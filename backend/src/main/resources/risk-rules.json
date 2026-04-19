@@ -1,0 +1,74 @@
+{
+  "rules": [
+    {
+      "ruleCode": "API_COMPATIBILITY_CHECK",
+      "changeType": "API",
+      "riskLevel": "HIGH",
+      "title": "接口变更需要确认兼容性",
+      "description": "检测到接口、Controller、DTO 或请求响应对象发生变化，需要确认是否影响调用方兼容性。",
+      "impact": "可能导致前端或下游服务调用失败、字段解析异常或契约不一致。",
+      "recommendedChecks": [
+        "确认接口路径、方法、请求参数和响应字段是否保持向后兼容。",
+        "确认前端和下游调用方是否已同步适配。",
+        "补充或更新接口契约测试与回归用例。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "QA", "OWNER"]
+    },
+    {
+      "ruleCode": "DB_CHANGE_CHECK",
+      "changeType": "DB",
+      "riskLevel": "HIGH",
+      "title": "数据库变更需要确认数据兼容与回滚方案",
+      "description": "检测到 SQL、Mapper、Entity、Repository 或 migration 发生变化，需要确认数据结构、查询性能和兼容性。",
+      "impact": "可能引入数据不一致、慢 SQL、字段兼容或上线回滚风险。",
+      "recommendedChecks": [
+        "确认表结构和 SQL 变更是否兼容历史数据。",
+        "确认是否需要索引、数据迁移脚本或回滚脚本。",
+        "覆盖核心查询、写入和异常数据场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "DBA", "QA"]
+    },
+    {
+      "ruleCode": "CACHE_CONSISTENCY_CHECK",
+      "changeType": "CACHE",
+      "riskLevel": "MEDIUM",
+      "title": "缓存变更需要确认一致性与失效策略",
+      "description": "检测到 Redis、Spring Cache 或缓存 key 相关逻辑发生变化，需要确认缓存读写、TTL 和失效策略。",
+      "impact": "可能出现脏数据、缓存穿透、缓存雪崩或回源逻辑异常。",
+      "recommendedChecks": [
+        "确认写路径是否同步更新或删除相关缓存。",
+        "确认缓存 key、TTL、空值缓存和降级策略符合预期。",
+        "覆盖缓存命中、未命中、更新后再次查询场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "QA"]
+    },
+    {
+      "ruleCode": "MQ_IDEMPOTENCY_CHECK",
+      "changeType": "MQ",
+      "riskLevel": "HIGH",
+      "title": "MQ 变更需要确认幂等、重试与消费兼容",
+      "description": "检测到生产者、消费者、Topic 或消息发送消费逻辑发生变化，需要确认幂等和重复消费风险。",
+      "impact": "可能导致消息重复处理、消费堆积、消息体不兼容或业务状态错乱。",
+      "recommendedChecks": [
+        "确认消费者是否具备幂等处理能力。",
+        "确认消息体字段变更是否兼容已有生产者或消费者。",
+        "确认重试、死信、告警和消费堆积监控是否覆盖。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "SRE", "QA"]
+    },
+    {
+      "ruleCode": "CONFIG_RELEASE_CHECK",
+      "changeType": "CONFIG",
+      "riskLevel": "MEDIUM",
+      "title": "配置变更需要确认灰度、默认值和回滚策略",
+      "description": "检测到 YAML、properties、Nacos 或开关配置发生变化，需要确认配置生效范围和上线策略。",
+      "impact": "可能导致环境差异、配置缺失、开关误开或发布后无法快速回滚。",
+      "recommendedChecks": [
+        "确认新增配置是否有安全默认值。",
+        "确认不同环境配置是否同步。",
+        "确认配置变更是否支持灰度和快速回滚。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "SRE", "QA"]
+    }
+  ]
+}

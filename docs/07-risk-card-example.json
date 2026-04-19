@@ -1,0 +1,126 @@
+{
+  "cardId": "risk-card-demo-001",
+  "summary": "本次变更涉及 API, DB, CACHE，生成 3 个风险项，整体风险等级为 HIGH。",
+  "riskLevel": "HIGH",
+  "affectedResources": [
+    {
+      "resourceType": "API",
+      "name": "GET /api/orders/{id}",
+      "operation": "MODIFIED",
+      "filePath": "src/main/java/com/demo/order/OrderController.java",
+      "evidence": {
+        "changeType": "API",
+        "filePath": "src/main/java/com/demo/order/OrderController.java",
+        "lineStart": null,
+        "lineEnd": null,
+        "snippet": "GET /api/orders/{id}",
+        "matcher": "API_HEURISTIC_RULE"
+      }
+    },
+    {
+      "resourceType": "DB_TABLE",
+      "name": "orders",
+      "operation": "MODIFIED",
+      "filePath": "src/main/resources/mapper/OrderMapper.xml",
+      "evidence": {
+        "changeType": "DB",
+        "filePath": "src/main/resources/mapper/OrderMapper.xml",
+        "lineStart": null,
+        "lineEnd": null,
+        "snippet": "orders",
+        "matcher": "DB_HEURISTIC_RULE"
+      }
+    },
+    {
+      "resourceType": "CACHE_KEY",
+      "name": "order:detail",
+      "operation": "MODIFIED",
+      "filePath": "src/main/java/com/demo/order/OrderCacheService.java",
+      "evidence": {
+        "changeType": "CACHE",
+        "filePath": "src/main/java/com/demo/order/OrderCacheService.java",
+        "lineStart": null,
+        "lineEnd": null,
+        "snippet": "order:detail",
+        "matcher": "CACHE_HEURISTIC_RULE"
+      }
+    }
+  ],
+  "riskItems": [
+    {
+      "riskId": "API_COMPATIBILITY_CHECK-001",
+      "ruleCode": "API_COMPATIBILITY_CHECK",
+      "category": "API",
+      "riskLevel": "HIGH",
+      "title": "接口变更需要确认兼容性",
+      "description": "检测到接口、Controller、DTO 或请求响应对象发生变化，需要确认是否影响调用方兼容性。",
+      "impact": "可能导致前端或下游服务调用失败、字段解析异常或契约不一致。",
+      "affectedResources": [
+        {
+          "resourceType": "API",
+          "name": "GET /api/orders/{id}",
+          "operation": "MODIFIED",
+          "filePath": "src/main/java/com/demo/order/OrderController.java"
+        }
+      ],
+      "evidences": [
+        {
+          "filePath": "src/main/java/com/demo/order/OrderController.java",
+          "lineStart": null,
+          "lineEnd": null,
+          "snippet": "GET /api/orders/{id}",
+          "matcher": "API_HEURISTIC_RULE"
+        }
+      ],
+      "recommendedChecks": [
+        "确认接口路径、方法、请求参数和响应字段是否保持向后兼容。",
+        "确认前端和下游调用方是否已同步适配。",
+        "补充或更新接口契约测试与回归用例。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "QA", "OWNER"]
+    },
+    {
+      "riskId": "DB_CHANGE_CHECK-002",
+      "ruleCode": "DB_CHANGE_CHECK",
+      "category": "DB",
+      "riskLevel": "HIGH",
+      "title": "数据库变更需要确认数据兼容与回滚方案",
+      "description": "检测到 SQL、Mapper、Entity、Repository 或 migration 发生变化，需要确认数据结构、查询性能和兼容性。",
+      "impact": "可能引入数据不一致、慢 SQL、字段兼容或上线回滚风险。",
+      "affectedResources": [
+        {
+          "resourceType": "DB_TABLE",
+          "name": "orders",
+          "operation": "MODIFIED",
+          "filePath": "src/main/resources/mapper/OrderMapper.xml"
+        }
+      ],
+      "evidences": [
+        {
+          "filePath": "src/main/resources/mapper/OrderMapper.xml",
+          "lineStart": null,
+          "lineEnd": null,
+          "snippet": "orders",
+          "matcher": "DB_HEURISTIC_RULE"
+        }
+      ],
+      "recommendedChecks": [
+        "确认表结构和 SQL 变更是否兼容历史数据。",
+        "确认是否需要索引、数据迁移脚本或回滚脚本。",
+        "覆盖核心查询、写入和异常数据场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "DBA", "QA"]
+    }
+  ],
+  "recommendedChecks": [
+    "确认接口路径、方法、请求参数和响应字段是否保持向后兼容。",
+    "确认前端和下游调用方是否已同步适配。",
+    "补充或更新接口契约测试与回归用例。",
+    "确认表结构和 SQL 变更是否兼容历史数据。",
+    "确认是否需要索引、数据迁移脚本或回滚脚本。",
+    "覆盖核心查询、写入和异常数据场景。"
+  ],
+  "suggestedReviewRoles": ["BACKEND", "QA", "OWNER", "DBA"],
+  "generatedAt": "2026-04-19T14:30:00+08:00",
+  "generator": "risk-engine-rule-v1"
+}

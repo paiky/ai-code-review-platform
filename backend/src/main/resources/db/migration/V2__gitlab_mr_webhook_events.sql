@@ -1,0 +1,20 @@
+CREATE TABLE gitlab_mr_webhook_events (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  task_id BIGINT NOT NULL,
+  git_project_id VARCHAR(128) NOT NULL,
+  project_name VARCHAR(128) NOT NULL,
+  mr_id VARCHAR(128) NOT NULL,
+  event_action VARCHAR(64) NULL,
+  event_time DATETIME(3) NOT NULL,
+  source_branch VARCHAR(255) NULL,
+  target_branch VARCHAR(255) NULL,
+  author_name VARCHAR(128) NULL,
+  author_username VARCHAR(128) NULL,
+  changed_files_summary JSON NOT NULL,
+  raw_payload JSON NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  KEY idx_task (task_id),
+  KEY idx_git_project_mr (git_project_id, mr_id),
+  KEY idx_event_time (event_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

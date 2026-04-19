@@ -1,0 +1,8 @@
+backend/target/
+*.class
+*.log
+.DS_Store
+.idea/
+*.iml
+frontend/node_modules/
+frontend/dist/
