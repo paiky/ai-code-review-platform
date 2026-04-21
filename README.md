@@ -1,8 +1,57 @@
 # AI 变更风险审查平台
 
-本仓库当前处于 MVP 基础工程阶段。设计文档位于 `docs` 目录，后端基础工程位于 `backend` 目录。
+本仓库当前处于 MVP 原型阶段。设计文档位于 `docs` 目录，后端工程位于 `backend` 目录，前端工程位于 `frontend` 目录。
 
-## Backend 本地启动
+当前已经具备可本地演示的主链路：
+
+```text
+mock GitLab MR webhook
+  -> 创建项目与审查任务
+  -> 保存原始 webhook payload
+  -> 变更分析
+  -> 风险规则引擎
+  -> 生成风险卡片
+  -> 审查结果落库
+  -> 钉钉推送或 SKIPPED 记录
+  -> 前端查看任务与风险卡片
+```
+
+说明：P0 演示链路可以继续使用 mock payload 中的 `changedFiles` / `diffText`。真实 GitLab MR webhook 通常不会携带完整 diff，当前已支持在 payload 缺少 changed files 时按 `projectId + mrIid` 调用 GitLab API 补拉 diff。
+
+## 当前能力
+
+已完成：
+
+- Spring Boot 后端基础工程。
+- MySQL 数据源配置。
+- Flyway 数据库 migration。
+- 统一响应结构 `ApiResponse`。
+- 统一异常处理 `GlobalExceptionHandler`。
+- 请求 traceId。
+- CORS 配置。
+- 健康检查接口 `/api/health`。
+- GitLab MR webhook controller。
+- mock changed files / diffText 解析。
+- API / DB / CACHE / MQ / CONFIG 启发式变更分析。
+- 规则引擎与结构化风险卡片生成。
+- 审查任务和审查结果落库。
+- 钉钉通知器；未配置 webhook 时记录 `SKIPPED`。
+- React + Ant Design 最小管理页面。
+- 审查模板查看与项目默认模板绑定。
+- 手动审查后端接口。
+- payload 不带 `changedFiles` 时，可通过 GitLab API 拉取 MR diff。
+
+暂未完成：
+
+- 真实 GitLab diff 拉取的项目级凭证配置与生产级重试策略。
+- Jenkins 入口。
+- 前端手动发起审查页面。
+- 项目级钉钉 webhook 配置读取。
+- 主链路集成测试。
+- RiskCard schema 与代码对象的完整对齐。
+- knowledge-base / 人工反馈闭环。
+
+## 后端本地启动
 
 ### 1. 环境要求
 
@@ -26,8 +75,13 @@ CREATE DATABASE ai_code_review DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_uni
 | --- | --- | --- |
 | `MYSQL_URL` | `jdbc:mysql://localhost:3306/ai_code_review?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false` | MySQL JDBC URL |
 | `MYSQL_USERNAME` | `root` | MySQL 用户名 |
-| `MYSQL_PASSWORD` | `root` | MySQL 密码 |
+| `MYSQL_PASSWORD` | 以 `backend/src/main/resources/application.yml` 为准 | MySQL 密码 |
 | `SERVER_PORT` | `8080` | 后端端口 |
+| `DINGTALK_WEBHOOK_URL` | 空 | 钉钉机器人 webhook，空值时推送记录为 `SKIPPED` |
+| `GITLAB_API_ENABLED` | `false` | payload 不带 `changedFiles` 时是否启用 GitLab API 补拉 diff |
+| `GITLAB_BASE_URL` | 空 | GitLab base URL，例如 `https://gitlab.example.com` |
+| `GITLAB_TOKEN` | 空 | GitLab access token，通过 `PRIVATE-TOKEN` header 使用 |
+| `GITLAB_DIFF_PER_PAGE` | `100` | GitLab MR diff 分页大小 |
 
 PowerShell 示例：
 
@@ -35,6 +89,8 @@ PowerShell 示例：
 $env:MYSQL_URL="jdbc:mysql://localhost:3306/ai_code_review?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false"
 $env:MYSQL_USERNAME="root"
 $env:MYSQL_PASSWORD="root"
+$env:DINGTALK_WEBHOOK_URL=""
+$env:GITLAB_API_ENABLED="false"
 ```
 
 ### 4. 启动后端
@@ -48,9 +104,11 @@ mvn spring-boot:run
 
 ```text
 src/main/resources/db/migration/V1__init_mvp_schema.sql
+src/main/resources/db/migration/V2__gitlab_mr_webhook_events.sql
+src/main/resources/db/migration/V3__review_templates.sql
 ```
 
-该 migration 会创建 MVP 所需基础表：
+当前 migration 会创建 MVP 所需基础表：
 
 - `projects`
 - `review_tasks`
@@ -58,10 +116,15 @@ src/main/resources/db/migration/V1__init_mvp_schema.sql
 - `rule_templates`
 - `notification_records`
 - `notification_webhooks`
+- `gitlab_mr_webhook_events`
 
-同时会初始化 `backend-default` 规则模板。
+并初始化三套模板：
 
-### 5. 验证启动
+- `backend-default`
+- `frontend-default`
+- `general-default`
+
+### 5. 验证后端
 
 健康检查接口：
 
@@ -79,7 +142,7 @@ curl http://localhost:8080/api/health
   "data": {
     "status": "UP",
     "application": "ai-code-review-backend",
-    "time": "2026-04-19T13:00:00+08:00"
+    "time": "2026-04-21T22:37:18.434710600+08:00"
   },
   "traceId": "..."
 }
@@ -91,154 +154,9 @@ Actuator 健康检查：
 curl http://localhost:8080/actuator/health
 ```
 
-## 当前后端范围
+`components.db.status` 应为 `UP`。
 
-已完成基础工程骨架：
-
-- Spring Boot Maven 工程。
-- MySQL 数据源配置。
-- Flyway 数据库 migration。
-- 统一响应结构 `ApiResponse`。
-- 统一异常处理 `GlobalExceptionHandler`。
-- 请求 traceId 过滤器。
-- 健康检查接口 `/api/health`。
-- 按 MVP 文档预留核心模块包结构。
-
-暂未实现复杂业务链路：
-
-- GitLab webhook controller。
-- diff 拉取与变更分析。
-- 风险规则执行。
-- 风险卡片生成。
-- 钉钉推送。
-- Web 管理页面。
-
-推荐下一步先实现核心 DTO / VO / Entity / enum，再实现 GitLab webhook 到 ReviewTask 落库的最小链路。
-## GitLab MR Webhook 最小链路
-
-当前已实现 GitLab Merge Request webhook 的最小可用链路：
-
-```text
-POST /api/webhooks/gitlab/merge-request
-  -> 校验 X-Gitlab-Event 与 object_kind
-  -> 解析项目、MR、分支、作者、changedFiles 摘要、eventTime
-  -> 自动 upsert projects
-  -> 创建 review_tasks
-  -> 保存 gitlab_mr_webhook_events.raw_payload
-  -> GET /api/review-tasks/{taskId} 查询详情
-```
-
-说明：真实 GitLab MR webhook 通常不直接包含完整 changed files。为了本地验证，mock payload 支持传入顶层 `changedFiles` 数组，后续接入 GitLab API 后再由 MR iid 拉取真实 diff / changed files。
-
-### 本地 mock webhook 请求
-
-PowerShell 示例：
-
-```powershell
-$payload = @"
-{
-  "object_kind": "merge_request",
-  "event_type": "merge_request",
-  "event_time": "2026-04-19T13:30:00+08:00",
-  "project": {
-    "id": 1001,
-    "name": "demo-service",
-    "web_url": "https://gitlab.example.com/group/demo-service"
-  },
-  "object_attributes": {
-    "id": 90001,
-    "iid": 12,
-    "action": "open",
-    "source_branch": "feature/risk-demo",
-    "target_branch": "main",
-    "url": "https://gitlab.example.com/group/demo-service/-/merge_requests/12",
-    "updated_at": "2026-04-19T13:30:00+08:00",
-    "last_commit": {
-      "id": "abcdef123456"
-    }
-  },
-  "user": {
-    "name": "Alice",
-    "username": "alice"
-  },
-  "changedFiles": [
-    {
-      "old_path": "src/main/java/com/demo/order/OrderController.java",
-      "new_path": "src/main/java/com/demo/order/OrderController.java",
-      "new_file": false,
-      "deleted_file": false,
-      "renamed_file": false
-    },
-    {
-      "old_path": "src/main/resources/mapper/OrderMapper.xml",
-      "new_path": "src/main/resources/mapper/OrderMapper.xml",
-      "new_file": false,
-      "deleted_file": false,
-      "renamed_file": false
-    }
-  ]
-}
-"@
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "http://localhost:8080/api/webhooks/gitlab/merge-request" `
-  -ContentType "application/json" `
-  -Headers @{ "X-Gitlab-Event" = "Merge Request Hook" } `
-  -Body $payload
-```
-
-预期返回：
-
-```json
-{
-  "success": true,
-  "code": "OK",
-  "message": "success",
-  "data": {
-    "taskId": 1,
-    "status": "PENDING",
-    "projectId": "1001",
-    "projectName": "demo-service",
-    "mrId": "12"
-  },
-  "traceId": "..."
-}
-```
-
-### 查询任务详情
-
-```powershell
-curl http://localhost:8080/api/review-tasks/1
-```
-
-详情会返回基础任务字段、MR 字段、`changedFilesSummary` 和 `rawPayload`。当前任务状态固定为 `PENDING`，后续接入变更分析与风险引擎后再推进状态流转。
-## 前后端联调步骤
-
-### 1. 启动后端
-
-确认 MySQL 已创建数据库：
-
-```sql
-CREATE DATABASE ai_code_review DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-```
-
-PowerShell 示例：
-
-```powershell
-$env:MYSQL_USERNAME="root"
-$env:MYSQL_PASSWORD="root"
-$env:DINGTALK_WEBHOOK_URL=""
-cd backend
-mvn spring-boot:run
-```
-
-说明：
-
-- `DINGTALK_WEBHOOK_URL` 为空时，系统仍会生成风险卡片并保存推送记录，推送状态为 `SKIPPED`。
-- 配置真实钉钉机器人 webhook 后，任务分析完成会自动推送 IM 消息。
-
-### 2. 启动前端
+## 前端本地启动
 
 首次运行需要安装依赖：
 
@@ -256,84 +174,274 @@ http://localhost:5173
 
 前端 Vite dev server 已配置 `/api` 代理到 `http://localhost:8080`。
 
-### 3. 发送 mock GitLab MR webhook
+## P0 本地演示闭环
+
+本节用于验证当前 MVP 原型是否能在本机跑通：
+
+```text
+后端健康检查
+  -> 前端页面访问
+  -> mock GitLab MR webhook
+  -> 审查任务 SUCCESS
+  -> 风险卡片生成
+  -> 审查结果查询
+  -> 钉钉通知记录 SUCCESS 或 SKIPPED
+```
+
+### 1. 确认服务状态
+
+```powershell
+curl http://localhost:8080/api/health
+curl http://localhost:8080/actuator/health
+curl http://localhost:5173
+```
+
+后端应返回 `UP`，前端应能打开页面。
+
+### 2. 发送 mock GitLab MR webhook
+
+下面的 payload 同时覆盖 API、DB、CACHE、MQ、CONFIG 五类变更，适合用于 P0 演示：
 
 ```powershell
 $payload = @"
 {
   "object_kind": "merge_request",
   "event_type": "merge_request",
-  "event_time": "2026-04-19T13:30:00+08:00",
+  "event_time": "2026-04-21T22:38:00+08:00",
   "project": {
     "id": 1001,
     "name": "demo-service",
     "web_url": "https://gitlab.example.com/group/demo-service"
   },
   "object_attributes": {
-    "id": 90001,
-    "iid": 12,
+    "id": 90021,
+    "iid": 21,
     "action": "open",
-    "source_branch": "feature/risk-demo",
+    "source_branch": "feature/p0-demo-risk-review",
     "target_branch": "main",
-    "url": "https://gitlab.example.com/group/demo-service/-/merge_requests/12",
-    "updated_at": "2026-04-19T13:30:00+08:00",
+    "url": "https://gitlab.example.com/group/demo-service/-/merge_requests/21",
+    "updated_at": "2026-04-21T22:38:00+08:00",
     "last_commit": {
-      "id": "abcdef123456"
+      "id": "p0demoabcdef123456"
     }
   },
   "user": {
-    "name": "Alice",
-    "username": "alice"
+    "name": "P0 Demo User",
+    "username": "p0-demo"
   },
   "changedFiles": [
     {
       "old_path": "src/main/java/com/demo/order/OrderController.java",
       "new_path": "src/main/java/com/demo/order/OrderController.java",
-      "diffText": "+ @GetMapping(\"/api/orders/{id}\")\n+ public OrderResponse detail(@PathVariable Long id) { return service.detail(id); }"
+      "new_file": false,
+      "deleted_file": false,
+      "renamed_file": false,
+      "diffText": "+ @PostMapping(\"/api/orders/{id}/confirm\")\n+ public OrderResponse confirm(@PathVariable Long id) { return orderService.confirm(id); }"
     },
     {
       "old_path": "src/main/resources/mapper/OrderMapper.xml",
       "new_path": "src/main/resources/mapper/OrderMapper.xml",
-      "diffText": "+ select id, status from orders where id = #{id}"
+      "new_file": false,
+      "deleted_file": false,
+      "renamed_file": false,
+      "diffText": "+ update orders set status = 'CONFIRMED' where id = #{id}\n+ select id, status from orders where id = #{id}"
     },
     {
       "old_path": "src/main/java/com/demo/order/OrderCacheService.java",
       "new_path": "src/main/java/com/demo/order/OrderCacheService.java",
-      "diffText": "+ redisTemplate.opsForValue().set(\"order:detail\" + id, value);"
+      "new_file": false,
+      "deleted_file": false,
+      "renamed_file": false,
+      "diffText": "+ redisTemplate.opsForValue().set(\"order:detail:\" + id, value);\n+ redisTemplate.delete(\"order:list\");"
+    },
+    {
+      "old_path": "src/main/java/com/demo/order/OrderEventPublisher.java",
+      "new_path": "src/main/java/com/demo/order/OrderEventPublisher.java",
+      "new_file": false,
+      "deleted_file": false,
+      "renamed_file": false,
+      "diffText": "+ rabbitTemplate.convertAndSend(\"order.exchange\", \"order.confirmed\", event);"
+    },
+    {
+      "old_path": "src/main/resources/application.yml",
+      "new_path": "src/main/resources/application.yml",
+      "new_file": false,
+      "deleted_file": false,
+      "renamed_file": false,
+      "diffText": "+ order:\n+   confirm-timeout-seconds: 30\n+   enable-confirm-event: true"
     }
   ]
 }
 "@
 
-Invoke-RestMethod `
+$webhookResponse = Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8080/api/webhooks/gitlab/merge-request" `
   -ContentType "application/json" `
   -Headers @{ "X-Gitlab-Event" = "Merge Request Hook" } `
   -Body $payload
+
+$webhookResponse | ConvertTo-Json -Depth 20
+$taskId = $webhookResponse.data.taskId
 ```
 
-成功后，后端会同步完成：
+预期返回：
 
-```text
-webhook -> 任务落库 -> 变更分析 -> 风险卡片 -> review_results 落库 -> 钉钉推送/跳过记录
+```json
+{
+  "success": true,
+  "code": "OK",
+  "message": "success",
+  "data": {
+    "taskId": 2,
+    "status": "SUCCESS",
+    "projectId": "1001",
+    "projectName": "demo-service",
+    "mrId": "21"
+  },
+  "traceId": "..."
+}
 ```
 
-### 4. 验证接口
+说明：`taskId` 会随本机数据库已有数据递增，不一定等于示例里的 `2`。
+
+### 3. 验证任务列表、详情和风险结果
 
 ```powershell
-curl http://localhost:8080/api/review-tasks
-curl http://localhost:8080/api/review-tasks/1
-curl http://localhost:8080/api/review-tasks/1/result
+Invoke-RestMethod -Uri "http://localhost:8080/api/review-tasks" -Method Get |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod -Uri "http://localhost:8080/api/review-tasks/$taskId" -Method Get |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod -Uri "http://localhost:8080/api/review-tasks/$taskId/result" -Method Get |
+  ConvertTo-Json -Depth 30
 ```
+
+预期结果：
+
+- 任务状态为 `SUCCESS`。
+- `riskLevel` 为 `HIGH`。
+- `riskItemCount` 为 `5`。
+- `changeAnalysis.changeTypes` 包含 `API`、`DB`、`CACHE`、`MQ`、`CONFIG`。
+- `riskCard` 包含风险项、受影响资源、推荐检查项和建议 review 角色。
+
+### 4. 验证通知记录
+
+如果本机安装了 MySQL CLI，可以查询通知记录：
+
+```powershell
+mysql -h localhost -P 3306 -u root -p --default-character-set=utf8mb4 ai_code_review --execute "SELECT id, task_id, result_id, channel, status, target, error_message, sent_at, created_at FROM notification_records WHERE task_id = $taskId ORDER BY id DESC LIMIT 5;"
+```
+
+预期结果：
+
+- 配置了 `DINGTALK_WEBHOOK_URL`：`status` 通常为 `SUCCESS` 或 `FAILED`。
+- 未配置 `DINGTALK_WEBHOOK_URL`：`status` 为 `SKIPPED`，`error_message` 为 `DingTalk webhook is not configured`。
 
 ### 5. 前端查看
 
-打开 `http://localhost:5173`：
+打开：
 
-- 任务列表页展示项目、MR、分支、状态、风险等级和风险项数量。
+```text
+http://localhost:5173
+```
+
+验证：
+
+- 任务列表页展示 `demo-service`、MR、分支、状态、风险等级和风险项数量。
 - 任务详情页展示风险卡片、分析结果和原始事件摘要。
 - 风险卡片展示整体风险、受影响资源、风险项、推荐检查项和建议 review 角色。
+
+### 6. 自动化验证
+
+后端测试：
+
+```powershell
+cd backend
+mvn -q test
+```
+
+前端构建：
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+## GitLab MR Webhook 接口
+
+当前接口：
+
+```text
+POST /api/webhooks/gitlab/merge-request
+```
+
+处理流程：
+
+```text
+校验 X-Gitlab-Event 与 object_kind
+  -> 解析项目、MR、分支、作者、changedFiles 摘要、eventTime
+  -> 自动 upsert projects
+  -> 创建 review_tasks
+  -> 保存 gitlab_mr_webhook_events.raw_payload
+  -> 变更分析
+  -> 风险卡片生成
+  -> review_results 落库
+  -> 钉钉推送或 SKIPPED 记录
+```
+
+说明：真实 GitLab MR webhook 通常不直接包含完整 changed files。为了本地验证，mock payload 支持传入顶层 `changedFiles` 数组；真实接入时可启用 GitLab API，由后端按 MR iid 拉取真实 diff / changed files。
+
+## 真实 GitLab diff 接入
+
+当 webhook payload 不包含 `changedFiles`、`changed_files`、`object_attributes.changed_files` 或 `changes.changed_files.current` 时，后端会尝试通过 GitLab API 拉取 MR diff。
+
+启用方式：
+
+```powershell
+$env:GITLAB_API_ENABLED="true"
+$env:GITLAB_BASE_URL="https://gitlab.example.com"
+$env:GITLAB_TOKEN="your_access_token"
+$env:GITLAB_DIFF_PER_PAGE="100"
+```
+
+后端调用接口：
+
+```text
+GET {GITLAB_BASE_URL}/api/v4/projects/{projectId}/merge_requests/{mrIid}/diffs?page=1&per_page=100
+PRIVATE-TOKEN: {GITLAB_TOKEN}
+```
+
+处理规则：
+
+- payload 自带 `changedFiles` 时，优先使用 payload，`changedFilesSummary.source = payload`。
+- payload 不带 `changedFiles` 时，使用 GitLab API 补拉，`changedFilesSummary.source = gitlab_api`。
+- GitLab API 未启用、`GITLAB_BASE_URL` 缺失、`GITLAB_TOKEN` 缺失、接口失败或返回空 diff 时，任务会标记为 `FAILED`。
+
+可以先手动验证 GitLab token：
+
+```powershell
+curl `
+  --header "PRIVATE-TOKEN: $env:GITLAB_TOKEN" `
+  "$env:GITLAB_BASE_URL/api/v4/projects/<projectId>/merge_requests/<mrIid>/diffs?page=1&per_page=20"
+```
+
+真实 webhook 验证步骤：
+
+1. 启动后端时配置 `GITLAB_API_ENABLED=true`、`GITLAB_BASE_URL`、`GITLAB_TOKEN`。
+2. 发送不带 `changedFiles` 的 GitLab MR webhook payload。
+3. 查询 `GET /api/review-tasks/{taskId}`，确认 `changedFilesSummary.source` 为 `gitlab_api`。
+4. 查询 `GET /api/review-tasks/{taskId}/result`，确认风险卡片正常生成。
+
+## 查询接口
+
+```powershell
+curl http://localhost:8080/api/review-tasks
+curl http://localhost:8080/api/review-tasks/{taskId}
+curl http://localhost:8080/api/review-tasks/{taskId}/result
+```
+
 ## 审查模板能力
 
 系统内置三套 MVP 模板：
@@ -414,3 +522,13 @@ http://localhost:5173
 - 查看 `backend-default` / `frontend-default` / `general-default`。
 - 查看每个模板启用的规则和推荐检查项。
 - 修改项目默认模板绑定。
+
+## 下一步建议
+
+推荐按以下顺序继续推进：
+
+1. 新增 `examples/`，保存 mock GitLab webhook 和 manual review 请求示例。
+2. 补主链路集成测试，覆盖 `webhook -> review_results -> notification_records`。
+3. 完善 GitLab diff 接入的真实环境联调、项目级凭证和失败重试。
+4. 实现前端手动发起审查页面。
+5. 将钉钉 webhook 从环境变量升级为项目级数据库配置。

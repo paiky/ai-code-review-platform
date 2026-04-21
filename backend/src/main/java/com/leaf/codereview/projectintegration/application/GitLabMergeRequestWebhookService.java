@@ -14,8 +14,10 @@ import com.leaf.codereview.common.exception.BusinessException;
 import com.leaf.codereview.notification.application.DingTalkNotifier;
 import com.leaf.codereview.notification.domain.DingTalkNotificationResult;
 import com.leaf.codereview.notification.infrastructure.NotificationRecordRepository;
+import com.leaf.codereview.projectintegration.domain.GitLabDiffFile;
 import com.leaf.codereview.projectintegration.domain.GitLabMergeRequestEvent;
 import com.leaf.codereview.projectintegration.domain.ProjectRecord;
+import com.leaf.codereview.projectintegration.infrastructure.GitLabClient;
 import com.leaf.codereview.projectintegration.infrastructure.GitLabMrWebhookEventRepository;
 import com.leaf.codereview.projectintegration.infrastructure.ProjectRepository;
 import com.leaf.codereview.reviewrecord.domain.ReviewTaskCreateCommand;
@@ -52,6 +54,7 @@ public class GitLabMergeRequestWebhookService {
     private final RiskCardGenerator riskCardGenerator;
     private final DingTalkNotifier dingTalkNotifier;
     private final NotificationRecordRepository notificationRecordRepository;
+    private final GitLabClient gitLabClient;
 
     public GitLabMergeRequestWebhookService(
             ObjectMapper objectMapper,
@@ -62,7 +65,8 @@ public class GitLabMergeRequestWebhookService {
             ChangeAnalysisService changeAnalysisService,
             RiskCardGenerator riskCardGenerator,
             DingTalkNotifier dingTalkNotifier,
-            NotificationRecordRepository notificationRecordRepository
+            NotificationRecordRepository notificationRecordRepository,
+            GitLabClient gitLabClient
     ) {
         this.objectMapper = objectMapper;
         this.projectRepository = projectRepository;
@@ -73,6 +77,7 @@ public class GitLabMergeRequestWebhookService {
         this.riskCardGenerator = riskCardGenerator;
         this.dingTalkNotifier = dingTalkNotifier;
         this.notificationRecordRepository = notificationRecordRepository;
+        this.gitLabClient = gitLabClient;
     }
 
     @Transactional(noRollbackFor = Exception.class)
@@ -104,7 +109,8 @@ public class GitLabMergeRequestWebhookService {
         webhookEventRepository.save(taskId, event);
 
         try {
-            processReviewTask(taskId, project.id(), project.defaultTemplateCode(), event);
+            GitLabMergeRequestEvent eventWithChangedFiles = resolveChangedFiles(taskId, event);
+            processReviewTask(taskId, project.id(), project.defaultTemplateCode(), eventWithChangedFiles);
             return new GitLabWebhookResponse(taskId, "SUCCESS", event.gitProjectId(), event.projectName(), event.mrId());
         } catch (Exception exception) {
             reviewTaskRepository.markFailed(taskId, exception.getMessage());
@@ -113,6 +119,21 @@ public class GitLabMergeRequestWebhookService {
             }
             throw new BusinessException(ErrorCode.INTERNAL_ERROR, exception.getMessage());
         }
+    }
+
+    private GitLabMergeRequestEvent resolveChangedFiles(Long taskId, GitLabMergeRequestEvent event) {
+        if ("payload".equals(textAt(event.changedFilesSummary(), "/source"))) {
+            return event;
+        }
+
+        List<GitLabDiffFile> diffFiles = gitLabClient.listMergeRequestDiffs(event.gitProjectId(), event.mrId());
+        if (diffFiles.isEmpty()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "GitLab MR diffs response is empty");
+        }
+
+        JsonNode changedFilesSummary = buildGitLabChangedFilesSummary(diffFiles);
+        webhookEventRepository.updateChangedFilesSummary(taskId, changedFilesSummary);
+        return copyWithChangedFilesSummary(event, changedFilesSummary);
     }
 
     private void processReviewTask(Long taskId, Long projectId, String templateCode, GitLabMergeRequestEvent event) {
@@ -191,12 +212,12 @@ public class GitLabMergeRequestWebhookService {
                 firstText(payload, "/object_attributes/last_commit/id", "/object_attributes/last_commit/sha", "/checkout_sha"),
                 firstText(payload, "/user/name", "/user_username", "/object_attributes/author/name"),
                 firstText(payload, "/user/username", "/user_username", "/object_attributes/author/username"),
-                buildChangedFilesSummary(payload),
+                buildPayloadChangedFilesSummary(payload),
                 payload.deepCopy()
         );
     }
 
-    private JsonNode buildChangedFilesSummary(JsonNode payload) {
+    private JsonNode buildPayloadChangedFilesSummary(JsonNode payload) {
         JsonNode changedFiles = firstArray(payload,
                 "/changedFiles",
                 "/changed_files",
@@ -219,6 +240,66 @@ public class GitLabMergeRequestWebhookService {
         summary.put("source", source);
         summary.set("files", files);
         return summary;
+    }
+
+    private JsonNode buildGitLabChangedFilesSummary(List<GitLabDiffFile> diffFiles) {
+        ObjectNode summary = objectMapper.createObjectNode();
+        ArrayNode files = objectMapper.createArrayNode();
+        for (GitLabDiffFile diffFile : diffFiles) {
+            files.add(normalizeGitLabDiffFile(diffFile));
+        }
+
+        summary.put("count", files.size());
+        summary.put("source", "gitlab_api");
+        summary.set("files", files);
+        return summary;
+    }
+
+    private ObjectNode normalizeGitLabDiffFile(GitLabDiffFile diffFile) {
+        ObjectNode file = objectMapper.createObjectNode();
+        String path = StringUtils.hasText(diffFile.newPath()) ? diffFile.newPath() : diffFile.oldPath();
+        file.put("path", path);
+        file.put("oldPath", diffFile.oldPath());
+        file.put("newPath", diffFile.newPath());
+        file.put("changeType", inferGitLabChangeType(diffFile));
+        if (StringUtils.hasText(diffFile.diffText())) {
+            file.put("diffText", diffFile.diffText());
+        }
+        file.put("collapsed", diffFile.collapsed());
+        file.put("tooLarge", diffFile.tooLarge());
+        return file;
+    }
+
+    private String inferGitLabChangeType(GitLabDiffFile diffFile) {
+        if (diffFile.newFile()) {
+            return "ADDED";
+        }
+        if (diffFile.deletedFile()) {
+            return "DELETED";
+        }
+        if (diffFile.renamedFile()) {
+            return "RENAMED";
+        }
+        return "MODIFIED";
+    }
+
+    private GitLabMergeRequestEvent copyWithChangedFilesSummary(GitLabMergeRequestEvent event, JsonNode changedFilesSummary) {
+        return new GitLabMergeRequestEvent(
+                event.gitProjectId(),
+                event.projectName(),
+                event.repositoryUrl(),
+                event.mrId(),
+                event.eventAction(),
+                event.eventTime(),
+                event.externalUrl(),
+                event.sourceBranch(),
+                event.targetBranch(),
+                event.commitSha(),
+                event.authorName(),
+                event.authorUsername(),
+                changedFilesSummary,
+                event.rawPayload()
+        );
     }
 
     private ObjectNode normalizeChangedFile(JsonNode fileNode) {

@@ -1,6 +1,7 @@
 package com.leaf.codereview.projectintegration.infrastructure;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leaf.codereview.projectintegration.domain.GitLabMergeRequestEvent;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -38,6 +39,14 @@ public class GitLabMrWebhookEventRepository {
                 writeJson(event.changedFilesSummary()),
                 writeJson(event.rawPayload())
         );
+    }
+
+    public void updateChangedFilesSummary(Long taskId, JsonNode changedFilesSummary) {
+        jdbcTemplate.update("""
+                UPDATE gitlab_mr_webhook_events
+                SET changed_files_summary = ?
+                WHERE task_id = ?
+                """, writeJson(changedFilesSummary), taskId);
     }
 
     private String writeJson(Object value) {

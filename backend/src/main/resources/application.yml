@@ -37,6 +37,13 @@ notification:
     webhook-url: ${DINGTALK_WEBHOOK_URL:}
     enabled: ${DINGTALK_ENABLED:true}
 
+gitlab:
+  api:
+    enabled: ${GITLAB_API_ENABLED:false}
+    base-url: ${GITLAB_BASE_URL:}
+    token: ${GITLAB_TOKEN:}
+    per-page: ${GITLAB_DIFF_PER_PAGE:100}
+
 frontend:
   cors:
     allowed-origins: ${FRONTEND_ALLOWED_ORIGINS:http://localhost:5173}
