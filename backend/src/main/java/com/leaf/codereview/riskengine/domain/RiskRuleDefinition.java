@@ -13,10 +13,25 @@ public record RiskRuleDefinition(
         String description,
         String impact,
         List<String> recommendedChecks,
-        Set<ReviewRole> suggestedReviewRoles
+        Set<ReviewRole> suggestedReviewRoles,
+        String confidence,
+        String reason
 ) {
     public RiskRuleDefinition {
         recommendedChecks = recommendedChecks == null ? List.of() : List.copyOf(recommendedChecks);
         suggestedReviewRoles = suggestedReviewRoles == null ? Set.of() : Set.copyOf(suggestedReviewRoles);
+    }
+
+    public RiskRuleDefinition(
+            String ruleCode,
+            ChangeType changeType,
+            RiskLevel riskLevel,
+            String title,
+            String description,
+            String impact,
+            List<String> recommendedChecks,
+            Set<ReviewRole> suggestedReviewRoles
+    ) {
+        this(ruleCode, changeType, riskLevel, title, description, impact, recommendedChecks, suggestedReviewRoles, null, null);
     }
 }

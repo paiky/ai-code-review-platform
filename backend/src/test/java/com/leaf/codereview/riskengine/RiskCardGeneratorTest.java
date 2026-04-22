@@ -14,6 +14,7 @@ import com.leaf.codereview.changeanalysis.rule.MqChangeRule;
 import com.leaf.codereview.riskengine.application.RiskCardGenerator;
 import com.leaf.codereview.riskengine.domain.ReviewRole;
 import com.leaf.codereview.riskengine.domain.RiskCard;
+import com.leaf.codereview.riskengine.domain.RiskItem;
 import com.leaf.codereview.riskengine.domain.RiskLevel;
 import com.leaf.codereview.riskengine.domain.RiskRuleDefinition;
 import com.leaf.codereview.riskengine.infrastructure.ClasspathRiskRuleRepository;
@@ -42,7 +43,12 @@ class RiskCardGeneratorTest {
                 .extracting(RiskRuleDefinition::ruleCode)
                 .containsExactly(
                         "API_COMPATIBILITY_CHECK",
-                        "DB_CHANGE_CHECK",
+                        "DB_SCHEMA_CHANGE_CHECK",
+                        "DB_SQL_CHANGE_CHECK",
+                        "ORM_MAPPING_CHANGE_CHECK",
+                        "ENTITY_MODEL_CHANGE_CHECK",
+                        "DATA_MIGRATION_CHECK",
+                        "DB_SCHEMA_SYNC_SUSPECT_CHECK",
                         "CACHE_CONSISTENCY_CHECK",
                         "MQ_IDEMPOTENCY_CHECK",
                         "CONFIG_RELEASE_CHECK"
@@ -66,7 +72,12 @@ class RiskCardGeneratorTest {
         assertThat(card.affectedResources()).hasSize(3);
         assertThat(card.riskItems()).hasSize(3);
         assertThat(card.riskItems()).extracting(item -> item.ruleCode())
-                .containsExactly("API_COMPATIBILITY_CHECK", "DB_CHANGE_CHECK", "CACHE_CONSISTENCY_CHECK");
+                .containsExactly("API_COMPATIBILITY_CHECK", "DB_SQL_CHANGE_CHECK", "CACHE_CONSISTENCY_CHECK");
+        assertThat(card.riskItems()).anySatisfy(item -> {
+            assertThat(item.ruleCode()).isEqualTo("DB_SQL_CHANGE_CHECK");
+            assertThat(item.confidence()).isEqualTo("MEDIUM");
+            assertThat(item.reason()).contains("SQL");
+        });
         assertThat(card.recommendedChecks()).isNotEmpty();
         assertThat(card.suggestedReviewRoles()).contains(ReviewRole.BACKEND, ReviewRole.QA);
     }
@@ -96,7 +107,7 @@ class RiskCardGeneratorTest {
         ), null));
         RiskRuleDefinition criticalRule = new RiskRuleDefinition(
                 "DB_DROP_TABLE_CRITICAL_CHECK",
-                ChangeType.DB,
+                ChangeType.DB_SCHEMA,
                 RiskLevel.CRITICAL,
                 "删除表属于 CRITICAL 风险",
                 "检测到数据库高危变更，需要专项审批。",
@@ -128,5 +139,26 @@ class RiskCardGeneratorTest {
         assertThat(card.riskItems()).isEmpty();
         assertThat(card.recommendedChecks()).isEmpty();
         assertThat(card.suggestedReviewRoles()).isEmpty();
+    }
+
+    @Test
+    void generatesSuspectedSchemaSyncRiskFromEntityAndMappingWithoutMigration() throws Exception {
+        ChangeAnalysisResult analysisResult = analysisService.analyze(new ChangeAnalysisRequest(List.of(
+                ChangedFile.of("src/main/java/com/demo/car/entity/Car.java", "+ private String supportDeviceModel;"),
+                ChangedFile.of("src/main/resources/mapper/CarMapper.xml", "+ <result column=\"support_device_model\" property=\"supportDeviceModel\" />")
+        ), null));
+        ClasspathRiskRuleRepository repository = new ClasspathRiskRuleRepository(new ObjectMapper());
+        RiskCardGenerator generator = new RiskCardGenerator(repository, null);
+
+        RiskCard card = generator.generate(analysisResult, repository.findEnabledRules(), List.of());
+
+        assertThat(card.riskLevel()).isEqualTo(RiskLevel.HIGH);
+        assertThat(card.riskItems()).extracting(RiskItem::ruleCode)
+                .contains("ENTITY_MODEL_CHANGE_CHECK", "ORM_MAPPING_CHANGE_CHECK", "DB_SCHEMA_SYNC_SUSPECT_CHECK");
+        assertThat(card.riskItems()).anySatisfy(item -> {
+            assertThat(item.ruleCode()).isEqualTo("DB_SCHEMA_SYNC_SUSPECT_CHECK");
+            assertThat(item.relatedSignals()).contains("entity model changed", "ORM/MyBatis mapping changed", "migration or DDL not detected");
+            assertThat(item.affectedResources()).hasSize(2);
+        });
     }
 }

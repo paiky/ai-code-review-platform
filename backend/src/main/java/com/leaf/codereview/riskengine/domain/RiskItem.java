@@ -17,12 +17,32 @@ public record RiskItem(
         List<ImpactedResource> affectedResources,
         List<RiskEvidence> evidences,
         List<String> recommendedChecks,
-        Set<ReviewRole> suggestedReviewRoles
+        Set<ReviewRole> suggestedReviewRoles,
+        String confidence,
+        String reason,
+        List<String> relatedSignals
 ) {
     public RiskItem {
         affectedResources = affectedResources == null ? List.of() : List.copyOf(affectedResources);
         evidences = evidences == null ? List.of() : List.copyOf(evidences);
         recommendedChecks = recommendedChecks == null ? List.of() : List.copyOf(recommendedChecks);
         suggestedReviewRoles = suggestedReviewRoles == null ? Set.of() : Set.copyOf(suggestedReviewRoles);
+        relatedSignals = relatedSignals == null ? List.of() : List.copyOf(relatedSignals);
+    }
+
+    public RiskItem(
+            String riskId,
+            String ruleCode,
+            ChangeType category,
+            RiskLevel riskLevel,
+            String title,
+            String description,
+            String impact,
+            List<ImpactedResource> affectedResources,
+            List<RiskEvidence> evidences,
+            List<String> recommendedChecks,
+            Set<ReviewRole> suggestedReviewRoles
+    ) {
+        this(riskId, ruleCode, category, riskLevel, title, description, impact, affectedResources, evidences, recommendedChecks, suggestedReviewRoles, null, null, List.of());
     }
 }

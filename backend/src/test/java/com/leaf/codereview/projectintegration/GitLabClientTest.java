@@ -2,6 +2,8 @@ package com.leaf.codereview.projectintegration;
 
 import com.leaf.codereview.common.exception.BusinessException;
 import com.leaf.codereview.projectintegration.domain.GitLabDiffFile;
+import com.leaf.codereview.projectintegration.domain.GitLabMergeRequestDetail;
+import com.leaf.codereview.projectintegration.domain.GitLabProjectDetail;
 import com.leaf.codereview.projectintegration.infrastructure.GitLabApiProperties;
 import com.leaf.codereview.projectintegration.infrastructure.GitLabClient;
 import org.junit.jupiter.api.Test;
@@ -118,6 +120,55 @@ class GitLabClientTest {
         assertThat(files).hasSize(1);
         assertThat(files.getFirst().newPath()).isEqualTo("src/main/java/com/demo/order/OrderController.java");
         assertThat(files.getFirst().diffText()).contains("@PostMapping");
+        server.verify();
+    }
+
+    @Test
+    void fetchesProjectAndMergeRequestDetail() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GitLabClient client = new GitLabClient(
+                new GitLabApiProperties(true, "https://gitlab.example.com/", "test-token", 100),
+                builder
+        );
+
+        server.expect(requestTo("https://gitlab.example.com/api/v4/projects/1001"))
+                .andExpect(header("PRIVATE-TOKEN", "test-token"))
+                .andRespond(withSuccess("""
+                        {
+                          "id": 1001,
+                          "name": "demo-service",
+                          "path_with_namespace": "group/demo-service",
+                          "web_url": "https://gitlab.example.com/group/demo-service"
+                        }
+                        """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://gitlab.example.com/api/v4/projects/1001/merge_requests/21"))
+                .andExpect(header("PRIVATE-TOKEN", "test-token"))
+                .andRespond(withSuccess("""
+                        {
+                          "iid": 21,
+                          "title": "feat: use real gitlab details",
+                          "web_url": "https://gitlab.example.com/group/demo-service/-/merge_requests/21",
+                          "source_branch": "feature/real-source",
+                          "target_branch": "main",
+                          "sha": "abcdef123456",
+                          "author": {
+                            "name": "GitLab User",
+                            "username": "gitlab-user"
+                          }
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        GitLabProjectDetail projectDetail = client.getProjectDetail("1001");
+        GitLabMergeRequestDetail mergeRequestDetail = client.getMergeRequestDetail("1001", "21");
+
+        assertThat(projectDetail.pathWithNamespace()).isEqualTo("group/demo-service");
+        assertThat(projectDetail.webUrl()).isEqualTo("https://gitlab.example.com/group/demo-service");
+        assertThat(mergeRequestDetail.webUrl()).isEqualTo("https://gitlab.example.com/group/demo-service/-/merge_requests/21");
+        assertThat(mergeRequestDetail.sourceBranch()).isEqualTo("feature/real-source");
+        assertThat(mergeRequestDetail.targetBranch()).isEqualTo("main");
+        assertThat(mergeRequestDetail.commitSha()).isEqualTo("abcdef123456");
+        assertThat(mergeRequestDetail.authorUsername()).isEqualTo("gitlab-user");
         server.verify();
     }
 

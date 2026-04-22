@@ -116,9 +116,18 @@ if ($health.success -ne $true -or $health.data.status -ne "UP") {
 Write-Host "Backend is UP."
 
 Write-Host ""
-Write-Host "Step 2/5: Checking GitLab MR diffs API..."
+Write-Host "Step 2/6: Checking GitLab project and MR detail APIs..."
 $encodedProjectId = [uri]::EscapeDataString($projectId)
 $encodedMrIid = [uri]::EscapeDataString($mrIid)
+$projectUrl = "$gitlabBaseUrl/api/v4/projects/$encodedProjectId"
+$mrDetailUrl = "$gitlabBaseUrl/api/v4/projects/$encodedProjectId/merge_requests/$encodedMrIid"
+$projectDetail = Invoke-Json -Method "GET" -Uri $projectUrl -Headers @{ "PRIVATE-TOKEN" = $gitlabToken }
+$mrDetail = Invoke-Json -Method "GET" -Uri $mrDetailUrl -Headers @{ "PRIVATE-TOKEN" = $gitlabToken }
+Write-Host "Project: $($projectDetail.path_with_namespace)"
+Write-Host "MR: !$($mrDetail.iid) $($mrDetail.source_branch) -> $($mrDetail.target_branch)"
+
+Write-Host ""
+Write-Host "Step 3/6: Checking GitLab MR diffs API..."
 $diffUrl = "$gitlabBaseUrl/api/v4/projects/$encodedProjectId/merge_requests/$encodedMrIid/diffs?page=1&per_page=$perPageValue"
 $diffSource = "diffs"
 try {
@@ -140,7 +149,7 @@ if ($null -eq $diffs -or $diffs.Count -eq 0) {
 Write-Host "GitLab returned $($diffs.Count) diff file(s) via /$diffSource."
 
 Write-Host ""
-Write-Host "Step 3/5: Sending webhook payload without changedFiles..."
+Write-Host "Step 4/6: Sending webhook payload without changedFiles and with placeholder metadata..."
 $now = (Get-Date).ToString("yyyy-MM-ddTHH:mm:sszzz")
 $payload = [ordered]@{
     object_kind = "merge_request"
@@ -183,7 +192,7 @@ $taskId = $webhookResponse.data.taskId
 Write-Host "Webhook task created: $taskId"
 
 Write-Host ""
-Write-Host "Step 4/5: Checking task detail..."
+Write-Host "Step 5/6: Checking task detail..."
 $taskDetail = Invoke-Json -Method "GET" -Uri "$backendBaseUrl/api/review-tasks/$taskId"
 $source = $taskDetail.data.changedFilesSummary.source
 $count = $taskDetail.data.changedFilesSummary.count
@@ -196,12 +205,34 @@ if ($count -le 0) {
     Write-Host "Expected changedFilesSummary.count > 0, got: $count" -ForegroundColor Red
     exit 1
 }
+$expectedProjectName = $projectDetail.path_with_namespace
+if ([string]::IsNullOrWhiteSpace($expectedProjectName)) {
+    $expectedProjectName = $projectDetail.name
+}
+if ($taskDetail.data.projectName -ne $expectedProjectName) {
+    Write-Host "Expected projectName=$expectedProjectName, got: $($taskDetail.data.projectName)" -ForegroundColor Red
+    exit 1
+}
+if ($taskDetail.data.sourceBranch -ne $mrDetail.source_branch) {
+    Write-Host "Expected sourceBranch=$($mrDetail.source_branch), got: $($taskDetail.data.sourceBranch)" -ForegroundColor Red
+    exit 1
+}
+if ($taskDetail.data.targetBranch -ne $mrDetail.target_branch) {
+    Write-Host "Expected targetBranch=$($mrDetail.target_branch), got: $($taskDetail.data.targetBranch)" -ForegroundColor Red
+    exit 1
+}
+if ($taskDetail.data.externalUrl -ne $mrDetail.web_url) {
+    Write-Host "Expected externalUrl=$($mrDetail.web_url), got: $($taskDetail.data.externalUrl)" -ForegroundColor Red
+    exit 1
+}
 Write-Host "Task status: $($taskDetail.data.status)"
+Write-Host "Project name: $($taskDetail.data.projectName)"
+Write-Host "Branches: $($taskDetail.data.sourceBranch) -> $($taskDetail.data.targetBranch)"
 Write-Host "Changed files source: $source"
 Write-Host "Changed files count: $count"
 
 Write-Host ""
-Write-Host "Step 5/5: Checking risk result..."
+Write-Host "Step 6/6: Checking risk result..."
 $result = Invoke-Json -Method "GET" -Uri "$backendBaseUrl/api/review-tasks/$taskId/result"
 if ($result.success -ne $true -or $null -eq $result.data.riskCard) {
     Write-Host "Risk result is missing." -ForegroundColor Red
@@ -214,6 +245,9 @@ Write-Host "GitLab validation passed." -ForegroundColor Green
 [PSCustomObject]@{
     taskId = $taskId
     taskStatus = $taskDetail.data.status
+    projectName = $taskDetail.data.projectName
+    sourceBranch = $taskDetail.data.sourceBranch
+    targetBranch = $taskDetail.data.targetBranch
     changedFilesSource = $source
     changedFilesCount = $count
     riskLevel = $result.data.riskLevel

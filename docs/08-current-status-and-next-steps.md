@@ -263,7 +263,7 @@ npm.cmd run build
 .\scripts\verify-gitlab-diff.cmd
 ```
 
-配置文件使用 `.local/gitlab.env`，示例见 `examples/gitlab.env.example`。`.local/` 已加入 `.gitignore`，用于保存 token、MySQL 密码等本地敏感配置。
+配置文件使用 `.local/gitlab.env`，示例见 `examples/gitlab.env.example`。`.local/` 已加入 `.gitignore`，用于保存 token、MySQL 密码等本地敏感配置。验证脚本会读取 GitLab project detail 和 MR detail，并校验后端创建的任务已使用真实项目名、真实 MR URL 和真实 source/target branch。
 
 ### 3.9 已完成的真实 GitLab 验证
 
@@ -284,6 +284,79 @@ changeTypes = DB
 前端可查看该 MR 生成的 review 内容
 ```
 
+### 3.10 DB 规则精度优化第一轮已完成
+
+当前风险识别仍是 MVP 启发式规则，但已完成第一轮 DB 细分优化，避免把 Mapper XML 或实体字段变更直接等同于数据库结构变更。
+
+已完成：
+
+- GitLab 扫描模式的数据准确性：用 MR detail / project detail API 填充真实项目名、MR URL、分支、作者和 commit sha。
+- DB 风险细分：将单一 `DB` 拆为 `DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION` 等更细类型，并保留 `DB` 作为聚合兼容类型。
+- 置信度与证据：风险项已携带命中原因、证据文件、置信度，区分“明确 DDL/migration 变更”和“Mapper SQL/实体字段疑似影响”。
+- 跨文件关联：实体类字段变更 + Mapper 映射变更 + 缺少 migration 时，会生成“疑似 DB schema 未同步”组合风险。
+- 规则模板迁移：新增 `V4__db_fine_grained_rule_templates.sql`，将后端和通用模板升级到 DB 细分规则。
+
+后续仍需优化：
+
+- 前端风险卡片进一步突出展示 `confidence`、`reason`、`relatedSignals`。
+- 与 `docs/04-risk-card-schema.md` 对齐，形成唯一权威 schema。
+- 用真实业务 MR 持续校准规则误报和漏报。
+
+#### 3.10.1 规则细分目标
+
+第一轮不直接追求“所有规则都准确”，而是先把 DB 相关风险从粗粒度命中拆成可解释的最小规则集：
+
+| 细分类型 | 含义 | 典型命中条件 | 初始置信度 |
+| --- | --- | --- | --- |
+| `DB_SCHEMA` | 数据库结构变更 | Flyway/Liquibase migration、DDL、`ALTER TABLE`、`CREATE TABLE`、`DROP COLUMN` | HIGH |
+| `DB_SQL` | SQL 读写逻辑变更 | Mapper XML / SQL 文件中 `select`、`insert`、`update`、`delete`、where/join/order by 变化 | MEDIUM |
+| `ORM_MAPPING` | ORM / MyBatis 映射变更 | `resultMap`、`@Column`、`@Table`、字段映射、Mapper 返回字段变化 | MEDIUM |
+| `ENTITY_MODEL` | 实体模型字段变更 | Java entity / DO / PO 字段增删改、字段类型变化、序列化字段变化 | MEDIUM |
+| `DATA_MIGRATION` | 数据迁移或历史数据兼容风险 | migration 中包含数据修复 SQL、默认值回填、枚举值/状态值转换 | HIGH |
+
+#### 3.10.2 命中原则
+
+规则实现时需要避免“看到 Mapper XML 就直接判定表结构风险”的误报：
+
+- 只改 Mapper XML 的 SQL：优先命中 `DB_SQL`，不直接命中 `DB_SCHEMA`。
+- 只改实体类字段：优先命中 `ENTITY_MODEL`，提示确认是否需要同步 DB/mapping，但不直接断言已发生表结构变更。
+- 出现 DDL / migration：强命中 `DB_SCHEMA`。
+- 实体字段变更 + Mapper 映射字段变更 + 没有 migration：生成“疑似 DB schema 未同步”组合风险，风险等级提升。
+- Mapper 查询条件、join、order by、limit 变化：命中 `DB_SQL`，推荐检查索引、数据量、分页和执行计划。
+- resultMap / insert / update 字段集合变化：命中 `ORM_MAPPING`，推荐检查字段兼容、空值、默认值和回归用例。
+
+#### 3.10.3 风险输出字段规划
+
+细粒度规则需要在风险卡片中增加或显式保留以下信息：
+
+- `category`：细分类型，如 `DB_SQL`、`ENTITY_MODEL`。
+- `confidence`：`LOW / MEDIUM / HIGH`。
+- `reason`：为什么命中该风险。
+- `evidences`：命中文件、片段、规则名。
+- `relatedSignals`：组合判断时关联到的其他信号，例如 entity changed、mapper changed、migration missing。
+
+MVP 兼容策略：当前已先把 `confidence`、`reason`、`relatedSignals` 放进 `riskItems`，后续再和 `docs/04-risk-card-schema.md` 做统一对齐。
+
+#### 3.10.4 第一轮实现范围
+
+第一轮只覆盖 DB 相关规则，不同时扩展 API/CACHE/MQ/CONFIG，已完成：
+
+1. 更新 `docs/06-change-analysis-rules.md`，写清 DB 细分类型和命中样例。
+2. 更新后端 `ChangeType` / 规则配置，支持 `DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION`。
+3. 调整变更分析器，输出细分类型和证据。
+4. 调整风险规则引擎，为细分类型生成更准确的风险项和推荐检查项。
+5. 补单元测试，覆盖 Mapper XML、entity 字段、migration、组合风险四类样例。
+
+#### 3.10.5 验收样例
+
+第一轮规则优化已满足：
+
+- 仅修改 `CarMapper.xml` 查询 SQL：输出 `DB_SQL`，不输出 `DB_SCHEMA`。
+- 修改 entity 字段但无 migration：输出 `ENTITY_MODEL`，并提示确认 DB/mapping 是否同步。
+- 修改 Flyway migration DDL：输出 `DB_SCHEMA`，置信度 HIGH。
+- 同时修改 entity 字段和 Mapper 映射但无 migration：输出组合风险“疑似 DB schema 未同步”，风险等级至少 HIGH。
+- 风险卡片能展示命中原因和证据，前端不再只显示粗粒度 `DB`。
+
 ## 4. 未完成或部分完成内容
 
 ### 4.1 真实 GitLab diff 拉取已完成联调，仍需 webhook 权限接入
@@ -294,6 +367,7 @@ changeTypes = DB
 - 配置 GitLab token。
 - 根据 `projectId + mrIid` 调用 GitLab MR diffs API。
 - GitLab 14.x `/diffs` 404 时 fallback 到 MR changes API。
+- GitLab 扫描模式下使用 project detail / MR detail 回填真实项目信息和分支信息。
 - payload 不含 changed files 时自动补拉。
 - 拉取失败时任务标记 `FAILED` 并记录错误。
 - 保留 P0 mock payload 优先逻辑。
@@ -510,13 +584,38 @@ examples/README.md
 
 - 风险卡片 JSON 有唯一权威结构。
 
+### P5：DB 风险细粒度规则优化
+
+目标：降低 Mapper XML、实体字段、migration 等 DB 相关变更的误报和误判，让风险卡片能解释“为什么命中”和“置信度有多高”。
+
+已完成：
+
+1. 更新 `docs/06-change-analysis-rules.md` 的 DB 细分规则设计。
+2. 拆分 `DB` 为 `DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION`。
+3. 在风险项中增加 `confidence` / `reason` / `relatedSignals`。
+4. 实现第一批 DB 细分识别规则。
+5. 补充单元测试，覆盖 Mapper XML、entity 字段、migration、组合风险。
+
+已满足：
+
+- Mapper XML SQL 变更不再直接等同于 DB schema 风险。
+- migration / DDL 变更能被高置信度识别为 DB schema 风险。
+- 实体字段和 Mapper 映射组合变更能提示“疑似 DB schema 未同步”。
+- 风险卡片能展示细分类型、命中原因和证据。
+
+后续建议：
+
+- 用真实 MR 样本继续校准命中条件，降低业务语义上的误报。
+- 对齐 `docs/04-risk-card-schema.md`，把 `confidence` / `reason` / `relatedSignals` 固化为权威 schema。
+- 前端风险卡片增加更清晰的置信度和关联信号展示。
+
 ## 6. 建议的下一轮 Codex 任务
 
 建议按以下顺序继续推进：
 
 1. `请补一个 webhook 到 review result 的主链路集成测试，覆盖 mock payload 和 gitlab_api source。`
 2. `请新增 examples 目录下的 mock GitLab webhook 和 manual review 请求示例。`
-3. `请实现前端手动发起审查页面，支持输入 projectId + mrIid 或 changedFiles。`
+3. `请对齐 docs/04-risk-card-schema.md 与后端 RiskCard / 前端风险卡片展示字段。`
 4. `请在拿到 GitLab webhook 权限后，配置真实 webhook 并验证自动触发链路。`
 5. `请把 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。`
 

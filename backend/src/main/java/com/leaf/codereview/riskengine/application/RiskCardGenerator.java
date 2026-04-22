@@ -51,7 +51,7 @@ public class RiskCardGenerator {
         List<RiskItem> riskItems = new ArrayList<>();
         int sequence = 1;
         for (RiskRuleDefinition rule : enabledRules) {
-            if (!analysisResult.changeTypes().contains(rule.changeType())) {
+            if (!matchesRule(rule, analysisResult)) {
                 continue;
             }
             riskItems.add(buildRiskItem(sequence++, rule, analysisResult));
@@ -94,11 +94,11 @@ public class RiskCardGenerator {
 
     private RiskItem buildRiskItem(int sequence, RiskRuleDefinition rule, ChangeAnalysisResult analysisResult) {
         List<ImpactedResource> affectedResources = analysisResult.impactedResources().stream()
-                .filter(resource -> matchesRuleChangeType(resource, rule.changeType()))
+                .filter(resource -> matchesRuleResource(resource, rule))
                 .toList();
 
         List<RiskEvidence> evidences = analysisResult.evidences().stream()
-                .filter(evidence -> evidence.changeType() == rule.changeType())
+                .filter(evidence -> matchesRuleEvidence(evidence, rule))
                 .map(this::toRiskEvidence)
                 .toList();
 
@@ -113,12 +113,55 @@ public class RiskCardGenerator {
                 affectedResources,
                 evidences,
                 rule.recommendedChecks(),
-                rule.suggestedReviewRoles()
+                rule.suggestedReviewRoles(),
+                rule.confidence(),
+                rule.reason(),
+                relatedSignals(rule, analysisResult)
         );
     }
 
-    private boolean matchesRuleChangeType(ImpactedResource resource, ChangeType changeType) {
-        return resource.evidence() != null && resource.evidence().changeType() == changeType;
+    private boolean matchesRule(RiskRuleDefinition rule, ChangeAnalysisResult analysisResult) {
+        if ("DB_SCHEMA_SYNC_SUSPECT_CHECK".equals(rule.ruleCode())) {
+            return analysisResult.changeTypes().contains(ChangeType.ENTITY_MODEL)
+                    && analysisResult.changeTypes().contains(ChangeType.ORM_MAPPING)
+                    && !analysisResult.changeTypes().contains(ChangeType.DB_SCHEMA);
+        }
+        return analysisResult.changeTypes().contains(rule.changeType());
+    }
+
+    private boolean matchesRuleResource(ImpactedResource resource, RiskRuleDefinition rule) {
+        return resource.evidence() != null && matchesRuleChangeType(resource.evidence().changeType(), rule);
+    }
+
+    private boolean matchesRuleEvidence(ChangeEvidence evidence, RiskRuleDefinition rule) {
+        return matchesRuleChangeType(evidence.changeType(), rule);
+    }
+
+    private boolean matchesRuleChangeType(ChangeType actualChangeType, RiskRuleDefinition rule) {
+        if ("DB_SCHEMA_SYNC_SUSPECT_CHECK".equals(rule.ruleCode())) {
+            return actualChangeType == ChangeType.ENTITY_MODEL || actualChangeType == ChangeType.ORM_MAPPING;
+        }
+        if (rule.changeType() == ChangeType.DB) {
+            return actualChangeType.isDbFamily();
+        }
+        return actualChangeType == rule.changeType();
+    }
+
+    private List<String> relatedSignals(RiskRuleDefinition rule, ChangeAnalysisResult analysisResult) {
+        if (!"DB_SCHEMA_SYNC_SUSPECT_CHECK".equals(rule.ruleCode())) {
+            return List.of();
+        }
+        List<String> signals = new ArrayList<>();
+        if (analysisResult.changeTypes().contains(ChangeType.ENTITY_MODEL)) {
+            signals.add("entity model changed");
+        }
+        if (analysisResult.changeTypes().contains(ChangeType.ORM_MAPPING)) {
+            signals.add("ORM/MyBatis mapping changed");
+        }
+        if (!analysisResult.changeTypes().contains(ChangeType.DB_SCHEMA)) {
+            signals.add("migration or DDL not detected");
+        }
+        return signals;
     }
 
     private RiskEvidence toRiskEvidence(ChangeEvidence evidence) {

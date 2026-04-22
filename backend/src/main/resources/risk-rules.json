@@ -15,16 +15,98 @@
       "suggestedReviewRoles": ["BACKEND", "QA", "OWNER"]
     },
     {
-      "ruleCode": "DB_CHANGE_CHECK",
-      "changeType": "DB",
+      "ruleCode": "DB_SCHEMA_CHANGE_CHECK",
+      "changeType": "DB_SCHEMA",
       "riskLevel": "HIGH",
-      "title": "数据库变更需要确认数据兼容与回滚方案",
-      "description": "检测到 SQL、Mapper、Entity、Repository 或 migration 发生变化，需要确认数据结构、查询性能和兼容性。",
-      "impact": "可能引入数据不一致、慢 SQL、字段兼容或上线回滚风险。",
+      "title": "数据库表结构变更需要确认兼容与回滚",
+      "description": "检测到 migration、DDL 或表结构语句发生变化，需要确认历史数据兼容、灰度发布和回滚方案。",
+      "impact": "可能导致字段缺失、索引异常、历史数据不兼容或上线后无法快速回滚。",
+      "confidence": "HIGH",
+      "reason": "出现明确 DDL / migration schema 信号。",
       "recommendedChecks": [
-        "确认表结构和 SQL 变更是否兼容历史数据。",
-        "确认是否需要索引、数据迁移脚本或回滚脚本。",
-        "覆盖核心查询、写入和异常数据场景。"
+        "确认 DDL 是否兼容历史数据和线上表规模。",
+        "确认是否需要默认值、回填脚本、索引和回滚脚本。",
+        "确认 migration 已在测试环境完整执行并可观测。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "DBA", "QA"]
+    },
+    {
+      "ruleCode": "DB_SQL_CHANGE_CHECK",
+      "changeType": "DB_SQL",
+      "riskLevel": "MEDIUM",
+      "title": "SQL 读写逻辑变更需要确认性能与结果兼容",
+      "description": "检测到 Mapper XML、SQL 文件或代码中的 SQL 读写逻辑发生变化，需要确认查询结果、索引和边界数据。",
+      "impact": "可能引入慢 SQL、结果集变化、分页异常或写入条件不一致。",
+      "confidence": "MEDIUM",
+      "reason": "出现 SQL select/insert/update/delete 信号，但未直接发现表结构变更。",
+      "recommendedChecks": [
+        "确认 where、join、order by、limit 和返回字段变化符合预期。",
+        "确认核心 SQL 有索引支撑，并检查大数据量下执行计划。",
+        "覆盖空结果、多结果、边界状态和异常数据场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "DBA", "QA"]
+    },
+    {
+      "ruleCode": "ORM_MAPPING_CHANGE_CHECK",
+      "changeType": "ORM_MAPPING",
+      "riskLevel": "MEDIUM",
+      "title": "ORM / MyBatis 映射变更需要确认字段兼容",
+      "description": "检测到 resultMap、字段映射、ORM 注解或 Mapper 映射结构发生变化，需要确认实体字段与数据库列保持一致。",
+      "impact": "可能导致字段为空、类型转换失败、查询结果映射错误或写入字段遗漏。",
+      "confidence": "MEDIUM",
+      "reason": "出现 resultMap / 字段映射 / ORM 注解信号。",
+      "recommendedChecks": [
+        "确认 resultMap、insert、update 和 select 字段集合与实体字段一致。",
+        "确认新增字段有默认值、空值处理和兼容测试。",
+        "确认 Mapper 映射变更不依赖未上线的数据库结构。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "DBA", "QA"]
+    },
+    {
+      "ruleCode": "ENTITY_MODEL_CHANGE_CHECK",
+      "changeType": "ENTITY_MODEL",
+      "riskLevel": "MEDIUM",
+      "title": "实体模型字段变更需要确认数据库与映射同步",
+      "description": "检测到 Entity / DO / PO 字段或 ORM 注解发生变化，需要确认数据库列、Mapper 映射和序列化兼容。",
+      "impact": "可能导致字段未入库、读取为空、类型不兼容或接口返回字段变化。",
+      "confidence": "MEDIUM",
+      "reason": "出现实体字段或 ORM 注解变更信号。",
+      "recommendedChecks": [
+        "确认实体字段变更是否需要对应 migration 或 Mapper 映射变更。",
+        "确认字段类型、默认值、空值和序列化行为兼容历史数据。",
+        "覆盖新老数据读写和字段缺省场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "DBA", "QA"]
+    },
+    {
+      "ruleCode": "DATA_MIGRATION_CHECK",
+      "changeType": "DATA_MIGRATION",
+      "riskLevel": "HIGH",
+      "title": "数据迁移或历史数据修复需要确认幂等与回滚",
+      "description": "检测到 migration 中包含数据修复、回填或状态转换逻辑，需要确认幂等性、批量执行策略和回滚方案。",
+      "impact": "可能导致历史数据不一致、重复回填、锁表或长事务风险。",
+      "confidence": "HIGH",
+      "reason": "出现 migration 数据更新或历史数据修复信号。",
+      "recommendedChecks": [
+        "确认数据修复脚本幂等，可重复执行且有影响范围评估。",
+        "确认大表更新有分批、限流、索引和锁等待控制。",
+        "确认执行前后校验 SQL、备份和回滚方案。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "DBA", "SRE", "QA"]
+    },
+    {
+      "ruleCode": "DB_SCHEMA_SYNC_SUSPECT_CHECK",
+      "changeType": "ENTITY_MODEL",
+      "riskLevel": "HIGH",
+      "title": "疑似实体、映射与数据库结构未同步",
+      "description": "检测到实体字段和 ORM/MyBatis 映射同时变化，但未发现 migration 或 DDL，需要确认是否遗漏表结构变更。",
+      "impact": "可能导致代码依赖的字段在数据库中不存在，或 Mapper 与实体模型不一致。",
+      "confidence": "MEDIUM",
+      "reason": "组合信号：entity model changed + ORM mapping changed + migration/DDL not detected。",
+      "recommendedChecks": [
+        "确认本次实体字段变更是否需要新增或修改数据库列。",
+        "确认 Mapper 映射字段与数据库实际列一致。",
+        "如确实不需要 migration，请在 MR 说明中解释原因。"
       ],
       "suggestedReviewRoles": ["BACKEND", "DBA", "QA"]
     },

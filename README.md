@@ -40,6 +40,8 @@ mock GitLab MR webhook
 - 审查模板查看与项目默认模板绑定。
 - 手动审查后端接口。
 - payload 不带 `changedFiles` 时，可通过 GitLab API 拉取 MR diff。
+- GitLab 扫描模式下通过 project detail / MR detail 回填真实项目名、MR URL、分支、作者和 commit sha。
+- DB 风险第一轮细分识别：`DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION`，并保留 `DB` 聚合类型兼容旧模板。
 
 暂未完成：
 
@@ -129,6 +131,7 @@ mvn spring-boot:run
 src/main/resources/db/migration/V1__init_mvp_schema.sql
 src/main/resources/db/migration/V2__gitlab_mr_webhook_events.sql
 src/main/resources/db/migration/V3__review_templates.sql
+src/main/resources/db/migration/V4__db_fine_grained_rule_templates.sql
 ```
 
 当前 migration 会创建 MVP 所需基础表：
@@ -146,6 +149,8 @@ src/main/resources/db/migration/V3__review_templates.sql
 - `backend-default`
 - `frontend-default`
 - `general-default`
+
+其中 `V4` 会将后端和通用模板升级到 DB 细分风险规则，避免仅修改 Mapper XML 或实体字段时被直接误判为数据库结构变更。
 
 ### 5. 验证后端
 
@@ -449,6 +454,8 @@ Copy-Item examples/gitlab.env.example .local/gitlab.env
 .\scripts\verify-gitlab-diff.cmd
 ```
 
+验证脚本会先读取 GitLab project detail 和 MR detail，再发送一个不携带 `changedFiles` 的模拟 webhook。后端会使用 GitLab API 回填真实项目名称、MR URL、source/target branch、作者和 commit sha，避免验证模式下前端显示占位项目名或占位分支名。
+
 启用方式：
 
 ```powershell
@@ -589,5 +596,5 @@ http://localhost:5173
 1. 新增 `examples/`，保存 mock GitLab webhook 和 manual review 请求示例。
 2. 补主链路集成测试，覆盖 `webhook -> review_results -> notification_records`。
 3. 完善 GitLab diff 接入的真实环境联调、项目级凭证和失败重试。
-4. 实现前端手动发起审查页面。
-5. 将钉钉 webhook 从环境变量升级为项目级数据库配置。
+4. 对齐 `docs/04-risk-card-schema.md` 与后端 `RiskCard` / 前端风险卡片展示字段。
+5. 将 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。

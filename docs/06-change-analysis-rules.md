@@ -2,10 +2,15 @@
 
 ## 1. 目标
 
-MVP 版变更分析器用于根据 changed files、单文件 diff 文本和全局 diff 文本，识别本次 MR 是否涉及以下五类变更：
+MVP 版变更分析器用于根据 changed files、单文件 diff 文本和全局 diff 文本，识别本次 MR 是否涉及以下变更：
 
 - API
-- DB
+- DB（聚合类型）
+- DB_SCHEMA
+- DB_SQL
+- ORM_MAPPING
+- ENTITY_MODEL
+- DATA_MIGRATION
 - CACHE
 - MQ
 - CONFIG
@@ -84,7 +89,7 @@ public interface ChangeAnalysisRule {
 
 聚合服务 `ChangeAnalysisService` 不关心具体规则细节，只负责执行规则、合并命中结果、生成统一输出。
 
-## 5. 五类识别逻辑
+## 5. 识别逻辑
 
 ### 5.1 API
 
@@ -106,28 +111,136 @@ public interface ChangeAnalysisRule {
 - 优先提取 mapping 注解中的 HTTP 方法和路径，例如 `GET /api/orders/{id}`。
 - 无法提取时退化为文件路径。
 
-### 5.2 DB
+### 5.2 DB 聚合类型
+
+`DB` 作为兼容聚合类型保留。只要命中 `DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL` 或 `DATA_MIGRATION`，分析结果会同时包含 `DB`，用于旧模板、汇总和粗粒度筛选。
+
+但风险卡片应优先展示细分类型，不应把 Mapper XML 或 Entity 变更直接等同于表结构变更。
+
+### 5.3 DB_SCHEMA
 
 命中条件：
 
-- 文件路径包含：`mapper`、`repository`、`dao`、`entity`、`migration`、`schema`、`.sql`、`mybatis`、`jpa`。
-- 或 diff 内容包含 SQL / ORM 特征：
-  - `insert into`
+- 文件路径或内容体现 Flyway / Liquibase / migration / schema 变更。
+- diff 内容包含 DDL 特征：
   - `create table`
   - `alter table`
   - `drop table`
-  - `@Table`
-  - `@Entity`
-  - `select ... from`
-  - `update ... set`
-  - `delete from`
+  - `add column`
+  - `drop column`
+  - `modify column`
+  - `create index`
+  - `drop index`
 
 资源提取：
 
 - 优先提取表名，例如 `orders`。
-- 无法提取时退化为 SQL 文件或代码文件路径。
+- 无法提取时退化为 SQL 文件路径。
 
-### 5.3 CACHE
+置信度：
+
+- 初始置信度为 `HIGH`。
+
+### 5.4 DB_SQL
+
+命中条件：
+
+- Mapper XML、SQL 文件或代码 diff 中包含 SQL 读写逻辑：
+  - `select ... from`
+  - `insert into`
+  - `update ... set`
+  - `delete from`
+- 查询条件、join、order by、limit 或返回字段变化。
+
+资源提取：
+
+- 优先提取表名，例如 `orders`。
+- 无法提取时退化为 SQL 文件路径。
+
+置信度：
+
+- 初始置信度为 `MEDIUM`。
+- 仅修改 Mapper XML 的 SQL 时，不直接命中 `DB_SCHEMA`。
+
+### 5.5 ORM_MAPPING
+
+命中条件：
+
+- MyBatis / ORM 映射结构变化：
+  - `resultMap`
+  - `<result ...>`
+  - `<id ...>`
+  - `column=`
+  - `property=`
+  - `@Table`
+  - `@Column`
+  - `@JoinColumn`
+
+资源提取：
+
+- 优先提取表名或字段片段。
+- 无法提取时退化为 Mapper / Entity 文件路径。
+
+置信度：
+
+- 初始置信度为 `MEDIUM`。
+
+### 5.6 ENTITY_MODEL
+
+命中条件：
+
+- Java Entity / DO / PO / domain model 字段增删改。
+- ORM 注解变化：
+  - `@Entity`
+  - `@Table`
+  - `@Column`
+- 字段类型变化、字段名变化、序列化字段变化。
+
+资源提取：
+
+- 优先提取字段名。
+- 无法提取时退化为实体类文件路径。
+
+置信度：
+
+- 初始置信度为 `MEDIUM`。
+- 只命中实体字段变更时，提示确认 DB / Mapper 是否同步，但不直接断言表结构已变更。
+
+### 5.7 DATA_MIGRATION
+
+命中条件：
+
+- migration 中包含数据修复、历史数据回填或状态值转换。
+- migration 文件中出现 `insert into`、`update ... set`、`delete from`，且不是纯 DDL。
+- diff 内容包含：
+  - `backfill`
+  - `migrate`
+  - `数据修复`
+  - `回填`
+  - `历史数据`
+
+资源提取：
+
+- 优先提取表名。
+- 无法提取时退化为 migration 文件路径。
+
+置信度：
+
+- 初始置信度为 `HIGH`。
+
+### 5.8 DB 组合风险
+
+以下组合需要在风险引擎中提升风险等级：
+
+- `ENTITY_MODEL` + `ORM_MAPPING` + 未命中 `DB_SCHEMA`：
+  - 输出“疑似实体、映射与数据库结构未同步”。
+  - 建议确认是否遗漏 migration 或 DDL。
+- `DB_SQL` + `CONFIG`：
+  - 建议确认数据源、分页、开关或灰度配置是否影响 SQL 路径。
+- `DB_SCHEMA` + `DATA_MIGRATION`：
+  - 建议确认结构变更和数据回填的执行顺序、幂等性和回滚策略。
+
+### 5.9 CACHE
 
 命中条件：
 
@@ -148,7 +261,7 @@ public interface ChangeAnalysisRule {
 - 优先提取形如 `order:detail` 的缓存 key。
 - 无法提取时退化为文件路径。
 
-### 5.4 MQ
+### 5.10 MQ
 
 命中条件：
 
@@ -173,7 +286,7 @@ public interface ChangeAnalysisRule {
 - 优先提取 `topic = "xxx"`、`topics = "xxx"` 或 `destination = "xxx"`。
 - 无法提取时退化为文件路径。
 
-### 5.5 CONFIG
+### 5.11 CONFIG
 
 命中条件：
 
@@ -253,7 +366,7 @@ public interface ChangeAnalysisRule {
 
 ```json
 {
-  "changeTypes": ["DB"],
+  "changeTypes": ["DB", "DB_SQL"],
   "resourceType": "DB_TABLE",
   "resourceName": "orders"
 }
@@ -274,9 +387,51 @@ public interface ChangeAnalysisRule {
 
 ```json
 {
-  "changeTypes": ["DB"],
+  "changeTypes": ["DB", "DB_SCHEMA"],
   "resourceType": "DB_TABLE",
   "resourceName": "orders"
+}
+```
+
+### 示例 4.1：实体字段变更
+
+输入：
+
+```json
+{
+  "path": "src/main/java/com/demo/car/entity/Car.java",
+  "diffText": "+ private String supportDeviceModel;"
+}
+```
+
+输出摘要：
+
+```json
+{
+  "changeTypes": ["DB", "ENTITY_MODEL"],
+  "resourceType": "ENTITY_FIELD",
+  "resourceName": "supportDeviceModel"
+}
+```
+
+### 示例 4.2：MyBatis 映射变更
+
+输入：
+
+```json
+{
+  "path": "src/main/resources/mapper/CarMapper.xml",
+  "diffText": "+ <result column=\"support_device_model\" property=\"supportDeviceModel\" />"
+}
+```
+
+输出摘要：
+
+```json
+{
+  "changeTypes": ["DB", "ORM_MAPPING"],
+  "resourceType": "ORM_MAPPING",
+  "resourceName": "CarMapper.xml"
 }
 ```
 

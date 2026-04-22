@@ -49,10 +49,55 @@ class ChangeAnalysisServiceTest {
                 "+ select id, status from orders where id = #{id}"
         ));
 
-        assertThat(result.changeTypes()).containsExactly(ChangeType.DB);
+        assertThat(result.changeTypes()).containsExactlyInAnyOrder(ChangeType.DB, ChangeType.DB_SQL);
         assertThat(result.impactedResources()).anySatisfy(resource -> {
             assertThat(resource.resourceType()).isEqualTo(ResourceType.DB_TABLE);
             assertThat(resource.name()).isEqualTo("orders");
+            assertThat(resource.evidence().changeType()).isEqualTo(ChangeType.DB_SQL);
+        });
+    }
+
+    @Test
+    void detectsDbSchemaChangeFromMigrationDdl() {
+        ChangeAnalysisResult result = analyze(ChangedFile.of(
+                "db/migration/V12__alter_car.sql",
+                "+ alter table car add column support_device_model varchar(64)"
+        ));
+
+        assertThat(result.changeTypes()).containsExactlyInAnyOrder(ChangeType.DB, ChangeType.DB_SCHEMA);
+        assertThat(result.impactedResources()).anySatisfy(resource -> {
+            assertThat(resource.resourceType()).isEqualTo(ResourceType.DB_TABLE);
+            assertThat(resource.name()).isEqualTo("car");
+            assertThat(resource.evidence().changeType()).isEqualTo(ChangeType.DB_SCHEMA);
+        });
+    }
+
+    @Test
+    void detectsEntityModelChangeFromEntityField() {
+        ChangeAnalysisResult result = analyze(ChangedFile.of(
+                "src/main/java/com/demo/car/entity/Car.java",
+                "+ private String supportDeviceModel;"
+        ));
+
+        assertThat(result.changeTypes()).containsExactlyInAnyOrder(ChangeType.DB, ChangeType.ENTITY_MODEL);
+        assertThat(result.impactedResources()).anySatisfy(resource -> {
+            assertThat(resource.resourceType()).isEqualTo(ResourceType.ENTITY_FIELD);
+            assertThat(resource.name()).isEqualTo("supportDeviceModel");
+            assertThat(resource.evidence().changeType()).isEqualTo(ChangeType.ENTITY_MODEL);
+        });
+    }
+
+    @Test
+    void detectsOrmMappingChangeFromResultMap() {
+        ChangeAnalysisResult result = analyze(ChangedFile.of(
+                "src/main/resources/mapper/CarMapper.xml",
+                "+ <result column=\"support_device_model\" property=\"supportDeviceModel\" />"
+        ));
+
+        assertThat(result.changeTypes()).containsExactlyInAnyOrder(ChangeType.DB, ChangeType.ORM_MAPPING);
+        assertThat(result.impactedResources()).anySatisfy(resource -> {
+            assertThat(resource.resourceType()).isEqualTo(ResourceType.ORM_MAPPING);
+            assertThat(resource.evidence().changeType()).isEqualTo(ChangeType.ORM_MAPPING);
         });
     }
 
@@ -106,7 +151,7 @@ class ChangeAnalysisServiceTest {
                 ChangedFile.of("src/main/resources/application.yml", "+ rocketmq:\n+   name-server: localhost:9876")
         ), null));
 
-        assertThat(result.changeTypes()).containsExactlyInAnyOrder(ChangeType.API, ChangeType.DB, ChangeType.CONFIG, ChangeType.MQ);
+        assertThat(result.changeTypes()).containsExactlyInAnyOrder(ChangeType.API, ChangeType.DB, ChangeType.DB_SQL, ChangeType.CONFIG, ChangeType.MQ);
         assertThat(result.changedFileCount()).isEqualTo(3);
         assertThat(result.changedFiles()).hasSize(3);
         assertThat(result.summary()).contains("matched change types");

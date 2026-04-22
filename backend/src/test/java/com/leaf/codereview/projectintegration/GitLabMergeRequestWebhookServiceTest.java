@@ -10,6 +10,8 @@ import com.leaf.codereview.notification.domain.NotificationStatus;
 import com.leaf.codereview.notification.infrastructure.NotificationRecordRepository;
 import com.leaf.codereview.projectintegration.application.GitLabMergeRequestWebhookService;
 import com.leaf.codereview.projectintegration.domain.GitLabDiffFile;
+import com.leaf.codereview.projectintegration.domain.GitLabMergeRequestDetail;
+import com.leaf.codereview.projectintegration.domain.GitLabProjectDetail;
 import com.leaf.codereview.projectintegration.domain.ProjectRecord;
 import com.leaf.codereview.projectintegration.infrastructure.GitLabClient;
 import com.leaf.codereview.projectintegration.infrastructure.GitLabMrWebhookEventRepository;
@@ -52,6 +54,22 @@ class GitLabMergeRequestWebhookServiceTest {
     void fetchesGitLabDiffsWhenWebhookPayloadDoesNotProvideChangedFiles() throws Exception {
         GitLabMergeRequestWebhookService service = newService();
         stubSuccessfulReview();
+        when(gitLabClient.getProjectDetail("1001")).thenReturn(new GitLabProjectDetail(
+                "1001",
+                "demo-service",
+                "group/demo-service",
+                "https://gitlab.example.com/group/demo-service"
+        ));
+        when(gitLabClient.getMergeRequestDetail("1001", "21")).thenReturn(new GitLabMergeRequestDetail(
+                "21",
+                "feat: real gitlab detail",
+                "https://gitlab.example.com/group/demo-service/-/merge_requests/21",
+                "feature/real-source-branch",
+                "release/real-target-branch",
+                "real-sha-from-api",
+                "Real GitLab User",
+                "real-gitlab-user"
+        ));
         when(gitLabClient.listMergeRequestDiffs("1001", "21")).thenReturn(List.of(
                 new GitLabDiffFile(
                         "src/main/java/com/demo/order/OrderController.java",
@@ -92,6 +110,19 @@ class GitLabMergeRequestWebhookServiceTest {
                 """));
 
         verify(gitLabClient).listMergeRequestDiffs("1001", "21");
+        verify(projectRepository).upsertGitLabProject(
+                "1001",
+                "group/demo-service",
+                "https://gitlab.example.com/group/demo-service"
+        );
+
+        ArgumentCaptor<ReviewTaskCreateCommand> taskCaptor = ArgumentCaptor.forClass(ReviewTaskCreateCommand.class);
+        verify(reviewTaskRepository).create(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().sourceBranch()).isEqualTo("feature/real-source-branch");
+        assertThat(taskCaptor.getValue().targetBranch()).isEqualTo("release/real-target-branch");
+        assertThat(taskCaptor.getValue().commitSha()).isEqualTo("real-sha-from-api");
+        assertThat(taskCaptor.getValue().authorName()).isEqualTo("Real GitLab User");
+        assertThat(taskCaptor.getValue().authorUsername()).isEqualTo("real-gitlab-user");
 
         ArgumentCaptor<ChangeAnalysisRequest> requestCaptor = ArgumentCaptor.forClass(ChangeAnalysisRequest.class);
         verify(changeAnalysisService).analyze(requestCaptor.capture());

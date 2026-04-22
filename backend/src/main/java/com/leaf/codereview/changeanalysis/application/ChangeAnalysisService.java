@@ -67,10 +67,16 @@ public class ChangeAnalysisService {
             Map<String, Set<ChangeType>> fileMatches
     ) {
         allChangeTypes.add(match.changeType());
+        if (match.changeType().isDbFamily() && match.changeType() != ChangeType.DB) {
+            allChangeTypes.add(ChangeType.DB);
+        }
         impactedResources.addAll(match.impactedResources());
         evidences.addAll(match.evidences());
-        fileMatches.computeIfAbsent(match.changedFile().effectivePath(), ignored -> EnumSet.noneOf(ChangeType.class))
-                .add(match.changeType());
+        Set<ChangeType> matchedTypes = fileMatches.computeIfAbsent(match.changedFile().effectivePath(), ignored -> EnumSet.noneOf(ChangeType.class));
+        matchedTypes.add(match.changeType());
+        if (match.changeType().isDbFamily() && match.changeType() != ChangeType.DB) {
+            matchedTypes.add(ChangeType.DB);
+        }
     }
 
     private List<ChangedFile> normalizeFiles(ChangeAnalysisRequest request) {

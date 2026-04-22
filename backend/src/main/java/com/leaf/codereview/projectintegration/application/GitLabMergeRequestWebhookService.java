@@ -15,7 +15,9 @@ import com.leaf.codereview.notification.application.DingTalkNotifier;
 import com.leaf.codereview.notification.domain.DingTalkNotificationResult;
 import com.leaf.codereview.notification.infrastructure.NotificationRecordRepository;
 import com.leaf.codereview.projectintegration.domain.GitLabDiffFile;
+import com.leaf.codereview.projectintegration.domain.GitLabMergeRequestDetail;
 import com.leaf.codereview.projectintegration.domain.GitLabMergeRequestEvent;
+import com.leaf.codereview.projectintegration.domain.GitLabProjectDetail;
 import com.leaf.codereview.projectintegration.domain.ProjectRecord;
 import com.leaf.codereview.projectintegration.infrastructure.GitLabClient;
 import com.leaf.codereview.projectintegration.infrastructure.GitLabMrWebhookEventRepository;
@@ -25,6 +27,8 @@ import com.leaf.codereview.reviewrecord.infrastructure.ReviewResultRepository;
 import com.leaf.codereview.reviewrecord.infrastructure.ReviewTaskRepository;
 import com.leaf.codereview.riskengine.application.RiskCardGenerator;
 import com.leaf.codereview.riskengine.domain.RiskCard;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -40,6 +44,8 @@ import java.util.Locale;
 
 @Service
 public class GitLabMergeRequestWebhookService {
+
+    private static final Logger log = LoggerFactory.getLogger(GitLabMergeRequestWebhookService.class);
 
     private static final String GITLAB_MR_HEADER = "Merge Request Hook";
     private static final String OBJECT_KIND = "merge_request";
@@ -84,7 +90,7 @@ public class GitLabMergeRequestWebhookService {
     public GitLabWebhookResponse handle(String gitlabEventHeader, JsonNode payload) {
         validateGitLabMergeRequestEvent(gitlabEventHeader, payload);
 
-        GitLabMergeRequestEvent event = parseEvent(payload);
+        GitLabMergeRequestEvent event = enrichWithGitLabDetail(parseEvent(payload));
         ProjectRecord project = projectRepository.upsertGitLabProject(
                 event.gitProjectId(),
                 event.projectName(),
@@ -134,6 +140,22 @@ public class GitLabMergeRequestWebhookService {
         JsonNode changedFilesSummary = buildGitLabChangedFilesSummary(diffFiles);
         webhookEventRepository.updateChangedFilesSummary(taskId, changedFilesSummary);
         return copyWithChangedFilesSummary(event, changedFilesSummary);
+    }
+
+    private GitLabMergeRequestEvent enrichWithGitLabDetail(GitLabMergeRequestEvent event) {
+        if ("payload".equals(textAt(event.changedFilesSummary(), "/source"))) {
+            return event;
+        }
+
+        try {
+            GitLabProjectDetail projectDetail = gitLabClient.getProjectDetail(event.gitProjectId());
+            GitLabMergeRequestDetail mergeRequestDetail = gitLabClient.getMergeRequestDetail(event.gitProjectId(), event.mrId());
+            return copyWithGitLabDetail(event, projectDetail, mergeRequestDetail);
+        } catch (Exception exception) {
+            log.warn("Failed to enrich GitLab MR detail for projectId={}, mrId={}: {}",
+                    event.gitProjectId(), event.mrId(), exception.getMessage());
+            return event;
+        }
     }
 
     private void processReviewTask(Long taskId, Long projectId, String templateCode, GitLabMergeRequestEvent event) {
@@ -302,6 +324,31 @@ public class GitLabMergeRequestWebhookService {
         );
     }
 
+    private GitLabMergeRequestEvent copyWithGitLabDetail(
+            GitLabMergeRequestEvent event,
+            GitLabProjectDetail projectDetail,
+            GitLabMergeRequestDetail mergeRequestDetail
+    ) {
+        return new GitLabMergeRequestEvent(
+                event.gitProjectId(),
+                firstNonBlank(projectDetail == null ? null : projectDetail.pathWithNamespace(),
+                        projectDetail == null ? null : projectDetail.name(),
+                        event.projectName()),
+                firstNonBlank(projectDetail == null ? null : projectDetail.webUrl(), event.repositoryUrl()),
+                firstNonBlank(mergeRequestDetail == null ? null : mergeRequestDetail.iid(), event.mrId()),
+                event.eventAction(),
+                event.eventTime(),
+                firstNonBlank(mergeRequestDetail == null ? null : mergeRequestDetail.webUrl(), event.externalUrl()),
+                firstNonBlank(mergeRequestDetail == null ? null : mergeRequestDetail.sourceBranch(), event.sourceBranch()),
+                firstNonBlank(mergeRequestDetail == null ? null : mergeRequestDetail.targetBranch(), event.targetBranch()),
+                firstNonBlank(mergeRequestDetail == null ? null : mergeRequestDetail.commitSha(), event.commitSha()),
+                firstNonBlank(mergeRequestDetail == null ? null : mergeRequestDetail.authorName(), event.authorName()),
+                firstNonBlank(mergeRequestDetail == null ? null : mergeRequestDetail.authorUsername(), event.authorUsername()),
+                event.changedFilesSummary(),
+                event.rawPayload()
+        );
+    }
+
     private ObjectNode normalizeChangedFile(JsonNode fileNode) {
         ObjectNode file = objectMapper.createObjectNode();
         if (fileNode.isTextual()) {
@@ -373,6 +420,15 @@ public class GitLabMergeRequestWebhookService {
     private String firstText(JsonNode node, String... pointers) {
         for (String pointer : pointers) {
             String value = textAt(node, pointer);
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
             if (StringUtils.hasText(value)) {
                 return value;
             }
