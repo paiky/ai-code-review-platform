@@ -457,21 +457,21 @@ examples/README.md
 - 钉钉 webhook 未配置。
 - 前端代理失败。
 
-### 4.7 RiskCard schema 第一轮已对齐，仍需补测试
+### 4.7 RiskCard schema 第一轮已对齐
 
-`docs/04-risk-card-schema.md` 已更新为当前后端 `RiskCard` / `RiskItem` 的实际结构，并明确 DB 细分风险项的 `category`、`confidence`、`reason`、`relatedSignals`、`evidences` 展示要求。
+`docs/04-risk-card-schema.md` 已更新为当前后端 `RiskCard` / `RiskItem` 的实际结构，并明确 DB / MQ / CACHE 细分风险项的 `category`、`confidence`、`reason`、`relatedSignals`、`evidences` 展示要求。
 
 已完成：
 
 1. schema 文档对齐当前 MVP 简化版字段。
-2. 前端风险卡片展示 DB 细分类型、置信度、命中原因、关联信号和证据。
+2. 前端风险卡片展示 DB / MQ / CACHE 细分类型、置信度、命中原因、关联信号和证据。
 3. 后端 `RiskItem` 已输出 `confidence` / `reason` / `relatedSignals`。
+4. 新增 `RiskCardSchemaTest`，解析 `docs/04-risk-card-schema.md` 中的 JSON Schema，并校验 DB / MQ / CACHE 细分字段和枚举同步。
 
 后续需要：
 
-1. 补 RiskCard schema 校验测试。
-2. 增强钉钉消息中的 DB 细分展示。
-3. 如果后续扩展完整项目、触发源、通知字段，再同步升级 schema 和代码对象。
+1. 增强钉钉消息中的 DB / MQ / CACHE 细分展示。
+2. 如果后续扩展完整项目、触发源、通知字段，再同步升级 schema 和代码对象。
 
 ### 4.8 知识库与人工反馈未完成
 
@@ -582,17 +582,17 @@ examples/README.md
 已完成：
 
 1. 对齐 `docs/04-risk-card-schema.md` 与后端 `RiskCard`。
-2. 前端基于统一 schema 展示 DB 细分风险项。
+2. 前端基于统一 schema 展示 DB / MQ / CACHE 细分风险项。
+3. 补充 schema 校验测试，覆盖 DB / MQ / CACHE 细分字段。
 
 后续任务：
 
-1. 补 schema 校验测试。
-2. 增强钉钉消息中的 DB 细分展示。
+1. 增强钉钉消息中的 DB / MQ / CACHE 细分展示。
 
 验收标准：
 
 - 风险卡片 JSON 有唯一权威结构。
-- DB 细分风险项能展示类型、置信度、命中原因、关联信号和证据。
+- DB / MQ / CACHE 细分风险项能展示类型、置信度、命中原因、关联信号和证据。
 
 ### P5：DB 风险细粒度规则优化
 
@@ -616,8 +616,7 @@ examples/README.md
 后续建议：
 
 - 用真实 MR 样本继续校准命中条件，降低业务语义上的误报。
-- 补 schema 校验测试，保护 `confidence` / `reason` / `relatedSignals` 字段不被回退。
-- 增强钉钉消息中的 DB 细分展示。
+- 增强钉钉消息中的 DB / MQ / CACHE 细分展示。
 
 ### P6：API / CACHE / MQ / CONFIG 细粒度规则优化
 
@@ -679,8 +678,8 @@ examples/README.md
 
 建议按以下顺序继续推进：
 
-1. `请补 RiskCard schema 校验测试，并覆盖 DB、MQ、CACHE 细分字段。`
-2. `请实现 API 第一轮细分规则，保留 API 聚合类型兼容旧模板。`
+1. `请实现 API 第一轮细分规则，保留 API 聚合类型兼容旧模板。`
+2. `请增强钉钉消息中的 DB / MQ / CACHE 细分展示。`
 3. `请补一个 webhook 到 review result 的主链路集成测试，覆盖 mock payload 和 gitlab_api source。`
 4. `请新增 examples 目录下的 mock GitLab webhook 和 manual review 请求示例。`
 5. `请在拿到 GitLab webhook 权限后，配置真实 webhook 并验证自动触发链路。`
