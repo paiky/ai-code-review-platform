@@ -42,7 +42,8 @@ mock GitLab MR webhook
 - payload 不带 `changedFiles` 时，可通过 GitLab API 拉取 MR diff。
 - GitLab 扫描模式下通过 project detail / MR detail 回填真实项目名、MR URL、分支、作者和 commit sha。
 - DB 风险第一轮细分识别：`DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION`，并保留 `DB` 聚合类型兼容旧模板。
-- RiskCard schema 已对齐当前后端对象，前端风险卡片可展示 DB 细分类型、置信度、命中原因、关联信号和证据。
+- MQ / CACHE 风险第一轮细分识别：`MQ_PRODUCER`、`MQ_CONSUMER`、`MQ_MESSAGE_SCHEMA`、`MQ_TOPIC_CONFIG`、`MQ_RETRY_DLQ`、`CACHE_KEY`、`CACHE_TTL`、`CACHE_INVALIDATION`、`CACHE_READ_WRITE`、`CACHE_SERIALIZATION`，并保留 `MQ` / `CACHE` 聚合类型兼容旧模板。
+- RiskCard schema 已对齐当前后端对象，前端风险卡片可展示 DB / MQ / CACHE 细分类型、置信度、命中原因、关联信号和证据。
 
 暂未完成：
 
@@ -133,6 +134,7 @@ src/main/resources/db/migration/V1__init_mvp_schema.sql
 src/main/resources/db/migration/V2__gitlab_mr_webhook_events.sql
 src/main/resources/db/migration/V3__review_templates.sql
 src/main/resources/db/migration/V4__db_fine_grained_rule_templates.sql
+src/main/resources/db/migration/V5__mq_cache_fine_grained_rule_templates.sql
 ```
 
 当前 migration 会创建 MVP 所需基础表：
@@ -151,7 +153,7 @@ src/main/resources/db/migration/V4__db_fine_grained_rule_templates.sql
 - `frontend-default`
 - `general-default`
 
-其中 `V4` 会将后端和通用模板升级到 DB 细分风险规则，避免仅修改 Mapper XML 或实体字段时被直接误判为数据库结构变更。
+其中 `V4` 会将后端和通用模板升级到 DB 细分风险规则，避免仅修改 Mapper XML 或实体字段时被直接误判为数据库结构变更。`V5` 会将后端模板升级到 MQ / CACHE 细分风险规则。
 
 ### 5. 验证后端
 
@@ -360,7 +362,7 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/review-tasks/$taskId/result" -
 - 任务状态为 `SUCCESS`。
 - `riskLevel` 为 `HIGH`。
 - `riskItemCount` 为 `5`。
-- `changeAnalysis.changeTypes` 包含 `API`、`DB`、`CACHE`、`MQ`、`CONFIG`。
+- `changeAnalysis.changeTypes` 包含聚合类型 `API`、`DB`、`CACHE`、`MQ`、`CONFIG`，并包含对应细分类型，例如 `DB_SQL`、`CACHE_INVALIDATION`、`MQ_PRODUCER`。
 - `riskCard` 包含风险项、受影响资源、推荐检查项和建议 review 角色。
 
 ### 4. 验证通知记录
@@ -597,5 +599,5 @@ http://localhost:5173
 1. 新增 `examples/`，保存 mock GitLab webhook 和 manual review 请求示例。
 2. 补主链路集成测试，覆盖 `webhook -> review_results -> notification_records`。
 3. 完善 GitLab diff 接入的真实环境联调、项目级凭证和失败重试。
-4. 补 RiskCard schema 校验测试，并增强钉钉消息中的 DB 细分展示。
+4. 补 RiskCard schema 校验测试，并增强钉钉消息中的 DB / MQ / CACHE 细分展示。
 5. 将 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。

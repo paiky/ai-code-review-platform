@@ -67,15 +67,16 @@ public class ChangeAnalysisService {
             Map<String, Set<ChangeType>> fileMatches
     ) {
         allChangeTypes.add(match.changeType());
-        if (match.changeType().isDbFamily() && match.changeType() != ChangeType.DB) {
-            allChangeTypes.add(ChangeType.DB);
+        ChangeType aggregateType = match.changeType().aggregateType();
+        if (aggregateType != match.changeType()) {
+            allChangeTypes.add(aggregateType);
         }
         impactedResources.addAll(match.impactedResources());
         evidences.addAll(match.evidences());
         Set<ChangeType> matchedTypes = fileMatches.computeIfAbsent(match.changedFile().effectivePath(), ignored -> EnumSet.noneOf(ChangeType.class));
         matchedTypes.add(match.changeType());
-        if (match.changeType().isDbFamily() && match.changeType() != ChangeType.DB) {
-            matchedTypes.add(ChangeType.DB);
+        if (aggregateType != match.changeType()) {
+            matchedTypes.add(aggregateType);
         }
     }
 

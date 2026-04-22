@@ -49,8 +49,16 @@ class RiskCardGeneratorTest {
                         "ENTITY_MODEL_CHANGE_CHECK",
                         "DATA_MIGRATION_CHECK",
                         "DB_SCHEMA_SYNC_SUSPECT_CHECK",
-                        "CACHE_CONSISTENCY_CHECK",
-                        "MQ_IDEMPOTENCY_CHECK",
+                        "CACHE_KEY_CHANGE_CHECK",
+                        "CACHE_TTL_CHANGE_CHECK",
+                        "CACHE_INVALIDATION_CHANGE_CHECK",
+                        "CACHE_READ_WRITE_CHANGE_CHECK",
+                        "CACHE_SERIALIZATION_CHANGE_CHECK",
+                        "MQ_PRODUCER_CHANGE_CHECK",
+                        "MQ_CONSUMER_CHANGE_CHECK",
+                        "MQ_MESSAGE_SCHEMA_CHANGE_CHECK",
+                        "MQ_TOPIC_CONFIG_CHANGE_CHECK",
+                        "MQ_RETRY_DLQ_CHANGE_CHECK",
                         "CONFIG_RELEASE_CHECK"
                 );
     }
@@ -72,7 +80,7 @@ class RiskCardGeneratorTest {
         assertThat(card.affectedResources()).hasSize(3);
         assertThat(card.riskItems()).hasSize(3);
         assertThat(card.riskItems()).extracting(item -> item.ruleCode())
-                .containsExactly("API_COMPATIBILITY_CHECK", "DB_SQL_CHANGE_CHECK", "CACHE_CONSISTENCY_CHECK");
+                .containsExactly("API_COMPATIBILITY_CHECK", "DB_SQL_CHANGE_CHECK", "CACHE_READ_WRITE_CHANGE_CHECK");
         assertThat(card.riskItems()).anySatisfy(item -> {
             assertThat(item.ruleCode()).isEqualTo("DB_SQL_CHANGE_CHECK");
             assertThat(item.confidence()).isEqualTo("MEDIUM");
@@ -83,9 +91,9 @@ class RiskCardGeneratorTest {
     }
 
     @Test
-    void usesMediumRiskForCacheOnlyChange() throws Exception {
+    void usesMediumRiskForCacheReadWriteOnlyChange() throws Exception {
         ChangeAnalysisResult analysisResult = analysisService.analyze(new ChangeAnalysisRequest(List.of(
-                ChangedFile.of("src/main/java/com/demo/order/OrderCacheService.java", "+ redisTemplate.delete(\"order:detail\" + id);")
+                ChangedFile.of("src/main/java/com/demo/order/OrderCacheService.java", "+ redisTemplate.opsForValue().get(\"order:detail\" + id);")
         ), null));
         ClasspathRiskRuleRepository repository = new ClasspathRiskRuleRepository(new ObjectMapper());
         RiskCardGenerator generator = new RiskCardGenerator(repository, null);
@@ -94,9 +102,29 @@ class RiskCardGeneratorTest {
 
         assertThat(card.riskLevel()).isEqualTo(RiskLevel.MEDIUM);
         assertThat(card.riskItems()).singleElement().satisfies(item -> {
-            assertThat(item.category()).isEqualTo(ChangeType.CACHE);
+            assertThat(item.category()).isEqualTo(ChangeType.CACHE_READ_WRITE);
             assertThat(item.riskLevel()).isEqualTo(RiskLevel.MEDIUM);
             assertThat(item.recommendedChecks()).anyMatch(check -> check.contains("缓存"));
+            assertThat(item.confidence()).isEqualTo("MEDIUM");
+        });
+    }
+
+    @Test
+    void generatesHighRiskForMqMessageSchemaChange() throws Exception {
+        ChangeAnalysisResult analysisResult = analysisService.analyze(new ChangeAnalysisRequest(List.of(
+                ChangedFile.of("src/main/java/com/demo/order/message/OrderPaidMessage.java", "+ private String deviceModel;")
+        ), null));
+        ClasspathRiskRuleRepository repository = new ClasspathRiskRuleRepository(new ObjectMapper());
+        RiskCardGenerator generator = new RiskCardGenerator(repository, null);
+
+        RiskCard card = generator.generate(analysisResult, repository.findEnabledRules(), List.of());
+
+        assertThat(card.riskLevel()).isEqualTo(RiskLevel.HIGH);
+        assertThat(card.riskItems()).singleElement().satisfies(item -> {
+            assertThat(item.ruleCode()).isEqualTo("MQ_MESSAGE_SCHEMA_CHANGE_CHECK");
+            assertThat(item.category()).isEqualTo(ChangeType.MQ_MESSAGE_SCHEMA);
+            assertThat(item.confidence()).isEqualTo("HIGH");
+            assertThat(item.reason()).contains("message");
         });
     }
 

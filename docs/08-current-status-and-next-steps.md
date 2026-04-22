@@ -619,15 +619,72 @@ examples/README.md
 - 补 schema 校验测试，保护 `confidence` / `reason` / `relatedSignals` 字段不被回退。
 - 增强钉钉消息中的 DB 细分展示。
 
+### P6：API / CACHE / MQ / CONFIG 细粒度规则优化
+
+目标：在 DB 细分闭环稳定后，逐步把其他粗粒度类型拆成可解释、可展示、可配置的细分规则，降低“只看到 MQ/CACHE/API/CONFIG 但不知道具体风险”的问题。
+
+已完成：
+
+1. 在 `docs/06-change-analysis-rules.md` 中补充 API 细分规划：
+   - `API_ENDPOINT`
+   - `API_REQUEST_SCHEMA`
+   - `API_RESPONSE_SCHEMA`
+   - `API_AUTH`
+   - `API_ERROR_CONTRACT`
+2. 实现 CACHE 第一轮细分：
+   - `CACHE_KEY`
+   - `CACHE_TTL`
+   - `CACHE_INVALIDATION`
+   - `CACHE_READ_WRITE`
+   - `CACHE_SERIALIZATION`
+3. 实现 MQ 第一轮细分：
+   - `MQ_PRODUCER`
+   - `MQ_CONSUMER`
+   - `MQ_MESSAGE_SCHEMA`
+   - `MQ_TOPIC_CONFIG`
+   - `MQ_RETRY_DLQ`
+4. 补充 CONFIG 细分规划：
+   - `CONFIG_FEATURE_FLAG`
+   - `CONFIG_DATASOURCE`
+   - `CONFIG_MIDDLEWARE`
+   - `CONFIG_SECURITY`
+   - `CONFIG_ENVIRONMENT`
+5. 新增 `V5__mq_cache_fine_grained_rule_templates.sql`，将 `backend-default` 模板升级到 MQ / CACHE 细分规则。
+6. 补充单元测试覆盖 producer、consumer、message DTO、topic/group、cache TTL、cache evict、cache serialization。
+
+建议实现顺序：
+
+1. 第二轮做 `API`，重点解决接口路径、入参、出参、鉴权、错误码的兼容性表达。
+2. 第三轮做 `CONFIG`，重点和 DB / MQ / CACHE / API 形成组合风险，而不是孤立地提示“配置变更”。
+3. 对 MQ / CACHE 继续用真实 MR 样本校准误报和漏报。
+
+第一轮 MQ / CACHE 已完成范围：
+
+1. 保留 `MQ` / `CACHE` 聚合类型兼容旧模板。
+2. 新增 `MQ_PRODUCER`、`MQ_CONSUMER`、`MQ_MESSAGE_SCHEMA`、`MQ_TOPIC_CONFIG`、`MQ_RETRY_DLQ`。
+3. 新增 `CACHE_KEY`、`CACHE_TTL`、`CACHE_INVALIDATION`、`CACHE_READ_WRITE`、`CACHE_SERIALIZATION`。
+4. 风险项继续使用 `confidence` / `reason` / `relatedSignals`。
+5. 补单元测试覆盖 producer、consumer、message DTO、topic/group、cache key、TTL、evict、serialization。
+
+验收标准：
+
+- 只改 MQ listener 时，输出 `MQ_CONSUMER`，不直接泛化成所有 MQ 风险。
+- 只改消息体 DTO 时，输出 `MQ_MESSAGE_SCHEMA`，并提示生产者/消费者兼容检查。
+- 只改 topic/group 时，输出 `MQ_TOPIC_CONFIG`，并提示环境配置一致性。
+- 只改缓存 key 拼接时，输出 `CACHE_KEY`，并提示新旧 key 兼容和清理策略。
+- 只改 TTL 时，输出 `CACHE_TTL`，不直接断言缓存一致性问题。
+- 修改 cache evict/delete 时，输出 `CACHE_INVALIDATION`，并提示脏数据风险。
+
 ## 6. 建议的下一轮 Codex 任务
 
 建议按以下顺序继续推进：
 
-1. `请补一个 webhook 到 review result 的主链路集成测试，覆盖 mock payload 和 gitlab_api source。`
-2. `请新增 examples 目录下的 mock GitLab webhook 和 manual review 请求示例。`
-3. `请补 RiskCard schema 校验测试，并覆盖 DB 细分字段。`
-4. `请在拿到 GitLab webhook 权限后，配置真实 webhook 并验证自动触发链路。`
-5. `请把 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。`
+1. `请补 RiskCard schema 校验测试，并覆盖 DB、MQ、CACHE 细分字段。`
+2. `请实现 API 第一轮细分规则，保留 API 聚合类型兼容旧模板。`
+3. `请补一个 webhook 到 review result 的主链路集成测试，覆盖 mock payload 和 gitlab_api source。`
+4. `请新增 examples 目录下的 mock GitLab webhook 和 manual review 请求示例。`
+5. `请在拿到 GitLab webhook 权限后，配置真实 webhook 并验证自动触发链路。`
+6. `请把 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。`
 
 ## 7. 暂缓事项
 

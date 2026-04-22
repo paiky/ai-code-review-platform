@@ -27,7 +27,23 @@ import { fetchApi, riskColor, statusColor } from './api.js';
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
-const dbFineTypes = new Set(['DB_SCHEMA', 'DB_SQL', 'ORM_MAPPING', 'ENTITY_MODEL', 'DATA_MIGRATION']);
+const fineChangeTypes = new Set([
+  'DB_SCHEMA',
+  'DB_SQL',
+  'ORM_MAPPING',
+  'ENTITY_MODEL',
+  'DATA_MIGRATION',
+  'CACHE_KEY',
+  'CACHE_TTL',
+  'CACHE_INVALIDATION',
+  'CACHE_READ_WRITE',
+  'CACHE_SERIALIZATION',
+  'MQ_PRODUCER',
+  'MQ_CONSUMER',
+  'MQ_MESSAGE_SCHEMA',
+  'MQ_TOPIC_CONFIG',
+  'MQ_RETRY_DLQ'
+]);
 
 function JsonBlock({ value }) {
   return <pre className="json-block">{JSON.stringify(value ?? {}, null, 2)}</pre>;
@@ -174,7 +190,7 @@ function RiskCardView({ riskCard }) {
             label: (
               <Space className="risk-item-heading" wrap>
                 <Tag color={riskColor(item.riskLevel)}>{item.riskLevel}</Tag>
-                <Tag color={dbFineTypes.has(item.category) ? 'blue' : 'default'}>{item.category}</Tag>
+                <Tag color={fineChangeTypes.has(item.category) ? 'blue' : 'default'}>{item.category}</Tag>
                 {item.confidence && <Tag color={confidenceColor(item.confidence)}>置信度 {item.confidence}</Tag>}
                 <Text strong>{item.title}</Text>
               </Space>

@@ -111,30 +111,162 @@
       "suggestedReviewRoles": ["BACKEND", "DBA", "QA"]
     },
     {
-      "ruleCode": "CACHE_CONSISTENCY_CHECK",
-      "changeType": "CACHE",
+      "ruleCode": "CACHE_KEY_CHANGE_CHECK",
+      "changeType": "CACHE_KEY",
       "riskLevel": "MEDIUM",
-      "title": "缓存变更需要确认一致性与失效策略",
-      "description": "检测到 Redis、Spring Cache 或缓存 key 相关逻辑发生变化，需要确认缓存读写、TTL 和失效策略。",
-      "impact": "可能出现脏数据、缓存穿透、缓存雪崩或回源逻辑异常。",
+      "title": "缓存 key 变更需要确认新旧 key 兼容",
+      "description": "检测到缓存 key 命名、前缀或组成维度发生变化，需要确认历史 key、灰度发布和清理策略。",
+      "impact": "可能导致命中率骤降、新旧 key 并存、缓存击穿或历史缓存无法清理。",
+      "confidence": "HIGH",
+      "reason": "出现缓存 key 命名或组成变化信号。",
       "recommendedChecks": [
-        "确认写路径是否同步更新或删除相关缓存。",
-        "确认缓存 key、TTL、空值缓存和降级策略符合预期。",
-        "覆盖缓存命中、未命中、更新后再次查询场景。"
+        "确认新旧 key 是否需要兼容读取或批量清理。",
+        "确认 key 维度变化不会造成租户、用户或业务数据串读。",
+        "覆盖新 key 命中、旧 key 未命中和灰度切换场景。"
       ],
       "suggestedReviewRoles": ["BACKEND", "QA"]
     },
     {
-      "ruleCode": "MQ_IDEMPOTENCY_CHECK",
-      "changeType": "MQ",
-      "riskLevel": "HIGH",
-      "title": "MQ 变更需要确认幂等、重试与消费兼容",
-      "description": "检测到生产者、消费者、Topic 或消息发送消费逻辑发生变化，需要确认幂等和重复消费风险。",
-      "impact": "可能导致消息重复处理、消费堆积、消息体不兼容或业务状态错乱。",
+      "ruleCode": "CACHE_TTL_CHANGE_CHECK",
+      "changeType": "CACHE_TTL",
+      "riskLevel": "MEDIUM",
+      "title": "缓存 TTL 变更需要确认过期与回源压力",
+      "description": "检测到缓存过期时间、续期或 TTL 策略发生变化，需要确认缓存生命周期和回源压力。",
+      "impact": "可能导致缓存雪崩、数据过期不及时、热点数据频繁回源或旧数据停留过久。",
+      "confidence": "MEDIUM",
+      "reason": "出现 expire / ttl / Duration / TimeUnit 等缓存过期策略信号。",
       "recommendedChecks": [
-        "确认消费者是否具备幂等处理能力。",
-        "确认消息体字段变更是否兼容已有生产者或消费者。",
-        "确认重试、死信、告警和消费堆积监控是否覆盖。"
+        "确认 TTL 变化符合业务实时性和数据一致性要求。",
+        "确认热点 key 过期时间是否有随机化或防雪崩策略。",
+        "覆盖过期、续期、回源和空值缓存场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "SRE", "QA"]
+    },
+    {
+      "ruleCode": "CACHE_INVALIDATION_CHANGE_CHECK",
+      "changeType": "CACHE_INVALIDATION",
+      "riskLevel": "HIGH",
+      "title": "缓存失效策略变更需要确认脏数据风险",
+      "description": "检测到缓存删除、刷新、evict 或 invalidate 逻辑发生变化，需要确认写路径和失效路径一致。",
+      "impact": "可能导致更新后仍读取旧缓存、缓存清理遗漏或误删其他业务 key。",
+      "confidence": "HIGH",
+      "reason": "出现 delete / evict / invalidate / @CacheEvict 等缓存失效信号。",
+      "recommendedChecks": [
+        "确认写入或状态变更后会同步失效相关缓存。",
+        "确认删除 key 范围精确，不会误删其他业务数据。",
+        "覆盖更新后再次查询、删除后重建缓存和并发更新场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "QA"]
+    },
+    {
+      "ruleCode": "CACHE_READ_WRITE_CHANGE_CHECK",
+      "changeType": "CACHE_READ_WRITE",
+      "riskLevel": "MEDIUM",
+      "title": "缓存读写路径变更需要确认一致性与降级",
+      "description": "检测到缓存读取、写入或回源逻辑发生变化，需要确认 cache-aside、降级和异常处理。",
+      "impact": "可能导致缓存穿透、回源异常、读写不一致或缓存不可用时主流程失败。",
+      "confidence": "MEDIUM",
+      "reason": "出现 RedisTemplate / @Cacheable / @CachePut / opsForValue 等缓存读写信号。",
+      "recommendedChecks": [
+        "确认缓存命中、未命中和回源逻辑符合预期。",
+        "确认缓存异常时不会阻断核心业务路径。",
+        "覆盖缓存不可用、空值缓存和并发回源场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "QA"]
+    },
+    {
+      "ruleCode": "CACHE_SERIALIZATION_CHANGE_CHECK",
+      "changeType": "CACHE_SERIALIZATION",
+      "riskLevel": "MEDIUM",
+      "title": "缓存序列化变更需要确认历史值兼容",
+      "description": "检测到缓存序列化器、反序列化逻辑或缓存值结构发生变化，需要确认历史缓存可读取。",
+      "impact": "可能导致线上旧缓存反序列化失败、字段缺失或缓存对象版本不兼容。",
+      "confidence": "MEDIUM",
+      "reason": "出现 RedisSerializer / JSON serializer / serialize / deserialize 等缓存序列化信号。",
+      "recommendedChecks": [
+        "确认历史缓存值能被新代码兼容读取。",
+        "确认是否需要缓存版本号、双读或批量清理。",
+        "覆盖旧值反序列化、新值写入和灰度回滚场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "QA"]
+    },
+    {
+      "ruleCode": "MQ_PRODUCER_CHANGE_CHECK",
+      "changeType": "MQ_PRODUCER",
+      "riskLevel": "HIGH",
+      "title": "MQ 生产逻辑变更需要确认发送语义与下游兼容",
+      "description": "检测到 RocketMQ/Kafka/RabbitMQ 生产者发送逻辑发生变化，需要确认 topic、消息体和发送时机。",
+      "impact": "可能导致消息少发、多发、发送到错误 topic 或下游消费者无法兼容。",
+      "confidence": "HIGH",
+      "reason": "出现 MQ producer template 或 send / convertAndSend 信号。",
+      "recommendedChecks": [
+        "确认发送 topic、tag、key 和消息体符合消费者契约。",
+        "确认发送时机、事务边界和失败处理符合业务预期。",
+        "覆盖发送成功、发送失败和重复发送场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "SRE", "QA"]
+    },
+    {
+      "ruleCode": "MQ_CONSUMER_CHANGE_CHECK",
+      "changeType": "MQ_CONSUMER",
+      "riskLevel": "HIGH",
+      "title": "MQ 消费逻辑变更需要确认幂等与堆积风险",
+      "description": "检测到 MQ listener、consumer 或消费业务逻辑发生变化，需要确认幂等、异常处理和消费性能。",
+      "impact": "可能导致重复消费、消费失败、消息堆积或业务状态错乱。",
+      "confidence": "HIGH",
+      "reason": "出现 MQ listener / consumer 信号。",
+      "recommendedChecks": [
+        "确认消费者具备幂等处理能力。",
+        "确认异常处理不会导致无限重试或消息丢失。",
+        "确认消费耗时、并发和堆积监控覆盖核心 topic。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "SRE", "QA"]
+    },
+    {
+      "ruleCode": "MQ_MESSAGE_SCHEMA_CHANGE_CHECK",
+      "changeType": "MQ_MESSAGE_SCHEMA",
+      "riskLevel": "HIGH",
+      "title": "MQ 消息体变更需要确认生产者与消费者兼容",
+      "description": "检测到消息 DTO、事件对象或 payload 字段发生变化，需要确认新老生产者和消费者兼容。",
+      "impact": "可能导致消息解析失败、字段为空、语义不一致或灰度期间新老版本互不兼容。",
+      "confidence": "HIGH",
+      "reason": "出现 MQ message / event / payload 字段变更信号。",
+      "recommendedChecks": [
+        "确认新增字段有默认值，删除或重命名字段有兼容方案。",
+        "确认生产者和所有消费者版本发布顺序安全。",
+        "覆盖新消息、旧消息和缺省字段解析场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "QA", "OWNER"]
+    },
+    {
+      "ruleCode": "MQ_TOPIC_CONFIG_CHANGE_CHECK",
+      "changeType": "MQ_TOPIC_CONFIG",
+      "riskLevel": "HIGH",
+      "title": "MQ topic/group 配置变更需要确认环境一致性",
+      "description": "检测到 topic、tag、consumerGroup、groupId 或 destination 发生变化，需要确认代码和环境配置一致。",
+      "impact": "可能导致消息投递到错误 topic、消费者订阅不到消息或消费组错乱。",
+      "confidence": "HIGH",
+      "reason": "出现 topic / tag / consumerGroup / destination 变更信号。",
+      "recommendedChecks": [
+        "确认各环境 topic、tag 和 consumerGroup 已同步配置。",
+        "确认生产者和消费者的 topic/group 命名一致。",
+        "确认发布期间新旧 topic 是否需要双写、双读或迁移方案。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "SRE", "QA"]
+    },
+    {
+      "ruleCode": "MQ_RETRY_DLQ_CHANGE_CHECK",
+      "changeType": "MQ_RETRY_DLQ",
+      "riskLevel": "HIGH",
+      "title": "MQ 重试、死信或 ack 变更需要确认失败闭环",
+      "description": "检测到重试、死信、ack/nack、异常捕获或幂等 key 逻辑发生变化，需要确认失败消息处理闭环。",
+      "impact": "可能导致重复消费、消息丢失、死信堆积、重试风暴或人工补偿缺失。",
+      "confidence": "HIGH",
+      "reason": "出现 retry / dead letter / ack / idempotency 等失败处理信号。",
+      "recommendedChecks": [
+        "确认失败消息进入可观测、可补偿的路径。",
+        "确认重试次数、间隔和死信策略符合业务 SLA。",
+        "确认幂等 key 和重复消费处理覆盖核心业务状态。"
       ],
       "suggestedReviewRoles": ["BACKEND", "SRE", "QA"]
     },

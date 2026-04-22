@@ -16,12 +16,17 @@ import java.util.regex.Pattern;
 public class CacheChangeRule implements ChangeAnalysisRule {
 
     private static final List<String> PATH_KEYWORDS = List.of("cache", "redis", "caffeine", "ehcache");
-    private static final List<String> CONTENT_KEYWORDS = List.of("RedisTemplate", "StringRedisTemplate", "@Cacheable", "@CacheEvict", "@CachePut", "cacheManager", "opsForValue", "expire(", "delete(");
+    private static final List<String> CONTENT_KEYWORDS = List.of("RedisTemplate", "StringRedisTemplate", "@Cacheable", "@CacheEvict", "@CachePut", "cacheManager", "opsForValue", "expire(", "delete(", "RedisSerializer");
+    private static final List<String> TTL_KEYWORDS = List.of("expire(", "expireAt(", "ttl", "time-to-live", "timeToLive", "Duration.of", "TimeUnit.");
+    private static final List<String> INVALIDATION_KEYWORDS = List.of("@CacheEvict", "delete(", "evict(", "invalidate(", "clear(", "unlink(");
+    private static final List<String> READ_WRITE_KEYWORDS = List.of("@Cacheable", "@CachePut", "opsForValue", "opsForHash", "get(", "set(", "put(", "cacheManager");
+    private static final List<String> SERIALIZATION_KEYWORDS = List.of("RedisSerializer", "Jackson2JsonRedisSerializer", "GenericJackson2JsonRedisSerializer", "StringRedisSerializer", "serialize(", "deserialize(", "ObjectMapper");
     private static final Pattern CACHE_KEY_PATTERN = Pattern.compile("[\"']([a-zA-Z0-9_.:-]+:[a-zA-Z0-9_.:-]+)[\"']");
+    private static final Pattern CACHE_KEY_CONSTANT_PATTERN = Pattern.compile("(?i)(?:cache[_-]?key|key|prefix)\\s*(?:=|:)\\s*[\"']([a-zA-Z0-9_.:-]+)[\"']");
 
     @Override
     public String code() {
-        return "CACHE_HEURISTIC_RULE";
+        return "CACHE_FINE_GRAINED_RULE";
     }
 
     @Override
@@ -33,9 +38,35 @@ public class CacheChangeRule implements ChangeAnalysisRule {
             return Optional.empty();
         }
 
-        String resourceName = HeuristicSupport.firstRegexGroup(content, CACHE_KEY_PATTERN).orElse(changedFile.effectivePath());
-        ChangeEvidence evidence = HeuristicSupport.evidence(ChangeType.CACHE, changedFile, resourceName, code());
-        ImpactedResource resource = new ImpactedResource(ResourceType.CACHE_KEY, resourceName, changedFile.changeType().name(), changedFile.effectivePath(), evidence);
-        return Optional.of(new RuleMatch(ChangeType.CACHE, changedFile, List.of(resource), List.of(evidence)));
+        CacheSignal signal = classify(content);
+        String resourceName = HeuristicSupport.firstRegexGroup(content, CACHE_KEY_PATTERN)
+                .or(() -> HeuristicSupport.firstRegexGroup(content, CACHE_KEY_CONSTANT_PATTERN))
+                .orElse(changedFile.effectivePath());
+
+        ChangeEvidence evidence = HeuristicSupport.evidence(signal.changeType(), changedFile, signal.reason() + " | " + resourceName, code());
+        ImpactedResource resource = new ImpactedResource(signal.resourceType(), resourceName, changedFile.changeType().name(), changedFile.effectivePath(), evidence);
+        return Optional.of(new RuleMatch(signal.changeType(), changedFile, List.of(resource), List.of(evidence)));
+    }
+
+    private CacheSignal classify(String content) {
+        if (HeuristicSupport.containsAny(content, SERIALIZATION_KEYWORDS)) {
+            return new CacheSignal(ChangeType.CACHE_SERIALIZATION, ResourceType.CACHE_VALUE, "Detected cache serialization or cached value schema change");
+        }
+        if (HeuristicSupport.containsAny(content, INVALIDATION_KEYWORDS)) {
+            return new CacheSignal(ChangeType.CACHE_INVALIDATION, ResourceType.CACHE_KEY, "Detected cache invalidation or eviction change");
+        }
+        if (HeuristicSupport.containsAny(content, TTL_KEYWORDS)) {
+            return new CacheSignal(ChangeType.CACHE_TTL, ResourceType.CACHE_POLICY, "Detected cache TTL or expiration policy change");
+        }
+        if (HeuristicSupport.containsAny(content, READ_WRITE_KEYWORDS)) {
+            return new CacheSignal(ChangeType.CACHE_READ_WRITE, ResourceType.CACHE_KEY, "Detected cache read/write path change");
+        }
+        if (CACHE_KEY_PATTERN.matcher(content).find() || CACHE_KEY_CONSTANT_PATTERN.matcher(content).find()) {
+            return new CacheSignal(ChangeType.CACHE_KEY, ResourceType.CACHE_KEY, "Detected cache key naming or composition change");
+        }
+        return new CacheSignal(ChangeType.CACHE_READ_WRITE, ResourceType.CACHE_KEY, "Detected cache-related code path change");
+    }
+
+    private record CacheSignal(ChangeType changeType, ResourceType resourceType, String reason) {
     }
 }

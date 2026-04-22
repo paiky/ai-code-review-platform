@@ -144,6 +144,12 @@ public class RiskCardGenerator {
         if (rule.changeType() == ChangeType.DB) {
             return actualChangeType.isDbFamily();
         }
+        if (rule.changeType() == ChangeType.CACHE) {
+            return actualChangeType.isCacheFamily();
+        }
+        if (rule.changeType() == ChangeType.MQ) {
+            return actualChangeType.isMqFamily();
+        }
         return actualChangeType == rule.changeType();
     }
 

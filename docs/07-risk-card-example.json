@@ -1,6 +1,6 @@
 {
   "cardId": "risk-card-demo-001",
-  "summary": "本次变更涉及 API, DB, CACHE，生成 3 个风险项，整体风险等级为 HIGH。",
+  "summary": "本次变更涉及 API, DB, DB_SQL, CACHE, CACHE_READ_WRITE，生成 3 个风险项，整体风险等级为 HIGH。",
   "riskLevel": "HIGH",
   "affectedResources": [
     {
@@ -23,12 +23,12 @@
       "operation": "MODIFIED",
       "filePath": "src/main/resources/mapper/OrderMapper.xml",
       "evidence": {
-        "changeType": "DB",
+        "changeType": "DB_SQL",
         "filePath": "src/main/resources/mapper/OrderMapper.xml",
         "lineStart": null,
         "lineEnd": null,
-        "snippet": "orders",
-        "matcher": "DB_HEURISTIC_RULE"
+        "snippet": "Detected SQL read/write logic change | orders",
+        "matcher": "DB_FINE_GRAINED_RULE"
       }
     },
     {
@@ -37,12 +37,12 @@
       "operation": "MODIFIED",
       "filePath": "src/main/java/com/demo/order/OrderCacheService.java",
       "evidence": {
-        "changeType": "CACHE",
+        "changeType": "CACHE_READ_WRITE",
         "filePath": "src/main/java/com/demo/order/OrderCacheService.java",
         "lineStart": null,
         "lineEnd": null,
-        "snippet": "order:detail",
-        "matcher": "CACHE_HEURISTIC_RULE"
+        "snippet": "Detected cache read/write path change | order:detail",
+        "matcher": "CACHE_FINE_GRAINED_RULE"
       }
     }
   ],
@@ -77,16 +77,19 @@
         "确认前端和下游调用方是否已同步适配。",
         "补充或更新接口契约测试与回归用例。"
       ],
-      "suggestedReviewRoles": ["BACKEND", "QA", "OWNER"]
+      "suggestedReviewRoles": ["BACKEND", "QA", "OWNER"],
+      "confidence": null,
+      "reason": null,
+      "relatedSignals": []
     },
     {
-      "riskId": "DB_CHANGE_CHECK-002",
-      "ruleCode": "DB_CHANGE_CHECK",
-      "category": "DB",
-      "riskLevel": "HIGH",
-      "title": "数据库变更需要确认数据兼容与回滚方案",
-      "description": "检测到 SQL、Mapper、Entity、Repository 或 migration 发生变化，需要确认数据结构、查询性能和兼容性。",
-      "impact": "可能引入数据不一致、慢 SQL、字段兼容或上线回滚风险。",
+      "riskId": "DB_SQL_CHANGE_CHECK-002",
+      "ruleCode": "DB_SQL_CHANGE_CHECK",
+      "category": "DB_SQL",
+      "riskLevel": "MEDIUM",
+      "title": "SQL 读写逻辑变更需要确认性能与结果兼容",
+      "description": "检测到 Mapper XML、SQL 文件或代码中的 SQL 读写逻辑发生变化，需要确认查询结果、索引和边界数据。",
+      "impact": "可能引入慢 SQL、结果集变化、分页异常或写入条件不一致。",
       "affectedResources": [
         {
           "resourceType": "DB_TABLE",
@@ -100,25 +103,66 @@
           "filePath": "src/main/resources/mapper/OrderMapper.xml",
           "lineStart": null,
           "lineEnd": null,
-          "snippet": "orders",
-          "matcher": "DB_HEURISTIC_RULE"
+          "snippet": "Detected SQL read/write logic change | orders",
+          "matcher": "DB_FINE_GRAINED_RULE"
         }
       ],
       "recommendedChecks": [
-        "确认表结构和 SQL 变更是否兼容历史数据。",
-        "确认是否需要索引、数据迁移脚本或回滚脚本。",
-        "覆盖核心查询、写入和异常数据场景。"
+        "确认 where、join、order by、limit 和返回字段变化符合预期。",
+        "确认核心 SQL 有索引支撑，并检查大数据量下执行计划。",
+        "覆盖空结果、多结果、边界状态和异常数据场景。"
       ],
-      "suggestedReviewRoles": ["BACKEND", "DBA", "QA"]
+      "suggestedReviewRoles": ["BACKEND", "DBA", "QA"],
+      "confidence": "MEDIUM",
+      "reason": "出现 SQL select/insert/update/delete 信号，但未直接发现表结构变更。",
+      "relatedSignals": []
+    },
+    {
+      "riskId": "CACHE_READ_WRITE_CHANGE_CHECK-003",
+      "ruleCode": "CACHE_READ_WRITE_CHANGE_CHECK",
+      "category": "CACHE_READ_WRITE",
+      "riskLevel": "MEDIUM",
+      "title": "缓存读写路径变更需要确认一致性与降级",
+      "description": "检测到缓存读取、写入或回源逻辑发生变化，需要确认 cache-aside、降级和异常处理。",
+      "impact": "可能导致缓存穿透、回源异常、读写不一致或缓存不可用时主流程失败。",
+      "affectedResources": [
+        {
+          "resourceType": "CACHE_KEY",
+          "name": "order:detail",
+          "operation": "MODIFIED",
+          "filePath": "src/main/java/com/demo/order/OrderCacheService.java"
+        }
+      ],
+      "evidences": [
+        {
+          "filePath": "src/main/java/com/demo/order/OrderCacheService.java",
+          "lineStart": null,
+          "lineEnd": null,
+          "snippet": "Detected cache read/write path change | order:detail",
+          "matcher": "CACHE_FINE_GRAINED_RULE"
+        }
+      ],
+      "recommendedChecks": [
+        "确认缓存命中、未命中和回源逻辑符合预期。",
+        "确认缓存异常时不会阻断核心业务路径。",
+        "覆盖缓存不可用、空值缓存和并发回源场景。"
+      ],
+      "suggestedReviewRoles": ["BACKEND", "QA"],
+      "confidence": "MEDIUM",
+      "reason": "出现 RedisTemplate / @Cacheable / @CachePut / opsForValue 等缓存读写信号。",
+      "relatedSignals": []
     }
   ],
   "recommendedChecks": [
     "确认接口路径、方法、请求参数和响应字段是否保持向后兼容。",
     "确认前端和下游调用方是否已同步适配。",
     "补充或更新接口契约测试与回归用例。",
-    "确认表结构和 SQL 变更是否兼容历史数据。",
-    "确认是否需要索引、数据迁移脚本或回滚脚本。",
-    "覆盖核心查询、写入和异常数据场景。"
+    "确认 where、join、order by、limit 和返回字段变化符合预期。",
+    "确认核心 SQL 有索引支撑，并检查大数据量下执行计划。",
+    "覆盖空结果、多结果、边界状态和异常数据场景。",
+    "确认缓存命中、未命中和回源逻辑符合预期。",
+    "确认缓存异常时不会阻断核心业务路径。",
+    "覆盖缓存不可用、空值缓存和并发回源场景。"
   ],
   "suggestedReviewRoles": ["BACKEND", "QA", "OWNER", "DBA"],
   "generatedAt": "2026-04-19T14:30:00+08:00",
