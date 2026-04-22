@@ -35,6 +35,14 @@ public class GitLabClient {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "GitLab merge request iid is required to fetch MR diffs");
         }
 
+        try {
+            return listMergeRequestDiffsFromDiffsEndpoint(projectId, mergeRequestIid);
+        } catch (GitLabDiffsEndpointNotFoundException exception) {
+            return listMergeRequestDiffsFromChangesEndpoint(projectId, mergeRequestIid);
+        }
+    }
+
+    private List<GitLabDiffFile> listMergeRequestDiffsFromDiffsEndpoint(String projectId, String mergeRequestIid) {
         List<GitLabDiffFile> files = new ArrayList<>();
         int perPage = Math.max(1, properties.perPage());
         int page = 1;
@@ -53,6 +61,20 @@ public class GitLabClient {
             }
             page++;
         }
+    }
+
+    private List<GitLabDiffFile> listMergeRequestDiffsFromChangesEndpoint(String projectId, String mergeRequestIid) {
+        JsonNode response = fetchChanges(projectId, mergeRequestIid);
+        JsonNode changes = response == null ? null : response.path("changes");
+        if (changes == null || !changes.isArray()) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, "GitLab MR changes response must contain a changes array");
+        }
+
+        List<GitLabDiffFile> files = new ArrayList<>();
+        for (JsonNode fileNode : changes) {
+            files.add(toDiffFile(fileNode));
+        }
+        return files;
     }
 
     private void validateReady() {
@@ -83,10 +105,36 @@ public class GitLabClient {
                 .uri(uri)
                 .header("PRIVATE-TOKEN", properties.token())
                 .retrieve()
+                .onStatus(status -> status.value() == 404, (request, response) -> {
+                    throw new GitLabDiffsEndpointNotFoundException();
+                })
                 .onStatus(HttpStatusCode::isError, (request, response) -> {
                     throw new BusinessException(
                             ErrorCode.INTERNAL_ERROR,
                             "Failed to fetch GitLab MR diffs: HTTP " + response.getStatusCode().value()
+                    );
+                })
+                .body(JsonNode.class);
+    }
+
+    private JsonNode fetchChanges(String projectId, String mergeRequestIid) {
+        String uri = UriComponentsBuilder
+                .fromHttpUrl(normalizeBaseUrl(properties.baseUrl()))
+                .path("/api/v4/projects/{projectId}/merge_requests/{mergeRequestIid}/changes")
+                .buildAndExpand(
+                        UriUtils.encodePathSegment(projectId, StandardCharsets.UTF_8),
+                        UriUtils.encodePathSegment(mergeRequestIid, StandardCharsets.UTF_8)
+                )
+                .toUriString();
+
+        return restClient.get()
+                .uri(uri)
+                .header("PRIVATE-TOKEN", properties.token())
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, (request, response) -> {
+                    throw new BusinessException(
+                            ErrorCode.INTERNAL_ERROR,
+                            "Failed to fetch GitLab MR changes: HTTP " + response.getStatusCode().value()
                     );
                 })
                 .body(JsonNode.class);
@@ -124,5 +172,8 @@ public class GitLabClient {
     private boolean booleanAt(JsonNode node, String pointer) {
         JsonNode value = node.at(pointer);
         return !value.isMissingNode() && value.asBoolean(false);
+    }
+
+    private static class GitLabDiffsEndpointNotFoundException extends RuntimeException {
     }
 }

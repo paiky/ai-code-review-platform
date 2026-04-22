@@ -6,3 +6,6 @@ backend/target/
 *.iml
 frontend/node_modules/
 frontend/dist/
+tools/jdk-21*/
+.jdk/
+.local/

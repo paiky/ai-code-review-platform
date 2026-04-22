@@ -59,6 +59,19 @@ mock GitLab MR webhook
 - Maven 3.6+
 - MySQL 8.0+
 
+如果本机默认 Java 不是 21，可以把 JDK 21 解压到仓库内的 `tools/jdk-21` 目录，后续通过项目脚本临时使用该 JDK 启动后端，不需要修改系统级 `JAVA_HOME`。
+
+推荐目录结构：
+
+```text
+tools/
+  jdk-21/
+    bin/
+      java.exe
+```
+
+说明：`tools/jdk-21*` 已加入 `.gitignore`。不建议把 JDK 二进制提交到仓库，避免仓库体积、平台差异和安全更新问题。
+
 ### 2. 创建数据库
 
 先在本地 MySQL 创建数据库：
@@ -94,6 +107,16 @@ $env:GITLAB_API_ENABLED="false"
 ```
 
 ### 4. 启动后端
+
+推荐使用项目脚本启动。脚本会优先查找 `tools/jdk-21` / `.jdk/jdk-21`，再查找 `JAVA21_HOME` / `JDK21_HOME` / `JAVA_HOME`，并要求 Java 版本至少为 21：
+
+```powershell
+.\scripts\run-backend.cmd
+```
+
+如果启动失败，`.cmd` 会停留在窗口中，方便查看错误。自动化脚本中如需失败后直接退出，可先设置 `NO_PAUSE=1`。
+
+也可以继续使用本机环境中的 Maven 和 JDK：
 
 ```powershell
 cd backend
@@ -158,7 +181,15 @@ curl http://localhost:8080/actuator/health
 
 ## 前端本地启动
 
-首次运行需要安装依赖：
+推荐使用项目脚本启动。首次运行时如果 `frontend/node_modules` 不存在，脚本会先执行 `npm install`，然后启动 Vite dev server：
+
+```powershell
+.\scripts\run-frontend.cmd
+```
+
+如果启动失败，`.cmd` 会停留在窗口中，方便查看错误。自动化脚本中如需失败后直接退出，可先设置 `NO_PAUSE=1`。
+
+也可以继续手动启动：
 
 ```powershell
 cd frontend
@@ -397,6 +428,27 @@ POST /api/webhooks/gitlab/merge-request
 
 当 webhook payload 不包含 `changedFiles`、`changed_files`、`object_attributes.changed_files` 或 `changes.changed_files.current` 时，后端会尝试通过 GitLab API 拉取 MR diff。
 
+推荐使用本地忽略文件保存联调配置。先复制示例：
+
+```powershell
+New-Item -ItemType Directory -Force .local
+Copy-Item examples/gitlab.env.example .local/gitlab.env
+```
+
+然后编辑 `.local/gitlab.env`，填入真实的 `GITLAB_BASE_URL`、`GITLAB_TOKEN`、`GITLAB_PROJECT_ID`、`GITLAB_MR_IID` 和 MySQL 密码。`.local/` 已加入 `.gitignore`，不要提交 token。
+
+使用项目脚本重启后端时，会自动加载 `.local/gitlab.env`：
+
+```powershell
+.\scripts\run-backend.cmd
+```
+
+后端启动成功后，可以一键验证 GitLab diff 拉取链路：
+
+```powershell
+.\scripts\verify-gitlab-diff.cmd
+```
+
 启用方式：
 
 ```powershell
@@ -410,6 +462,13 @@ $env:GITLAB_DIFF_PER_PAGE="100"
 
 ```text
 GET {GITLAB_BASE_URL}/api/v4/projects/{projectId}/merge_requests/{mrIid}/diffs?page=1&per_page=100
+PRIVATE-TOKEN: {GITLAB_TOKEN}
+```
+
+兼容说明：部分 GitLab 版本（例如 14.x）可能不支持 MR `diffs` 接口并返回 404。当前后端和验证脚本会自动 fallback 到：
+
+```text
+GET {GITLAB_BASE_URL}/api/v4/projects/{projectId}/merge_requests/{mrIid}/changes
 PRIVATE-TOKEN: {GITLAB_TOKEN}
 ```
 

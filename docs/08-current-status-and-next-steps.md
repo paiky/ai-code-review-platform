@@ -16,7 +16,7 @@ mock GitLab MR webhook
   -> 前端查看任务与风险卡片
 ```
 
-但当前仍更接近“可演示版本”，还不是“稳定可接入真实研发流程的 MVP”。P1 已完成真实 GitLab diff 拉取的最小实现，下一阶段应优先补齐真实环境联调、前端手动审查入口、项目级凭证配置和 README/demo 环境整理。
+但当前仍更接近“可演示版本”，还不是“稳定可接入真实研发流程的 MVP”。P0 本地闭环已验证通过，P1 已完成真实 GitLab MR diff/change 拉取联调；当前在没有 GitLab webhook 权限的情况下，先通过本地令牌和 `projectId + mrIid` 验证真实 MR 审查链路，后续拿到 webhook 权限后再切换为 GitLab 自动触发。
 
 ## 2. 已完成内容
 
@@ -81,6 +81,7 @@ mock GitLab MR webhook
 
 - mock payload 中直接携带 `changedFiles` 与 `diffText`。
 - 真实 GitLab MR webhook 不携带 `changedFiles` 时，通过 GitLab API 按 `projectId + mrIid` 拉取 MR diff。
+- 兼容 GitLab 14.x：`/merge_requests/{iid}/diffs` 返回 404 时，自动 fallback 到 `/merge_requests/{iid}/changes`。
 
 ### 2.5 变更分析器
 
@@ -245,23 +246,63 @@ cd frontend
 npm.cmd run build
 ```
 
+### 3.8 本地启动脚本与 GitLab 联调脚本
+
+已补充 Windows 启动脚本：
+
+```powershell
+.\scripts\run-backend.cmd
+.\scripts\run-frontend.cmd
+```
+
+后端脚本会优先使用仓库本地 `tools/jdk-21`，并自动加载 `.local/gitlab.env`。前端脚本会在缺少 `node_modules` 时自动执行 `npm install`。
+
+已补充 GitLab 真实 MR 联调脚本：
+
+```powershell
+.\scripts\verify-gitlab-diff.cmd
+```
+
+配置文件使用 `.local/gitlab.env`，示例见 `examples/gitlab.env.example`。`.local/` 已加入 `.gitignore`，用于保存 token、MySQL 密码等本地敏感配置。
+
+### 3.9 已完成的真实 GitLab 验证
+
+当前已在真实 GitLab MR 上验证通过：
+
+```text
+GitLab 14.5.0
+internal projectId + mrIid
+/diffs 返回 404
+/changes fallback 返回 7 个变更文件
+webhook 模拟请求创建审查任务
+任务状态 SUCCESS
+changedFilesSummary.source = gitlab_api
+changedFilesSummary.count = 7
+riskLevel = HIGH
+riskItemCount = 1
+changeTypes = DB
+前端可查看该 MR 生成的 review 内容
+```
+
 ## 4. 未完成或部分完成内容
 
-### 4.1 真实 GitLab diff 拉取已完成最小实现，仍需真实环境联调
+### 4.1 真实 GitLab diff 拉取已完成联调，仍需 webhook 权限接入
 
 已完成：
 
 - 配置 GitLab base URL。
 - 配置 GitLab token。
 - 根据 `projectId + mrIid` 调用 GitLab MR diffs API。
+- GitLab 14.x `/diffs` 404 时 fallback 到 MR changes API。
 - payload 不含 changed files 时自动补拉。
 - 拉取失败时任务标记 `FAILED` 并记录错误。
 - 保留 P0 mock payload 优先逻辑。
 - 补充 GitLab client 和 webhook service 单元测试。
+- 使用真实 GitLab 项目和真实 token 完成令牌联调。
 
 仍需补齐：
 
-- 使用真实 GitLab 项目和真实 token 联调。
+- GitLab webhook 权限开通后，配置真实 MR webhook 自动触发。
 - 项目级 GitLab base URL / token 配置。
 - GitLab API 失败重试与更细粒度错误记录。
 - 对超大 diff、`collapsed`、`too_large` 文件做更明确的处理策略。
@@ -371,7 +412,12 @@ examples/README.md
 
 目标：让当前 mock 输入下的完整闭环稳定可验证。
 
-建议任务：
+当前状态：
+
+- 已验证本地 P0 链路：mock webhook -> analysis -> risk card -> review result -> frontend。
+- 已验证前后端代理链路。
+
+后续建议任务：
 
 1. 清理 README 旧描述。
 2. 新增 `examples/` demo payload。
@@ -396,7 +442,9 @@ examples/README.md
 2. 实现 `GitLabClient`。
 3. 根据 project id 和 MR iid 拉取 changed files / diff。
 4. webhook payload 缺少 changed files 时自动拉取。
-5. 补成功和失败测试。
+5. GitLab 14.x `/changes` fallback。
+6. 补成功和失败测试。
+7. 基于真实 GitLab MR 完成令牌联调。
 
 验收标准：
 
@@ -410,6 +458,11 @@ examples/README.md
 - 使用真实 GitLab MR webhook 触发审查。
 - 无需手动在 payload 中塞 `changedFiles`。
 - `/api/review-tasks/{taskId}/result` 能返回基于真实 diff 生成的风险卡片。
+
+当前限制：
+
+- 暂无 GitLab webhook 配置权限，所以继续使用 `verify-gitlab-diff.cmd` 通过令牌和 `projectId + mrIid` 打通真实 MR 审查流程。
+- 拿到管理员 webhook 权限后，再把触发方式从本地脚本切换到 GitLab 自动回调。
 
 ### P2：前端手动审查页面
 
@@ -461,11 +514,11 @@ examples/README.md
 
 建议按以下顺序继续推进：
 
-1. `请整理 README，并新增 examples 目录下的 mock GitLab webhook 和 manual review 请求示例。`
-2. `请补一个 webhook 到 review result 的主链路集成测试。`
-3. `请用真实 GitLab token 联调无 changedFiles 的 MR webhook。`
-4. `请实现前端手动发起审查页面。`
-5. `请把钉钉 webhook 从环境变量升级为项目级数据库配置。`
+1. `请补一个 webhook 到 review result 的主链路集成测试，覆盖 mock payload 和 gitlab_api source。`
+2. `请新增 examples 目录下的 mock GitLab webhook 和 manual review 请求示例。`
+3. `请实现前端手动发起审查页面，支持输入 projectId + mrIid 或 changedFiles。`
+4. `请在拿到 GitLab webhook 权限后，配置真实 webhook 并验证自动触发链路。`
+5. `请把 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。`
 
 ## 7. 暂缓事项
 
