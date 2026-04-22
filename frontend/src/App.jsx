@@ -27,8 +27,17 @@ import { fetchApi, riskColor, statusColor } from './api.js';
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
+const dbFineTypes = new Set(['DB_SCHEMA', 'DB_SQL', 'ORM_MAPPING', 'ENTITY_MODEL', 'DATA_MIGRATION']);
+
 function JsonBlock({ value }) {
   return <pre className="json-block">{JSON.stringify(value ?? {}, null, 2)}</pre>;
+}
+
+function confidenceColor(value) {
+  if (value === 'HIGH') return 'red';
+  if (value === 'MEDIUM') return 'orange';
+  if (value === 'LOW') return 'green';
+  return 'default';
 }
 
 function TaskList({ onOpen }) {
@@ -126,6 +135,17 @@ function RiskCardView({ riskCard }) {
     { title: '操作', dataIndex: 'operation', width: 110 }
   ];
 
+  const evidenceColumns = [
+    { title: '文件', dataIndex: 'filePath', ellipsis: true },
+    { title: '规则', dataIndex: 'matcher', width: 180, ellipsis: true },
+    {
+      title: '片段',
+      dataIndex: 'snippet',
+      ellipsis: true,
+      render: value => value ? <Text code className="evidence-snippet">{value}</Text> : '-'
+    }
+  ];
+
   return (
     <Space direction="vertical" size="large" className="full-width">
       <Card>
@@ -151,11 +171,41 @@ function RiskCardView({ riskCard }) {
         <Collapse
           items={riskItems.map(item => ({
             key: item.riskId,
-            label: <Space><Tag color={riskColor(item.riskLevel)}>{item.riskLevel}</Tag><Text strong>{item.title}</Text></Space>,
+            label: (
+              <Space className="risk-item-heading" wrap>
+                <Tag color={riskColor(item.riskLevel)}>{item.riskLevel}</Tag>
+                <Tag color={dbFineTypes.has(item.category) ? 'blue' : 'default'}>{item.category}</Tag>
+                {item.confidence && <Tag color={confidenceColor(item.confidence)}>置信度 {item.confidence}</Tag>}
+                <Text strong>{item.title}</Text>
+              </Space>
+            ),
             children: (
               <Space direction="vertical" className="full-width">
+                <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+                  <Descriptions.Item label="规则">{item.ruleCode || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="类型">{item.category || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="风险等级">{item.riskLevel || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="置信度">{item.confidence || '-'}</Descriptions.Item>
+                </Descriptions>
                 <Paragraph>{item.description}</Paragraph>
-                <Text type="secondary">{item.impact}</Text>
+                {item.reason && <Alert type="info" showIcon message="命中原因" description={item.reason} />}
+                {item.impact && <Text type="secondary">{item.impact}</Text>}
+                {(item.relatedSignals || []).length > 0 && (
+                  <Space direction="vertical" size="small">
+                    <Text strong>关联信号</Text>
+                    <Space wrap>{item.relatedSignals.map(signal => <Tag key={signal}>{signal}</Tag>)}</Space>
+                  </Space>
+                )}
+                <Divider />
+                <Text strong>命中证据</Text>
+                <Table
+                  rowKey={(row, index) => `${row.filePath}-${row.matcher}-${index}`}
+                  size="small"
+                  columns={evidenceColumns}
+                  dataSource={item.evidences || []}
+                  pagination={false}
+                  locale={{ emptyText: '暂无命中证据' }}
+                />
                 <Divider />
                 <Text strong>检查项</Text>
                 <List size="small" dataSource={item.recommendedChecks || []} renderItem={check => <List.Item>{check}</List.Item>} />

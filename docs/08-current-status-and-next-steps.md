@@ -457,16 +457,21 @@ examples/README.md
 - 钉钉 webhook 未配置。
 - 前端代理失败。
 
-### 4.7 RiskCard schema 与当前对象需进一步对齐
+### 4.7 RiskCard schema 第一轮已对齐，仍需补测试
 
-`docs/04-risk-card-schema.md` 中的 schema 更完整，当前后端 `RiskCard` 是 MVP 简化对象。
+`docs/04-risk-card-schema.md` 已更新为当前后端 `RiskCard` / `RiskItem` 的实际结构，并明确 DB 细分风险项的 `category`、`confidence`、`reason`、`relatedSignals`、`evidences` 展示要求。
 
-后续需要二选一：
+已完成：
 
-1. 让代码输出完全贴合 `docs/04-risk-card-schema.md`。
-2. 更新 schema，明确当前 MVP 简化版字段。
+1. schema 文档对齐当前 MVP 简化版字段。
+2. 前端风险卡片展示 DB 细分类型、置信度、命中原因、关联信号和证据。
+3. 后端 `RiskItem` 已输出 `confidence` / `reason` / `relatedSignals`。
 
-建议在 MVP 阶段优先做字段对齐，避免前端、钉钉和数据库里出现多个风险卡片口径。
+后续需要：
+
+1. 补 RiskCard schema 校验测试。
+2. 增强钉钉消息中的 DB 细分展示。
+3. 如果后续扩展完整项目、触发源、通知字段，再同步升级 schema 和代码对象。
 
 ### 4.8 知识库与人工反馈未完成
 
@@ -574,15 +579,20 @@ examples/README.md
 
 目标：统一文档、数据库、前端和钉钉使用的风险卡片结构。
 
-建议任务：
+已完成：
 
 1. 对齐 `docs/04-risk-card-schema.md` 与后端 `RiskCard`。
-2. 补 schema 校验测试。
-3. 前端基于统一 schema 渲染。
+2. 前端基于统一 schema 展示 DB 细分风险项。
+
+后续任务：
+
+1. 补 schema 校验测试。
+2. 增强钉钉消息中的 DB 细分展示。
 
 验收标准：
 
 - 风险卡片 JSON 有唯一权威结构。
+- DB 细分风险项能展示类型、置信度、命中原因、关联信号和证据。
 
 ### P5：DB 风险细粒度规则优化
 
@@ -606,8 +616,8 @@ examples/README.md
 后续建议：
 
 - 用真实 MR 样本继续校准命中条件，降低业务语义上的误报。
-- 对齐 `docs/04-risk-card-schema.md`，把 `confidence` / `reason` / `relatedSignals` 固化为权威 schema。
-- 前端风险卡片增加更清晰的置信度和关联信号展示。
+- 补 schema 校验测试，保护 `confidence` / `reason` / `relatedSignals` 字段不被回退。
+- 增强钉钉消息中的 DB 细分展示。
 
 ## 6. 建议的下一轮 Codex 任务
 
@@ -615,7 +625,7 @@ examples/README.md
 
 1. `请补一个 webhook 到 review result 的主链路集成测试，覆盖 mock payload 和 gitlab_api source。`
 2. `请新增 examples 目录下的 mock GitLab webhook 和 manual review 请求示例。`
-3. `请对齐 docs/04-risk-card-schema.md 与后端 RiskCard / 前端风险卡片展示字段。`
+3. `请补 RiskCard schema 校验测试，并覆盖 DB 细分字段。`
 4. `请在拿到 GitLab webhook 权限后，配置真实 webhook 并验证自动触发链路。`
 5. `请把 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。`
 

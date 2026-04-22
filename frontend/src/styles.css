@@ -81,6 +81,23 @@ body {
   line-height: 1.55;
 }
 
+.risk-item-heading {
+  max-width: 100%;
+}
+
+.risk-item-heading .ant-typography {
+  white-space: normal;
+}
+
+.evidence-snippet {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
 .ant-card {
   border-radius: 8px;
 }
