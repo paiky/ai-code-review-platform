@@ -54,6 +54,7 @@ public class RuleTemplateRepository {
                 rs.getString("target_type"),
                 rs.getInt("version"),
                 readStringArray(rs.getString("enabled_rule_codes")),
+                readConfigStringArray(config, "focusChangeTypes"),
                 readRecommendedChecks(config),
                 config,
                 rs.getString("status"),
@@ -82,8 +83,12 @@ public class RuleTemplateRepository {
     }
 
     private List<String> readRecommendedChecks(JsonNode config) {
+        return readConfigStringArray(config, "recommendedChecks");
+    }
+
+    private List<String> readConfigStringArray(JsonNode config, String fieldName) {
         List<String> checks = new ArrayList<>();
-        JsonNode node = config.path("recommendedChecks");
+        JsonNode node = config.path(fieldName);
         if (node.isArray()) {
             node.forEach(item -> checks.add(item.asText()));
         }

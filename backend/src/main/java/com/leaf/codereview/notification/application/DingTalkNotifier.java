@@ -4,8 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.leaf.codereview.notification.domain.DingTalkNotificationResult;
 import com.leaf.codereview.notification.domain.NotificationStatus;
+import com.leaf.codereview.riskengine.domain.ReviewRole;
 import com.leaf.codereview.riskengine.domain.RiskCard;
 import com.leaf.codereview.riskengine.domain.RiskItem;
+import com.leaf.codereview.riskengine.domain.RiskLevel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -16,7 +18,12 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -41,8 +48,24 @@ public class DingTalkNotifier {
     }
 
     public DingTalkNotificationResult sendRiskCard(Long taskId, RiskCard riskCard) {
-        String title = "AI 变更风险审查 #" + taskId + "：" + riskCard.riskLevel();
-        String markdown = formatMarkdown(taskId, riskCard);
+        return sendRiskCard(taskId, riskCard, List.of());
+    }
+
+    public DingTalkNotificationResult sendRiskCard(Long taskId, RiskCard riskCard, Collection<String> focusChangeTypes) {
+        RiskCard notificationCard = filterRiskCard(riskCard, focusChangeTypes);
+        if (notificationCard.riskItems().isEmpty() && focusChangeTypes != null && !focusChangeTypes.isEmpty()) {
+            String focusText = focusChangeTypes.stream().collect(Collectors.joining(", "));
+            return new DingTalkNotificationResult(
+                    NotificationStatus.SKIPPED,
+                    "DINGTALK_FOCUS_CHANGE_TYPES",
+                    "No focused risk item matched. focusChangeTypes=" + focusText,
+                    null,
+                    "No focused risk item matched"
+            );
+        }
+
+        String title = "AI 变更风险审查 #" + taskId + "：" + notificationCard.riskLevel();
+        String markdown = formatMarkdown(taskId, notificationCard);
         String requestBody = buildRequestBody(title, markdown);
         String digest = markdown.length() > 500 ? markdown.substring(0, 500) : markdown;
 
@@ -102,7 +125,51 @@ public class DingTalkNotifier {
     }
 
     private String formatRiskItem(RiskItem item) {
-        return "- [" + item.riskLevel() + "] " + item.title();
+        String category = item.category() == null ? "-" : item.category().name();
+        String confidence = StringUtils.hasText(item.confidence()) ? "，置信度 " + item.confidence() : "";
+        String reason = StringUtils.hasText(item.reason()) ? "\n  - 原因：" + item.reason() : "";
+        return "- [" + item.riskLevel() + "] [" + category + "] " + item.title() + confidence + reason;
+    }
+
+    private RiskCard filterRiskCard(RiskCard riskCard, Collection<String> focusChangeTypes) {
+        if (focusChangeTypes == null || focusChangeTypes.isEmpty()) {
+            return riskCard;
+        }
+
+        Set<String> normalizedFocusTypes = focusChangeTypes.stream()
+                .filter(StringUtils::hasText)
+                .map(value -> value.trim().toUpperCase(Locale.ROOT))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (normalizedFocusTypes.isEmpty()) {
+            return riskCard;
+        }
+
+        List<RiskItem> focusedItems = riskCard.riskItems().stream()
+                .filter(item -> item.category() != null && normalizedFocusTypes.contains(item.category().name()))
+                .toList();
+        RiskLevel focusedRiskLevel = focusedItems.stream()
+                .map(RiskItem::riskLevel)
+                .max(Comparator.comparingInt(RiskLevel::weight))
+                .orElse(RiskLevel.LOW);
+        List<String> focusedChecks = focusedItems.stream()
+                .flatMap(item -> item.recommendedChecks().stream())
+                .distinct()
+                .toList();
+        Set<ReviewRole> focusedRoles = focusedItems.stream()
+                .flatMap(item -> item.suggestedReviewRoles().stream())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        return new RiskCard(
+                riskCard.cardId(),
+                "仅推送关注标签风险项：" + String.join(", ", normalizedFocusTypes) + "。命中 " + focusedItems.size() + " 个。",
+                focusedRiskLevel,
+                riskCard.affectedResources(),
+                focusedItems,
+                focusedChecks,
+                focusedRoles,
+                riskCard.generatedAt(),
+                riskCard.generator()
+        );
     }
 
     private String buildRequestBody(String title, String markdown) {

@@ -15,6 +15,7 @@ import com.leaf.codereview.reviewrecord.infrastructure.ReviewResultRepository;
 import com.leaf.codereview.reviewrecord.infrastructure.ReviewTaskRepository;
 import com.leaf.codereview.riskengine.application.RiskCardGenerator;
 import com.leaf.codereview.riskengine.domain.RiskCard;
+import com.leaf.codereview.ruletemplate.domain.ReviewTemplateDefinition;
 import com.leaf.codereview.ruletemplate.application.RuleTemplateService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -57,7 +58,7 @@ public class ManualReviewService {
         ProjectRecord project = projectRepository.findById(request.projectId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Project not found: " + request.projectId()));
         String templateCode = StringUtils.hasText(request.templateCode()) ? request.templateCode() : project.defaultTemplateCode();
-        ruleTemplateService.getEnabledTemplate(templateCode);
+        ReviewTemplateDefinition template = ruleTemplateService.getEnabledTemplate(templateCode);
 
         Long taskId = reviewTaskRepository.create(new ReviewTaskCreateCommand(
                 project.id(),
@@ -80,7 +81,7 @@ public class ManualReviewService {
             RiskCard riskCard = riskCardGenerator.generate(analysisResult, templateCode);
             Long resultId = reviewResultRepository.save(taskId, project.id(), templateCode, analysisResult, riskCard);
             reviewTaskRepository.markSuccess(taskId, riskCard.riskLevel().name());
-            DingTalkNotificationResult notificationResult = dingTalkNotifier.sendRiskCard(taskId, riskCard);
+            DingTalkNotificationResult notificationResult = dingTalkNotifier.sendRiskCard(taskId, riskCard, template.focusChangeTypes());
             notificationRecordRepository.saveDingTalkRecord(taskId, resultId, notificationResult);
             return new ManualReviewResponse(taskId, "SUCCESS", templateCode, riskCard.riskLevel().name());
         } catch (Exception exception) {

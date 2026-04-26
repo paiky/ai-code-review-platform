@@ -27,6 +27,8 @@ import com.leaf.codereview.reviewrecord.infrastructure.ReviewResultRepository;
 import com.leaf.codereview.reviewrecord.infrastructure.ReviewTaskRepository;
 import com.leaf.codereview.riskengine.application.RiskCardGenerator;
 import com.leaf.codereview.riskengine.domain.RiskCard;
+import com.leaf.codereview.ruletemplate.application.RuleTemplateService;
+import com.leaf.codereview.ruletemplate.domain.ReviewTemplateDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -61,6 +63,7 @@ public class GitLabMergeRequestWebhookService {
     private final DingTalkNotifier dingTalkNotifier;
     private final NotificationRecordRepository notificationRecordRepository;
     private final GitLabClient gitLabClient;
+    private final RuleTemplateService ruleTemplateService;
 
     public GitLabMergeRequestWebhookService(
             ObjectMapper objectMapper,
@@ -72,7 +75,8 @@ public class GitLabMergeRequestWebhookService {
             RiskCardGenerator riskCardGenerator,
             DingTalkNotifier dingTalkNotifier,
             NotificationRecordRepository notificationRecordRepository,
-            GitLabClient gitLabClient
+            GitLabClient gitLabClient,
+            RuleTemplateService ruleTemplateService
     ) {
         this.objectMapper = objectMapper;
         this.projectRepository = projectRepository;
@@ -84,6 +88,7 @@ public class GitLabMergeRequestWebhookService {
         this.dingTalkNotifier = dingTalkNotifier;
         this.notificationRecordRepository = notificationRecordRepository;
         this.gitLabClient = gitLabClient;
+        this.ruleTemplateService = ruleTemplateService;
     }
 
     @Transactional(noRollbackFor = Exception.class)
@@ -159,11 +164,12 @@ public class GitLabMergeRequestWebhookService {
     }
 
     private void processReviewTask(Long taskId, Long projectId, String templateCode, GitLabMergeRequestEvent event) {
+        ReviewTemplateDefinition template = ruleTemplateService.getEnabledTemplate(templateCode);
         ChangeAnalysisResult analysisResult = changeAnalysisService.analyze(toAnalysisRequest(event));
         RiskCard riskCard = riskCardGenerator.generate(analysisResult, templateCode);
         Long resultId = reviewResultRepository.save(taskId, projectId, templateCode, analysisResult, riskCard);
         reviewTaskRepository.markSuccess(taskId, riskCard.riskLevel().name());
-        DingTalkNotificationResult notificationResult = dingTalkNotifier.sendRiskCard(taskId, riskCard);
+        DingTalkNotificationResult notificationResult = dingTalkNotifier.sendRiskCard(taskId, riskCard, template.focusChangeTypes());
         notificationRecordRepository.saveDingTalkRecord(taskId, resultId, notificationResult);
     }
 

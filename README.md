@@ -46,6 +46,7 @@ mock GitLab MR webhook
 - RiskCard schema 已对齐当前后端对象，前端风险卡片可展示 DB / MQ / CACHE 细分类型、置信度、命中原因、关联信号和证据。
 - RiskCard schema 校验测试覆盖 DB / MQ / CACHE 细分字段，防止 schema 文档和后端输出脱节。
 - 本地 GitLab CE Docker 模拟环境，见 `local-gitlab/README.md`。
+- 钉钉通知支持按模板 `focusChangeTypes` 过滤风险项；`backend-default` 默认只推送 `DB_SCHEMA`、`DATA_MIGRATION`、`ENTITY_MODEL`，其他风险仍落库并在前端展示。
 
 暂未完成：
 
@@ -473,6 +474,16 @@ curl http://localhost:8080/api/review-tasks/{taskId}/result
 | `general-default` | 通用项目 | API、DB、CONFIG |
 
 模板配置存储在 `rule_templates` 表中，`enabled_rule_codes` 决定启用哪些风险规则，`config_json.recommendedChecks` 定义模板级推荐检查项。项目表 `projects.default_template_code` 绑定项目默认模板。
+
+`config_json.focusChangeTypes` 用于控制钉钉关注标签。风险卡片会完整落库，但钉钉只推送 `category` 精确命中关注标签的风险项。`backend-default` 当前默认关注：
+
+```text
+DB_SCHEMA
+DATA_MIGRATION
+ENTITY_MODEL
+```
+
+如果本次审查没有命中关注标签，通知记录会保存为 `SKIPPED`，错误信息为 `No focused risk item matched`。
 
 ### 模板接口
 

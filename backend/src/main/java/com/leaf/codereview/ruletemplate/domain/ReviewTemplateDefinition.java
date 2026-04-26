@@ -11,6 +11,7 @@ public record ReviewTemplateDefinition(
         String targetType,
         Integer version,
         List<String> enabledRuleCodes,
+        List<String> focusChangeTypes,
         List<String> recommendedChecks,
         JsonNode config,
         String status,
@@ -18,6 +19,7 @@ public record ReviewTemplateDefinition(
 ) {
     public ReviewTemplateDefinition {
         enabledRuleCodes = enabledRuleCodes == null ? List.of() : List.copyOf(enabledRuleCodes);
+        focusChangeTypes = focusChangeTypes == null ? List.of() : List.copyOf(focusChangeTypes);
         recommendedChecks = recommendedChecks == null ? List.of() : List.copyOf(recommendedChecks);
     }
 }

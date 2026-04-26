@@ -22,6 +22,8 @@ import com.leaf.codereview.reviewrecord.infrastructure.ReviewTaskRepository;
 import com.leaf.codereview.riskengine.application.RiskCardGenerator;
 import com.leaf.codereview.riskengine.domain.RiskCard;
 import com.leaf.codereview.riskengine.domain.RiskLevel;
+import com.leaf.codereview.ruletemplate.application.RuleTemplateService;
+import com.leaf.codereview.ruletemplate.domain.ReviewTemplateDefinition;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -49,6 +51,7 @@ class GitLabMergeRequestWebhookServiceTest {
     private final DingTalkNotifier dingTalkNotifier = mock(DingTalkNotifier.class);
     private final NotificationRecordRepository notificationRecordRepository = mock(NotificationRecordRepository.class);
     private final GitLabClient gitLabClient = mock(GitLabClient.class);
+    private final RuleTemplateService ruleTemplateService = mock(RuleTemplateService.class);
 
     @Test
     void fetchesGitLabDiffsWhenWebhookPayloadDoesNotProvideChangedFiles() throws Exception {
@@ -188,7 +191,8 @@ class GitLabMergeRequestWebhookServiceTest {
                 riskCardGenerator,
                 dingTalkNotifier,
                 notificationRecordRepository,
-                gitLabClient
+                gitLabClient,
+                ruleTemplateService
         );
     }
 
@@ -223,7 +227,20 @@ class GitLabMergeRequestWebhookServiceTest {
                 "test"
         ));
         when(reviewResultRepository.save(any(), any(), any(), any(), any())).thenReturn(88L);
-        when(dingTalkNotifier.sendRiskCard(any(), any())).thenReturn(new DingTalkNotificationResult(
+        when(ruleTemplateService.getEnabledTemplate("backend-default")).thenReturn(new ReviewTemplateDefinition(
+                1L,
+                "backend-default",
+                "后端默认审查模板",
+                "BACKEND",
+                1,
+                List.of("DB_SCHEMA_CHANGE_CHECK"),
+                List.of("DB_SCHEMA", "DATA_MIGRATION", "ENTITY_MODEL"),
+                List.of(),
+                objectMapper.createObjectNode(),
+                "ENABLED",
+                "test"
+        ));
+        when(dingTalkNotifier.sendRiskCard(any(), any(), any())).thenReturn(new DingTalkNotificationResult(
                 NotificationStatus.SKIPPED,
                 "DINGTALK_WEBHOOK_URL",
                 null,

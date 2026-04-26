@@ -446,6 +446,12 @@ DINGTALK_WEBHOOK_URL
 - 前端展示和配置通知目标。
 - 推送失败重试策略。
 
+已完成一部分：
+
+- 模板 `config_json.focusChangeTypes` 可控制钉钉关注标签。
+- `backend-default` 默认只关注 `DB_SCHEMA`、`DATA_MIGRATION`、`ENTITY_MODEL`。
+- 未命中关注标签时仍完整落库，但通知记录为 `SKIPPED`。
+
 ### 4.5 集成测试不足
 
 当前已有变更分析器和风险引擎单元测试，但缺少主链路集成测试。
