@@ -1,0 +1,23 @@
+{
+  "projectId": 1,
+  "templateCode": "general-default",
+  "sourceBranch": "feature/manual-review",
+  "targetBranch": "main",
+  "authorName": "Manual Tester",
+  "changedFiles": [
+    {
+      "path": "src/main/java/com/demo/order/OrderController.java",
+      "oldPath": "src/main/java/com/demo/order/OrderController.java",
+      "newPath": "src/main/java/com/demo/order/OrderController.java",
+      "changeType": "MODIFIED",
+      "diffText": "+ @PostMapping(\"/api/orders\")"
+    },
+    {
+      "path": "src/main/resources/application.yml",
+      "oldPath": "src/main/resources/application.yml",
+      "newPath": "src/main/resources/application.yml",
+      "changeType": "MODIFIED",
+      "diffText": "+ order:\n+   feature-enabled: true"
+    }
+  ]
+}

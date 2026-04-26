@@ -1,0 +1,26 @@
+{
+  "object_kind": "merge_request",
+  "event_type": "merge_request",
+  "event_time": "2026-04-24T20:00:00+08:00",
+  "project": {
+    "id": 0,
+    "name": "replace-with-real-project",
+    "web_url": "https://gitlab.example.com/group/replace-with-real-project"
+  },
+  "object_attributes": {
+    "id": 0,
+    "iid": 0,
+    "action": "open",
+    "source_branch": "replace-with-real-source-branch",
+    "target_branch": "main",
+    "url": "https://gitlab.example.com/group/replace-with-real-project/-/merge_requests/0",
+    "updated_at": "2026-04-24T20:00:00+08:00",
+    "last_commit": {
+      "id": "replace-with-real-commit-sha"
+    }
+  },
+  "user": {
+    "name": "replace-with-real-author-name",
+    "username": "replace-with-real-author-username"
+  }
+}

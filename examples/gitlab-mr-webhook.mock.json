@@ -1,0 +1,68 @@
+{
+  "object_kind": "merge_request",
+  "event_type": "merge_request",
+  "event_time": "2026-04-21T22:38:00+08:00",
+  "project": {
+    "id": 1001,
+    "name": "demo-service",
+    "web_url": "https://gitlab.example.com/group/demo-service"
+  },
+  "object_attributes": {
+    "id": 90021,
+    "iid": 21,
+    "action": "open",
+    "source_branch": "feature/p0-demo-risk-review",
+    "target_branch": "main",
+    "url": "https://gitlab.example.com/group/demo-service/-/merge_requests/21",
+    "updated_at": "2026-04-21T22:38:00+08:00",
+    "last_commit": {
+      "id": "p0demoabcdef123456"
+    }
+  },
+  "user": {
+    "name": "P0 Demo User",
+    "username": "p0-demo"
+  },
+  "changedFiles": [
+    {
+      "old_path": "src/main/java/com/demo/order/OrderController.java",
+      "new_path": "src/main/java/com/demo/order/OrderController.java",
+      "new_file": false,
+      "deleted_file": false,
+      "renamed_file": false,
+      "diffText": "+ @PostMapping(\"/api/orders/{id}/confirm\")\n+ public OrderResponse confirm(@PathVariable Long id) { return orderService.confirm(id); }"
+    },
+    {
+      "old_path": "src/main/resources/mapper/OrderMapper.xml",
+      "new_path": "src/main/resources/mapper/OrderMapper.xml",
+      "new_file": false,
+      "deleted_file": false,
+      "renamed_file": false,
+      "diffText": "+ update orders set status = 'CONFIRMED' where id = #{id}\n+ select id, status from orders where id = #{id}"
+    },
+    {
+      "old_path": "src/main/java/com/demo/order/OrderCacheService.java",
+      "new_path": "src/main/java/com/demo/order/OrderCacheService.java",
+      "new_file": false,
+      "deleted_file": false,
+      "renamed_file": false,
+      "diffText": "+ redisTemplate.opsForValue().set(\"order:detail:\" + id, value);\n+ redisTemplate.delete(\"order:list\");"
+    },
+    {
+      "old_path": "src/main/java/com/demo/order/OrderEventPublisher.java",
+      "new_path": "src/main/java/com/demo/order/OrderEventPublisher.java",
+      "new_file": false,
+      "deleted_file": false,
+      "renamed_file": false,
+      "diffText": "+ rabbitTemplate.convertAndSend(\"order.exchange\", \"order.confirmed\", event);"
+    },
+    {
+      "old_path": "src/main/resources/application.yml",
+      "new_path": "src/main/resources/application.yml",
+      "new_file": false,
+      "deleted_file": false,
+      "renamed_file": false,
+      "diffText": "+ order:\n+   confirm-timeout-seconds: 30\n+   enable-confirm-event: true"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-# AI 变更风险审查平台
+﻿# AI 变更风险审查平台
 
 本仓库当前处于 MVP 原型阶段。设计文档位于 `docs` 目录，后端工程位于 `backend` 目录，前端工程位于 `frontend` 目录。
 
@@ -240,79 +240,10 @@ curl http://localhost:5173
 
 ### 2. 发送 mock GitLab MR webhook
 
-下面的 payload 同时覆盖 API、DB、CACHE、MQ、CONFIG 五类变更，适合用于 P0 演示：
+示例数据位于 `examples/gitlab-mr-webhook.mock.json`，统一说明见 `examples/README.md`。
 
 ```powershell
-$payload = @"
-{
-  "object_kind": "merge_request",
-  "event_type": "merge_request",
-  "event_time": "2026-04-21T22:38:00+08:00",
-  "project": {
-    "id": 1001,
-    "name": "demo-service",
-    "web_url": "https://gitlab.example.com/group/demo-service"
-  },
-  "object_attributes": {
-    "id": 90021,
-    "iid": 21,
-    "action": "open",
-    "source_branch": "feature/p0-demo-risk-review",
-    "target_branch": "main",
-    "url": "https://gitlab.example.com/group/demo-service/-/merge_requests/21",
-    "updated_at": "2026-04-21T22:38:00+08:00",
-    "last_commit": {
-      "id": "p0demoabcdef123456"
-    }
-  },
-  "user": {
-    "name": "P0 Demo User",
-    "username": "p0-demo"
-  },
-  "changedFiles": [
-    {
-      "old_path": "src/main/java/com/demo/order/OrderController.java",
-      "new_path": "src/main/java/com/demo/order/OrderController.java",
-      "new_file": false,
-      "deleted_file": false,
-      "renamed_file": false,
-      "diffText": "+ @PostMapping(\"/api/orders/{id}/confirm\")\n+ public OrderResponse confirm(@PathVariable Long id) { return orderService.confirm(id); }"
-    },
-    {
-      "old_path": "src/main/resources/mapper/OrderMapper.xml",
-      "new_path": "src/main/resources/mapper/OrderMapper.xml",
-      "new_file": false,
-      "deleted_file": false,
-      "renamed_file": false,
-      "diffText": "+ update orders set status = 'CONFIRMED' where id = #{id}\n+ select id, status from orders where id = #{id}"
-    },
-    {
-      "old_path": "src/main/java/com/demo/order/OrderCacheService.java",
-      "new_path": "src/main/java/com/demo/order/OrderCacheService.java",
-      "new_file": false,
-      "deleted_file": false,
-      "renamed_file": false,
-      "diffText": "+ redisTemplate.opsForValue().set(\"order:detail:\" + id, value);\n+ redisTemplate.delete(\"order:list\");"
-    },
-    {
-      "old_path": "src/main/java/com/demo/order/OrderEventPublisher.java",
-      "new_path": "src/main/java/com/demo/order/OrderEventPublisher.java",
-      "new_file": false,
-      "deleted_file": false,
-      "renamed_file": false,
-      "diffText": "+ rabbitTemplate.convertAndSend(\"order.exchange\", \"order.confirmed\", event);"
-    },
-    {
-      "old_path": "src/main/resources/application.yml",
-      "new_path": "src/main/resources/application.yml",
-      "new_file": false,
-      "deleted_file": false,
-      "renamed_file": false,
-      "diffText": "+ order:\n+   confirm-timeout-seconds: 30\n+   enable-confirm-event: true"
-    }
-  ]
-}
-"@
+$payload = Get-Content -Raw -Path .\examples\gitlab-mr-webhook.mock.json
 
 $webhookResponse = Invoke-RestMethod `
   -Method Post `
@@ -543,32 +474,10 @@ Invoke-RestMethod `
 
 ### 手动发起审查并指定模板
 
+示例数据位于 `examples/manual-review-request.json`，统一说明见 `examples/README.md`。
+
 ```powershell
-$payload = @"
-{
-  "projectId": 1,
-  "templateCode": "general-default",
-  "sourceBranch": "feature/manual-review",
-  "targetBranch": "main",
-  "authorName": "Manual Tester",
-  "changedFiles": [
-    {
-      "path": "src/main/java/com/demo/order/OrderController.java",
-      "oldPath": "src/main/java/com/demo/order/OrderController.java",
-      "newPath": "src/main/java/com/demo/order/OrderController.java",
-      "changeType": "MODIFIED",
-      "diffText": "+ @PostMapping(\"/api/orders\")"
-    },
-    {
-      "path": "src/main/resources/application.yml",
-      "oldPath": "src/main/resources/application.yml",
-      "newPath": "src/main/resources/application.yml",
-      "changeType": "MODIFIED",
-      "diffText": "+ order:\n+   feature-enabled: true"
-    }
-  ]
-}
-"@
+$payload = Get-Content -Raw -Path .\examples\manual-review-request.json
 
 Invoke-RestMethod `
   -Method Post `
@@ -597,8 +506,8 @@ http://localhost:5173
 
 推荐按以下顺序继续推进：
 
-1. 新增 `examples/`，保存 mock GitLab webhook 和 manual review 请求示例。
-2. 补主链路集成测试，覆盖 `webhook -> review_results -> notification_records`。
-3. 完善 GitLab diff 接入的真实环境联调、项目级凭证和失败重试。
-4. 增强钉钉消息中的 DB / MQ / CACHE 细分展示。
-5. 将 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。
+1. 补主链路集成测试，覆盖 `mock payload` 和 `gitlab_api source` 两条链路，以及 `review_results` / `notification_records` 落库。
+2. 增强钉钉消息中的 DB / MQ / CACHE 细分展示。
+3. 将 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。
+4. 稳定性任务收口后，再继续推进 API 细粒度规则。
+
