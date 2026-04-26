@@ -45,6 +45,7 @@ mock GitLab MR webhook
 - MQ / CACHE 风险第一轮细分识别：`MQ_PRODUCER`、`MQ_CONSUMER`、`MQ_MESSAGE_SCHEMA`、`MQ_TOPIC_CONFIG`、`MQ_RETRY_DLQ`、`CACHE_KEY`、`CACHE_TTL`、`CACHE_INVALIDATION`、`CACHE_READ_WRITE`、`CACHE_SERIALIZATION`，并保留 `MQ` / `CACHE` 聚合类型兼容旧模板。
 - RiskCard schema 已对齐当前后端对象，前端风险卡片可展示 DB / MQ / CACHE 细分类型、置信度、命中原因、关联信号和证据。
 - RiskCard schema 校验测试覆盖 DB / MQ / CACHE 细分字段，防止 schema 文档和后端输出脱节。
+- 本地 GitLab CE Docker 模拟环境，见 `local-gitlab/README.md`。
 
 暂未完成：
 
@@ -367,6 +368,24 @@ POST /api/webhooks/gitlab/merge-request
 ## 真实 GitLab diff 接入
 
 当 webhook payload 不包含 `changedFiles`、`changed_files`、`object_attributes.changed_files` 或 `changes.changed_files.current` 时，后端会尝试通过 GitLab API 拉取 MR diff。
+
+如果当前电脑没有可用的公司 GitLab，可以先启动本地 GitLab CE：
+
+```powershell
+.\scripts\run-local-gitlab.cmd
+```
+
+访问：
+
+```text
+http://localhost:8929
+```
+
+本地 GitLab 的完整使用说明见：
+
+```text
+local-gitlab/README.md
+```
 
 推荐使用本地忽略文件保存联调配置。先复制示例：
 

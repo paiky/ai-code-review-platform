@@ -22,6 +22,8 @@
   - 用于真实 GitLab 联调的本地环境变量模板。
   - 建议复制到 `.local/gitlab.env` 后再填写真实值。
 
+如果个人电脑没有可用的 GitLab，可以使用仓库内的本地 GitLab CE Docker 配置，说明见 `local-gitlab/README.md`。
+
 ## 使用方式
 
 ### 1. Mock GitLab webhook
