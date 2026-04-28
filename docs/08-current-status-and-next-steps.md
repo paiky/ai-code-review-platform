@@ -10,22 +10,22 @@
 - P1 真实 GitLab diff/change 拉取已联调通过：
   - 支持 payload 不带 `changedFiles` 时按 `projectId + mrIid` 拉取真实 MR diff。
   - 兼容 GitLab 14.x：`/diffs` 404 时 fallback 到 `/changes`。
+- GitLab webhook 同一 URL 已支持 `Merge Request Hook` 和 `Push Hook` 分发；Push Hook 当前基于 commits 文件列表触发轻量审查。
 - DB / MQ / CACHE 第一轮细粒度规则已实现。
 - 风险卡片 schema、前端展示和对应测试已做第一轮对齐。
+- examples 示例数据、README 验证说明和主链路集成测试已补齐第一轮。
 
 当前推荐优先级：
 
 1. 先收口稳定性和可复现性，不继续优先扩规则。
-2. 先补 `examples/` 示例数据和 README 验证说明。
-3. 再补主链路集成测试，覆盖 `mock payload` 和 `gitlab_api source`。
-4. 然后做钉钉细分展示、项目级配置。
-5. 稳定性任务收口后，再继续推进 API 第一轮细粒度规则。
+2. 增强钉钉细分展示。
+3. 推进项目级配置。
+4. 稳定性任务收口后，再继续推进 API 第一轮细粒度规则。
 
 如果下一个对话只做一个小目标，优先建议：
 
 ```text
-新增 examples/ 示例数据并清理 README 中的大段 payload，
-然后补 webhook -> review_result -> notification_records 的主链路集成测试。
+增强钉钉消息中的 DB / MQ / CACHE 细分展示。
 ```
 ## 1. 当前结论
 
@@ -103,12 +103,14 @@ mock GitLab MR webhook
 - 自动 upsert 项目。
 - 创建审查任务。
 - 保存原始 webhook payload。
+- 同一 URL 也支持 `Push Hook`，会创建 `GITLAB_PUSH_WEBHOOK` 审查任务并保存 push 原始 payload。
 
 当前 webhook 链路支持两种输入：
 
 - mock payload 中直接携带 `changedFiles` 与 `diffText`。
 - 真实 GitLab MR webhook 不携带 `changedFiles` 时，通过 GitLab API 按 `projectId + mrIid` 拉取 MR diff。
 - 兼容 GitLab 14.x：`/merge_requests/{iid}/diffs` 返回 404 时，自动 fallback 到 `/merge_requests/{iid}/changes`。
+- 真实 GitLab Push webhook 通过 commits 的 `added` / `modified` / `removed` 文件列表触发轻量审查。
 
 ### 2.5 变更分析器
 
@@ -407,6 +409,7 @@ MVP 兼容策略：当前已先把 `confidence`、`reason`、`relatedSignals` �
 - 项目级 GitLab base URL / token 配置。
 - GitLab API 失败重试与更细粒度错误记录。
 - 对超大 diff、`collapsed`、`too_large` 文件做更明确的处理策略。
+- Push webhook 后续可接 GitLab compare API，按 `beforeSha -> afterSha` 拉取完整 diff。
 
 ### 4.2 Jenkins 入口未完成
 
@@ -452,11 +455,11 @@ DINGTALK_WEBHOOK_URL
 - `backend-default` 默认只关注 `DB_SCHEMA`、`DATA_MIGRATION`、`ENTITY_MODEL`。
 - 未命中关注标签时仍完整落库，但通知记录为 `SKIPPED`。
 
-### 4.5 集成测试不足
+### 4.5 主链路集成测试第一轮已完成
 
-当前已有变更分析器和风险引擎单元测试，但缺少主链路集成测试。
+当前已有变更分析器、风险引擎单元测试，并已补充主链路集成测试。
 
-应补充：
+已覆盖：
 
 ```text
 webhook -> task -> analysis -> risk card -> notification record -> query result
@@ -469,6 +472,7 @@ webhook -> task -> analysis -> risk card -> notification record -> query result
 - `review_results` 有分析结果和风险卡片。
 - `notification_records` 有 `SKIPPED` 或 `SUCCESS` 记录。
 - `/api/review-tasks/{id}/result` 能返回风险卡片。
+- 覆盖 `mock payload` 和 `gitlab_api source` 两条路径。
 
 ### 4.6 README 和 demo 数据需要整理
 
@@ -532,10 +536,9 @@ examples/README.md
 
 后续建议任务：
 
-1. 清理 README 旧描述。
-2. 新增 `examples/` demo payload。
-3. 补主链路集成测试。
-4. 明确本地验证步骤。
+1. 持续清理 README 与当前实现不一致的描述。
+2. 明确更多常见错误排查步骤。
+3. 真实环境样本增加后，补充更多边界用例。
 
 验收标准：
 
@@ -712,13 +715,10 @@ examples/README.md
 
 建议按以下顺序继续推进：
 
-1. `请新增 examples 目录下的 mock GitLab webhook、manual review 请求示例和 examples/README.md。`
-2. `请清理 README，把大段 payload 抽离到 examples，并明确 mock webhook 和 manual review 两条验证路径。`
-3. `请补一个 webhook 到 review result 的主链路集成测试，覆盖 mock payload 和 gitlab_api source。`
-4. `请增强钉钉消息中的 DB / MQ / CACHE 细分展示。`
-5. `请把 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。`
-6. `请在稳定性任务收口后，再实现 API 第一轮细分规则，保留 API 聚合类型兼容旧模板。`
-7. `请在拿到 GitLab webhook 权限后，配置真实 webhook 并验证自动触发链路。`
+1. `请增强钉钉消息中的 DB / MQ / CACHE 细分展示。`
+2. `请把 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。`
+3. `请在稳定性任务收口后，再实现 API 第一轮细分规则，保留 API 聚合类型兼容旧模板。`
+4. `请在拿到 GitLab webhook 权限后，配置真实 webhook 并验证自动触发链路。`
 
 ## 7. 暂缓事项
 

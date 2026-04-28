@@ -93,13 +93,14 @@ public class ReviewTaskQueryRepository {
                   rt.created_at,
                   rt.updated_at,
                   gwe.mr_id,
-                  gwe.event_action,
-                  gwe.event_time,
-                  gwe.changed_files_summary,
-                  gwe.raw_payload
+                  COALESCE(gwe.event_action, CASE WHEN gpe.id IS NULL THEN NULL ELSE 'push' END) AS event_action,
+                  COALESCE(gwe.event_time, gpe.event_time) AS event_time,
+                  COALESCE(gwe.changed_files_summary, gpe.changed_files_summary) AS changed_files_summary,
+                  COALESCE(gwe.raw_payload, gpe.raw_payload) AS raw_payload
                 FROM review_tasks rt
                 JOIN projects p ON p.id = rt.project_id
                 LEFT JOIN gitlab_mr_webhook_events gwe ON gwe.task_id = rt.id
+                LEFT JOIN gitlab_push_webhook_events gpe ON gpe.task_id = rt.id
                 WHERE rt.id = ?
                 """, (rs, rowNum) -> mapDetail(rs), taskId);
         return results.stream().findFirst();

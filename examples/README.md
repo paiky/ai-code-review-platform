@@ -1,5 +1,20 @@
 # Examples
 
+## Push webhook quick check
+
+`gitlab-push-webhook.mock.json` verifies that `Push Hook` can use the same URL as MR events:
+
+```powershell
+$payload = Get-Content -Raw -Path .\examples\gitlab-push-webhook.mock.json
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8080/api/webhooks/gitlab/merge-request" `
+  -ContentType "application/json" `
+  -Headers @{ "X-Gitlab-Event" = "Push Hook" } `
+  -Body $payload
+```
+
 本目录用于存放本地验证和联调用的示例数据。
 
 ## 文件说明

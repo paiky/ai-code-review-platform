@@ -5,7 +5,7 @@
 当前已经具备可本地演示的主链路：
 
 ```text
-mock GitLab MR webhook
+mock GitLab MR webhook / GitLab Push webhook
   -> 创建项目与审查任务
   -> 保存原始 webhook payload
   -> 变更分析
@@ -16,7 +16,7 @@ mock GitLab MR webhook
   -> 前端查看任务与风险卡片
 ```
 
-说明：P0 演示链路可以继续使用 mock payload 中的 `changedFiles` / `diffText`。真实 GitLab MR webhook 通常不会携带完整 diff，当前已支持在 payload 缺少 changed files 时按 `projectId + mrIid` 调用 GitLab API 补拉 diff。
+说明：P0 演示链路可以继续使用 mock payload 中的 `changedFiles` / `diffText`。真实 GitLab MR webhook 通常不会携带完整 diff，当前已支持在 payload 缺少 changed files 时按 `projectId + mrIid` 调用 GitLab API 补拉 diff。Push webhook 会从 commits 的 `added` / `modified` / `removed` 文件列表触发轻量审查，后续可再增强为 compare API 拉取完整 diff。
 
 ## 当前能力
 
@@ -31,6 +31,7 @@ mock GitLab MR webhook
 - CORS 配置。
 - 健康检查接口 `/api/health`。
 - GitLab MR webhook controller。
+- 同一个 GitLab webhook URL 支持 `Merge Request Hook` 和 `Push Hook` 分发处理。
 - mock changed files / diffText 解析。
 - API / DB / CACHE / MQ / CONFIG 启发式变更分析。
 - 规则引擎与结构化风险卡片生成。
@@ -40,21 +41,23 @@ mock GitLab MR webhook
 - 审查模板查看与项目默认模板绑定。
 - 手动审查后端接口。
 - payload 不带 `changedFiles` 时，可通过 GitLab API 拉取 MR diff。
+- Push webhook 支持从 commit 文件列表生成 `GITLAB_PUSH_WEBHOOK` 审查任务。
 - GitLab 扫描模式下通过 project detail / MR detail 回填真实项目名、MR URL、分支、作者和 commit sha。
 - DB 风险第一轮细分识别：`DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION`，并保留 `DB` 聚合类型兼容旧模板。
 - MQ / CACHE 风险第一轮细分识别：`MQ_PRODUCER`、`MQ_CONSUMER`、`MQ_MESSAGE_SCHEMA`、`MQ_TOPIC_CONFIG`、`MQ_RETRY_DLQ`、`CACHE_KEY`、`CACHE_TTL`、`CACHE_INVALIDATION`、`CACHE_READ_WRITE`、`CACHE_SERIALIZATION`，并保留 `MQ` / `CACHE` 聚合类型兼容旧模板。
 - RiskCard schema 已对齐当前后端对象，前端风险卡片可展示 DB / MQ / CACHE 细分类型、置信度、命中原因、关联信号和证据。
 - RiskCard schema 校验测试覆盖 DB / MQ / CACHE 细分字段，防止 schema 文档和后端输出脱节。
+- 主链路集成测试覆盖 `mock payload` 和 `gitlab_api source`，并验证 `review_results` / `notification_records` 落库与查询。
 - 本地 GitLab CE Docker 模拟环境，见 `local-gitlab/README.md`。
 - 钉钉通知支持按模板 `focusChangeTypes` 过滤风险项；`backend-default` 默认只推送 `DB_SCHEMA`、`DATA_MIGRATION`、`ENTITY_MODEL`，其他风险仍落库并在前端展示。
 
 暂未完成：
 
 - 真实 GitLab diff 拉取的项目级凭证配置与生产级重试策略。
+- Push webhook 的 GitLab compare API 完整 diff 拉取。
 - Jenkins 入口。
 - 前端手动发起审查页面。
 - 项目级钉钉 webhook 配置读取。
-- 主链路集成测试。
 - 钉钉消息中的 DB / MQ / CACHE 细分展示增强。
 - knowledge-base / 人工反馈闭环。
 
@@ -138,6 +141,8 @@ src/main/resources/db/migration/V2__gitlab_mr_webhook_events.sql
 src/main/resources/db/migration/V3__review_templates.sql
 src/main/resources/db/migration/V4__db_fine_grained_rule_templates.sql
 src/main/resources/db/migration/V5__mq_cache_fine_grained_rule_templates.sql
+src/main/resources/db/migration/V6__focused_notification_change_types.sql
+src/main/resources/db/migration/V7__gitlab_push_webhook_events.sql
 ```
 
 当前 migration 会创建 MVP 所需基础表：
@@ -149,6 +154,7 @@ src/main/resources/db/migration/V5__mq_cache_fine_grained_rule_templates.sql
 - `notification_records`
 - `notification_webhooks`
 - `gitlab_mr_webhook_events`
+- `gitlab_push_webhook_events`
 
 并初始化三套模板：
 
@@ -156,7 +162,7 @@ src/main/resources/db/migration/V5__mq_cache_fine_grained_rule_templates.sql
 - `frontend-default`
 - `general-default`
 
-其中 `V4` 会将后端和通用模板升级到 DB 细分风险规则，避免仅修改 Mapper XML 或实体字段时被直接误判为数据库结构变更。`V5` 会将后端模板升级到 MQ / CACHE 细分风险规则。
+其中 `V4` 会将后端和通用模板升级到 DB 细分风险规则，避免仅修改 Mapper XML 或实体字段时被直接误判为数据库结构变更。`V5` 会将后端模板升级到 MQ / CACHE 细分风险规则。`V6` 会收窄默认钉钉关注标签。`V7` 会新增 Push Hook 原始事件表。
 
 ### 5. 验证后端
 
@@ -335,6 +341,8 @@ cd backend
 mvn -q test
 ```
 
+后端测试包含主链路集成测试，会用内存数据库覆盖 `mock payload` 与 `gitlab_api source` 两条路径，并断言 `review_tasks`、`review_results`、`notification_records` 可查询。
+
 前端构建：
 
 ```powershell
@@ -353,18 +361,36 @@ POST /api/webhooks/gitlab/merge-request
 处理流程：
 
 ```text
-校验 X-Gitlab-Event 与 object_kind
+根据 X-Gitlab-Event 分发 Merge Request Hook / Push Hook
+  -> 校验 object_kind
   -> 解析项目、MR、分支、作者、changedFiles 摘要、eventTime
   -> 自动 upsert projects
   -> 创建 review_tasks
-  -> 保存 gitlab_mr_webhook_events.raw_payload
+  -> 保存 gitlab_mr_webhook_events.raw_payload 或 gitlab_push_webhook_events.raw_payload
   -> 变更分析
   -> 风险卡片生成
   -> review_results 落库
   -> 钉钉推送或 SKIPPED 记录
 ```
 
-说明：真实 GitLab MR webhook 通常不直接包含完整 changed files。为了本地验证，mock payload 支持传入顶层 `changedFiles` 数组；真实接入时可启用 GitLab API，由后端按 MR iid 拉取真实 diff / changed files。
+说明：真实 GitLab MR webhook 通常不直接包含完整 changed files。为了本地验证，mock payload 支持传入顶层 `changedFiles` 数组；真实接入时可启用 GitLab API，由后端按 MR iid 拉取真实 diff / changed files。Push Hook 可使用相同 URL，当前从 payload commits 文件列表触发轻量审查。
+
+### Push webhook 验证
+
+示例数据位于 `examples/gitlab-push-webhook.mock.json`：
+
+```powershell
+$payload = Get-Content -Raw -Path .\examples\gitlab-push-webhook.mock.json
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8080/api/webhooks/gitlab/merge-request" `
+  -ContentType "application/json" `
+  -Headers @{ "X-Gitlab-Event" = "Push Hook" } `
+  -Body $payload
+```
+
+预期会创建 `triggerType = GITLAB_PUSH_WEBHOOK` 的审查任务，`changedFilesSummary.source = push_payload`。
 
 ## 真实 GitLab diff 接入
 
@@ -536,8 +562,7 @@ http://localhost:5173
 
 推荐按以下顺序继续推进：
 
-1. 补主链路集成测试，覆盖 `mock payload` 和 `gitlab_api source` 两条链路，以及 `review_results` / `notification_records` 落库。
-2. 增强钉钉消息中的 DB / MQ / CACHE 细分展示。
-3. 将 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。
-4. 稳定性任务收口后，再继续推进 API 细粒度规则。
+1. 增强钉钉消息中的 DB / MQ / CACHE 细分展示。
+2. 将 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。
+3. 稳定性任务收口后，再继续推进 API 细粒度规则。
 

@@ -1,0 +1,32 @@
+{
+  "object_kind": "push",
+  "event_name": "push",
+  "before": "1111111111111111111111111111111111111111",
+  "after": "2222222222222222222222222222222222222222",
+  "ref": "refs/heads/feature/push-review-demo",
+  "project_id": 1001,
+  "project": {
+    "id": 1001,
+    "name": "demo-service",
+    "path_with_namespace": "group/demo-service",
+    "web_url": "https://gitlab.example.com/group/demo-service"
+  },
+  "user_name": "Push Demo User",
+  "user_username": "push-demo",
+  "commits": [
+    {
+      "id": "2222222222222222222222222222222222222222",
+      "timestamp": "2026-04-27T20:00:00+08:00",
+      "added": [
+        "src/main/resources/application.yml"
+      ],
+      "modified": [
+        "src/main/java/com/demo/order/OrderController.java",
+        "src/main/java/com/demo/order/OrderCacheService.java"
+      ],
+      "removed": [
+        "src/main/resources/legacy.properties"
+      ]
+    }
+  ]
+}
