@@ -6,6 +6,7 @@ import com.leaf.codereview.changeanalysis.domain.ChangeAnalysisResult;
 import com.leaf.codereview.common.enums.ErrorCode;
 import com.leaf.codereview.common.exception.BusinessException;
 import com.leaf.codereview.notification.application.DingTalkNotifier;
+import com.leaf.codereview.notification.domain.DingTalkMessageContext;
 import com.leaf.codereview.notification.domain.DingTalkNotificationResult;
 import com.leaf.codereview.notification.infrastructure.NotificationRecordRepository;
 import com.leaf.codereview.projectintegration.domain.ProjectRecord;
@@ -81,7 +82,14 @@ public class ManualReviewService {
             RiskCard riskCard = riskCardGenerator.generate(analysisResult, templateCode);
             Long resultId = reviewResultRepository.save(taskId, project.id(), templateCode, analysisResult, riskCard);
             reviewTaskRepository.markSuccess(taskId, riskCard.riskLevel().name());
-            DingTalkNotificationResult notificationResult = dingTalkNotifier.sendRiskCard(taskId, riskCard, template.focusChangeTypes());
+            DingTalkNotificationResult notificationResult = dingTalkNotifier.sendRiskCard(taskId, riskCard, template.focusChangeTypes(), new DingTalkMessageContext(
+                    "手动审查 " + project.name(),
+                    request.authorName(),
+                    request.authorUsername(),
+                    request.sourceBranch(),
+                    request.targetBranch(),
+                    null
+            ));
             notificationRecordRepository.saveDingTalkRecord(taskId, resultId, notificationResult);
             return new ManualReviewResponse(taskId, "SUCCESS", templateCode, riskCard.riskLevel().name());
         } catch (Exception exception) {

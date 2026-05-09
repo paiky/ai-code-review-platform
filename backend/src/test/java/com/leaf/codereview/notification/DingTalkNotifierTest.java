@@ -3,6 +3,7 @@ package com.leaf.codereview.notification;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leaf.codereview.changeanalysis.domain.ChangeType;
 import com.leaf.codereview.notification.application.DingTalkNotifier;
+import com.leaf.codereview.notification.domain.DingTalkMessageContext;
 import com.leaf.codereview.notification.domain.DingTalkNotificationResult;
 import com.leaf.codereview.notification.domain.NotificationStatus;
 import com.leaf.codereview.riskengine.domain.ReviewRole;
@@ -35,28 +36,60 @@ class DingTalkNotifierTest {
 
         assertThat(result.status()).isEqualTo(NotificationStatus.SKIPPED);
         assertThat(result.target()).isEqualTo("DINGTALK_FOCUS_CHANGE_TYPES");
-        assertThat(result.errorMessage()).isEqualTo("No focused risk item matched");
+        assertThat(result.errorMessage()).isEqualTo("No focused reminder matched");
     }
 
     @Test
     void formatsOnlyFocusedRiskItemsBeforeSending() {
         RiskCard riskCard = riskCard(
                 riskItem("DB_SCHEMA_CHANGE_CHECK", ChangeType.DB_SCHEMA, RiskLevel.HIGH),
+                riskItem("DB_SQL_CHANGE_CHECK", ChangeType.DB_SQL, RiskLevel.MEDIUM),
                 riskItem("CACHE_INVALIDATION_CHANGE_CHECK", ChangeType.CACHE_INVALIDATION, RiskLevel.HIGH)
         );
 
         DingTalkNotificationResult result = notifier.sendRiskCard(
                 11L,
                 riskCard,
-                List.of("DB_SCHEMA")
+                List.of("DB_SCHEMA", "DB_SQL")
         );
 
         assertThat(result.status()).isEqualTo(NotificationStatus.SKIPPED);
         assertThat(result.target()).isEqualTo("DINGTALK_WEBHOOK_URL");
-        assertThat(result.requestDigest()).contains("[DB_SCHEMA]");
-        assertThat(result.requestDigest()).contains("DB schema changed");
+        assertThat(result.requestDigest()).contains("作者");
+        assertThat(result.requestDigest()).contains("### 变更提醒");
+        assertThat(result.requestDigest()).contains("维护事项提醒");
+        assertThat(result.requestDigest()).doesNotContain("变更提醒 #11");
+        assertThat(result.requestDigest()).contains("DB 变更提醒：命中 DB 表结构、SQL，共 2 条提醒");
+        assertThat(result.requestDigest()).doesNotContain("触发提醒");
+        assertThat(result.requestDigest()).doesNotContain("上线前请准备并核对 SQL");
+        assertThat(result.requestDigest()).doesNotContain("DB schema changed");
+        assertThat(result.requestDigest()).doesNotContain("高风险");
+        assertThat(result.requestDigest()).doesNotContain("置信度");
         assertThat(result.requestDigest()).doesNotContain("CACHE_INVALIDATION");
         assertThat(result.requestDigest()).doesNotContain("Cache invalidation changed");
+    }
+
+    @Test
+    void formatsAuthorAndPlatformDetailLink() {
+        DingTalkNotifier notifierWithPlatformUrl = new DingTalkNotifier(new ObjectMapper(), "", "http://localhost:5173/", true);
+        String markdown = notifierWithPlatformUrl.formatMarkdown(
+                12L,
+                riskCard(riskItem("DB_SCHEMA_CHANGE_CHECK", ChangeType.DB_SCHEMA, RiskLevel.HIGH)),
+                new DingTalkMessageContext(
+                        "GitLab MR !12 feature/order -> master",
+                        "Alice",
+                        "alice",
+                        "feature/order",
+                        "master",
+                        "https://gitlab.example.com/group/demo/-/merge_requests/12"
+                )
+        );
+
+        assertThat(markdown).contains("Alice(@alice)");
+        assertThat(markdown).contains("feature/order -> master");
+        assertThat(markdown).contains("[查看平台详情](http://localhost:5173/?taskId=12)");
+        assertThat(markdown).doesNotContain("查看 GitLab");
+        assertThat(markdown).doesNotContain("gitlab.example.com");
     }
 
     private RiskCard riskCard(RiskItem... riskItems) {
@@ -74,7 +107,11 @@ class DingTalkNotifierTest {
     }
 
     private RiskItem riskItem(String ruleCode, ChangeType category, RiskLevel riskLevel) {
-        String title = category == ChangeType.DB_SCHEMA ? "DB schema changed" : "Cache invalidation changed";
+        String title = switch (category) {
+            case DB_SCHEMA -> "DB schema changed";
+            case DB_SQL -> "SQL changed";
+            default -> "Cache invalidation changed";
+        };
         return new RiskItem(
                 ruleCode + "-001",
                 ruleCode,

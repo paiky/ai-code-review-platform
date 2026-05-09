@@ -33,6 +33,7 @@ logging:
     root: INFO
     com.leaf.codereview: DEBUG
 notification:
+  platform-base-url: ${PLATFORM_BASE_URL:http://localhost:5173}
   dingtalk:
     webhook-url: ${DINGTALK_WEBHOOK_URL:}
     enabled: ${DINGTALK_ENABLED:true}
@@ -43,6 +44,26 @@ gitlab:
     base-url: ${GITLAB_BASE_URL:}
     token: ${GITLAB_TOKEN:}
     per-page: ${GITLAB_DIFF_PER_PAGE:100}
+
+code-quality:
+  review:
+    enabled: ${CODE_QUALITY_REVIEW_ENABLED:false}
+    provider: ${CODE_QUALITY_REVIEW_PROVIDER:CODEX_CLI}
+    workspace-root: ${CODE_QUALITY_WORKSPACE_ROOT:}
+    codex:
+      command: ${CODEX_CLI_COMMAND:}
+      model: ${CODEX_CLI_MODEL:}
+      timeout-seconds: ${CODEX_CLI_TIMEOUT_SECONDS:600}
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      responses-url: ${OPENAI_RESPONSES_URL:https://api.openai.com/v1/responses}
+      model: ${OPENAI_CODE_REVIEW_MODEL:gpt-5.4}
+      timeout-seconds: ${OPENAI_CODE_REVIEW_TIMEOUT_SECONDS:120}
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}
+      messages-url: ${ANTHROPIC_MESSAGES_URL:https://api.anthropic.com/v1/messages}
+      model: ${ANTHROPIC_CODE_REVIEW_MODEL:claude-sonnet-4-5}
+      timeout-seconds: ${ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS:120}
 
 frontend:
   cors:

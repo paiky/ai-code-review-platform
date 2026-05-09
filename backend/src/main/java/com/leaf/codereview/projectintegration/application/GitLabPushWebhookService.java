@@ -12,10 +12,13 @@ import com.leaf.codereview.changeanalysis.domain.FileChangeType;
 import com.leaf.codereview.common.enums.ErrorCode;
 import com.leaf.codereview.common.exception.BusinessException;
 import com.leaf.codereview.notification.application.DingTalkNotifier;
+import com.leaf.codereview.notification.domain.DingTalkMessageContext;
 import com.leaf.codereview.notification.domain.DingTalkNotificationResult;
 import com.leaf.codereview.notification.infrastructure.NotificationRecordRepository;
+import com.leaf.codereview.projectintegration.domain.GitLabDiffFile;
 import com.leaf.codereview.projectintegration.domain.GitLabPushEvent;
 import com.leaf.codereview.projectintegration.domain.ProjectRecord;
+import com.leaf.codereview.projectintegration.infrastructure.GitLabClient;
 import com.leaf.codereview.projectintegration.infrastructure.GitLabPushWebhookEventRepository;
 import com.leaf.codereview.projectintegration.infrastructure.ProjectRepository;
 import com.leaf.codereview.reviewrecord.domain.ReviewTaskCreateCommand;
@@ -25,6 +28,8 @@ import com.leaf.codereview.riskengine.application.RiskCardGenerator;
 import com.leaf.codereview.riskengine.domain.RiskCard;
 import com.leaf.codereview.ruletemplate.application.RuleTemplateService;
 import com.leaf.codereview.ruletemplate.domain.ReviewTemplateDefinition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -43,6 +48,8 @@ import java.util.Map;
 @Service
 public class GitLabPushWebhookService {
 
+    private static final Logger log = LoggerFactory.getLogger(GitLabPushWebhookService.class);
+
     private static final String GITLAB_PUSH_HEADER = "Push Hook";
     private static final String OBJECT_KIND = "push";
 
@@ -56,6 +63,7 @@ public class GitLabPushWebhookService {
     private final DingTalkNotifier dingTalkNotifier;
     private final NotificationRecordRepository notificationRecordRepository;
     private final RuleTemplateService ruleTemplateService;
+    private final GitLabClient gitLabClient;
 
     public GitLabPushWebhookService(
             ObjectMapper objectMapper,
@@ -67,7 +75,8 @@ public class GitLabPushWebhookService {
             RiskCardGenerator riskCardGenerator,
             DingTalkNotifier dingTalkNotifier,
             NotificationRecordRepository notificationRecordRepository,
-            RuleTemplateService ruleTemplateService
+            RuleTemplateService ruleTemplateService,
+            GitLabClient gitLabClient
     ) {
         this.objectMapper = objectMapper;
         this.projectRepository = projectRepository;
@@ -79,13 +88,14 @@ public class GitLabPushWebhookService {
         this.dingTalkNotifier = dingTalkNotifier;
         this.notificationRecordRepository = notificationRecordRepository;
         this.ruleTemplateService = ruleTemplateService;
+        this.gitLabClient = gitLabClient;
     }
 
     @Transactional(noRollbackFor = Exception.class)
     public GitLabWebhookResponse handle(String gitlabEventHeader, JsonNode payload) {
         validateGitLabPushEvent(gitlabEventHeader, payload);
 
-        GitLabPushEvent event = parseEvent(payload);
+        GitLabPushEvent event = resolveChangedFiles(parseEvent(payload));
         ProjectRecord project = projectRepository.upsertGitLabProject(
                 event.gitProjectId(),
                 event.projectName(),
@@ -127,7 +137,14 @@ public class GitLabPushWebhookService {
         RiskCard riskCard = riskCardGenerator.generate(analysisResult, templateCode);
         Long resultId = reviewResultRepository.save(taskId, projectId, templateCode, analysisResult, riskCard);
         reviewTaskRepository.markSuccess(taskId, riskCard.riskLevel().name());
-        DingTalkNotificationResult notificationResult = dingTalkNotifier.sendRiskCard(taskId, riskCard, template.focusChangeTypes());
+        DingTalkNotificationResult notificationResult = dingTalkNotifier.sendRiskCard(taskId, riskCard, template.focusChangeTypes(), new DingTalkMessageContext(
+                "GitLab Push " + nullToEmpty(event.branchName()) + " " + abbreviate(event.afterSha(), 8),
+                event.authorName(),
+                event.authorUsername(),
+                event.branchName(),
+                null,
+                event.externalUrl()
+        ));
         notificationRecordRepository.saveDingTalkRecord(taskId, resultId, notificationResult);
     }
 
@@ -139,10 +156,28 @@ public class GitLabPushWebhookService {
                 String path = firstText(fileNode, "/path", "/newPath", "/oldPath");
                 String oldPath = firstText(fileNode, "/oldPath", "/path");
                 String newPath = firstText(fileNode, "/newPath", "/path");
-                files.add(new ChangedFile(path, oldPath, newPath, parseFileChangeType(textAt(fileNode, "/changeType")), null));
+                String diffText = firstText(fileNode, "/diffText", "/diff", "/patch");
+                files.add(new ChangedFile(path, oldPath, newPath, parseFileChangeType(textAt(fileNode, "/changeType")), diffText));
             }
         }
         return new ChangeAnalysisRequest(files, null);
+    }
+
+    private GitLabPushEvent resolveChangedFiles(GitLabPushEvent event) {
+        JsonNode fallbackSummary = event.changedFilesSummary();
+        try {
+            List<GitLabDiffFile> diffFiles = gitLabClient.compare(event.gitProjectId(), event.beforeSha(), event.afterSha());
+            if (diffFiles.isEmpty()) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, "GitLab compare diff response is empty");
+            }
+            return copyWithChangedFilesSummary(event, buildGitLabCompareChangedFilesSummary(event, diffFiles));
+        } catch (Exception exception) {
+            log.warn("Failed to fetch GitLab compare diff for projectId={}, beforeSha={}, afterSha={}; fallback to push payload: {}",
+                    event.gitProjectId(), event.beforeSha(), event.afterSha(), exception.getMessage());
+            ObjectNode fallbackWithReason = fallbackSummary.deepCopy();
+            fallbackWithReason.put("fallbackReason", exception.getMessage());
+            return copyWithChangedFilesSummary(event, fallbackWithReason);
+        }
     }
 
     private void validateGitLabPushEvent(String gitlabEventHeader, JsonNode payload) {
@@ -211,6 +246,68 @@ public class GitLabPushWebhookService {
         summary.put("afterSha", textAt(payload, "/after"));
         summary.set("files", files);
         return summary;
+    }
+
+    private JsonNode buildGitLabCompareChangedFilesSummary(GitLabPushEvent event, List<GitLabDiffFile> diffFiles) {
+        ObjectNode summary = objectMapper.createObjectNode();
+        ArrayNode files = objectMapper.createArrayNode();
+        for (GitLabDiffFile diffFile : diffFiles) {
+            files.add(normalizeGitLabDiffFile(diffFile));
+        }
+
+        summary.put("count", files.size());
+        summary.put("source", "gitlab_compare_api");
+        summary.put("ref", event.ref());
+        summary.put("beforeSha", event.beforeSha());
+        summary.put("afterSha", event.afterSha());
+        summary.set("files", files);
+        return summary;
+    }
+
+    private ObjectNode normalizeGitLabDiffFile(GitLabDiffFile diffFile) {
+        ObjectNode file = objectMapper.createObjectNode();
+        String path = StringUtils.hasText(diffFile.newPath()) ? diffFile.newPath() : diffFile.oldPath();
+        file.put("path", path);
+        file.put("oldPath", diffFile.oldPath());
+        file.put("newPath", diffFile.newPath());
+        file.put("changeType", inferGitLabChangeType(diffFile));
+        if (StringUtils.hasText(diffFile.diffText())) {
+            file.put("diffText", diffFile.diffText());
+        }
+        file.put("collapsed", diffFile.collapsed());
+        file.put("tooLarge", diffFile.tooLarge());
+        return file;
+    }
+
+    private String inferGitLabChangeType(GitLabDiffFile diffFile) {
+        if (diffFile.newFile()) {
+            return "ADDED";
+        }
+        if (diffFile.deletedFile()) {
+            return "DELETED";
+        }
+        if (diffFile.renamedFile()) {
+            return "RENAMED";
+        }
+        return "MODIFIED";
+    }
+
+    private GitLabPushEvent copyWithChangedFilesSummary(GitLabPushEvent event, JsonNode changedFilesSummary) {
+        return new GitLabPushEvent(
+                event.gitProjectId(),
+                event.projectName(),
+                event.repositoryUrl(),
+                event.ref(),
+                event.branchName(),
+                event.beforeSha(),
+                event.afterSha(),
+                event.eventTime(),
+                event.externalUrl(),
+                event.authorName(),
+                event.authorUsername(),
+                changedFilesSummary,
+                event.rawPayload()
+        );
     }
 
     private void addCommitFiles(Map<String, ObjectNode> filesByPath, JsonNode filePaths, FileChangeType changeType) {
@@ -295,6 +392,17 @@ public class GitLabPushWebhookService {
             }
         }
         return null;
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
+    private String abbreviate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value == null ? "" : value;
+        }
+        return value.substring(0, maxLength);
     }
 
     private String textAt(JsonNode node, String pointer) {

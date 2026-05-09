@@ -18,7 +18,7 @@ public class DbChangeRule implements ChangeAnalysisRule {
     private static final List<String> ENTITY_PATH_KEYWORDS = List.of("entity", "/domain/", "\\domain\\", "/model/", "\\model\\", "/po/", "\\po\\", "/do/", "\\do\\");
     private static final List<String> ORM_PATH_KEYWORDS = List.of("mapper", "mybatis", "jpa");
     private static final List<String> MIGRATION_PATH_KEYWORDS = List.of("migration", "db/migration", "schema", "liquibase", "flyway", ".sql");
-    private static final List<String> ENTITY_CONTENT_KEYWORDS = List.of("@Entity", "@Table", "@Column");
+    private static final List<String> ENTITY_CONTENT_KEYWORDS = List.of("@Entity", "@Table", "@Column", "@TableField", "@TableId", "@TableName");
     private static final List<String> ORM_CONTENT_KEYWORDS = List.of("resultMap", "<result ", "<id ", "column=", "property=", "@Table", "@Column", "@JoinColumn", "@OneToMany", "@ManyToOne");
     private static final List<String> DATA_MIGRATION_KEYWORDS = List.of("backfill", "migrate", "migration", "数据修复", "回填", "历史数据");
     private static final List<String> DDL_KEYWORDS = List.of("create table", "alter table", "drop table", "add column", "drop column", "modify column", "rename column", "create index", "drop index");
@@ -30,6 +30,7 @@ public class DbChangeRule implements ChangeAnalysisRule {
     );
     private static final Pattern TABLE_PATTERN = Pattern.compile("(?i)(?:from|into|update|table|join)\\s+[`\"]?([a-zA-Z_][a-zA-Z0-9_]*)[`\"]?");
     private static final Pattern JAVA_FIELD_PATTERN = Pattern.compile("(?m)^\\s*[+-]\\s*(?:private|protected|public)\\s+[\\w<>?, ]+\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?:=|;)");
+    private static final Pattern MYBATIS_PLUS_FIELD_PATTERN = Pattern.compile("@(?:TableField|TableId)\\s*\\(\\s*(?:value\\s*=\\s*)?[\"']([a-zA-Z_][a-zA-Z0-9_]*)[\"']");
 
     @Override
     public String code() {
@@ -46,7 +47,9 @@ public class DbChangeRule implements ChangeAnalysisRule {
 
         String resourceName = HeuristicSupport.firstRegexGroup(content, TABLE_PATTERN).orElse(changedFile.effectivePath());
         if (signal.changeType() == ChangeType.ENTITY_MODEL) {
-            resourceName = HeuristicSupport.firstRegexGroup(content, JAVA_FIELD_PATTERN).orElse(changedFile.effectivePath());
+            resourceName = HeuristicSupport.firstRegexGroup(content, MYBATIS_PLUS_FIELD_PATTERN)
+                    .or(() -> HeuristicSupport.firstRegexGroup(content, JAVA_FIELD_PATTERN))
+                    .orElse(changedFile.effectivePath());
         }
 
         ChangeEvidence evidence = HeuristicSupport.evidence(signal.changeType(), changedFile, signal.reason() + " | " + resourceName, code());
@@ -65,7 +68,9 @@ public class DbChangeRule implements ChangeAnalysisRule {
         boolean ddlMatched = HeuristicSupport.containsAny(content, DDL_KEYWORDS);
         boolean sqlMatched = SQL_PATTERNS.stream().anyMatch(pattern -> pattern.matcher(content).find());
         boolean ormMatched = HeuristicSupport.containsAny(content, ORM_CONTENT_KEYWORDS);
-        boolean entityMatched = entityPath && (HeuristicSupport.containsAny(content, ENTITY_CONTENT_KEYWORDS) || JAVA_FIELD_PATTERN.matcher(content).find());
+        boolean myBatisPlusFieldMatched = MYBATIS_PLUS_FIELD_PATTERN.matcher(content).find();
+        boolean entityMatched = myBatisPlusFieldMatched
+                || (entityPath && (HeuristicSupport.containsAny(content, ENTITY_CONTENT_KEYWORDS) || JAVA_FIELD_PATTERN.matcher(content).find()));
 
         if (ddlMatched) {
             return new DbSignal(ChangeType.DB_SCHEMA, ResourceType.DB_TABLE, "Detected DDL or migration schema statement");

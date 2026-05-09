@@ -44,6 +44,31 @@ public class GitLabClient {
         }
     }
 
+    public List<GitLabDiffFile> compare(String projectId, String fromSha, String toSha) {
+        validateReady();
+        if (!StringUtils.hasText(projectId)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "GitLab project id is required to compare refs");
+        }
+        if (!StringUtils.hasText(fromSha)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "GitLab compare from sha is required");
+        }
+        if (!StringUtils.hasText(toSha)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "GitLab compare to sha is required");
+        }
+
+        JsonNode response = fetchCompare(projectId, fromSha, toSha);
+        JsonNode diffs = response == null ? null : response.path("diffs");
+        if (diffs == null || !diffs.isArray()) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, "GitLab compare response must contain a diffs array");
+        }
+
+        List<GitLabDiffFile> files = new ArrayList<>();
+        for (JsonNode fileNode : diffs) {
+            files.add(toDiffFile(fileNode));
+        }
+        return files;
+    }
+
     public GitLabProjectDetail getProjectDetail(String projectId) {
         validateReady();
         if (!StringUtils.hasText(projectId)) {
@@ -176,6 +201,28 @@ public class GitLabClient {
                     throw new BusinessException(
                             ErrorCode.INTERNAL_ERROR,
                             "Failed to fetch GitLab API: HTTP " + response.getStatusCode().value()
+                    );
+                })
+                .body(JsonNode.class);
+    }
+
+    private JsonNode fetchCompare(String projectId, String fromSha, String toSha) {
+        String uri = UriComponentsBuilder
+                .fromHttpUrl(normalizeBaseUrl(properties.baseUrl()))
+                .path("/api/v4/projects/{projectId}/repository/compare")
+                .queryParam("from", fromSha)
+                .queryParam("to", toSha)
+                .buildAndExpand(UriUtils.encodePathSegment(projectId, StandardCharsets.UTF_8))
+                .toUriString();
+
+        return restClient.get()
+                .uri(uri)
+                .header("PRIVATE-TOKEN", properties.token())
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, (request, response) -> {
+                    throw new BusinessException(
+                            ErrorCode.INTERNAL_ERROR,
+                            "Failed to fetch GitLab compare diff: HTTP " + response.getStatusCode().value()
                     );
                 })
                 .body(JsonNode.class);

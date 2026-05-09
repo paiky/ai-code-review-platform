@@ -124,6 +124,44 @@ class GitLabClientTest {
     }
 
     @Test
+    void fetchesCompareDiffs() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GitLabClient client = new GitLabClient(
+                new GitLabApiProperties(true, "https://gitlab.example.com/", "test-token", 100),
+                builder
+        );
+
+        server.expect(requestTo("https://gitlab.example.com/api/v4/projects/1001/repository/compare?from=before-sha&to=after-sha"))
+                .andExpect(header("PRIVATE-TOKEN", "test-token"))
+                .andRespond(withSuccess("""
+                        {
+                          "commit": { "id": "after-sha" },
+                          "diffs": [
+                            {
+                              "old_path": "src/main/resources/db/migration/V8__add_order_status.sql",
+                              "new_path": "src/main/resources/db/migration/V8__add_order_status.sql",
+                              "diff": "+ ALTER TABLE orders ADD COLUMN status VARCHAR(32);",
+                              "new_file": true,
+                              "renamed_file": false,
+                              "deleted_file": false,
+                              "collapsed": false,
+                              "too_large": false
+                            }
+                          ]
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        List<GitLabDiffFile> files = client.compare("1001", "before-sha", "after-sha");
+
+        assertThat(files).hasSize(1);
+        assertThat(files.getFirst().newPath()).isEqualTo("src/main/resources/db/migration/V8__add_order_status.sql");
+        assertThat(files.getFirst().diffText()).contains("ALTER TABLE");
+        assertThat(files.getFirst().newFile()).isTrue();
+        server.verify();
+    }
+
+    @Test
     void fetchesProjectAndMergeRequestDetail() {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();

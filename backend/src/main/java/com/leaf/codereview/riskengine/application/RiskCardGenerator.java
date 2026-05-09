@@ -4,6 +4,8 @@ import com.leaf.codereview.changeanalysis.domain.ChangeAnalysisResult;
 import com.leaf.codereview.changeanalysis.domain.ChangeEvidence;
 import com.leaf.codereview.changeanalysis.domain.ChangeType;
 import com.leaf.codereview.changeanalysis.domain.ImpactedResource;
+import com.leaf.codereview.changeanalysis.rule.ValueConfigChangeRule;
+import com.leaf.codereview.riskengine.domain.FocusIndicator;
 import com.leaf.codereview.riskengine.domain.ReviewRole;
 import com.leaf.codereview.riskengine.domain.RiskCard;
 import com.leaf.codereview.riskengine.domain.RiskEvidence;
@@ -18,6 +20,7 @@ import org.springframework.stereotype.Service;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -51,6 +54,9 @@ public class RiskCardGenerator {
         List<RiskItem> riskItems = new ArrayList<>();
         int sequence = 1;
         for (RiskRuleDefinition rule : enabledRules) {
+            if (isLowSignalApiCompatibilityRule(rule)) {
+                continue;
+            }
             if (!matchesRule(rule, analysisResult)) {
                 continue;
             }
@@ -81,15 +87,124 @@ public class RiskCardGenerator {
 
         return new RiskCard(
                 "risk-card-" + UUID.randomUUID(),
-                buildSummary(analysisResult, overallLevel, riskItems.size()),
+                buildSummary(analysisResult, overallLevel, riskItems),
                 overallLevel,
                 affectedResources,
+                buildFocusIndicators(analysisResult, riskItems),
                 riskItems,
                 recommendedChecks,
                 suggestedReviewRoles,
                 OffsetDateTime.now(),
                 GENERATOR
         );
+    }
+
+    private List<FocusIndicator> buildFocusIndicators(ChangeAnalysisResult analysisResult, List<RiskItem> riskItems) {
+        return List.of(
+                buildFocusIndicator(
+                        "DB_SCHEMA_CHANGE",
+                        "DB 表/字段变更",
+                        EnumSet.of(ChangeType.DB_SCHEMA, ChangeType.DATA_MIGRATION, ChangeType.ENTITY_MODEL, ChangeType.ORM_MAPPING),
+                        RiskLevel.HIGH,
+                        analysisResult,
+                        riskItems
+                ),
+                buildFocusIndicator(
+                        "MQ_CONFIG_CHANGE",
+                        "MQ 配置变更",
+                        EnumSet.of(ChangeType.MQ_TOPIC_CONFIG),
+                        RiskLevel.MEDIUM,
+                        analysisResult,
+                        riskItems
+                ),
+                buildFocusIndicator(
+                        "REDIS_CONFIG_CHANGE",
+                        "Redis 配置变更",
+                        EnumSet.of(
+                                ChangeType.CACHE_KEY,
+                                ChangeType.CACHE_TTL,
+                                ChangeType.CACHE_INVALIDATION,
+                                ChangeType.CACHE_READ_WRITE,
+                                ChangeType.CACHE_SERIALIZATION
+                        ),
+                        RiskLevel.MEDIUM,
+                        analysisResult,
+                        riskItems
+                ),
+                buildValueConfigFocusIndicator(analysisResult, riskItems)
+        );
+    }
+
+    private FocusIndicator buildFocusIndicator(
+            String code,
+            String name,
+            Set<ChangeType> sourceChangeTypes,
+            RiskLevel defaultRiskLevel,
+            ChangeAnalysisResult analysisResult,
+            List<RiskItem> riskItems
+    ) {
+        boolean matched = !sourceChangeTypes.isEmpty()
+                && analysisResult.changeTypes().stream().anyMatch(sourceChangeTypes::contains);
+        List<RiskEvidence> evidences = analysisResult.evidences().stream()
+                .filter(evidence -> sourceChangeTypes.contains(evidence.changeType()))
+                .map(this::toRiskEvidence)
+                .distinct()
+                .toList();
+        RiskLevel riskLevel = riskItems.stream()
+                .filter(item -> item.category() != null && sourceChangeTypes.contains(item.category()))
+                .map(RiskItem::riskLevel)
+                .max(Comparator.comparingInt(RiskLevel::weight))
+                .orElse(matched ? defaultRiskLevel : null);
+        Set<ChangeType> matchedTypes = analysisResult.changeTypes().stream()
+                .filter(sourceChangeTypes::contains)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        return new FocusIndicator(
+                code,
+                name,
+                riskLevel,
+                matched,
+                focusIndicatorReason(name, matched, matchedTypes),
+                evidences,
+                matchedTypes
+        );
+    }
+
+    private FocusIndicator buildValueConfigFocusIndicator(ChangeAnalysisResult analysisResult, List<RiskItem> riskItems) {
+        List<RiskEvidence> evidences = analysisResult.evidences().stream()
+                .filter(evidence -> ValueConfigChangeRule.RULE_CODE.equals(evidence.matcher()))
+                .map(this::toRiskEvidence)
+                .distinct()
+                .toList();
+        boolean matched = !evidences.isEmpty();
+        RiskLevel riskLevel = matched
+                ? riskItems.stream()
+                        .filter(item -> item.category() == ChangeType.CONFIG)
+                        .map(RiskItem::riskLevel)
+                        .max(Comparator.comparingInt(RiskLevel::weight))
+                        .orElse(RiskLevel.MEDIUM)
+                : null;
+        Set<ChangeType> sourceChangeTypes = matched ? Set.of(ChangeType.CONFIG) : Set.of();
+
+        return new FocusIndicator(
+                "VALUE_CONFIG_CHANGE",
+                "@Value 配置变更",
+                riskLevel,
+                matched,
+                matched ? "命中 @Value 配置占位符变更。" : "未命中 @Value 配置变更信号。",
+                evidences,
+                sourceChangeTypes
+        );
+    }
+
+    private String focusIndicatorReason(String name, boolean matched, Set<ChangeType> matchedTypes) {
+        if (!matched) {
+            return "未命中" + name + "信号。";
+        }
+        String signals = matchedTypes.stream()
+                .map(this::changeTypeLabel)
+                .collect(Collectors.joining(", "));
+        return "命中变更类型：" + signals + "。";
     }
 
     private RiskItem buildRiskItem(int sequence, RiskRuleDefinition rule, ChangeAnalysisResult analysisResult) {
@@ -159,13 +274,13 @@ public class RiskCardGenerator {
         }
         List<String> signals = new ArrayList<>();
         if (analysisResult.changeTypes().contains(ChangeType.ENTITY_MODEL)) {
-            signals.add("entity model changed");
+            signals.add("实体模型变更");
         }
         if (analysisResult.changeTypes().contains(ChangeType.ORM_MAPPING)) {
-            signals.add("ORM/MyBatis mapping changed");
+            signals.add("ORM/MyBatis 映射变更");
         }
         if (!analysisResult.changeTypes().contains(ChangeType.DB_SCHEMA)) {
-            signals.add("migration or DDL not detected");
+            signals.add("未检测到 migration 或 DDL");
         }
         return signals;
     }
@@ -180,13 +295,47 @@ public class RiskCardGenerator {
         );
     }
 
-    private String buildSummary(ChangeAnalysisResult analysisResult, RiskLevel riskLevel, int riskItemCount) {
-        String changeTypes = analysisResult.changeTypes().stream()
-                .map(Enum::name)
-                .collect(Collectors.joining(", "));
-        if (riskItemCount == 0) {
-            return "未命中风险规则。本次分析文件数：" + analysisResult.changedFileCount() + "。";
+    private boolean isLowSignalApiCompatibilityRule(RiskRuleDefinition rule) {
+        return "API_COMPATIBILITY_CHECK".equals(rule.ruleCode()) || rule.changeType() == ChangeType.API;
+    }
+
+    private String buildSummary(ChangeAnalysisResult analysisResult, RiskLevel riskLevel, List<RiskItem> riskItems) {
+        if (riskItems.isEmpty()) {
+            return "未命中需要关注的风险规则。本次分析文件数：" + analysisResult.changedFileCount() + "。";
         }
-        return "本次变更涉及 " + changeTypes + "，生成 " + riskItemCount + " 个风险项，整体风险等级为 " + riskLevel.name() + "。";
+        String changeTypes = riskItems.stream()
+                .map(RiskItem::category)
+                .distinct()
+                .map(this::changeTypeLabel)
+                .collect(Collectors.joining(", "));
+        return "本次重点风险涉及 " + changeTypes + "，生成 " + riskItems.size() + " 个风险项，整体风险等级为 " + riskLevel.name() + "。";
+    }
+
+    private String changeTypeLabel(ChangeType changeType) {
+        if (changeType == null) {
+            return "-";
+        }
+        return switch (changeType) {
+            case API -> "接口";
+            case DB -> "数据库";
+            case DB_SCHEMA -> "DB 表结构";
+            case DB_SQL -> "SQL";
+            case ORM_MAPPING -> "ORM/MyBatis 映射";
+            case ENTITY_MODEL -> "实体模型";
+            case DATA_MIGRATION -> "数据迁移";
+            case CACHE -> "缓存";
+            case CACHE_KEY -> "缓存 Key";
+            case CACHE_TTL -> "缓存 TTL";
+            case CACHE_INVALIDATION -> "缓存失效";
+            case CACHE_READ_WRITE -> "缓存读写";
+            case CACHE_SERIALIZATION -> "缓存序列化";
+            case MQ -> "MQ";
+            case MQ_PRODUCER -> "MQ 生产者";
+            case MQ_CONSUMER -> "MQ 消费者";
+            case MQ_MESSAGE_SCHEMA -> "MQ 消息结构";
+            case MQ_TOPIC_CONFIG -> "MQ Topic/消费组配置";
+            case MQ_RETRY_DLQ -> "MQ 重试/死信";
+            case CONFIG -> "配置";
+        };
     }
 }

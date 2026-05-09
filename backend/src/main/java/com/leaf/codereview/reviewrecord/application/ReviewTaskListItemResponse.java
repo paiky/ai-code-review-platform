@@ -1,5 +1,7 @@
 package com.leaf.codereview.reviewrecord.application;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 public record ReviewTaskListItemResponse(
         Long id,
         Long projectId,
@@ -14,6 +16,7 @@ public record ReviewTaskListItemResponse(
         String status,
         String riskLevel,
         Integer riskItemCount,
+        JsonNode focusIndicators,
         String createdAt,
         String finishedAt
 ) {

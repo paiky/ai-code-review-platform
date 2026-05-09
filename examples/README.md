@@ -33,6 +33,10 @@ Invoke-RestMethod `
   - 用于验证手动审查接口 `POST /api/review-tasks/manual`。
   - 不依赖 GitLab webhook。
 
+- `manual-review-value-config-request.json`
+  - 用于验证 `@Value("${xxx}")` 配置感知。
+  - 预期风险卡片中的 `focusIndicators` 会命中 `VALUE_CONFIG_CHANGE`。
+
 - `gitlab.env.example`
   - 用于真实 GitLab 联调的本地环境变量模板。
   - 建议复制到 `.local/gitlab.env` 后再填写真实值。

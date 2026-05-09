@@ -3,6 +3,7 @@ package com.leaf.codereview.projectintegration.controller;
 import com.leaf.codereview.common.response.ApiResponse;
 import com.leaf.codereview.common.response.PageResponse;
 import com.leaf.codereview.projectintegration.application.ProjectService;
+import com.leaf.codereview.projectintegration.application.UpdateProjectCodeQualityProfileRequest;
 import com.leaf.codereview.projectintegration.application.UpdateProjectTemplateRequest;
 import com.leaf.codereview.projectintegration.domain.ProjectRecord;
 import jakarta.validation.Valid;
@@ -34,5 +35,13 @@ public class ProjectController {
     @PutMapping("/{projectId}/default-template")
     public ApiResponse<ProjectRecord> updateDefaultTemplate(@PathVariable Long projectId, @Valid @RequestBody UpdateProjectTemplateRequest request) {
         return ApiResponse.ok(projectService.updateDefaultTemplate(projectId, request.templateCode()));
+    }
+
+    @PutMapping("/{projectId}/code-quality-profile")
+    public ApiResponse<ProjectRecord> updateDefaultCodeQualityProfile(
+            @PathVariable Long projectId,
+            @Valid @RequestBody UpdateProjectCodeQualityProfileRequest request
+    ) {
+        return ApiResponse.ok(projectService.updateDefaultCodeQualityProfile(projectId, request.profileCode()));
     }
 }

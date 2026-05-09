@@ -2,6 +2,8 @@ package com.leaf.codereview.reviewrecord.controller;
 
 import com.leaf.codereview.common.response.ApiResponse;
 import com.leaf.codereview.common.response.PageResponse;
+import com.leaf.codereview.codequality.application.CodeQualityReviewProgressEventResponse;
+import com.leaf.codereview.codequality.application.CodeQualityReviewResultResponse;
 import com.leaf.codereview.reviewrecord.application.ManualReviewRequest;
 import com.leaf.codereview.reviewrecord.application.ManualReviewResponse;
 import com.leaf.codereview.reviewrecord.application.ManualReviewService;
@@ -17,6 +19,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/review-tasks")
@@ -55,5 +59,15 @@ public class ReviewTaskController {
     @GetMapping("/{taskId}/result")
     public ApiResponse<ReviewTaskResultResponse> getResult(@PathVariable Long taskId) {
         return ApiResponse.ok(reviewTaskQueryService.getResult(taskId));
+    }
+
+    @GetMapping("/{taskId}/code-quality-result")
+    public ApiResponse<CodeQualityReviewResultResponse> getCodeQualityResult(@PathVariable Long taskId) {
+        return ApiResponse.ok(reviewTaskQueryService.getCodeQualityResult(taskId));
+    }
+
+    @GetMapping("/{taskId}/code-quality-progress")
+    public ApiResponse<List<CodeQualityReviewProgressEventResponse>> getCodeQualityProgress(@PathVariable Long taskId) {
+        return ApiResponse.ok(reviewTaskQueryService.getCodeQualityProgress(taskId));
     }
 }

@@ -11,6 +11,7 @@ import com.leaf.codereview.changeanalysis.rule.CacheChangeRule;
 import com.leaf.codereview.changeanalysis.rule.ConfigChangeRule;
 import com.leaf.codereview.changeanalysis.rule.DbChangeRule;
 import com.leaf.codereview.changeanalysis.rule.MqChangeRule;
+import com.leaf.codereview.changeanalysis.rule.ValueConfigChangeRule;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -25,7 +26,8 @@ class ChangeAnalysisServiceTest {
             new DbChangeRule(),
             new CacheChangeRule(),
             new MqChangeRule(),
-            new ConfigChangeRule()
+            new ConfigChangeRule(),
+            new ValueConfigChangeRule()
     ));
 
     @Test
@@ -84,6 +86,22 @@ class ChangeAnalysisServiceTest {
             assertThat(resource.resourceType()).isEqualTo(ResourceType.ENTITY_FIELD);
             assertThat(resource.name()).isEqualTo("supportDeviceModel");
             assertThat(resource.evidence().changeType()).isEqualTo(ChangeType.ENTITY_MODEL);
+        });
+    }
+
+    @Test
+    void detectsEntityModelChangeFromMyBatisPlusTableFieldAnnotation() {
+        ChangeAnalysisResult result = analyze(ChangedFile.of(
+                "src/main/java/com/demo/user/dal/dataobject/UserDO.java",
+                "  /**\n   * 迁移前用户id\n   */\n  @TableField(\"old_user_id\")\n+ private Long oldUserId;"
+        ));
+
+        assertThat(result.changeTypes()).containsExactlyInAnyOrder(ChangeType.DB, ChangeType.ENTITY_MODEL);
+        assertThat(result.impactedResources()).anySatisfy(resource -> {
+            assertThat(resource.resourceType()).isEqualTo(ResourceType.ENTITY_FIELD);
+            assertThat(resource.name()).isEqualTo("old_user_id");
+            assertThat(resource.evidence().changeType()).isEqualTo(ChangeType.ENTITY_MODEL);
+            assertThat(resource.evidence().snippet()).contains("old_user_id");
         });
     }
 
@@ -242,6 +260,21 @@ class ChangeAnalysisServiceTest {
         assertThat(result.impactedResources()).anySatisfy(resource -> {
             assertThat(resource.resourceType()).isEqualTo(ResourceType.CONFIG_KEY);
             assertThat(resource.name()).isEqualTo("order");
+        });
+    }
+
+    @Test
+    void detectsValueConfigChangeFromSpringValueAnnotation() {
+        ChangeAnalysisResult result = analyze(ChangedFile.of(
+                "src/main/java/com/demo/order/OrderProperties.java",
+                "+ @Value(\"${order.confirm.enabled:false}\")\n+ private boolean confirmEnabled;"
+        ));
+
+        assertThat(result.changeTypes()).containsExactly(ChangeType.CONFIG);
+        assertThat(result.impactedResources()).anySatisfy(resource -> {
+            assertThat(resource.resourceType()).isEqualTo(ResourceType.CONFIG_KEY);
+            assertThat(resource.name()).isEqualTo("order.confirm.enabled");
+            assertThat(resource.evidence().matcher()).isEqualTo(ValueConfigChangeRule.RULE_CODE);
         });
     }
 

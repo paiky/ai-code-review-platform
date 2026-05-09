@@ -18,6 +18,7 @@ public class ProjectRepository {
 
     private static final String GIT_PROVIDER = "GITLAB";
     private static final String DEFAULT_TEMPLATE_CODE = "backend-default";
+    private static final String DEFAULT_CODE_QUALITY_PROFILE_CODE = "backend-default-ai-review";
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -42,15 +43,16 @@ public class ProjectRepository {
             PreparedStatement ps = connection.prepareStatement("""
                     INSERT INTO projects (
                       name, git_provider, git_project_id, repository_url,
-                      default_template_code, status, description
-                    ) VALUES (?, ?, ?, ?, ?, 'ENABLED', ?)
+                      default_template_code, default_code_quality_profile_code, status, description
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'ENABLED', ?)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, projectName);
             ps.setString(2, GIT_PROVIDER);
             ps.setString(3, gitProjectId);
             ps.setString(4, repositoryUrl);
             ps.setString(5, DEFAULT_TEMPLATE_CODE);
-            ps.setString(6, "Auto-created from GitLab MR webhook");
+            ps.setString(6, DEFAULT_CODE_QUALITY_PROFILE_CODE);
+            ps.setString(7, "Auto-created from GitLab MR webhook");
             return ps;
         }, keyHolder);
 
@@ -61,7 +63,7 @@ public class ProjectRepository {
     public Optional<ProjectRecord> findById(Long id) {
         List<ProjectRecord> projects = jdbcTemplate.query("""
                 SELECT id, name, git_provider, git_project_id, repository_url,
-                       default_template_code, status
+                       default_template_code, default_code_quality_profile_code, status
                 FROM projects
                 WHERE id = ?
                 """, rowMapper(), id);
@@ -71,7 +73,7 @@ public class ProjectRepository {
     public Optional<ProjectRecord> findByGitProjectId(String gitProjectId) {
         List<ProjectRecord> projects = jdbcTemplate.query("""
                 SELECT id, name, git_provider, git_project_id, repository_url,
-                       default_template_code, status
+                       default_template_code, default_code_quality_profile_code, status
                 FROM projects
                 WHERE git_provider = ? AND git_project_id = ?
                 """, rowMapper(), GIT_PROVIDER, gitProjectId);
@@ -82,7 +84,7 @@ public class ProjectRepository {
     public List<ProjectRecord> findAllEnabled() {
         return jdbcTemplate.query("""
                 SELECT id, name, git_provider, git_project_id, repository_url,
-                       default_template_code, status
+                       default_template_code, default_code_quality_profile_code, status
                 FROM projects
                 WHERE status = 'ENABLED'
                 ORDER BY id DESC
@@ -96,6 +98,15 @@ public class ProjectRepository {
                 WHERE id = ?
                 """, templateCode, projectId);
     }
+
+    public void updateDefaultCodeQualityProfile(Long projectId, String profileCode) {
+        jdbcTemplate.update("""
+                UPDATE projects
+                SET default_code_quality_profile_code = ?
+                WHERE id = ?
+                """, profileCode, projectId);
+    }
+
     private RowMapper<ProjectRecord> rowMapper() {
         return (rs, rowNum) -> new ProjectRecord(
                 rs.getLong("id"),
@@ -104,6 +115,7 @@ public class ProjectRepository {
                 rs.getString("git_project_id"),
                 rs.getString("repository_url"),
                 rs.getString("default_template_code"),
+                rs.getString("default_code_quality_profile_code"),
                 rs.getString("status")
         );
     }

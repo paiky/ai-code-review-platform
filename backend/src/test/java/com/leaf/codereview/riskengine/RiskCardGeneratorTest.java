@@ -11,7 +11,9 @@ import com.leaf.codereview.changeanalysis.rule.CacheChangeRule;
 import com.leaf.codereview.changeanalysis.rule.ConfigChangeRule;
 import com.leaf.codereview.changeanalysis.rule.DbChangeRule;
 import com.leaf.codereview.changeanalysis.rule.MqChangeRule;
+import com.leaf.codereview.changeanalysis.rule.ValueConfigChangeRule;
 import com.leaf.codereview.riskengine.application.RiskCardGenerator;
+import com.leaf.codereview.riskengine.domain.FocusIndicator;
 import com.leaf.codereview.riskengine.domain.ReviewRole;
 import com.leaf.codereview.riskengine.domain.RiskCard;
 import com.leaf.codereview.riskengine.domain.RiskItem;
@@ -32,7 +34,8 @@ class RiskCardGeneratorTest {
             new DbChangeRule(),
             new CacheChangeRule(),
             new MqChangeRule(),
-            new ConfigChangeRule()
+            new ConfigChangeRule(),
+            new ValueConfigChangeRule()
     ));
 
     @Test
@@ -75,19 +78,103 @@ class RiskCardGeneratorTest {
 
         RiskCard card = generator.generate(analysisResult, repository.findEnabledRules(), List.of("模板级检查项"));
 
-        assertThat(card.summary()).contains("API", "DB", "CACHE");
-        assertThat(card.riskLevel()).isEqualTo(RiskLevel.HIGH);
+        assertThat(card.summary()).contains("SQL", "缓存读写");
+        assertThat(card.riskLevel()).isEqualTo(RiskLevel.MEDIUM);
         assertThat(card.affectedResources()).hasSize(3);
-        assertThat(card.riskItems()).hasSize(3);
+        assertThat(card.riskItems()).hasSize(2);
         assertThat(card.riskItems()).extracting(item -> item.ruleCode())
-                .containsExactly("API_COMPATIBILITY_CHECK", "DB_SQL_CHANGE_CHECK", "CACHE_READ_WRITE_CHANGE_CHECK");
+                .containsExactly("DB_SQL_CHANGE_CHECK", "CACHE_READ_WRITE_CHANGE_CHECK");
         assertThat(card.riskItems()).anySatisfy(item -> {
             assertThat(item.ruleCode()).isEqualTo("DB_SQL_CHANGE_CHECK");
             assertThat(item.confidence()).isEqualTo("MEDIUM");
             assertThat(item.reason()).contains("SQL");
         });
+        assertThat(card.focusIndicators()).extracting(FocusIndicator::code)
+                .containsExactly("DB_SCHEMA_CHANGE", "MQ_CONFIG_CHANGE", "REDIS_CONFIG_CHANGE", "VALUE_CONFIG_CHANGE");
+        assertThat(indicator(card, "REDIS_CONFIG_CHANGE")).satisfies(indicator -> {
+            assertThat(indicator.matched()).isTrue();
+            assertThat(indicator.riskLevel()).isEqualTo(RiskLevel.MEDIUM);
+            assertThat(indicator.sourceChangeTypes()).contains(ChangeType.CACHE_READ_WRITE);
+            assertThat(indicator.evidences()).isNotEmpty();
+        });
+        assertThat(indicator(card, "DB_SCHEMA_CHANGE").matched()).isFalse();
         assertThat(card.recommendedChecks()).isNotEmpty();
         assertThat(card.suggestedReviewRoles()).contains(ReviewRole.BACKEND, ReviewRole.QA);
+    }
+
+    @Test
+    void generatesFocusIndicatorsFromFineGrainedChangeTypes() throws Exception {
+        ChangeAnalysisResult analysisResult = analysisService.analyze(new ChangeAnalysisRequest(List.of(
+                ChangedFile.of("src/main/resources/db/migration/V12__alter_car.sql", "+ alter table car add column support_device_model varchar(64)"),
+                ChangedFile.of("src/main/resources/application.yml", "+ rocketmq:\n+   topic: order-paid-v2")
+        ), null));
+        ClasspathRiskRuleRepository repository = new ClasspathRiskRuleRepository(new ObjectMapper());
+        RiskCardGenerator generator = new RiskCardGenerator(repository, null);
+
+        RiskCard card = generator.generate(analysisResult, repository.findEnabledRules(), List.of());
+
+        assertThat(indicator(card, "DB_SCHEMA_CHANGE")).satisfies(indicator -> {
+            assertThat(indicator.matched()).isTrue();
+            assertThat(indicator.riskLevel()).isEqualTo(RiskLevel.HIGH);
+            assertThat(indicator.sourceChangeTypes()).contains(ChangeType.DB_SCHEMA);
+            assertThat(indicator.reason()).contains("DB 表结构");
+        });
+        assertThat(indicator(card, "MQ_CONFIG_CHANGE")).satisfies(indicator -> {
+            assertThat(indicator.matched()).isTrue();
+            assertThat(indicator.sourceChangeTypes()).contains(ChangeType.MQ_TOPIC_CONFIG);
+        });
+        assertThat(indicator(card, "VALUE_CONFIG_CHANGE")).satisfies(indicator -> {
+            assertThat(indicator.matched()).isFalse();
+            assertThat(indicator.riskLevel()).isNull();
+        });
+    }
+
+    @Test
+    void generatesValueConfigFocusIndicatorFromSpringValueAnnotation() throws Exception {
+        ChangeAnalysisResult analysisResult = analysisService.analyze(new ChangeAnalysisRequest(List.of(
+                ChangedFile.of("src/main/java/com/demo/order/OrderProperties.java",
+                        "+ @Value(\"${order.confirm.enabled:false}\")\n+ private boolean confirmEnabled;")
+        ), null));
+        ClasspathRiskRuleRepository repository = new ClasspathRiskRuleRepository(new ObjectMapper());
+        RiskCardGenerator generator = new RiskCardGenerator(repository, null);
+
+        RiskCard card = generator.generate(analysisResult, repository.findEnabledRules(), List.of());
+
+        assertThat(card.riskItems()).extracting(RiskItem::ruleCode).contains("CONFIG_RELEASE_CHECK");
+        assertThat(indicator(card, "VALUE_CONFIG_CHANGE")).satisfies(indicator -> {
+            assertThat(indicator.matched()).isTrue();
+            assertThat(indicator.riskLevel()).isEqualTo(RiskLevel.MEDIUM);
+            assertThat(indicator.sourceChangeTypes()).contains(ChangeType.CONFIG);
+            assertThat(indicator.reason()).contains("@Value");
+            assertThat(indicator.evidences()).singleElement().satisfies(evidence -> {
+                assertThat(evidence.filePath()).contains("OrderProperties.java");
+                assertThat(evidence.snippet()).contains("order.confirm.enabled");
+            });
+        });
+    }
+
+    @Test
+    void generatesEntityModelRiskFromMyBatisPlusTableFieldAnnotation() throws Exception {
+        ChangeAnalysisResult analysisResult = analysisService.analyze(new ChangeAnalysisRequest(List.of(
+                ChangedFile.of("src/main/java/com/demo/user/dal/dataobject/UserDO.java",
+                        "  /**\n   * 迁移前用户id\n   */\n  @TableField(\"old_user_id\")\n+ private Long oldUserId;")
+        ), null));
+        ClasspathRiskRuleRepository repository = new ClasspathRiskRuleRepository(new ObjectMapper());
+        RiskCardGenerator generator = new RiskCardGenerator(repository, null);
+
+        RiskCard card = generator.generate(analysisResult, repository.findEnabledRules(), List.of());
+
+        assertThat(card.riskItems()).extracting(RiskItem::ruleCode).contains("ENTITY_MODEL_CHANGE_CHECK");
+        assertThat(card.riskItems()).anySatisfy(item -> {
+            assertThat(item.category()).isEqualTo(ChangeType.ENTITY_MODEL);
+            assertThat(item.affectedResources()).anySatisfy(resource -> assertThat(resource.name()).isEqualTo("old_user_id"));
+        });
+        assertThat(indicator(card, "DB_SCHEMA_CHANGE")).satisfies(indicator -> {
+            assertThat(indicator.matched()).isTrue();
+            assertThat(indicator.riskLevel()).isEqualTo(RiskLevel.MEDIUM);
+            assertThat(indicator.sourceChangeTypes()).contains(ChangeType.ENTITY_MODEL);
+            assertThat(indicator.evidences()).isNotEmpty();
+        });
     }
 
     @Test
@@ -185,8 +272,15 @@ class RiskCardGeneratorTest {
                 .contains("ENTITY_MODEL_CHANGE_CHECK", "ORM_MAPPING_CHANGE_CHECK", "DB_SCHEMA_SYNC_SUSPECT_CHECK");
         assertThat(card.riskItems()).anySatisfy(item -> {
             assertThat(item.ruleCode()).isEqualTo("DB_SCHEMA_SYNC_SUSPECT_CHECK");
-            assertThat(item.relatedSignals()).contains("entity model changed", "ORM/MyBatis mapping changed", "migration or DDL not detected");
+            assertThat(item.relatedSignals()).contains("实体模型变更", "ORM/MyBatis 映射变更", "未检测到 migration 或 DDL");
             assertThat(item.affectedResources()).hasSize(2);
         });
+    }
+
+    private FocusIndicator indicator(RiskCard card, String code) {
+        return card.focusIndicators().stream()
+                .filter(indicator -> code.equals(indicator.code()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Missing focus indicator: " + code));
     }
 }

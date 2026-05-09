@@ -10,13 +10,13 @@ mock GitLab MR webhook / GitLab Push webhook
   -> 保存原始 webhook payload
   -> 变更分析
   -> 风险规则引擎
-  -> 生成风险卡片
+  -> 生成提醒卡片
   -> 审查结果落库
   -> 钉钉推送或 SKIPPED 记录
-  -> 前端查看任务与风险卡片
+  -> 前端查看任务与提醒卡片
 ```
 
-说明：P0 演示链路可以继续使用 mock payload 中的 `changedFiles` / `diffText`。真实 GitLab MR webhook 通常不会携带完整 diff，当前已支持在 payload 缺少 changed files 时按 `projectId + mrIid` 调用 GitLab API 补拉 diff。Push webhook 会从 commits 的 `added` / `modified` / `removed` 文件列表触发轻量审查，后续可再增强为 compare API 拉取完整 diff。
+说明：P0 演示链路可以继续使用 mock payload 中的 `changedFiles` / `diffText`。真实 GitLab MR webhook 通常不会携带完整 diff，当前已支持在 payload 缺少 changed files 时按 `projectId + mrIid` 调用 GitLab API 补拉 diff。Push webhook 会优先按 `projectId + beforeSha + afterSha` 调用 GitLab compare API 拉取完整 diff；compare 不可用时回退到 commits 的 `added` / `modified` / `removed` 文件列表，任务不中断。
 
 ## 当前能力
 
@@ -42,21 +42,25 @@ mock GitLab MR webhook / GitLab Push webhook
 - 手动审查后端接口。
 - payload 不带 `changedFiles` 时，可通过 GitLab API 拉取 MR diff。
 - Push webhook 支持从 commit 文件列表生成 `GITLAB_PUSH_WEBHOOK` 审查任务。
+- Push webhook 支持通过 GitLab compare API 拉取完整 diff，成功时 `changedFilesSummary.source = gitlab_compare_api`，失败时回退 `push_payload` 并记录 `fallbackReason`。
 - GitLab 扫描模式下通过 project detail / MR detail 回填真实项目名、MR URL、分支、作者和 commit sha。
-- DB 风险第一轮细分识别：`DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION`，并保留 `DB` 聚合类型兼容旧模板。
+- DB 风险第一轮细分识别：`DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION`，并保留 `DB` 聚合类型兼容旧模板；实体识别包含 JPA 注解和 MyBatis Plus `@TableField` / `@TableId` 字段映射变更。
 - MQ / CACHE 风险第一轮细分识别：`MQ_PRODUCER`、`MQ_CONSUMER`、`MQ_MESSAGE_SCHEMA`、`MQ_TOPIC_CONFIG`、`MQ_RETRY_DLQ`、`CACHE_KEY`、`CACHE_TTL`、`CACHE_INVALIDATION`、`CACHE_READ_WRITE`、`CACHE_SERIALIZATION`，并保留 `MQ` / `CACHE` 聚合类型兼容旧模板。
-- RiskCard schema 已对齐当前后端对象，前端风险卡片可展示 DB / MQ / CACHE 细分类型、置信度、命中原因、关联信号和证据。
+- RiskCard schema 已对齐当前后端对象；展示层先按“提醒卡片”处理，前端会把 DB / MQ / Redis/缓存 / 配置相关命中分组，点开后查看规则命中原因、关联信号和证据。
+- RiskCard 已新增粗粒度关注指标 `focusIndicators`，固定输出 DB 表/字段、MQ 配置、Redis 配置、`@Value` 配置四类指标，任务列表和风险卡片详情会优先展示该字段。
+- 代码质量 AI Review 已有第一版闭环：支持本地 `CODEX_CLI`、`OPENAI_API` 和 `ANTHROPIC_API` 三种 provider，支持项目级 profile / prompt 配置，手动接口会创建任务并将结果落库，GitLab MR 风险审查成功后可按 profile 异步触发 AI Review，前端任务详情页可展示 `RUNNING` / `SUCCESS` / `FAILED` 状态和代码质量 Review 结果。
+- AI Review 增加了运行期治理：平台提供 MR 自动 AI Review 全局开关，关闭后新的 MR 只做规则风险审查；后端启动时会把超时残留的 `RUNNING` AI Review 标记为失败；任务详情支持重试 AI Review，并展示 Codex CLI / OpenAI / Anthropic 调用过程事件。
 - RiskCard schema 校验测试覆盖 DB / MQ / CACHE 细分字段，防止 schema 文档和后端输出脱节。
 - 主链路集成测试覆盖 `mock payload` 和 `gitlab_api source`，并验证 `review_results` / `notification_records` 落库与查询。
 - 本地 GitLab CE Docker 模拟环境，见 `local-gitlab/README.md`。
-- 钉钉通知支持按模板 `focusChangeTypes` 过滤风险项；`backend-default` 默认只推送 `DB_SCHEMA`、`DATA_MIGRATION`、`ENTITY_MODEL`，其他风险仍落库并在前端展示。
+- 钉钉通知支持按模板 `focusChangeTypes` 过滤提醒来源；推送内容会按 DB / MQ / Redis/缓存 / 配置聚合同组命中，只输出简洁提醒和平台详情链接。
 
 暂未完成：
 
 - 真实 GitLab diff 拉取的项目级凭证配置与生产级重试策略。
-- Push webhook 的 GitLab compare API 完整 diff 拉取。
 - Jenkins 入口。
 - 前端手动发起审查页面。
+- 代码质量 Review GitLab MR comment 回写。
 - 项目级钉钉 webhook 配置读取。
 - 钉钉消息中的 DB / MQ / CACHE 细分展示增强。
 - knowledge-base / 人工反馈闭环。
@@ -100,11 +104,26 @@ CREATE DATABASE ai_code_review DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_uni
 | `MYSQL_USERNAME` | `root` | MySQL 用户名 |
 | `MYSQL_PASSWORD` | 以 `backend/src/main/resources/application.yml` 为准 | MySQL 密码 |
 | `SERVER_PORT` | `8080` | 后端端口 |
+| `PLATFORM_BASE_URL` | `http://localhost:5173` | 平台前端访问地址，用于钉钉消息“查看平台详情”链接 |
 | `DINGTALK_WEBHOOK_URL` | 空 | 钉钉机器人 webhook，空值时推送记录为 `SKIPPED` |
 | `GITLAB_API_ENABLED` | `false` | payload 不带 `changedFiles` 时是否启用 GitLab API 补拉 diff |
 | `GITLAB_BASE_URL` | 空 | GitLab base URL，例如 `https://gitlab.example.com` |
 | `GITLAB_TOKEN` | 空 | GitLab access token，通过 `PRIVATE-TOKEN` header 使用 |
 | `GITLAB_DIFF_PER_PAGE` | `100` | GitLab MR diff 分页大小 |
+| `CODE_QUALITY_REVIEW_ENABLED` | `false` | 是否启用代码质量 Review 手动接口 |
+| `CODE_QUALITY_REVIEW_PROVIDER` | `CODEX_CLI` | 代码质量 Review provider，可选 `CODEX_CLI` / `OPENAI_API` / `ANTHROPIC_API` |
+| `CODE_QUALITY_WORKSPACE_ROOT` | 空 | Codex CLI 可审查仓库根目录限制，建议生产-like 环境配置 |
+| `CODEX_CLI_COMMAND` | 按 OS 推断 | Windows 默认 `codex.cmd`，Linux 默认 `codex` |
+| `CODEX_CLI_MODEL` | 空 | Codex CLI model override，空值时使用本机 Codex 配置 |
+| `CODEX_CLI_TIMEOUT_SECONDS` | `600` | Codex CLI 审查超时时间 |
+| `OPENAI_API_KEY` | 空 | OpenAI API provider 使用的 API key |
+| `OPENAI_RESPONSES_URL` | `https://api.openai.com/v1/responses` | OpenAI Responses API 地址 |
+| `OPENAI_CODE_REVIEW_MODEL` | `gpt-5.4` | OpenAI API provider 使用的模型 |
+| `OPENAI_CODE_REVIEW_TIMEOUT_SECONDS` | `120` | OpenAI API provider 请求超时时间 |
+| `ANTHROPIC_API_KEY` | 空 | Anthropic API provider 使用的 API key |
+| `ANTHROPIC_MESSAGES_URL` | `https://api.anthropic.com/v1/messages` | Anthropic Messages API 地址 |
+| `ANTHROPIC_CODE_REVIEW_MODEL` | `claude-sonnet-4-5` | Anthropic API provider 使用的模型 |
+| `ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS` | `120` | Anthropic API provider 请求超时时间 |
 
 PowerShell 示例：
 
@@ -115,6 +134,37 @@ $env:MYSQL_PASSWORD="root"
 $env:DINGTALK_WEBHOOK_URL=""
 $env:GITLAB_API_ENABLED="false"
 ```
+
+代码质量 Review 手动验证可选开启。本地 Codex CLI provider 示例：
+
+```powershell
+$env:CODE_QUALITY_REVIEW_ENABLED="true"
+$env:CODE_QUALITY_REVIEW_PROVIDER="CODEX_CLI"
+$env:CODE_QUALITY_WORKSPACE_ROOT="D:\projects"
+$env:CODEX_CLI_COMMAND="codex.cmd"
+```
+
+OpenAI API provider 示例：
+
+```powershell
+$env:CODE_QUALITY_REVIEW_ENABLED="true"
+$env:CODE_QUALITY_REVIEW_PROVIDER="OPENAI_API"
+$env:OPENAI_API_KEY="sk-..."
+```
+
+Anthropic / Claude API provider 示例：
+
+```powershell
+$env:CODE_QUALITY_REVIEW_ENABLED="true"
+$env:CODE_QUALITY_REVIEW_PROVIDER="ANTHROPIC_API"
+$env:ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+开启后，GitLab MR webhook 主链路仍会先完成变更风险审查；如果项目绑定的 AI Review profile 启用且 `triggerOnMr=true`，后端会异步触发 AI Code Review，并把结果挂到同一个 `review_tasks.id` 下。AI Review 启动时会先保存 `RUNNING` 结果，Codex / OpenAI / Anthropic 完成后更新为 `SUCCESS` 或 `FAILED`。`CODEX_CLI` 自动触发需要后端能定位本地仓库目录：可以将本地仓库放在 `CODE_QUALITY_WORKSPACE_ROOT` 下，并使用 `gitProjectId`、项目名或仓库名作为目录名；`OPENAI_API` / `ANTHROPIC_API` 自动触发会直接使用 MR diff 文本。
+
+前端“模板配置”页可以在全局设置中切换 AI Review 执行方式：`CODEX_CLI` 表示使用项目所在服务器的本地 CLI agent；`OPENAI_API` / `ANTHROPIC_API` 表示使用平台配置的 API Key。OpenAI 与 Anthropic API Key 支持按供应商保存和清除，接口只返回是否已配置与脱敏后的 key，不返回明文。当前 MVP 会把 key 保存到 `code_quality_review_settings` 表；生产环境建议替换为 KMS/Secret Manager 或数据库字段加密。
+
+Codex CLI provider 会把最终 prompt 写入 UTF-8 临时文件，再通过一段短英文命令让 Codex 读取该文件，避免 Windows 长中文命令行参数导致 prompt 丢失或变形。执行过程会记录 `profileCode`、`provider`、`model`、`repositoryPath`、`promptHash`、`promptLength`、`promptPreview`、`runtimeMode` 和脱敏后的 `commandPreview`，便于确认本轮 AI Review 实际使用了哪个 profile 和 prompt。
 
 ### 4. 启动后端
 
@@ -300,10 +350,9 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/review-tasks/$taskId/result" -
 预期结果：
 
 - 任务状态为 `SUCCESS`。
-- `riskLevel` 为 `HIGH`。
-- `riskItemCount` 为 `5`。
+- `riskItemCount` 为 `5`，前端展示为提醒项数量。
 - `changeAnalysis.changeTypes` 包含聚合类型 `API`、`DB`、`CACHE`、`MQ`、`CONFIG`，并包含对应细分类型，例如 `DB_SQL`、`CACHE_INVALIDATION`、`MQ_PRODUCER`。
-- `riskCard` 包含风险项、受影响资源、推荐检查项和建议 review 角色。
+- `riskCard` 仍为兼容字段名，展示层会按提醒卡片处理，包含规则命中、受影响资源、推荐检查项和建议 review 角色。
 
 ### 4. 验证通知记录
 
@@ -328,9 +377,9 @@ http://localhost:5173
 
 验证：
 
-- 任务列表页展示 `demo-service`、MR、分支、状态、风险等级和风险项数量。
-- 任务详情页展示风险卡片、分析结果和原始事件摘要。
-- 风险卡片展示整体风险、受影响资源、风险项、推荐检查项和建议 review 角色。
+- 任务列表页展示 `demo-service`、类型、分支、状态、重点变更和提醒项数量。
+- 任务详情页展示代码质量 Review、提醒卡片、分析结果和原始事件摘要。
+- 提醒卡片按 DB / MQ / Redis/缓存 / 配置分组展示命中提醒，点开后可查看命中原因、关联信号和证据。
 
 ### 6. 自动化验证
 
@@ -341,7 +390,7 @@ cd backend
 mvn -q test
 ```
 
-后端测试包含主链路集成测试，会用内存数据库覆盖 `mock payload` 与 `gitlab_api source` 两条路径，并断言 `review_tasks`、`review_results`、`notification_records` 可查询。
+后端测试包含主链路集成测试，会用内存数据库覆盖 `mock payload`、MR `gitlab_api source`、Push `gitlab_compare_api` 与 Push fallback 路径，并断言 `review_tasks`、`review_results`、`notification_records` 可查询。
 
 前端构建：
 
@@ -373,7 +422,7 @@ POST /api/webhooks/gitlab/merge-request
   -> 钉钉推送或 SKIPPED 记录
 ```
 
-说明：真实 GitLab MR webhook 通常不直接包含完整 changed files。为了本地验证，mock payload 支持传入顶层 `changedFiles` 数组；真实接入时可启用 GitLab API，由后端按 MR iid 拉取真实 diff / changed files。Push Hook 可使用相同 URL，当前从 payload commits 文件列表触发轻量审查。
+说明：真实 GitLab MR webhook 通常不直接包含完整 changed files。为了本地验证，mock payload 支持传入顶层 `changedFiles` 数组；真实接入时可启用 GitLab API，由后端按 MR iid 拉取真实 diff / changed files。Push Hook 可使用相同 URL；启用 GitLab API 后会优先拉取 compare diff，用于识别代码内容中的 API / DB / CACHE / MQ / CONFIG 风险。
 
 ### Push webhook 验证
 
@@ -390,11 +439,11 @@ Invoke-RestMethod `
   -Body $payload
 ```
 
-预期会创建 `triggerType = GITLAB_PUSH_WEBHOOK` 的审查任务，`changedFilesSummary.source = push_payload`。
+预期会创建 `triggerType = GITLAB_PUSH_WEBHOOK` 的审查任务。启用并正确配置 GitLab API 时，`changedFilesSummary.source = gitlab_compare_api`；未启用、接口失败或 compare 返回空 diff 时，任务仍会成功回退到 `changedFilesSummary.source = push_payload`，并在摘要中记录 `fallbackReason`。
 
 ## 真实 GitLab diff 接入
 
-当 webhook payload 不包含 `changedFiles`、`changed_files`、`object_attributes.changed_files` 或 `changes.changed_files.current` 时，后端会尝试通过 GitLab API 拉取 MR diff。
+当 MR webhook payload 不包含 `changedFiles`、`changed_files`、`object_attributes.changed_files` 或 `changes.changed_files.current` 时，后端会尝试通过 GitLab API 拉取 MR diff。Push webhook 会在收到事件后优先通过 GitLab compare API 拉取 `beforeSha -> afterSha` 的完整 diff。
 
 如果当前电脑没有可用的公司 GitLab，可以先启动本地 GitLab CE：
 
@@ -453,6 +502,13 @@ GET {GITLAB_BASE_URL}/api/v4/projects/{projectId}/merge_requests/{mrIid}/diffs?p
 PRIVATE-TOKEN: {GITLAB_TOKEN}
 ```
 
+Push compare 调用接口：
+
+```text
+GET {GITLAB_BASE_URL}/api/v4/projects/{projectId}/repository/compare?from={beforeSha}&to={afterSha}
+PRIVATE-TOKEN: {GITLAB_TOKEN}
+```
+
 兼容说明：部分 GitLab 版本（例如 14.x）可能不支持 MR `diffs` 接口并返回 404。当前后端和验证脚本会自动 fallback 到：
 
 ```text
@@ -465,6 +521,8 @@ PRIVATE-TOKEN: {GITLAB_TOKEN}
 - payload 自带 `changedFiles` 时，优先使用 payload，`changedFilesSummary.source = payload`。
 - payload 不带 `changedFiles` 时，使用 GitLab API 补拉，`changedFilesSummary.source = gitlab_api`。
 - GitLab API 未启用、`GITLAB_BASE_URL` 缺失、`GITLAB_TOKEN` 缺失、接口失败或返回空 diff 时，任务会标记为 `FAILED`。
+- Push Hook 启用 GitLab API 时，优先使用 compare API，`changedFilesSummary.source = gitlab_compare_api`。
+- Push Hook compare 失败或返回空 diff 时，回退到 push payload 文件列表，`changedFilesSummary.source = push_payload`，任务继续生成风险卡片。
 
 可以先手动验证 GitLab token：
 
@@ -489,6 +547,15 @@ curl http://localhost:8080/api/review-tasks/{taskId}
 curl http://localhost:8080/api/review-tasks/{taskId}/result
 ```
 
+`GET /api/review-tasks/{taskId}/result` 返回的 `riskCard.focusIndicators` 会固定包含：
+
+| code | 展示含义 | 当前来源信号 |
+| --- | --- | --- |
+| `DB_SCHEMA_CHANGE` | DB 表/字段变更 | `DB_SCHEMA`、`DATA_MIGRATION`、`ENTITY_MODEL`、`ORM_MAPPING` |
+| `MQ_CONFIG_CHANGE` | MQ 配置变更 | `MQ_TOPIC_CONFIG` |
+| `REDIS_CONFIG_CHANGE` | Redis 配置变更 | `CACHE_KEY`、`CACHE_TTL`、`CACHE_INVALIDATION`、`CACHE_READ_WRITE`、`CACHE_SERIALIZATION` |
+| `VALUE_CONFIG_CHANGE` | `@Value` 配置变更 | Java / Kotlin diff 中出现 `@Value("${xxx}")` 或 `@Value("${xxx:default}")` |
+
 ## 审查模板能力
 
 系统内置三套 MVP 模板：
@@ -501,7 +568,7 @@ curl http://localhost:8080/api/review-tasks/{taskId}/result
 
 模板配置存储在 `rule_templates` 表中，`enabled_rule_codes` 决定启用哪些风险规则，`config_json.recommendedChecks` 定义模板级推荐检查项。项目表 `projects.default_template_code` 绑定项目默认模板。
 
-`config_json.focusChangeTypes` 用于控制钉钉关注标签。风险卡片会完整落库，但钉钉只推送 `category` 精确命中关注标签的风险项。`backend-default` 当前默认关注：
+`config_json.focusChangeTypes` 用于控制钉钉关注标签。RiskCard 会完整落库，但钉钉只推送 `category` 精确命中关注标签的提醒来源，并按 DB / MQ / Redis/缓存 / 配置聚合展示。`backend-default` 当前默认关注：
 
 ```text
 DB_SCHEMA
@@ -509,7 +576,7 @@ DATA_MIGRATION
 ENTITY_MODEL
 ```
 
-如果本次审查没有命中关注标签，通知记录会保存为 `SKIPPED`，错误信息为 `No focused risk item matched`。
+如果本次审查没有命中关注标签，通知记录会保存为 `SKIPPED`，错误信息为 `No focused reminder matched`。
 
 ### 模板接口
 
@@ -544,6 +611,101 @@ Invoke-RestMethod `
 
 如果 `templateCode` 为空，系统会使用项目绑定的 `default_template_code`。
 
+### 手动发起代码质量 Review
+
+代码质量 Review provider 设计与配置见 `docs/12-code-quality-review-provider-plan.md`。该能力默认关闭，需先设置 `CODE_QUALITY_REVIEW_ENABLED=true`。
+
+Codex CLI provider 示例：
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8080/api/code-quality-reviews/manual" `
+  -ContentType "application/json" `
+  -Body '{
+    "projectId":1,
+    "profileCode":"backend-default-ai-review",
+    "repositoryPath":"D:/projects/ai-code-review-platform",
+    "mode":"BASE",
+    "baseRef":"origin/main",
+    "title":"Manual Codex review",
+    "instructions":"Only report actionable correctness, data consistency, or security issues."
+  }'
+```
+
+OpenAI API provider 示例：
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8080/api/code-quality-reviews/manual" `
+  -ContentType "application/json" `
+  -Body '{
+    "projectId":1,
+    "profileCode":"backend-default-ai-review",
+    "mode":"DIFF_TEXT",
+    "title":"Diff-only review",
+    "diffText":"+ public void createOrder() { }",
+    "changedFiles":["src/main/java/com/demo/OrderService.java"]
+  }'
+```
+
+接口会创建一条 `triggerType = CODE_QUALITY_MANUAL` 的审查任务，并把结果保存到 `code_quality_review_results`。查询结果：
+
+```powershell
+curl http://localhost:8080/api/review-tasks/{taskId}/code-quality-result
+```
+
+`CODEX_CLI` provider 会保留 Codex 原始 Markdown 输出，同时会把 `- High:` / `- Medium:` 等 findings 解析为结构化 `findings`，供前端折叠面板展示。历史记录如果只有 `rawOutput` 且 `findings_json` 为空，查询时也会做同样的兜底解析。
+
+查询执行过程：
+
+```powershell
+curl http://localhost:8080/api/review-tasks/{taskId}/code-quality-progress
+```
+
+过程事件会记录 `QUEUED`、`REQUEST_BUILT`、`PROMPT_METADATA`、`CODEX_COMMAND`、`CODEX_PROCESS_STARTED`、`CODEX_OUTPUT`、`CODEX_PROCESS_EXIT`、`CODEX_PARSED`、`SAVE_RESULT` 等阶段。前端任务详情页会在“代码质量 Review”页签展示“执行过程”，`RUNNING` 时自动轮询刷新。
+
+AI Review 运维接口：
+
+```powershell
+# 查看全局开关
+curl http://localhost:8080/api/code-quality-reviews/settings
+
+# 控制 GitLab MR 是否自动触发 AI Review
+Invoke-RestMethod `
+  -Method Put `
+  -Uri "http://localhost:8080/api/code-quality-reviews/settings" `
+  -ContentType "application/json" `
+  -Body '{"mrAutoReviewEnabled":false}'
+
+# 重试某个任务的 AI Review
+Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/code-quality-reviews/tasks/{taskId}/retry"
+```
+
+AI Review Profile / Prompt 接口：
+
+```powershell
+# 查看 profile
+curl http://localhost:8080/api/code-quality-review-profiles
+curl http://localhost:8080/api/code-quality-review-profiles/backend-default-ai-review
+
+# 预览最终拼装后的 Codex / OpenAI prompt
+curl http://localhost:8080/api/code-quality-review-profiles/backend-default-ai-review/rendered-prompt
+
+# 更新 prompt
+Invoke-RestMethod `
+  -Method Put `
+  -Uri "http://localhost:8080/api/code-quality-review-profiles/backend-default-ai-review" `
+  -ContentType "application/json" `
+  -Body '{"codexPrompt":"只报告会影响线上正确性、数据一致性或安全的问题。","openAiInstructions":"Review only the supplied diff and return strict JSON."}'
+
+# 恢复内置默认 prompt
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8080/api/code-quality-review-profiles/backend-default-ai-review/reset-default-prompt"
+```
+
 ### 前端配置页面
 
 启动前端后访问：
@@ -557,6 +719,8 @@ http://localhost:5173
 - 查看 `backend-default` / `frontend-default` / `general-default`。
 - 查看每个模板启用的规则和推荐检查项。
 - 修改项目默认模板绑定。
+- 查看并编辑 AI Review Profile 的 Codex prompt / OpenAI instructions。
+- 预览最终拼装后的 AI Review prompt，并可一键恢复内置默认 prompt。
 
 ## 下一步建议
 

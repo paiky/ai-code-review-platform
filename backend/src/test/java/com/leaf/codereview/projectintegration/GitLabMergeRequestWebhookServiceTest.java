@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leaf.codereview.changeanalysis.application.ChangeAnalysisService;
 import com.leaf.codereview.changeanalysis.domain.ChangeAnalysisRequest;
 import com.leaf.codereview.changeanalysis.domain.ChangeAnalysisResult;
+import com.leaf.codereview.codequality.application.CodeQualityAutoReviewService;
 import com.leaf.codereview.notification.application.DingTalkNotifier;
 import com.leaf.codereview.notification.domain.DingTalkNotificationResult;
 import com.leaf.codereview.notification.domain.NotificationStatus;
@@ -52,6 +53,7 @@ class GitLabMergeRequestWebhookServiceTest {
     private final NotificationRecordRepository notificationRecordRepository = mock(NotificationRecordRepository.class);
     private final GitLabClient gitLabClient = mock(GitLabClient.class);
     private final RuleTemplateService ruleTemplateService = mock(RuleTemplateService.class);
+    private final CodeQualityAutoReviewService codeQualityAutoReviewService = mock(CodeQualityAutoReviewService.class);
 
     @Test
     void fetchesGitLabDiffsWhenWebhookPayloadDoesNotProvideChangedFiles() throws Exception {
@@ -136,6 +138,7 @@ class GitLabMergeRequestWebhookServiceTest {
         verify(webhookEventRepository).updateChangedFilesSummary(eq(99L), summaryCaptor.capture());
         assertThat(summaryCaptor.getValue().path("source").asText()).isEqualTo("gitlab_api");
         assertThat(summaryCaptor.getValue().path("count").asInt()).isEqualTo(1);
+        verify(codeQualityAutoReviewService).triggerAfterMergeRequestReview(eq(99L), any(), any());
     }
 
     @Test
@@ -192,7 +195,8 @@ class GitLabMergeRequestWebhookServiceTest {
                 dingTalkNotifier,
                 notificationRecordRepository,
                 gitLabClient,
-                ruleTemplateService
+                ruleTemplateService,
+                codeQualityAutoReviewService
         );
     }
 
@@ -204,6 +208,7 @@ class GitLabMergeRequestWebhookServiceTest {
                 "1001",
                 "https://gitlab.example.com/group/demo-service",
                 "backend-default",
+                "backend-default-ai-review",
                 "ACTIVE"
         ));
         when(reviewTaskRepository.create(any(ReviewTaskCreateCommand.class))).thenReturn(99L);
@@ -240,7 +245,7 @@ class GitLabMergeRequestWebhookServiceTest {
                 "ENABLED",
                 "test"
         ));
-        when(dingTalkNotifier.sendRiskCard(any(), any(), any())).thenReturn(new DingTalkNotificationResult(
+        when(dingTalkNotifier.sendRiskCard(any(), any(), any(), any())).thenReturn(new DingTalkNotificationResult(
                 NotificationStatus.SKIPPED,
                 "DINGTALK_WEBHOOK_URL",
                 null,

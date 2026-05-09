@@ -14,6 +14,7 @@
   "summary": "本次变更涉及 API, DB_SQL，生成 2 个风险项，整体风险等级为 HIGH。",
   "riskLevel": "HIGH",
   "affectedResources": [],
+  "focusIndicators": [],
   "riskItems": [],
   "recommendedChecks": [],
   "suggestedReviewRoles": [],
@@ -113,6 +114,7 @@ DB 细分风险项必须携带以下解释字段：
     "summary",
     "riskLevel",
     "affectedResources",
+    "focusIndicators",
     "riskItems",
     "recommendedChecks",
     "suggestedReviewRoles",
@@ -126,6 +128,10 @@ DB 细分风险项必须携带以下解释字段：
     "affectedResources": {
       "type": "array",
       "items": { "$ref": "#/$defs/impactedResource" }
+    },
+    "focusIndicators": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/focusIndicator" }
     },
     "riskItems": {
       "type": "array",
@@ -144,6 +150,47 @@ DB 细分风险项必须携带以下解释字段：
     "generator": { "type": "string" }
   },
   "$defs": {
+    "focusIndicator": {
+      "type": "object",
+      "required": [
+        "code",
+        "name",
+        "riskLevel",
+        "matched",
+        "reason",
+        "evidences",
+        "sourceChangeTypes"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "DB_SCHEMA_CHANGE",
+            "MQ_CONFIG_CHANGE",
+            "REDIS_CONFIG_CHANGE",
+            "VALUE_CONFIG_CHANGE"
+          ]
+        },
+        "name": { "type": "string" },
+        "riskLevel": {
+          "anyOf": [
+            { "$ref": "#/$defs/riskLevel" },
+            { "type": "null" }
+          ]
+        },
+        "matched": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "evidences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/riskEvidence" }
+        },
+        "sourceChangeTypes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/changeType" },
+          "uniqueItems": true
+        }
+      }
+    },
     "riskItem": {
       "type": "object",
       "required": [

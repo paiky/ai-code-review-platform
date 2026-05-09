@@ -9,9 +9,11 @@ import com.leaf.codereview.changeanalysis.domain.ChangeAnalysisRequest;
 import com.leaf.codereview.changeanalysis.domain.ChangeAnalysisResult;
 import com.leaf.codereview.changeanalysis.domain.ChangedFile;
 import com.leaf.codereview.changeanalysis.domain.FileChangeType;
+import com.leaf.codereview.codequality.application.CodeQualityAutoReviewService;
 import com.leaf.codereview.common.enums.ErrorCode;
 import com.leaf.codereview.common.exception.BusinessException;
 import com.leaf.codereview.notification.application.DingTalkNotifier;
+import com.leaf.codereview.notification.domain.DingTalkMessageContext;
 import com.leaf.codereview.notification.domain.DingTalkNotificationResult;
 import com.leaf.codereview.notification.infrastructure.NotificationRecordRepository;
 import com.leaf.codereview.projectintegration.domain.GitLabDiffFile;
@@ -64,6 +66,7 @@ public class GitLabMergeRequestWebhookService {
     private final NotificationRecordRepository notificationRecordRepository;
     private final GitLabClient gitLabClient;
     private final RuleTemplateService ruleTemplateService;
+    private final CodeQualityAutoReviewService codeQualityAutoReviewService;
 
     public GitLabMergeRequestWebhookService(
             ObjectMapper objectMapper,
@@ -76,7 +79,8 @@ public class GitLabMergeRequestWebhookService {
             DingTalkNotifier dingTalkNotifier,
             NotificationRecordRepository notificationRecordRepository,
             GitLabClient gitLabClient,
-            RuleTemplateService ruleTemplateService
+            RuleTemplateService ruleTemplateService,
+            CodeQualityAutoReviewService codeQualityAutoReviewService
     ) {
         this.objectMapper = objectMapper;
         this.projectRepository = projectRepository;
@@ -89,6 +93,7 @@ public class GitLabMergeRequestWebhookService {
         this.notificationRecordRepository = notificationRecordRepository;
         this.gitLabClient = gitLabClient;
         this.ruleTemplateService = ruleTemplateService;
+        this.codeQualityAutoReviewService = codeQualityAutoReviewService;
     }
 
     @Transactional(noRollbackFor = Exception.class)
@@ -122,6 +127,7 @@ public class GitLabMergeRequestWebhookService {
         try {
             GitLabMergeRequestEvent eventWithChangedFiles = resolveChangedFiles(taskId, event);
             processReviewTask(taskId, project.id(), project.defaultTemplateCode(), eventWithChangedFiles);
+            codeQualityAutoReviewService.triggerAfterMergeRequestReview(taskId, project, eventWithChangedFiles);
             return new GitLabWebhookResponse(taskId, "SUCCESS", event.gitProjectId(), event.projectName(), event.mrId());
         } catch (Exception exception) {
             reviewTaskRepository.markFailed(taskId, exception.getMessage());
@@ -169,7 +175,14 @@ public class GitLabMergeRequestWebhookService {
         RiskCard riskCard = riskCardGenerator.generate(analysisResult, templateCode);
         Long resultId = reviewResultRepository.save(taskId, projectId, templateCode, analysisResult, riskCard);
         reviewTaskRepository.markSuccess(taskId, riskCard.riskLevel().name());
-        DingTalkNotificationResult notificationResult = dingTalkNotifier.sendRiskCard(taskId, riskCard, template.focusChangeTypes());
+        DingTalkNotificationResult notificationResult = dingTalkNotifier.sendRiskCard(taskId, riskCard, template.focusChangeTypes(), new DingTalkMessageContext(
+                "GitLab MR !" + event.mrId() + " " + nullToEmpty(event.sourceBranch()) + " -> " + nullToEmpty(event.targetBranch()),
+                event.authorName(),
+                event.authorUsername(),
+                event.sourceBranch(),
+                event.targetBranch(),
+                event.externalUrl()
+        ));
         notificationRecordRepository.saveDingTalkRecord(taskId, resultId, notificationResult);
     }
 
@@ -440,6 +453,10 @@ public class GitLabMergeRequestWebhookService {
             }
         }
         return null;
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private String textAt(JsonNode node, String pointer) {

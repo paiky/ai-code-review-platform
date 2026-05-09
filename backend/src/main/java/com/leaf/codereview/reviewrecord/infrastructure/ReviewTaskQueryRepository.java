@@ -61,6 +61,7 @@ public class ReviewTaskQueryRepository {
                   rt.status,
                   rt.risk_level,
                   rr.risk_item_count,
+                  rr.risk_card_json,
                   rt.created_at,
                   rt.finished_at
                 FROM review_tasks rt
@@ -161,9 +162,16 @@ public class ReviewTaskQueryRepository {
                 rs.getString("status"),
                 rs.getString("risk_level"),
                 nullableInt(rs, "risk_item_count"),
+                focusIndicators(rs.getString("risk_card_json")),
                 formatTimestamp(rs.getTimestamp("created_at")),
                 formatTimestamp(rs.getTimestamp("finished_at"))
         );
+    }
+
+    private JsonNode focusIndicators(String riskCardJson) {
+        JsonNode riskCard = readJson(riskCardJson);
+        JsonNode focusIndicators = riskCard.path("focusIndicators");
+        return focusIndicators.isArray() ? focusIndicators : objectMapper.createArrayNode();
     }
 
     private ReviewTaskDetailResponse mapDetail(ResultSet rs) throws SQLException {

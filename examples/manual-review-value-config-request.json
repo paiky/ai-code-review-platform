@@ -1,0 +1,16 @@
+{
+  "projectId": 1,
+  "templateCode": "backend-default",
+  "sourceBranch": "feature/value-config-review",
+  "targetBranch": "main",
+  "authorName": "Manual Tester",
+  "changedFiles": [
+    {
+      "path": "src/main/java/com/demo/order/OrderProperties.java",
+      "oldPath": "src/main/java/com/demo/order/OrderProperties.java",
+      "newPath": "src/main/java/com/demo/order/OrderProperties.java",
+      "changeType": "MODIFIED",
+      "diffText": "+ @Value(\"${order.confirm.enabled:false}\")\n+ private boolean confirmEnabled;"
+    }
+  ]
+}

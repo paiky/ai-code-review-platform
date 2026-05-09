@@ -7,6 +7,7 @@ public record ProjectRecord(
         String gitProjectId,
         String repositoryUrl,
         String defaultTemplateCode,
+        String defaultCodeQualityProfileCode,
         String status
 ) {
 }

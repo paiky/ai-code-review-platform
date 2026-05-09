@@ -53,6 +53,8 @@ class RiskCardSchemaTest {
                 .containsAll(Arrays.stream(ChangeType.values()).map(Enum::name).toList());
         assertThat(enumValues(schema.at("/$defs/resourceType")))
                 .containsAll(Arrays.stream(ResourceType.values()).map(Enum::name).toList());
+        assertThat(enumValues(schema.at("/$defs/focusIndicator/properties/code")))
+                .containsExactlyInAnyOrder("DB_SCHEMA_CHANGE", "MQ_CONFIG_CHANGE", "REDIS_CONFIG_CHANGE", "VALUE_CONFIG_CHANGE");
         assertThat(enumValues(schema.at("/$defs/riskItem/properties/confidence")))
                 .contains("LOW", "MEDIUM", "HIGH");
     }
@@ -73,6 +75,9 @@ class RiskCardSchemaTest {
 
         assertRequiredFieldsPresent(cardJson, schema.get("required"));
         assertThat(cardJson.path("riskItems")).hasSize(3);
+        assertThat(cardJson.path("focusIndicators")).hasSize(4);
+        assertThat(focusIndicatorByCode(cardJson, "REDIS_CONFIG_CHANGE").path("matched").asBoolean()).isTrue();
+        assertThat(focusIndicatorByCode(cardJson, "VALUE_CONFIG_CHANGE").path("matched").asBoolean()).isFalse();
 
         JsonNode dbItem = riskItemByCategory(cardJson, "DB_SQL");
         assertFineGrainedRiskItem(dbItem, "DB_SQL_CHANGE_CHECK", "MEDIUM");
@@ -110,6 +115,13 @@ class RiskCardSchemaTest {
                 .filter(item -> category.equals(item.path("category").asText()))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("Missing risk item category: " + category));
+    }
+
+    private JsonNode focusIndicatorByCode(JsonNode cardJson, String code) {
+        return StreamSupport.stream(cardJson.path("focusIndicators").spliterator(), false)
+                .filter(item -> code.equals(item.path("code").asText()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Missing focus indicator: " + code));
     }
 
     private Set<String> changeTypesFromEvidences(JsonNode cardJson) {
