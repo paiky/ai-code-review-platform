@@ -57,7 +57,8 @@ class DingTalkNotifierTest {
         assertThat(result.target()).isEqualTo("DINGTALK_WEBHOOK_URL");
         assertThat(result.requestDigest()).contains("作者");
         assertThat(result.requestDigest()).contains("### 变更提醒");
-        assertThat(result.requestDigest()).contains("维护事项提醒");
+        assertThat(result.requestDigest()).contains("**提醒**");
+        assertThat(result.requestDigest()).doesNotContain("维护事项提醒");
         assertThat(result.requestDigest()).doesNotContain("变更提醒 #11");
         assertThat(result.requestDigest()).contains("DB 变更提醒：命中 DB 表结构、SQL，共 2 条提醒");
         assertThat(result.requestDigest()).doesNotContain("触发提醒");

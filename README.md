@@ -57,12 +57,11 @@ mock GitLab MR webhook / GitLab Push webhook
 
 暂未完成：
 
-- 真实 GitLab diff 拉取的项目级凭证配置与生产级重试策略。
 - Jenkins 入口。
 - 前端手动发起审查页面。
 - 代码质量 Review GitLab MR comment 回写。
-- 项目级钉钉 webhook 配置读取。
-- 钉钉消息中的 DB / MQ / CACHE 细分展示增强。
+- GitLab token、钉钉 webhook、AI API Key 的生产级密钥托管与加密存储。目前 GitLab / 钉钉主要使用环境变量，AI API Key 已支持前端配置但仍建议接入 KMS/Secret Manager。
+- 提醒卡片领域命名仍兼容 `RiskCard` / `riskItems` 历史字段，后续如要彻底改名为 reminder，需要分阶段迁移 JSON schema、API DTO、数据库字段和前端字段。
 - knowledge-base / 人工反馈闭环。
 
 ## 后端本地启动
@@ -193,6 +192,14 @@ src/main/resources/db/migration/V4__db_fine_grained_rule_templates.sql
 src/main/resources/db/migration/V5__mq_cache_fine_grained_rule_templates.sql
 src/main/resources/db/migration/V6__focused_notification_change_types.sql
 src/main/resources/db/migration/V7__gitlab_push_webhook_events.sql
+src/main/resources/db/migration/V8__code_quality_review_profiles_and_results.sql
+src/main/resources/db/migration/V9__code_quality_review_settings.sql
+src/main/resources/db/migration/V10__code_quality_review_summary_text.sql
+src/main/resources/db/migration/V11__code_quality_review_progress_events.sql
+src/main/resources/db/migration/V12__ai_review_default_prompt_chinese_first.sql
+src/main/resources/db/migration/V13__code_quality_api_key_settings.sql
+src/main/resources/db/migration/V14__code_quality_global_review_provider.sql
+src/main/resources/db/migration/V15__remove_api_compatibility_from_backend_templates.sql
 ```
 
 当前 migration 会创建 MVP 所需基础表：
@@ -205,6 +212,10 @@ src/main/resources/db/migration/V7__gitlab_push_webhook_events.sql
 - `notification_webhooks`
 - `gitlab_mr_webhook_events`
 - `gitlab_push_webhook_events`
+- `code_quality_review_profiles`
+- `code_quality_review_results`
+- `code_quality_review_progress_events`
+- `code_quality_review_settings`
 
 并初始化三套模板：
 
@@ -212,7 +223,7 @@ src/main/resources/db/migration/V7__gitlab_push_webhook_events.sql
 - `frontend-default`
 - `general-default`
 
-其中 `V4` 会将后端和通用模板升级到 DB 细分风险规则，避免仅修改 Mapper XML 或实体字段时被直接误判为数据库结构变更。`V5` 会将后端模板升级到 MQ / CACHE 细分风险规则。`V6` 会收窄默认钉钉关注标签。`V7` 会新增 Push Hook 原始事件表。
+其中 `V4` 会将后端和通用模板升级到 DB 细分提醒规则，避免仅修改 Mapper XML 或实体字段时被直接误判为数据库结构变更。`V5` 会将后端模板升级到 MQ / CACHE 细分提醒规则。`V6` 会收窄默认钉钉关注标签。`V7` 会新增 Push Hook 原始事件表。`V8` ~ `V14` 会创建代码质量 AI Review profile、结果、过程事件和全局设置；`V15` 会从后端默认模板中移除低信号 API 兼容性提醒。
 
 ### 5. 验证后端
 
@@ -281,7 +292,7 @@ http://localhost:5173
   -> 前端页面访问
   -> mock GitLab MR webhook
   -> 审查任务 SUCCESS
-  -> 风险卡片生成
+  -> 提醒卡片生成
   -> 审查结果查询
   -> 钉钉通知记录 SUCCESS 或 SKIPPED
 ```
@@ -417,7 +428,7 @@ POST /api/webhooks/gitlab/merge-request
   -> 创建 review_tasks
   -> 保存 gitlab_mr_webhook_events.raw_payload 或 gitlab_push_webhook_events.raw_payload
   -> 变更分析
-  -> 风险卡片生成
+  -> 提醒卡片生成
   -> review_results 落库
   -> 钉钉推送或 SKIPPED 记录
 ```
@@ -726,7 +737,9 @@ http://localhost:5173
 
 推荐按以下顺序继续推进：
 
-1. 增强钉钉消息中的 DB / MQ / CACHE 细分展示。
-2. 将 GitLab token 和钉钉 webhook 从环境变量升级为项目级数据库配置。
-3. 稳定性任务收口后，再继续推进 API 细粒度规则。
+1. 做代码质量 Review 的 GitLab MR comment 回写，把 AI Review 高价值问题回写到 MR 讨论区。
+2. 做生产级密钥治理：GitLab token、钉钉 webhook、AI API Key 接入 KMS/Secret Manager 或数据库字段加密，并补充权限控制。
+3. 将提醒卡片领域命名从 `RiskCard` / `riskItems` 分阶段迁移到 reminder 语义，保持历史数据兼容。
+4. 补前端手动发起审查页面，减少依赖 curl / PowerShell 示例。
+5. 接入 Jenkins 入口和 knowledge-base / 人工反馈闭环。
 

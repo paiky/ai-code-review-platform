@@ -138,7 +138,7 @@ public class DingTalkNotifier {
                 + "- **作者：** " + authorText(context) + "\n"
                 + "- **变更：** " + valueOrDash(context.title()) + "\n"
                 + "- **分支：** " + branchText(context) + "\n\n"
-                + "**维护事项提醒**\n" + reminders + "\n\n"
+                + "**提醒**\n" + reminders + "\n\n"
                 + (StringUtils.hasText(links) ? links : "");
     }
 
