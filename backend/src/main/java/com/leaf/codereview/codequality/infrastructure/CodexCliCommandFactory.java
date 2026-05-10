@@ -85,7 +85,8 @@ public class CodexCliCommandFactory {
                 3. 每个问题尽量包含文件路径和行号。
                 4. 不要输出英文标题，例如 Findings、Residual Risks、Assumptions。
                 5. 不要报告纯代码风格问题。
-                6. 如果没有发现明确问题，请简要说明未发现需要阻断的代码质量风险。
+                6. 每个问题必须简要说明证据、触发条件、潜在影响和修复建议。
+                7. 如果没有发现明确问题，只输出“未发现需要阻断的代码质量风险。”。
 
                 English compatibility note: review only the requested scope, return Simplified Chinese, and do not edit files.
                 """.formatted(scopeDescription(request), fallbackText(request.title(), "Code quality review"), request.instructions());

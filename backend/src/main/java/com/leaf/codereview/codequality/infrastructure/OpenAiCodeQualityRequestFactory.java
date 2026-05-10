@@ -27,13 +27,15 @@ public class OpenAiCodeQualityRequestFactory {
 
     private String buildInstructions(CodeQualityReviewRequest request) {
         String base = """
-                You are a senior code reviewer. Review only the supplied changed code and return strict JSON.
-                Focus on correctness, maintainability, security, data consistency, concurrency, transaction boundaries,
-                SQL/cache/MQ misuse, exception handling, observability, and missing tests.
-                Do not include markdown. Do not invent files or line numbers that are absent from the input.
+                你是资深后端代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
+                JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
+                只报告本次变更引入的、可执行的代码质量问题，不报告历史存量问题。
+                重点关注正确性、数据一致性、安全、事务边界、SQL 性能、缓存一致性、MQ 一致性、异常处理、可观测性和关键测试缺口。
+                不报告纯代码风格、命名偏好、格式、注释或主观重构建议。
+                不要编造输入中不存在的文件或行号；缺少证据时不要报告，除非潜在影响很高且必须人工确认。
                 """;
         if (StringUtils.hasText(request.instructions())) {
-            return base + "\nAdditional review instructions:\n" + request.instructions();
+            return base + "\n用户自定义审核规则：\n" + request.instructions();
         }
         return base;
     }

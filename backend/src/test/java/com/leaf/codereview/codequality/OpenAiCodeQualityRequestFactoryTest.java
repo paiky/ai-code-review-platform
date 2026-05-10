@@ -34,7 +34,7 @@ class OpenAiCodeQualityRequestFactoryTest {
 
         assertThat(body).containsEntry("model", "gpt-5.4");
         assertThat(body).containsEntry("store", false);
-        assertThat((String) body.get("instructions")).contains("strict JSON", "Only report actionable findings");
+        assertThat((String) body.get("instructions")).contains("严格 JSON", "Only report actionable findings");
         assertThat((String) body.get("input")).contains("OrderService.java", "createOrder");
         Map<?, ?> text = (Map<?, ?>) body.get("text");
         Map<?, ?> format = (Map<?, ?>) text.get("format");

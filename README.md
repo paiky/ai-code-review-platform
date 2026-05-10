@@ -163,6 +163,7 @@ V12__ai_review_default_prompt_chinese_first.sql
 V13__code_quality_api_key_settings.sql
 V14__code_quality_global_review_provider.sql
 V15__remove_api_compatibility_from_backend_templates.sql
+V16__stronger_default_ai_review_prompt.sql
 ```
 
 主要表：
