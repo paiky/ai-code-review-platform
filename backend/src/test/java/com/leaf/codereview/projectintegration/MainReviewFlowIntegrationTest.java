@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -161,6 +162,83 @@ class MainReviewFlowIntegrationTest {
         assertThat(result.riskCard().path("riskItems").findValuesAsText("category")).contains("DB_SCHEMA");
 
         assertSingleSkippedNotification(taskId);
+    }
+
+    @Test
+    void rerunReviewTaskCreatesNewTaskFromStoredChangedFiles() throws Exception {
+        when(gitLabClient.getProjectDetail("2005")).thenReturn(new GitLabProjectDetail(
+                "2005",
+                "rerun-service",
+                "group/rerun-service",
+                "https://gitlab.example.com/group/rerun-service"
+        ));
+        when(gitLabClient.getMergeRequestDetail("2005", "35")).thenReturn(new GitLabMergeRequestDetail(
+                "35",
+                "feat: rerun review",
+                "https://gitlab.example.com/group/rerun-service/-/merge_requests/35",
+                "feature/rerun-review",
+                "main",
+                "rerun-sha-35",
+                "Rerun User",
+                "rerun-user"
+        ));
+        when(gitLabClient.listMergeRequestDiffs("2005", "35")).thenReturn(List.of(
+                new GitLabDiffFile(
+                        "backend/src/main/resources/db/migration/V9__rerun.sql",
+                        "backend/src/main/resources/db/migration/V9__rerun.sql",
+                        "+ ALTER TABLE orders ADD COLUMN rerun_flag TINYINT DEFAULT 0;",
+                        true,
+                        false,
+                        false,
+                        false,
+                        false
+                )
+        ));
+
+        JsonNode originalResponse = postWebhook(GITLAB_MR_EVENT, """
+                {
+                  "object_kind": "merge_request",
+                  "project": {
+                    "id": 2005,
+                    "name": "placeholder-rerun-service",
+                    "web_url": "https://gitlab.example.com/group/placeholder-rerun-service"
+                  },
+                  "object_attributes": {
+                    "iid": 35,
+                    "action": "update",
+                    "source_branch": "feature/rerun-review",
+                    "target_branch": "main",
+                    "url": "https://gitlab.example.com/group/rerun-service/-/merge_requests/35",
+                    "updated_at": "2026-05-10T10:00:00+08:00"
+                  },
+                  "user": {
+                    "name": "Rerun User",
+                    "username": "rerun-user"
+                  }
+                }
+                """);
+        long originalTaskId = originalResponse.path("data").path("taskId").asLong();
+        assertThat(reviewTaskQueryService.getDetail(originalTaskId).changedFilesSummary().path("source").asText()).isEqualTo("gitlab_api");
+
+        clearInvocations(gitLabClient);
+        JsonNode rerunResponse = postRerun(originalTaskId);
+        long rerunTaskId = rerunResponse.path("data").path("taskId").asLong();
+
+        assertThat(rerunTaskId).isNotEqualTo(originalTaskId);
+        assertThat(rerunResponse.path("data").path("sourceTaskId").asLong()).isEqualTo(originalTaskId);
+        verify(gitLabClient, never()).getProjectDetail("2005");
+        verify(gitLabClient, never()).getMergeRequestDetail("2005", "35");
+        verify(gitLabClient, never()).listMergeRequestDiffs("2005", "35");
+
+        ReviewTaskDetailResponse rerunDetail = reviewTaskQueryService.getDetail(rerunTaskId);
+        assertThat(rerunDetail.status()).isEqualTo("SUCCESS");
+        assertThat(rerunDetail.projectName()).isEqualTo("group/rerun-service");
+        assertThat(rerunDetail.changedFilesSummary().path("source").asText()).isEqualTo("payload");
+        assertThat(rerunDetail.changedFilesSummary().path("files").get(0).path("diffText").asText()).contains("ALTER TABLE");
+
+        ReviewTaskResultResponse rerunResult = reviewTaskQueryService.getResult(rerunTaskId);
+        assertThat(rerunResult.riskCard().path("riskItems").findValuesAsText("category")).contains("DB_SCHEMA");
+        assertSingleSkippedNotification(rerunTaskId);
     }
 
     @Test
@@ -309,6 +387,15 @@ class MainReviewFlowIntegrationTest {
                         .header("X-Gitlab-Event", gitlabEvent)
                         .contentType("application/json")
                         .content(payload))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return objectMapper.readTree(response);
+    }
+
+    private JsonNode postRerun(long taskId) throws Exception {
+        String response = mockMvc.perform(post("/api/review-tasks/{taskId}/rerun", taskId))
                 .andExpect(status().isOk())
                 .andReturn()
                 .getResponse()

@@ -221,6 +221,12 @@ curl http://localhost:8080/api/review-tasks/$taskId/code-quality-result
 curl http://localhost:8080/api/review-tasks/$taskId/code-quality-progress
 ```
 
+重新触发已有 GitLab MR / Push 审查任务，会基于数据库中保存的 raw payload 和 changed files 摘要创建一个新任务：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/review-tasks/$taskId/rerun"
+```
+
 前端任务详情页包含：
 
 - 代码质量 Review
@@ -398,6 +404,8 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/code-quality-revi
 
 - `审查任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程。
 - `模板配置`：项目默认模板、AI Review 全局设置、API Key、Profile prompt。
+
+任务详情页的“重新触发审阅”会从当前任务复制出一条新的审查任务，适合调试规则、钉钉模板和前端展示，不需要再次真实 push 或更新 MR。
 
 详情页支持 `?taskId={taskId}` 直达，例如：
 

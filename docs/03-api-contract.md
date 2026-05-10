@@ -211,13 +211,24 @@ GET /api/review-tasks/{taskId}/result
 }
 ```
 
-### 3.4 查询风险卡片
+### 3.4 重新触发审阅
 
 ```http
-GET /api/review-tasks/{taskId}/risk-card
+POST /api/review-tasks/{taskId}/rerun
 ```
 
-响应 data：完整 RiskCard JSON，schema 见 `04-risk-card-schema.md`。
+基于已有 GitLab MR / Push 任务保存的 raw payload 和 changed files 摘要创建一条新的审查任务，用于调试规则、钉钉模板和前端展示。当前不支持手动任务 replay。
+
+响应 data：
+
+```json
+{
+  "sourceTaskId": 10001,
+  "taskId": 10002,
+  "status": "SUCCESS",
+  "triggerType": "GITLAB_MR_WEBHOOK"
+}
+```
 
 ## 4. Project API
 

@@ -165,6 +165,9 @@ public class GitLabPushWebhookService {
 
     private GitLabPushEvent resolveChangedFiles(GitLabPushEvent event) {
         JsonNode fallbackSummary = event.changedFilesSummary();
+        if ("payload".equals(textAt(fallbackSummary, "/source"))) {
+            return event;
+        }
         try {
             List<GitLabDiffFile> diffFiles = gitLabClient.compare(event.gitProjectId(), event.beforeSha(), event.afterSha());
             if (diffFiles.isEmpty()) {
@@ -225,6 +228,23 @@ public class GitLabPushWebhookService {
     }
 
     private JsonNode buildPushChangedFilesSummary(JsonNode payload) {
+        JsonNode changedFiles = firstArray(payload, "/changedFiles", "/changed_files");
+        if (changedFiles != null) {
+            ObjectNode summary = objectMapper.createObjectNode();
+            ArrayNode files = objectMapper.createArrayNode();
+            for (JsonNode fileNode : changedFiles) {
+                files.add(normalizeChangedFile(fileNode));
+            }
+            summary.put("count", files.size());
+            summary.put("source", "payload");
+            summary.put("commitCount", payload.path("commits").isArray() ? payload.path("commits").size() : 0);
+            summary.put("ref", textAt(payload, "/ref"));
+            summary.put("beforeSha", textAt(payload, "/before"));
+            summary.put("afterSha", textAt(payload, "/after"));
+            summary.set("files", files);
+            return summary;
+        }
+
         Map<String, ObjectNode> filesByPath = new LinkedHashMap<>();
         JsonNode commits = payload.path("commits");
         if (commits.isArray()) {
@@ -276,6 +296,30 @@ public class GitLabPushWebhookService {
         }
         file.put("collapsed", diffFile.collapsed());
         file.put("tooLarge", diffFile.tooLarge());
+        return file;
+    }
+
+    private ObjectNode normalizeChangedFile(JsonNode fileNode) {
+        ObjectNode file = objectMapper.createObjectNode();
+        if (fileNode.isTextual()) {
+            String path = fileNode.asText();
+            file.put("path", path);
+            file.put("oldPath", path);
+            file.put("newPath", path);
+            file.put("changeType", "UNKNOWN");
+            return file;
+        }
+        String path = firstText(fileNode, "/path", "/newPath", "/new_path", "/oldPath", "/old_path");
+        String oldPath = firstText(fileNode, "/oldPath", "/old_path", "/path");
+        String newPath = firstText(fileNode, "/newPath", "/new_path", "/path");
+        file.put("path", path);
+        file.put("oldPath", oldPath);
+        file.put("newPath", newPath);
+        file.put("changeType", firstNonBlank(firstText(fileNode, "/changeType", "/change_type"), "UNKNOWN"));
+        String diffText = firstText(fileNode, "/diffText", "/diff", "/patch");
+        if (StringUtils.hasText(diffText)) {
+            file.put("diffText", diffText);
+        }
         return file;
     }
 
@@ -387,6 +431,28 @@ public class GitLabPushWebhookService {
     private String firstText(JsonNode node, String... pointers) {
         for (String pointer : pointers) {
             String value = textAt(node, pointer);
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private JsonNode firstArray(JsonNode node, String... pointers) {
+        if (node == null) {
+            return null;
+        }
+        for (String pointer : pointers) {
+            JsonNode value = node.at(pointer);
+            if (value.isArray()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
             if (StringUtils.hasText(value)) {
                 return value;
             }

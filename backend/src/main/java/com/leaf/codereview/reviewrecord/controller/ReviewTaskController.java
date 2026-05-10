@@ -10,6 +10,8 @@ import com.leaf.codereview.reviewrecord.application.ManualReviewService;
 import com.leaf.codereview.reviewrecord.application.ReviewTaskDetailResponse;
 import com.leaf.codereview.reviewrecord.application.ReviewTaskListItemResponse;
 import com.leaf.codereview.reviewrecord.application.ReviewTaskQueryService;
+import com.leaf.codereview.reviewrecord.application.ReviewTaskRerunResponse;
+import com.leaf.codereview.reviewrecord.application.ReviewTaskRerunService;
 import com.leaf.codereview.reviewrecord.application.ReviewTaskResultResponse;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,15 +30,26 @@ public class ReviewTaskController {
 
     private final ReviewTaskQueryService reviewTaskQueryService;
     private final ManualReviewService manualReviewService;
+    private final ReviewTaskRerunService reviewTaskRerunService;
 
-    public ReviewTaskController(ReviewTaskQueryService reviewTaskQueryService, ManualReviewService manualReviewService) {
+    public ReviewTaskController(
+            ReviewTaskQueryService reviewTaskQueryService,
+            ManualReviewService manualReviewService,
+            ReviewTaskRerunService reviewTaskRerunService
+    ) {
         this.reviewTaskQueryService = reviewTaskQueryService;
         this.manualReviewService = manualReviewService;
+        this.reviewTaskRerunService = reviewTaskRerunService;
     }
 
     @PostMapping("/manual")
     public ApiResponse<ManualReviewResponse> createManualReview(@Valid @RequestBody ManualReviewRequest request) {
         return ApiResponse.ok(manualReviewService.createManualReview(request));
+    }
+
+    @PostMapping("/{taskId}/rerun")
+    public ApiResponse<ReviewTaskRerunResponse> rerun(@PathVariable Long taskId) {
+        return ApiResponse.ok(reviewTaskRerunService.rerun(taskId));
     }
 
     @GetMapping

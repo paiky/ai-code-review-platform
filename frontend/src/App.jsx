@@ -877,13 +877,14 @@ function CodeQualityReviewView({ review, progress, onRetry, retrying }) {
   );
 }
 
-function TaskDetail({ taskId, onBack }) {
+function TaskDetail({ taskId, onBack, onOpen }) {
   const [detail, setDetail] = useState(null);
   const [result, setResult] = useState(null);
   const [codeQualityResult, setCodeQualityResult] = useState(null);
   const [codeQualityProgress, setCodeQualityProgress] = useState([]);
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
   const [error, setError] = useState(null);
 
   const load = async () => {
@@ -959,6 +960,23 @@ function TaskDetail({ taskId, onBack }) {
     }
   };
 
+  const rerunReviewTask = async () => {
+    setRerunning(true);
+    setError(null);
+    try {
+      const rerunResult = await fetchApi(`/api/review-tasks/${taskId}/rerun`, { method: 'POST' });
+      if (rerunResult?.taskId) {
+        onOpen(rerunResult.taskId);
+      } else {
+        await load();
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRerunning(false);
+    }
+  };
+
   const tabItems = useMemo(() => [
     { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewView review={codeQualityResult} progress={codeQualityProgress} onRetry={retryCodeQualityReview} retrying={retrying} /> },
     { key: 'risk', label: '提醒卡片', children: <RiskCardView riskCard={result?.riskCard} /> },
@@ -971,6 +989,15 @@ function TaskDetail({ taskId, onBack }) {
       <Space className="detail-toolbar">
         <Button icon={<ArrowLeftOutlined />} onClick={onBack}>返回</Button>
         <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+        <Button
+          type="primary"
+          icon={<ReloadOutlined />}
+          loading={rerunning}
+          disabled={!detail || !['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(detail.triggerType)}
+          onClick={rerunReviewTask}
+        >
+          重新触发审阅
+        </Button>
       </Space>
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
       <Spin spinning={loading}>
@@ -1525,7 +1552,7 @@ export default function App() {
       </Header>
       <Content>
         {selectedTaskId ? (
-          <TaskDetail taskId={selectedTaskId} onBack={openTasks} />
+          <TaskDetail taskId={selectedTaskId} onBack={openTasks} onOpen={openTaskDetail} />
         ) : view === 'templates' ? (
           <TemplateConfig />
         ) : (
