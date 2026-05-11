@@ -29,4 +29,5 @@ class CodeQualityReviewPropertiesTest {
 
         assertThat(properties.provider()).isEqualTo(CodeQualityReviewProviderType.CODEX_CLI);
     }
+
 }

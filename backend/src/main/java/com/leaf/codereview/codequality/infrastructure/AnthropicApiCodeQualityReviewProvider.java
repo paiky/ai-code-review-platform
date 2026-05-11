@@ -100,6 +100,7 @@ public class AnthropicApiCodeQualityReviewProvider implements CodeQualityReviewP
                 JSON 字段必须为 summary、overallLevel、findings。
                 findings 每项字段必须为 severity、category、filePath、startLine、endLine、title、body、suggestion、confidence。
                 severity 只能是 MINOR、MAJOR、CRITICAL；overallLevel 只能是 LOW、MEDIUM、HIGH、CRITICAL；confidence 只能是 LOW、MEDIUM、HIGH。
+                你可以参考上下文，但最终只能报告由 changed files 白名单中的 diff 引入的问题。
 
                 用户自定义审核规则：
                 %s

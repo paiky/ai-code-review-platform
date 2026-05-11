@@ -33,6 +33,7 @@ public class OpenAiCodeQualityRequestFactory {
                 重点关注正确性、数据一致性、安全、事务边界、SQL 性能、缓存一致性、MQ 一致性、异常处理、可观测性和关键测试缺口。
                 不报告纯代码风格、命名偏好、格式、注释或主观重构建议。
                 不要编造输入中不存在的文件或行号；缺少证据时不要报告，除非潜在影响很高且必须人工确认。
+                你可以参考上下文，但最终只能报告由 changed files 白名单中的 diff 引入的问题。
                 """;
         if (StringUtils.hasText(request.instructions())) {
             return base + "\n用户自定义审核规则：\n" + request.instructions();

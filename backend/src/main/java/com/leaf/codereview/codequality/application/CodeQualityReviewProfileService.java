@@ -106,14 +106,17 @@ public class CodeQualityReviewProfileService {
                 : profile.openAiInstructions();
         return new CodeQualityReviewRequest(
                 null,
-                provider == CodeQualityReviewProviderType.CODEX_CLI ? CodeQualityReviewMode.BASE : CodeQualityReviewMode.DIFF_TEXT,
+                CodeQualityReviewMode.DIFF_TEXT,
                 "origin/main",
                 null,
                 "Agent Prompt preview",
                 profile.model(),
                 instructions,
-                "",
-                List.of()
+                """
+                        diff --git a/src/main/java/com/demo/OrderService.java b/src/main/java/com/demo/OrderService.java
+                        + public void createOrder() {}
+                        """,
+                List.of("src/main/java/com/demo/OrderService.java")
         );
     }
 

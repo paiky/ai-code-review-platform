@@ -79,6 +79,17 @@ public class CodexCliCommandFactory {
                 用户自定义审核规则：
                 %s
 
+                本轮变更文件白名单：
+                %s
+
+                本轮唯一变更来源：
+                以下 diff 文本来自平台保存的 GitLab changed files / diff。你必须只审查这段 diff 中新增或修改引入的问题。
+                不要读取本地工作区文件，不要执行 git diff，不要根据当前目录的 HEAD 或分支推断审查范围。
+
+                ```diff
+                %s
+                ```
+
                 输出要求：
                 1. 必须使用简体中文。
                 2. 每个问题必须以“高风险：”“中风险：”或“低风险：”开头。
@@ -86,21 +97,30 @@ public class CodexCliCommandFactory {
                 4. 不要输出英文标题，例如 Findings、Residual Risks、Assumptions。
                 5. 不要报告纯代码风格问题。
                 6. 每个问题必须简要说明证据、触发条件、潜在影响和修复建议。
-                7. 如果没有发现明确问题，只输出“未发现需要阻断的代码质量风险。”。
+                7. 你可以读取相关上下文文件辅助理解，但最终只能报告由白名单文件 diff 引入的问题。
+                8. 如果问题需要引用上下文文件，必须说明它如何由白名单文件的 diff 触发。
+                9. 不要报告只存在于上下文文件、历史代码或本地其它分支中的问题。
+                10. 如果没有发现明确问题，只输出“未发现需要阻断的代码质量风险。”。
 
                 English compatibility note: review only the requested scope, return Simplified Chinese, and do not edit files.
-                """.formatted(scopeDescription(request), fallbackText(request.title(), "Code quality review"), request.instructions());
+                """.formatted(
+                scopeDescription(request),
+                fallbackText(request.title(), "Code quality review"),
+                request.instructions(),
+                changedFilesWhitelist(request),
+                diffText(request)
+        );
     }
 
     private String scopeDescription(CodeQualityReviewRequest request) {
         CodeQualityReviewMode mode = request.mode() == null ? CodeQualityReviewMode.UNCOMMITTED : request.mode();
         return switch (mode) {
-            case BASE -> "审查当前分支相对基线分支 `%s` 的变更，请使用从该基线到 HEAD 的 git diff。"
+            case BASE -> "请求来源标记为 BASE 模式，基线分支为 `%s`。本轮仍只审查下方平台提供的 diff 文本，不要执行 git diff。"
                     .formatted(StringUtils.hasText(request.baseRef()) ? request.baseRef() : "origin/main");
-            case COMMIT -> "审查 commit `%s` 引入的变更。"
+            case COMMIT -> "请求来源标记为 COMMIT 模式，commit 为 `%s`。本轮仍只审查下方平台提供的 diff 文本。"
                     .formatted(fallbackText(request.commitSha(), "HEAD"));
-            case UNCOMMITTED -> "审查 staged、unstaged 和 untracked 的本地变更。";
-            case DIFF_TEXT -> "审查当前工作区变更。原始 diff 文本只会直接提供给 API provider。";
+            case UNCOMMITTED -> "请求来源标记为 UNCOMMITTED 模式。本轮仍只审查下方平台提供的 diff 文本，不要读取本地未提交变更。";
+            case DIFF_TEXT -> "审查平台提供的 diff 文本。这是本轮唯一变更来源，不要读取本地仓库或执行 git diff。";
         };
     }
 
@@ -111,6 +131,25 @@ public class CodexCliCommandFactory {
 
     private String fallbackText(String text, String fallback) {
         return StringUtils.hasText(text) ? text : fallback;
+    }
+
+    private String changedFilesWhitelist(CodeQualityReviewRequest request) {
+        if (request.changedFiles() == null || request.changedFiles().isEmpty()) {
+            return "未提供 changed files 白名单。请严格以审查范围中的 diff 为准。";
+        }
+        StringBuilder builder = new StringBuilder();
+        int index = 1;
+        for (String changedFile : request.changedFiles()) {
+            if (!StringUtils.hasText(changedFile)) {
+                continue;
+            }
+            builder.append(index++).append(". ").append(changedFile.replace('\\', '/').strip()).append('\n');
+        }
+        return builder.isEmpty() ? "未提供 changed files 白名单。请严格以审查范围中的 diff 为准。" : builder.toString().stripTrailing();
+    }
+
+    private String diffText(CodeQualityReviewRequest request) {
+        return StringUtils.hasText(request.diffText()) ? request.diffText() : "未提供 diff 文本。";
     }
 
     public String defaultCommand(String osName) {

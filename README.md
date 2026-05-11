@@ -72,7 +72,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 | `GITLAB_DIFF_PER_PAGE` | `100` | MR diff 分页大小 |
 | `CODE_QUALITY_REVIEW_ENABLED` | `false` | 是否启用代码质量 Review 能力 |
 | `CODE_QUALITY_REVIEW_PROVIDER` | `CODEX_CLI` | 默认 provider |
-| `CODE_QUALITY_WORKSPACE_ROOT` | 空 | 本地 CLI 可访问仓库根目录限制 |
+| `CODE_QUALITY_WORKSPACE_ROOT` | 空 | 兼容保留；当前 CODEX_CLI diff-only 模式不依赖本地被审查仓库 |
 | `CODEX_CLI_COMMAND` | 按 OS 推断 | Windows 默认 `codex.cmd`，Linux 默认 `codex` |
 | `CODEX_CLI_MODEL` | 空 | Codex CLI 模型覆盖 |
 | `CODEX_CLI_TIMEOUT_SECONDS` | `600` | Codex CLI 超时时间 |
@@ -337,13 +337,12 @@ Invoke-RestMethod `
 ```powershell
 $env:CODE_QUALITY_REVIEW_ENABLED="true"
 $env:CODE_QUALITY_REVIEW_PROVIDER="CODEX_CLI"
-$env:CODE_QUALITY_WORKSPACE_ROOT="D:\projects"
 $env:CODEX_CLI_COMMAND="codex.cmd"
 ```
 
 Provider 说明：
 
-- `CODEX_CLI`：调用项目服务器本地 Codex CLI。Linux 默认命令为 `codex`，Windows 默认命令为 `codex.cmd`。
+- `CODEX_CLI`：调用项目服务器本地 Codex CLI 子进程，但审查输入只使用平台保存的 `diffText` 和 `changedFiles`，不再读取被审查项目的本地仓库或 `HEAD`。Linux 默认命令为 `codex`，Windows 默认命令为 `codex.cmd`。
 - `OPENAI_API`：调用 OpenAI Responses API。
 - `ANTHROPIC_API`：调用 Anthropic Messages API。
 
@@ -364,10 +363,11 @@ Invoke-RestMethod `
   -Body '{
     "projectId": 1,
     "profileCode": "backend-default-ai-review",
-    "repositoryPath": "D:/projects/ai-code-review-platform",
-    "mode": "BASE",
+    "mode": "DIFF_TEXT",
     "baseRef": "origin/main",
-    "title": "Manual review"
+    "title": "Manual review",
+    "diffText": "diff --git a/src/main/java/com/demo/OrderService.java b/src/main/java/com/demo/OrderService.java\n+ public void createOrder() {}",
+    "changedFiles": ["src/main/java/com/demo/OrderService.java"]
   }'
 ```
 

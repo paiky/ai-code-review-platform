@@ -54,10 +54,6 @@ public class CodeQualityAsyncReviewExecutor {
         progressTracker.info("STARTED", "AI Review 异步执行线程已启动", "project=" + project.name() + ", mr=!" + event.mrId() + ", profileCode=" + profile.profileCode());
         CodeQualityReviewRequest request = buildRequest(project, event, profile, provider);
         progressTracker.info("REQUEST_BUILT", "AI Review 请求已构建", "profileCode=" + profile.profileCode() + ", provider=" + provider.name() + ", model=" + request.model() + ", mode=" + request.mode() + ", baseRef=" + request.baseRef() + ", changedFiles=" + request.changedFiles().size());
-        if (provider == CodeQualityReviewProviderType.CODEX_CLI && !StringUtils.hasText(request.repositoryPath())) {
-            saveFailed(taskId, project.id(), profile, provider, "CODEX_CLI auto review requires a local repository path under CODE_QUALITY_WORKSPACE_ROOT");
-            return;
-        }
 
         try {
             progressTracker.info("PROVIDER_START", "开始调用代码质量 Review Provider", "provider=" + provider.name());
@@ -73,12 +69,9 @@ public class CodeQualityAsyncReviewExecutor {
     }
 
     private CodeQualityReviewRequest buildRequest(ProjectRecord project, GitLabMergeRequestEvent event, CodeQualityReviewProfile profile, CodeQualityReviewProviderType provider) {
-        String repositoryPath = resolveRepositoryPath(project);
-        CodeQualityReviewMode mode = provider == CodeQualityReviewProviderType.CODEX_CLI
-                ? CodeQualityReviewMode.BASE
-                : CodeQualityReviewMode.DIFF_TEXT;
+        CodeQualityReviewMode mode = CodeQualityReviewMode.DIFF_TEXT;
         return new CodeQualityReviewRequest(
-                repositoryPath,
+                null,
                 mode,
                 baseRef(event.targetBranch()),
                 event.commitSha(),

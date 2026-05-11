@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -53,18 +54,23 @@ public class CodexCliCodeQualityReviewProvider implements CodeQualityReviewProvi
     @Override
     public CodeQualityReviewResult review(CodeQualityReviewRequest request) {
         OffsetDateTime startedAt = OffsetDateTime.now();
-        Path repositoryPath = resolveRepositoryPath(request.repositoryPath());
-        progressTracker.info("CODEX_REPOSITORY", "Codex CLI 本地仓库已确认", repositoryPath.toString());
+        if (!StringUtils.hasText(request.diffText())) {
+            String errorMessage = "diffText is required for Codex CLI code quality review; Codex CLI no longer reads local repository diffs";
+            progressTracker.error("CODEX_DIFF_TEXT_REQUIRED", "Codex CLI 缺少平台 diff，已拒绝执行", errorMessage);
+            return CodeQualityReviewResult.failed(type(), errorMessage, null, null, startedAt, OffsetDateTime.now());
+        }
+        Path executionDirectory = createExecutionDirectory();
         Path outputFile = createOutputFile();
-        Path promptFile = createPromptFileIfNeeded(request);
+        Path promptFile = createPromptFile(request);
+        progressTracker.info("CODEX_WORKDIR", "Codex CLI 临时工作目录已创建", executionDirectory.toAbsolutePath().toString());
         progressTracker.info("CODEX_OUTPUT_FILE", "Codex CLI 输出文件已创建", outputFile.toAbsolutePath().toString());
-        recordPromptMetadata(request, repositoryPath, promptFile);
+        recordPromptMetadata(request, executionDirectory, promptFile);
         List<String> command = commandFactory.buildCommand(properties, request, outputFile, promptFile);
         progressTracker.info("CODEX_COMMAND", "即将启动 Codex CLI 子进程", "commandPreview=" + formatCommand(command));
 
         try {
             ProcessBuilder processBuilder = new ProcessBuilder(command)
-                    .directory(repositoryPath.toFile())
+                    .directory(executionDirectory.toFile())
                     .redirectErrorStream(false);
             configureUtf8Environment(processBuilder);
             Process process = processBuilder.start();
@@ -108,24 +114,16 @@ public class CodexCliCodeQualityReviewProvider implements CodeQualityReviewProvi
         } finally {
             deleteQuietly(outputFile);
             deleteQuietly(promptFile);
+            deleteRecursivelyQuietly(executionDirectory);
         }
     }
 
-    private Path resolveRepositoryPath(String repositoryPath) {
-        if (!StringUtils.hasText(repositoryPath)) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, "repositoryPath is required for Codex CLI review");
+    private Path createExecutionDirectory() {
+        try {
+            return Files.createTempDirectory("codex-review-work-");
+        } catch (IOException exception) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, "Failed to create Codex execution directory");
         }
-        Path path = Path.of(repositoryPath).toAbsolutePath().normalize();
-        if (!Files.isDirectory(path)) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, "repositoryPath is not a directory: " + repositoryPath);
-        }
-        if (StringUtils.hasText(properties.workspaceRoot())) {
-            Path root = Path.of(properties.workspaceRoot()).toAbsolutePath().normalize();
-            if (!path.startsWith(root)) {
-                throw new BusinessException(ErrorCode.BAD_REQUEST, "repositoryPath must be under configured workspaceRoot");
-            }
-        }
-        return path;
     }
 
     private Path createOutputFile() {
@@ -136,10 +134,7 @@ public class CodexCliCodeQualityReviewProvider implements CodeQualityReviewProvi
         }
     }
 
-    private Path createPromptFileIfNeeded(CodeQualityReviewRequest request) {
-        if (!StringUtils.hasText(request.instructions())) {
-            return null;
-        }
+    private Path createPromptFile(CodeQualityReviewRequest request) {
         try {
             Path promptFile = Files.createTempFile("codex-review-prompt-", ".md");
             Files.writeString(promptFile, commandFactory.renderPrompt(request), StandardCharsets.UTF_8);
@@ -149,11 +144,11 @@ public class CodexCliCodeQualityReviewProvider implements CodeQualityReviewProvi
         }
     }
 
-    private void recordPromptMetadata(CodeQualityReviewRequest request, Path repositoryPath, Path promptFile) {
-        String renderedPrompt = StringUtils.hasText(request.instructions()) ? commandFactory.renderPrompt(request) : "";
+    private void recordPromptMetadata(CodeQualityReviewRequest request, Path executionDirectory, Path promptFile) {
+        String renderedPrompt = commandFactory.renderPrompt(request);
         String detail = "provider=CODEX_CLI"
                 + ", model=" + firstText(request.model(), properties.codexModel())
-                + ", repositoryPath=" + repositoryPath
+                + ", executionDirectory=" + executionDirectory
                 + ", runtimeMode=" + runtimeMode()
                 + ", promptFile=" + (promptFile == null ? "-" : promptFile.toAbsolutePath())
                 + ", promptHash=" + sha256(renderedPrompt)
@@ -255,6 +250,17 @@ public class CodexCliCodeQualityReviewProvider implements CodeQualityReviewProvi
             Files.deleteIfExists(outputFile);
         } catch (IOException ignored) {
             // Temporary output cleanup should not change review result.
+        }
+    }
+
+    private void deleteRecursivelyQuietly(Path directory) {
+        if (directory == null) {
+            return;
+        }
+        try (var paths = Files.walk(directory)) {
+            paths.sorted(Comparator.reverseOrder()).forEach(this::deleteQuietly);
+        } catch (IOException ignored) {
+            // Temporary workdir cleanup should not change review result.
         }
     }
 }

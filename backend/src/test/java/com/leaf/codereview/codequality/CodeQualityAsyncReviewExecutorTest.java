@@ -26,7 +26,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -65,16 +64,28 @@ class CodeQualityAsyncReviewExecutorTest {
     }
 
     @Test
-    void savesFailureForCodexCliWhenLocalRepositoryIsMissing() {
+    void triggersCodexCliReviewWithMrDiffWithoutLocalRepository() {
         CodeQualityAsyncReviewExecutor executor = newExecutor("");
+        CodeQualityReviewResult result = CodeQualityReviewResult.success(
+                CodeQualityReviewProviderType.CODEX_CLI,
+                "HIGH",
+                "summary",
+                List.of(),
+                "raw",
+                0,
+                OffsetDateTime.now(),
+                OffsetDateTime.now()
+        );
+        when(reviewService.review(any(), any())).thenReturn(result);
 
         executor.execute(99L, project(), event(), profile(CodeQualityReviewProviderType.OPENAI_API), CodeQualityReviewProviderType.CODEX_CLI);
 
-        verify(reviewService, never()).review(any(), any());
-        ArgumentCaptor<CodeQualityReviewResult> resultCaptor = ArgumentCaptor.forClass(CodeQualityReviewResult.class);
-        verify(resultRepository).save(eq(99L), eq(1L), eq("backend-default-ai-review"), eq("gpt-5.4"), resultCaptor.capture());
-        assertThat(resultCaptor.getValue().status()).isEqualTo("FAILED");
-        assertThat(resultCaptor.getValue().errorMessage()).contains("local repository path");
+        ArgumentCaptor<CodeQualityReviewRequest> requestCaptor = ArgumentCaptor.forClass(CodeQualityReviewRequest.class);
+        verify(reviewService).review(requestCaptor.capture(), eq(CodeQualityReviewProviderType.CODEX_CLI));
+        assertThat(requestCaptor.getValue().repositoryPath()).isNull();
+        assertThat(requestCaptor.getValue().mode()).isEqualTo(CodeQualityReviewMode.DIFF_TEXT);
+        assertThat(requestCaptor.getValue().diffText()).contains("OrderService.java", "createOrder");
+        verify(resultRepository).save(99L, 1L, "backend-default-ai-review", "gpt-5.4", result);
     }
 
     private CodeQualityAsyncReviewExecutor newExecutor(String workspaceRoot) {

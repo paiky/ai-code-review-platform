@@ -419,14 +419,14 @@ Content-Type: application/json
 {
   "projectId": 1,
   "profileCode": "backend-default-ai-review",
-  "repositoryPath": "D:/projects/ai-code-review-platform",
-  "mode": "BASE",
+  "repositoryPath": null,
+  "mode": "DIFF_TEXT",
   "baseRef": "origin/main",
   "commitSha": null,
   "title": "Manual Codex review",
   "instructions": "Only report actionable correctness, data consistency, or security issues.",
-  "diffText": null,
-  "changedFiles": []
+  "diffText": "diff --git a/src/main/java/com/demo/OrderService.java b/src/main/java/com/demo/OrderService.java\n+ public void createOrder() {}",
+  "changedFiles": ["src/main/java/com/demo/OrderService.java"]
 }
 ```
 
@@ -436,13 +436,13 @@ Content-Type: application/json
 | --- | --- |
 | `projectId` | 必填，AI Review 会创建一条 `CODE_QUALITY_MANUAL` 类型任务 |
 | `profileCode` | 可选，为空时使用项目绑定的默认 AI Review profile |
-| `repositoryPath` | `CODEX_CLI` provider 需要，必须是本地 Git 仓库目录 |
+| `repositoryPath` | 兼容字段；当前 `CODEX_CLI` 不再读取被审查项目本地仓库 |
 | `mode` | `BASE`、`COMMIT`、`UNCOMMITTED`、`DIFF_TEXT` |
 | `baseRef` | `BASE` 模式下传入，例如 `origin/main` |
 | `commitSha` | `COMMIT` 模式下传入 |
 | `instructions` | 附加审查要求 |
-| `diffText` | `OPENAI_API` provider 需要，可直接审查 diff 文本 |
-| `changedFiles` | diff 对应文件列表，供 API provider 作为上下文 |
+| `diffText` | `CODEX_CLI`、`OPENAI_API`、`ANTHROPIC_API` 都需要，作为唯一审查变更输入 |
+| `changedFiles` | diff 对应文件列表，作为最终 finding 输出白名单 |
 
 响应 data：
 
@@ -460,12 +460,12 @@ Content-Type: application/json
 说明：
 
 - 该接口默认关闭，需设置 `CODE_QUALITY_REVIEW_ENABLED=true`。
-- `CODEX_CLI` 复用宿主机 Codex CLI 登录态，Windows 默认调用 `codex.cmd`，Linux 默认调用 `codex`。
+- `CODEX_CLI` 复用宿主机 Codex CLI 登录态，Windows 默认调用 `codex.cmd`，Linux 默认调用 `codex`；它只读取平台提供的 `diffText` / `changedFiles`，不再通过本地仓库 `HEAD` 或 `git diff` 决定审查范围。
 - `OPENAI_API` 使用 `OPENAI_API_KEY` 或前端保存的 OpenAI API Key 调用 Responses API，并要求 `diffText`。
 - `ANTHROPIC_API` 使用 `ANTHROPIC_API_KEY` 或前端保存的 Anthropic API Key 调用 Messages API，并要求 `diffText`。
 - GitLab MR webhook 风险审查成功后，如果全局配置已开启且项目绑定 profile 的 `triggerOnMr=true`，系统会异步触发 AI Code Review，并将结果保存到同一个 `taskId` 下。
 - MR 自动 AI Review 启动后会先保存 `RUNNING` 结果，执行完成后更新为 `SUCCESS` 或 `FAILED`，前端可轮询本接口展示进度。
-- `CODEX_CLI` 自动触发需要后端能定位本地仓库目录；`OPENAI_API` / `ANTHROPIC_API` 自动触发直接使用 MR diff 文本。
+- `CODEX_CLI` / `OPENAI_API` / `ANTHROPIC_API` 自动触发都直接使用 MR diff 文本。
 - MR 自动 AI Review 还受全局开关 `mrAutoReviewEnabled` 控制。关闭后，新的 MR webhook 不会触发 AI Review；手动 Review 和重试不受该开关影响。
 
 ### 7.2 查询代码质量 Review 结果

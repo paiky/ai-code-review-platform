@@ -2,6 +2,8 @@
 
 日期：2026-05-10
 
+> 2026-05-11 更新：已采用更直接的 diff-only 方案替代本文早期的本地 `HEAD` 范围预检方案。`CODEX_CLI` 现在只作为子进程执行器，审查输入来自平台保存的 `diffText` / `changedFiles`，不再读取被审查项目的本地仓库，也不再通过 `origin/<target>...HEAD` 决定审查范围。本文的 preflight / worktree 内容保留为历史排查记录和备选方案。
+
 ## 1. 背景
 
 最新 GitLab MR !371 的代码质量 AI Review 出现了范围污染：

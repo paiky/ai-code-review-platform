@@ -2,6 +2,8 @@
 
 日期：2026-05-10
 
+> 2026-05-11 补充：后续实施请优先阅读 `docs/16-ai-review-feedback-loop-implementation-guide.md`。本文保留完整产品方案，`docs/16` 记录当前代码基线和 Phase 1 落地切入点。
+
 ## 1. 背景
 
 代码质量 AI Review 当前已经支持本地 CLI、OpenAI API、Anthropic API 三类 provider，并支持 profile、prompt、执行过程和前端结果展示。

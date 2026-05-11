@@ -52,14 +52,18 @@ class CodexCliCommandFactoryTest {
                 "MR title",
                 null,
                 "Focus on regressions",
-                null,
-                List.of()
+                "+ public void createOrder() {}",
+                List.of("src/main/java/com/demo/OrderService.java")
         );
 
         String prompt = factory.renderPrompt(request);
 
         assertThat(prompt)
                 .contains("你是代码质量审核助手", "审查范围", "origin/main", "MR title", "Focus on regressions")
+                .contains("本轮变更文件白名单", "src/main/java/com/demo/OrderService.java")
+                .contains("最终只能报告由白名单文件 diff 引入的问题")
+                .contains("本轮唯一变更来源", "+ public void createOrder() {}")
+                .contains("不要读取本地工作区文件", "不要执行 git diff")
                 .contains("必须使用简体中文")
                 .doesNotContain("Run a code quality review");
     }
