@@ -28,6 +28,7 @@ public class CodeQualityReviewSettingsService {
 
     private boolean hasAnyUpdate(CodeQualityReviewSettingsUpdateRequest request) {
         return request.mrAutoReviewEnabled() != null
+                || request.dingtalkNotificationEnabled() != null
                 || request.reviewProvider() != null
                 || request.openAiApiKey() != null
                 || request.clearOpenAiApiKey() != null

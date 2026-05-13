@@ -154,6 +154,7 @@ CREATE TABLE code_quality_review_results (
 CREATE TABLE code_quality_review_settings (
   id BIGINT PRIMARY KEY,
   mr_auto_review_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  dingtalk_notification_enabled BOOLEAN NOT NULL DEFAULT TRUE,
   review_provider VARCHAR(32) NOT NULL DEFAULT 'CODEX_CLI',
   openai_api_key VARCHAR(1024) NULL,
   anthropic_api_key VARCHAR(1024) NULL,
@@ -316,8 +317,10 @@ JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必
 
 INSERT INTO code_quality_review_settings (
   id,
-  mr_auto_review_enabled
+  mr_auto_review_enabled,
+  dingtalk_notification_enabled
 ) VALUES (
   1,
+  TRUE,
   TRUE
 );

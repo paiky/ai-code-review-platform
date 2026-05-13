@@ -554,8 +554,14 @@ function phaseLabel(phase) {
     CODEX_IO_ERROR: '启动或读取失败',
     CODEX_INTERRUPTED: '执行中断',
     OPENAI_REQUEST: '调用 OpenAI',
+    OPENAI_REQUEST_DEBUG: 'OpenAI 请求摘要',
+    OPENAI_REQUEST_PREVIEW: 'OpenAI 请求预览',
     OPENAI_RESPONSE: 'OpenAI 已响应',
+    OPENAI_RESPONSE_DEBUG: 'OpenAI 响应摘要',
+    OPENAI_RESPONSE_RAW: 'OpenAI 原始响应',
+    OPENAI_OUTPUT_TEXT: 'OpenAI 输出文本',
     OPENAI_PARSED: '解析 OpenAI 输出',
+    OPENAI_PARSE_RESULT: 'OpenAI 解析结果',
     OPENAI_FAILED: 'OpenAI 执行失败',
     ANTHROPIC_REQUEST: '调用 Anthropic',
     ANTHROPIC_RESPONSE: 'Anthropic 已响应',
@@ -1113,6 +1119,22 @@ function TemplateConfig() {
     }
   };
 
+  const updateDingTalkNotificationEnabled = async (checked) => {
+    setSettingsSaving(true);
+    try {
+      const settings = await fetchApi('/api/code-quality-reviews/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ dingtalkNotificationEnabled: checked })
+      });
+      setAiSettings(settings);
+      messageApi.success(checked ? '钉钉推送已开启' : '钉钉推送已关闭');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
   const updateReviewProvider = async (nextProvider) => {
     setSettingsSaving(true);
     try {
@@ -1270,11 +1292,7 @@ function TemplateConfig() {
   return (
     <div className="page-shell">
       {contextHolder}
-      <div className="page-heading">
-        <div>
-          <Title level={3}>模板配置</Title>
-          <Text type="secondary">配置项目默认模板，查看模板启用规则和推荐检查项</Text>
-        </div>
+      <div className="settings-actions">
         <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
       </div>
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
@@ -1296,6 +1314,21 @@ function TemplateConfig() {
                   </div>
                   <Text type="secondary" className="settings-description">
                     关闭后，新的 MR webhook 仍会执行规则风险审查，但不会启动代码质量 Review。
+                  </Text>
+                </div>
+                <div className="global-setting-field">
+                  <div className="settings-inline-head">
+                    <Text strong>钉钉推送</Text>
+                    <Switch
+                      checked={aiSettings?.dingtalkNotificationEnabled ?? true}
+                      loading={settingsSaving}
+                      checkedChildren="开启"
+                      unCheckedChildren="关闭"
+                      onChange={updateDingTalkNotificationEnabled}
+                    />
+                  </div>
+                  <Text type="secondary" className="settings-description">
+                    关闭后，规则审查和 AI Review 仍会正常执行与落库，但不会向钉钉发送消息。
                   </Text>
                 </div>
                 <div className="global-setting-field">
@@ -1547,7 +1580,7 @@ export default function App() {
         <div className="brand">AI 变更风险审查平台</div>
         <Space className="top-nav">
           <Button icon={<UnorderedListOutlined />} type={view === 'tasks' ? 'primary' : 'default'} onClick={openTasks}>任务</Button>
-          <Button icon={<SettingOutlined />} type={view === 'templates' ? 'primary' : 'default'} onClick={openTemplates}>模板配置</Button>
+          <Button icon={<SettingOutlined />} type={view === 'templates' ? 'primary' : 'default'} onClick={openTemplates}>设置</Button>
         </Space>
       </Header>
       <Content>

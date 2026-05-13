@@ -26,11 +26,12 @@ public class CodeQualityReviewSettingsRepository {
     public CodeQualityReviewSettingsResponse get() {
         ensureRow();
         List<CodeQualityReviewSettingsResponse> settings = jdbcTemplate.query("""
-                SELECT mr_auto_review_enabled, review_provider, openai_api_key, anthropic_api_key, updated_at
+                SELECT mr_auto_review_enabled, dingtalk_notification_enabled, review_provider, openai_api_key, anthropic_api_key, updated_at
                 FROM code_quality_review_settings
                 WHERE id = ?
                 """, (rs, rowNum) -> new CodeQualityReviewSettingsResponse(
                 rs.getBoolean("mr_auto_review_enabled"),
+                rs.getBoolean("dingtalk_notification_enabled"),
                 reviewProvider(rs.getString("review_provider")).name(),
                 StringUtils.hasText(rs.getString("openai_api_key")),
                 mask(rs.getString("openai_api_key")),
@@ -38,7 +39,7 @@ public class CodeQualityReviewSettingsRepository {
                 mask(rs.getString("anthropic_api_key")),
                 formatTimestamp(rs.getTimestamp("updated_at"))
         ), SETTINGS_ID);
-        return settings.stream().findFirst().orElse(new CodeQualityReviewSettingsResponse(true, CodeQualityReviewProviderType.CODEX_CLI.name(), false, null, false, null, null));
+        return settings.stream().findFirst().orElse(new CodeQualityReviewSettingsResponse(true, true, CodeQualityReviewProviderType.CODEX_CLI.name(), false, null, false, null, null));
     }
 
     public CodeQualityReviewSettingsResponse updateMrAutoReviewEnabled(boolean enabled) {
@@ -59,6 +60,13 @@ public class CodeQualityReviewSettingsRepository {
                     SET mr_auto_review_enabled = ?
                     WHERE id = ?
                     """, request.mrAutoReviewEnabled(), SETTINGS_ID);
+        }
+        if (request.dingtalkNotificationEnabled() != null) {
+            jdbcTemplate.update("""
+                    UPDATE code_quality_review_settings
+                    SET dingtalk_notification_enabled = ?
+                    WHERE id = ?
+                    """, request.dingtalkNotificationEnabled(), SETTINGS_ID);
         }
         if (request.reviewProvider() != null) {
             jdbcTemplate.update("""
@@ -100,6 +108,10 @@ public class CodeQualityReviewSettingsRepository {
         return get().mrAutoReviewEnabled();
     }
 
+    public boolean dingtalkNotificationEnabled() {
+        return get().dingtalkNotificationEnabled();
+    }
+
     public String openAiApiKey() {
         ensureRow();
         return jdbcTemplate.queryForObject("""
@@ -130,8 +142,8 @@ public class CodeQualityReviewSettingsRepository {
 
     private void ensureRow() {
         jdbcTemplate.update("""
-                INSERT INTO code_quality_review_settings (id, mr_auto_review_enabled, review_provider)
-                VALUES (?, TRUE, ?)
+                INSERT INTO code_quality_review_settings (id, mr_auto_review_enabled, dingtalk_notification_enabled, review_provider)
+                VALUES (?, TRUE, TRUE, ?)
                 ON DUPLICATE KEY UPDATE id = id
                 """, SETTINGS_ID, CodeQualityReviewProviderType.CODEX_CLI.name());
     }

@@ -10,6 +10,17 @@
 - `examples/`：Webhook 与手动审查示例请求。
 - `scripts/`：本地启动、GitLab 验证脚本。
 
+## Agent / 新对话入口
+
+新对话或自动化 Agent 理解项目时，优先阅读：
+
+1. `AGENTS.md`：项目目标、工作方式、脚本使用约束。
+2. `README.md`：本地启动、配置、验证步骤。
+3. `docs/10-local-dev-pitfalls.md`：本地环境与调试避坑。
+4. 与当前任务相关的 `docs/` 设计文档，例如 API、规则、AI Review provider 计划等。
+
+启动、编译、测试、构建应优先使用 `scripts/` 目录下脚本，不要绕过脚本直接按个人习惯执行底层 `mvn` / `npm` 命令。脚本负责统一 JDK 21 选择、本地 env 加载、依赖安装和 Windows 命令兼容。
+
 ## 当前主链路
 
 ```text
@@ -41,6 +52,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 审查任务、变更分析结果、提醒卡片、通知记录均落库。
 - 代码质量 AI Review 支持 `CODEX_CLI`、`OPENAI_API`、`ANTHROPIC_API` 三种 provider。
 - AI Review 支持 profile / prompt 配置、全局执行方式切换、API Key 配置、MR 自动触发开关、重试、执行过程展示。
+- GitLab MR 自动 AI Review 完成后会向同一个钉钉 webhook 推送“代码质量 Review”结果。
 - 本地 GitLab CE 验证脚本位于 `local-gitlab/` 与 `scripts/verify-gitlab-diff.*`。
 
 ## 环境要求
@@ -62,7 +74,6 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 | `MYSQL_USERNAME` | `root` | MySQL 用户 |
 | `MYSQL_PASSWORD` | `root` | MySQL 密码 |
 | `SERVER_PORT` | `8080` | 后端端口 |
-| `FRONTEND_ALLOWED_ORIGINS` | `http://localhost:5173` | CORS 允许来源 |
 | `PLATFORM_BASE_URL` | `http://localhost:5173` | 钉钉“查看平台详情”链接前缀 |
 | `DINGTALK_WEBHOOK_URL` | 空 | 钉钉机器人 webhook，空值时通知记录为 `SKIPPED` |
 | `DINGTALK_ENABLED` | `true` | 是否启用钉钉发送 |
@@ -109,12 +120,7 @@ CREATE DATABASE ai_code_review DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_uni
 .\scripts\run-backend.cmd
 ```
 
-或手动启动：
-
-```powershell
-cd backend
-mvn spring-boot:run
-```
+后端脚本默认执行 `spring-boot:run`，也可以透传 Maven 参数，例如 `.\scripts\run-backend.cmd -q test` 或 `.\scripts\run-backend.cmd -q -DskipTests compile`。
 
 启动前端：
 
@@ -122,13 +128,7 @@ mvn spring-boot:run
 .\scripts\run-frontend.cmd
 ```
 
-或手动启动：
-
-```powershell
-cd frontend
-npm.cmd install
-npm.cmd run dev
-```
+前端脚本默认执行 `npm run dev`，首次运行会自动 `npm install`。构建时使用 `.\scripts\run-frontend.cmd build`。
 
 访问前端：
 
@@ -164,6 +164,7 @@ V13__code_quality_api_key_settings.sql
 V14__code_quality_global_review_provider.sql
 V15__remove_api_compatibility_from_backend_templates.sql
 V16__stronger_default_ai_review_prompt.sql
+V17__dingtalk_notification_global_switch.sql
 ```
 
 主要表：
@@ -349,6 +350,7 @@ Provider 说明：
 前端“模板配置”页可以：
 
 - 控制 GitLab MR 是否自动触发 AI Review。
+- 控制是否全局发送钉钉推送；关闭后审查和落库仍正常执行。
 - 切换执行方式：本地 CLI 或 API Key。
 - 按供应商配置 OpenAI / Anthropic API Key。
 - 查看、编辑、预览、恢复 AI Review Profile prompt。
@@ -380,7 +382,7 @@ Invoke-RestMethod `
   -Method Put `
   -Uri "http://localhost:8080/api/code-quality-reviews/settings" `
   -ContentType "application/json" `
-  -Body '{"mrAutoReviewEnabled": false}'
+  -Body '{"mrAutoReviewEnabled": false, "dingtalkNotificationEnabled": false}'
 ```
 
 AI Review Profile 接口：
@@ -419,20 +421,17 @@ http://localhost:5173/?taskId=47
 后端：
 
 ```powershell
-cd backend
-mvn.cmd -q test
+.\scripts\run-backend.cmd -q test
 ```
 
 快速编译：
 
 ```powershell
-cd backend
-mvn.cmd -q -DskipTests compile
+.\scripts\run-backend.cmd -q -DskipTests compile
 ```
 
 前端：
 
 ```powershell
-cd frontend
-npm.cmd run build
+.\scripts\run-frontend.cmd build
 ```

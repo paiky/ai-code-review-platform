@@ -59,12 +59,19 @@ AI 变更风险审查平台（MVP）
 - rule engine with configurable rules
 
 ## Working style
+- 新对话理解项目时，先读 `AGENTS.md`、`README.md`，再按任务需要阅读 `docs/` 下相关设计文档。
+- 本地启动、编译、测试、构建优先使用仓库 `scripts/` 目录下脚本，不要直接按个人习惯拼 `mvn` / `npm` 命令。
+- 后端启动使用 `scripts/run-backend.cmd`；需要传 Maven 目标时也通过该脚本传参，例如 `scripts/run-backend.cmd -q test`、`scripts/run-backend.cmd -q -DskipTests compile`。
+- 前端启动使用 `scripts/run-frontend.cmd`；需要构建时使用 `scripts/run-frontend.cmd build`。
+- 只有脚本缺少所需能力或脚本本身失败且需要定位根因时，才直接进入 `backend/` 或 `frontend/` 执行底层命令，并在结论中说明原因。
 - 每次只做一个小目标
 - 先写设计，再实现
 - 先补充 README，再写代码
 - 先写数据结构与接口，再写业务逻辑
 - 完成后必须补测试与示例数据
 - 所有 PR/patch 必须附带“改了什么、为什么、如何验证”
+- 遇到问题或异常现象时，先查阅 `docs/10-local-dev-pitfalls.md` 是否已有解决方式。
+- 新解决的踩坑、误判根因、环境问题或调试结论，完成后必须补充到 `docs/10-local-dev-pitfalls.md`。
 
 ## Definition of done
 - 能本地跑通

@@ -24,6 +24,7 @@ class CodeQualityReviewSettingsRepositoryTest {
                 CREATE TABLE code_quality_review_settings (
                   id BIGINT PRIMARY KEY,
                   mr_auto_review_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                  dingtalk_notification_enabled BOOLEAN NOT NULL DEFAULT TRUE,
                   review_provider VARCHAR(32) NOT NULL DEFAULT 'CODEX_CLI',
                   openai_api_key VARCHAR(1024),
                   anthropic_api_key VARCHAR(1024),
@@ -36,6 +37,7 @@ class CodeQualityReviewSettingsRepositoryTest {
     void savesMasksAndClearsApiKeys() {
         var saved = repository.update(new CodeQualityReviewSettingsUpdateRequest(
                 false,
+                false,
                 CodeQualityReviewProviderType.ANTHROPIC_API,
                 "sk-openai-123456",
                 null,
@@ -44,6 +46,8 @@ class CodeQualityReviewSettingsRepositoryTest {
         ));
 
         assertThat(saved.mrAutoReviewEnabled()).isFalse();
+        assertThat(saved.dingtalkNotificationEnabled()).isFalse();
+        assertThat(repository.dingtalkNotificationEnabled()).isFalse();
         assertThat(saved.reviewProvider()).isEqualTo("ANTHROPIC_API");
         assertThat(saved.openAiApiKeyConfigured()).isTrue();
         assertThat(saved.openAiApiKeyMasked()).isEqualTo("sk-o...3456");
@@ -53,6 +57,7 @@ class CodeQualityReviewSettingsRepositoryTest {
         assertThat(repository.anthropicApiKey()).isEqualTo("sk-ant-abcdef");
 
         var cleared = repository.update(new CodeQualityReviewSettingsUpdateRequest(
+                null,
                 null,
                 null,
                 null,

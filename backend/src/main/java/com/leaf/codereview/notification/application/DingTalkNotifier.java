@@ -3,6 +3,9 @@ package com.leaf.codereview.notification.application;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.leaf.codereview.changeanalysis.domain.ChangeType;
+import com.leaf.codereview.codequality.domain.CodeQualityFinding;
+import com.leaf.codereview.codequality.domain.CodeQualityReviewResult;
+import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewSettingsRepository;
 import com.leaf.codereview.notification.domain.DingTalkMessageContext;
 import com.leaf.codereview.notification.domain.DingTalkNotificationResult;
 import com.leaf.codereview.notification.domain.NotificationStatus;
@@ -40,9 +43,14 @@ public class DingTalkNotifier {
     private final String webhookUrl;
     private final String platformBaseUrl;
     private final boolean enabled;
+    private final CodeQualityReviewSettingsRepository settingsRepository;
 
     public DingTalkNotifier(ObjectMapper objectMapper, String webhookUrl, boolean enabled) {
         this(objectMapper, webhookUrl, "", enabled);
+    }
+
+    public DingTalkNotifier(ObjectMapper objectMapper, String webhookUrl, String platformBaseUrl, boolean enabled) {
+        this(objectMapper, webhookUrl, platformBaseUrl, enabled, null);
     }
 
     @Autowired
@@ -50,12 +58,14 @@ public class DingTalkNotifier {
             ObjectMapper objectMapper,
             @Value("${notification.dingtalk.webhook-url:}") String webhookUrl,
             @Value("${notification.platform-base-url:}") String platformBaseUrl,
-            @Value("${notification.dingtalk.enabled:true}") boolean enabled
+            @Value("${notification.dingtalk.enabled:true}") boolean enabled,
+            CodeQualityReviewSettingsRepository settingsRepository
     ) {
         this.objectMapper = objectMapper;
         this.webhookUrl = webhookUrl;
         this.platformBaseUrl = platformBaseUrl;
         this.enabled = enabled;
+        this.settingsRepository = settingsRepository;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
                 .build();
@@ -63,6 +73,115 @@ public class DingTalkNotifier {
 
     public DingTalkNotificationResult sendRiskCard(Long taskId, RiskCard riskCard) {
         return sendRiskCard(taskId, riskCard, List.of(), DingTalkMessageContext.empty());
+    }
+
+    public DingTalkNotificationResult sendCodeQualityReviewResult(
+            Long taskId,
+            CodeQualityReviewResult reviewResult,
+            DingTalkMessageContext context
+    ) {
+        String title = "代码质量 Review";
+        String markdown = formatCodeQualityMarkdown(taskId, reviewResult, context == null ? DingTalkMessageContext.empty() : context);
+        String requestBody = buildRequestBody(title, markdown);
+        String digest = markdown.length() > 500 ? markdown.substring(0, 500) : markdown;
+
+        if (!isDingTalkEnabled()) {
+            return dingtalkDisabledResult(digest);
+        }
+        if (!StringUtils.hasText(webhookUrl)) {
+            return new DingTalkNotificationResult(
+                    NotificationStatus.SKIPPED,
+                    "DINGTALK_WEBHOOK_URL",
+                    digest,
+                    null,
+                    "DingTalk webhook is not configured"
+            );
+        }
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(webhookUrl))
+                    .timeout(Duration.ofSeconds(8))
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            NotificationStatus status = response.statusCode() >= 200 && response.statusCode() < 300
+                    ? NotificationStatus.SUCCESS
+                    : NotificationStatus.FAILED;
+            return new DingTalkNotificationResult(status, webhookUrl, digest, response.body(), status == NotificationStatus.SUCCESS ? null : "HTTP " + response.statusCode());
+        } catch (Exception exception) {
+            return new DingTalkNotificationResult(NotificationStatus.FAILED, webhookUrl, digest, null, exception.getMessage());
+        }
+    }
+
+    public DingTalkNotificationResult sendReviewSummary(
+            Long taskId,
+            RiskCard riskCard,
+            Collection<String> focusChangeTypes,
+            CodeQualityReviewResult reviewResult,
+            DingTalkMessageContext context
+    ) {
+        RiskCard notificationCard = riskCard == null ? null : filterRiskCard(riskCard, focusChangeTypes);
+        if (!hasRiskItems(notificationCard) && !hasCodeQualityNotification(reviewResult)) {
+            return new DingTalkNotificationResult(
+                    NotificationStatus.SKIPPED,
+                    "DINGTALK_REVIEW_SUMMARY",
+                    "No focused reminders or code quality findings matched.",
+                    null,
+                    "No focused reminders or code quality findings matched"
+            );
+        }
+        String title = "变更审查结果";
+        String markdown = formatReviewSummaryMarkdown(
+                taskId,
+                notificationCard,
+                reviewResult,
+                context == null ? DingTalkMessageContext.empty() : context
+        );
+        String requestBody = buildRequestBody(title, markdown);
+        String digest = markdown.length() > 500 ? markdown.substring(0, 500) : markdown;
+
+        if (!isDingTalkEnabled()) {
+            return dingtalkDisabledResult(digest);
+        }
+        if (!StringUtils.hasText(webhookUrl)) {
+            return new DingTalkNotificationResult(
+                    NotificationStatus.SKIPPED,
+                    "DINGTALK_WEBHOOK_URL",
+                    digest,
+                    null,
+                    "DingTalk webhook is not configured"
+            );
+        }
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(webhookUrl))
+                    .timeout(Duration.ofSeconds(8))
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            NotificationStatus status = response.statusCode() >= 200 && response.statusCode() < 300
+                    ? NotificationStatus.SUCCESS
+                    : NotificationStatus.FAILED;
+            return new DingTalkNotificationResult(status, webhookUrl, digest, response.body(), status == NotificationStatus.SUCCESS ? null : "HTTP " + response.statusCode());
+        } catch (Exception exception) {
+            return new DingTalkNotificationResult(NotificationStatus.FAILED, webhookUrl, digest, null, exception.getMessage());
+        }
+    }
+
+    private boolean hasRiskItems(RiskCard riskCard) {
+        return riskCard != null && riskCard.riskItems() != null && !riskCard.riskItems().isEmpty();
+    }
+
+    private boolean hasCodeQualityNotification(CodeQualityReviewResult reviewResult) {
+        if (reviewResult == null) {
+            return false;
+        }
+        if (!"SUCCESS".equals(reviewResult.status())) {
+            return true;
+        }
+        return reviewResult.findings() != null && !reviewResult.findings().isEmpty();
     }
 
     public DingTalkNotificationResult sendRiskCard(Long taskId, RiskCard riskCard, Collection<String> focusChangeTypes) {
@@ -92,7 +211,10 @@ public class DingTalkNotifier {
         String requestBody = buildRequestBody(title, markdown);
         String digest = markdown.length() > 500 ? markdown.substring(0, 500) : markdown;
 
-        if (!enabled || !StringUtils.hasText(webhookUrl)) {
+        if (!isDingTalkEnabled()) {
+            return dingtalkDisabledResult(digest);
+        }
+        if (!StringUtils.hasText(webhookUrl)) {
             return new DingTalkNotificationResult(
                     NotificationStatus.SKIPPED,
                     "DINGTALK_WEBHOOK_URL",
@@ -140,6 +262,172 @@ public class DingTalkNotifier {
                 + "- **分支：** " + branchText(context) + "\n\n"
                 + "**提醒**\n" + reminders + "\n\n"
                 + (StringUtils.hasText(links) ? links : "");
+    }
+
+    public String formatCodeQualityMarkdown(Long taskId, CodeQualityReviewResult reviewResult, DingTalkMessageContext context) {
+        String detailUrl = detailUrl(taskId);
+        String links = StringUtils.hasText(detailUrl) ? "[查看平台详情](" + detailUrl + ")" : "";
+        String status = reviewResult == null ? "-" : valueOrDash(reviewResult.status());
+        String provider = reviewResult == null || reviewResult.provider() == null ? "-" : reviewResult.provider().name();
+        String overallLevel = reviewResult == null ? "-" : valueOrDash(reviewResult.overallLevel());
+        String summary = reviewResult == null ? "-" : valueOrDash(reviewResult.summary());
+        int findingCount = reviewResult == null || reviewResult.findings() == null ? 0 : reviewResult.findings().size();
+        String findings = formatCodeQualityFindings(reviewResult == null ? List.of() : reviewResult.findings());
+        String error = reviewResult == null ? null : reviewResult.errorMessage();
+
+        StringBuilder builder = new StringBuilder()
+                .append("### 代码质量 Review\n\n")
+                .append("- **状态：** ").append(status).append('\n')
+                .append("- **Provider：** ").append(provider).append('\n')
+                .append("- **等级：** ").append(overallLevel).append('\n')
+                .append("- **问题数：** ").append(findingCount).append('\n')
+                .append("- **作者：** ").append(authorText(context)).append('\n')
+                .append("- **变更：** ").append(valueOrDash(context.title())).append('\n')
+                .append("- **分支：** ").append(branchText(context)).append("\n\n")
+                .append("**摘要**\n")
+                .append(summary).append("\n\n")
+                .append("**主要问题**\n")
+                .append(findings).append("\n\n");
+        if (StringUtils.hasText(error)) {
+            builder.append("**错误信息**\n").append(error).append("\n\n");
+        }
+        if (StringUtils.hasText(links)) {
+            builder.append(links);
+        }
+        return builder.toString();
+    }
+
+    public String formatReviewSummaryMarkdown(
+            Long taskId,
+            RiskCard riskCard,
+            CodeQualityReviewResult reviewResult,
+            DingTalkMessageContext context
+    ) {
+        String detailUrl = detailUrl(taskId);
+        String title = StringUtils.hasText(context.title())
+                ? context.title().replaceFirst("^GitLab\\s+", "")
+                : "-";
+        StringBuilder builder = new StringBuilder()
+                .append("### 变更审查结果\n\n")
+                .append(title).append('\n')
+                .append("作者：").append(authorText(context)).append("\n\n")
+                .append("#### 维护提醒（规则扫描）\n\n")
+                .append(formatMaintenanceReminders(riskCard)).append("\n\n")
+                .append("#### 代码质量 Review（AI）\n\n")
+                .append(formatCodeQualitySummary(reviewResult)).append("\n\n");
+        if (StringUtils.hasText(detailUrl)) {
+            builder.append("详情：").append(detailUrl);
+        }
+        return builder.toString();
+    }
+
+    private String formatMaintenanceReminders(RiskCard riskCard) {
+        if (riskCard == null || riskCard.riskItems() == null || riskCard.riskItems().isEmpty()) {
+            return "- 暂无需要特别维护的变更。";
+        }
+        Set<String> groups = riskCard.riskItems().stream()
+                .map(RiskItem::category)
+                .map(this::reminderGroupKey)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        List<String> reminders = new ArrayList<>();
+        if (groups.contains("DB")) {
+            reminders.add("- 数据库变更：请确认脚本是否需要准备");
+        }
+        if (groups.contains("MQ")) {
+            reminders.add("- MQ 变更：请留意 topic、消费组或消息结构是否需要配置");
+        }
+        if (groups.contains("CACHE")) {
+            reminders.add("- Redis 变更：请确认缓存 key 是否需要配置");
+        }
+        if (groups.contains("CONFIG")) {
+            reminders.add("- 配置变更：请确认是否有新的 Nacos 配置");
+        }
+        if (reminders.isEmpty()) {
+            return "- 暂无需要特别维护的变更。";
+        }
+        return String.join("\n", reminders);
+    }
+
+    private String formatCodeQualitySummary(CodeQualityReviewResult reviewResult) {
+        if (reviewResult == null) {
+            return "- 未执行代码质量 Review。";
+        }
+        if (!"SUCCESS".equals(reviewResult.status())) {
+            return "- 代码质量 Review 执行失败，请查看详情。";
+        }
+        List<CodeQualityFinding> findings = reviewResult.findings() == null ? List.of() : reviewResult.findings();
+        if (findings.isEmpty()) {
+            return "- 未发现需要修复的问题。";
+        }
+        List<CodeQualityFinding> urgentFindings = findings.stream()
+                .filter(finding -> isSeverityIn(finding, "CRITICAL", "HIGH"))
+                .toList();
+        List<CodeQualityFinding> possibleFindings = findings.stream()
+                .filter(finding -> isSeverityIn(finding, "MAJOR", "MEDIUM"))
+                .toList();
+        List<CodeQualityFinding> suggestionFindings = findings.stream()
+                .filter(finding -> !isSeverityIn(finding, "CRITICAL", "HIGH", "MAJOR", "MEDIUM"))
+                .toList();
+
+        List<String> sections = new ArrayList<>();
+        appendFindingSection(sections, "紧急需要修复", urgentFindings);
+        appendFindingSection(sections, "可能需要修复", possibleFindings);
+        appendFindingSection(sections, "建议关注", suggestionFindings);
+        return String.join("\n\n", sections);
+    }
+
+    private void appendFindingSection(List<String> sections, String title, List<CodeQualityFinding> findings) {
+        if (findings == null || findings.isEmpty()) {
+            return;
+        }
+        String findingItems = findings.stream()
+                .limit(5)
+                .map(finding -> "- " + conciseFindingTitle(finding.title()))
+                .collect(Collectors.joining("\n"));
+        sections.add("**" + title + "：" + findings.size() + " 个**\n" + findingItems);
+    }
+
+    private boolean isSeverityIn(CodeQualityFinding finding, String... severities) {
+        if (finding == null || !StringUtils.hasText(finding.severity())) {
+            return false;
+        }
+        Set<String> severitySet = Set.of(severities);
+        return severitySet.contains(finding.severity().trim().toUpperCase(Locale.ROOT));
+    }
+
+    private String conciseFindingTitle(String title) {
+        String normalized = valueOrDash(title)
+                .replaceAll("（[^）]*）", "")
+                .replaceAll("\\([^)]*\\)", "")
+                .replaceAll("`[^`]*`", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (normalized.length() <= 48) {
+            return normalized + "。";
+        }
+        return normalized.substring(0, 45) + "...";
+    }
+
+    private String formatCodeQualityFindings(List<CodeQualityFinding> findings) {
+        if (findings == null || findings.isEmpty()) {
+            return "- 未发现需要推送的代码质量问题。";
+        }
+        return findings.stream()
+                .limit(5)
+                .map(finding -> "- " + valueOrDash(finding.severity())
+                        + "：" + valueOrDash(finding.title())
+                        + locationText(finding))
+                .collect(Collectors.joining("\n"));
+    }
+
+    private String locationText(CodeQualityFinding finding) {
+        if (finding == null || !StringUtils.hasText(finding.filePath())) {
+            return "";
+        }
+        if (finding.startLine() != null) {
+            return "（" + finding.filePath() + ":" + finding.startLine() + "）";
+        }
+        return "（" + finding.filePath() + "）";
     }
 
     private String formatReminderGroup(ReminderGroup group) {
@@ -321,6 +609,20 @@ public class DingTalkNotifier {
         markdownNode.put("title", title);
         markdownNode.put("text", markdown);
         return root.toString();
+    }
+
+    private boolean isDingTalkEnabled() {
+        return enabled && (settingsRepository == null || settingsRepository.dingtalkNotificationEnabled());
+    }
+
+    private DingTalkNotificationResult dingtalkDisabledResult(String digest) {
+        return new DingTalkNotificationResult(
+                NotificationStatus.SKIPPED,
+                "DINGTALK_NOTIFICATION_ENABLED",
+                digest,
+                null,
+                "DingTalk notification is disabled"
+        );
     }
 
     private record ReminderGroup(String key, String label, List<RiskItem> items, Set<ChangeType> categories) {
