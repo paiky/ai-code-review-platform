@@ -9,9 +9,13 @@ import com.leaf.codereview.codequality.domain.CodeQualityReviewProfile;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewProviderType;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewRequest;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewResult;
+import com.leaf.codereview.notification.application.DingTalkNotifier;
+import com.leaf.codereview.notification.domain.DingTalkMessageContext;
+import com.leaf.codereview.notification.domain.DingTalkNotificationResult;
+import com.leaf.codereview.notification.domain.NotificationStatus;
+import com.leaf.codereview.notification.infrastructure.NotificationRecordRepository;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewProgressEventRepository;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewProgressTracker;
-import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewProperties;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewResultRepository;
 import com.leaf.codereview.projectintegration.domain.GitLabMergeRequestEvent;
 import com.leaf.codereview.projectintegration.domain.ProjectRecord;
@@ -34,12 +38,14 @@ class CodeQualityAsyncReviewExecutorTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final CodeQualityReviewService reviewService = mock(CodeQualityReviewService.class);
     private final CodeQualityReviewResultRepository resultRepository = mock(CodeQualityReviewResultRepository.class);
+    private final DingTalkNotifier dingTalkNotifier = mock(DingTalkNotifier.class);
+    private final NotificationRecordRepository notificationRecordRepository = mock(NotificationRecordRepository.class);
     private final CodeQualityReviewProgressEventRepository progressEventRepository = mock(CodeQualityReviewProgressEventRepository.class);
     private final CodeQualityReviewProgressTracker progressTracker = new CodeQualityReviewProgressTracker(progressEventRepository);
 
     @Test
     void triggersOpenAiReviewWithMrDiffAndPersistsResult() {
-        CodeQualityAsyncReviewExecutor executor = newExecutor("");
+        CodeQualityAsyncReviewExecutor executor = newExecutor();
         CodeQualityReviewResult result = CodeQualityReviewResult.success(
                 CodeQualityReviewProviderType.OPENAI_API,
                 "HIGH",
@@ -51,6 +57,9 @@ class CodeQualityAsyncReviewExecutorTest {
                 OffsetDateTime.now()
         );
         when(reviewService.review(any(), any())).thenReturn(result);
+        when(resultRepository.save(eq(99L), eq(1L), eq("backend-default-ai-review"), eq("gpt-5.4"), eq(result))).thenReturn(500L);
+        DingTalkNotificationResult notificationResult = new DingTalkNotificationResult(NotificationStatus.SKIPPED, "DINGTALK_WEBHOOK_URL", "digest", null, "skip");
+        when(dingTalkNotifier.sendReviewSummary(eq(99L), any(), any(), eq(result), any(DingTalkMessageContext.class))).thenReturn(notificationResult);
 
         executor.execute(99L, project(), event(), profile(CodeQualityReviewProviderType.CODEX_CLI), CodeQualityReviewProviderType.OPENAI_API);
 
@@ -61,11 +70,13 @@ class CodeQualityAsyncReviewExecutorTest {
         assertThat(requestCaptor.getValue().changedFiles()).contains("src/main/java/com/demo/OrderService.java");
         assertThat(requestCaptor.getValue().instructions()).isEqualTo("OpenAI instructions");
         verify(resultRepository).save(99L, 1L, "backend-default-ai-review", "gpt-5.4", result);
+        verify(dingTalkNotifier).sendReviewSummary(eq(99L), any(), any(), eq(result), any(DingTalkMessageContext.class));
+        verify(notificationRecordRepository).saveDingTalkRecord(99L, 500L, notificationResult);
     }
 
     @Test
     void triggersCodexCliReviewWithMrDiffWithoutLocalRepository() {
-        CodeQualityAsyncReviewExecutor executor = newExecutor("");
+        CodeQualityAsyncReviewExecutor executor = newExecutor();
         CodeQualityReviewResult result = CodeQualityReviewResult.success(
                 CodeQualityReviewProviderType.CODEX_CLI,
                 "HIGH",
@@ -77,6 +88,9 @@ class CodeQualityAsyncReviewExecutorTest {
                 OffsetDateTime.now()
         );
         when(reviewService.review(any(), any())).thenReturn(result);
+        when(resultRepository.save(eq(99L), eq(1L), eq("backend-default-ai-review"), eq("gpt-5.4"), eq(result))).thenReturn(501L);
+        DingTalkNotificationResult notificationResult = new DingTalkNotificationResult(NotificationStatus.SKIPPED, "DINGTALK_WEBHOOK_URL", "digest", null, "skip");
+        when(dingTalkNotifier.sendReviewSummary(eq(99L), any(), any(), eq(result), any(DingTalkMessageContext.class))).thenReturn(notificationResult);
 
         executor.execute(99L, project(), event(), profile(CodeQualityReviewProviderType.OPENAI_API), CodeQualityReviewProviderType.CODEX_CLI);
 
@@ -86,26 +100,11 @@ class CodeQualityAsyncReviewExecutorTest {
         assertThat(requestCaptor.getValue().mode()).isEqualTo(CodeQualityReviewMode.DIFF_TEXT);
         assertThat(requestCaptor.getValue().diffText()).contains("OrderService.java", "createOrder");
         verify(resultRepository).save(99L, 1L, "backend-default-ai-review", "gpt-5.4", result);
+        verify(notificationRecordRepository).saveDingTalkRecord(99L, 501L, notificationResult);
     }
 
-    private CodeQualityAsyncReviewExecutor newExecutor(String workspaceRoot) {
-        CodeQualityReviewProperties properties = new CodeQualityReviewProperties(
-                true,
-                CodeQualityReviewProviderType.CODEX_CLI,
-                workspaceRoot,
-                "",
-                "",
-                600,
-                "",
-                "https://api.openai.com/v1/responses",
-                "gpt-5.4",
-                120,
-                "",
-                "https://api.anthropic.com/v1/messages",
-                "claude-sonnet-4-5",
-                120
-        );
-        return new CodeQualityAsyncReviewExecutor(properties, progressTracker, reviewService, resultRepository);
+    private CodeQualityAsyncReviewExecutor newExecutor() {
+        return new CodeQualityAsyncReviewExecutor(progressTracker, reviewService, resultRepository, dingTalkNotifier, notificationRecordRepository);
     }
 
     private CodeQualityReviewProfile profile(CodeQualityReviewProviderType provider) {

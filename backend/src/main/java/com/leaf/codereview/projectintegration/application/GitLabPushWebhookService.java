@@ -95,6 +95,15 @@ public class GitLabPushWebhookService {
     public GitLabWebhookResponse handle(String gitlabEventHeader, JsonNode payload) {
         validateGitLabPushEvent(gitlabEventHeader, payload);
 
+        GitLabPushEvent event = parseEvent(payload);
+        log.info("Skip GitLab Push webhook review. projectId={}, branch={}, beforeSha={}, afterSha={}",
+                event.gitProjectId(), event.branchName(), event.beforeSha(), event.afterSha());
+        return new GitLabWebhookResponse(null, "SKIPPED", event.gitProjectId(), event.projectName(), null);
+    }
+
+    private GitLabWebhookResponse handleReview(String gitlabEventHeader, JsonNode payload) {
+        validateGitLabPushEvent(gitlabEventHeader, payload);
+
         GitLabPushEvent event = resolveChangedFiles(parseEvent(payload));
         ProjectRecord project = projectRepository.upsertGitLabProject(
                 event.gitProjectId(),

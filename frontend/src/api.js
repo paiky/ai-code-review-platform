@@ -6,11 +6,19 @@ export async function fetchApi(path, options = {}) {
     },
     ...options
   });
-  const body = await response.json();
-  if (!response.ok || body.success === false) {
-    throw new Error(body.message || `Request failed: ${response.status}`);
+  const responseText = await response.text();
+  let body = null;
+  if (responseText) {
+    try {
+      body = JSON.parse(responseText);
+    } catch {
+      body = { message: responseText };
+    }
   }
-  return body.data;
+  if (!response.ok || body.success === false) {
+    throw new Error(body?.message || `Request failed: ${response.status}`);
+  }
+  return body?.data;
 }
 
 export function riskColor(level) {

@@ -100,7 +100,20 @@ public class GitLabMergeRequestWebhookService {
     public GitLabWebhookResponse handle(String gitlabEventHeader, JsonNode payload) {
         validateGitLabMergeRequestEvent(gitlabEventHeader, payload);
 
-        GitLabMergeRequestEvent event = enrichWithGitLabDetail(parseEvent(payload));
+        GitLabMergeRequestEvent parsedEvent = parseEvent(payload);
+        if (!isOpenedMergeRequestEvent(parsedEvent)) {
+            log.info("Skip GitLab MR webhook because merge request is not opened. projectId={}, mrId={}, action={}",
+                    parsedEvent.gitProjectId(), parsedEvent.mrId(), parsedEvent.eventAction());
+            return new GitLabWebhookResponse(
+                    null,
+                    "SKIPPED",
+                    parsedEvent.gitProjectId(),
+                    parsedEvent.projectName(),
+                    parsedEvent.mrId()
+            );
+        }
+
+        GitLabMergeRequestEvent event = enrichWithGitLabDetail(parsedEvent);
         ProjectRecord project = projectRepository.upsertGitLabProject(
                 event.gitProjectId(),
                 event.projectName(),
@@ -126,8 +139,26 @@ public class GitLabMergeRequestWebhookService {
 
         try {
             GitLabMergeRequestEvent eventWithChangedFiles = resolveChangedFiles(taskId, event);
-            processReviewTask(taskId, project.id(), project.defaultTemplateCode(), eventWithChangedFiles);
-            codeQualityAutoReviewService.triggerAfterMergeRequestReview(taskId, project, eventWithChangedFiles);
+            ReviewNotificationPayload notificationPayload = processReviewTask(taskId, project.id(), project.defaultTemplateCode(), eventWithChangedFiles);
+            boolean aiReviewScheduled = codeQualityAutoReviewService.triggerAfterMergeRequestReview(
+                    taskId,
+                    project,
+                    eventWithChangedFiles,
+                    notificationPayload.resultId(),
+                    notificationPayload.riskCard(),
+                    notificationPayload.focusChangeTypes(),
+                    notificationPayload.context()
+            );
+            if (!aiReviewScheduled) {
+                DingTalkNotificationResult notificationResult = dingTalkNotifier.sendReviewSummary(
+                        taskId,
+                        notificationPayload.riskCard(),
+                        notificationPayload.focusChangeTypes(),
+                        null,
+                        notificationPayload.context()
+                );
+                notificationRecordRepository.saveDingTalkRecord(taskId, notificationPayload.resultId(), notificationResult);
+            }
             return new GitLabWebhookResponse(taskId, "SUCCESS", event.gitProjectId(), event.projectName(), event.mrId());
         } catch (Exception exception) {
             reviewTaskRepository.markFailed(taskId, exception.getMessage());
@@ -136,6 +167,21 @@ public class GitLabMergeRequestWebhookService {
             }
             throw new BusinessException(ErrorCode.INTERNAL_ERROR, exception.getMessage());
         }
+    }
+
+    private boolean isOpenedMergeRequestEvent(GitLabMergeRequestEvent event) {
+        String state = firstText(event.rawPayload(), "/object_attributes/state", "/object_attributes/state_name");
+        if (StringUtils.hasText(state)) {
+            String normalizedState = state.trim().toLowerCase(Locale.ROOT);
+            return "opened".equals(normalizedState) || "open".equals(normalizedState);
+        }
+        if (!StringUtils.hasText(event.eventAction())) {
+            return true;
+        }
+        return switch (event.eventAction().trim().toLowerCase(Locale.ROOT)) {
+            case "close", "closed", "merge", "merged", "destroy" -> false;
+            default -> true;
+        };
     }
 
     private GitLabMergeRequestEvent resolveChangedFiles(Long taskId, GitLabMergeRequestEvent event) {
@@ -169,21 +215,21 @@ public class GitLabMergeRequestWebhookService {
         }
     }
 
-    private void processReviewTask(Long taskId, Long projectId, String templateCode, GitLabMergeRequestEvent event) {
+    private ReviewNotificationPayload processReviewTask(Long taskId, Long projectId, String templateCode, GitLabMergeRequestEvent event) {
         ReviewTemplateDefinition template = ruleTemplateService.getEnabledTemplate(templateCode);
         ChangeAnalysisResult analysisResult = changeAnalysisService.analyze(toAnalysisRequest(event));
         RiskCard riskCard = riskCardGenerator.generate(analysisResult, templateCode);
         Long resultId = reviewResultRepository.save(taskId, projectId, templateCode, analysisResult, riskCard);
         reviewTaskRepository.markSuccess(taskId, riskCard.riskLevel().name());
-        DingTalkNotificationResult notificationResult = dingTalkNotifier.sendRiskCard(taskId, riskCard, template.focusChangeTypes(), new DingTalkMessageContext(
+        DingTalkMessageContext context = new DingTalkMessageContext(
                 "GitLab MR !" + event.mrId() + " " + nullToEmpty(event.sourceBranch()) + " -> " + nullToEmpty(event.targetBranch()),
                 event.authorName(),
                 event.authorUsername(),
                 event.sourceBranch(),
                 event.targetBranch(),
                 event.externalUrl()
-        ));
-        notificationRecordRepository.saveDingTalkRecord(taskId, resultId, notificationResult);
+        );
+        return new ReviewNotificationPayload(resultId, riskCard, template.focusChangeTypes(), context);
     }
 
     private ChangeAnalysisRequest toAnalysisRequest(GitLabMergeRequestEvent event) {
@@ -470,5 +516,13 @@ public class GitLabMergeRequestWebhookService {
     private boolean booleanAt(JsonNode node, String pointer) {
         JsonNode value = node.at(pointer);
         return !value.isMissingNode() && value.asBoolean(false);
+    }
+
+    private record ReviewNotificationPayload(
+            Long resultId,
+            RiskCard riskCard,
+            List<String> focusChangeTypes,
+            DingTalkMessageContext context
+    ) {
     }
 }

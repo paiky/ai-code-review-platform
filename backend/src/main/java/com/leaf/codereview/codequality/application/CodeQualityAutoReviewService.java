@@ -13,8 +13,10 @@ import com.leaf.codereview.common.exception.BusinessException;
 import com.leaf.codereview.projectintegration.domain.GitLabMergeRequestEvent;
 import com.leaf.codereview.projectintegration.domain.ProjectRecord;
 import com.leaf.codereview.projectintegration.infrastructure.ProjectRepository;
+import com.leaf.codereview.notification.domain.DingTalkMessageContext;
 import com.leaf.codereview.reviewrecord.application.ReviewTaskDetailResponse;
 import com.leaf.codereview.reviewrecord.infrastructure.ReviewTaskQueryRepository;
+import com.leaf.codereview.riskengine.domain.RiskCard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -57,25 +59,38 @@ public class CodeQualityAutoReviewService {
         this.executor = executor;
     }
 
-    public void triggerAfterMergeRequestReview(Long taskId, ProjectRecord project, GitLabMergeRequestEvent event) {
+    public boolean triggerAfterMergeRequestReview(
+            Long taskId,
+            ProjectRecord project,
+            GitLabMergeRequestEvent event,
+            Long ruleResultId,
+            RiskCard riskCard,
+            java.util.Collection<String> focusChangeTypes,
+            DingTalkMessageContext notificationContext
+    ) {
         if (!properties.enabled()) {
-            return;
+            return false;
         }
         if (!settingsRepository.mrAutoReviewEnabled()) {
             log.debug("Skip AI code review because MR auto review is disabled globally, taskId={}", taskId);
-            return;
+            return false;
         }
         if (resultRepository.existsByTaskId(taskId)) {
             log.debug("Skip AI code review because result already exists for taskId={}", taskId);
-            return;
+            return false;
         }
 
         CodeQualityReviewProfile profile = resolveProfile(project);
         if (profile == null || !profile.enabled() || !profile.triggerOnMr()) {
-            return;
+            return false;
         }
 
-        schedule(taskId, project, event, profile, settingsRepository.reviewProvider());
+        schedule(taskId, project, event, profile, settingsRepository.reviewProvider(), ruleResultId, riskCard, focusChangeTypes, notificationContext);
+        return true;
+    }
+
+    public boolean triggerAfterMergeRequestReview(Long taskId, ProjectRecord project, GitLabMergeRequestEvent event) {
+        return triggerAfterMergeRequestReview(taskId, project, event, null, null, java.util.List.of(), null);
     }
 
     public CodeQualityManualReviewResponse retryMergeRequestReview(Long taskId) {
@@ -94,7 +109,7 @@ public class CodeQualityAutoReviewService {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "Code quality review profile is disabled or missing");
         }
         CodeQualityReviewProviderType provider = settingsRepository.reviewProvider();
-        schedule(taskId, project, toEvent(detail, project), profile, provider);
+        schedule(taskId, project, toEvent(detail, project), profile, provider, null, null, java.util.List.of(), null);
         return new CodeQualityManualReviewResponse(
                 taskId,
                 "RUNNING",
@@ -105,7 +120,17 @@ public class CodeQualityAutoReviewService {
         );
     }
 
-    private void schedule(Long taskId, ProjectRecord project, GitLabMergeRequestEvent event, CodeQualityReviewProfile profile, CodeQualityReviewProviderType provider) {
+    private void schedule(
+            Long taskId,
+            ProjectRecord project,
+            GitLabMergeRequestEvent event,
+            CodeQualityReviewProfile profile,
+            CodeQualityReviewProviderType provider,
+            Long ruleResultId,
+            RiskCard riskCard,
+            java.util.Collection<String> focusChangeTypes,
+            DingTalkMessageContext notificationContext
+    ) {
         progressEventRepository.deleteByTaskId(taskId);
         progressEventRepository.append(taskId, "QUEUED", "INFO", "AI Review 已进入执行队列", "provider=" + provider.name() + ", profile=" + profile.profileCode());
         resultRepository.save(
@@ -115,7 +140,11 @@ public class CodeQualityAutoReviewService {
                 profile.model(),
                 CodeQualityReviewResult.running(provider, OffsetDateTime.now())
         );
-        executor.execute(taskId, project, event, profile, provider);
+        if (ruleResultId == null && riskCard == null && (focusChangeTypes == null || focusChangeTypes.isEmpty()) && notificationContext == null) {
+            executor.execute(taskId, project, event, profile, provider);
+            return;
+        }
+        executor.execute(taskId, project, event, profile, provider, ruleResultId, riskCard, focusChangeTypes, notificationContext);
     }
 
     private CodeQualityReviewProfile resolveProfile(ProjectRecord project) {

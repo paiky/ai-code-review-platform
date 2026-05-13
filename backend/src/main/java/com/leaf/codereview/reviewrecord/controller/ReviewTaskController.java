@@ -7,6 +7,7 @@ import com.leaf.codereview.codequality.application.CodeQualityReviewResultRespon
 import com.leaf.codereview.reviewrecord.application.ManualReviewRequest;
 import com.leaf.codereview.reviewrecord.application.ManualReviewResponse;
 import com.leaf.codereview.reviewrecord.application.ManualReviewService;
+import com.leaf.codereview.notification.application.NotificationRecordResponse;
 import com.leaf.codereview.reviewrecord.application.ReviewTaskDetailResponse;
 import com.leaf.codereview.reviewrecord.application.ReviewTaskListItemResponse;
 import com.leaf.codereview.reviewrecord.application.ReviewTaskQueryService;
@@ -82,5 +83,10 @@ public class ReviewTaskController {
     @GetMapping("/{taskId}/code-quality-progress")
     public ApiResponse<List<CodeQualityReviewProgressEventResponse>> getCodeQualityProgress(@PathVariable Long taskId) {
         return ApiResponse.ok(reviewTaskQueryService.getCodeQualityProgress(taskId));
+    }
+
+    @GetMapping("/{taskId}/notifications")
+    public ApiResponse<List<NotificationRecordResponse>> getNotifications(@PathVariable Long taskId) {
+        return ApiResponse.ok(reviewTaskQueryService.getNotifications(taskId));
     }
 }

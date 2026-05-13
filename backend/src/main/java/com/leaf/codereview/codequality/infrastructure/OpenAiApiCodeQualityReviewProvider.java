@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Component
 public class OpenAiApiCodeQualityReviewProvider implements CodeQualityReviewProvider {
@@ -62,18 +63,27 @@ public class OpenAiApiCodeQualityReviewProvider implements CodeQualityReviewProv
 
         OffsetDateTime startedAt = OffsetDateTime.now();
         try {
+            Map<String, Object> requestBody = requestFactory.buildRequest(properties, request);
+            String requestJson = objectMapper.writeValueAsString(requestBody);
             progressTracker.info("OPENAI_REQUEST", "准备调用 OpenAI Responses API", "url=" + properties.openAiResponsesUrl() + ", model=" + firstText(request.model(), properties.openAiModel()));
+            progressTracker.debug("OPENAI_REQUEST_DEBUG", "OpenAI 请求摘要", requestDebugDetail(request, requestJson));
+            progressTracker.debug("OPENAI_REQUEST_PREVIEW", "OpenAI 请求预览", abbreviate(requestJson, 3000));
             String responseBody = restClient().post()
                     .uri(properties.openAiResponsesUrl())
                     .contentType(MediaType.APPLICATION_JSON)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
-                    .body(requestFactory.buildRequest(properties, request))
+                    .body(requestBody)
                     .retrieve()
                     .body(String.class);
             progressTracker.info("OPENAI_RESPONSE", "OpenAI API 已返回响应", "responseBytes=" + (responseBody == null ? 0 : responseBody.length()));
+            progressTracker.debug("OPENAI_RESPONSE_DEBUG", "OpenAI 响应摘要", "responseBytes=" + (responseBody == null ? 0 : responseBody.length()));
+            progressTracker.debug("OPENAI_RESPONSE_RAW", "OpenAI 原始响应预览", abbreviate(responseBody, 3000));
             String outputText = extractOutputText(responseBody);
             progressTracker.info("OPENAI_PARSED", "OpenAI API 响应文本已提取", "outputBytes=" + outputText.length());
-            return toResult(outputText, responseBody, startedAt);
+            progressTracker.debug("OPENAI_OUTPUT_TEXT", "OpenAI 输出文本预览", abbreviate(outputText, 3000));
+            CodeQualityReviewResult result = toResult(outputText, responseBody, startedAt);
+            progressTracker.debug("OPENAI_PARSE_RESULT", "OpenAI 解析结果", "findingCount=" + result.findings().size() + ", overallLevel=" + firstText(result.overallLevel(), "-"));
+            return result;
         } catch (Exception exception) {
             progressTracker.error("OPENAI_FAILED", "OpenAI API Review 执行失败", exception.getMessage());
             return CodeQualityReviewResult.failed(type(), exception.getMessage(), null, null, startedAt, OffsetDateTime.now());
@@ -134,6 +144,28 @@ public class OpenAiApiCodeQualityReviewProvider implements CodeQualityReviewProv
 
     private String firstText(String primary, String fallback) {
         return StringUtils.hasText(primary) ? primary : fallback;
+    }
+
+    private String requestDebugDetail(CodeQualityReviewRequest request, String requestJson) {
+        int diffBytes = request.diffText() == null ? 0 : request.diffText().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        int changedFileCount = request.changedFiles() == null ? 0 : request.changedFiles().size();
+        return "url=" + properties.openAiResponsesUrl()
+                + ", model=" + firstText(request.model(), properties.openAiModel())
+                + ", mode=" + request.mode()
+                + ", baseRef=" + firstText(request.baseRef(), "-")
+                + ", changedFiles=" + changedFileCount
+                + ", diffBytes=" + diffBytes
+                + ", requestBytes=" + (requestJson == null ? 0 : requestJson.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+    }
+
+    private String abbreviate(String value, int maxLength) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        if (value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength) + "\n... truncated, totalChars=" + value.length();
     }
 
     private String effectiveApiKey() {

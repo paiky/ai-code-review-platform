@@ -44,7 +44,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.sql.init.mode=always",
         "spring.sql.init.schema-locations=classpath:main-flow-test-schema.sql",
         "notification.dingtalk.webhook-url=",
-        "notification.dingtalk.enabled=true"
+        "notification.dingtalk.enabled=true",
+        "code-quality.review.enabled=false"
 })
 class MainReviewFlowIntegrationTest {
 
@@ -242,7 +243,7 @@ class MainReviewFlowIntegrationTest {
     }
 
     @Test
-    void pushWebhookCreatesReviewResultAndNotificationRecordOnSameEndpoint() throws Exception {
+    void pushWebhookIsSkippedOnSameEndpoint() throws Exception {
         when(gitLabClient.compare(
                 "3003",
                 "1111111111111111111111111111111111111111",
@@ -276,29 +277,19 @@ class MainReviewFlowIntegrationTest {
                   ]
                 }
                 """);
-        long taskId = response.path("data").path("taskId").asLong();
 
-        assertThat(response.path("data").path("status").asText()).isEqualTo("SUCCESS");
-
-        ReviewTaskDetailResponse detail = reviewTaskQueryService.getDetail(taskId);
-        assertThat(detail.triggerType()).isEqualTo("GITLAB_PUSH_WEBHOOK");
-        assertThat(detail.status()).isEqualTo("SUCCESS");
-        assertThat(detail.projectName()).isEqualTo("group/push-service");
-        assertThat(detail.sourceBranch()).isEqualTo("feature/push-review");
-        assertThat(detail.commitSha()).isEqualTo("2222222222222222222222222222222222222222");
-        assertThat(detail.changedFilesSummary().path("source").asText()).isEqualTo("push_payload");
-        assertThat(detail.changedFilesSummary().path("count").asInt()).isEqualTo(3);
-        assertThat(detail.changedFilesSummary().path("fallbackReason").asText()).isEqualTo("compare unavailable");
-
-        ReviewTaskResultResponse result = reviewTaskQueryService.getResult(taskId);
-        assertThat(result.riskItemCount()).isGreaterThan(0);
-        assertThat(textValues(result.changeAnalysis().path("changeTypes"))).contains("API", "CONFIG");
-
-        assertSingleSkippedNotification(taskId);
+        assertThat(response.path("data").path("status").asText()).isEqualTo("SKIPPED");
+        assertThat(response.path("data").hasNonNull("taskId")).isFalse();
+        assertThat(response.path("data").path("projectId").asText()).isEqualTo("3003");
+        verify(gitLabClient, never()).compare(
+                "3003",
+                "1111111111111111111111111111111111111111",
+                "2222222222222222222222222222222222222222"
+        );
     }
 
     @Test
-    void pushWebhookUsesGitLabCompareDiffsWhenAvailable() throws Exception {
+    void skippedPushWebhookDoesNotUseGitLabCompareDiffs() throws Exception {
         when(gitLabClient.compare(
                 "3004",
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -353,33 +344,14 @@ class MainReviewFlowIntegrationTest {
                   ]
                 }
                 """);
-        long taskId = response.path("data").path("taskId").asLong();
 
-        assertThat(response.path("data").path("status").asText()).isEqualTo("SUCCESS");
-        verify(gitLabClient).compare(
+        assertThat(response.path("data").path("status").asText()).isEqualTo("SKIPPED");
+        assertThat(response.path("data").hasNonNull("taskId")).isFalse();
+        verify(gitLabClient, never()).compare(
                 "3004",
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         );
-
-        ReviewTaskDetailResponse detail = reviewTaskQueryService.getDetail(taskId);
-        assertThat(detail.triggerType()).isEqualTo("GITLAB_PUSH_WEBHOOK");
-        assertThat(detail.changedFilesSummary().path("source").asText()).isEqualTo("gitlab_compare_api");
-        assertThat(detail.changedFilesSummary().path("count").asInt()).isEqualTo(2);
-        assertThat(detail.changedFilesSummary().path("files").get(0).path("diffText").asText()).contains("@PostMapping");
-
-        ReviewTaskResultResponse result = reviewTaskQueryService.getResult(taskId);
-        assertThat(textValues(result.changeAnalysis().path("changeTypes"))).contains("API", "DB_SCHEMA");
-        assertThat(result.riskCard().path("riskItems").findValuesAsText("category")).contains("DB_SCHEMA");
-
-        PageResponse<ReviewTaskListItemResponse> page = reviewTaskQueryService.findPage(null, null, null, "push-compare", 1, 20);
-        assertThat(page.getItems()).singleElement().satisfies(item -> {
-            assertThat(item.id()).isEqualTo(taskId);
-            assertThat(item.focusIndicators().findValuesAsText("code")).contains("DB_SCHEMA_CHANGE");
-            assertThat(item.focusIndicators().findValuesAsText("matched")).contains("true");
-        });
-
-        assertSingleSkippedNotification(taskId);
     }
 
     private JsonNode postWebhook(String gitlabEvent, String payload) throws Exception {

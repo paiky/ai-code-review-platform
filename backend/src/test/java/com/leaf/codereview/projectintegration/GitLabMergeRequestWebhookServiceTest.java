@@ -138,7 +138,7 @@ class GitLabMergeRequestWebhookServiceTest {
         verify(webhookEventRepository).updateChangedFilesSummary(eq(99L), summaryCaptor.capture());
         assertThat(summaryCaptor.getValue().path("source").asText()).isEqualTo("gitlab_api");
         assertThat(summaryCaptor.getValue().path("count").asInt()).isEqualTo(1);
-        verify(codeQualityAutoReviewService).triggerAfterMergeRequestReview(eq(99L), any(), any());
+        verify(codeQualityAutoReviewService).triggerAfterMergeRequestReview(eq(99L), any(), any(), eq(88L), any(), any(), any());
     }
 
     @Test
@@ -181,6 +181,48 @@ class GitLabMergeRequestWebhookServiceTest {
 
         verify(gitLabClient, never()).listMergeRequestDiffs(any(), any());
         verify(webhookEventRepository, never()).updateChangedFilesSummary(any(), any());
+    }
+
+    @Test
+    void skipsClosedMergeRequestWebhookWithoutCreatingReviewTask() throws Exception {
+        GitLabMergeRequestWebhookService service = newService();
+
+        var response = service.handle("Merge Request Hook", objectMapper.readTree("""
+                {
+                  "object_kind": "merge_request",
+                  "project": {
+                    "id": 1001,
+                    "name": "demo-service",
+                    "web_url": "https://gitlab.example.com/group/demo-service"
+                  },
+                  "object_attributes": {
+                    "iid": 21,
+                    "action": "close",
+                    "state": "closed",
+                    "source_branch": "feature/payload-diff",
+                    "target_branch": "main",
+                    "url": "https://gitlab.example.com/group/demo-service/-/merge_requests/21",
+                    "updated_at": "2026-04-21T22:38:00+08:00",
+                    "last_commit": {
+                      "id": "abcdef123456"
+                    }
+                  },
+                  "user": {
+                    "name": "GitLab User",
+                    "username": "gitlab-user"
+                  }
+                }
+                """));
+
+        assertThat(response.status()).isEqualTo("SKIPPED");
+        assertThat(response.taskId()).isNull();
+        assertThat(response.projectId()).isEqualTo("1001");
+        assertThat(response.mrId()).isEqualTo("21");
+        verify(projectRepository, never()).upsertGitLabProject(any(), any(), any());
+        verify(reviewTaskRepository, never()).create(any(ReviewTaskCreateCommand.class));
+        verify(gitLabClient, never()).listMergeRequestDiffs(any(), any());
+        verify(changeAnalysisService, never()).analyze(any());
+        verify(codeQualityAutoReviewService, never()).triggerAfterMergeRequestReview(any(), any(), any(), any(), any(), any(), any());
     }
 
     private GitLabMergeRequestWebhookService newService() {
