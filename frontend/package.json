@@ -9,12 +9,15 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "antd": "latest",
-    "@ant-design/icons": "latest"
+    "@ant-design/icons": "6.1.1",
+    "@vitejs/plugin-react": "6.0.1",
+    "antd": "6.3.6",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "vite": "8.0.8"
   },
-  "devDependencies": {}
+  "optionalDependencies": {
+    "@emnapi/core": "1.10.0",
+    "@emnapi/runtime": "1.10.0"
+  }
 }

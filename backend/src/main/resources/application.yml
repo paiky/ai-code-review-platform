@@ -48,15 +48,10 @@ gitlab:
 code-quality:
   review:
     enabled: ${CODE_QUALITY_REVIEW_ENABLED:false}
-    provider: ${CODE_QUALITY_REVIEW_PROVIDER:CODEX_CLI}
-    workspace-root: ${CODE_QUALITY_WORKSPACE_ROOT:}
-    codex:
-      command: ${CODEX_CLI_COMMAND:}
-      model: ${CODEX_CLI_MODEL:}
-      timeout-seconds: ${CODEX_CLI_TIMEOUT_SECONDS:600}
+    provider: ${CODE_QUALITY_REVIEW_PROVIDER:DEEPSEEK}
     openai:
       api-key: ${OPENAI_API_KEY:}
-      responses-url: ${OPENAI_RESPONSES_URL:http://150.158.95.207/v1/responses}
+      responses-url: ${OPENAI_RESPONSES_URL:https://api.openai.com/v1/responses}
       model: ${OPENAI_CODE_REVIEW_MODEL:gpt-5.5}
       timeout-seconds: ${OPENAI_CODE_REVIEW_TIMEOUT_SECONDS:120}
     anthropic:
@@ -64,3 +59,7 @@ code-quality:
       messages-url: ${ANTHROPIC_MESSAGES_URL:https://api.anthropic.com/v1/messages}
       model: ${ANTHROPIC_CODE_REVIEW_MODEL:claude-sonnet-4-5}
       timeout-seconds: ${ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS:120}
+    deepseek:
+      api-key: ${DEEPSEEK_API_KEY:}
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      model: ${DEEPSEEK_CODE_REVIEW_MODEL:deepseek-v4-pro}

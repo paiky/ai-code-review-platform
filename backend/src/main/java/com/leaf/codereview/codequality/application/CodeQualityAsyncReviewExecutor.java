@@ -118,7 +118,7 @@ public class CodeQualityAsyncReviewExecutor {
                 event.commitSha(),
                 "GitLab MR !" + event.mrId() + " " + nullToEmpty(event.sourceBranch()) + " -> " + nullToEmpty(event.targetBranch()),
                 profile.model(),
-                provider == CodeQualityReviewProviderType.CODEX_CLI ? profile.codexPrompt() : profile.openAiInstructions(),
+                profile.reviewInstructions(),
                 buildDiffText(event.changedFilesSummary()),
                 changedFilePaths(event.changedFilesSummary())
         );

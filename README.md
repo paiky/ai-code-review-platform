@@ -1,6 +1,6 @@
 # AI 变更提醒与代码质量审查平台
 
-本仓库是一个可接入 GitLab / 钉钉 / 本地或 API 模式 AI Review 的研发质量平台原型。当前主流程围绕代码变更生成结构化“提醒卡片”，再按需触发代码质量 AI Review。
+本仓库是一个可接入 GitLab / 钉钉 / 多模型 API 模式 AI Review 的研发质量平台原型。当前主流程围绕代码变更生成结构化“提醒卡片”，再按需触发代码质量 AI Review。
 
 代码目录：
 
@@ -9,6 +9,10 @@
 - `docs/`：设计、API、schema 与实施计划文档。
 - `examples/`：Webhook 与手动审查示例请求。
 - `scripts/`：本地启动、GitLab 验证脚本。
+
+常用文档：
+
+- `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
 
 ## Agent / 新对话入口
 
@@ -50,8 +54,8 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 提醒卡片在前端按 DB / MQ / Redis/缓存 / 配置分组展示。
 - 钉钉消息按模板 `focusChangeTypes` 过滤提醒来源，只输出简洁提醒和平台详情链接。
 - 审查任务、变更分析结果、提醒卡片、通知记录均落库。
-- 代码质量 AI Review 支持 `CODEX_CLI`、`OPENAI_API`、`ANTHROPIC_API` 三种 provider。
-- AI Review 支持 profile / prompt 配置、全局执行方式切换、API Key 配置、MR 自动触发开关、重试、执行过程展示。
+- 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek 和 OpenAI-compatible 自定义模型 Provider。
+- AI Review 支持 profile / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、MR 自动触发开关、重试、执行过程展示。
 - GitLab MR 自动 AI Review 完成后会向同一个钉钉 webhook 推送“代码质量 Review”结果。
 - 本地 GitLab CE 验证脚本位于 `local-gitlab/` 与 `scripts/verify-gitlab-diff.*`。
 
@@ -82,12 +86,8 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 | `GITLAB_TOKEN` | 空 | GitLab access token |
 | `GITLAB_DIFF_PER_PAGE` | `100` | MR diff 分页大小 |
 | `CODE_QUALITY_REVIEW_ENABLED` | `false` | 是否启用代码质量 Review 能力 |
-| `CODE_QUALITY_REVIEW_PROVIDER` | `CODEX_CLI` | 默认 provider |
-| `CODE_QUALITY_WORKSPACE_ROOT` | 空 | 兼容保留；当前 CODEX_CLI diff-only 模式不依赖本地被审查仓库 |
-| `CODEX_CLI_COMMAND` | 按 OS 推断 | Windows 默认 `codex.cmd`，Linux 默认 `codex` |
-| `CODEX_CLI_MODEL` | 空 | Codex CLI 模型覆盖 |
-| `CODEX_CLI_TIMEOUT_SECONDS` | `600` | Codex CLI 超时时间 |
-| `OPENAI_API_KEY` | 空 | OpenAI API key |
+| `CODE_QUALITY_REVIEW_PROVIDER` | `DEEPSEEK` | 默认模型 Provider，可被数据库配置覆盖 |
+| `OPENAI_API_KEY` | 空 | OpenAI API key，首次初始化 Provider 时可作为默认值 |
 | `OPENAI_RESPONSES_URL` | `https://api.openai.com/v1/responses` | OpenAI Responses API 地址 |
 | `OPENAI_CODE_REVIEW_MODEL` | `gpt-5.4` | OpenAI provider 模型 |
 | `OPENAI_CODE_REVIEW_TIMEOUT_SECONDS` | `120` | OpenAI 请求超时时间 |
@@ -95,6 +95,9 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 | `ANTHROPIC_MESSAGES_URL` | `https://api.anthropic.com/v1/messages` | Anthropic Messages API 地址 |
 | `ANTHROPIC_CODE_REVIEW_MODEL` | `claude-sonnet-4-5` | Anthropic provider 模型 |
 | `ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS` | `120` | Anthropic 请求超时时间 |
+| `DEEPSEEK_API_KEY` | 空 | DeepSeek API key，首次初始化 Provider 时可作为默认值 |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek OpenAI-compatible base URL |
+| `DEEPSEEK_CODE_REVIEW_MODEL` | `deepseek-v4-pro` | DeepSeek provider 模型 |
 
 PowerShell 示例：
 
@@ -105,6 +108,125 @@ $env:MYSQL_PASSWORD="root"
 $env:DINGTALK_WEBHOOK_URL=""
 $env:GITLAB_API_ENABLED="false"
 ```
+
+## Docker 部署
+
+仓库内置 `deploy/docker-compose.yml`，适合单台远程服务器快速部署：
+
+```text
+宿主机 :${PUBLIC_HTTP_PORT}，默认 8080
+  -> Nginx frontend 容器 :80
+  -> React 静态页面
+  -> /api 反向代理到 backend:${BACKEND_PORT}
+Spring Boot backend 容器，默认 8080，仅在 Docker 网络内访问
+MySQL 8.4 容器 + mysql-data 持久化卷
+```
+
+服务器需要先安装 Docker Engine 和 Docker Compose plugin。首次部署：
+
+```bash
+git clone <repo-url> ai-code-review-platform
+cd ai-code-review-platform/deploy
+cp .env.example .env
+```
+
+编辑 `deploy/.env`，至少修改：
+
+```text
+PUBLIC_HTTP_PORT=8080
+PLATFORM_BASE_URL=http://你的域名或服务器IP:8080
+BACKEND_PORT=8080
+MYSQL_ROOT_PASSWORD=强密码
+MYSQL_USERNAME=ai_review
+MYSQL_PASSWORD=强密码
+DINGTALK_WEBHOOK_URL=钉钉机器人 webhook，可为空
+GITLAB_API_ENABLED=true
+GITLAB_BASE_URL=https://你的 GitLab 地址
+GITLAB_TOKEN=GitLab access token
+```
+
+启动：
+
+```bash
+docker compose up -d --build
+```
+
+查看状态和日志：
+
+```bash
+docker compose ps
+docker compose logs -f backend
+docker compose logs -f frontend
+```
+
+验证：
+
+```bash
+curl http://127.0.0.1/actuator/health
+curl http://127.0.0.1/api/health
+```
+
+平台访问和 GitLab webhook 使用同一个对外端口：`PUBLIC_HTTP_PORT`。默认访问 `http://服务器IP:8080`，GitLab webhook 配 `http://服务器IP:8080/api/webhooks/gitlab/merge-request`。如果服务器的 `8080` 已被占用，可以改 `PUBLIC_HTTP_PORT`，例如 `PUBLIC_HTTP_PORT=18080` 后访问 `http://服务器IP:18080`。`BACKEND_PORT` 默认只在 Docker 内部使用，不会额外占用宿主机端口；如需避开容器内的 `8080` 约定，也可以改成 `BACKEND_PORT=18081`，Nginx 反向代理会自动跟随。
+
+升级：
+
+```bash
+git pull
+cd deploy
+docker compose up -d --build
+```
+
+GitLab webhook 地址配置为：
+
+```text
+http://你的域名或服务器IP:8080/api/webhooks/gitlab/merge-request
+```
+
+如果需要 HTTPS，建议在服务器最外层再放一个宿主机 Nginx / Caddy / 云厂商负载均衡做 TLS 终止，再转发到 `PUBLIC_HTTP_PORT`。
+
+### 本地打包后上传服务器
+
+如果服务器不拉源代码，可以在本地先构建并导出 Docker 镜像。要求本地已安装 Docker Desktop：
+
+```powershell
+.\scripts\package-docker-deploy.cmd
+```
+
+脚本会生成：
+
+```text
+.local/docker-deploy/{版本号}/
+  ai-code-review-backend-{版本号}.tar
+  ai-code-review-frontend-{版本号}.tar
+  docker-compose.yml
+  .env.example
+  load-images.sh
+```
+
+如果服务器无法访问 Docker Hub，还需要把 MySQL 镜像一起打包：
+
+```powershell
+.\scripts\package-docker-deploy.cmd -IncludeMysqlImage
+```
+
+将 `.local/docker-deploy/{版本号}/` 整个目录上传到服务器，例如：
+
+```bash
+scp -r .local/docker-deploy/{版本号} user@server:/opt/ai-code-review-platform
+```
+
+服务器执行：
+
+```bash
+cd /opt/ai-code-review-platform
+chmod +x load-images.sh
+./load-images.sh
+cp .env.example .env
+vi .env
+docker compose up -d
+```
+
+升级时重新在本地执行 `package-docker-deploy.cmd`，上传新的版本目录到服务器，执行 `./load-images.sh` 后再 `docker compose up -d`。数据库数据保存在 Docker volume `mysql-data` 中，升级应用镜像不会删除数据；不要执行 `docker compose down -v`。
 
 ## 本地启动
 
@@ -337,22 +459,21 @@ Invoke-RestMethod `
 
 ```powershell
 $env:CODE_QUALITY_REVIEW_ENABLED="true"
-$env:CODE_QUALITY_REVIEW_PROVIDER="CODEX_CLI"
-$env:CODEX_CLI_COMMAND="codex.cmd"
 ```
 
 Provider 说明：
 
-- `CODEX_CLI`：调用项目服务器本地 Codex CLI 子进程，但审查输入只使用平台保存的 `diffText` 和 `changedFiles`，不再读取被审查项目的本地仓库或 `HEAD`。Linux 默认命令为 `codex`，Windows 默认命令为 `codex.cmd`。
-- `OPENAI_API`：调用 OpenAI Responses API。
-- `ANTHROPIC_API`：调用 Anthropic Messages API。
+- `OPENAI`：调用 OpenAI Responses API。
+- `ANTHROPIC`：调用 Anthropic Messages API。
+- `DEEPSEEK`：调用 DeepSeek OpenAI-compatible Chat Completions API，默认 base URL 为 `https://api.deepseek.com`。
+- `CUSTOM`：调用自定义 OpenAI-compatible Chat Completions API，需要配置端点 URL、模型名称和 API Key。
 
 前端“模板配置”页可以：
 
 - 控制 GitLab MR 是否自动触发 AI Review。
 - 控制是否全局发送钉钉推送；关闭后审查和落库仍正常执行。
-- 切换执行方式：本地 CLI 或 API Key。
-- 按供应商配置 OpenAI / Anthropic API Key。
+- 配置 OpenAI / Anthropic / DeepSeek / 自定义 Provider 的模型端点 URL、模型名称和 API Key。
+- 设置全局默认 Provider，以及项目级默认 Provider。
 - 查看、编辑、预览、恢复 AI Review Profile prompt。
 
 手动触发代码质量 Review：
@@ -377,6 +498,7 @@ AI Review 设置接口：
 
 ```powershell
 curl http://localhost:8080/api/code-quality-reviews/settings
+curl http://localhost:8080/api/code-quality-review-providers
 
 Invoke-RestMethod `
   -Method Put `

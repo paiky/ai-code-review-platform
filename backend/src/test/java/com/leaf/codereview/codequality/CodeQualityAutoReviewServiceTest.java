@@ -66,9 +66,9 @@ class CodeQualityAutoReviewServiceTest {
     @Test
     void writesRunningAndSchedulesAsyncReview() {
         CodeQualityAutoReviewService service = newService(true);
-        CodeQualityReviewProfile profile = profile(CodeQualityReviewProviderType.OPENAI_API, true);
+        CodeQualityReviewProfile profile = profile(CodeQualityReviewProviderType.OPENAI, true);
         when(settingsRepository.mrAutoReviewEnabled()).thenReturn(true);
-        when(settingsRepository.reviewProvider()).thenReturn(CodeQualityReviewProviderType.ANTHROPIC_API);
+        when(settingsRepository.reviewProvider()).thenReturn(CodeQualityReviewProviderType.ANTHROPIC);
         when(resultRepository.existsByTaskId(99L)).thenReturn(false);
         when(profileRepository.findByCode("backend-default-ai-review")).thenReturn(Optional.of(profile));
 
@@ -77,15 +77,15 @@ class CodeQualityAutoReviewServiceTest {
         ArgumentCaptor<CodeQualityReviewResult> resultCaptor = ArgumentCaptor.forClass(CodeQualityReviewResult.class);
         verify(resultRepository).save(eq(99L), eq(1L), eq("backend-default-ai-review"), eq("gpt-5.4"), resultCaptor.capture());
         assertThat(resultCaptor.getValue().status()).isEqualTo("RUNNING");
-        assertThat(resultCaptor.getValue().provider()).isEqualTo(CodeQualityReviewProviderType.ANTHROPIC_API);
+        assertThat(resultCaptor.getValue().provider()).isEqualTo(CodeQualityReviewProviderType.OPENAI);
         assertThat(resultCaptor.getValue().startedAt()).isNotNull();
-        verify(executor).execute(eq(99L), eq(project()), any(GitLabMergeRequestEvent.class), eq(profile), eq(CodeQualityReviewProviderType.ANTHROPIC_API));
+        verify(executor).execute(eq(99L), eq(project()), any(GitLabMergeRequestEvent.class), eq(profile), eq(CodeQualityReviewProviderType.OPENAI));
     }
 
     private CodeQualityAutoReviewService newService(boolean enabled) {
         CodeQualityReviewProperties properties = new CodeQualityReviewProperties(
                 enabled,
-                CodeQualityReviewProviderType.CODEX_CLI,
+                CodeQualityReviewProviderType.DEEPSEEK,
                 "",
                 "",
                 "",

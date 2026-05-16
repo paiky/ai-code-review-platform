@@ -4,11 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leaf.codereview.codequality.application.CodeQualityReviewResultResponse;
-import com.leaf.codereview.codequality.domain.CodeQualityFinding;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewResult;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
-import org.springframework.util.StringUtils;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -16,8 +14,8 @@ import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
 import java.util.Optional;
+import java.util.List;
 
 @Repository
 public class CodeQualityReviewResultRepository {
@@ -26,16 +24,13 @@ public class CodeQualityReviewResultRepository {
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
-    private final CodexCliOutputParser codexOutputParser;
 
     public CodeQualityReviewResultRepository(
             JdbcTemplate jdbcTemplate,
-            ObjectMapper objectMapper,
-            CodexCliOutputParser codexOutputParser
+            ObjectMapper objectMapper
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
-        this.codexOutputParser = codexOutputParser;
     }
 
     public Long save(Long taskId, Long projectId, String profileCode, String model, CodeQualityReviewResult result) {
@@ -120,20 +115,10 @@ public class CodeQualityReviewResultRepository {
 
     private CodeQualityReviewResultResponse mapResponse(ResultSet rs) throws SQLException {
         String provider = rs.getString("provider");
-        String rawOutput = rs.getString("raw_output");
         JsonNode findings = readJson(rs.getString("findings_json"));
         Integer findingCount = nullableInt(rs, "finding_count");
         String overallLevel = rs.getString("overall_level");
         String summary = rs.getString("summary");
-        if (isEmptyFindings(findings) && "CODEX_CLI".equals(provider) && StringUtils.hasText(rawOutput)) {
-            List<CodeQualityFinding> parsedFindings = codexOutputParser.findings(rawOutput);
-            if (!parsedFindings.isEmpty()) {
-                findings = objectMapper.valueToTree(parsedFindings);
-                findingCount = parsedFindings.size();
-                overallLevel = firstText(overallLevel, codexOutputParser.overallLevel(parsedFindings));
-                summary = firstText(summary, codexOutputParser.summary(rawOutput, parsedFindings));
-            }
-        }
         return new CodeQualityReviewResultResponse(
                 rs.getLong("task_id"),
                 rs.getLong("project_id"),
@@ -145,7 +130,7 @@ public class CodeQualityReviewResultRepository {
                 summary,
                 findingCount,
                 findings,
-                rawOutput,
+                rs.getString("raw_output"),
                 nullableInt(rs, "exit_code"),
                 rs.getString("error_message"),
                 formatTimestamp(rs.getTimestamp("started_at")),
@@ -195,11 +180,4 @@ public class CodeQualityReviewResultRepository {
         return value.substring(0, maxLength);
     }
 
-    private boolean isEmptyFindings(JsonNode findings) {
-        return findings == null || !findings.isArray() || findings.isEmpty();
-    }
-
-    private String firstText(String primary, String fallback) {
-        return StringUtils.hasText(primary) ? primary : fallback;
-    }
 }

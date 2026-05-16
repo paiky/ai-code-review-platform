@@ -60,6 +60,7 @@ AI 变更风险审查平台（MVP）
 
 ## Working style
 - 新对话理解项目时，先读 `AGENTS.md`、`README.md`，再按任务需要阅读 `docs/` 下相关设计文档。
+- 在 Windows PowerShell 中阅读中文 Markdown / 文档时，优先使用 `Get-Content -Raw -Encoding UTF8 <path>`，避免默认编码导致中文乱码并影响理解。
 - 本地启动、编译、测试、构建优先使用仓库 `scripts/` 目录下脚本，不要直接按个人习惯拼 `mvn` / `npm` 命令。
 - 后端启动使用 `scripts/run-backend.cmd`；需要传 Maven 目标时也通过该脚本传参，例如 `scripts/run-backend.cmd -q test`、`scripts/run-backend.cmd -q -DskipTests compile`。
 - 前端启动使用 `scripts/run-frontend.cmd`；需要构建时使用 `scripts/run-frontend.cmd build`。

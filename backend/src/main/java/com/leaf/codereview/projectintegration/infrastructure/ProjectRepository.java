@@ -43,8 +43,8 @@ public class ProjectRepository {
             PreparedStatement ps = connection.prepareStatement("""
                     INSERT INTO projects (
                       name, git_provider, git_project_id, repository_url,
-                      default_template_code, default_code_quality_profile_code, status, description
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'ENABLED', ?)
+                      default_template_code, default_code_quality_profile_code, default_code_quality_provider_code, status, description
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'ENABLED', ?)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, projectName);
             ps.setString(2, GIT_PROVIDER);
@@ -63,7 +63,7 @@ public class ProjectRepository {
     public Optional<ProjectRecord> findById(Long id) {
         List<ProjectRecord> projects = jdbcTemplate.query("""
                 SELECT id, name, git_provider, git_project_id, repository_url,
-                       default_template_code, default_code_quality_profile_code, status
+                       default_template_code, default_code_quality_profile_code, default_code_quality_provider_code, status
                 FROM projects
                 WHERE id = ?
                 """, rowMapper(), id);
@@ -73,7 +73,7 @@ public class ProjectRepository {
     public Optional<ProjectRecord> findByGitProjectId(String gitProjectId) {
         List<ProjectRecord> projects = jdbcTemplate.query("""
                 SELECT id, name, git_provider, git_project_id, repository_url,
-                       default_template_code, default_code_quality_profile_code, status
+                       default_template_code, default_code_quality_profile_code, default_code_quality_provider_code, status
                 FROM projects
                 WHERE git_provider = ? AND git_project_id = ?
                 """, rowMapper(), GIT_PROVIDER, gitProjectId);
@@ -84,7 +84,7 @@ public class ProjectRepository {
     public List<ProjectRecord> findAllEnabled() {
         return jdbcTemplate.query("""
                 SELECT id, name, git_provider, git_project_id, repository_url,
-                       default_template_code, default_code_quality_profile_code, status
+                       default_template_code, default_code_quality_profile_code, default_code_quality_provider_code, status
                 FROM projects
                 WHERE status = 'ENABLED'
                 ORDER BY id DESC
@@ -107,6 +107,14 @@ public class ProjectRepository {
                 """, profileCode, projectId);
     }
 
+    public void updateDefaultCodeQualityProvider(Long projectId, String providerCode) {
+        jdbcTemplate.update("""
+                UPDATE projects
+                SET default_code_quality_provider_code = ?
+                WHERE id = ?
+                """, providerCode, projectId);
+    }
+
     private RowMapper<ProjectRecord> rowMapper() {
         return (rs, rowNum) -> new ProjectRecord(
                 rs.getLong("id"),
@@ -116,6 +124,7 @@ public class ProjectRepository {
                 rs.getString("repository_url"),
                 rs.getString("default_template_code"),
                 rs.getString("default_code_quality_profile_code"),
+                rs.getString("default_code_quality_provider_code"),
                 rs.getString("status")
         );
     }

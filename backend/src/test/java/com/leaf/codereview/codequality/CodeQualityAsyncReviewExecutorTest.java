@@ -47,7 +47,7 @@ class CodeQualityAsyncReviewExecutorTest {
     void triggersOpenAiReviewWithMrDiffAndPersistsResult() {
         CodeQualityAsyncReviewExecutor executor = newExecutor();
         CodeQualityReviewResult result = CodeQualityReviewResult.success(
-                CodeQualityReviewProviderType.OPENAI_API,
+                CodeQualityReviewProviderType.OPENAI,
                 "HIGH",
                 "summary",
                 List.of(),
@@ -61,10 +61,10 @@ class CodeQualityAsyncReviewExecutorTest {
         DingTalkNotificationResult notificationResult = new DingTalkNotificationResult(NotificationStatus.SKIPPED, "DINGTALK_WEBHOOK_URL", "digest", null, "skip");
         when(dingTalkNotifier.sendReviewSummary(eq(99L), any(), any(), eq(result), any(DingTalkMessageContext.class))).thenReturn(notificationResult);
 
-        executor.execute(99L, project(), event(), profile(CodeQualityReviewProviderType.CODEX_CLI), CodeQualityReviewProviderType.OPENAI_API);
+        executor.execute(99L, project(), event(), profile(CodeQualityReviewProviderType.DEEPSEEK), CodeQualityReviewProviderType.OPENAI);
 
         ArgumentCaptor<CodeQualityReviewRequest> requestCaptor = ArgumentCaptor.forClass(CodeQualityReviewRequest.class);
-        verify(reviewService).review(requestCaptor.capture(), eq(CodeQualityReviewProviderType.OPENAI_API));
+        verify(reviewService).review(requestCaptor.capture(), eq(CodeQualityReviewProviderType.OPENAI));
         assertThat(requestCaptor.getValue().mode()).isEqualTo(CodeQualityReviewMode.DIFF_TEXT);
         assertThat(requestCaptor.getValue().diffText()).contains("OrderService.java", "createOrder");
         assertThat(requestCaptor.getValue().changedFiles()).contains("src/main/java/com/demo/OrderService.java");
@@ -78,7 +78,7 @@ class CodeQualityAsyncReviewExecutorTest {
     void triggersCodexCliReviewWithMrDiffWithoutLocalRepository() {
         CodeQualityAsyncReviewExecutor executor = newExecutor();
         CodeQualityReviewResult result = CodeQualityReviewResult.success(
-                CodeQualityReviewProviderType.CODEX_CLI,
+                CodeQualityReviewProviderType.DEEPSEEK,
                 "HIGH",
                 "summary",
                 List.of(),
@@ -92,10 +92,10 @@ class CodeQualityAsyncReviewExecutorTest {
         DingTalkNotificationResult notificationResult = new DingTalkNotificationResult(NotificationStatus.SKIPPED, "DINGTALK_WEBHOOK_URL", "digest", null, "skip");
         when(dingTalkNotifier.sendReviewSummary(eq(99L), any(), any(), eq(result), any(DingTalkMessageContext.class))).thenReturn(notificationResult);
 
-        executor.execute(99L, project(), event(), profile(CodeQualityReviewProviderType.OPENAI_API), CodeQualityReviewProviderType.CODEX_CLI);
+        executor.execute(99L, project(), event(), profile(CodeQualityReviewProviderType.OPENAI), CodeQualityReviewProviderType.DEEPSEEK);
 
         ArgumentCaptor<CodeQualityReviewRequest> requestCaptor = ArgumentCaptor.forClass(CodeQualityReviewRequest.class);
-        verify(reviewService).review(requestCaptor.capture(), eq(CodeQualityReviewProviderType.CODEX_CLI));
+        verify(reviewService).review(requestCaptor.capture(), eq(CodeQualityReviewProviderType.DEEPSEEK));
         assertThat(requestCaptor.getValue().repositoryPath()).isNull();
         assertThat(requestCaptor.getValue().mode()).isEqualTo(CodeQualityReviewMode.DIFF_TEXT);
         assertThat(requestCaptor.getValue().diffText()).contains("OrderService.java", "createOrder");

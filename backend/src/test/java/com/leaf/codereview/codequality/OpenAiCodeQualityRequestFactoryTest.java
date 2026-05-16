@@ -30,7 +30,7 @@ class OpenAiCodeQualityRequestFactoryTest {
                 List.of("OrderService.java")
         );
 
-        Map<String, Object> body = factory.buildRequest(properties(), request);
+        Map<String, Object> body = factory.buildRequest("gpt-5.4", request);
 
         assertThat(body).containsEntry("model", "gpt-5.4");
         assertThat(body).containsEntry("store", false);
@@ -46,7 +46,7 @@ class OpenAiCodeQualityRequestFactoryTest {
     private CodeQualityReviewProperties properties() {
         return new CodeQualityReviewProperties(
                 true,
-                CodeQualityReviewProviderType.OPENAI_API,
+                CodeQualityReviewProviderType.OPENAI,
                 "",
                 "",
                 "",

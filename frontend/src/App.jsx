@@ -10,7 +10,6 @@ import {
   Empty,
   Input,
   Layout,
-  List,
   message,
   Row,
   Select,
@@ -137,12 +136,20 @@ function categoryLabel(value) {
 
 function sourceLabel(value) {
   switch (value) {
+    case 'OPENAI':
+      return 'OpenAI';
+    case 'ANTHROPIC':
+      return 'Anthropic / Claude';
+    case 'DEEPSEEK':
+      return 'DeepSeek';
+    case 'CUSTOM':
+      return '自定义模型';
     case 'CODEX_CLI':
-      return 'Codex CLI';
+      return 'Codex CLI（历史）';
     case 'OPENAI_API':
-      return 'OpenAI API';
+      return 'OpenAI API（历史）';
     case 'ANTHROPIC_API':
-      return 'Anthropic API';
+      return 'Anthropic API（历史）';
     default:
       return value || '-';
   }
@@ -541,18 +548,18 @@ function phaseLabel(phase) {
     STARTED: '已启动',
     REQUEST_BUILT: '请求已构建',
     PROVIDER_START: '调用 Provider',
-    CODEX_REPOSITORY: '确认仓库',
+    CODEX_REPOSITORY: '确认仓库（历史）',
     PROMPT_METADATA: 'Prompt 元数据',
-    CODEX_OUTPUT_FILE: '准备输出文件',
-    CODEX_COMMAND: '启动命令',
-    CODEX_PROCESS_STARTED: '子进程启动',
-    CODEX_OUTPUT: '过程输出',
-    CODEX_PROCESS_EXIT: '子进程退出',
-    CODEX_PARSED: '解析输出',
-    CODEX_TIMEOUT: '执行超时',
-    CODEX_FAILED: 'Codex 执行失败',
-    CODEX_IO_ERROR: '启动或读取失败',
-    CODEX_INTERRUPTED: '执行中断',
+    CODEX_OUTPUT_FILE: '准备输出文件（历史）',
+    CODEX_COMMAND: '启动命令（历史）',
+    CODEX_PROCESS_STARTED: '子进程启动（历史）',
+    CODEX_OUTPUT: '过程输出（历史）',
+    CODEX_PROCESS_EXIT: '子进程退出（历史）',
+    CODEX_PARSED: '解析输出（历史）',
+    CODEX_TIMEOUT: '执行超时（历史）',
+    CODEX_FAILED: '历史 CLI 执行失败',
+    CODEX_IO_ERROR: '历史 CLI 启动或读取失败',
+    CODEX_INTERRUPTED: '历史 CLI 执行中断',
     OPENAI_REQUEST: '调用 OpenAI',
     OPENAI_REQUEST_DEBUG: 'OpenAI 请求摘要',
     OPENAI_REQUEST_PREVIEW: 'OpenAI 请求预览',
@@ -567,6 +574,14 @@ function phaseLabel(phase) {
     ANTHROPIC_RESPONSE: 'Anthropic 已响应',
     ANTHROPIC_PARSED: '解析 Anthropic 输出',
     ANTHROPIC_FAILED: 'Anthropic 执行失败',
+    DEEPSEEK_REQUEST: '调用 DeepSeek',
+    DEEPSEEK_RESPONSE: 'DeepSeek 已响应',
+    DEEPSEEK_PARSED: '解析 DeepSeek 输出',
+    DEEPSEEK_FAILED: 'DeepSeek 执行失败',
+    CUSTOM_REQUEST: '调用自定义 Provider',
+    CUSTOM_RESPONSE: '自定义 Provider 已响应',
+    CUSTOM_PARSED: '解析自定义 Provider 输出',
+    CUSTOM_FAILED: '自定义 Provider 执行失败',
     SAVE_RESULT: '保存结果',
     FINISHED: '已完成',
     FAILED: '失败',
@@ -591,6 +606,12 @@ const keyProgressPhases = new Set([
   'ANTHROPIC_REQUEST',
   'ANTHROPIC_RESPONSE',
   'ANTHROPIC_PARSED',
+  'DEEPSEEK_REQUEST',
+  'DEEPSEEK_RESPONSE',
+  'DEEPSEEK_PARSED',
+  'CUSTOM_REQUEST',
+  'CUSTOM_RESPONSE',
+  'CUSTOM_PARSED',
   'SAVE_RESULT',
   'FINISHED',
   'FAILED',
@@ -600,7 +621,9 @@ const keyProgressPhases = new Set([
   'CODEX_IO_ERROR',
   'CODEX_INTERRUPTED',
   'OPENAI_FAILED',
-  'ANTHROPIC_FAILED'
+  'ANTHROPIC_FAILED',
+  'DEEPSEEK_FAILED',
+  'CUSTOM_FAILED'
 ]);
 
 function isDebugProgressEvent(event) {
@@ -624,13 +647,13 @@ function progressStepDescription(event) {
     case 'PROMPT_METADATA':
       return '已生成最终 prompt，并记录 hash、长度、预览和运行环境。';
     case 'CODEX_COMMAND':
-      return '准备启动 Codex CLI；完整中文 prompt 通过 UTF-8 文件传递。';
+      return '历史 CLI 模式准备启动命令。';
     case 'CODEX_PROCESS_STARTED':
-      return 'Codex CLI 子进程已经启动，开始分析变更。';
+      return '历史 CLI 子进程已经启动，开始分析变更。';
     case 'CODEX_PROCESS_EXIT':
-      return 'Codex CLI 子进程已退出。';
+      return '历史 CLI 子进程已退出。';
     case 'CODEX_PARSED':
-      return 'Codex 输出已解析为结构化质量问题；评审建议见上方“质量问题”。';
+      return '历史 CLI 输出已解析为结构化质量问题；评审建议见上方“质量问题”。';
     case 'OPENAI_REQUEST':
       return '开始调用 OpenAI API。';
     case 'OPENAI_RESPONSE':
@@ -643,6 +666,18 @@ function progressStepDescription(event) {
       return 'Anthropic API 已返回响应。';
     case 'ANTHROPIC_PARSED':
       return 'Anthropic 输出已解析为结构化质量问题；评审建议见上方“质量问题”。';
+    case 'DEEPSEEK_REQUEST':
+      return '开始调用 DeepSeek API。';
+    case 'DEEPSEEK_RESPONSE':
+      return 'DeepSeek API 已返回响应。';
+    case 'DEEPSEEK_PARSED':
+      return 'DeepSeek 输出已解析为结构化质量问题；评审建议见上方“质量问题”。';
+    case 'CUSTOM_REQUEST':
+      return '开始调用自定义 OpenAI-compatible Provider。';
+    case 'CUSTOM_RESPONSE':
+      return '自定义 Provider 已返回响应。';
+    case 'CUSTOM_PARSED':
+      return '自定义 Provider 输出已解析为结构化质量问题；评审建议见上方“质量问题”。';
     case 'SAVE_RESULT':
       return 'Provider 执行完成，正在保存 Review 结果。';
     case 'FINISHED':
@@ -655,6 +690,8 @@ function progressStepDescription(event) {
     case 'CODEX_INTERRUPTED':
     case 'OPENAI_FAILED':
     case 'ANTHROPIC_FAILED':
+    case 'DEEPSEEK_FAILED':
+    case 'CUSTOM_FAILED':
       return '该阶段失败，需要查看错误详情。';
     default:
       return event?.message || '-';
@@ -826,7 +863,7 @@ function CodeQualityReviewView({ review, progress, onRetry, retrying }) {
             <Button loading={retrying} disabled={review.status === 'RUNNING'} onClick={onRetry}>重试 AI Review</Button>
           </div>
           <Alert type={findings.length > 0 ? 'warning' : 'info'} showIcon message={summaryText} />
-          {review.status === 'RUNNING' && <Alert type="info" showIcon message="AI Review 正在执行" description="Codex CLI 正在分析代码变更，完成后结果会自动刷新。" />}
+          {review.status === 'RUNNING' && <Alert type="info" showIcon message="AI Review 正在执行" description="模型 Provider 正在分析代码变更，完成后结果会自动刷新。" />}
           {review.errorMessage && <Alert type="error" showIcon message="AI Review 执行失败" description={review.errorMessage} />}
           <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
             <Descriptions.Item label="Profile">{review.profileCode || '-'}</Descriptions.Item>
@@ -1039,19 +1076,18 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 
 
 function TemplateConfig() {
-  const [templates, setTemplates] = useState([]);
-  const [projects, setProjects] = useState([]);
   const [profiles, setProfiles] = useState([]);
+  const [providers, setProviders] = useState([]);
+  const [selectedProviderCode, setSelectedProviderCode] = useState('DEEPSEEK');
+  const [providerDraft, setProviderDraft] = useState(null);
   const [selectedProfileCode, setSelectedProfileCode] = useState(null);
   const [profileDraft, setProfileDraft] = useState(null);
   const [promptPreview, setPromptPreview] = useState(null);
   const [aiSettings, setAiSettings] = useState(null);
-  const [apiKeyProvider, setApiKeyProvider] = useState('OPENAI_API');
-  const [openAiApiKeyDraft, setOpenAiApiKeyDraft] = useState('');
-  const [anthropicApiKeyDraft, setAnthropicApiKeyDraft] = useState('');
+  const [providerApiKeyDraft, setProviderApiKeyDraft] = useState('');
   const [loading, setLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
-  const [apiKeySaving, setApiKeySaving] = useState(false);
+  const [providerSaving, setProviderSaving] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
   const [promptPreviewLoading, setPromptPreviewLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -1061,20 +1097,20 @@ function TemplateConfig() {
     setLoading(true);
     setError(null);
     try {
-      const [templateData, projectData, settingsData, profileData] = await Promise.all([
-        fetchApi('/api/rule-templates'),
-        fetchApi('/api/projects'),
+      const [settingsData, profileData, providerData] = await Promise.all([
         fetchApi('/api/code-quality-reviews/settings'),
-        fetchApi('/api/code-quality-review-profiles')
+        fetchApi('/api/code-quality-review-profiles'),
+        fetchApi('/api/code-quality-review-providers')
       ]);
       const profileItems = Array.isArray(profileData) ? profileData : (profileData.items || []);
+      const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
       const nextSelectedProfileCode = selectedProfileCode || profileItems[0]?.profileCode || null;
-      setTemplates(Array.isArray(templateData) ? templateData : (templateData.items || []));
-      setProjects(Array.isArray(projectData) ? projectData : (projectData.items || []));
+      const nextSelectedProviderCode = settingsData?.defaultProviderCode || selectedProviderCode || providerItems[0]?.providerCode || 'DEEPSEEK';
       setAiSettings(settingsData);
-      setApiKeyProvider(settingsData?.reviewProvider && settingsData.reviewProvider !== 'CODEX_CLI' ? settingsData.reviewProvider : 'OPENAI_API');
-      setOpenAiApiKeyDraft('');
-      setAnthropicApiKeyDraft('');
+      setProviders(providerItems);
+      setSelectedProviderCode(nextSelectedProviderCode);
+      setProviderDraft(providerItems.find(item => item.providerCode === nextSelectedProviderCode) || providerItems[0] || null);
+      setProviderApiKeyDraft('');
       setProfiles(profileItems);
       setSelectedProfileCode(nextSelectedProfileCode);
       setProfileDraft(profileItems.find(item => item.profileCode === nextSelectedProfileCode) || profileItems[0] || null);
@@ -1089,19 +1125,6 @@ function TemplateConfig() {
   useEffect(() => {
     load();
   }, []);
-
-  const updateProjectTemplate = async (projectId, templateCode) => {
-    try {
-      await fetchApi(`/api/projects/${projectId}/default-template`, {
-        method: 'PUT',
-        body: JSON.stringify({ templateCode })
-      });
-      messageApi.success('默认模板已更新');
-      load();
-    } catch (err) {
-      messageApi.error(err.message);
-    }
-  };
 
   const updateMrAutoReviewEnabled = async (checked) => {
     setSettingsSaving(true);
@@ -1135,62 +1158,65 @@ function TemplateConfig() {
     }
   };
 
-  const updateReviewProvider = async (nextProvider) => {
-    setSettingsSaving(true);
-    try {
-      const settings = await fetchApi('/api/code-quality-reviews/settings', {
-        method: 'PUT',
-        body: JSON.stringify({ reviewProvider: nextProvider })
-      });
-      setAiSettings(settings);
-      if (nextProvider !== 'CODEX_CLI') setApiKeyProvider(nextProvider);
-      messageApi.success(`执行方式已切换为 ${sourceLabel(nextProvider)}`);
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setSettingsSaving(false);
-    }
+  const selectProvider = (providerCode) => {
+    setSelectedProviderCode(providerCode);
+    setProviderDraft(providers.find(provider => provider.providerCode === providerCode) || null);
+    setProviderApiKeyDraft('');
   };
 
-  const saveApiKeySettings = async () => {
-    setApiKeySaving(true);
+  const updateProviderDraft = (field, value) => {
+    setProviderDraft(current => current ? { ...current, [field]: value } : current);
+  };
+
+  const saveProviderSettings = async () => {
+    if (!providerDraft) return;
+    setProviderSaving(true);
     try {
-      const body = {};
-      const draft = apiKeyProvider === 'ANTHROPIC_API' ? anthropicApiKeyDraft : openAiApiKeyDraft;
-      if (apiKeyProvider === 'ANTHROPIC_API' && draft.trim()) body.anthropicApiKey = draft.trim();
-      if (apiKeyProvider === 'OPENAI_API' && draft.trim()) body.openAiApiKey = draft.trim();
-      if (Object.keys(body).length === 0) {
-        messageApi.info('请输入需要保存的 API Key');
-        return;
-      }
-      const settings = await fetchApi('/api/code-quality-reviews/settings', {
+      const providerCode = providerDraft.providerCode;
+      const body = {
+        providerName: providerDraft.providerName,
+        endpointUrl: providerDraft.endpointUrl,
+        modelName: providerDraft.modelName,
+        enabled: providerDraft.enabled
+      };
+      if (providerApiKeyDraft.trim()) body.apiKey = providerApiKeyDraft.trim();
+      await fetchApi(`/api/code-quality-review-providers/${providerCode}`, {
         method: 'PUT',
         body: JSON.stringify(body)
       });
+      const settings = await fetchApi(`/api/code-quality-review-providers/${providerCode}/set-default`, { method: 'POST' });
       setAiSettings(settings);
-      if (apiKeyProvider === 'ANTHROPIC_API') setAnthropicApiKeyDraft('');
-      if (apiKeyProvider === 'OPENAI_API') setOpenAiApiKeyDraft('');
-      messageApi.success(`${sourceLabel(apiKeyProvider)} Key 配置已保存`);
+      const providerData = await fetchApi('/api/code-quality-review-providers');
+      const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
+      setProviders(providerItems);
+      setSelectedProviderCode(providerCode);
+      setProviderDraft(providerItems.find(item => item.providerCode === providerCode) || null);
+      setProviderApiKeyDraft('');
+      messageApi.success(`${sourceLabel(providerCode)} Provider 已保存`);
     } catch (err) {
       messageApi.error(err.message);
     } finally {
-      setApiKeySaving(false);
+      setProviderSaving(false);
     }
   };
 
-  const clearApiKey = async () => {
-    setApiKeySaving(true);
+  const clearProviderApiKey = async () => {
+    if (!providerDraft) return;
+    setProviderSaving(true);
     try {
-      const settings = await fetchApi('/api/code-quality-reviews/settings', {
+      const providerData = await fetchApi(`/api/code-quality-review-providers/${providerDraft.providerCode}`, {
         method: 'PUT',
-        body: JSON.stringify(apiKeyProvider === 'OPENAI_API' ? { clearOpenAiApiKey: true } : { clearAnthropicApiKey: true })
+        body: JSON.stringify({ clearApiKey: true })
       });
-      setAiSettings(settings);
-      messageApi.success(`${sourceLabel(apiKeyProvider)} Key 已清除`);
+      const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
+      setProviders(providerItems);
+      setProviderDraft(providerItems.find(item => item.providerCode === providerDraft.providerCode) || null);
+      setProviderApiKeyDraft('');
+      messageApi.success(`${sourceLabel(providerDraft.providerCode)} Key 已清除`);
     } catch (err) {
       messageApi.error(err.message);
     } finally {
-      setApiKeySaving(false);
+      setProviderSaving(false);
     }
   };
 
@@ -1211,8 +1237,8 @@ function TemplateConfig() {
       const updated = await fetchApi(`/api/code-quality-review-profiles/${profileDraft.profileCode}`, {
         method: 'PUT',
         body: JSON.stringify({
-          codexPrompt: profileDraft.codexPrompt,
-          openAiInstructions: profileDraft.openAiInstructions,
+          providerCode: profileDraft.providerCode || null,
+          reviewInstructions: profileDraft.reviewInstructions,
           model: profileDraft.model
         })
       });
@@ -1258,36 +1284,20 @@ function TemplateConfig() {
     }
   };
 
-  const templateOptions = templates.map(template => ({
-    label: `${template.templateName} (${template.templateCode})`,
-    value: template.templateCode
-  }));
-
   const profileOptions = profiles.map(profile => ({
     label: `${profile.profileName} (${profile.profileCode})`,
     value: profile.profileCode
   }));
 
-  const executionModeOptions = [
-    { label: '本地 CLI（项目服务器本地 agent）', value: 'LOCAL_CLI' },
-    { label: 'API Key', value: 'API_KEY' }
+  const providerOptions = providers.map(provider => ({
+    label: provider.providerName || sourceLabel(provider.providerCode),
+    value: provider.providerCode
+  }));
+  const profileProviderOptions = [
+    { label: '使用当前模型 Provider', value: '' },
+    ...providerOptions
   ];
-  const apiKeyProviderOptions = [
-    { label: 'OpenAI', value: 'OPENAI_API' },
-    { label: 'Anthropic / Claude', value: 'ANTHROPIC_API' }
-  ];
-  const reviewProvider = aiSettings?.reviewProvider || 'CODEX_CLI';
-  const executionMode = reviewProvider === 'CODEX_CLI' ? 'LOCAL_CLI' : 'API_KEY';
-  const selectedApiKeyConfigured = apiKeyProvider === 'ANTHROPIC_API'
-    ? aiSettings?.anthropicApiKeyConfigured
-    : aiSettings?.openAiApiKeyConfigured;
-  const selectedApiKeyMasked = apiKeyProvider === 'ANTHROPIC_API'
-    ? aiSettings?.anthropicApiKeyMasked
-    : aiSettings?.openAiApiKeyMasked;
-  const selectedApiKeyDraft = apiKeyProvider === 'ANTHROPIC_API' ? anthropicApiKeyDraft : openAiApiKeyDraft;
-  const selectedApiKeyPlaceholder = apiKeyProvider === 'ANTHROPIC_API'
-    ? 'sk-ant-...，留空表示不更新'
-    : 'sk-...，留空表示不更新';
+  const providerApiKeyPlaceholder = '留空表示不更新当前 API Key';
 
   return (
     <div className="page-shell">
@@ -1331,81 +1341,81 @@ function TemplateConfig() {
                     关闭后，规则审查和 AI Review 仍会正常执行与落库，但不会向钉钉发送消息。
                   </Text>
                 </div>
-                <div className="global-setting-field">
-                  <Text strong>执行方式</Text>
-                  <Select
-                    className="full-width"
-                    value={executionMode}
-                    options={executionModeOptions}
-                    loading={settingsSaving}
-                    onChange={next => updateReviewProvider(next === 'LOCAL_CLI' ? 'CODEX_CLI' : apiKeyProvider)}
-                  />
-                  {executionMode === 'API_KEY' && (
-                    <Space direction="vertical" size="small" className="full-width api-provider-inline">
-                      <Text strong>供应商</Text>
-                      <Select
-                        className="full-width"
-                        value={apiKeyProvider}
-                        options={apiKeyProviderOptions}
-                        loading={settingsSaving}
-                        onChange={next => {
-                          setApiKeyProvider(next);
-                          updateReviewProvider(next);
-                        }}
-                      />
-                      {!selectedApiKeyConfigured && (
-                        <Alert
-                          type="warning"
-                          showIcon
-                          message={`请先配置 ${sourceLabel(apiKeyProvider)} Key`}
-                        />
-                      )}
-                    </Space>
-                  )}
-                </div>
               </Space>
             </Card>
           </Col>
           <Col xs={24}>
             <Card
-              title="AI API Key"
-              extra={<Button type="primary" loading={apiKeySaving} onClick={saveApiKeySettings}>保存 API Key</Button>}
+              title="模型 Provider 配置"
+              extra={<Button type="primary" loading={providerSaving} onClick={saveProviderSettings} disabled={!providerDraft}>保存 Provider</Button>}
             >
               <Row gutter={[16, 16]} align="bottom">
                 <Col xs={24} md={8}>
-                  <Text strong>供应商</Text>
+                  <Text strong>Provider</Text>
                   <Select
                     className="full-width prompt-field"
-                    value={apiKeyProvider}
-                    options={apiKeyProviderOptions}
-                    onChange={setApiKeyProvider}
+                    value={selectedProviderCode}
+                    options={providerOptions}
+                    loading={settingsSaving}
+                    onChange={selectProvider}
+                  />
+                  {providerDraft && !providerDraft.apiKeyConfigured && (
+                    <Alert
+                      className="prompt-field"
+                      type="warning"
+                      showIcon
+                      message={`请先配置 ${sourceLabel(providerDraft.providerCode)} API Key`}
+                    />
+                  )}
+                </Col>
+                <Col xs={24} md={8}>
+                  <Text strong>端点 URL</Text>
+                  <Input
+                    className="prompt-field"
+                    placeholder="例如 https://api.deepseek.com"
+                    value={providerDraft?.endpointUrl || ''}
+                    onChange={event => updateProviderDraft('endpointUrl', event.target.value)}
+                  />
+                </Col>
+                <Col xs={24} md={8}>
+                  <Text strong>模型名称</Text>
+                  <Input
+                    className="prompt-field"
+                    placeholder="例如 deepseek-v4-pro"
+                    value={providerDraft?.modelName || ''}
+                    onChange={event => updateProviderDraft('modelName', event.target.value)}
                   />
                 </Col>
                 <Col xs={24} md={10}>
                   <Space direction="vertical" className="full-width">
                     <Space wrap>
-                      <Text strong>{sourceLabel(apiKeyProvider)} Key</Text>
-                      {selectedApiKeyConfigured ? (
-                        <Tag color="green">已配置 {selectedApiKeyMasked}</Tag>
+                      <Text strong>{sourceLabel(providerDraft?.providerCode)} Key</Text>
+                      {providerDraft?.apiKeyConfigured ? (
+                        <Tag color="green">已配置 {providerDraft.apiKeyMasked}</Tag>
                       ) : (
                         <Tag>未配置</Tag>
                       )}
+                      {providerDraft?.defaultProvider && <Tag color="blue">当前使用</Tag>}
                     </Space>
                     <Input.Password
-                      placeholder={selectedApiKeyPlaceholder}
-                      value={selectedApiKeyDraft}
-                      onChange={event => {
-                        if (apiKeyProvider === 'ANTHROPIC_API') {
-                          setAnthropicApiKeyDraft(event.target.value);
-                        } else {
-                          setOpenAiApiKeyDraft(event.target.value);
-                        }
-                      }}
+                      placeholder={providerApiKeyPlaceholder}
+                      value={providerApiKeyDraft}
+                      onChange={event => setProviderApiKeyDraft(event.target.value)}
                     />
                   </Space>
                 </Col>
                 <Col xs={24} md={6}>
-                  <Button danger disabled={!selectedApiKeyConfigured} loading={apiKeySaving} onClick={clearApiKey}>
+                  <Space>
+                    <Switch
+                      checked={providerDraft?.enabled ?? false}
+                      checkedChildren="启用"
+                      unCheckedChildren="停用"
+                      onChange={checked => updateProviderDraft('enabled', checked)}
+                    />
+                  </Space>
+                </Col>
+                <Col xs={24} md={8}>
+                  <Button danger disabled={!providerDraft?.apiKeyConfigured} loading={providerSaving} onClick={clearProviderApiKey}>
                     清除当前 Key
                   </Button>
                 </Col>
@@ -1417,7 +1427,7 @@ function TemplateConfig() {
               title="AI Review Profile"
               extra={
                 <Space wrap>
-                  <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={!profileDraft}>预览 Agent Prompt</Button>
+                  <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={!profileDraft}>预览 Prompt</Button>
                   <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={!profileDraft}>恢复默认</Button>
                   <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={!profileDraft}>保存 Profile</Button>
                 </Space>
@@ -1438,6 +1448,15 @@ function TemplateConfig() {
                     <Col xs={24} lg={14}>
                       <Row gutter={[12, 12]}>
                         <Col xs={24} md={12}>
+                          <Text strong>Provider 覆盖</Text>
+                          <Select
+                            className="full-width prompt-field"
+                            value={profileDraft.providerCode || ''}
+                            options={profileProviderOptions}
+                            onChange={value => updateProfileDraft('providerCode', value || null)}
+                          />
+                        </Col>
+                        <Col xs={24} md={12}>
                           <Text strong>模型覆盖</Text>
                           <Input
                             className="prompt-field"
@@ -1456,21 +1475,12 @@ function TemplateConfig() {
                     </Col>
                   </Row>
                   <Row gutter={[16, 16]}>
-                    <Col xs={24} lg={12}>
-                      <Text strong>Agent Prompt</Text>
+                    <Col xs={24}>
+                      <Text strong>Review Instructions</Text>
                       <Input.TextArea
                         className="prompt-textarea"
-                        value={profileDraft.codexPrompt || ''}
-                        onChange={event => updateProfileDraft('codexPrompt', event.target.value)}
-                        autoSize={{ minRows: 8, maxRows: 16 }}
-                      />
-                    </Col>
-                    <Col xs={24} lg={12}>
-                      <Text strong>API Review Instructions</Text>
-                      <Input.TextArea
-                        className="prompt-textarea"
-                        value={profileDraft.openAiInstructions || ''}
-                        onChange={event => updateProfileDraft('openAiInstructions', event.target.value)}
+                        value={profileDraft.reviewInstructions || ''}
+                        onChange={event => updateProfileDraft('reviewInstructions', event.target.value)}
                         autoSize={{ minRows: 8, maxRows: 16 }}
                       />
                     </Col>
@@ -1482,7 +1492,7 @@ function TemplateConfig() {
                         key: 'preview',
                         label: (
                           <Space wrap>
-                            <Text strong>Agent Prompt 预览</Text>
+                            <Text strong>Prompt 预览</Text>
                             <Tag>{promptPreview.provider}</Tag>
                             {promptPreview.model && <Tag>{promptPreview.model}</Tag>}
                             <Tag>{promptPreview.promptLength} 字符</Tag>
@@ -1497,53 +1507,6 @@ function TemplateConfig() {
               ) : (
                 <Empty description="暂无 AI Review Profile" />
               )}
-            </Card>
-          </Col>
-          <Col xs={24} xl={10}>
-            <Card title="项目默认模板">
-              <Table
-                rowKey="id"
-                size="small"
-                dataSource={projects}
-                pagination={false}
-                columns={[
-                  { title: '项目', dataIndex: 'name', ellipsis: true },
-                  { title: 'GitLab', dataIndex: 'gitProjectId', width: 110 },
-                  {
-                    title: '默认模板',
-                    dataIndex: 'defaultTemplateCode',
-                    width: 260,
-                    render: (value, row) => (
-                      <Select
-                        className="full-width"
-                        value={value}
-                        options={templateOptions}
-                        onChange={next => updateProjectTemplate(row.id, next)}
-                      />
-                    )
-                  }
-                ]}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} xl={14}>
-            <Card title="审查模板">
-              <Collapse
-                items={templates.map(template => ({
-                  key: template.templateCode,
-                  label: <Space><Text strong>{template.templateName}</Text><Tag>{template.targetType}</Tag><Tag color="blue">{template.templateCode}</Tag></Space>,
-                  children: (
-                    <Space direction="vertical" className="full-width">
-                      <Paragraph>{template.description}</Paragraph>
-                      <Text strong>启用规则</Text>
-                      <Space wrap>{(template.enabledRuleCodes || []).map(code => <Tag key={code}>{code}</Tag>)}</Space>
-                      <Divider />
-                      <Text strong>模板推荐检查项</Text>
-                      <List size="small" dataSource={template.recommendedChecks || []} renderItem={item => <List.Item>{item}</List.Item>} />
-                    </Space>
-                  )
-                }))}
-              />
             </Card>
           </Col>
         </Row>

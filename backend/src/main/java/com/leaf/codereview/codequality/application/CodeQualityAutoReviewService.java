@@ -85,7 +85,7 @@ public class CodeQualityAutoReviewService {
             return false;
         }
 
-        schedule(taskId, project, event, profile, settingsRepository.reviewProvider(), ruleResultId, riskCard, focusChangeTypes, notificationContext);
+        schedule(taskId, project, event, profile, resolveProvider(project, profile), ruleResultId, riskCard, focusChangeTypes, notificationContext);
         return true;
     }
 
@@ -108,7 +108,7 @@ public class CodeQualityAutoReviewService {
         if (profile == null || !profile.enabled()) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "Code quality review profile is disabled or missing");
         }
-        CodeQualityReviewProviderType provider = settingsRepository.reviewProvider();
+        CodeQualityReviewProviderType provider = resolveProvider(project, profile);
         schedule(taskId, project, toEvent(detail, project), profile, provider, null, null, java.util.List.of(), null);
         return new CodeQualityManualReviewResponse(
                 taskId,
@@ -153,6 +153,16 @@ public class CodeQualityAutoReviewService {
                 : CodeQualityReviewProfileRepository.DEFAULT_PROFILE_CODE;
         return profileRepository.findByCode(profileCode)
                 .orElseGet(() -> profileRepository.findByCode(CodeQualityReviewProfileRepository.DEFAULT_PROFILE_CODE).orElse(null));
+    }
+
+    private CodeQualityReviewProviderType resolveProvider(ProjectRecord project, CodeQualityReviewProfile profile) {
+        if (profile.providerCode() != null) {
+            return profile.providerCode();
+        }
+        if (StringUtils.hasText(project.defaultCodeQualityProviderCode())) {
+            return CodeQualityReviewProviderType.valueOf(project.defaultCodeQualityProviderCode());
+        }
+        return settingsRepository.reviewProvider();
     }
 
     private GitLabMergeRequestEvent toEvent(ReviewTaskDetailResponse detail, ProjectRecord project) {

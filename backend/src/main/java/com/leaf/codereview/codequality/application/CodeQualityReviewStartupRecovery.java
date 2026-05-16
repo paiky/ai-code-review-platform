@@ -26,7 +26,8 @@ public class CodeQualityReviewStartupRecovery {
 
     @EventListener(ApplicationReadyEvent.class)
     public void recoverStaleRunningReviews() {
-        int updated = resultRepository.markStaleRunningAsFailed(properties.codexTimeoutSeconds());
+        int timeoutSeconds = Math.max(properties.openAiTimeoutSeconds(), properties.anthropicTimeoutSeconds());
+        int updated = resultRepository.markStaleRunningAsFailed(Math.max(timeoutSeconds, 120));
         if (updated > 0) {
             log.warn("Marked {} stale RUNNING AI code review result(s) as FAILED", updated);
         }

@@ -4,6 +4,7 @@ import com.leaf.codereview.common.response.ApiResponse;
 import com.leaf.codereview.common.response.PageResponse;
 import com.leaf.codereview.projectintegration.application.ProjectService;
 import com.leaf.codereview.projectintegration.application.UpdateProjectCodeQualityProfileRequest;
+import com.leaf.codereview.projectintegration.application.UpdateProjectCodeQualityProviderRequest;
 import com.leaf.codereview.projectintegration.application.UpdateProjectTemplateRequest;
 import com.leaf.codereview.projectintegration.domain.ProjectRecord;
 import jakarta.validation.Valid;
@@ -43,5 +44,13 @@ public class ProjectController {
             @Valid @RequestBody UpdateProjectCodeQualityProfileRequest request
     ) {
         return ApiResponse.ok(projectService.updateDefaultCodeQualityProfile(projectId, request.profileCode()));
+    }
+
+    @PutMapping("/{projectId}/code-quality-provider")
+    public ApiResponse<ProjectRecord> updateDefaultCodeQualityProvider(
+            @PathVariable Long projectId,
+            @Valid @RequestBody UpdateProjectCodeQualityProviderRequest request
+    ) {
+        return ApiResponse.ok(projectService.updateDefaultCodeQualityProvider(projectId, request.providerCode()));
     }
 }

@@ -25,53 +25,30 @@ class CodeQualityReviewSettingsRepositoryTest {
                   id BIGINT PRIMARY KEY,
                   mr_auto_review_enabled BOOLEAN NOT NULL DEFAULT TRUE,
                   dingtalk_notification_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                  review_provider VARCHAR(32) NOT NULL DEFAULT 'CODEX_CLI',
-                  openai_api_key VARCHAR(1024),
-                  anthropic_api_key VARCHAR(1024),
+                  default_provider_code VARCHAR(64) NOT NULL DEFAULT 'DEEPSEEK',
                   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """);
     }
 
     @Test
-    void savesMasksAndClearsApiKeys() {
+    void savesGlobalSwitchesAndDefaultProvider() {
         var saved = repository.update(new CodeQualityReviewSettingsUpdateRequest(
                 false,
                 false,
-                CodeQualityReviewProviderType.ANTHROPIC_API,
-                "sk-openai-123456",
-                null,
-                "sk-ant-abcdef",
-                null
+                "ANTHROPIC"
         ));
 
         assertThat(saved.mrAutoReviewEnabled()).isFalse();
         assertThat(saved.dingtalkNotificationEnabled()).isFalse();
         assertThat(repository.dingtalkNotificationEnabled()).isFalse();
-        assertThat(saved.reviewProvider()).isEqualTo("ANTHROPIC_API");
-        assertThat(saved.openAiApiKeyConfigured()).isTrue();
-        assertThat(saved.openAiApiKeyMasked()).isEqualTo("sk-o...3456");
-        assertThat(saved.anthropicApiKeyConfigured()).isTrue();
-        assertThat(saved.anthropicApiKeyMasked()).isEqualTo("sk-a...cdef");
-        assertThat(repository.openAiApiKey()).isEqualTo("sk-openai-123456");
-        assertThat(repository.anthropicApiKey()).isEqualTo("sk-ant-abcdef");
+        assertThat(saved.defaultProviderCode()).isEqualTo("ANTHROPIC");
+        assertThat(repository.reviewProvider()).isEqualTo(CodeQualityReviewProviderType.ANTHROPIC);
 
-        var cleared = repository.update(new CodeQualityReviewSettingsUpdateRequest(
-                null,
-                null,
-                null,
-                null,
-                true,
-                null,
-                true
-        ));
+        var changed = repository.updateDefaultProvider(CodeQualityReviewProviderType.DEEPSEEK);
 
-        assertThat(cleared.openAiApiKeyConfigured()).isFalse();
-        assertThat(cleared.openAiApiKeyMasked()).isNull();
-        assertThat(cleared.anthropicApiKeyConfigured()).isFalse();
-        assertThat(cleared.anthropicApiKeyMasked()).isNull();
-        assertThat(repository.openAiApiKey()).isNull();
-        assertThat(repository.anthropicApiKey()).isNull();
+        assertThat(changed.defaultProviderCode()).isEqualTo("DEEPSEEK");
+        assertThat(repository.reviewProvider()).isEqualTo(CodeQualityReviewProviderType.DEEPSEEK);
     }
 
     private DataSource dataSource() {

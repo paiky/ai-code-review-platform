@@ -45,7 +45,7 @@ class CodeQualityManualReviewServiceTest {
     private final CodeQualityReviewSettingsRepository settingsRepository = mock(CodeQualityReviewSettingsRepository.class);
     private final CodeQualityReviewProperties properties = new CodeQualityReviewProperties(
             true,
-            CodeQualityReviewProviderType.CODEX_CLI,
+            CodeQualityReviewProviderType.DEEPSEEK,
             "",
             "",
             "",
@@ -79,7 +79,7 @@ class CodeQualityManualReviewServiceTest {
                 "backend-default-ai-review",
                 "Backend AI",
                 true,
-                CodeQualityReviewProviderType.OPENAI_API,
+                CodeQualityReviewProviderType.OPENAI,
                 "gpt-5.4",
                 true,
                 true,
@@ -97,7 +97,7 @@ class CodeQualityManualReviewServiceTest {
                 "Profile instructions"
         );
         CodeQualityReviewResult result = CodeQualityReviewResult.success(
-                CodeQualityReviewProviderType.OPENAI_API,
+                CodeQualityReviewProviderType.OPENAI,
                 "HIGH",
                 "Found one issue",
                 List.of(),
@@ -109,7 +109,7 @@ class CodeQualityManualReviewServiceTest {
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
         when(profileRepository.findByCode("backend-default-ai-review")).thenReturn(Optional.of(profile));
         when(reviewTaskRepository.create(any(ReviewTaskCreateCommand.class))).thenReturn(99L);
-        when(settingsRepository.reviewProvider()).thenReturn(CodeQualityReviewProviderType.OPENAI_API);
+        when(settingsRepository.reviewProvider()).thenReturn(CodeQualityReviewProviderType.OPENAI);
         when(codeQualityReviewService.review(any(CodeQualityReviewRequest.class), any())).thenReturn(result);
 
         service.createManualReview(new CodeQualityManualReviewRequest(

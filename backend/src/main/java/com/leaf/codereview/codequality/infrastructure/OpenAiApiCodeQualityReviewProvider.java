@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leaf.codereview.codequality.application.CodeQualityReviewProvider;
 import com.leaf.codereview.codequality.domain.CodeQualityFinding;
+import com.leaf.codereview.codequality.domain.CodeQualityModelProvider;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewProviderType;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewRequest;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewResult;
@@ -30,32 +31,36 @@ public class OpenAiApiCodeQualityReviewProvider implements CodeQualityReviewProv
     private final OpenAiCodeQualityRequestFactory requestFactory;
     private final ObjectMapper objectMapper;
     private final CodeQualityReviewProgressTracker progressTracker;
-    private final CodeQualityReviewSettingsRepository settingsRepository;
+    private final CodeQualityModelProviderRepository providerRepository;
 
     public OpenAiApiCodeQualityReviewProvider(
             CodeQualityReviewProperties properties,
             OpenAiCodeQualityRequestFactory requestFactory,
             ObjectMapper objectMapper,
             CodeQualityReviewProgressTracker progressTracker,
-            CodeQualityReviewSettingsRepository settingsRepository
+            CodeQualityModelProviderRepository providerRepository
     ) {
         this.properties = properties;
         this.requestFactory = requestFactory;
         this.objectMapper = objectMapper;
         this.progressTracker = progressTracker;
-        this.settingsRepository = settingsRepository;
+        this.providerRepository = providerRepository;
     }
 
     @Override
     public CodeQualityReviewProviderType type() {
-        return CodeQualityReviewProviderType.OPENAI_API;
+        return CodeQualityReviewProviderType.OPENAI;
     }
 
     @Override
     public CodeQualityReviewResult review(CodeQualityReviewRequest request) {
-        String apiKey = effectiveApiKey();
+        CodeQualityModelProvider modelProvider = providerRepository.getRequired(type());
+        String apiKey = firstText(modelProvider.apiKey(), properties.openAiApiKey());
         if (!StringUtils.hasText(apiKey)) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "OPENAI_API_KEY is required for OpenAI API code quality review");
+        }
+        if (!modelProvider.enabled()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "OpenAI model provider is disabled");
         }
         if (!StringUtils.hasText(request.diffText())) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "diffText is required for OpenAI API code quality review");
@@ -63,13 +68,15 @@ public class OpenAiApiCodeQualityReviewProvider implements CodeQualityReviewProv
 
         OffsetDateTime startedAt = OffsetDateTime.now();
         try {
-            Map<String, Object> requestBody = requestFactory.buildRequest(properties, request);
+            String endpointUrl = firstText(modelProvider.endpointUrl(), properties.openAiResponsesUrl());
+            String model = firstText(request.model(), firstText(modelProvider.modelName(), properties.openAiModel()));
+            Map<String, Object> requestBody = requestFactory.buildRequest(model, request);
             String requestJson = objectMapper.writeValueAsString(requestBody);
-            progressTracker.info("OPENAI_REQUEST", "准备调用 OpenAI Responses API", "url=" + properties.openAiResponsesUrl() + ", model=" + firstText(request.model(), properties.openAiModel()));
-            progressTracker.debug("OPENAI_REQUEST_DEBUG", "OpenAI 请求摘要", requestDebugDetail(request, requestJson));
+            progressTracker.info("OPENAI_REQUEST", "准备调用 OpenAI Responses API", "url=" + endpointUrl + ", model=" + model);
+            progressTracker.debug("OPENAI_REQUEST_DEBUG", "OpenAI 请求摘要", requestDebugDetail(request, requestJson, endpointUrl, model));
             progressTracker.debug("OPENAI_REQUEST_PREVIEW", "OpenAI 请求预览", abbreviate(requestJson, 3000));
             String responseBody = restClient().post()
-                    .uri(properties.openAiResponsesUrl())
+                    .uri(endpointUrl)
                     .contentType(MediaType.APPLICATION_JSON)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
                     .body(requestBody)
@@ -112,7 +119,7 @@ public class OpenAiApiCodeQualityReviewProvider implements CodeQualityReviewProv
                     finding.path("body").asText(),
                     finding.path("suggestion").asText(),
                     finding.path("confidence").asText(),
-                    "OPENAI_API"
+                    "OPENAI"
             ));
         }
         return CodeQualityReviewResult.success(
@@ -146,11 +153,11 @@ public class OpenAiApiCodeQualityReviewProvider implements CodeQualityReviewProv
         return StringUtils.hasText(primary) ? primary : fallback;
     }
 
-    private String requestDebugDetail(CodeQualityReviewRequest request, String requestJson) {
+    private String requestDebugDetail(CodeQualityReviewRequest request, String requestJson, String endpointUrl, String model) {
         int diffBytes = request.diffText() == null ? 0 : request.diffText().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
         int changedFileCount = request.changedFiles() == null ? 0 : request.changedFiles().size();
-        return "url=" + properties.openAiResponsesUrl()
-                + ", model=" + firstText(request.model(), properties.openAiModel())
+        return "url=" + endpointUrl
+                + ", model=" + model
                 + ", mode=" + request.mode()
                 + ", baseRef=" + firstText(request.baseRef(), "-")
                 + ", changedFiles=" + changedFileCount
@@ -168,8 +175,4 @@ public class OpenAiApiCodeQualityReviewProvider implements CodeQualityReviewProv
         return value.substring(0, maxLength) + "\n... truncated, totalChars=" + value.length();
     }
 
-    private String effectiveApiKey() {
-        String configured = settingsRepository.openAiApiKey();
-        return StringUtils.hasText(configured) ? configured : properties.openAiApiKey();
-    }
 }

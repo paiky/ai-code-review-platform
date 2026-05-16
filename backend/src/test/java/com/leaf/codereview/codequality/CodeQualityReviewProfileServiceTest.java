@@ -10,7 +10,6 @@ import com.leaf.codereview.codequality.domain.CodeQualityReviewProviderType;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewProfileRepository;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewProperties;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewSettingsRepository;
-import com.leaf.codereview.codequality.infrastructure.CodexCliCommandFactory;
 import com.leaf.codereview.codequality.infrastructure.OpenAiCodeQualityRequestFactory;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -32,20 +31,19 @@ class CodeQualityReviewProfileServiceTest {
             repository,
             properties(),
             settingsRepository,
-            new CodexCliCommandFactory(),
             new OpenAiCodeQualityRequestFactory()
     );
 
     @Test
-    void rendersCodexPromptPreviewWithHashAndChineseWrapper() {
+    void rendersPromptPreviewWithHashAndChineseWrapper() {
         when(repository.findByCode("backend-default-ai-review")).thenReturn(Optional.of(profile()));
-        when(settingsRepository.reviewProvider()).thenReturn(CodeQualityReviewProviderType.CODEX_CLI);
+        when(settingsRepository.reviewProvider()).thenReturn(CodeQualityReviewProviderType.DEEPSEEK);
 
         CodeQualityRenderedPromptResponse response = service.renderedPrompt("backend-default-ai-review");
 
         assertThat(response.profileCode()).isEqualTo("backend-default-ai-review");
-        assertThat(response.provider()).isEqualTo("CODEX_CLI");
-        assertThat(response.prompt()).contains("你是代码质量审核助手", "Codex prompt", "必须使用简体中文");
+        assertThat(response.provider()).isEqualTo("DEEPSEEK");
+        assertThat(response.prompt()).contains("严格 JSON", "OpenAI instructions", "必须使用简体中文");
         assertThat(response.promptHash()).hasSize(64);
         assertThat(response.promptLength()).isEqualTo(response.prompt().length());
     }
@@ -58,9 +56,8 @@ class CodeQualityReviewProfileServiceTest {
 
         ArgumentCaptor<CodeQualityReviewProfileUpdateRequest> captor = ArgumentCaptor.forClass(CodeQualityReviewProfileUpdateRequest.class);
         verify(repository).update(eq("backend-default-ai-review"), eq(profile()), captor.capture());
-        assertThat(captor.getValue().codexPrompt()).isEqualTo(CodeQualityReviewProfileDefaults.DEFAULT_CODEX_PROMPT);
-        assertThat(captor.getValue().openAiInstructions()).isEqualTo(CodeQualityReviewProfileDefaults.DEFAULT_OPENAI_INSTRUCTIONS);
-        assertThat(captor.getValue().provider()).isNull();
+        assertThat(captor.getValue().reviewInstructions()).isEqualTo(CodeQualityReviewProfileDefaults.DEFAULT_OPENAI_INSTRUCTIONS);
+        assertThat(captor.getValue().providerCode()).isNull();
     }
 
     private CodeQualityReviewProfile profile() {
@@ -69,7 +66,7 @@ class CodeQualityReviewProfileServiceTest {
                 "backend-default-ai-review",
                 "Backend AI",
                 true,
-                CodeQualityReviewProviderType.CODEX_CLI,
+                CodeQualityReviewProviderType.DEEPSEEK,
                 "gpt-5.4",
                 true,
                 true,
@@ -91,7 +88,7 @@ class CodeQualityReviewProfileServiceTest {
     private CodeQualityReviewProperties properties() {
         return new CodeQualityReviewProperties(
                 true,
-                CodeQualityReviewProviderType.CODEX_CLI,
+                CodeQualityReviewProviderType.DEEPSEEK,
                 "",
                 "",
                 "",

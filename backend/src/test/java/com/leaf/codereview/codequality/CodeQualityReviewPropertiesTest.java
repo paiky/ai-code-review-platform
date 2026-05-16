@@ -27,7 +27,7 @@ class CodeQualityReviewPropertiesTest {
                 120
         );
 
-        assertThat(properties.provider()).isEqualTo(CodeQualityReviewProviderType.CODEX_CLI);
+        assertThat(properties.provider()).isEqualTo(CodeQualityReviewProviderType.DEEPSEEK);
     }
 
 }

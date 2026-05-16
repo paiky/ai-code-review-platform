@@ -4,17 +4,19 @@
 
 ## 1. 文档目的
 
-本文用于沉淀当前系统已完成能力与后续产品规划，作为后续制作 PPT、阶段汇报或路线介绍的目录大纲。
+本文用于沉淀当前系统已完成能力与后续产品规划，作为后续制作 PPT、阶段汇报或路线介绍的目录大纲。文档既包含“当前项目从 0 到 1 已打通的能力”，也包含“后续价值落地路线”，可直接作为 Gemini / PPT 生成工具的输入素材。
 
-当前平台已经具备从 GitLab Push / MR webhook 接入，到规则扫描、AI Code Review、钉钉推送、任务落库和前端查看的基础链路。下一阶段的核心目标不是继续堆叠更多审查入口，而是让平台从“审查通知工具”演进为“研发变更质量决策辅助系统”。
+当前平台已经具备从 GitLab MR webhook / 手动审查接入，到 changed files / diff 获取、规则扫描、AI Code Review、钉钉推送、任务落库、通知记录查询和前端查看的基础闭环。Push Hook 当前已保留入口和解析能力，但默认跳过审查，后续通过规则闸门再逐步启用。下一阶段的核心目标不是继续堆叠更多审查入口，而是让平台从“审查通知工具”演进为“研发变更质量决策辅助系统”。
 
 后续重点围绕五个方向推进：
 
 1. AI Review 结果可标记，并沉淀为 review memory。
 2. 将 AI Code Review 从 MR 阶段提前到 commit push 阶段，并通过规则闸门控制触发。
 3. 钉钉推送支持 @ 作者修复紧急问题，并跳转到具体 file change。
-4. API Key 支持自定义端点和模型，提升模型接入通用性。
+4. 模型 Provider 支持 OpenAI / Anthropic / DeepSeek / 自定义 OpenAI-compatible 配置，前端可配置端点、模型和 API Key。
 5. 增加 Dashboard 仪表盘，用数据展示平台价值。
+
+建议 PPT 生成时采用“当前能力 60% + 后续规划 40%”的结构：前半部分讲清楚系统为什么做、现在能做什么、端到端如何运转；后半部分再讲反馈闭环、Push 前置、精准通知、模型通用化和 Dashboard。
 
 ## 2. PPT 总体叙事建议
 
@@ -27,7 +29,10 @@ AI 变更风险审查平台：从自动提醒到研发质量闭环
 ### 2.2 推荐主线
 
 ```text
-当前已打通自动审查链路
+当前已打通从 GitLab / 手动输入到审查结果展示的闭环
+  -> 用规则识别 DB / MQ / 缓存 / 配置等高价值变更
+  -> 用 AI Review 增强代码质量审查
+  -> 通过钉钉和前端把结果触达给研发团队
   -> 下一步提升审查结果可信度
   -> 将审查提前到更早的 commit push 阶段
   -> 把高风险问题精准触达责任人
@@ -39,14 +44,15 @@ AI 变更风险审查平台：从自动提醒到研发质量闭环
 
 1. 项目背景与当前进展
 2. 当前系统能力基线
-3. 后续价值落地总览
-4. 方向一：AI Review 反馈闭环与 Review Memory
-5. 方向二：Push 阶段智能触发 AI Code Review
-6. 方向三：钉钉精准触达与 File Change 深链
-7. 方向四：模型 Provider 通用化配置
-8. 方向五：Dashboard 价值度量
-9. 分阶段路线图
-10. 预期收益与验收标准
+3. 当前端到端演示链路
+4. 后续价值落地总览
+5. 方向一：AI Review 反馈闭环与 Review Memory
+6. 方向二：Push 阶段智能触发 AI Code Review
+7. 方向三：钉钉精准触达与 File Change 深链
+8. 方向四：模型 Provider 通用化配置
+9. 方向五：Dashboard 价值度量
+10. 分阶段路线图
+11. 预期收益与验收标准
 
 ## 3. 项目背景与当前进展
 
@@ -73,32 +79,102 @@ AI 变更风险审查平台：从自动提醒到研发质量闭环
 #### 3.2.3 当前主链路
 
 ```text
-GitLab MR webhook / GitLab Push webhook
+GitLab MR webhook / 手动审查 / 手动重跑
   -> 创建 review task
-  -> 获取 changed files / diff
+  -> 保存 raw payload / changed files 摘要
+  -> 获取 changed files / diff（payload 或 GitLab API）
   -> 变更分析
   -> 规则引擎生成提醒卡片
-  -> 可选触发 AI Code Review
   -> 结果落库
-  -> 钉钉推送
-  -> 前端查看任务详情
+  -> 钉钉推送或 SKIPPED 通知记录
+  -> 可选触发 / 自动触发 AI Code Review
+  -> 保存 AI Review 结果和执行进度
+  -> AI Review 完成后合并推送规则提醒与 AI 结果摘要
+  -> 前端查看任务列表、任务详情、提醒卡片、分析结果、AI Review 结果和通知记录
 ```
 
 #### 3.2.4 当前已完成能力
 
-- GitLab MR webhook 与 Push webhook 接入。
-- MR diff 可通过 GitLab API 补拉，兼容 `/diffs` 与 `/changes`。
-- Push webhook 已能基于变更文件触发轻量审查。
-- 变更分析覆盖 API、DB、MQ、缓存、配置。
-- DB / MQ / 缓存已完成第一轮细粒度识别。
-- 提醒卡片支持前端展示、落库与钉钉推送。
-- AI Review 支持 `CODEX_CLI`、`OPENAI_API`、`ANTHROPIC_API`。
-- AI Review 已切换到 diff-only 审查范围，避免本地仓库范围污染。
-- 前端支持任务列表、任务详情、提醒卡片、AI Review 结果和执行过程查看。
+接入与任务：
+
+- GitLab `Merge Request Hook` 接入，支持 MR open/update 等事件进入审查链路。
+- GitLab `Push Hook` 入口已保留并能解析 payload；当前默认返回 `SKIPPED`，避免目标分支 push 造成重复审查，后续通过 Push AI Review gate 再启用。
+- 支持手动规则审查，适合本地验证规则、模板和钉钉消息。
+- 支持基于已保存 raw payload 和 changed files 摘要重新触发已有 GitLab 审查任务。
+- 审查任务统一落库，包含触发类型、项目、分支、commit、作者、状态、风险等级等信息。
+
+Diff 与变更分析：
+
+- MR payload 缺少 changed files 时，可通过 GitLab API 补拉 MR diff，并兼容 `/diffs` 与 `/changes`。
+- 变更分析覆盖 API、DB、MQ、Redis/缓存、配置等类型。
+- DB 细分识别覆盖 `DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION`。
+- MQ 细分识别覆盖 producer、consumer、消息结构、topic 配置、重试死信等场景。
+- 缓存细分识别覆盖 cache key、TTL、失效逻辑、读写、序列化等场景。
+- 配置识别覆盖配置文件、环境变量、开关项和 `@Value` 占位符变更。
+
+规则与提醒卡片：
+
+- 规则引擎基于变更分析结果生成结构化提醒卡片。
+- 提醒卡片包含风险等级、影响资源、重点指标、提醒项、推荐检查项和建议 review 角色。
+- 模板支持 `focusChangeTypes`，钉钉消息可只推送 DB / MQ / Redis / 配置等重点提醒，降低噪音。
+- 提醒卡片支持前端展示、JSON 落库和钉钉 Markdown 推送。
+
+AI Review：
+
+- AI Review 支持 OpenAI、Anthropic、DeepSeek 和自定义 OpenAI-compatible Provider。
+- AI Review 已切换到 diff-only 审查范围，只审查平台保存的 diffText 和 changedFiles，避免读取本地仓库导致范围污染。
+- 支持 MR 自动触发 AI Review，也支持在任务详情页手动重试 AI Review。
+- 支持 Review Profile：模型、Prompt、OpenAI instructions / Codex prompt 可配置、预览和恢复默认。
+- 支持模型端点 URL、模型名称、API Key 配置和脱敏展示，支持在前端切换默认模型 Provider。
+- 支持 AI Review 执行进度事件展示，包括 queued、request built、provider start、save result、finished / failed 等阶段。
+
+通知与设置：
+
+- 钉钉支持规则提醒、AI Review 结果、规则 + AI 合并摘要三类消息形态。
+- 钉钉消息包含作者、变更标题、分支、维护提醒、AI 主要问题和平台详情链接。
+- 已支持钉钉推送全局开关；关闭后审查和落库正常执行，通知记录为跳过或不实际发送。
+- 通知记录落库，可在任务详情页查询每次推送的 channel、target、status、digest、error message 等。
+
+前端页面：
+
+- `审查任务`：任务列表、搜索过滤、任务详情。
+- 任务详情页：代码质量 Review、提醒卡片、分析结果、原始事件摘要。
+- AI Review 面板：状态、Provider、模型、等级、问题数、主要 finding、原始输出、执行进度。
+- `模板配置`：项目默认模板、AI Review 全局设置、API Key、Profile Prompt 编辑和预览。
+- 全局设置包含 MR 自动 AI Review 开关、钉钉推送开关、执行方式切换和供应商选择。
+
+#### 3.2.5 当前系统模块关系
+
+```text
+GitLab / 手动请求
+  -> project-integration：解析 webhook、补拉 diff、保存原始事件
+  -> change-analysis：识别 API / DB / MQ / CACHE / CONFIG 等变更类型
+  -> risk-engine + rule-template：按模板生成结构化提醒卡片
+  -> code-quality：按 profile 和 provider 执行 AI Review
+  -> notification：生成钉钉 Markdown，保存通知记录
+  -> review-record：统一查询任务、规则结果、AI 结果、进度、通知记录
+  -> frontend：任务查看、配置管理、AI Review 结果展示
+  -> MySQL：保存项目、任务、结果、配置、通知、进度事件
+```
+
+#### 3.2.6 推荐演示链路
+
+PPT 中可以用一页“端到端 Demo”展示：
+
+```text
+1. GitLab MR 打开或手动导入 diff
+2. 平台创建审查任务，保存 raw payload 和 changedFiles
+3. 规则扫描识别 DB / MQ / Redis / 配置等重点变更
+4. 生成提醒卡片并落库
+5. 根据全局配置触发 AI Review
+6. AI Review 输出结构化 finding 和整体等级
+7. 钉钉推送合并摘要，包含维护提醒和 AI 问题
+8. 用户点击平台链接查看任务详情、进度、原始事件和通知记录
+```
 
 ### 3.3 本章结论
 
-当前系统已经完成从“GitLab 变更进入平台”到“规则扫描、AI Review、钉钉推送和前端查看”的基础闭环。下一阶段重点是让结果更可信、触发更前置、通知更可处理、模型更通用、价值更可衡量。
+当前系统已经完成从“GitLab / 手动变更进入平台”到“规则扫描、AI Review、钉钉触达、结果落库和前端查看”的基础闭环。下一阶段重点是让 AI 结果更可信、Push 触发更前置、通知更可处理、模型配置更通用、平台价值更可衡量。
 
 ## 4. 后续价值落地总览
 
@@ -126,7 +202,7 @@ GitLab MR webhook / GitLab Push webhook
 | AI Review 结果可标记与 review memory | 降低误判，沉淀团队审查偏好 | P0 |
 | Push 阶段智能触发 AI Review | 更早发现问题，减少 MR 后期返工 | P1 |
 | 钉钉 @ 作者与 file change 深链 | 让高风险问题真正被处理 | P1 |
-| API Key 自定义端点和模型 | 支持更多模型和私有化部署 | P2 |
+| 模型 Provider 通用化配置 | 支持 DeepSeek、更多模型和私有化部署 | P2 |
 | Dashboard 仪表盘 | 量化平台效果和质量趋势 | P2 |
 
 #### 4.2.3 推荐推进顺序
@@ -240,7 +316,7 @@ AI Review 不应被当作最终裁决，而应被当作候选问题来源。人�
 
 - 当前 AI Code Review 主要在 MR 阶段触发。
 - 许多问题到 MR 阶段才暴露，开发返工成本较高。
-- Push hook 已进入平台，但目前更偏轻量规则审查。
+- Push hook 已有入口和解析能力，但当前默认跳过审查，避免目标分支 push 或合并后 push 造成重复任务。
 - 如果每次 push 都直接触发 AI Review，会带来成本、耗时和通知噪音。
 
 #### 6.2.2 建设目标
@@ -401,8 +477,8 @@ http://localhost:5173/?taskId={taskId}&file={encodedFilePath}&finding={fingerpri
 
 #### 8.2.1 当前问题
 
-- 当前系统已支持 `CODEX_CLI`、`OPENAI_API`、`ANTHROPIC_API`。
-- OpenAI / Anthropic API 参数仍偏固定。
+- 当前系统已支持 OpenAI、Anthropic、DeepSeek 和自定义 OpenAI-compatible Provider。
+- OpenAI / Anthropic / DeepSeek / 自定义 Provider 均可在前端维护端点、模型和 API Key。
 - 企业内部可能使用代理网关、私有模型或 OpenAI-compatible 服务。
 - 不同项目可能希望使用不同模型、不同 endpoint、不同超时和 token 限制。
 
@@ -418,10 +494,10 @@ http://localhost:5173/?taskId={taskId}&file={encodedFilePath}&finding={fingerpri
 #### 8.2.3 配置维度
 
 - Provider 类型：
-  - `CODEX_CLI`
-  - `OPENAI_API`
-  - `ANTHROPIC_API`
-  - `OPENAI_COMPATIBLE`
+  - `OPENAI`
+  - `ANTHROPIC`
+  - `DEEPSEEK`
+  - `CUSTOM`
 - Endpoint URL。
 - Model name。
 - API Key。

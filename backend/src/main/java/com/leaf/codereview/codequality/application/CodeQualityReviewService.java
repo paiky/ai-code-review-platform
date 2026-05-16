@@ -31,9 +31,9 @@ public class CodeQualityReviewService {
         }
         CodeQualityReviewProviderType selectedProvider = providerType == null ? properties.provider() : providerType;
         return providers.stream()
-                .filter(provider -> provider.type() == selectedProvider)
+                .filter(provider -> provider.supports(selectedProvider))
                 .findFirst()
                 .orElseThrow(() -> new BusinessException(ErrorCode.BAD_REQUEST, "Unsupported code quality review provider: " + selectedProvider))
-                .review(request);
+                .review(request, selectedProvider);
     }
 }

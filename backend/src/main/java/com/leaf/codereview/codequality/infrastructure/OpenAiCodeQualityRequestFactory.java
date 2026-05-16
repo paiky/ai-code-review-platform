@@ -11,9 +11,9 @@ import java.util.Map;
 @Component
 public class OpenAiCodeQualityRequestFactory {
 
-    public Map<String, Object> buildRequest(CodeQualityReviewProperties properties, CodeQualityReviewRequest request) {
+    public Map<String, Object> buildRequest(String model, CodeQualityReviewRequest request) {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("model", StringUtils.hasText(request.model()) ? request.model() : properties.openAiModel());
+        body.put("model", model);
         body.put("instructions", buildInstructions(request));
         body.put("input", buildInput(request));
         body.put("text", Map.of("format", buildJsonSchemaFormat()));

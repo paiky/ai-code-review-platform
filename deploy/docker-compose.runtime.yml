@@ -1,0 +1,68 @@
+services:
+  mysql:
+    image: ${MYSQL_IMAGE:-mysql:8.4}
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USERNAME}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  backend:
+    image: ai-code-review-backend:${APP_VERSION:-local}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SERVER_PORT: ${BACKEND_PORT:-8080}
+      MYSQL_URL: ${MYSQL_URL}
+      MYSQL_USERNAME: ${MYSQL_USERNAME}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      PLATFORM_BASE_URL: ${PLATFORM_BASE_URL}
+      DINGTALK_ENABLED: ${DINGTALK_ENABLED}
+      DINGTALK_WEBHOOK_URL: ${DINGTALK_WEBHOOK_URL}
+      GITLAB_API_ENABLED: ${GITLAB_API_ENABLED}
+      GITLAB_BASE_URL: ${GITLAB_BASE_URL}
+      GITLAB_TOKEN: ${GITLAB_TOKEN}
+      GITLAB_DIFF_PER_PAGE: ${GITLAB_DIFF_PER_PAGE}
+      CODE_QUALITY_REVIEW_ENABLED: ${CODE_QUALITY_REVIEW_ENABLED}
+      CODE_QUALITY_REVIEW_PROVIDER: ${CODE_QUALITY_REVIEW_PROVIDER}
+      CODEX_CLI_COMMAND: ${CODEX_CLI_COMMAND}
+      CODEX_CLI_MODEL: ${CODEX_CLI_MODEL}
+      CODEX_CLI_TIMEOUT_SECONDS: ${CODEX_CLI_TIMEOUT_SECONDS}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_RESPONSES_URL: ${OPENAI_RESPONSES_URL}
+      OPENAI_CODE_REVIEW_MODEL: ${OPENAI_CODE_REVIEW_MODEL}
+      OPENAI_CODE_REVIEW_TIMEOUT_SECONDS: ${OPENAI_CODE_REVIEW_TIMEOUT_SECONDS}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MESSAGES_URL: ${ANTHROPIC_MESSAGES_URL}
+      ANTHROPIC_CODE_REVIEW_MODEL: ${ANTHROPIC_CODE_REVIEW_MODEL}
+      ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS: ${ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS}
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  frontend:
+    image: ai-code-review-frontend:${APP_VERSION:-local}
+    restart: unless-stopped
+    ports:
+      - "${PUBLIC_HTTP_PORT:-8080}:80"
+    environment:
+      BACKEND_PORT: ${BACKEND_PORT:-8080}
+    depends_on:
+      - backend
+
+volumes:
+  mysql-data:

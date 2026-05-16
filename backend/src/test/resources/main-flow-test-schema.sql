@@ -2,6 +2,7 @@ DROP TABLE IF EXISTS gitlab_mr_webhook_events;
 DROP TABLE IF EXISTS code_quality_review_progress_events;
 DROP TABLE IF EXISTS code_quality_review_results;
 DROP TABLE IF EXISTS code_quality_review_profiles;
+DROP TABLE IF EXISTS code_quality_model_providers;
 DROP TABLE IF EXISTS notification_records;
 DROP TABLE IF EXISTS review_results;
 DROP TABLE IF EXISTS review_tasks;
@@ -28,6 +29,7 @@ CREATE TABLE projects (
   repository_url VARCHAR(512) NULL,
   default_template_code VARCHAR(64) NOT NULL DEFAULT 'backend-default',
   default_code_quality_profile_code VARCHAR(64) NOT NULL DEFAULT 'backend-default-ai-review',
+  default_code_quality_provider_code VARCHAR(64) NULL,
   dingtalk_webhook_id BIGINT NULL,
   status VARCHAR(32) NOT NULL DEFAULT 'ENABLED',
   description VARCHAR(512) NULL,
@@ -108,7 +110,8 @@ CREATE TABLE code_quality_review_profiles (
   profile_code VARCHAR(64) NOT NULL UNIQUE,
   profile_name VARCHAR(128) NOT NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
-  provider VARCHAR(32) NOT NULL DEFAULT 'CODEX_CLI',
+  provider VARCHAR(32) NOT NULL DEFAULT 'DEEPSEEK',
+  provider_code VARCHAR(64) NULL,
   model VARCHAR(128) NULL,
   trigger_on_manual BOOLEAN NOT NULL DEFAULT TRUE,
   trigger_on_mr BOOLEAN NOT NULL DEFAULT TRUE,
@@ -124,6 +127,7 @@ CREATE TABLE code_quality_review_profiles (
   trigger_only_when_risk_matched BOOLEAN NOT NULL DEFAULT TRUE,
   codex_prompt CLOB NULL,
   openai_instructions CLOB NULL,
+  review_instructions CLOB NULL,
   status VARCHAR(32) NOT NULL DEFAULT 'ENABLED',
   description VARCHAR(512) NULL,
   created_at TIMESTAMP(3) NULL,
@@ -155,11 +159,28 @@ CREATE TABLE code_quality_review_settings (
   id BIGINT PRIMARY KEY,
   mr_auto_review_enabled BOOLEAN NOT NULL DEFAULT TRUE,
   dingtalk_notification_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-  review_provider VARCHAR(32) NOT NULL DEFAULT 'CODEX_CLI',
+  review_provider VARCHAR(32) NOT NULL DEFAULT 'DEEPSEEK',
+  default_provider_code VARCHAR(64) NOT NULL DEFAULT 'DEEPSEEK',
   openai_api_key VARCHAR(1024) NULL,
   anthropic_api_key VARCHAR(1024) NULL,
   created_at TIMESTAMP(3) NULL,
   updated_at TIMESTAMP(3) NULL
+);
+
+CREATE TABLE code_quality_model_providers (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  provider_code VARCHAR(64) NOT NULL,
+  provider_name VARCHAR(128) NOT NULL,
+  provider_type VARCHAR(64) NOT NULL,
+  endpoint_url VARCHAR(1024) NULL,
+  model_name VARCHAR(128) NULL,
+  api_key VARCHAR(1024) NULL,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  built_in BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order INT NOT NULL DEFAULT 100,
+  created_at TIMESTAMP(3) NULL,
+  updated_at TIMESTAMP(3) NULL,
+  UNIQUE (provider_code)
 );
 
 CREATE TABLE code_quality_review_progress_events (
@@ -233,6 +254,7 @@ INSERT INTO code_quality_review_profiles (
   profile_name,
   enabled,
   provider,
+  provider_code,
   model,
   trigger_on_manual,
   trigger_on_mr,
@@ -248,13 +270,15 @@ INSERT INTO code_quality_review_profiles (
   trigger_only_when_risk_matched,
   codex_prompt,
   openai_instructions,
+  review_instructions,
   status,
   description
 ) VALUES (
   'backend-default-ai-review',
   'Backend default AI code review',
   TRUE,
-  'CODEX_CLI',
+  'DEEPSEEK',
+  'DEEPSEEK',
   NULL,
   TRUE,
   TRUE,
@@ -311,6 +335,25 @@ JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必
 - 安全：鉴权、越权、输入校验、注入、敏感信息泄露、日志暴露。
 - 异常与观测：异常吞掉、错误码误导、补偿缺失、关键日志和监控缺口。
 - 测试缺口：当本次变更涉及核心业务分支、数据一致性或高风险边界时，指出缺少的关键测试。',
+  '你是资深后端代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
+JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
+
+审查原则：
+1. 只审查本次 diff 新增或修改引入的问题，不报告历史存量问题。
+2. 只报告会影响线上正确性、数据一致性、安全、事务边界、SQL 性能、缓存一致性、MQ 一致性、异常处理或关键测试覆盖的问题。
+3. 不报告纯代码风格、命名偏好、格式、注释、主观重构或没有明确线上影响的建议。
+4. 不要猜测 diff 外部代码、调用方行为或未提供的配置；缺少证据时不要报告，除非潜在影响很高且必须人工确认。
+5. 每个 finding 都必须说明：为什么它由本次变更引入、具体触发条件、潜在影响、建议修复方式。
+
+重点检查：
+- 正确性：条件分支、边界值、空值、状态流转、幂等、重复提交、并发竞争。
+- 事务与一致性：多表写入、远程调用、消息/缓存副作用、异常回滚、部分成功。
+- SQL 与数据访问：索引命中、慢查询、分页、批量操作、更新/删除条件、N+1、结果兼容。
+- 缓存：key 兼容、TTL、失效路径、数据库与缓存写入顺序、降级与旧数据清理。
+- MQ：发送时机、事务一致性、重复消费、顺序、重试、死信、消息结构兼容。
+- 安全：鉴权、越权、输入校验、注入、敏感信息泄露、日志暴露。
+- 异常与观测：异常吞掉、错误码误导、补偿缺失、关键日志和监控缺口。
+- 测试缺口：当本次变更涉及核心业务分支、数据一致性或高风险边界时，指出缺少的关键测试。',
   'ENABLED',
   'Default backend AI code quality review profile.'
 );
@@ -318,9 +361,27 @@ JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必
 INSERT INTO code_quality_review_settings (
   id,
   mr_auto_review_enabled,
-  dingtalk_notification_enabled
+  dingtalk_notification_enabled,
+  default_provider_code
 ) VALUES (
   1,
   TRUE,
-  TRUE
+  TRUE,
+  'DEEPSEEK'
 );
+
+INSERT INTO code_quality_model_providers (
+  provider_code,
+  provider_name,
+  provider_type,
+  endpoint_url,
+  model_name,
+  api_key,
+  enabled,
+  built_in,
+  sort_order
+) VALUES
+  ('OPENAI', 'OpenAI', 'OPENAI_RESPONSES', 'https://api.openai.com/v1/responses', 'gpt-5.4', NULL, TRUE, TRUE, 10),
+  ('ANTHROPIC', 'Anthropic / Claude', 'ANTHROPIC_MESSAGES', 'https://api.anthropic.com/v1/messages', 'claude-sonnet-4-5', NULL, TRUE, TRUE, 20),
+  ('DEEPSEEK', 'DeepSeek', 'OPENAI_CHAT_COMPATIBLE', 'https://api.deepseek.com', 'deepseek-v4-pro', NULL, TRUE, TRUE, 30),
+  ('CUSTOM', '自定义 OpenAI-compatible', 'OPENAI_CHAT_COMPATIBLE', NULL, NULL, NULL, FALSE, TRUE, 40);

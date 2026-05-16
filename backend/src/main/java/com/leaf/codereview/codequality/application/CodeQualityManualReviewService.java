@@ -89,7 +89,7 @@ public class CodeQualityManualReviewService {
 
         try {
             progressEventRepository.deleteByTaskId(taskId);
-            CodeQualityReviewProviderType provider = settingsRepository.reviewProvider();
+            CodeQualityReviewProviderType provider = resolveProvider(project, profile);
             progressEventRepository.append(taskId, "QUEUED", "INFO", "手动 AI Review 已创建", "provider=" + provider.name() + ", profile=" + profile.profileCode());
             return runManualReview(taskId, project, request, profile, provider);
         } catch (Exception exception) {
@@ -145,11 +145,18 @@ public class CodeQualityManualReviewService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Code quality review profile not found: " + selectedProfileCode));
     }
 
+    private CodeQualityReviewProviderType resolveProvider(ProjectRecord project, CodeQualityReviewProfile profile) {
+        if (profile.providerCode() != null) {
+            return profile.providerCode();
+        }
+        if (StringUtils.hasText(project.defaultCodeQualityProviderCode())) {
+            return CodeQualityReviewProviderType.valueOf(project.defaultCodeQualityProviderCode());
+        }
+        return settingsRepository.reviewProvider();
+    }
+
     private CodeQualityReviewRequest enrichRequest(CodeQualityReviewRequest request, CodeQualityReviewProfile profile, CodeQualityReviewProviderType provider) {
-        String profilePrompt = provider == CodeQualityReviewProviderType.CODEX_CLI
-                ? profile.codexPrompt()
-                : profile.openAiInstructions();
-        String instructions = joinInstructions(profilePrompt, request.instructions());
+        String instructions = joinInstructions(profile.reviewInstructions(), request.instructions());
         String model = StringUtils.hasText(request.model()) ? request.model() : profile.model();
         return new CodeQualityReviewRequest(
                 request.repositoryPath(),

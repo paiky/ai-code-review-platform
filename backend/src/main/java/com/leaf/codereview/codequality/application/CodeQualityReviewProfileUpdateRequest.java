@@ -6,7 +6,7 @@ import com.leaf.codereview.codequality.domain.CodeQualityReviewProviderType;
 public record CodeQualityReviewProfileUpdateRequest(
         String profileName,
         Boolean enabled,
-        CodeQualityReviewProviderType provider,
+        CodeQualityReviewProviderType providerCode,
         String model,
         Boolean triggerOnManual,
         Boolean triggerOnMr,
@@ -20,7 +20,6 @@ public record CodeQualityReviewProfileUpdateRequest(
         Integer pushMaxDiffBytes,
         Integer pushDebounceSeconds,
         Boolean triggerOnlyWhenRiskMatched,
-        String codexPrompt,
-        String openAiInstructions
+        String reviewInstructions
 ) {
 }

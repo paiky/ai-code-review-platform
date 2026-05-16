@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewProviderType;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewResult;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewResultRepository;
-import com.leaf.codereview.codequality.infrastructure.CodexCliOutputParser;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -22,8 +21,7 @@ class CodeQualityReviewResultRepositoryTest {
     private final JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource());
     private final CodeQualityReviewResultRepository repository = new CodeQualityReviewResultRepository(
             jdbcTemplate,
-            objectMapper,
-            new CodexCliOutputParser(objectMapper)
+            objectMapper
     );
 
     @BeforeEach
@@ -52,7 +50,7 @@ class CodeQualityReviewResultRepositoryTest {
     }
 
     @Test
-    void parsesLegacyCodexRawOutputWhenFindingsJsonIsEmpty() {
+    void leavesLegacyRawOutputUnparsedWhenFindingsJsonIsEmpty() {
         jdbcTemplate.update("""
                 INSERT INTO code_quality_review_results (
                   task_id, project_id, profile_code, provider, status, finding_count,
@@ -62,7 +60,7 @@ class CodeQualityReviewResultRepositoryTest {
                 28L,
                 4L,
                 "backend-default-ai-review",
-                "CODEX_CLI",
+                "DEEPSEEK",
                 "SUCCESS",
                 0,
                 "[]",
@@ -76,19 +74,18 @@ class CodeQualityReviewResultRepositoryTest {
 
         var response = repository.findByTaskId(28L).orElseThrow();
 
-        assertThat(response.findingCount()).isEqualTo(1);
-        assertThat(response.overallLevel()).isEqualTo("HIGH");
-        assertThat(response.summary()).isEqualTo("发现 1 个 Codex 代码质量问题");
-        assertThat(response.findings()).hasSize(1);
-        assertThat(response.findings().get(0).path("severity").asText()).isEqualTo("HIGH");
-        assertThat(response.findings().get(0).path("startLine").asInt()).isEqualTo(154);
+        assertThat(response.findingCount()).isZero();
+        assertThat(response.overallLevel()).isNull();
+        assertThat(response.summary()).isNull();
+        assertThat(response.findings()).isEmpty();
+        assertThat(response.rawOutput()).contains("AuthFilter.java");
     }
 
     @Test
     void truncatesOversizedSummaryBeforeSaving() {
         String longSummary = "x".repeat(1500);
         CodeQualityReviewResult result = CodeQualityReviewResult.success(
-                CodeQualityReviewProviderType.CODEX_CLI,
+                CodeQualityReviewProviderType.DEEPSEEK,
                 "LOW",
                 longSummary,
                 List.of(),

@@ -7,7 +7,6 @@ import com.leaf.codereview.codequality.domain.CodeQualityReviewRequest;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewProperties;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewProfileRepository;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewSettingsRepository;
-import com.leaf.codereview.codequality.infrastructure.CodexCliCommandFactory;
 import com.leaf.codereview.codequality.infrastructure.OpenAiCodeQualityRequestFactory;
 import com.leaf.codereview.common.enums.ErrorCode;
 import com.leaf.codereview.common.exception.BusinessException;
@@ -26,20 +25,17 @@ public class CodeQualityReviewProfileService {
     private final CodeQualityReviewProfileRepository repository;
     private final CodeQualityReviewProperties properties;
     private final CodeQualityReviewSettingsRepository settingsRepository;
-    private final CodexCliCommandFactory codexCliCommandFactory;
     private final OpenAiCodeQualityRequestFactory openAiRequestFactory;
 
     public CodeQualityReviewProfileService(
             CodeQualityReviewProfileRepository repository,
             CodeQualityReviewProperties properties,
             CodeQualityReviewSettingsRepository settingsRepository,
-            CodexCliCommandFactory codexCliCommandFactory,
             OpenAiCodeQualityRequestFactory openAiRequestFactory
     ) {
         this.repository = repository;
         this.properties = properties;
         this.settingsRepository = settingsRepository;
-        this.codexCliCommandFactory = codexCliCommandFactory;
         this.openAiRequestFactory = openAiRequestFactory;
     }
 
@@ -60,11 +56,9 @@ public class CodeQualityReviewProfileService {
 
     public CodeQualityRenderedPromptResponse renderedPrompt(String profileCode) {
         CodeQualityReviewProfile profile = getProfile(profileCode);
-        CodeQualityReviewProviderType provider = settingsRepository.reviewProvider();
+        CodeQualityReviewProviderType provider = profile.providerCode() == null ? settingsRepository.reviewProvider() : profile.providerCode();
         CodeQualityReviewRequest request = previewRequest(profile, provider);
-        String prompt = provider == CodeQualityReviewProviderType.CODEX_CLI
-                ? codexCliCommandFactory.renderPrompt(request)
-                : openAiRequestFactory.renderInstructions(request);
+        String prompt = openAiRequestFactory.renderInstructions(request);
         return new CodeQualityRenderedPromptResponse(
                 profile.profileCode(),
                 provider.name(),
@@ -94,16 +88,12 @@ public class CodeQualityReviewProfileService {
                 null,
                 null,
                 null,
-                CodeQualityReviewProfileDefaults.DEFAULT_CODEX_PROMPT,
                 CodeQualityReviewProfileDefaults.DEFAULT_OPENAI_INSTRUCTIONS
         ));
         return getProfile(profileCode);
     }
 
     private CodeQualityReviewRequest previewRequest(CodeQualityReviewProfile profile, CodeQualityReviewProviderType provider) {
-        String instructions = provider == CodeQualityReviewProviderType.CODEX_CLI
-                ? profile.codexPrompt()
-                : profile.openAiInstructions();
         return new CodeQualityReviewRequest(
                 null,
                 CodeQualityReviewMode.DIFF_TEXT,
@@ -111,7 +101,7 @@ public class CodeQualityReviewProfileService {
                 null,
                 "Agent Prompt preview",
                 profile.model(),
-                instructions,
+                profile.reviewInstructions(),
                 """
                         diff --git a/src/main/java/com/demo/OrderService.java b/src/main/java/com/demo/OrderService.java
                         + public void createOrder() {}
@@ -122,9 +112,9 @@ public class CodeQualityReviewProfileService {
 
     private String defaultModel(CodeQualityReviewProviderType provider) {
         return switch (provider) {
-            case CODEX_CLI -> properties.codexModel();
-            case OPENAI_API -> properties.openAiModel();
-            case ANTHROPIC_API -> properties.anthropicModel();
+            case OPENAI -> properties.openAiModel();
+            case ANTHROPIC -> properties.anthropicModel();
+            case DEEPSEEK, CUSTOM -> properties.deepSeekModel();
         };
     }
 

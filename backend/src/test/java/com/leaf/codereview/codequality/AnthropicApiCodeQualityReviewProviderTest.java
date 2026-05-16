@@ -1,15 +1,17 @@
 package com.leaf.codereview.codequality;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.leaf.codereview.codequality.domain.CodeQualityModelProvider;
+import com.leaf.codereview.codequality.domain.CodeQualityModelProviderType;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewMode;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewProviderType;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewRequest;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewResult;
 import com.leaf.codereview.codequality.infrastructure.AnthropicApiCodeQualityReviewProvider;
+import com.leaf.codereview.codequality.infrastructure.CodeQualityModelProviderRepository;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewProgressEventRepository;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewProgressTracker;
 import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewProperties;
-import com.leaf.codereview.codequality.infrastructure.CodeQualityReviewSettingsRepository;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -58,11 +60,26 @@ class AnthropicApiCodeQualityReviewProviderTest {
             exchange.close();
         });
         server.start();
-        CodeQualityReviewSettingsRepository settingsRepository = mock(CodeQualityReviewSettingsRepository.class);
-        when(settingsRepository.anthropicApiKey()).thenReturn("db-anthropic-key");
+        CodeQualityModelProviderRepository providerRepository = mock(CodeQualityModelProviderRepository.class);
+        when(providerRepository.getRequired(CodeQualityReviewProviderType.ANTHROPIC)).thenReturn(new CodeQualityModelProvider(
+                1L,
+                CodeQualityReviewProviderType.ANTHROPIC,
+                "Anthropic",
+                CodeQualityModelProviderType.ANTHROPIC_MESSAGES,
+                "http://127.0.0.1:" + server.getAddress().getPort() + "/v1/messages",
+                "claude-test",
+                true,
+                "db-a...-key",
+                "db-anthropic-key",
+                true,
+                true,
+                20,
+                true,
+                null
+        ));
         AnthropicApiCodeQualityReviewProvider provider = new AnthropicApiCodeQualityReviewProvider(
                 properties("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/messages"),
-                settingsRepository,
+                providerRepository,
                 objectMapper,
                 new CodeQualityReviewProgressTracker(mock(CodeQualityReviewProgressEventRepository.class))
         );
@@ -80,10 +97,10 @@ class AnthropicApiCodeQualityReviewProviderTest {
         ));
 
         assertThat(result.status()).isEqualTo("SUCCESS");
-        assertThat(result.provider()).isEqualTo(CodeQualityReviewProviderType.ANTHROPIC_API);
+        assertThat(result.provider()).isEqualTo(CodeQualityReviewProviderType.ANTHROPIC);
         assertThat(result.overallLevel()).isEqualTo("HIGH");
         assertThat(result.findings()).hasSize(1);
-        assertThat(result.findings().getFirst().source()).isEqualTo("ANTHROPIC_API");
+        assertThat(result.findings().getFirst().source()).isEqualTo("ANTHROPIC");
         assertThat(capturedRequest.apiKey).isEqualTo("db-anthropic-key");
         assertThat(capturedRequest.anthropicVersion).isEqualTo("2023-06-01");
         assertThat(capturedRequest.body).contains("claude-test", "只报告会导致线上缺陷的问题", "OrderMapper.xml");
@@ -92,7 +109,7 @@ class AnthropicApiCodeQualityReviewProviderTest {
     private CodeQualityReviewProperties properties(String messagesUrl) {
         return new CodeQualityReviewProperties(
                 true,
-                CodeQualityReviewProviderType.ANTHROPIC_API,
+                CodeQualityReviewProviderType.ANTHROPIC,
                 "",
                 "",
                 "",

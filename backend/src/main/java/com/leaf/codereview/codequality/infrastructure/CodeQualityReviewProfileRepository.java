@@ -51,7 +51,7 @@ public class CodeQualityReviewProfileRepository {
                 UPDATE code_quality_review_profiles
                 SET profile_name = ?,
                     enabled = ?,
-                    provider = ?,
+                    provider_code = ?,
                     model = ?,
                     trigger_on_manual = ?,
                     trigger_on_mr = ?,
@@ -65,13 +65,12 @@ public class CodeQualityReviewProfileRepository {
                     push_max_diff_bytes = ?,
                     push_debounce_seconds = ?,
                     trigger_only_when_risk_matched = ?,
-                    codex_prompt = ?,
-                    openai_instructions = ?
+                    review_instructions = ?
                 WHERE profile_code = ?
                 """,
                 value(request.profileName(), existing.profileName()),
                 value(request.enabled(), existing.enabled()),
-                value(request.provider(), existing.provider()).name(),
+                enumName(value(request.providerCode(), existing.providerCode())),
                 value(request.model(), existing.model()),
                 value(request.triggerOnManual(), existing.triggerOnManual()),
                 value(request.triggerOnMr(), existing.triggerOnMr()),
@@ -85,8 +84,7 @@ public class CodeQualityReviewProfileRepository {
                 value(request.pushMaxDiffBytes(), existing.pushMaxDiffBytes()),
                 value(request.pushDebounceSeconds(), existing.pushDebounceSeconds()),
                 value(request.triggerOnlyWhenRiskMatched(), existing.triggerOnlyWhenRiskMatched()),
-                value(request.codexPrompt(), existing.codexPrompt()),
-                value(request.openAiInstructions(), existing.openAiInstructions()),
+                value(request.reviewInstructions(), existing.reviewInstructions()),
                 profileCode
         );
     }
@@ -97,7 +95,7 @@ public class CodeQualityReviewProfileRepository {
                 rs.getString("profile_code"),
                 rs.getString("profile_name"),
                 rs.getBoolean("enabled"),
-                CodeQualityReviewProviderType.valueOf(rs.getString("provider")),
+                providerCode(rs.getString("provider_code")),
                 rs.getString("model"),
                 rs.getBoolean("trigger_on_manual"),
                 rs.getBoolean("trigger_on_mr"),
@@ -111,9 +109,24 @@ public class CodeQualityReviewProfileRepository {
                 nullableInt(rs, "push_max_diff_bytes"),
                 nullableInt(rs, "push_debounce_seconds"),
                 rs.getBoolean("trigger_only_when_risk_matched"),
-                rs.getString("codex_prompt"),
-                rs.getString("openai_instructions")
+                rs.getString("review_instructions")
         );
+    }
+
+    private CodeQualityReviewProviderType providerCode(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return switch (value.trim()) {
+            case "OPENAI_API" -> CodeQualityReviewProviderType.OPENAI;
+            case "ANTHROPIC_API" -> CodeQualityReviewProviderType.ANTHROPIC;
+            case "CODEX_CLI" -> null;
+            default -> CodeQualityReviewProviderType.valueOf(value.trim());
+        };
+    }
+
+    private String enumName(CodeQualityReviewProviderType providerCode) {
+        return providerCode == null ? null : providerCode.name();
     }
 
     private JsonNode readJson(ResultSet rs, String column) throws SQLException {

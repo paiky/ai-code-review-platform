@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.leaf.codereview.codequality.application.CodeQualityReviewProvider;
 import com.leaf.codereview.codequality.domain.CodeQualityFinding;
+import com.leaf.codereview.codequality.domain.CodeQualityModelProvider;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewProviderType;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewRequest;
 import com.leaf.codereview.codequality.domain.CodeQualityReviewResult;
@@ -27,32 +28,36 @@ import java.util.Map;
 public class AnthropicApiCodeQualityReviewProvider implements CodeQualityReviewProvider {
 
     private final CodeQualityReviewProperties properties;
-    private final CodeQualityReviewSettingsRepository settingsRepository;
+    private final CodeQualityModelProviderRepository providerRepository;
     private final ObjectMapper objectMapper;
     private final CodeQualityReviewProgressTracker progressTracker;
 
     public AnthropicApiCodeQualityReviewProvider(
             CodeQualityReviewProperties properties,
-            CodeQualityReviewSettingsRepository settingsRepository,
+            CodeQualityModelProviderRepository providerRepository,
             ObjectMapper objectMapper,
             CodeQualityReviewProgressTracker progressTracker
     ) {
         this.properties = properties;
-        this.settingsRepository = settingsRepository;
+        this.providerRepository = providerRepository;
         this.objectMapper = objectMapper;
         this.progressTracker = progressTracker;
     }
 
     @Override
     public CodeQualityReviewProviderType type() {
-        return CodeQualityReviewProviderType.ANTHROPIC_API;
+        return CodeQualityReviewProviderType.ANTHROPIC;
     }
 
     @Override
     public CodeQualityReviewResult review(CodeQualityReviewRequest request) {
-        String apiKey = effectiveApiKey();
+        CodeQualityModelProvider modelProvider = providerRepository.getRequired(type());
+        String apiKey = firstText(modelProvider.apiKey(), properties.anthropicApiKey());
         if (!StringUtils.hasText(apiKey)) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "ANTHROPIC_API_KEY is required for Anthropic API code quality review");
+        }
+        if (!modelProvider.enabled()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "Anthropic model provider is disabled");
         }
         if (!StringUtils.hasText(request.diffText())) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, "diffText is required for Anthropic API code quality review");
@@ -60,10 +65,11 @@ public class AnthropicApiCodeQualityReviewProvider implements CodeQualityReviewP
 
         OffsetDateTime startedAt = OffsetDateTime.now();
         try {
-            String model = firstText(request.model(), properties.anthropicModel());
-            progressTracker.info("ANTHROPIC_REQUEST", "准备调用 Anthropic Messages API", "url=" + properties.anthropicMessagesUrl() + ", model=" + model);
+            String endpointUrl = firstText(modelProvider.endpointUrl(), properties.anthropicMessagesUrl());
+            String model = firstText(request.model(), firstText(modelProvider.modelName(), properties.anthropicModel()));
+            progressTracker.info("ANTHROPIC_REQUEST", "准备调用 Anthropic Messages API", "url=" + endpointUrl + ", model=" + model);
             String responseBody = restClient().post()
-                    .uri(properties.anthropicMessagesUrl())
+                    .uri(endpointUrl)
                     .contentType(MediaType.APPLICATION_JSON)
                     .header("x-api-key", apiKey)
                     .header("anthropic-version", "2023-06-01")
@@ -149,7 +155,7 @@ public class AnthropicApiCodeQualityReviewProvider implements CodeQualityReviewP
                     finding.path("body").asText(),
                     finding.path("suggestion").asText(),
                     finding.path("confidence").asText(),
-                    "ANTHROPIC_API"
+                    "ANTHROPIC"
             ));
         }
         return CodeQualityReviewResult.success(
@@ -185,11 +191,6 @@ public class AnthropicApiCodeQualityReviewProvider implements CodeQualityReviewP
             trimmed = trimmed.replaceFirst("\\s*```$", "");
         }
         return trimmed;
-    }
-
-    private String effectiveApiKey() {
-        String configured = settingsRepository.anthropicApiKey();
-        return StringUtils.hasText(configured) ? configured : properties.anthropicApiKey();
     }
 
     private String firstText(String primary, String fallback) {

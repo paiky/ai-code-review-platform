@@ -103,7 +103,7 @@ class DingTalkNotifierTest {
     void formatsCodeQualityReviewResult() {
         DingTalkNotifier notifierWithPlatformUrl = new DingTalkNotifier(new ObjectMapper(), "", "http://localhost:5173/", true);
         CodeQualityReviewResult reviewResult = CodeQualityReviewResult.success(
-                CodeQualityReviewProviderType.OPENAI_API,
+                CodeQualityReviewProviderType.OPENAI,
                 "HIGH",
                 "发现 1 个事务一致性问题。",
                 List.of(new CodeQualityFinding(
@@ -116,7 +116,7 @@ class DingTalkNotifierTest {
                         "body",
                         "suggestion",
                         "HIGH",
-                        "OPENAI_API"
+                        "OPENAI"
                 )),
                 "{}",
                 null,
@@ -138,7 +138,7 @@ class DingTalkNotifierTest {
         );
 
         assertThat(markdown).contains("### 代码质量 Review");
-        assertThat(markdown).contains("OPENAI_API");
+        assertThat(markdown).contains("OPENAI");
         assertThat(markdown).contains("发现 1 个事务一致性问题");
         assertThat(markdown).contains("订单创建缺少事务边界");
         assertThat(markdown).contains("src/main/java/com/demo/OrderService.java:42");
@@ -154,13 +154,13 @@ class DingTalkNotifierTest {
                 riskItem("CONFIG_RELEASE_CHECK", ChangeType.CONFIG, RiskLevel.LOW)
         );
         CodeQualityReviewResult reviewResult = CodeQualityReviewResult.success(
-                CodeQualityReviewProviderType.OPENAI_API,
+                CodeQualityReviewProviderType.OPENAI,
                 "HIGH",
                 "long summary should not be included",
                 List.of(
-                        new CodeQualityFinding("CRITICAL", "CODE_QUALITY", "A.java", 1, 1, "代码可能存在空指针异常", "", "", "HIGH", "OPENAI_API"),
-                        new CodeQualityFinding("MAJOR", "CODE_QUALITY", "B.java", 2, 2, "微信迁移清洗可能导致数据库与缓存不一致", "", "", "HIGH", "OPENAI_API"),
-                        new CodeQualityFinding("MAJOR", "CODE_QUALITY", "C.java", 3, 3, "退款原因字段缺少校验，可能导致落库失败或脏数据", "", "", "HIGH", "OPENAI_API")
+                        new CodeQualityFinding("CRITICAL", "CODE_QUALITY", "A.java", 1, 1, "代码可能存在空指针异常", "", "", "HIGH", "OPENAI"),
+                        new CodeQualityFinding("MAJOR", "CODE_QUALITY", "B.java", 2, 2, "微信迁移清洗可能导致数据库与缓存不一致", "", "", "HIGH", "OPENAI"),
+                        new CodeQualityFinding("MAJOR", "CODE_QUALITY", "C.java", 3, 3, "退款原因字段缺少校验，可能导致落库失败或脏数据", "", "", "HIGH", "OPENAI")
                 ),
                 "{}",
                 null,
@@ -205,7 +205,7 @@ class DingTalkNotifierTest {
     void skipsCombinedReviewSummaryWhenNoReminderOrCodeQualityFindingExists() {
         DingTalkNotifier notifierWithWebhook = new DingTalkNotifier(new ObjectMapper(), "https://example.com/webhook", "http://localhost:5173/", true);
         CodeQualityReviewResult reviewResult = CodeQualityReviewResult.success(
-                CodeQualityReviewProviderType.OPENAI_API,
+                CodeQualityReviewProviderType.OPENAI,
                 "LOW",
                 "未发现需要修复的问题。",
                 List.of(),

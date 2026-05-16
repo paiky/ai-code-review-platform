@@ -438,12 +438,12 @@ Content-Type: application/json
 | --- | --- |
 | `projectId` | 必填，AI Review 会创建一条 `CODE_QUALITY_MANUAL` 类型任务 |
 | `profileCode` | 可选，为空时使用项目绑定的默认 AI Review profile |
-| `repositoryPath` | 兼容字段；当前 `CODEX_CLI` 不再读取被审查项目本地仓库 |
+| `repositoryPath` | 兼容字段；当前 API Provider 只审查传入的 `diffText` |
 | `mode` | `BASE`、`COMMIT`、`UNCOMMITTED`、`DIFF_TEXT` |
 | `baseRef` | `BASE` 模式下传入，例如 `origin/main` |
 | `commitSha` | `COMMIT` 模式下传入 |
 | `instructions` | 附加审查要求 |
-| `diffText` | `CODEX_CLI`、`OPENAI_API`、`ANTHROPIC_API` 都需要，作为唯一审查变更输入 |
+| `diffText` | 必填，作为唯一审查变更输入 |
 | `changedFiles` | diff 对应文件列表，作为最终 finding 输出白名单 |
 
 响应 data：
@@ -453,7 +453,7 @@ Content-Type: application/json
   "taskId": 10002,
   "status": "SUCCESS",
   "profileCode": "backend-default-ai-review",
-  "provider": "CODEX_CLI",
+  "provider": "DEEPSEEK",
   "overallLevel": "HIGH",
   "findingCount": 1
 }
@@ -462,12 +462,12 @@ Content-Type: application/json
 说明：
 
 - 该接口默认关闭，需设置 `CODE_QUALITY_REVIEW_ENABLED=true`。
-- `CODEX_CLI` 复用宿主机 Codex CLI 登录态，Windows 默认调用 `codex.cmd`，Linux 默认调用 `codex`；它只读取平台提供的 `diffText` / `changedFiles`，不再通过本地仓库 `HEAD` 或 `git diff` 决定审查范围。
-- `OPENAI_API` 使用 `OPENAI_API_KEY` 或前端保存的 OpenAI API Key 调用 Responses API，并要求 `diffText`。
-- `ANTHROPIC_API` 使用 `ANTHROPIC_API_KEY` 或前端保存的 Anthropic API Key 调用 Messages API，并要求 `diffText`。
+- `OPENAI` 使用 Provider 配置中的 API Key 调用 OpenAI Responses API，并要求 `diffText`。
+- `ANTHROPIC` 使用 Provider 配置中的 API Key 调用 Anthropic Messages API，并要求 `diffText`。
+- `DEEPSEEK` 与 `CUSTOM` 使用 OpenAI-compatible Chat Completions API，并要求 `diffText`。
 - GitLab MR webhook 风险审查成功后，如果全局配置已开启且项目绑定 profile 的 `triggerOnMr=true`，系统会异步触发 AI Code Review，并将结果保存到同一个 `taskId` 下。
 - MR 自动 AI Review 启动后会先保存 `RUNNING` 结果，执行完成后更新为 `SUCCESS` 或 `FAILED`，前端可轮询本接口展示进度。
-- `CODEX_CLI` / `OPENAI_API` / `ANTHROPIC_API` 自动触发都直接使用 MR diff 文本。
+- 所有 API Provider 自动触发都直接使用 MR diff 文本。
 - MR 自动 AI Review 还受全局开关 `mrAutoReviewEnabled` 控制。关闭后，新的 MR webhook 不会触发 AI Review；手动 Review 和重试不受该开关影响。
 
 ### 7.2 查询代码质量 Review 结果
@@ -483,7 +483,7 @@ GET /api/review-tasks/{taskId}/code-quality-result
   "taskId": 10002,
   "projectId": 1,
   "profileCode": "backend-default-ai-review",
-  "provider": "OPENAI_API",
+  "provider": "OPENAI",
   "model": "gpt-5.4",
   "status": "SUCCESS",
   "overallLevel": "HIGH",
@@ -500,7 +500,7 @@ GET /api/review-tasks/{taskId}/code-quality-result
       "body": "该方法同时写订单和流水，部分失败会造成数据不一致。",
       "suggestion": "为入口方法增加事务，并确认外部调用不在事务内执行。",
       "confidence": "HIGH",
-      "source": "OPENAI_API"
+      "source": "OPENAI"
     }
   ],
   "rawOutput": "...",
@@ -514,7 +514,7 @@ GET /api/review-tasks/{taskId}/code-quality-result
 说明：
 
 - `status=RUNNING` 时，`finishedAt`、`exitCode`、`rawOutput` 通常为空。
-- `CODEX_CLI` provider 会保存 Codex Markdown 原始输出，并解析 `- High:`、`- Medium:` 等条目为结构化 `findings`；历史结果如果只有 `rawOutput` 且 `findings_json` 为空，查询时也会兜底解析。
+- 历史 `CODEX_CLI` 结果只作为历史 provider 字符串展示；新版本不再执行 Codex CLI，也不再对 Codex Markdown raw output 做运行时兜底解析。
 - 后端启动时会扫描超过超时阈值仍处于 `RUNNING` 的 AI Review，并标记为 `FAILED`，避免后端重启或 Codex 子进程丢失后页面永久卡住。
 
 ### 7.3 查询代码质量 Review 执行过程
@@ -530,19 +530,19 @@ GET /api/review-tasks/{taskId}/code-quality-progress
   {
     "id": 1,
     "taskId": 10002,
-    "phase": "CODEX_PROCESS_STARTED",
+    "phase": "PROVIDER_START",
     "level": "INFO",
-    "message": "Codex CLI 子进程已启动",
-    "detail": "pid=12345",
+    "message": "开始调用代码质量 Review Provider",
+    "detail": "provider=DEEPSEEK",
     "createdAt": "2026-05-09T10:40:00"
   },
   {
     "id": 2,
     "taskId": 10002,
-    "phase": "CODEX_OUTPUT",
+    "phase": "DEEPSEEK_RESPONSE",
     "level": "DEBUG",
-    "message": "stdout: {\"type\":\"thread.started\"}",
-    "detail": "{\"type\":\"thread.started\"}",
+    "message": "DeepSeek API 已返回响应",
+    "detail": "responseBytes=2048",
     "createdAt": "2026-05-09T10:40:01"
   }
 ]
@@ -551,7 +551,7 @@ GET /api/review-tasks/{taskId}/code-quality-progress
 说明：
 
 - 该接口返回持久化的 AI Review 过程事件，前端在 `RUNNING` 时轮询展示。
-- `CODEX_CLI` 会记录仓库确认、输出文件、命令、子进程 PID、stdout/stderr 行、退出码、解析和保存结果等阶段。
+- API Provider 会记录请求构建、Provider 调用、响应摘要、解析和保存结果等阶段，敏感字段会脱敏或省略。
 - 重试 AI Review 会清空同一任务旧过程事件，并重新写入本轮过程。
 
 ### 7.4 AI Review 设置与重试
@@ -559,6 +559,9 @@ GET /api/review-tasks/{taskId}/code-quality-progress
 ```http
 GET /api/code-quality-reviews/settings
 PUT /api/code-quality-reviews/settings
+GET /api/code-quality-review-providers
+PUT /api/code-quality-review-providers/{providerCode}
+POST /api/code-quality-review-providers/{providerCode}/set-default
 POST /api/code-quality-reviews/tasks/{taskId}/retry
 ```
 
@@ -567,18 +570,8 @@ POST /api/code-quality-reviews/tasks/{taskId}/retry
 ```json
 {
   "mrAutoReviewEnabled": false,
-  "reviewProvider": "ANTHROPIC_API",
-  "openAiApiKey": "sk-...",
-  "anthropicApiKey": "sk-ant-..."
-}
-```
-
-清除 API Key 时传：
-
-```json
-{
-  "clearOpenAiApiKey": true,
-  "clearAnthropicApiKey": true
+  "dingtalkNotificationEnabled": true,
+  "defaultProviderCode": "DEEPSEEK"
 }
 ```
 
@@ -587,12 +580,39 @@ POST /api/code-quality-reviews/tasks/{taskId}/retry
 ```json
 {
   "mrAutoReviewEnabled": false,
-  "reviewProvider": "ANTHROPIC_API",
-  "openAiApiKeyConfigured": true,
-  "openAiApiKeyMasked": "sk-...abcd",
-  "anthropicApiKeyConfigured": true,
-  "anthropicApiKeyMasked": "sk-a...wxyz",
+  "dingtalkNotificationEnabled": true,
+  "defaultProviderCode": "DEEPSEEK",
   "updatedAt": "2026-05-09T00:10:00"
+}
+```
+
+Provider 列表响应 data：
+
+```json
+[
+  {
+    "providerCode": "DEEPSEEK",
+    "providerName": "DeepSeek",
+    "providerType": "OPENAI_CHAT_COMPATIBLE",
+    "endpointUrl": "https://api.deepseek.com",
+    "modelName": "deepseek-v4-pro",
+    "enabled": true,
+    "builtIn": true,
+    "defaultProvider": true,
+    "apiKeyConfigured": true,
+    "apiKeyMasked": "sk-d...abcd"
+  }
+]
+```
+
+`PUT /api/code-quality-review-providers/{providerCode}` 请求：
+
+```json
+{
+  "endpointUrl": "https://api.deepseek.com",
+  "modelName": "deepseek-v4-pro",
+  "apiKey": "sk-...",
+  "enabled": true
 }
 ```
 
@@ -603,7 +623,7 @@ POST /api/code-quality-reviews/tasks/{taskId}/retry
   "taskId": 10002,
   "status": "RUNNING",
   "profileCode": "backend-default-ai-review",
-  "provider": "CODEX_CLI",
+  "provider": "DEEPSEEK",
   "overallLevel": null,
   "findingCount": 0
 }
@@ -625,7 +645,7 @@ PUT /api/projects/{projectId}/code-quality-profile
 ```json
 {
   "profileCode": "backend-default-ai-review",
-  "provider": "CODEX_CLI",
+  "provider": "DEEPSEEK",
   "model": "gpt-5.4",
   "prompt": "你是代码质量审核助手...",
   "promptHash": "e3b0c44298fc1c149afbf4c8996fb924...",
@@ -635,9 +655,8 @@ PUT /api/projects/{projectId}/code-quality-profile
 
 说明：
 
-- `rendered-prompt` 用于前端预览实际传给 provider 的最终 prompt。Codex CLI provider 会使用中文优先 wrapper 加 profile prompt 拼装。
-- `reset-default-prompt` 会把指定 profile 的 `codexPrompt` 和 `openAiInstructions` 恢复为平台内置默认值，其他 profile 配置保持不变。
-- Codex CLI 执行时不会再把完整 prompt 放进命令行参数，而是写入 UTF-8 prompt 文件；进度事件只记录 prompt hash、长度、预览和脱敏后的 command preview。
+- `rendered-prompt` 用于前端预览实际传给 provider 的最终 instructions。
+- `reset-default-prompt` 会把指定 profile 的 `reviewInstructions` 恢复为平台内置默认值，其他 profile 配置保持不变。
 
 `PUT /api/projects/{projectId}/code-quality-profile` 请求：
 
