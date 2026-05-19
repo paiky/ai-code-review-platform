@@ -105,7 +105,7 @@ try {
         "dev" {
             $port = $env:SERVER_PORT
             if ([string]::IsNullOrWhiteSpace($port)) {
-                $port = "18080"
+                $port = "8080"
             }
             Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", $port, "--reload") + $remainingArgs)
         }

@@ -236,6 +236,65 @@ def test_dingtalk_success_is_recorded(
     assert notifications[0]["responseBody"] == '{"errcode":0,"errmsg":"ok"}'
 
 
+def test_dingtalk_filter_prefers_focus_rule_codes_for_value_config(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 5, 18, 10, 0, 0)
+    db_session.add(
+        RuleTemplate(
+            template_code="backend-default",
+            template_name="后端默认审查模板",
+            target_type="BACKEND",
+            version=1,
+            enabled_rule_codes=json.dumps(["DB_SQL_CHANGE_CHECK", "CONFIG_RELEASE_CHECK"]),
+            config_json=json.dumps(
+                {
+                    "focusChangeTypes": ["DB_SQL"],
+                    "focusRuleCodes": ["CONFIG_RELEASE_CHECK"],
+                    "recommendedChecks": ["确认配置发布窗口。"],
+                }
+            ),
+            status="ENABLED",
+            description="focus rule codes",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.commit()
+    monkeypatch.setenv("DINGTALK_WEBHOOK_URL", "https://dingtalk.example.test/robot/send")
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://dingtalk.example.test/robot/send").mock(
+            return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
+        )
+        response = client.post(
+            "/api/webhooks/gitlab/merge-request",
+            json={
+                **mr_payload_without_changed_files(),
+                "changedFiles": [
+                    {
+                        "old_path": "src/main/java/com/demo/OrderProperties.java",
+                        "new_path": "src/main/java/com/demo/OrderProperties.java",
+                        "diffText": (
+                            "+ @Value(\"${order.confirm.enabled:false}\")\n"
+                            "+ private boolean confirmEnabled;"
+                        ),
+                    }
+                ],
+            },
+            headers={"X-Gitlab-Event": "Merge Request Hook"},
+        )
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    notifications = client.get(f"/api/review-tasks/{task_id}/notifications").json()["data"]
+    assert notifications[0]["status"] == "SUCCESS"
+    assert "配置提醒" in notifications[0]["requestDigest"]
+    assert "本次没有命中需推送的重点提醒" not in notifications[0]["requestDigest"]
+
+
 def test_push_without_payload_diff_uses_compare_api(
     client: TestClient,
     db_session: Session,

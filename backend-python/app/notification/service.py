@@ -3,8 +3,16 @@ import httpx
 from app.core.config import get_settings
 
 
-def dingtalk_skipped_result() -> dict:
+def dingtalk_skipped_result(dingtalk_notification_enabled: bool | None = None) -> dict:
     settings = get_settings()
+    if dingtalk_notification_enabled is False:
+        return {
+            "target": "DINGTALK_NOTIFICATION_ENABLED",
+            "status": "SKIPPED",
+            "requestDigest": "DingTalk notification is disabled by global setting",
+            "responseBody": None,
+            "errorMessage": "DingTalk notification is disabled",
+        }
     if not settings.dingtalk_enabled:
         return {
             "target": "DINGTALK_DISABLED",
@@ -30,10 +38,17 @@ def dingtalk_skipped_result() -> dict:
     }
 
 
-def send_risk_card(task_id: int, risk_card: dict, focus_change_types: list[str], context: dict) -> dict:
-    markdown = format_markdown(task_id, filter_risk_card(risk_card, focus_change_types), context)
+def send_risk_card(
+    task_id: int,
+    risk_card: dict,
+    focus_change_types: list[str],
+    context: dict,
+    dingtalk_notification_enabled: bool | None = None,
+    focus_rule_codes: list[str] | None = None,
+) -> dict:
+    markdown = format_markdown(task_id, filter_risk_card(risk_card, focus_change_types, focus_rule_codes), context)
     digest = markdown[:500]
-    return _send_markdown("变更提醒", markdown, digest)
+    return _send_markdown("变更提醒", markdown, digest, dingtalk_notification_enabled)
 
 
 def send_review_summary(
@@ -42,8 +57,10 @@ def send_review_summary(
     focus_change_types: list[str] | None,
     code_quality_result: dict | None,
     context: dict,
+    dingtalk_notification_enabled: bool | None = None,
+    focus_rule_codes: list[str] | None = None,
 ) -> dict:
-    notification_card = filter_risk_card(risk_card, focus_change_types) if risk_card else None
+    notification_card = filter_risk_card(risk_card, focus_change_types, focus_rule_codes) if risk_card else None
     if not _has_risk_items(notification_card) and not _has_code_quality_notification(code_quality_result):
         return {
             "target": "DINGTALK_REVIEW_SUMMARY",
@@ -54,11 +71,24 @@ def send_review_summary(
         }
     markdown = format_review_summary_markdown(task_id, notification_card, code_quality_result, context)
     digest = markdown[:500]
-    return _send_markdown("变更审查结果", markdown, digest)
+    return _send_markdown("变更审查结果", markdown, digest, dingtalk_notification_enabled)
 
 
-def _send_markdown(title: str, markdown: str, digest: str) -> dict:
+def _send_markdown(
+    title: str,
+    markdown: str,
+    digest: str,
+    dingtalk_notification_enabled: bool | None,
+) -> dict:
     settings = get_settings()
+    if dingtalk_notification_enabled is False:
+        return {
+            "target": "DINGTALK_NOTIFICATION_ENABLED",
+            "status": "SKIPPED",
+            "requestDigest": digest,
+            "responseBody": None,
+            "errorMessage": "DingTalk notification is disabled",
+        }
     if not settings.dingtalk_enabled:
         return {
             "target": "DINGTALK_NOTIFICATION_ENABLED",
@@ -100,7 +130,19 @@ def _send_markdown(title: str, markdown: str, digest: str) -> dict:
         }
 
 
-def filter_risk_card(risk_card: dict, focus_change_types: list[str] | None) -> dict:
+def filter_risk_card(
+    risk_card: dict,
+    focus_change_types: list[str] | None,
+    focus_rule_codes: list[str] | None = None,
+) -> dict:
+    rule_focus = {value.strip().upper() for value in focus_rule_codes or [] if value and value.strip()}
+    if rule_focus:
+        clone = dict(risk_card)
+        clone["riskItems"] = [
+            item for item in risk_card.get("riskItems", []) if str(item.get("ruleCode", "")).upper() in rule_focus
+        ]
+        return clone
+
     if not focus_change_types:
         return risk_card
     focus = {value.strip().upper() for value in focus_change_types if value and value.strip()}

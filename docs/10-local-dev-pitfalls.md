@@ -394,3 +394,103 @@ Python 后端本身不执行 Java Flyway migration。如果本地 MySQL 还停�
 1. Python 后端的 AI Review 配置初始化会在当前 Session connection 上补齐必要表和列，避免旧库直接 500。
 2. 本地真实 MySQL 如果仍异常，先重启 Python 后端，再确认数据库至少有 `code_quality_review_settings`、`code_quality_review_profiles`、`code_quality_model_providers`。
 3. 长期仍建议通过 Java 后端启动一次 Flyway，让正式 schema 迁移记录保持完整；Python 的运行时补齐只作为本地重构期兼容保护。
+
+## 17. Python 后端写 MySQL 时不能依赖数据库默认时间戳
+
+现象：
+
+前端点击“重新审查”或调用：
+
+```text
+POST /api/review-tasks/{taskId}/rerun
+```
+
+返回 500。离线复现可看到：
+
+```text
+Column 'created_at' cannot be null
+```
+
+原因：
+
+Java Flyway 表结构里 `review_tasks`、`review_results`、`notification_records`、`gitlab_mr_webhook_events`、`gitlab_push_webhook_events` 等表的 `created_at` / `updated_at` 是 `NOT NULL DEFAULT CURRENT_TIMESTAMP`。但 SQLAlchemy 如果把字段映射出来且对象属性为 `None`，INSERT 时会显式传 `NULL`，MySQL 不会再套用默认值。
+
+处理方式：
+
+1. Python 创建任务、结果、通知、GitLab webhook event、自动创建项目时，显式写入 `created_at` 和 `updated_at`。
+2. 标记任务成功或失败时同步更新 `updated_at`。
+3. SQLite 测试库对 NULL 更宽松，必须在 contract 测试里至少断言返回的 `createdAt` / `updatedAt` 不为空，避免真实 MySQL 才暴露问题。
+
+## 18. 钉钉发送必须同时遵守环境开关和平台全局开关
+
+现象：
+
+前端“AI Review 全局设置”中关闭钉钉推送后，手动重新触发审阅仍可能发送钉钉消息。
+
+原因：
+
+Python 后端通知发送链路最初只读取环境变量 `DINGTALK_ENABLED` 和 `DINGTALK_WEBHOOK_URL`，没有把数据库里的 `code_quality_review_settings.dingtalk_notification_enabled` 传入规则审查重跑和 AI Review 合并通知。
+
+处理方式：
+
+1. 规则审查通知、AI Review 合并通知和手动审查跳过记录都要读取 `get_settings_record(db).dingtalk_notification_enabled`。
+2. 环境变量 `DINGTALK_ENABLED=false` 仍作为更底层的运维总开关。
+3. 全局推送关闭时应保存 `SKIPPED` 通知记录，且不能发起钉钉 HTTP 请求。
+
+## 19. AI Review Provider 返回旧字段名时要做归一化
+
+现象：
+
+AI Review 结果里标题、正文和建议正常，但前端“文件 / 行号 / 分类 / 风险等级”显示为 `-`。
+
+原因：
+
+OpenAI Responses strict schema 会强约束 `filePath`、`startLine`、`category`、`severity` 等字段；DeepSeek / OpenAI-compatible JSON mode 不一定严格遵守 schema，可能返回 `file_path`、`line_range`、`type`。如果 Python 后端只读取精确字段名，就会在落库时把这些信息写成 `null`。
+
+处理方式：
+
+1. Prompt 中明确要求返回平台字段：`severity`、`category`、`filePath`、`startLine`、`endLine`、`confidence`。
+2. 保存 AI Review 结果时兼容 `file_path`、`line_range`、`type`、`line` 等旧字段名。
+3. 读取历史结果时，如果 findings 已经缺字段，但 `rawOutput` 里保留了原始模型响应，可从 `rawOutput` 中重解析并补齐展示字段。
+
+## 20. 不要默认全量跑测试，按改动影响面选择最小验证集
+
+现象：
+
+每轮开发都执行全量测试，例如：
+
+```powershell
+.\scripts\run-backend-python.cmd test
+```
+
+随着测试数量和输出增加，会让每轮对话耗时和额度消耗越来越高。对于只改前端交互、文档或单个后端模块的小目标，全量测试常常不是最高性价比的验证方式。
+
+处理方式：
+
+1. 前端样式、交互或展示逻辑改动：优先执行 `.\scripts\run-frontend.cmd build`。
+2. Python 后端局部改动：优先执行相关 pytest 文件，例如 `.\backend-python\.venv\Scripts\python.exe -m pytest tests/contract/test_rule_templates_api_contract.py`，或通过脚本能力可达的最小测试集。
+3. 只有改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容、通知发送或跨模块边界时，才执行 `.\scripts\run-backend-python.cmd test` 全量 Python 测试。
+4. Java 后端 `backend/` 已停止维护，默认不再执行 Maven 编译或测试；只有用户明确要求对照历史 Java 行为时才读取或运行。
+5. 最终结论中说明“为什么选择这组验证”，避免把全量测试当作无脑默认动作。
+
+## 21. 搜索不要扫进依赖目录和构建产物
+
+现象：
+
+使用全仓搜索时如果扫进 `frontend/node_modules/`、`backend/target/`、`frontend/dist/`、`backend-python/.venv/` 等目录，会输出大量无关内容，甚至让搜索命令超时。之前搜索 Ant Design 或通知关键字时就曾被 `node_modules` 和构建产物拖慢。
+
+原因：
+
+依赖目录和构建产物体积大、重复内容多，而且通常不是需要人工修改的源代码。扫这些目录会增加命令耗时、上下文噪声和对话额度消耗。
+
+处理方式：
+
+1. 优先使用 `rg`，并遵守仓库根目录 `.rgignore`。
+2. 搜索时显式限定源目录，例如 `backend-python/app`、`backend-python/tests`、`frontend/src`、`docs`。
+3. 必要时追加排除参数：
+
+```powershell
+rg "focusRuleCodes" backend-python/app frontend/src -g "!**/node_modules/**" -g "!**/target/**" -g "!**/.venv/**"
+```
+
+4. 不要把 `node_modules`、`target`、`dist`、`.venv`、`__pycache__`、`.pytest_cache` 的搜索输出贴入分析结论。

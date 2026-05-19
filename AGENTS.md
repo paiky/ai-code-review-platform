@@ -33,7 +33,8 @@ AI 变更风险审查平台（MVP）
 - 所有接口必须有清晰 DTO / VO / schema
 
 ## Architecture preference
-- backend: Java Spring Boot
+- backend: Python FastAPI (`backend-python/`) is the active backend.
+- legacy backend: Java Spring Boot (`backend/`) is no longer maintained and should only be used as historical reference when explicitly needed.
 - db: MySQL
 - cache: Redis (optional later)
 - messaging: keep abstraction only in MVP
@@ -61,10 +62,14 @@ AI 变更风险审查平台（MVP）
 ## Working style
 - 新对话理解项目时，先读 `AGENTS.md`、`README.md`，再按任务需要阅读 `docs/` 下相关设计文档。
 - 在 Windows PowerShell 中阅读中文 Markdown / 文档时，优先使用 `Get-Content -Raw -Encoding UTF8 <path>`，避免默认编码导致中文乱码并影响理解。
+- 后续开发以后端 Python 为主，默认只维护 `backend-python/` 与 `frontend/`。`backend/` Java 后端已停止维护，不再新增实现、测试或编译验证，除非用户明确要求对照历史行为。
+- 搜索代码时必须避开依赖和构建产物目录，例如 `frontend/node_modules/`、`frontend/dist/`、`backend/target/`、`backend-python/.venv/`、`__pycache__/`、`.pytest_cache/`。优先使用 `rg`，不要用会扫进这些目录的全盘搜索。
 - 本地启动、编译、测试、构建优先使用仓库 `scripts/` 目录下脚本，不要直接按个人习惯拼 `mvn` / `npm` 命令。
-- 后端启动使用 `scripts/run-backend.cmd`；需要传 Maven 目标时也通过该脚本传参，例如 `scripts/run-backend.cmd -q test`、`scripts/run-backend.cmd -q -DskipTests compile`。
+- Python 后端启动使用 `scripts/run-backend-python.cmd dev`；测试使用 `scripts/run-backend-python.cmd test` 或按影响范围执行相关 pytest 文件。
+- Java 后端脚本 `scripts/run-backend.cmd` / Maven 测试仅保留历史用途，默认不要运行。
 - 前端启动使用 `scripts/run-frontend.cmd`；需要构建时使用 `scripts/run-frontend.cmd build`。
-- 只有脚本缺少所需能力或脚本本身失败且需要定位根因时，才直接进入 `backend/` 或 `frontend/` 执行底层命令，并在结论中说明原因。
+- 测试验证按影响范围选择最小集：前端样式/交互改动优先只跑前端 build；Python 局部后端改动优先跑相关 contract/unit 测试文件；只有改到主链路、共享模型、通知、数据库兼容或多模块交界时才跑全量 Python 测试。
+- 只有脚本缺少所需能力或脚本本身失败且需要定位根因时，才直接进入 `backend-python/` 或 `frontend/` 执行底层命令，并在结论中说明原因。
 - 每次只做一个小目标
 - 先写设计，再实现
 - 先补充 README，再写代码

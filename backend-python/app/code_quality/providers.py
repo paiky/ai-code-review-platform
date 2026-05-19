@@ -328,23 +328,12 @@ def _success_result(
     card = json.loads(_strip_json_fence(output_text))
     findings = []
     for finding in card.get("findings") or []:
-        item = {
-            "severity": finding.get("severity"),
-            "category": finding.get("category"),
-            "filePath": finding.get("filePath"),
-            "startLine": finding.get("startLine"),
-            "endLine": finding.get("endLine"),
-            "title": finding.get("title"),
-            "body": finding.get("body"),
-            "suggestion": finding.get("suggestion"),
-            "confidence": finding.get("confidence"),
-            "source": source,
-        }
-        findings.append(item)
+        findings.append(_normalize_finding(finding, source, card.get("overallLevel")))
+    overall_level = _normalize_overall_level(card.get("overallLevel")) or _overall_level_from_findings(findings)
     return {
         "status": "SUCCESS",
         "provider": source,
-        "overallLevel": card.get("overallLevel"),
+        "overallLevel": overall_level,
         "summary": card.get("summary") or f"{source} review completed",
         "findings": findings,
         "rawOutput": scrub_sensitive(raw_output),
@@ -353,6 +342,130 @@ def _success_result(
         "startedAt": started_at,
         "finishedAt": datetime.now(),
     }
+
+
+def _normalize_finding(finding: dict[str, Any], source: str, overall_level: Any) -> dict[str, Any]:
+    line_range = finding.get("line_range") or finding.get("lineRange") or finding.get("lines")
+    start_line = _first_present(
+        finding,
+        "startLine",
+        "start_line",
+        "line",
+        "lineNumber",
+        "line_number",
+    )
+    end_line = _first_present(finding, "endLine", "end_line")
+    if isinstance(line_range, list) and line_range:
+        start_line = start_line if start_line is not None else line_range[0]
+        end_line = end_line if end_line is not None else (line_range[1] if len(line_range) > 1 else line_range[0])
+    location = finding.get("location") if isinstance(finding.get("location"), dict) else {}
+    if location:
+        start_line = start_line if start_line is not None else _first_present(location, "startLine", "start_line", "line")
+        end_line = end_line if end_line is not None else _first_present(location, "endLine", "end_line", "line")
+
+    category = _normalize_category(
+        _first_present(finding, "category", "type", "kind", "issueType", "issue_type")
+    )
+    severity = _normalize_severity(
+        _first_present(finding, "severity", "riskLevel", "risk_level", "level", "priority")
+    ) or _severity_from_overall(overall_level)
+    return {
+        "severity": severity,
+        "category": category,
+        "filePath": _first_present(finding, "filePath", "file_path", "path", "file") or location.get("filePath") or location.get("file"),
+        "startLine": _to_int(start_line),
+        "endLine": _to_int(end_line if end_line is not None else start_line),
+        "title": finding.get("title"),
+        "body": finding.get("body") or finding.get("description"),
+        "suggestion": finding.get("suggestion") or finding.get("recommendation"),
+        "confidence": _normalize_confidence(finding.get("confidence")) or "MEDIUM",
+        "source": source,
+    }
+
+
+def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _normalize_category(value: Any) -> str:
+    normalized = str(value or "").strip().upper().replace("-", "_")
+    return {
+        "BUG": "CORRECTNESS",
+        "CORRECTNESS": "CORRECTNESS",
+        "SECURITY": "SECURITY",
+        "PERFORMANCE": "SQL_PERFORMANCE",
+        "SQL_PERFORMANCE": "SQL_PERFORMANCE",
+        "CONSISTENCY": "CORRECTNESS",
+        "DATA_CONSISTENCY": "CORRECTNESS",
+        "TRANSACTION": "TRANSACTION",
+        "TEST": "TEST_GAP",
+        "TEST_COVERAGE": "TEST_GAP",
+        "TEST_GAP": "TEST_GAP",
+        "EXCEPTION": "EXCEPTION_HANDLING",
+        "EXCEPTION_HANDLING": "EXCEPTION_HANDLING",
+        "CACHE": "CACHE_CONSISTENCY",
+        "CACHE_CONSISTENCY": "CACHE_CONSISTENCY",
+        "MQ": "MQ_CONSISTENCY",
+        "MQ_CONSISTENCY": "MQ_CONSISTENCY",
+        "OTHER": "CODE_QUALITY",
+        "CODE_QUALITY": "CODE_QUALITY",
+    }.get(normalized, normalized or "CODE_QUALITY")
+
+
+def _normalize_severity(value: Any) -> str | None:
+    normalized = str(value or "").strip().upper().replace("-", "_")
+    return {
+        "BLOCKER": "CRITICAL",
+        "CRITICAL": "CRITICAL",
+        "HIGH": "MAJOR",
+        "MAJOR": "MAJOR",
+        "MEDIUM": "MINOR",
+        "MINOR": "MINOR",
+        "LOW": "MINOR",
+    }.get(normalized)
+
+
+def _severity_from_overall(value: Any) -> str:
+    normalized = str(value or "").strip().upper()
+    if normalized == "CRITICAL":
+        return "CRITICAL"
+    if normalized == "HIGH":
+        return "MAJOR"
+    return "MINOR"
+
+
+def _normalize_overall_level(value: Any) -> str | None:
+    normalized = str(value or "").strip().upper()
+    return normalized if normalized in {"LOW", "MEDIUM", "HIGH", "CRITICAL"} else None
+
+
+def _overall_level_from_findings(findings: list[dict[str, Any]]) -> str:
+    severities = {finding.get("severity") for finding in findings}
+    if "CRITICAL" in severities:
+        return "CRITICAL"
+    if "MAJOR" in severities:
+        return "HIGH"
+    if "MINOR" in severities:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _normalize_confidence(value: Any) -> str | None:
+    normalized = str(value or "").strip().upper()
+    return normalized if normalized in {"LOW", "MEDIUM", "HIGH"} else None
+
+
+def _to_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _failed_result(provider: str, error_message: str | None, started_at: datetime) -> dict[str, Any]:

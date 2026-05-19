@@ -87,6 +87,25 @@ def review_card_json(summary: str = "发现一个问题") -> str:
     )
 
 
+def legacy_review_card_json() -> str:
+    return json.dumps(
+        {
+            "summary": "兼容旧字段",
+            "findings": [
+                {
+                    "title": "默认配置变更需要确认",
+                    "type": "other",
+                    "body": "默认值变更可能影响过滤范围。",
+                    "suggestion": "确认配置中心已有显式配置。",
+                    "file_path": "src/main/java/com/demo/Config.java",
+                    "line_range": [53, 53],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
 def test_manual_review_disabled_returns_clear_error(
     client: TestClient,
     db_session: Session,
@@ -256,6 +275,34 @@ def test_deepseek_manual_review_saves_result_and_progress(
     assert "DEEPSEEK_RESPONSE_RAW" in phases
     assert "DEEPSEEK_PARSE_RESULT" in phases
     assert "deepseek-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
+@respx.mock
+def test_provider_legacy_finding_fields_are_normalized(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    seed_project(db_session, "DEEPSEEK")
+    respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": legacy_review_card_json()}}]})
+    )
+
+    response = client.post("/api/code-quality-reviews/manual", json=manual_request())
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    result = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-result").json()["data"]
+    finding = result["findings"][0]
+    assert finding["filePath"] == "src/main/java/com/demo/Config.java"
+    assert finding["startLine"] == 53
+    assert finding["endLine"] == 53
+    assert finding["category"] == "CODE_QUALITY"
+    assert finding["severity"] == "MINOR"
+    assert result["overallLevel"] == "MEDIUM"
 
 
 @respx.mock

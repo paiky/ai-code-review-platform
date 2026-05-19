@@ -579,6 +579,9 @@ def find_result_response(db: Session, task_id: int) -> dict[str, Any] | None:
     ).first()
     if result is None:
         return None
+    findings = json.loads(result.findings_json or "[]")
+    if _needs_finding_repair(findings):
+        findings = _repair_findings_from_raw_output(findings, result.raw_output, result.provider)
     return {
         "taskId": result.task_id,
         "projectId": result.project_id,
@@ -589,13 +592,163 @@ def find_result_response(db: Session, task_id: int) -> dict[str, Any] | None:
         "overallLevel": result.overall_level,
         "summary": result.summary,
         "findingCount": result.finding_count,
-        "findings": json.loads(result.findings_json or "[]"),
+        "findings": findings,
         "rawOutput": result.raw_output,
         "exitCode": result.exit_code,
         "errorMessage": result.error_message,
         "startedAt": format_datetime(result.started_at),
         "finishedAt": format_datetime(result.finished_at),
     }
+
+
+def _needs_finding_repair(findings: list[dict[str, Any]]) -> bool:
+    return any(
+        not finding.get("filePath") or not finding.get("category") or finding.get("startLine") is None
+        for finding in findings
+        if isinstance(finding, dict)
+    )
+
+
+def _repair_findings_from_raw_output(
+    stored_findings: list[dict[str, Any]],
+    raw_output: str | None,
+    provider: str | None,
+) -> list[dict[str, Any]]:
+    if not raw_output:
+        return stored_findings
+    try:
+        output_text = _extract_model_output_text(raw_output)
+        card = json.loads(_strip_json_fence(output_text))
+    except Exception:
+        return stored_findings
+    repaired = []
+    raw_findings = [item for item in card.get("findings") or [] if isinstance(item, dict)]
+    for index, stored in enumerate(stored_findings):
+        raw = raw_findings[index] if index < len(raw_findings) else {}
+        merged = dict(stored)
+        normalized = _normalize_finding_response(raw, provider)
+        for key, value in normalized.items():
+            if _is_blank(merged.get(key)) and not _is_blank(value):
+                merged[key] = value
+        repaired.append(merged)
+    return repaired or stored_findings
+
+
+def _is_blank(value: Any) -> bool:
+    return value is None or value == ""
+
+
+def _extract_model_output_text(raw_output: str) -> str:
+    root = json.loads(raw_output)
+    if root.get("output_text"):
+        return str(root["output_text"])
+    choices = root.get("choices") or []
+    if choices:
+        content = ((choices[0].get("message") or {}).get("content"))
+        if content:
+            return str(content)
+    for output in root.get("output") or []:
+        for content in output.get("content") or []:
+            if content.get("text"):
+                return str(content["text"])
+    parts = [
+        str(content.get("text"))
+        for content in root.get("content") or []
+        if content.get("type") == "text" and content.get("text")
+    ]
+    if parts:
+        return "".join(parts)
+    raise ValueError("raw output does not contain model text")
+
+
+def _normalize_finding_response(finding: dict[str, Any], provider: str | None) -> dict[str, Any]:
+    line_range = finding.get("line_range") or finding.get("lineRange") or finding.get("lines")
+    start_line = _first_present(finding, "startLine", "start_line", "line", "lineNumber", "line_number")
+    end_line = _first_present(finding, "endLine", "end_line")
+    if isinstance(line_range, list) and line_range:
+        start_line = start_line if start_line is not None else line_range[0]
+        end_line = end_line if end_line is not None else (line_range[1] if len(line_range) > 1 else line_range[0])
+    location = finding.get("location") if isinstance(finding.get("location"), dict) else {}
+    if location:
+        start_line = start_line if start_line is not None else _first_present(location, "startLine", "start_line", "line")
+        end_line = end_line if end_line is not None else _first_present(location, "endLine", "end_line", "line")
+    return {
+        "severity": _normalize_finding_severity(_first_present(finding, "severity", "riskLevel", "risk_level", "level", "priority")),
+        "category": _normalize_finding_category(_first_present(finding, "category", "type", "kind", "issueType", "issue_type")),
+        "filePath": _first_present(finding, "filePath", "file_path", "path", "file") or location.get("filePath") or location.get("file"),
+        "startLine": _to_int(start_line),
+        "endLine": _to_int(end_line if end_line is not None else start_line),
+        "confidence": _normalize_finding_confidence(finding.get("confidence")),
+        "source": provider,
+    }
+
+
+def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _normalize_finding_category(value: Any) -> str:
+    normalized = str(value or "").strip().upper().replace("-", "_")
+    return {
+        "BUG": "CORRECTNESS",
+        "CORRECTNESS": "CORRECTNESS",
+        "SECURITY": "SECURITY",
+        "PERFORMANCE": "SQL_PERFORMANCE",
+        "SQL_PERFORMANCE": "SQL_PERFORMANCE",
+        "CONSISTENCY": "CORRECTNESS",
+        "DATA_CONSISTENCY": "CORRECTNESS",
+        "TRANSACTION": "TRANSACTION",
+        "TEST": "TEST_GAP",
+        "TEST_COVERAGE": "TEST_GAP",
+        "TEST_GAP": "TEST_GAP",
+        "EXCEPTION": "EXCEPTION_HANDLING",
+        "EXCEPTION_HANDLING": "EXCEPTION_HANDLING",
+        "CACHE": "CACHE_CONSISTENCY",
+        "CACHE_CONSISTENCY": "CACHE_CONSISTENCY",
+        "MQ": "MQ_CONSISTENCY",
+        "MQ_CONSISTENCY": "MQ_CONSISTENCY",
+        "OTHER": "CODE_QUALITY",
+        "CODE_QUALITY": "CODE_QUALITY",
+    }.get(normalized, normalized or "CODE_QUALITY")
+
+
+def _normalize_finding_severity(value: Any) -> str | None:
+    normalized = str(value or "").strip().upper().replace("-", "_")
+    return {
+        "BLOCKER": "CRITICAL",
+        "CRITICAL": "CRITICAL",
+        "HIGH": "MAJOR",
+        "MAJOR": "MAJOR",
+        "MEDIUM": "MINOR",
+        "MINOR": "MINOR",
+        "LOW": "MINOR",
+    }.get(normalized)
+
+
+def _normalize_finding_confidence(value: Any) -> str | None:
+    normalized = str(value or "").strip().upper()
+    return normalized if normalized in {"LOW", "MEDIUM", "HIGH"} else None
+
+
+def _to_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _strip_json_fence(value: str) -> str:
+    text = (value or "").strip()
+    if text.startswith("```"):
+        text = text.removeprefix("```json").removeprefix("```").strip()
+        text = text.removesuffix("```").strip()
+    return text
 
 
 def append_progress(

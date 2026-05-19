@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.change_analysis.service import analyze_changes
 from app.core.errors import AppError
 from app.notification.service import dingtalk_skipped_result
+from app.code_quality.repository import get_settings_record
 from app.project_integration.repository import find_project_by_id
 from app.project_integration.service import handle_merge_request_webhook
 from app.review_record.repository import (
@@ -56,7 +57,7 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict:
         )
         result = save_review_result(db, task=task, analysis=analysis, risk_card=risk_card)
         mark_task_success(task, risk_card["riskLevel"])
-        notification = dingtalk_skipped_result()
+        notification = dingtalk_skipped_result(get_settings_record(db).dingtalk_notification_enabled)
         save_notification_record(
             db,
             task_id=task.id,
@@ -94,4 +95,3 @@ def rerun_review_task(db: Session, source_task_id: int) -> dict:
         "status": response.get("status"),
         "triggerType": source["triggerType"],
     }
-

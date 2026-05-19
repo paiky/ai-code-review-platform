@@ -272,6 +272,7 @@ def trigger_auto_review(
     rule_result_id: int | None = None,
     risk_card: dict | None = None,
     focus_change_types: list[str] | None = None,
+    focus_rule_codes: list[str] | None = None,
     notification_context: dict | None = None,
 ) -> bool:
     if not _enabled():
@@ -336,6 +337,7 @@ def trigger_auto_review(
             rule_result_id,
             risk_card,
             focus_change_types,
+            focus_rule_codes,
             notification_context,
         )
     else:
@@ -349,6 +351,7 @@ def trigger_auto_review(
             rule_result_id,
             risk_card,
             focus_change_types or [],
+            focus_rule_codes or [],
             notification_context or {},
         )
     return True
@@ -363,6 +366,7 @@ def run_auto_review_job(
     rule_result_id: int | None,
     risk_card: dict | None,
     focus_change_types: list[str],
+    focus_rule_codes: list[str],
     notification_context: dict,
 ) -> None:
     db = SessionLocal()
@@ -382,6 +386,7 @@ def run_auto_review_job(
             rule_result_id,
             risk_card,
             focus_change_types,
+            focus_rule_codes,
             notification_context,
         )
         db.commit()
@@ -581,6 +586,7 @@ def _send_auto_review_notification(
     rule_result_id: int | None,
     risk_card: dict | None,
     focus_change_types: list[str] | None,
+    focus_rule_codes: list[str] | None,
     notification_context: dict | None,
 ) -> None:
     notification = send_review_summary(
@@ -589,6 +595,8 @@ def _send_auto_review_notification(
         focus_change_types or [],
         result,
         notification_context or {},
+        get_settings_record(db).dingtalk_notification_enabled,
+        focus_rule_codes or [],
     )
     save_notification_record(
         db,

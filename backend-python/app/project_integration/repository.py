@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
@@ -37,11 +39,13 @@ def find_project_by_git_project_id(db: Session, git_project_id: str) -> Project 
 
 
 def upsert_gitlab_project(db: Session, git_project_id: str, project_name: str, repository_url: str | None) -> Project:
+    now = datetime.now()
     project = find_project_by_git_project_id(db, git_project_id)
     if project:
         project.name = project_name
         project.repository_url = repository_url
         project.status = "ENABLED"
+        project.updated_at = now
         db.flush()
         return project
 
@@ -56,6 +60,8 @@ def upsert_gitlab_project(db: Session, git_project_id: str, project_name: str, r
         dingtalk_webhook_id=None,
         status="ENABLED",
         description="Auto-created from GitLab webhook",
+        created_at=now,
+        updated_at=now,
     )
     db.add(project)
     db.flush()

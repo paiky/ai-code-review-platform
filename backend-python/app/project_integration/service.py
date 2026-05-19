@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.change_analysis.service import analyze_changes
 from app.code_quality.service import trigger_auto_review
+from app.code_quality.repository import get_settings_record
 from app.core.errors import AppError
 from app.notification.service import send_risk_card
 from app.project_integration import gitlab_client
@@ -64,6 +65,7 @@ def handle_merge_request_webhook(db: Session, payload: dict[str, Any]) -> dict:
         author_username=event["authorUsername"],
         template_code=project.default_template_code,
     )
+    now = datetime.now()
     mr_record = GitLabMergeRequestEvent(
         task_id=task.id,
         git_project_id=event["gitProjectId"],
@@ -77,6 +79,8 @@ def handle_merge_request_webhook(db: Session, payload: dict[str, Any]) -> dict:
         author_username=event["authorUsername"],
         changed_files_summary=json.dumps(event["changedFilesSummary"], ensure_ascii=False),
         raw_payload=json.dumps(payload, ensure_ascii=False),
+        created_at=now,
+        updated_at=now,
     )
     db.add(mr_record)
     try:
@@ -130,6 +134,7 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
         author_username=event["authorUsername"],
         template_code=project_record.default_template_code,
     )
+    now = datetime.now()
     push_record = GitLabPushEvent(
         task_id=task.id,
         git_project_id=git_project_id,
@@ -143,6 +148,8 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
         author_username=event["authorUsername"],
         changed_files_summary=json.dumps(event["changedFilesSummary"], ensure_ascii=False),
         raw_payload=json.dumps(payload, ensure_ascii=False),
+        created_at=now,
+        updated_at=now,
     )
     db.add(push_record)
     try:
@@ -201,14 +208,18 @@ def _process_task(
         rule_result_id=result.id,
         risk_card=risk_card,
         focus_change_types=template.get("focusChangeTypes", []),
+        focus_rule_codes=template.get("focusRuleCodes", []),
         notification_context=notification_context,
     )
     if not ai_review_scheduled:
+        settings = get_settings_record(db)
         notification = send_risk_card(
             task.id,
             risk_card,
             template.get("focusChangeTypes", []),
             notification_context,
+            settings.dingtalk_notification_enabled,
+            focus_rule_codes=template.get("focusRuleCodes", []),
         )
         save_notification_record(
             db,

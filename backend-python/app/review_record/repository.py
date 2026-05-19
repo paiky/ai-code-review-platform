@@ -193,6 +193,7 @@ def create_review_task(
     author_username: str | None,
     template_code: str,
 ) -> ReviewTask:
+    now = datetime.now()
     task = ReviewTask(
         project_id=project_id,
         trigger_type=trigger_type,
@@ -207,7 +208,9 @@ def create_review_task(
         author_username=author_username,
         template_code=template_code,
         status="RUNNING",
-        started_at=datetime.now(),
+        started_at=now,
+        created_at=now,
+        updated_at=now,
     )
     db.add(task)
     db.flush()
@@ -215,16 +218,20 @@ def create_review_task(
 
 
 def mark_task_success(task: ReviewTask, risk_level: str) -> None:
+    now = datetime.now()
     task.status = "SUCCESS"
     task.risk_level = risk_level
     task.error_message = None
-    task.finished_at = datetime.now()
+    task.finished_at = now
+    task.updated_at = now
 
 
 def mark_task_failed(task: ReviewTask, error_message: str) -> None:
+    now = datetime.now()
     task.status = "FAILED"
     task.error_message = (error_message or "")[:1024]
-    task.finished_at = datetime.now()
+    task.finished_at = now
+    task.updated_at = now
 
 
 def save_review_result(
@@ -234,6 +241,7 @@ def save_review_result(
     analysis: dict,
     risk_card: dict,
 ) -> ReviewResult:
+    now = datetime.now()
     result = ReviewResult(
         task_id=task.id,
         project_id=task.project_id,
@@ -243,6 +251,8 @@ def save_review_result(
         change_analysis_json=json.dumps(analysis, ensure_ascii=False),
         risk_card_json=json.dumps(risk_card, ensure_ascii=False),
         summary=risk_card["summary"],
+        created_at=now,
+        updated_at=now,
     )
     db.add(result)
     db.flush()
@@ -260,6 +270,7 @@ def save_notification_record(
     response_body: str | None = None,
     error_message: str | None = None,
 ) -> NotificationRecord:
+    now = datetime.now()
     record = NotificationRecord(
         task_id=task_id,
         result_id=result_id,
@@ -269,6 +280,9 @@ def save_notification_record(
         request_digest=request_digest,
         response_body=response_body,
         error_message=error_message,
+        sent_at=now if status in {"SUCCESS", "FAILED"} else None,
+        created_at=now,
+        updated_at=now,
     )
     db.add(record)
     db.flush()

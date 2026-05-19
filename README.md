@@ -4,8 +4,8 @@
 
 代码目录：
 
-- `backend/`：Spring Boot 后端。
-- `backend-python/`：Python 后端重构目录，阶段 1 起作为独立 FastAPI 骨架，不影响现有 Java 后端。
+- `backend-python/`：当前主后端，FastAPI 实现，后续功能开发默认在这里落地。
+- `backend/`：历史 Spring Boot 后端，已停止维护；仅在需要对照旧行为时作为参考。
 - `frontend/`：React + Ant Design 前端。
 - `docs/`：设计、API、schema 与实施计划文档。
 - `examples/`：Webhook 与手动审查示例请求。
@@ -25,7 +25,18 @@
 3. `docs/10-local-dev-pitfalls.md`：本地环境与调试避坑。
 4. 与当前任务相关的 `docs/` 设计文档，例如 API、规则、AI Review provider 计划等。
 
-启动、编译、测试、构建应优先使用 `scripts/` 目录下脚本，不要绕过脚本直接按个人习惯执行底层 `mvn` / `npm` 命令。脚本负责统一 JDK 21 选择、本地 env 加载、依赖安装和 Windows 命令兼容。
+后续开发默认以 `backend-python/` 和 `frontend/` 为主。`backend/` Java 后端已停止维护，不再新增实现、测试或编译验证，除非用户明确要求对照历史行为。
+
+启动、编译、测试、构建应优先使用 `scripts/` 目录下脚本，不要绕过脚本直接按个人习惯执行底层命令。脚本负责统一本地 env、依赖安装和 Windows 命令兼容。
+
+验证策略按影响范围选择最小集，不要无意义地默认全量扫描：
+
+- 只改前端样式或交互：优先跑 `.\scripts\run-frontend.cmd build`。
+- 只改 Python 后端局部逻辑：优先跑相关 pytest 文件或测试类。
+- 改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容或跨模块边界时，再跑 `.\scripts\run-backend-python.cmd test` 全量 Python 测试。
+- Java Maven 测试默认不跑。
+
+搜索代码时排除依赖和构建产物目录，例如 `frontend/node_modules/`、`frontend/dist/`、`backend/target/`、`backend-python/.venv/`、`__pycache__/`、`.pytest_cache/`。仓库根目录提供 `.rgignore`，优先使用 `rg` 遵守该忽略规则。
 
 ## 当前主链路
 
@@ -79,7 +90,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 | `MYSQL_URL` | `jdbc:mysql://localhost:3306/ai_code_review?...` | MySQL JDBC URL |
 | `MYSQL_USERNAME` | `root` | MySQL 用户 |
 | `MYSQL_PASSWORD` | `root` | MySQL 密码 |
-| `SERVER_PORT` | Java: `8080` / Python: `18080` | 后端端口 |
+| `SERVER_PORT` | `8080` | 后端端口 |
 | `PLATFORM_BASE_URL` | `http://localhost:5173` | 钉钉“查看平台详情”链接前缀 |
 | `DINGTALK_WEBHOOK_URL` | 空 | 钉钉机器人 webhook，空值时通知记录为 `SKIPPED` |
 | `DINGTALK_ENABLED` | `true` | 是否启用钉钉发送 |
@@ -238,27 +249,18 @@ docker compose up -d
 CREATE DATABASE ai_code_review DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-启动后端：
-
-```powershell
-.\scripts\run-backend.cmd
-```
-
-后端脚本默认执行 `spring-boot:run`，也可以透传 Maven 参数，例如 `.\scripts\run-backend.cmd -q test` 或 `.\scripts\run-backend.cmd -q -DskipTests compile`。
-
-Python 后端重构阶段 1 提供独立 FastAPI 骨架，默认跑在 18080，Java 后端仍保留在 8080 作为对照：
+启动 Python 后端，默认跑在 8080：
 
 ```powershell
 .\scripts\run-backend-python.cmd dev
 .\scripts\run-backend-python.cmd test
-.\scripts\run-backend-java.cmd -q test
 ```
 
 Python 健康检查：
 
 ```powershell
-curl http://localhost:18080/api/health
-curl http://localhost:18080/actuator/health
+curl http://localhost:8080/api/health
+curl http://localhost:8080/actuator/health
 ```
 
 阶段 2 已接入 SQLAlchemy 只读查询 API，优先读取 `DATABASE_URL`，未设置时兼容旧 `MYSQL_URL`、`MYSQL_USERNAME`、`MYSQL_PASSWORD`：
@@ -339,7 +341,7 @@ AI Review 排障建议：
 .\scripts\run-frontend.cmd
 ```
 
-前端脚本默认执行 `npm run dev`，首次运行会自动 `npm install`。当前 Python 重构阶段，脚本默认把 Vite `/api` 代理到 `http://localhost:18080`；如需临时连 Java 后端，可先设置 `$env:VITE_API_PROXY_TARGET="http://localhost:8080"`。构建时使用 `.\scripts\run-frontend.cmd build`。
+前端脚本默认执行 `npm run dev`，首次运行会自动 `npm install`。脚本会读取 `.local/gitlab.env`，默认把 Vite `/api` 代理到 `http://localhost:8080`；如需临时改到其他后端，可设置 `VITE_API_PROXY_TARGET`。构建时使用 `.\scripts\run-frontend.cmd build`。
 
 访问前端：
 
@@ -352,7 +354,6 @@ http://localhost:5173
 ```powershell
 curl http://localhost:8080/api/health
 curl http://localhost:8080/actuator/health
-curl http://localhost:18080/api/health
 ```
 
 ## 数据库迁移
@@ -467,13 +468,7 @@ Copy-Item examples/gitlab.env.example .local/gitlab.env
 - `GITLAB_MR_IID`
 - MySQL 连接信息
 
-验证 Java 后端时重启默认后端：
-
-```powershell
-.\scripts\run-backend.cmd
-```
-
-验证 Python 后端阶段 3B 时启动 Python 后端：
+启动 Python 后端：
 
 ```powershell
 .\scripts\run-backend-python.cmd dev
@@ -639,16 +634,10 @@ http://localhost:5173/?taskId=47
 
 ## 自动化验证
 
-后端：
+Python 后端：
 
 ```powershell
-.\scripts\run-backend.cmd -q test
-```
-
-快速编译：
-
-```powershell
-.\scripts\run-backend.cmd -q -DskipTests compile
+.\scripts\run-backend-python.cmd test
 ```
 
 前端：

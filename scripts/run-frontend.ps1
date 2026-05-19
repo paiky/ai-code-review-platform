@@ -10,6 +10,35 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $frontendDir = Join-Path $repoRoot "frontend"
 $packageJson = Join-Path $frontendDir "package.json"
 $nodeModules = Join-Path $frontendDir "node_modules"
+$localGitLabEnv = Join-Path $repoRoot ".local\gitlab.env"
+
+function Import-DotEnvIfPresent {
+    param([string] $Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    Write-Host "Loading local env: $Path"
+    Get-Content -Path $Path -Encoding UTF8 | ForEach-Object {
+        $line = $_.Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith("#")) {
+            return
+        }
+
+        $separatorIndex = $line.IndexOf("=")
+        if ($separatorIndex -le 0) {
+            return
+        }
+
+        $key = $line.Substring(0, $separatorIndex).Trim()
+        $value = $line.Substring($separatorIndex + 1).Trim()
+        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        [Environment]::SetEnvironmentVariable($key, $value, "Process")
+    }
+}
 
 if (-not (Test-Path $packageJson)) {
     Write-Host "frontend/package.json was not found." -ForegroundColor Red
@@ -34,11 +63,12 @@ Write-Host "Using Node:"
 & node.exe --version
 Write-Host "Using npm:"
 & npm.cmd --version
+Import-DotEnvIfPresent $localGitLabEnv
 
 Push-Location $frontendDir
 try {
     if ([string]::IsNullOrWhiteSpace($env:VITE_API_PROXY_TARGET)) {
-        $env:VITE_API_PROXY_TARGET = "http://localhost:18080"
+        $env:VITE_API_PROXY_TARGET = "http://localhost:8080"
     }
     Write-Host "Using API proxy target: $env:VITE_API_PROXY_TARGET"
 

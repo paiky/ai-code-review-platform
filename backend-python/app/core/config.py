@@ -39,7 +39,7 @@ class Settings:
     def from_env(cls) -> "Settings":
         return cls(
             application_name=os.getenv("APP_NAME", "ai-code-review-platform"),
-            server_port=int(os.getenv("SERVER_PORT", "18080")),
+            server_port=int(os.getenv("SERVER_PORT", "8080")),
             cors_allow_origins=_parse_csv(
                 os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
             ),

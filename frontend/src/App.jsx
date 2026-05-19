@@ -169,6 +169,13 @@ function cleanAiMarkdown(text) {
     .replace(/`([^`]+)`/g, '$1');
 }
 
+function codeLocationText(filePath, startLine, endLine) {
+  if (!filePath) return '-';
+  if (startLine == null) return filePath;
+  const lineRange = endLine != null && endLine !== startLine ? `${startLine}-${endLine}` : `${startLine}`;
+  return `${filePath}:${lineRange}`;
+}
+
 const focusIndicatorMeta = {
   DB_SCHEMA_CHANGE: { label: 'DB 表/字段', color: 'volcano' },
   MQ_CONFIG_CHANGE: { label: 'MQ 配置', color: 'blue' },
@@ -931,9 +938,10 @@ function CodeQualityReviewView({ review, progress, onRetry, retrying }) {
               children: (
                 <Space direction="vertical" className="full-width">
                   <Descriptions size="small" column={{ xs: 1, md: 2 }}>
-                    <Descriptions.Item label="文件">{finding.filePath || '-'}</Descriptions.Item>
-                    <Descriptions.Item label="行号">
-                      {finding.startLine ? `${finding.startLine}${finding.endLine && finding.endLine !== finding.startLine ? `-${finding.endLine}` : ''}` : '-'}
+                    <Descriptions.Item label="位置" span={2}>
+                      <Text code className="code-location-text">
+                        {codeLocationText(finding.filePath, finding.startLine, finding.endLine)}
+                      </Text>
                     </Descriptions.Item>
                     <Descriptions.Item label="来源">{sourceLabel(finding.source || review.provider)}</Descriptions.Item>
                     <Descriptions.Item label="分类">{categoryLabel(finding.category)}</Descriptions.Item>
@@ -1116,6 +1124,11 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 
 
 function TemplateConfig() {
+  const [templates, setTemplates] = useState([]);
+  const [selectedTemplateCode, setSelectedTemplateCode] = useState(null);
+  const [notificationRules, setNotificationRules] = useState(null);
+  const [notificationRuleDraftCodes, setNotificationRuleDraftCodes] = useState([]);
+  const [selectedNotificationRuleCode, setSelectedNotificationRuleCode] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [providers, setProviders] = useState([]);
   const [selectedProviderCode, setSelectedProviderCode] = useState('DEEPSEEK');
@@ -1127,6 +1140,7 @@ function TemplateConfig() {
   const [providerApiKeyDraft, setProviderApiKeyDraft] = useState('');
   const [loading, setLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [notificationSaving, setNotificationSaving] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
   const [promptPreviewLoading, setPromptPreviewLoading] = useState(false);
@@ -1137,16 +1151,21 @@ function TemplateConfig() {
     setLoading(true);
     setError(null);
     try {
-      const [settingsData, profileData, providerData] = await Promise.all([
+      const [settingsData, profileData, providerData, templateData] = await Promise.all([
         fetchApi('/api/code-quality-reviews/settings'),
         fetchApi('/api/code-quality-review-profiles'),
-        fetchApi('/api/code-quality-review-providers')
+        fetchApi('/api/code-quality-review-providers'),
+        fetchApi('/api/rule-templates')
       ]);
       const profileItems = Array.isArray(profileData) ? profileData : (profileData.items || []);
       const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
+      const templateItems = Array.isArray(templateData) ? templateData : (templateData.items || []);
       const nextSelectedProfileCode = selectedProfileCode || profileItems[0]?.profileCode || null;
       const nextSelectedProviderCode = settingsData?.defaultProviderCode || selectedProviderCode || providerItems[0]?.providerCode || 'DEEPSEEK';
+      const nextSelectedTemplateCode = selectedTemplateCode || templateItems.find(item => item.templateCode === 'backend-default')?.templateCode || templateItems[0]?.templateCode || null;
       setAiSettings(settingsData);
+      setTemplates(templateItems);
+      setSelectedTemplateCode(nextSelectedTemplateCode);
       setProviders(providerItems);
       setSelectedProviderCode(nextSelectedProviderCode);
       setProviderDraft(providerItems.find(item => item.providerCode === nextSelectedProviderCode) || providerItems[0] || null);
@@ -1155,6 +1174,18 @@ function TemplateConfig() {
       setSelectedProfileCode(nextSelectedProfileCode);
       setProfileDraft(profileItems.find(item => item.profileCode === nextSelectedProfileCode) || profileItems[0] || null);
       setPromptPreview(null);
+      if (nextSelectedTemplateCode) {
+        const rules = await fetchApi(`/api/rule-templates/${nextSelectedTemplateCode}/notification-rules`);
+        setNotificationRules(rules);
+        setNotificationRuleDraftCodes(rules.focusRuleCodes || []);
+        const firstSelected = rules.focusRuleCodes?.[0];
+        const firstRule = rules.groups?.flatMap(group => group.rules || [])?.[0]?.ruleCode;
+        setSelectedNotificationRuleCode(firstSelected || firstRule || null);
+      } else {
+        setNotificationRules(null);
+        setNotificationRuleDraftCodes([]);
+        setSelectedNotificationRuleCode(null);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1165,6 +1196,15 @@ function TemplateConfig() {
   useEffect(() => {
     load();
   }, []);
+
+  const loadNotificationRules = async (templateCode) => {
+    const rules = await fetchApi(`/api/rule-templates/${templateCode}/notification-rules`);
+    setNotificationRules(rules);
+    setNotificationRuleDraftCodes(rules.focusRuleCodes || []);
+    const firstSelected = rules.focusRuleCodes?.[0];
+    const firstRule = rules.groups?.flatMap(group => group.rules || [])?.[0]?.ruleCode;
+    setSelectedNotificationRuleCode(firstSelected || firstRule || null);
+  };
 
   const updateMrAutoReviewEnabled = async (checked) => {
     setSettingsSaving(true);
@@ -1195,6 +1235,45 @@ function TemplateConfig() {
       messageApi.error(err.message);
     } finally {
       setSettingsSaving(false);
+    }
+  };
+
+  const selectTemplate = async (templateCode) => {
+    setSelectedTemplateCode(templateCode);
+    setNotificationRules(null);
+    setNotificationRuleDraftCodes([]);
+    try {
+      await loadNotificationRules(templateCode);
+    } catch (err) {
+      messageApi.error(err.message);
+    }
+  };
+
+  const toggleNotificationRule = (ruleCode) => {
+    if (!notificationRules || notificationSaving) return;
+    setSelectedNotificationRuleCode(ruleCode);
+    setNotificationRuleDraftCodes(currentCodes => (
+      currentCodes.includes(ruleCode)
+        ? currentCodes.filter(code => code !== ruleCode)
+        : [...currentCodes, ruleCode]
+    ));
+  };
+
+  const saveNotificationRules = async () => {
+    if (!notificationRules || !selectedTemplateCode || notificationSaving) return;
+    setNotificationSaving(true);
+    try {
+      const updated = await fetchApi(`/api/rule-templates/${selectedTemplateCode}/notification-rules`, {
+        method: 'PUT',
+        body: JSON.stringify({ focusRuleCodes: notificationRuleDraftCodes })
+      });
+      setNotificationRules(updated);
+      setNotificationRuleDraftCodes(updated.focusRuleCodes || []);
+      messageApi.success('已更改配置');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setNotificationSaving(false);
     }
   };
 
@@ -1338,6 +1417,13 @@ function TemplateConfig() {
     ...providerOptions
   ];
   const providerApiKeyPlaceholder = '留空表示不更新当前 API Key';
+  const templateOptions = templates.map(template => ({
+    label: `${template.templateName} (${template.templateCode})`,
+    value: template.templateCode
+  }));
+  const notificationRuleItems = notificationRules?.groups?.flatMap(group => group.rules || []) || [];
+  const selectedNotificationRule = notificationRuleItems.find(rule => rule.ruleCode === selectedNotificationRuleCode) || notificationRuleItems[0] || null;
+  const notificationRulesDirty = JSON.stringify(notificationRuleDraftCodes) !== JSON.stringify(notificationRules?.focusRuleCodes || []);
 
   return (
     <div className="page-shell">
@@ -1381,6 +1467,105 @@ function TemplateConfig() {
                     关闭后，规则审查和 AI Review 仍会正常执行与落库，但不会向钉钉发送消息。
                   </Text>
                 </div>
+              </Space>
+            </Card>
+          </Col>
+          <Col xs={24}>
+            <Card
+              title="卡片提醒类型"
+              extra={
+                <Button
+                  type="primary"
+                  loading={notificationSaving}
+                  disabled={!notificationRules || !notificationRulesDirty}
+                  onClick={saveNotificationRules}
+                >
+                  保存配置
+                </Button>
+              }
+            >
+              <Space direction="vertical" size="middle" className="full-width">
+                <Row gutter={[16, 16]} align="middle">
+                  <Col xs={24} md={10}>
+                    <Text strong>规则模板</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      value={selectedTemplateCode}
+                      options={templateOptions}
+                      loading={notificationSaving}
+                      onChange={selectTemplate}
+                    />
+                  </Col>
+                  <Col xs={24} md={14}>
+                    <Space wrap>
+                      <Text type="secondary">已选择 {notificationRuleDraftCodes.length} 个提醒类型</Text>
+                      {notificationRulesDirty && <Tag color="gold">未保存</Tag>}
+                      {notificationRuleDraftCodes.map(code => <Tag key={code} color="blue">{code}</Tag>)}
+                    </Space>
+                  </Col>
+                </Row>
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} lg={12}>
+                    {notificationRules ? (
+                      <Collapse
+                        defaultActiveKey={(notificationRules.groups || []).map(group => group.groupCode)}
+                        items={(notificationRules.groups || []).map(group => ({
+                          key: group.groupCode,
+                          label: (
+                            <Space wrap>
+                              <Tag color={group.color}>{group.rules?.length || 0}</Tag>
+                              <Text strong>{group.groupName}</Text>
+                            </Space>
+                          ),
+                          children: (
+                            <Space wrap size={[8, 8]}>
+                              {(group.rules || []).map(rule => {
+                                const checked = notificationRuleDraftCodes.includes(rule.ruleCode);
+                                return (
+                                  <Tag.CheckableTag
+                                    key={rule.ruleCode}
+                                    checked={checked}
+                                    className={`notification-rule-tag ${checked ? 'is-selected' : ''}`}
+                                    onClick={() => toggleNotificationRule(rule.ruleCode)}
+                                  >
+                                    {rule.title}
+                                  </Tag.CheckableTag>
+                                );
+                              })}
+                            </Space>
+                          )
+                        }))}
+                      />
+                    ) : (
+                      <Empty description="暂无提醒类型配置" />
+                    )}
+                  </Col>
+                  <Col xs={24} lg={12}>
+                    {selectedNotificationRule ? (
+                      <div className="notification-rule-detail">
+                        <Space direction="vertical" size="middle" className="full-width">
+                          <Space wrap>
+                            <Tag color={riskColor(selectedNotificationRule.riskLevel)}>{severityLabel(selectedNotificationRule.riskLevel)}</Tag>
+                            <Tag>{selectedNotificationRule.changeType}</Tag>
+                            {!selectedNotificationRule.enabledInTemplate && <Tag color="warning">模板未启用</Tag>}
+                          </Space>
+                          <Title level={5}>{selectedNotificationRule.title}</Title>
+                          <Paragraph>{selectedNotificationRule.description}</Paragraph>
+                          <Text type="secondary">{selectedNotificationRule.impact}</Text>
+                          <Divider />
+                          <Text strong>建议检查</Text>
+                          <ul className="notification-rule-checks">
+                            {(selectedNotificationRule.recommendedChecks || []).map(check => <li key={check}>{check}</li>)}
+                          </ul>
+                          <Text strong>示例</Text>
+                          <pre className="notification-rule-example">{selectedNotificationRule.example || '-'}</pre>
+                        </Space>
+                      </div>
+                    ) : (
+                      <Empty description="请选择提醒类型" />
+                    )}
+                  </Col>
+                </Row>
               </Space>
             </Card>
           </Col>

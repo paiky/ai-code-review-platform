@@ -2,6 +2,8 @@ from datetime import datetime
 import json
 
 from fastapi.testclient import TestClient
+import httpx
+import respx
 from sqlalchemy.orm import Session
 
 from app.project_integration.models import Project
@@ -195,3 +197,41 @@ def test_rerun_gitlab_mr_task_replays_raw_payload(client: TestClient, db_session
     assert data["triggerType"] == "GITLAB_MR_WEBHOOK"
     assert data["taskId"] != created["taskId"]
 
+    detail = client.get(f"/api/review-tasks/{data['taskId']}").json()["data"]
+    assert detail["createdAt"] is not None
+    assert detail["updatedAt"] is not None
+
+    notifications = client.get(f"/api/review-tasks/{data['taskId']}/notifications").json()["data"]
+    assert notifications[0]["createdAt"] is not None
+
+
+def test_rerun_respects_global_dingtalk_notification_switch(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_backend_template(db_session)
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=mock_mr_payload(),
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    ).json()["data"]
+    monkeypatch.setenv("DINGTALK_WEBHOOK_URL", "https://dingtalk.example.test/robot/send")
+    settings = client.put(
+        "/api/code-quality-reviews/settings",
+        json={"dingtalkNotificationEnabled": False},
+    )
+    assert settings.status_code == 200
+
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post("https://dingtalk.example.test/robot/send").mock(
+            return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
+        )
+        rerun = client.post(f"/api/review-tasks/{created['taskId']}/rerun")
+
+    assert rerun.status_code == 200
+    new_task_id = rerun.json()["data"]["taskId"]
+    notifications = client.get(f"/api/review-tasks/{new_task_id}/notifications").json()["data"]
+    assert notifications[0]["status"] == "SKIPPED"
+    assert notifications[0]["target"] == "DINGTALK_NOTIFICATION_ENABLED"
+    assert route.called is False
