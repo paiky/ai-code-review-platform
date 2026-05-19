@@ -37,6 +37,11 @@ Write-Host "Using npm:"
 
 Push-Location $frontendDir
 try {
+    if ([string]::IsNullOrWhiteSpace($env:VITE_API_PROXY_TARGET)) {
+        $env:VITE_API_PROXY_TARGET = "http://localhost:18080"
+    }
+    Write-Host "Using API proxy target: $env:VITE_API_PROXY_TARGET"
+
     if (-not (Test-Path $nodeModules)) {
         Write-Host "frontend/node_modules was not found. Running npm install..."
         & npm.cmd install

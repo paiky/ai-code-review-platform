@@ -547,7 +547,10 @@ function phaseLabel(phase) {
     QUEUED: '已排队',
     STARTED: '已启动',
     REQUEST_BUILT: '请求已构建',
+    PROVIDER_SELECTED: '已选择 Provider',
+    REQUEST_VALIDATED: '请求校验',
     PROVIDER_START: '调用 Provider',
+    PROVIDER_FAILED: 'Provider 调用失败',
     CODEX_REPOSITORY: '确认仓库（历史）',
     PROMPT_METADATA: 'Prompt 元数据',
     CODEX_OUTPUT_FILE: '准备输出文件（历史）',
@@ -582,7 +585,14 @@ function phaseLabel(phase) {
     CUSTOM_RESPONSE: '自定义 Provider 已响应',
     CUSTOM_PARSED: '解析自定义 Provider 输出',
     CUSTOM_FAILED: '自定义 Provider 执行失败',
+    HTTP_REQUEST_START: 'HTTP 请求已发起',
+    HTTP_RESPONSE_HEADERS: 'HTTP 响应头',
+    HTTP_RESPONSE_BODY_PREVIEW: 'HTTP 响应预览',
+    OUTPUT_EXTRACTED: '输出文本已提取',
+    JSON_PARSE_START: '解析 JSON',
+    JSON_PARSE_FAILED: 'JSON 解析失败',
     SAVE_RESULT: '保存结果',
+    RESULT_SAVED: '结果已保存',
     FINISHED: '已完成',
     FAILED: '失败',
     SAVE_FAILED: '保存失败'
@@ -594,7 +604,10 @@ const keyProgressPhases = new Set([
   'QUEUED',
   'STARTED',
   'REQUEST_BUILT',
+  'PROVIDER_SELECTED',
+  'REQUEST_VALIDATED',
   'PROVIDER_START',
+  'PROVIDER_FAILED',
   'PROMPT_METADATA',
   'CODEX_COMMAND',
   'CODEX_PROCESS_STARTED',
@@ -612,7 +625,14 @@ const keyProgressPhases = new Set([
   'CUSTOM_REQUEST',
   'CUSTOM_RESPONSE',
   'CUSTOM_PARSED',
+  'HTTP_REQUEST_START',
+  'HTTP_RESPONSE_HEADERS',
+  'HTTP_RESPONSE_BODY_PREVIEW',
+  'OUTPUT_EXTRACTED',
+  'JSON_PARSE_START',
+  'JSON_PARSE_FAILED',
   'SAVE_RESULT',
+  'RESULT_SAVED',
   'FINISHED',
   'FAILED',
   'SAVE_FAILED',
@@ -642,8 +662,14 @@ function progressStepDescription(event) {
       return '开始执行代码质量 Review。';
     case 'REQUEST_BUILT':
       return '已确定本轮使用的 profile、provider、model、审查模式和变更范围。';
+    case 'PROVIDER_SELECTED':
+      return '已选择本轮使用的模型 Provider。';
+    case 'REQUEST_VALIDATED':
+      return event?.level === 'ERROR' ? 'Provider 请求参数未通过校验。' : 'Provider 请求参数已通过校验。';
     case 'PROVIDER_START':
       return '开始调用代码质量 Review provider。';
+    case 'PROVIDER_FAILED':
+      return '代码质量 Review Provider 调用失败。';
     case 'PROMPT_METADATA':
       return '已生成最终 prompt，并记录 hash、长度、预览和运行环境。';
     case 'CODEX_COMMAND':
@@ -678,8 +704,22 @@ function progressStepDescription(event) {
       return '自定义 Provider 已返回响应。';
     case 'CUSTOM_PARSED':
       return '自定义 Provider 输出已解析为结构化质量问题；评审建议见上方“质量问题”。';
+    case 'HTTP_REQUEST_START':
+      return '已发起 Provider HTTP 请求，正在等待模型服务响应。';
+    case 'HTTP_RESPONSE_HEADERS':
+      return 'Provider HTTP 响应头已返回。';
+    case 'HTTP_RESPONSE_BODY_PREVIEW':
+      return '已记录 Provider 响应体预览，可用于判断网关错误或非预期响应。';
+    case 'OUTPUT_EXTRACTED':
+      return event?.level === 'ERROR' ? 'Provider 响应中未提取到可解析的模型输出。' : 'Provider 输出文本已提取。';
+    case 'JSON_PARSE_START':
+      return '开始把模型输出解析为平台要求的结构化 JSON。';
+    case 'JSON_PARSE_FAILED':
+      return '模型已返回文本，但不是平台要求的合法 Review JSON。';
     case 'SAVE_RESULT':
       return 'Provider 执行完成，正在保存 Review 结果。';
+    case 'RESULT_SAVED':
+      return 'AI Review 结果已保存到数据库。';
     case 'FINISHED':
       return 'AI Review 已完成。';
     case 'FAILED':
@@ -1405,7 +1445,7 @@ function TemplateConfig() {
                   </Space>
                 </Col>
                 <Col xs={24} md={6}>
-                  <Space>
+                  <Space direction="vertical" size={4}>
                     <Switch
                       checked={providerDraft?.enabled ?? false}
                       checkedChildren="启用"

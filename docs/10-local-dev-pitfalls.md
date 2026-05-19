@@ -80,7 +80,7 @@ GitLab Push Hook 只有被推送的 `ref`，没有 MR 的 `source_branch` 和 `t
 1. 非流式模型 Provider 调试应至少记录请求摘要、请求预览、响应摘要、原始响应预览、输出文本预览和解析结果。
 2. 不要记录 API Key、Authorization header 等敏感信息。
 3. 请求和响应内容需要截断，避免 progress event 过大。
-4. 这不是流式输出；流式输出需要单独实现 SSE/event stream 解析。
+4. 当前 AI Review 保持非流式 HTTP 调用；前端只通过 progress / result 轮询刷新执行状态。
 
 ## 5. Agent 不应绕过 `scripts/` 自行拼编译命令
 
@@ -216,3 +216,181 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 ```
 
 3. 遇到 `\ufeff` 编译错误时，先检查最近被脚本改写过的 `.java` / `.sql` 文件编码，再重新保存为 UTF-8 无 BOM。
+
+## 10. WindowsApps 的 `python.exe` 占位别名会干扰 Python 后端脚本
+
+现象：
+
+阶段 1 Python 后端验证时，`python` 命令可能先命中：
+
+```text
+C:\Users\<user>\AppData\Local\Microsoft\WindowsApps\python.exe
+```
+
+沙箱内可能报：
+
+```text
+Program 'python.exe' failed to run: A specified logon session does not exist.
+```
+
+沙箱外或普通 PowerShell 中也可能因为 WindowsApps 占位别名而无法启动真实 Python。`py` launcher 存在时，还可能返回：
+
+```text
+No installed Python found!
+```
+
+原因：
+
+WindowsApps 的 `python.exe` 是应用执行别名，不一定是真实 Python 解释器；`py.exe` launcher 也可能没有注册到已安装解释器。
+
+处理方式：
+
+1. `scripts/run-backend-python.ps1` 优先使用 `backend-python/.venv/Scripts/python.exe`。
+2. 如果没有 `.venv`，脚本会跳过 WindowsApps 占位别名，寻找真实 `python.exe`。
+3. 如果全局 pip 异常，不要直接修全局 Python；优先在仓库内创建隔离环境：
+
+```powershell
+C:\Users\<user>\AppData\Local\Programs\Python\Python312\python.exe -m venv backend-python\.venv
+Push-Location backend-python
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+Pop-Location
+```
+
+## 11. `Start-Process` 可能因 `Path` / `PATH` 环境键冲突失败
+
+现象：
+
+在 Codex / PowerShell 环境里用 `Start-Process` 启动本地服务时，可能报：
+
+```text
+Start-Process : 已添加项。字典中的关键字:“Path”所添加的关键字:“PATH”
+```
+
+原因：
+
+当前进程环境中同时存在大小写不同的 `Path` / `PATH` 键，Windows 环境变量大小写不敏感，`Start-Process` 合并环境字典时会冲突。
+
+处理方式：
+
+1. 本地烟测需要临时启动服务时，可以改用 `.NET` 的 `System.Diagnostics.ProcessStartInfo`，并设置 `UseShellExecute = $false`、`CreateNoWindow = $true`。
+2. 如果当前 PowerShell / .NET 运行时的 `ProcessStartInfo.EnvironmentVariables` 也是空值或不可写，可以先在父进程设置 `$env:DATABASE_URL` 等环境变量，让子进程继承。
+3. 启动前先检查目标端口是否已被监听，避免误停已有服务。
+4. 烟测完成后只停止本次监听目标端口的进程。
+
+## 12. Python 后端不能把 JDBC 专属参数透传给 PyMySQL
+
+现象：
+
+Python 后端 `/api/health` 正常，但访问需要数据库的接口，例如：
+
+```text
+GET /api/review-tasks?pageNo=1&pageSize=20
+```
+
+返回 500。直接复现 SQLAlchemy 查询时可能看到：
+
+```text
+TypeError: Connection.__init__() got an unexpected keyword argument 'serverTimezone'
+```
+
+原因：
+
+旧 Java 后端使用的 `MYSQL_URL` 是 JDBC URL，常带有 `serverTimezone`、`allowPublicKeyRetrieval`、`useSSL` 等 JDBC 参数。Python 阶段把 `MYSQL_URL` 转成 SQLAlchemy URL 时，只有 PyMySQL 支持的参数才能进入 query string；`serverTimezone` 这类 JDBC 专属参数如果透传，会被 PyMySQL 当成连接参数并报错。
+
+处理方式：
+
+1. Python 后端优先使用明确的 `DATABASE_URL`：
+
+```powershell
+$env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?charset=utf8mb4"
+```
+
+2. 如果沿用 `MYSQL_URL`，转换逻辑只保留 `charset=utf8mb4` 等 PyMySQL 支持参数，不透传 `serverTimezone`、`useSSL`、`allowPublicKeyRetrieval`。
+3. 健康检查不访问数据库，不能只凭 `/api/health` 判断数据库链路可用；应再访问 `/api/review-tasks` 或 `/api/projects`。
+
+## 13. AI Review retry 不能同步等待真实模型调用
+
+现象：
+
+访问或点击：
+
+```text
+POST /api/code-quality-reviews/tasks/{taskId}/retry
+```
+
+后，接口长时间无响应；同时 `/api/health`、`/api/review-tasks` 等其它接口也开始超时。
+
+原因：
+
+Python 阶段 4 初版 retry 在 FastAPI `async def` 里同步执行数据库查询和真实模型 HTTP 调用。uvicorn 本地开发默认单 worker，真实 Provider 一慢，就会占住事件循环，导致其它请求也无法处理。
+
+处理方式：
+
+1. retry 接口只负责写入 `RUNNING` 结果和 `QUEUED` progress，然后立即返回。
+2. 真实 Provider 调用放到后台线程中执行，执行过程写入 `code_quality_review_progress_events`，结果写入 `code_quality_review_results`。
+3. 前端通过 `/api/review-tasks/{taskId}/code-quality-progress` 和 `/api/review-tasks/{taskId}/code-quality-result` 轮询。
+4. 如果已经触发旧同步 retry 并导致本地服务整体超时，需要重启 Python 后端进程。
+
+## 14. Python AI Review 阶段 4 通过 mock 不等于已对齐 Java 行为
+
+现象：
+
+Python 后端阶段 4 的 AI Review API、Provider mock 测试都能通过，但真实使用时效果仍弱于 Java 后端，例如默认审核规则过短、执行过程缺少请求/响应/解析调试信息、GitLab MR 自动 AI Review 完成后没有按 Java 逻辑发送合并的“变更审查结果”通知。
+
+原因：
+
+阶段 4 的验收重点是 Provider API、settings/profile/provider 接口、结果落库和基础脱敏；这只能证明“能调用模型并保存结果”，不能证明已经完整复刻 Java 后端后续补强过的真实可用性逻辑。
+
+处理方式：
+
+1. 对照 Java `codequality` 包时，不只看 Controller/API，还要同时核对 `CodeQualityAutoReviewService`、`CodeQualityAsyncReviewExecutor`、Provider progress debug、默认 prompt migration 和 `DingTalkNotifier.sendReviewSummary`。
+2. Python AI Review 至少应覆盖：强默认 prompt、请求/响应/输出预览 progress、Provider 失败落成 `FAILED`、MR 自动触发后的合并通知记录。
+3. 规则提醒主链路也不能只看样例测试通过；需要确认风险规则来源、模板加载、聚合类型匹配、focus indicator 和钉钉过滤是否与 Java 保持一致。
+
+## 15. AI Review 已恢复轮询模式，不要再把进度刷新设计成流式链路
+
+现象：
+
+引入 SSE / token streaming 后，前端仍需要轮询兜底，而且真实 Provider 容易卡在首包、网关或协议解析阶段，表现为 AI Review 长时间不完成或必须手动刷新才能看到结果。
+
+当前决定恢复为稳定轮询：Provider 调用非流式 HTTP API，前端不建立 EventSource / WebSocket。
+
+原因：
+
+1. Progress 刷新和模型 token streaming 是两层能力，混在一起会增加前后端状态复杂度。
+2. 当前前端没有必要为了 AI Review 结果展示建立 SSE / WebSocket；轮询 `code-quality-progress` 与 `code-quality-result` 已能覆盖执行过程展示。
+3. 真实模型网关对 streaming 协议、首包时间、JSON mode 的支持差异较大，容易把一次普通 Review 变成协议排障。
+
+处理方式：
+
+1. 前端任务详情页只保留定时轮询：运行中任务周期性请求 `/api/review-tasks/{taskId}/code-quality-progress` 和 `/api/review-tasks/{taskId}/code-quality-result`。
+2. 后端只保留普通 Provider HTTP 调用路径，不再提供 `/code-quality-progress/stream`，也不再维护 delta buffer。
+3. Provider 配置接口不暴露 `streamingEnabled`、`capabilities`、`streamingConfig`；页面不再展示流式开关。
+4. 如果最后 phase 是 `HTTP_REQUEST_START`，优先检查 endpoint、DNS、网关、API Key、模型名称和普通 HTTP read timeout。
+5. 如果最后 phase 是 `JSON_PARSE_FAILED`，说明模型已经返回文本，但不是平台要求的 Review JSON，应检查 prompt、`response_format` / strict schema 支持或模型 JSON mode 能力。
+6. 后续如确实要重做 streaming，必须重新设计阶段文档，明确前端连接协议、后端 fan-out、超时策略、回退行为和验收用例，再单独落地。
+7. 真实 Provider 联调前不要把 API Key、GitLab token、DingTalk webhook 写入代码、文档、测试快照或 progress detail。
+
+## 16. Python AI Review 配置接口 500 可能是运行库 schema 与 Flyway 迁移不一致
+
+现象：
+
+访问这些接口时返回 500：
+
+```text
+GET /api/code-quality-reviews/settings
+GET /api/code-quality-review-profiles
+GET /api/code-quality-review-providers
+```
+
+原因：
+
+Python 后端本身不执行 Java Flyway migration。如果本地 MySQL 还停在较旧的 AI Review 表结构，配置接口会在初始化默认 settings / profile / provider 时遇到缺表或缺列，例如 `code_quality_model_providers`、`default_provider_code`、`provider_code`、`review_instructions`。
+
+本次还定位到一个测试环境里的隐藏坑：运行时补 schema 时如果用 engine 级 inspector，SQLite 单连接测试可能触发额外 ROLLBACK，把同一请求里刚写入的 Provider 配置冲掉。schema 检查应绑定当前 SQLAlchemy Session 的 connection。
+
+处理方式：
+
+1. Python 后端的 AI Review 配置初始化会在当前 Session connection 上补齐必要表和列，避免旧库直接 500。
+2. 本地真实 MySQL 如果仍异常，先重启 Python 后端，再确认数据库至少有 `code_quality_review_settings`、`code_quality_review_profiles`、`code_quality_model_providers`。
+3. 长期仍建议通过 Java 后端启动一次 Flyway，让正式 schema 迁移记录保持完整；Python 的运行时补齐只作为本地重构期兼容保护。

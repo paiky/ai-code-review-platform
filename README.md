@@ -1,10 +1,11 @@
-# AI 变更提醒与代码质量审查平台
+﻿# AI 变更提醒与代码质量审查平台
 
 本仓库是一个可接入 GitLab / 钉钉 / 多模型 API 模式 AI Review 的研发质量平台原型。当前主流程围绕代码变更生成结构化“提醒卡片”，再按需触发代码质量 AI Review。
 
 代码目录：
 
 - `backend/`：Spring Boot 后端。
+- `backend-python/`：Python 后端重构目录，阶段 1 起作为独立 FastAPI 骨架，不影响现有 Java 后端。
 - `frontend/`：React + Ant Design 前端。
 - `docs/`：设计、API、schema 与实施计划文档。
 - `examples/`：Webhook 与手动审查示例请求。
@@ -13,6 +14,7 @@
 常用文档：
 
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
+- `docs/19-python-backend-refactor-plan.md`：Python 后端重构计划，说明是否保持前后端分离、部署变化、影响范围和分阶段迁移路径。
 
 ## Agent / 新对话入口
 
@@ -77,7 +79,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 | `MYSQL_URL` | `jdbc:mysql://localhost:3306/ai_code_review?...` | MySQL JDBC URL |
 | `MYSQL_USERNAME` | `root` | MySQL 用户 |
 | `MYSQL_PASSWORD` | `root` | MySQL 密码 |
-| `SERVER_PORT` | `8080` | 后端端口 |
+| `SERVER_PORT` | Java: `8080` / Python: `18080` | 后端端口 |
 | `PLATFORM_BASE_URL` | `http://localhost:5173` | 钉钉“查看平台详情”链接前缀 |
 | `DINGTALK_WEBHOOK_URL` | 空 | 钉钉机器人 webhook，空值时通知记录为 `SKIPPED` |
 | `DINGTALK_ENABLED` | `true` | 是否启用钉钉发送 |
@@ -244,13 +246,100 @@ CREATE DATABASE ai_code_review DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_uni
 
 后端脚本默认执行 `spring-boot:run`，也可以透传 Maven 参数，例如 `.\scripts\run-backend.cmd -q test` 或 `.\scripts\run-backend.cmd -q -DskipTests compile`。
 
+Python 后端重构阶段 1 提供独立 FastAPI 骨架，默认跑在 18080，Java 后端仍保留在 8080 作为对照：
+
+```powershell
+.\scripts\run-backend-python.cmd dev
+.\scripts\run-backend-python.cmd test
+.\scripts\run-backend-java.cmd -q test
+```
+
+Python 健康检查：
+
+```powershell
+curl http://localhost:18080/api/health
+curl http://localhost:18080/actuator/health
+```
+
+阶段 2 已接入 SQLAlchemy 只读查询 API，优先读取 `DATABASE_URL`，未设置时兼容旧 `MYSQL_URL`、`MYSQL_USERNAME`、`MYSQL_PASSWORD`：
+
+```powershell
+$env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?charset=utf8mb4"
+.\scripts\run-backend-python.cmd dev
+```
+
+当前 Python 只读接口：
+
+```text
+GET /api/projects
+GET /api/review-tasks
+GET /api/review-tasks/{taskId}
+GET /api/review-tasks/{taskId}/result
+GET /api/review-tasks/{taskId}/notifications
+GET /api/rule-templates
+GET /api/rule-templates/{templateCode}
+```
+
+阶段 3 已补齐规则审查主链路的 Python 实现，阶段 3B 已接入真实 GitLab diff 补拉与钉钉 HTTP 推送能力：
+
+```text
+POST /api/webhooks/gitlab/merge-request
+POST /api/review-tasks/manual
+POST /api/review-tasks/{taskId}/rerun
+```
+
+支持的闭环：
+
+```text
+mock MR webhook / GitLab MR webhook / GitLab Push webhook / manual review
+  -> 变更分析
+  -> RiskCard
+  -> review_results 落库
+  -> notification_records 写入 SUCCESS / FAILED / SKIPPED
+```
+
+GitLab API 补拉默认关闭，需要配置 `GITLAB_API_ENABLED=true`、`GITLAB_BASE_URL`、`GITLAB_TOKEN`；钉钉 webhook 为空或关闭时通知记录为 `SKIPPED`。
+
+阶段 4 已迁移 Python 代码质量 AI Review 的核心 API 与 HTTP Provider：
+
+```text
+POST /api/code-quality-reviews/manual
+GET /api/code-quality-reviews/settings
+PUT /api/code-quality-reviews/settings
+POST /api/code-quality-reviews/tasks/{taskId}/retry
+GET /api/code-quality-review-profiles
+GET /api/code-quality-review-profiles/{profileCode}
+PUT /api/code-quality-review-profiles/{profileCode}
+GET /api/code-quality-review-profiles/{profileCode}/rendered-prompt
+POST /api/code-quality-review-profiles/{profileCode}/reset-default-prompt
+GET /api/code-quality-review-providers
+PUT /api/code-quality-review-providers/{providerCode}
+POST /api/code-quality-review-providers/{providerCode}/set-default
+GET /api/review-tasks/{taskId}/code-quality-result
+GET /api/review-tasks/{taskId}/code-quality-progress
+```
+
+Python AI Review 默认关闭；启用后支持 OpenAI Responses、Anthropic Messages、DeepSeek / Custom OpenAI-compatible Chat Completions。Provider API Key 只返回 masked 形式，进度事件会做敏感字段脱敏。阶段 4 自动化验证使用 respx mock 外部模型 API，真实模型凭据联调需要单独确认。
+
+AI Review 当前保持稳定的非流式 HTTP Provider 调用。前端通过 `GET /api/review-tasks/{taskId}/code-quality-progress` 和 `GET /api/review-tasks/{taskId}/code-quality-result` 轮询展示执行过程与结果，不再建立 SSE / WebSocket 连接，也不启用模型 token streaming。
+
+已补充非流式 Provider 诊断事件：`PROVIDER_SELECTED`、`REQUEST_VALIDATED`、`HTTP_REQUEST_START`、`HTTP_RESPONSE_HEADERS`、`HTTP_RESPONSE_BODY_PREVIEW`、`OUTPUT_EXTRACTED`、`JSON_PARSE_START`、`JSON_PARSE_FAILED`、`RESULT_SAVED`。这些阶段用于定位 API Key / endpoint / HTTP 状态 / 超时 / 协议响应 / JSON 解析问题；失败会落库为 `FAILED`，不会长期停留在 `RUNNING`。
+
+AI Review 排障建议：
+
+```text
+最后 phase = HTTP_REQUEST_START：请求已发出但未收到响应，检查 endpoint、DNS、网关、模型响应耗时。
+最后 phase = JSON_PARSE_FAILED：模型已返回完整文本，但不是平台要求的 Review JSON，检查 prompt、response_format 或模型 JSON mode 能力。
+最后 phase = *_FAILED：查看 detail 中的 connect_timeout、read_timeout、provider_error、protocol_error 或 parse_error。
+```
+
 启动前端：
 
 ```powershell
 .\scripts\run-frontend.cmd
 ```
 
-前端脚本默认执行 `npm run dev`，首次运行会自动 `npm install`。构建时使用 `.\scripts\run-frontend.cmd build`。
+前端脚本默认执行 `npm run dev`，首次运行会自动 `npm install`。当前 Python 重构阶段，脚本默认把 Vite `/api` 代理到 `http://localhost:18080`；如需临时连 Java 后端，可先设置 `$env:VITE_API_PROXY_TARGET="http://localhost:8080"`。构建时使用 `.\scripts\run-frontend.cmd build`。
 
 访问前端：
 
@@ -263,6 +352,7 @@ http://localhost:5173
 ```powershell
 curl http://localhost:8080/api/health
 curl http://localhost:8080/actuator/health
+curl http://localhost:18080/api/health
 ```
 
 ## 数据库迁移
@@ -287,6 +377,7 @@ V14__code_quality_global_review_provider.sql
 V15__remove_api_compatibility_from_backend_templates.sql
 V16__stronger_default_ai_review_prompt.sql
 V17__dingtalk_notification_global_switch.sql
+V18__code_quality_model_providers.sql
 ```
 
 主要表：
@@ -369,16 +460,23 @@ Copy-Item examples/gitlab.env.example .local/gitlab.env
 
 编辑 `.local/gitlab.env`，填入：
 
+- `GITLAB_API_ENABLED=true`
 - `GITLAB_BASE_URL`
 - `GITLAB_TOKEN`
 - `GITLAB_PROJECT_ID`
 - `GITLAB_MR_IID`
 - MySQL 连接信息
 
-然后重启后端：
+验证 Java 后端时重启默认后端：
 
 ```powershell
 .\scripts\run-backend.cmd
+```
+
+验证 Python 后端阶段 3B 时启动 Python 后端：
+
+```powershell
+.\scripts\run-backend-python.cmd dev
 ```
 
 执行验证脚本：
@@ -473,6 +571,7 @@ Provider 说明：
 - 控制 GitLab MR 是否自动触发 AI Review。
 - 控制是否全局发送钉钉推送；关闭后审查和落库仍正常执行。
 - 配置 OpenAI / Anthropic / DeepSeek / 自定义 Provider 的模型端点 URL、模型名称和 API Key。
+- 在支持的 Provider 维度开启或关闭 AI Review 流式输出；当前支持 OpenAI 和 DeepSeek。
 - 设置全局默认 Provider，以及项目级默认 Provider。
 - 查看、编辑、预览、恢复 AI Review Profile prompt。
 
@@ -557,3 +656,4 @@ http://localhost:5173/?taskId=47
 ```powershell
 .\scripts\run-frontend.cmd build
 ```
+

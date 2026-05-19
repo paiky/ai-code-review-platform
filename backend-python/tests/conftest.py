@@ -1,0 +1,58 @@
+from collections.abc import Generator
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.core.database import Base, get_db
+from app.main import create_app
+
+# Import models so SQLAlchemy registers all stage-2 tables in Base.metadata.
+from app.code_quality import models as code_quality_models  # noqa: F401
+from app.project_integration import models as project_models  # noqa: F401
+from app.review_record import models as review_models  # noqa: F401
+from app.rule_template import models as rule_template_models  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def isolate_external_integrations(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITLAB_API_ENABLED", "false")
+    monkeypatch.delenv("GITLAB_BASE_URL", raising=False)
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    monkeypatch.delenv("DINGTALK_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "false")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+
+@pytest.fixture()
+def db_session() -> Generator[Session, None, None]:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+@pytest.fixture()
+def client(db_session: Session) -> Generator[TestClient, None, None]:
+    app = create_app()
+
+    def override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as test_client:
+        yield test_client

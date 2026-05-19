@@ -616,6 +616,8 @@ Provider 列表响应 data：
 }
 ```
 
+AI Review Provider 当前保持非流式 HTTP 请求；前端通过任务进度与结果接口轮询刷新，不再提供 Provider 维度流式开关。
+
 重试响应 data：
 
 ```json
