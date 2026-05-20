@@ -17,6 +17,12 @@ from app.code_quality.models import (
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.json_utils import format_datetime, page_response, read_json_array
+from app.notification.repository import (
+    ensure_webhook_schema,
+    list_webhooks,
+    upsert_webhooks,
+    webhook_to_dict,
+)
 
 
 DEFAULT_PROFILE_CODE = "backend-default-ai-review"
@@ -157,6 +163,7 @@ def ensure_code_quality_config_schema(db: Session) -> None:
     ensure_settings_schema(db)
     ensure_profile_schema(db)
     ensure_provider_schema(db)
+    ensure_webhook_schema(db)
 
 
 def ensure_settings_schema(db: Session) -> None:
@@ -300,9 +307,11 @@ def get_settings_record(db: Session) -> CodeQualityReviewSettings:
 
 
 def settings_to_dict(record: CodeQualityReviewSettings) -> dict[str, Any]:
+    session = Session.object_session(record)
     return {
         "mrAutoReviewEnabled": record.mr_auto_review_enabled,
         "dingtalkNotificationEnabled": record.dingtalk_notification_enabled,
+        "dingtalkWebhooks": [webhook_to_dict(item) for item in list_webhooks(session)] if session else [],
         "reviewProvider": record.default_provider_code or _provider_code(record.review_provider),
         "defaultProviderCode": record.default_provider_code or _provider_code(record.review_provider),
         "updatedAt": format_datetime(record.updated_at),
@@ -315,6 +324,11 @@ def update_settings_record(db: Session, request: dict[str, Any]) -> dict[str, An
         record.mr_auto_review_enabled = bool(request["mrAutoReviewEnabled"])
     if "dingtalkNotificationEnabled" in request:
         record.dingtalk_notification_enabled = bool(request["dingtalkNotificationEnabled"])
+    if "dingtalkWebhooks" in request:
+        payload = request["dingtalkWebhooks"] or []
+        if not isinstance(payload, list):
+            raise AppError("VALIDATION_ERROR", "dingtalkWebhooks must be a list", 400)
+        upsert_webhooks(db, payload)
     default_provider = request.get("defaultProviderCode") or request.get("reviewProvider")
     if default_provider is not None:
         provider = get_provider(db, str(default_provider).upper())

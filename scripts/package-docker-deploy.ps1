@@ -91,6 +91,30 @@ set -euo pipefail
 
 SCRIPT_DIR="`$(cd "`$(dirname "`${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_HOME="`${DEPLOY_HOME:-`$(dirname "`$SCRIPT_DIR")/runtime}"
+KEEP_IMAGE_VERSIONS="`${KEEP_IMAGE_VERSIONS:-2}"
+
+cleanup_old_images() {
+  local repo="`$1"
+  local keep_count="`$2"
+
+  if ! [[ "`$keep_count" =~ ^[0-9]+$ ]]; then
+    echo "Skip image cleanup for `$repo: KEEP_IMAGE_VERSIONS is not a non-negative integer: `$keep_count"
+    return 0
+  fi
+
+  mapfile -t tags < <(docker image ls "`$repo" --format '{{.Tag}}' | grep -E '^[0-9]{14}$' | awk '!seen[`$0]++' | sort -r)
+  if [ "`${#tags[@]}" -le "`$keep_count" ]; then
+    return 0
+  fi
+
+  for tag in "`${tags[@]:`$keep_count}"; do
+    if docker image rm "`$repo:`$tag" >/dev/null 2>&1; then
+      echo "Removed old image: `$repo:`$tag"
+    else
+      echo "Skipped removing old image still in use: `$repo:`$tag"
+    fi
+  done
+}
 
 docker load -i ai-code-review-backend-$Version.tar
 docker load -i ai-code-review-frontend-$Version.tar
@@ -119,10 +143,15 @@ else
   fi
 fi
 
+cleanup_old_images "ai-code-review-backend" "`$KEEP_IMAGE_VERSIONS"
+cleanup_old_images "ai-code-review-frontend" "`$KEEP_IMAGE_VERSIONS"
+
 echo "Images loaded. Runtime files are in: `$DEPLOY_HOME"
 echo "Start or upgrade with:"
 echo "  cd `$DEPLOY_HOME"
 echo "  docker compose up -d"
+echo "Image retention:"
+echo "  KEEP_IMAGE_VERSIONS=`$KEEP_IMAGE_VERSIONS"
 "@
 
 Write-Utf8NoBomFile -Path (Join-Path $OutputDir "load-images.sh") -Content $LoadScript

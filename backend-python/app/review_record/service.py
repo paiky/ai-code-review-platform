@@ -57,7 +57,7 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict:
         )
         result = save_review_result(db, task=task, analysis=analysis, risk_card=risk_card)
         mark_task_success(task, risk_card["riskLevel"])
-        notification = dingtalk_skipped_result(get_settings_record(db).dingtalk_notification_enabled)
+        notification = dingtalk_skipped_result(db, get_settings_record(db).dingtalk_notification_enabled)
         save_notification_record(
             db,
             task_id=task.id,

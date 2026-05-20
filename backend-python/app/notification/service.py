@@ -1,44 +1,21 @@
+from __future__ import annotations
+
 import httpx
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.notification.repository import list_enabled_webhooks
 
 
-def dingtalk_skipped_result(dingtalk_notification_enabled: bool | None = None) -> dict:
-    settings = get_settings()
-    if dingtalk_notification_enabled is False:
-        return {
-            "target": "DINGTALK_NOTIFICATION_ENABLED",
-            "status": "SKIPPED",
-            "requestDigest": "DingTalk notification is disabled by global setting",
-            "responseBody": None,
-            "errorMessage": "DingTalk notification is disabled",
-        }
-    if not settings.dingtalk_enabled:
-        return {
-            "target": "DINGTALK_DISABLED",
-            "status": "SKIPPED",
-            "requestDigest": "DINGTALK_ENABLED=false",
-            "responseBody": None,
-            "errorMessage": None,
-        }
-    if not settings.dingtalk_webhook_url.strip():
-        return {
-            "target": "DINGTALK_WEBHOOK_URL_EMPTY",
-            "status": "SKIPPED",
-            "requestDigest": "DINGTALK_WEBHOOK_URL is empty",
-            "responseBody": None,
-            "errorMessage": None,
-        }
-    return {
-        "target": settings.dingtalk_webhook_url,
-        "status": "SKIPPED",
-        "requestDigest": "DingTalk HTTP send is implemented in stage 3B",
-        "responseBody": None,
-        "errorMessage": None,
-    }
+def dingtalk_skipped_result(
+    db: Session,
+    dingtalk_notification_enabled: bool | None = None,
+) -> dict:
+    return _resolve_skipped_result(db, None, dingtalk_notification_enabled)
 
 
 def send_risk_card(
+    db: Session,
     task_id: int,
     risk_card: dict,
     focus_change_types: list[str],
@@ -46,12 +23,17 @@ def send_risk_card(
     dingtalk_notification_enabled: bool | None = None,
     focus_rule_codes: list[str] | None = None,
 ) -> dict:
-    markdown = format_markdown(task_id, filter_risk_card(risk_card, focus_change_types, focus_rule_codes), context)
+    markdown = format_markdown(
+        task_id,
+        filter_risk_card(risk_card, focus_change_types, focus_rule_codes),
+        context,
+    )
     digest = markdown[:500]
-    return _send_markdown("变更提醒", markdown, digest, dingtalk_notification_enabled)
+    return _send_markdown(db, "变更提醒", markdown, digest, dingtalk_notification_enabled)
 
 
 def send_review_summary(
+    db: Session,
     task_id: int,
     risk_card: dict | None,
     focus_change_types: list[str] | None,
@@ -60,61 +42,154 @@ def send_review_summary(
     dingtalk_notification_enabled: bool | None = None,
     focus_rule_codes: list[str] | None = None,
 ) -> dict:
-    notification_card = filter_risk_card(risk_card, focus_change_types, focus_rule_codes) if risk_card else None
+    notification_card = (
+        filter_risk_card(risk_card, focus_change_types, focus_rule_codes) if risk_card else None
+    )
     if not _has_risk_items(notification_card) and not _has_code_quality_notification(code_quality_result):
-        return {
+        skipped = {
             "target": "DINGTALK_REVIEW_SUMMARY",
             "status": "SKIPPED",
             "requestDigest": "No focused reminders or code quality findings matched.",
             "responseBody": None,
             "errorMessage": "No focused reminders or code quality findings matched",
         }
+        return _aggregate_results([skipped], skipped["requestDigest"])
     markdown = format_review_summary_markdown(task_id, notification_card, code_quality_result, context)
     digest = markdown[:500]
-    return _send_markdown("变更审查结果", markdown, digest, dingtalk_notification_enabled)
+    return _send_markdown(db, "变更审查结果", markdown, digest, dingtalk_notification_enabled)
+
+
+def send_test_notification(target_url: str, webhook_name: str | None = None) -> dict:
+    settings = get_settings()
+    if not settings.dingtalk_enabled:
+        return {
+            "target": target_url,
+            "status": "SKIPPED",
+            "requestDigest": "DINGTALK_ENABLED=false",
+            "responseBody": None,
+            "errorMessage": "DingTalk notification is disabled",
+        }
+    label = webhook_name or "钉钉机器人"
+    markdown = (
+        "### 钉钉 Webhook 测试通知\n\n"
+        f"- 名称：{label}\n"
+        "- 结果：平台已成功保存该 webhook 配置。\n"
+        "- 用途：这是新增 webhook 时自动发送的连通性测试消息。"
+    )
+    return _send_to_url(target_url, "钉钉 Webhook 测试通知", markdown, markdown[:500])
 
 
 def _send_markdown(
+    db: Session,
     title: str,
     markdown: str,
     digest: str,
     dingtalk_notification_enabled: bool | None,
 ) -> dict:
     settings = get_settings()
+    skipped = _resolve_skipped_result(db, digest, dingtalk_notification_enabled)
+    if skipped is not None:
+        return _aggregate_results([skipped], digest)
+
+    webhooks = list_enabled_webhooks(db)
+    if not webhooks:
+        return _aggregate_results(
+            [_send_to_url(settings.dingtalk_webhook_url, title, markdown, digest)],
+            digest,
+        )
+    results = []
+    for webhook in webhooks:
+        results.append(_send_to_url(webhook.webhook_url, title, markdown, digest))
+    return _aggregate_results(results, digest)
+
+
+def _resolve_skipped_result(
+    db: Session,
+    digest: str | None,
+    dingtalk_notification_enabled: bool | None,
+) -> dict | None:
+    settings = get_settings()
     if dingtalk_notification_enabled is False:
         return {
             "target": "DINGTALK_NOTIFICATION_ENABLED",
             "status": "SKIPPED",
-            "requestDigest": digest,
+            "requestDigest": digest or "DingTalk notification is disabled by global setting",
             "responseBody": None,
             "errorMessage": "DingTalk notification is disabled",
         }
     if not settings.dingtalk_enabled:
         return {
-            "target": "DINGTALK_NOTIFICATION_ENABLED",
+            "target": "DINGTALK_DISABLED",
             "status": "SKIPPED",
-            "requestDigest": digest,
+            "requestDigest": digest or "DINGTALK_ENABLED=false",
             "responseBody": None,
-            "errorMessage": "DingTalk notification is disabled",
+            "errorMessage": None,
         }
-    if not settings.dingtalk_webhook_url.strip():
-        return {
-            "target": "DINGTALK_WEBHOOK_URL",
-            "status": "SKIPPED",
-            "requestDigest": digest,
-            "responseBody": None,
-            "errorMessage": "DingTalk webhook is not configured",
-        }
+
+    webhooks = list_enabled_webhooks(db)
+    if webhooks:
+        return None
+
+    if settings.dingtalk_webhook_url.strip():
+        return None
+
+    return {
+        "target": "DINGTALK_WEBHOOKS_EMPTY",
+        "status": "SKIPPED",
+        "requestDigest": digest or "No enabled DingTalk webhook is configured",
+        "responseBody": None,
+        "errorMessage": "DingTalk webhook is not configured",
+    }
+
+
+def _aggregate_results(results: list[dict], digest: str) -> dict:
+    if not results:
+        results = [
+            {
+                "target": "DINGTALK_WEBHOOKS_EMPTY",
+                "status": "SKIPPED",
+                "requestDigest": digest,
+                "responseBody": None,
+                "errorMessage": "DingTalk webhook is not configured",
+            }
+        ]
+    statuses = {item["status"] for item in results}
+    if statuses == {"SUCCESS"}:
+        status = "SUCCESS"
+        error_message = None
+    elif statuses == {"SKIPPED"}:
+        status = "SKIPPED"
+        error_message = results[0].get("errorMessage")
+    elif "SUCCESS" in statuses and "FAILED" in statuses:
+        status = "FAILED"
+        error_message = "Partial DingTalk webhook delivery failure"
+    elif "FAILED" in statuses:
+        status = "FAILED"
+        error_message = results[0].get("errorMessage")
+    else:
+        status = "SKIPPED"
+        error_message = results[0].get("errorMessage")
+    return {
+        "target": results[0].get("target"),
+        "status": status,
+        "requestDigest": digest,
+        "responseBody": None,
+        "errorMessage": error_message,
+        "records": results,
+    }
+
+
+def _send_to_url(target_url: str, title: str, markdown: str, digest: str) -> dict:
     try:
         with httpx.Client(timeout=8) as client:
             response = client.post(
-                settings.dingtalk_webhook_url,
+                target_url,
                 json={"msgtype": "markdown", "markdown": {"title": title, "text": markdown}},
                 headers={"Content-Type": "application/json; charset=utf-8"},
             )
         status = "SUCCESS" if 200 <= response.status_code < 300 else "FAILED"
         return {
-            "target": settings.dingtalk_webhook_url,
+            "target": target_url,
             "status": status,
             "requestDigest": digest,
             "responseBody": response.text,
@@ -122,7 +197,7 @@ def _send_markdown(
         }
     except Exception as exception:
         return {
-            "target": settings.dingtalk_webhook_url,
+            "target": target_url,
             "status": "FAILED",
             "requestDigest": digest,
             "responseBody": None,

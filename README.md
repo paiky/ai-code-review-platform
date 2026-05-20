@@ -75,7 +75,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 审查任务、变更分析结果、提醒卡片、通知记录均落库。
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持 profile / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、MR 自动触发开关、重试、执行过程展示。
-- GitLab MR 自动 AI Review 完成后会向同一个钉钉 webhook 推送“代码质量 Review”结果。
+- GitLab MR 自动 AI Review 完成后会向设置页中已启用的全部钉钉 webhook 推送“代码质量 Review”结果。
 
 ## 环境要求
 
@@ -98,8 +98,6 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 | `MYSQL_PASSWORD` | `root` | MySQL 密码 |
 | `SERVER_PORT` | `8080` | 后端端口 |
 | `PLATFORM_BASE_URL` | `http://localhost:5173` | 钉钉“查看平台详情”链接前缀 |
-| `DINGTALK_WEBHOOK_URL` | 空 | 钉钉机器人 webhook，空值时通知记录为 `SKIPPED` |
-| `DINGTALK_ENABLED` | `true` | 是否启用钉钉发送 |
 | `GITLAB_API_ENABLED` | `false` | 是否启用 GitLab API 补拉 diff |
 | `GITLAB_BASE_URL` | 空 | GitLab base URL |
 | `GITLAB_TOKEN` | 空 | GitLab access token |
@@ -122,7 +120,6 @@ PowerShell 示例：
 
 ```powershell
 $env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?charset=utf8mb4"
-$env:DINGTALK_WEBHOOK_URL=""
 $env:GITLAB_API_ENABLED="false"
 ```
 
@@ -158,7 +155,6 @@ DATABASE_URL=mysql+pymysql://ai_review:强密码@192.168.100.88:3306/ai_code_rev
 按需再增加这些可选配置：
 
 ```text
-DINGTALK_WEBHOOK_URL=钉钉机器人 webhook，可为空
 GITLAB_API_ENABLED=true
 GITLAB_BASE_URL=https://你的 GitLab 地址
 GITLAB_TOKEN=GitLab access token
@@ -204,6 +200,7 @@ curl http://127.0.0.1/api/health
 
 - backend 容器启动时会先执行 `python -m app.migrate`。空 MySQL 会按 `backend-python/migrations/bootstrap_sql/` 顺序初始化历史表结构和内置数据；已有核心表时会自动跳过 bootstrap。
 - 如需单独确认后端 bootstrap / gunicorn 启动过程，可执行 `docker compose logs -f backend`。
+- 钉钉 webhook 不再通过 `.env` 默认配置。部署完成后，请进入前端“设置”页，在“AI Review 全局设置”中手动添加一个或多个钉钉 webhook。
 
 平台访问和 GitLab webhook 使用同一个对外端口：`PUBLIC_HTTP_PORT`。默认访问 `http://服务器IP:8080`，GitLab webhook 配 `http://服务器IP:8080/api/webhooks/gitlab/merge-request`。如果服务器的 `8080` 已被占用，可以改 `PUBLIC_HTTP_PORT`，例如 `PUBLIC_HTTP_PORT=18080` 后访问 `http://服务器IP:18080`。`BACKEND_PORT` 默认只在 Docker 内部使用，不会额外占用宿主机端口；如需避开容器内的 `8080` 约定，也可以改成 `BACKEND_PORT=18081`，Nginx 反向代理会自动跟随。
 
@@ -266,6 +263,19 @@ docker compose up -d
 ```
 
 `load-images.sh` 会把运行用的 `docker-compose.yml` 放到 `/opt/ai-code-review-platform/runtime/`，并且只在第一次部署时创建 `/opt/ai-code-review-platform/runtime/.env`。以后升级时重新上传新版本目录，执行新版本目录里的 `./load-images.sh`，脚本只更新 `APP_VERSION`，不会覆盖你已经配置好的 MySQL、GitLab、钉钉或模型密钥。
+
+离线升级时，脚本还会自动清理旧版本应用镜像，默认只保留最近 `2` 个版本的：
+
+- `ai-code-review-backend:{版本号}`
+- `ai-code-review-frontend:{版本号}`
+
+如果你想临时多保留几个回滚版本，可以在服务器上这样执行：
+
+```bash
+KEEP_IMAGE_VERSIONS=3 ./load-images.sh
+```
+
+如果旧镜像仍被旧容器占用，脚本会跳过删除，不会中断本次部署。
 
 升级命令：
 
@@ -358,7 +368,7 @@ mock MR webhook / GitLab MR webhook / GitLab Push webhook / manual review
   -> notification_records 写入 SUCCESS / FAILED / SKIPPED
 ```
 
-GitLab API 补拉默认关闭，需要配置 `GITLAB_API_ENABLED=true`、`GITLAB_BASE_URL`、`GITLAB_TOKEN`；钉钉 webhook 为空或关闭时通知记录为 `SKIPPED`。
+GitLab API 补拉默认关闭，需要配置 `GITLAB_API_ENABLED=true`、`GITLAB_BASE_URL`、`GITLAB_TOKEN`；全局钉钉开关关闭或未配置任何已启用 webhook 时，通知记录为 `SKIPPED`。
 
 阶段 4 已迁移 Python 代码质量 AI Review 的核心 API 与 HTTP Provider：
 
@@ -617,6 +627,7 @@ Provider 说明：
 
 - 控制 GitLab MR 是否自动触发 AI Review。
 - 控制是否全局发送钉钉推送；关闭后审查和落库仍正常执行。
+- 配置多个钉钉 webhook；开启钉钉推送后会向全部已启用 webhook 群发同一条通知。
 - 配置 OpenAI / Anthropic / DeepSeek / 自定义 Provider 的模型端点 URL、模型名称和 API Key。
 - 在支持的 Provider 维度开启或关闭 AI Review 流式输出；当前支持 OpenAI 和 DeepSeek。
 - 设置全局默认 Provider，以及项目级默认 Provider。

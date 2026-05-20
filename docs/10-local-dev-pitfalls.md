@@ -571,3 +571,47 @@ docker compose up -d --force-recreate backend
 ```
 
 4. 如果确认想完全重置运行配置，再手工备份并删除 `runtime/.env`，然后重新执行新版本目录下的 `./load-images.sh` 让它按新的 `.env.example` 重建。
+
+## 24. 离线升级会持续累积旧镜像，最好在 `load-images.sh` 中做版本保留策略
+
+现象：
+
+多次上传离线包并执行 `./load-images.sh` 后，服务器上会留下越来越多镜像，例如：
+
+```text
+ai-code-review-backend:20260520120046
+ai-code-review-backend:20260520210156
+ai-code-review-backend:20260521103000
+```
+
+原因：
+
+`docker load` 只负责导入新 tag，不会自动删除旧 tag。运行中的 compose 只会使用 `runtime/.env` 中 `APP_VERSION` 指向的版本，但历史镜像会持续占用磁盘。
+
+处理方式：
+
+1. 在离线部署脚本 `load-images.sh` 中加入镜像清理逻辑，按 tag 时间倒序只保留最近几个版本。
+2. 默认建议保留最近 `2` 个应用版本，兼顾快速回滚和磁盘占用。
+3. 清理时如果旧镜像仍被旧容器占用，应跳过删除而不是让部署失败。
+4. 如需临时调整保留数量，可在服务器上执行：
+
+```bash
+KEEP_IMAGE_VERSIONS=3 ./load-images.sh
+```
+
+## 25. 钉钉 Webhook 已改为设置页数据库配置，修改 `.env` 默认不会影响当前通知目标
+
+现象：
+
+部署完成后已经在服务器上更新了 `.env` 或重新打了包，但钉钉仍然不发，或者还在往旧群里发。
+
+原因：
+
+当前 Python 后端的默认通知目标已经从 `.env` 中的 `DINGTALK_WEBHOOK_URL` 切换到前端“设置”页里维护的 `notification_webhooks` 数据。全局钉钉开关、webhook 启用状态和 webhook 列表都以数据库中的设置为准。
+
+处理方式：
+
+1. 优先检查前端“设置”页中的全局钉钉推送开关是否打开。
+2. 确认至少存在一个已启用的 webhook，且 URL 保存成功。
+3. 如果页面已经配置但仍不生效，先确认当前容器是否已经升级到包含新 settings 接口响应的版本，再查看 `/api/code-quality-reviews/settings` 返回的 `dingtalkWebhooks`。
+4. 只有在数据库完全没有 webhook 配置时，才考虑是否仍命中了旧环境变量 fallback。

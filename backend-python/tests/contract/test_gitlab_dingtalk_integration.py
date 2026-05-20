@@ -56,6 +56,11 @@ def mr_payload_without_changed_files() -> dict:
     }
 
 
+def save_dingtalk_webhooks(client: TestClient, items: list[dict]) -> None:
+    response = client.put("/api/code-quality-reviews/settings", json={"dingtalkWebhooks": items})
+    assert response.status_code == 200
+
+
 def test_mr_without_changed_files_fetches_gitlab_diffs(
     client: TestClient,
     db_session: Session,
@@ -208,7 +213,17 @@ def test_dingtalk_success_is_recorded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seed_template(db_session)
-    monkeypatch.setenv("DINGTALK_WEBHOOK_URL", "https://dingtalk.example.test/robot/send")
+    save_dingtalk_webhooks(
+        client,
+        [
+            {
+                "name": "研发群",
+                "channel": "DINGTALK",
+                "webhookUrl": "https://dingtalk.example.test/robot/send",
+                "enabled": True,
+            }
+        ],
+    )
 
     with respx.mock(assert_all_called=True) as router:
         router.post("https://dingtalk.example.test/robot/send").mock(
@@ -263,7 +278,17 @@ def test_dingtalk_filter_prefers_focus_rule_codes_for_value_config(
         )
     )
     db_session.commit()
-    monkeypatch.setenv("DINGTALK_WEBHOOK_URL", "https://dingtalk.example.test/robot/send")
+    save_dingtalk_webhooks(
+        client,
+        [
+            {
+                "name": "配置群",
+                "channel": "DINGTALK",
+                "webhookUrl": "https://dingtalk.example.test/robot/send",
+                "enabled": True,
+            }
+        ],
+    )
 
     with respx.mock(assert_all_called=True) as router:
         router.post("https://dingtalk.example.test/robot/send").mock(
@@ -293,6 +318,58 @@ def test_dingtalk_filter_prefers_focus_rule_codes_for_value_config(
     assert notifications[0]["status"] == "SUCCESS"
     assert "配置提醒" in notifications[0]["requestDigest"]
     assert "本次没有命中需推送的重点提醒" not in notifications[0]["requestDigest"]
+
+
+def test_dingtalk_multiple_webhooks_record_partial_failure(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    seed_template(db_session)
+    save_dingtalk_webhooks(
+        client,
+        [
+            {
+                "name": "研发群",
+                "channel": "DINGTALK",
+                "webhookUrl": "https://dingtalk.example.test/robot/send?group=dev",
+                "enabled": True,
+            },
+            {
+                "name": "测试群",
+                "channel": "DINGTALK",
+                "webhookUrl": "https://dingtalk.example.test/robot/send?group=qa",
+                "enabled": True,
+            },
+        ],
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://dingtalk.example.test/robot/send?group=dev").mock(
+            return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
+        )
+        router.post("https://dingtalk.example.test/robot/send?group=qa").mock(
+            return_value=httpx.Response(500, json={"errcode": 500, "errmsg": "boom"})
+        )
+        response = client.post(
+            "/api/webhooks/gitlab/merge-request",
+            json={
+                **mr_payload_without_changed_files(),
+                "changedFiles": [
+                    {
+                        "old_path": "src/main/resources/mapper/OrderMapper.xml",
+                        "new_path": "src/main/resources/mapper/OrderMapper.xml",
+                        "diffText": "+ update orders set status = 'DONE' where id = #{id}",
+                    }
+                ],
+            },
+            headers={"X-Gitlab-Event": "Merge Request Hook"},
+        )
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    notifications = client.get(f"/api/review-tasks/{task_id}/notifications").json()["data"]
+    assert len(notifications) == 2
+    assert {item["status"] for item in notifications} == {"SUCCESS", "FAILED"}
 
 
 def test_push_without_payload_diff_uses_compare_api(

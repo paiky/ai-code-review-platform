@@ -22,7 +22,15 @@ import {
   Timeline,
   Typography
 } from 'antd';
-import { ArrowLeftOutlined, ReloadOutlined, SearchOutlined, SettingOutlined, UnorderedListOutlined } from '@ant-design/icons';
+import {
+  ArrowLeftOutlined,
+  CloseOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+  SettingOutlined,
+  UnorderedListOutlined
+} from '@ant-design/icons';
 import { fetchApi, riskColor, statusColor } from './api.js';
 
 const { Header, Content } = Layout;
@@ -1137,6 +1145,7 @@ function TemplateConfig() {
   const [profileDraft, setProfileDraft] = useState(null);
   const [promptPreview, setPromptPreview] = useState(null);
   const [aiSettings, setAiSettings] = useState(null);
+  const [settingsDraft, setSettingsDraft] = useState(null);
   const [providerApiKeyDraft, setProviderApiKeyDraft] = useState('');
   const [loading, setLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -1164,6 +1173,11 @@ function TemplateConfig() {
       const nextSelectedProviderCode = settingsData?.defaultProviderCode || selectedProviderCode || providerItems[0]?.providerCode || 'DEEPSEEK';
       const nextSelectedTemplateCode = selectedTemplateCode || templateItems.find(item => item.templateCode === 'backend-default')?.templateCode || templateItems[0]?.templateCode || null;
       setAiSettings(settingsData);
+      setSettingsDraft({
+        mrAutoReviewEnabled: settingsData?.mrAutoReviewEnabled ?? true,
+        dingtalkNotificationEnabled: settingsData?.dingtalkNotificationEnabled ?? true,
+        dingtalkWebhooks: (settingsData?.dingtalkWebhooks || []).map(item => ({ ...item }))
+      });
       setTemplates(templateItems);
       setSelectedTemplateCode(nextSelectedTemplateCode);
       setProviders(providerItems);
@@ -1206,31 +1220,104 @@ function TemplateConfig() {
     setSelectedNotificationRuleCode(firstSelected || firstRule || null);
   };
 
-  const updateMrAutoReviewEnabled = async (checked) => {
-    setSettingsSaving(true);
-    try {
-      const settings = await fetchApi('/api/code-quality-reviews/settings', {
-        method: 'PUT',
-        body: JSON.stringify({ mrAutoReviewEnabled: checked })
-      });
-      setAiSettings(settings);
-      messageApi.success(checked ? 'MR 自动 AI Review 已开启' : 'MR 自动 AI Review 已关闭');
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setSettingsSaving(false);
-    }
+  const updateSettingsDraft = (field, value) => {
+    setSettingsDraft(current => current ? { ...current, [field]: value } : current);
   };
 
-  const updateDingTalkNotificationEnabled = async (checked) => {
+  const updateWebhookDraft = (index, field, value) => {
+    setSettingsDraft(current => {
+      if (!current) return current;
+      const dingtalkWebhooks = current.dingtalkWebhooks.map((item, itemIndex) => (
+        itemIndex === index ? { ...item, [field]: value } : item
+      ));
+      return { ...current, dingtalkWebhooks };
+    });
+  };
+
+  const addWebhookDraft = () => {
+    setSettingsDraft(current => {
+      if (!current) return current;
+      return {
+        ...current,
+        dingtalkWebhooks: [
+          ...current.dingtalkWebhooks,
+          { id: null, name: '', channel: 'DINGTALK', webhookUrl: '', enabled: true, status: 'ENABLED' }
+        ]
+      };
+    });
+  };
+
+  const removeWebhookDraft = (index) => {
+    setSettingsDraft(current => {
+      if (!current) return current;
+      return {
+        ...current,
+        dingtalkWebhooks: current.dingtalkWebhooks.filter((_, itemIndex) => itemIndex !== index)
+      };
+    });
+  };
+
+  const validateSettingsDraft = () => {
+    const webhooks = settingsDraft?.dingtalkWebhooks || [];
+    const enabledUrls = new Set();
+    for (const item of webhooks) {
+      const name = (item.name || '').trim();
+      const webhookUrl = (item.webhookUrl || '').trim();
+      if (!name) return 'Webhook 名称不能为空';
+      if (!webhookUrl) return 'Webhook 地址不能为空';
+      try {
+        const parsed = new URL(webhookUrl);
+        if (!['http:', 'https:'].includes(parsed.protocol)) return 'Webhook 地址必须以 http:// 或 https:// 开头';
+      } catch {
+        return 'Webhook 地址格式不正确';
+      }
+      if (item.enabled) {
+        const normalized = webhookUrl.toLowerCase();
+        if (enabledUrls.has(normalized)) return '已启用的 webhook 地址不能重复';
+        enabledUrls.add(normalized);
+      }
+    }
+    return null;
+  };
+
+  const saveAiSettings = async () => {
+    if (!settingsDraft) return;
+    const validationError = validateSettingsDraft();
+    if (validationError) {
+      messageApi.error(validationError);
+      return;
+    }
     setSettingsSaving(true);
     try {
       const settings = await fetchApi('/api/code-quality-reviews/settings', {
         method: 'PUT',
-        body: JSON.stringify({ dingtalkNotificationEnabled: checked })
+        body: JSON.stringify({
+          mrAutoReviewEnabled: settingsDraft.mrAutoReviewEnabled,
+          dingtalkNotificationEnabled: settingsDraft.dingtalkNotificationEnabled,
+          dingtalkWebhooks: settingsDraft.dingtalkWebhooks.map(item => ({
+            id: item.id || undefined,
+            name: (item.name || '').trim(),
+            channel: 'DINGTALK',
+            webhookUrl: (item.webhookUrl || '').trim(),
+            enabled: item.enabled !== false
+          }))
+        })
       });
       setAiSettings(settings);
-      messageApi.success(checked ? '钉钉推送已开启' : '钉钉推送已关闭');
+      setSettingsDraft({
+        mrAutoReviewEnabled: settings?.mrAutoReviewEnabled ?? true,
+        dingtalkNotificationEnabled: settings?.dingtalkNotificationEnabled ?? true,
+        dingtalkWebhooks: (settings?.dingtalkWebhooks || []).map(item => ({ ...item }))
+      });
+      const testResults = settings?.webhookTestResults || [];
+      const failedTestCount = testResults.filter(item => item.status !== 'SUCCESS').length;
+      if (testResults.length === 0) {
+        messageApi.success('全局设置已保存');
+      } else if (failedTestCount === 0) {
+        messageApi.success(`全局设置已保存，已向 ${testResults.length} 个新 webhook 发送测试通知`);
+      } else {
+        messageApi.warning(`全局设置已保存，但有 ${failedTestCount} 个新 webhook 测试通知未成功`);
+      }
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -1269,7 +1356,7 @@ function TemplateConfig() {
       });
       setNotificationRules(updated);
       setNotificationRuleDraftCodes(updated.focusRuleCodes || []);
-      messageApi.success('已更改配置');
+      messageApi.success('提醒类型已保存');
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -1304,7 +1391,7 @@ function TemplateConfig() {
         body: JSON.stringify(body)
       });
       const settings = await fetchApi(`/api/code-quality-review-providers/${providerCode}/set-default`, { method: 'POST' });
-      setAiSettings(settings);
+      setAiSettings(current => current ? { ...current, ...settings } : settings);
       const providerData = await fetchApi('/api/code-quality-review-providers');
       const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
       setProviders(providerItems);
@@ -1407,15 +1494,11 @@ function TemplateConfig() {
     label: `${profile.profileName} (${profile.profileCode})`,
     value: profile.profileCode
   }));
-
   const providerOptions = providers.map(provider => ({
     label: provider.providerName || sourceLabel(provider.providerCode),
     value: provider.providerCode
   }));
-  const profileProviderOptions = [
-    { label: '使用当前模型 Provider', value: '' },
-    ...providerOptions
-  ];
+  const profileProviderOptions = [{ label: '使用当前模型 Provider', value: '' }, ...providerOptions];
   const providerApiKeyPlaceholder = '留空表示不更新当前 API Key';
   const templateOptions = templates.map(template => ({
     label: `${template.templateName} (${template.templateCode})`,
@@ -1424,6 +1507,418 @@ function TemplateConfig() {
   const notificationRuleItems = notificationRules?.groups?.flatMap(group => group.rules || []) || [];
   const selectedNotificationRule = notificationRuleItems.find(rule => rule.ruleCode === selectedNotificationRuleCode) || notificationRuleItems[0] || null;
   const notificationRulesDirty = JSON.stringify(notificationRuleDraftCodes) !== JSON.stringify(notificationRules?.focusRuleCodes || []);
+  const settingsDirty = JSON.stringify({
+    mrAutoReviewEnabled: settingsDraft?.mrAutoReviewEnabled ?? true,
+    dingtalkNotificationEnabled: settingsDraft?.dingtalkNotificationEnabled ?? true,
+    dingtalkWebhooks: settingsDraft?.dingtalkWebhooks || []
+  }) !== JSON.stringify({
+    mrAutoReviewEnabled: aiSettings?.mrAutoReviewEnabled ?? true,
+    dingtalkNotificationEnabled: aiSettings?.dingtalkNotificationEnabled ?? true,
+    dingtalkWebhooks: aiSettings?.dingtalkWebhooks || []
+  });
+  const configuredWebhookCount = (settingsDraft?.dingtalkWebhooks || []).filter(item => item.enabled !== false).length;
+
+  const collapseItems = [
+    {
+      key: 'global-settings',
+      label: (
+        <Space wrap>
+          <Text strong>AI Review 全局设置</Text>
+          <Tag color={(settingsDraft?.mrAutoReviewEnabled ?? true) ? 'green' : 'default'}>MR 自动 {(settingsDraft?.mrAutoReviewEnabled ?? true) ? '开启' : '关闭'}</Tag>
+          <Tag color={(settingsDraft?.dingtalkNotificationEnabled ?? true) ? 'blue' : 'default'}>钉钉 {(settingsDraft?.dingtalkNotificationEnabled ?? true) ? '开启' : '关闭'}</Tag>
+          <Tag>{configuredWebhookCount} 个 webhook</Tag>
+        </Space>
+      ),
+      children: (
+        <Card
+          bordered={false}
+          className="settings-inner-card"
+          extra={<Button type="primary" loading={settingsSaving} disabled={!settingsDraft || !settingsDirty} onClick={saveAiSettings}>保存设置</Button>}
+        >
+          <Space direction="vertical" size="middle" className="global-settings-stack">
+            <div className="global-setting-field">
+              <div className="settings-inline-head">
+                <Text strong>GitLab MR 自动触发 AI Review</Text>
+                <Switch
+                  checked={settingsDraft?.mrAutoReviewEnabled ?? true}
+                  loading={settingsSaving}
+                  checkedChildren="开启"
+                  unCheckedChildren="关闭"
+                  onChange={checked => updateSettingsDraft('mrAutoReviewEnabled', checked)}
+                />
+              </div>
+              <Text type="secondary" className="settings-description">
+                关闭后，新的 MR webhook 仍会执行规则风险审查，但不会启动代码质量 Review。
+              </Text>
+            </div>
+            <div className="global-setting-field">
+              <div className="settings-inline-head">
+                <Text strong>钉钉推送</Text>
+                <Switch
+                  checked={settingsDraft?.dingtalkNotificationEnabled ?? true}
+                  loading={settingsSaving}
+                  checkedChildren="开启"
+                  unCheckedChildren="关闭"
+                  onChange={checked => updateSettingsDraft('dingtalkNotificationEnabled', checked)}
+                />
+              </div>
+              <Text type="secondary" className="settings-description">
+                关闭后，规则审查和 AI Review 仍会正常执行与落库，但不会向钉钉发送消息。
+              </Text>
+            </div>
+            <div className="global-setting-field full-width">
+              <div className="settings-inline-head">
+                <Text strong>钉钉机器人 Webhook</Text>
+                <Button icon={<PlusOutlined />} onClick={addWebhookDraft}>新增 Webhook</Button>
+              </div>
+              <Text type="secondary" className="settings-description">
+                支持配置多个 webhook。开启钉钉推送后，平台会向所有已启用的 webhook 群发通知。
+              </Text>
+              <Space direction="vertical" size="middle" className="full-width webhook-list">
+                {(settingsDraft?.dingtalkWebhooks || []).length > 0 ? (
+                  (settingsDraft?.dingtalkWebhooks || []).map((item, index) => (
+                    <div key={item.id || `draft-${index}`} className="webhook-item">
+                      <Row gutter={[12, 12]} align="middle">
+                        <Col xs={24} lg={6}>
+                          <Text strong>名称</Text>
+                          <Input
+                            className="prompt-field"
+                            value={item.name || ''}
+                            placeholder="例如 研发群"
+                            onChange={event => updateWebhookDraft(index, 'name', event.target.value)}
+                          />
+                        </Col>
+                        <Col xs={24} lg={13}>
+                          <Text strong>Webhook URL</Text>
+                          <Input
+                            className="prompt-field"
+                            value={item.webhookUrl || ''}
+                            placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."
+                            onChange={event => updateWebhookDraft(index, 'webhookUrl', event.target.value)}
+                          />
+                        </Col>
+                        <Col xs={12} lg={3}>
+                          <Text strong>启用</Text>
+                          <div className="prompt-field">
+                            <Switch
+                              checked={item.enabled !== false}
+                              checkedChildren="开启"
+                              unCheckedChildren="关闭"
+                              onChange={checked => updateWebhookDraft(index, 'enabled', checked)}
+                            />
+                          </div>
+                        </Col>
+                        <Col xs={12} lg={2}>
+                          <Text strong>操作</Text>
+                          <div className="prompt-field webhook-remove-cell">
+                            <Button
+                              danger
+                              type="text"
+                              size="small"
+                              className="webhook-remove-button"
+                              icon={<CloseOutlined />}
+                              onClick={() => removeWebhookDraft(index)}
+                            />
+                          </div>
+                        </Col>
+                      </Row>
+                    </div>
+                  ))
+                ) : (
+                  <Empty description="暂未配置钉钉 webhook" />
+                )}
+              </Space>
+            </div>
+          </Space>
+        </Card>
+      )
+    },
+    {
+      key: 'notification-rules',
+      label: (
+        <Space wrap>
+          <Text strong>卡片提醒类型</Text>
+          <Tag>{notificationRuleDraftCodes.length} 个已选</Tag>
+          {notificationRulesDirty && <Tag color="gold">未保存</Tag>}
+        </Space>
+      ),
+      children: (
+        <Card
+          bordered={false}
+          className="settings-inner-card"
+          extra={<Button type="primary" loading={notificationSaving} disabled={!notificationRules || !notificationRulesDirty} onClick={saveNotificationRules}>保存配置</Button>}
+        >
+          <Space direction="vertical" size="middle" className="full-width">
+            <Row gutter={[16, 16]} align="middle">
+              <Col xs={24} md={10}>
+                <Text strong>规则模板</Text>
+                <Select
+                  className="full-width prompt-field"
+                  value={selectedTemplateCode}
+                  options={templateOptions}
+                  loading={notificationSaving}
+                  onChange={selectTemplate}
+                />
+              </Col>
+              <Col xs={24} md={14}>
+                <Space wrap>
+                  <Text type="secondary">已选择 {notificationRuleDraftCodes.length} 个提醒类型</Text>
+                  {notificationRuleDraftCodes.map(code => <Tag key={code} color="blue">{code}</Tag>)}
+                </Space>
+              </Col>
+            </Row>
+            <Row gutter={[16, 16]}>
+              <Col xs={24} lg={12}>
+                {notificationRules ? (
+                  <Collapse
+                    defaultActiveKey={(notificationRules.groups || []).map(group => group.groupCode)}
+                    items={(notificationRules.groups || []).map(group => ({
+                      key: group.groupCode,
+                      label: (
+                        <Space wrap>
+                          <Tag color={group.color}>{group.rules?.length || 0}</Tag>
+                          <Text strong>{group.groupName}</Text>
+                        </Space>
+                      ),
+                      children: (
+                        <Space wrap size={[8, 8]}>
+                          {(group.rules || []).map(rule => {
+                            const checked = notificationRuleDraftCodes.includes(rule.ruleCode);
+                            return (
+                              <Tag.CheckableTag
+                                key={rule.ruleCode}
+                                checked={checked}
+                                className={`notification-rule-tag ${checked ? 'is-selected' : ''}`}
+                                onClick={() => toggleNotificationRule(rule.ruleCode)}
+                              >
+                                {rule.title}
+                              </Tag.CheckableTag>
+                            );
+                          })}
+                        </Space>
+                      )
+                    }))}
+                  />
+                ) : (
+                  <Empty description="暂无提醒类型配置" />
+                )}
+              </Col>
+              <Col xs={24} lg={12}>
+                {selectedNotificationRule ? (
+                  <div className="notification-rule-detail">
+                    <Space direction="vertical" size="middle" className="full-width">
+                      <Space wrap>
+                        <Tag color={riskColor(selectedNotificationRule.riskLevel)}>{severityLabel(selectedNotificationRule.riskLevel)}</Tag>
+                        <Tag>{selectedNotificationRule.changeType}</Tag>
+                        {!selectedNotificationRule.enabledInTemplate && <Tag color="warning">模板未启用</Tag>}
+                      </Space>
+                      <Title level={5}>{selectedNotificationRule.title}</Title>
+                      <Paragraph>{selectedNotificationRule.description}</Paragraph>
+                      <Text type="secondary">{selectedNotificationRule.impact}</Text>
+                      <Divider />
+                      <Text strong>建议检查</Text>
+                      <ul className="notification-rule-checks">
+                        {(selectedNotificationRule.recommendedChecks || []).map(check => <li key={check}>{check}</li>)}
+                      </ul>
+                      <Text strong>示例</Text>
+                      <pre className="notification-rule-example">{selectedNotificationRule.example || '-'}</pre>
+                    </Space>
+                  </div>
+                ) : (
+                  <Empty description="请选择提醒类型" />
+                )}
+              </Col>
+            </Row>
+          </Space>
+        </Card>
+      )
+    },
+    {
+      key: 'provider-settings',
+      label: (
+        <Space wrap>
+          <Text strong>模型 Provider 配置</Text>
+          <Tag color="blue">{sourceLabel(aiSettings?.defaultProviderCode || selectedProviderCode)}</Tag>
+        </Space>
+      ),
+      children: (
+        <Card
+          bordered={false}
+          className="settings-inner-card"
+          extra={<Button type="primary" loading={providerSaving} onClick={saveProviderSettings} disabled={!providerDraft}>保存 Provider</Button>}
+        >
+          <Row gutter={[16, 16]} align="bottom">
+            <Col xs={24} md={8}>
+              <Text strong>Provider</Text>
+              <Select
+                className="full-width prompt-field"
+                value={selectedProviderCode}
+                options={providerOptions}
+                loading={settingsSaving}
+                onChange={selectProvider}
+              />
+              {providerDraft && !providerDraft.apiKeyConfigured && (
+                <Alert
+                  className="prompt-field"
+                  type="warning"
+                  showIcon
+                  message={`请先配置 ${sourceLabel(providerDraft.providerCode)} API Key`}
+                />
+              )}
+            </Col>
+            <Col xs={24} md={8}>
+              <Text strong>端点 URL</Text>
+              <Input
+                className="prompt-field"
+                placeholder="例如 https://api.deepseek.com"
+                value={providerDraft?.endpointUrl || ''}
+                onChange={event => updateProviderDraft('endpointUrl', event.target.value)}
+              />
+            </Col>
+            <Col xs={24} md={8}>
+              <Text strong>模型名称</Text>
+              <Input
+                className="prompt-field"
+                placeholder="例如 deepseek-v4-pro"
+                value={providerDraft?.modelName || ''}
+                onChange={event => updateProviderDraft('modelName', event.target.value)}
+              />
+            </Col>
+            <Col xs={24} md={10}>
+              <Space direction="vertical" className="full-width">
+                <Space wrap>
+                  <Text strong>{sourceLabel(providerDraft?.providerCode)} Key</Text>
+                  {providerDraft?.apiKeyConfigured ? (
+                    <Tag color="green">已配置 {providerDraft.apiKeyMasked}</Tag>
+                  ) : (
+                    <Tag>未配置</Tag>
+                  )}
+                  {providerDraft?.defaultProvider && <Tag color="blue">当前使用</Tag>}
+                </Space>
+                <Input.Password
+                  placeholder={providerApiKeyPlaceholder}
+                  value={providerApiKeyDraft}
+                  onChange={event => setProviderApiKeyDraft(event.target.value)}
+                />
+              </Space>
+            </Col>
+            <Col xs={24} md={6}>
+              <Space direction="vertical" size={4}>
+                <Switch
+                  checked={providerDraft?.enabled ?? false}
+                  checkedChildren="启用"
+                  unCheckedChildren="停用"
+                  onChange={checked => updateProviderDraft('enabled', checked)}
+                />
+              </Space>
+            </Col>
+            <Col xs={24} md={8}>
+              <Button danger disabled={!providerDraft?.apiKeyConfigured} loading={providerSaving} onClick={clearProviderApiKey}>
+                清除当前 Key
+              </Button>
+            </Col>
+          </Row>
+        </Card>
+      )
+    },
+    {
+      key: 'profile-settings',
+      label: (
+        <Space wrap>
+          <Text strong>AI Review Profile</Text>
+          {selectedProfileCode && <Tag>{selectedProfileCode}</Tag>}
+        </Space>
+      ),
+      children: (
+        <Card
+          bordered={false}
+          className="settings-inner-card"
+          extra={
+            <Space wrap>
+              <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={!profileDraft}>预览 Prompt</Button>
+              <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={!profileDraft}>恢复默认</Button>
+              <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={!profileDraft}>保存 Profile</Button>
+            </Space>
+          }
+        >
+          {profileDraft ? (
+            <Space direction="vertical" size="middle" className="full-width">
+              <Row gutter={[16, 16]}>
+                <Col xs={24} lg={10}>
+                  <Text strong>Profile</Text>
+                  <Select
+                    className="full-width prompt-field"
+                    value={selectedProfileCode}
+                    options={profileOptions}
+                    onChange={selectProfile}
+                  />
+                </Col>
+                <Col xs={24} lg={14}>
+                  <Row gutter={[12, 12]}>
+                    <Col xs={24} md={12}>
+                      <Text strong>Provider 覆盖</Text>
+                      <Select
+                        className="full-width prompt-field"
+                        value={profileDraft.providerCode || ''}
+                        options={profileProviderOptions}
+                        onChange={value => updateProfileDraft('providerCode', value || null)}
+                      />
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Text strong>模型覆盖</Text>
+                      <Input
+                        className="prompt-field"
+                        placeholder="留空使用后端默认模型"
+                        value={profileDraft.model || ''}
+                        onChange={event => updateProfileDraft('model', event.target.value)}
+                      />
+                    </Col>
+                    <Col xs={24}>
+                      <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+                        <Descriptions.Item label="MR 自动">{profileDraft.triggerOnMr ? '开启' : '关闭'}</Descriptions.Item>
+                        <Descriptions.Item label="手动触发">{profileDraft.triggerOnManual ? '开启' : '关闭'}</Descriptions.Item>
+                      </Descriptions>
+                    </Col>
+                  </Row>
+                </Col>
+              </Row>
+              <Row gutter={[16, 16]}>
+                <Col xs={24}>
+                  <Text strong>Review Instructions</Text>
+                  <Input.TextArea
+                    className="prompt-textarea"
+                    value={profileDraft.reviewInstructions || ''}
+                    onChange={event => updateProfileDraft('reviewInstructions', event.target.value)}
+                    autoSize={{ minRows: 8, maxRows: 16 }}
+                  />
+                </Col>
+              </Row>
+              {promptPreview && (
+                <Collapse
+                  defaultActiveKey={['preview']}
+                  items={[{
+                    key: 'preview',
+                    label: (
+                      <Space wrap>
+                        <Text strong>Prompt 预览</Text>
+                        <Tag>{promptPreview.provider}</Tag>
+                        {promptPreview.model && <Tag>{promptPreview.model}</Tag>}
+                        <Tag>{promptPreview.promptLength} 字符</Tag>
+                        <Tag>{promptPreview.promptHash?.slice(0, 12)}</Tag>
+                      </Space>
+                    ),
+                    children: <pre className="prompt-preview-block">{promptPreview.prompt}</pre>
+                  }]}
+                />
+              )}
+            </Space>
+          ) : (
+            <Empty description="暂无 AI Review Profile" />
+          )}
+        </Card>
+      )
+    }
+  ];
 
   return (
     <div className="page-shell">
@@ -1433,308 +1928,7 @@ function TemplateConfig() {
       </div>
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
       <Spin spinning={loading}>
-        <Row gutter={[16, 16]}>
-          <Col xs={24}>
-            <Card title="AI Review 全局设置">
-              <Space direction="vertical" size="middle" className="global-settings-stack">
-                <div className="global-setting-field">
-                  <div className="settings-inline-head">
-                    <Text strong>GitLab MR 自动触发 AI Review</Text>
-                    <Switch
-                      checked={aiSettings?.mrAutoReviewEnabled ?? true}
-                      loading={settingsSaving}
-                      checkedChildren="开启"
-                      unCheckedChildren="关闭"
-                      onChange={updateMrAutoReviewEnabled}
-                    />
-                  </div>
-                  <Text type="secondary" className="settings-description">
-                    关闭后，新的 MR webhook 仍会执行规则风险审查，但不会启动代码质量 Review。
-                  </Text>
-                </div>
-                <div className="global-setting-field">
-                  <div className="settings-inline-head">
-                    <Text strong>钉钉推送</Text>
-                    <Switch
-                      checked={aiSettings?.dingtalkNotificationEnabled ?? true}
-                      loading={settingsSaving}
-                      checkedChildren="开启"
-                      unCheckedChildren="关闭"
-                      onChange={updateDingTalkNotificationEnabled}
-                    />
-                  </div>
-                  <Text type="secondary" className="settings-description">
-                    关闭后，规则审查和 AI Review 仍会正常执行与落库，但不会向钉钉发送消息。
-                  </Text>
-                </div>
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24}>
-            <Card
-              title="卡片提醒类型"
-              extra={
-                <Button
-                  type="primary"
-                  loading={notificationSaving}
-                  disabled={!notificationRules || !notificationRulesDirty}
-                  onClick={saveNotificationRules}
-                >
-                  保存配置
-                </Button>
-              }
-            >
-              <Space direction="vertical" size="middle" className="full-width">
-                <Row gutter={[16, 16]} align="middle">
-                  <Col xs={24} md={10}>
-                    <Text strong>规则模板</Text>
-                    <Select
-                      className="full-width prompt-field"
-                      value={selectedTemplateCode}
-                      options={templateOptions}
-                      loading={notificationSaving}
-                      onChange={selectTemplate}
-                    />
-                  </Col>
-                  <Col xs={24} md={14}>
-                    <Space wrap>
-                      <Text type="secondary">已选择 {notificationRuleDraftCodes.length} 个提醒类型</Text>
-                      {notificationRulesDirty && <Tag color="gold">未保存</Tag>}
-                      {notificationRuleDraftCodes.map(code => <Tag key={code} color="blue">{code}</Tag>)}
-                    </Space>
-                  </Col>
-                </Row>
-                <Row gutter={[16, 16]}>
-                  <Col xs={24} lg={12}>
-                    {notificationRules ? (
-                      <Collapse
-                        defaultActiveKey={(notificationRules.groups || []).map(group => group.groupCode)}
-                        items={(notificationRules.groups || []).map(group => ({
-                          key: group.groupCode,
-                          label: (
-                            <Space wrap>
-                              <Tag color={group.color}>{group.rules?.length || 0}</Tag>
-                              <Text strong>{group.groupName}</Text>
-                            </Space>
-                          ),
-                          children: (
-                            <Space wrap size={[8, 8]}>
-                              {(group.rules || []).map(rule => {
-                                const checked = notificationRuleDraftCodes.includes(rule.ruleCode);
-                                return (
-                                  <Tag.CheckableTag
-                                    key={rule.ruleCode}
-                                    checked={checked}
-                                    className={`notification-rule-tag ${checked ? 'is-selected' : ''}`}
-                                    onClick={() => toggleNotificationRule(rule.ruleCode)}
-                                  >
-                                    {rule.title}
-                                  </Tag.CheckableTag>
-                                );
-                              })}
-                            </Space>
-                          )
-                        }))}
-                      />
-                    ) : (
-                      <Empty description="暂无提醒类型配置" />
-                    )}
-                  </Col>
-                  <Col xs={24} lg={12}>
-                    {selectedNotificationRule ? (
-                      <div className="notification-rule-detail">
-                        <Space direction="vertical" size="middle" className="full-width">
-                          <Space wrap>
-                            <Tag color={riskColor(selectedNotificationRule.riskLevel)}>{severityLabel(selectedNotificationRule.riskLevel)}</Tag>
-                            <Tag>{selectedNotificationRule.changeType}</Tag>
-                            {!selectedNotificationRule.enabledInTemplate && <Tag color="warning">模板未启用</Tag>}
-                          </Space>
-                          <Title level={5}>{selectedNotificationRule.title}</Title>
-                          <Paragraph>{selectedNotificationRule.description}</Paragraph>
-                          <Text type="secondary">{selectedNotificationRule.impact}</Text>
-                          <Divider />
-                          <Text strong>建议检查</Text>
-                          <ul className="notification-rule-checks">
-                            {(selectedNotificationRule.recommendedChecks || []).map(check => <li key={check}>{check}</li>)}
-                          </ul>
-                          <Text strong>示例</Text>
-                          <pre className="notification-rule-example">{selectedNotificationRule.example || '-'}</pre>
-                        </Space>
-                      </div>
-                    ) : (
-                      <Empty description="请选择提醒类型" />
-                    )}
-                  </Col>
-                </Row>
-              </Space>
-            </Card>
-          </Col>
-          <Col xs={24}>
-            <Card
-              title="模型 Provider 配置"
-              extra={<Button type="primary" loading={providerSaving} onClick={saveProviderSettings} disabled={!providerDraft}>保存 Provider</Button>}
-            >
-              <Row gutter={[16, 16]} align="bottom">
-                <Col xs={24} md={8}>
-                  <Text strong>Provider</Text>
-                  <Select
-                    className="full-width prompt-field"
-                    value={selectedProviderCode}
-                    options={providerOptions}
-                    loading={settingsSaving}
-                    onChange={selectProvider}
-                  />
-                  {providerDraft && !providerDraft.apiKeyConfigured && (
-                    <Alert
-                      className="prompt-field"
-                      type="warning"
-                      showIcon
-                      message={`请先配置 ${sourceLabel(providerDraft.providerCode)} API Key`}
-                    />
-                  )}
-                </Col>
-                <Col xs={24} md={8}>
-                  <Text strong>端点 URL</Text>
-                  <Input
-                    className="prompt-field"
-                    placeholder="例如 https://api.deepseek.com"
-                    value={providerDraft?.endpointUrl || ''}
-                    onChange={event => updateProviderDraft('endpointUrl', event.target.value)}
-                  />
-                </Col>
-                <Col xs={24} md={8}>
-                  <Text strong>模型名称</Text>
-                  <Input
-                    className="prompt-field"
-                    placeholder="例如 deepseek-v4-pro"
-                    value={providerDraft?.modelName || ''}
-                    onChange={event => updateProviderDraft('modelName', event.target.value)}
-                  />
-                </Col>
-                <Col xs={24} md={10}>
-                  <Space direction="vertical" className="full-width">
-                    <Space wrap>
-                      <Text strong>{sourceLabel(providerDraft?.providerCode)} Key</Text>
-                      {providerDraft?.apiKeyConfigured ? (
-                        <Tag color="green">已配置 {providerDraft.apiKeyMasked}</Tag>
-                      ) : (
-                        <Tag>未配置</Tag>
-                      )}
-                      {providerDraft?.defaultProvider && <Tag color="blue">当前使用</Tag>}
-                    </Space>
-                    <Input.Password
-                      placeholder={providerApiKeyPlaceholder}
-                      value={providerApiKeyDraft}
-                      onChange={event => setProviderApiKeyDraft(event.target.value)}
-                    />
-                  </Space>
-                </Col>
-                <Col xs={24} md={6}>
-                  <Space direction="vertical" size={4}>
-                    <Switch
-                      checked={providerDraft?.enabled ?? false}
-                      checkedChildren="启用"
-                      unCheckedChildren="停用"
-                      onChange={checked => updateProviderDraft('enabled', checked)}
-                    />
-                  </Space>
-                </Col>
-                <Col xs={24} md={8}>
-                  <Button danger disabled={!providerDraft?.apiKeyConfigured} loading={providerSaving} onClick={clearProviderApiKey}>
-                    清除当前 Key
-                  </Button>
-                </Col>
-              </Row>
-            </Card>
-          </Col>
-          <Col xs={24}>
-            <Card
-              title="AI Review Profile"
-              extra={
-                <Space wrap>
-                  <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={!profileDraft}>预览 Prompt</Button>
-                  <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={!profileDraft}>恢复默认</Button>
-                  <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={!profileDraft}>保存 Profile</Button>
-                </Space>
-              }
-            >
-              {profileDraft ? (
-                <Space direction="vertical" size="middle" className="full-width">
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} lg={10}>
-                      <Text strong>Profile</Text>
-                      <Select
-                        className="full-width prompt-field"
-                        value={selectedProfileCode}
-                        options={profileOptions}
-                        onChange={selectProfile}
-                      />
-                    </Col>
-                    <Col xs={24} lg={14}>
-                      <Row gutter={[12, 12]}>
-                        <Col xs={24} md={12}>
-                          <Text strong>Provider 覆盖</Text>
-                          <Select
-                            className="full-width prompt-field"
-                            value={profileDraft.providerCode || ''}
-                            options={profileProviderOptions}
-                            onChange={value => updateProfileDraft('providerCode', value || null)}
-                          />
-                        </Col>
-                        <Col xs={24} md={12}>
-                          <Text strong>模型覆盖</Text>
-                          <Input
-                            className="prompt-field"
-                            placeholder="留空使用后端默认模型"
-                            value={profileDraft.model || ''}
-                            onChange={event => updateProfileDraft('model', event.target.value)}
-                          />
-                        </Col>
-                        <Col xs={24}>
-                          <Descriptions size="small" column={{ xs: 1, md: 2 }}>
-                            <Descriptions.Item label="MR 自动">{profileDraft.triggerOnMr ? '开启' : '关闭'}</Descriptions.Item>
-                            <Descriptions.Item label="手动触发">{profileDraft.triggerOnManual ? '开启' : '关闭'}</Descriptions.Item>
-                          </Descriptions>
-                        </Col>
-                      </Row>
-                    </Col>
-                  </Row>
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24}>
-                      <Text strong>Review Instructions</Text>
-                      <Input.TextArea
-                        className="prompt-textarea"
-                        value={profileDraft.reviewInstructions || ''}
-                        onChange={event => updateProfileDraft('reviewInstructions', event.target.value)}
-                        autoSize={{ minRows: 8, maxRows: 16 }}
-                      />
-                    </Col>
-                  </Row>
-                  {promptPreview && (
-                    <Collapse
-                      defaultActiveKey={['preview']}
-                      items={[{
-                        key: 'preview',
-                        label: (
-                          <Space wrap>
-                            <Text strong>Prompt 预览</Text>
-                            <Tag>{promptPreview.provider}</Tag>
-                            {promptPreview.model && <Tag>{promptPreview.model}</Tag>}
-                            <Tag>{promptPreview.promptLength} 字符</Tag>
-                            <Tag>{promptPreview.promptHash?.slice(0, 12)}</Tag>
-                          </Space>
-                        ),
-                        children: <pre className="prompt-preview-block">{promptPreview.prompt}</pre>
-                      }]}
-                    />
-                  )}
-                </Space>
-              ) : (
-                <Empty description="暂无 AI Review Profile" />
-              )}
-            </Card>
-          </Col>
-        </Row>
+        <Collapse className="settings-collapse" items={collapseItems} />
       </Spin>
     </div>
   );

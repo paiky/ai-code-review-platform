@@ -41,6 +41,20 @@ body {
   margin-bottom: 16px;
 }
 
+.settings-collapse .ant-collapse-item {
+  margin-bottom: 16px;
+  border-radius: 10px !important;
+  overflow: hidden;
+}
+
+.settings-collapse .ant-collapse-header {
+  align-items: center !important;
+}
+
+.settings-inner-card .ant-card-body {
+  padding: 0;
+}
+
 .page-shell {
   width: min(1440px, calc(100% - 48px));
   margin: 24px auto 40px;
@@ -133,6 +147,31 @@ body {
 
 .global-settings-stack {
   width: min(580px, 100%);
+}
+
+.webhook-list {
+  margin-top: 12px;
+}
+
+.webhook-item {
+  width: 100%;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fafafa;
+}
+
+.webhook-remove-cell {
+  display: flex;
+  align-items: center;
+}
+
+.webhook-remove-button {
+  min-width: 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0 !important;
+  border-radius: 999px;
 }
 
 .api-provider-inline {

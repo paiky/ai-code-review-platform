@@ -18,7 +18,7 @@ from app.review_record.repository import (
     create_review_task,
     mark_task_failed,
     mark_task_success,
-    save_notification_record,
+    save_notification_records,
     save_review_result,
 )
 from app.risk_engine.service import generate_risk_card
@@ -214,6 +214,7 @@ def _process_task(
     if not ai_review_scheduled:
         settings = get_settings_record(db)
         notification = send_risk_card(
+            db,
             task.id,
             risk_card,
             template.get("focusChangeTypes", []),
@@ -221,15 +222,11 @@ def _process_task(
             settings.dingtalk_notification_enabled,
             focus_rule_codes=template.get("focusRuleCodes", []),
         )
-        save_notification_record(
+        save_notification_records(
             db,
             task_id=task.id,
             result_id=result.id,
-            target=notification["target"],
-            status=notification["status"],
-            request_digest=notification["requestDigest"],
-            response_body=notification["responseBody"],
-            error_message=notification["errorMessage"],
+            notifications=notification["records"],
         )
     return {"analysis": analysis, "riskCard": risk_card, "resultId": result.id}
 

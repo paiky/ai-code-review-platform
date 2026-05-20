@@ -287,3 +287,25 @@ def save_notification_record(
     db.add(record)
     db.flush()
     return record
+
+
+def save_notification_records(
+    db: Session,
+    *,
+    task_id: int,
+    result_id: int | None,
+    notifications: list[dict],
+) -> list[NotificationRecord]:
+    return [
+        save_notification_record(
+            db,
+            task_id=task_id,
+            result_id=result_id,
+            target=item.get("target"),
+            status=item.get("status") or "SKIPPED",
+            request_digest=item.get("requestDigest"),
+            response_body=item.get("responseBody"),
+            error_message=item.get("errorMessage"),
+        )
+        for item in notifications
+    ]

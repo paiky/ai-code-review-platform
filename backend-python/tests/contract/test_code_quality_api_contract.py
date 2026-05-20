@@ -246,6 +246,223 @@ def test_rendered_prompt_uses_java_stronger_default(
     assert "每个 finding 都必须说明" in prompt
 
 
+def test_settings_returns_empty_dingtalk_webhook_list(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+
+    response = client.get("/api/code-quality-reviews/settings")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["dingtalkWebhooks"] == []
+
+
+def test_settings_can_save_multiple_dingtalk_webhooks(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+
+    saved = client.put(
+        "/api/code-quality-reviews/settings",
+        json={
+            "dingtalkNotificationEnabled": True,
+            "dingtalkWebhooks": [
+                {
+                    "name": "研发群",
+                    "channel": "DINGTALK",
+                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=one",
+                    "enabled": True,
+                },
+                {
+                    "name": "测试群",
+                    "channel": "DINGTALK",
+                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=two",
+                    "enabled": False,
+                },
+            ],
+        },
+    )
+
+    assert saved.status_code == 200
+    items = saved.json()["data"]["dingtalkWebhooks"]
+    assert len(items) == 2
+    assert items[0]["name"] == "研发群"
+    assert items[0]["enabled"] is True
+    assert items[1]["enabled"] is False
+
+    fetched = client.get("/api/code-quality-reviews/settings")
+    assert fetched.status_code == 200
+    assert len(fetched.json()["data"]["dingtalkWebhooks"]) == 2
+
+
+@respx.mock
+def test_settings_sends_test_notification_for_new_webhook(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    route = respx.post("https://dingtalk.example.test/robot/send?access_token=test-new").mock(
+        return_value=Response(200, json={"errcode": 0, "errmsg": "ok"})
+    )
+
+    saved = client.put(
+        "/api/code-quality-reviews/settings",
+        json={
+            "dingtalkWebhooks": [
+                {
+                    "name": "测试群",
+                    "channel": "DINGTALK",
+                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=test-new",
+                    "enabled": True,
+                }
+            ],
+        },
+    )
+
+    assert saved.status_code == 200
+    assert route.called
+    test_results = saved.json()["data"]["webhookTestResults"]
+    assert len(test_results) == 1
+    assert test_results[0]["status"] == "SUCCESS"
+
+
+def test_settings_update_disables_omitted_webhook(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    created = client.put(
+        "/api/code-quality-reviews/settings",
+        json={
+            "dingtalkWebhooks": [
+                {
+                    "name": "研发群",
+                    "channel": "DINGTALK",
+                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=one",
+                    "enabled": True,
+                },
+                {
+                    "name": "测试群",
+                    "channel": "DINGTALK",
+                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=two",
+                    "enabled": True,
+                },
+            ]
+        },
+    ).json()["data"]["dingtalkWebhooks"]
+
+    updated = client.put(
+        "/api/code-quality-reviews/settings",
+        json={
+            "dingtalkWebhooks": [
+                {
+                    "id": created[0]["id"],
+                    "name": "研发群-新",
+                    "channel": "DINGTALK",
+                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=one-new",
+                    "enabled": True,
+                }
+            ]
+        },
+    )
+
+    assert updated.status_code == 200
+    items = updated.json()["data"]["dingtalkWebhooks"]
+    assert len(items) == 1
+    assert items[0]["name"] == "研发群-新"
+    assert items[0]["enabled"] is True
+
+
+@respx.mock
+def test_settings_sends_test_notification_when_reenabling_existing_webhook(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    created = client.put(
+        "/api/code-quality-reviews/settings",
+        json={
+            "dingtalkWebhooks": [
+                {
+                    "name": "测试群",
+                    "channel": "DINGTALK",
+                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=reenable",
+                    "enabled": False,
+                }
+            ]
+        },
+    )
+    assert created.status_code == 200
+    webhook = created.json()["data"]["dingtalkWebhooks"][0]
+    route = respx.post("https://dingtalk.example.test/robot/send?access_token=reenable").mock(
+        return_value=Response(200, json={"errcode": 0, "errmsg": "ok"})
+    )
+
+    updated = client.put(
+        "/api/code-quality-reviews/settings",
+        json={
+            "dingtalkWebhooks": [
+                {
+                    "id": webhook["id"],
+                    "name": "测试群",
+                    "channel": "DINGTALK",
+                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=reenable",
+                    "enabled": True,
+                }
+            ]
+        },
+    )
+
+    assert updated.status_code == 200
+    assert route.called
+    assert updated.json()["data"]["webhookTestResults"][0]["status"] == "SUCCESS"
+
+
+def test_settings_rejects_invalid_or_duplicate_dingtalk_webhooks(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+
+    invalid = client.put(
+        "/api/code-quality-reviews/settings",
+        json={
+            "dingtalkWebhooks": [
+                {
+                    "name": "",
+                    "channel": "DINGTALK",
+                    "webhookUrl": "ftp://invalid.example.test",
+                    "enabled": True,
+                }
+            ]
+        },
+    )
+    assert invalid.status_code == 400
+
+    duplicate = client.put(
+        "/api/code-quality-reviews/settings",
+        json={
+            "dingtalkWebhooks": [
+                {
+                    "name": "A",
+                    "channel": "DINGTALK",
+                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=same",
+                    "enabled": True,
+                },
+                {
+                    "name": "B",
+                    "channel": "DINGTALK",
+                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=same",
+                    "enabled": True,
+                },
+            ]
+        },
+    )
+    assert duplicate.status_code == 400
+
+
 @respx.mock
 def test_deepseek_manual_review_saves_result_and_progress(
     client: TestClient,
