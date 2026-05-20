@@ -92,9 +92,10 @@ GitLab Push Hook 只有被推送的 `ref`，没有 MR 的 `source_branch` 和 `t
 
 项目脚本不仅是启动入口，也封装了本地开发约定：
 
-1. `scripts/run-backend.cmd` 会调用 PowerShell 脚本选择 JDK 21，并加载 `.local/gitlab.env`。
-2. `scripts/run-frontend.cmd` 会检查 Node / npm，并在缺少 `node_modules` 时自动安装依赖。
-3. Windows 下优先使用 `.cmd` 入口可以减少 Shell、PATH、命令后缀差异。
+1. `scripts/run-backend.cmd` 默认转发到 Python 后端脚本，并加载 `.local/gitlab.env`。
+2. `scripts/run-backend-java.cmd` 保留 JDK 21 选择逻辑，供 legacy Java 行为对照使用。
+3. `scripts/run-frontend.cmd` 会检查 Node / npm，并在缺少 `node_modules` 时自动安装依赖。
+4. Windows 下优先使用 `.cmd` 入口可以减少 Shell、PATH、命令后缀差异。
 
 处理方式：
 
@@ -102,9 +103,10 @@ GitLab Push Hook 只有被推送的 `ref`，没有 MR 的 `source_branch` 和 `t
 2. 后端启动、测试、编译优先使用：
 
 ```powershell
-.\scripts\run-backend.cmd
-.\scripts\run-backend.cmd -q test
-.\scripts\run-backend.cmd -q -DskipTests compile
+.\scripts\run-backend.cmd dev
+.\scripts\run-backend.cmd test
+.\scripts\run-backend.cmd lint
+.\scripts\run-backend.cmd migrate
 ```
 
 3. 前端启动、构建优先使用：
@@ -115,6 +117,11 @@ GitLab Push Hook 只有被推送的 `ref`，没有 MR 的 `source_branch` 和 `t
 ```
 
 4. 只有脚本缺少所需能力或脚本本身失败需要定位时，才直接执行底层 `mvn.cmd` / `npm.cmd` 命令，并记录原因。
+5. 如果确实需要对照历史 Java 后端，再显式使用：
+
+```powershell
+.\scripts\run-backend-java.cmd
+```
 
 ## 6. Docker 离线部署打包脚本找不到 docker 命令
 
@@ -460,7 +467,7 @@ OpenAI Responses strict schema 会强约束 `filePath`、`startLine`、`category
 每轮开发都执行全量测试，例如：
 
 ```powershell
-.\scripts\run-backend-python.cmd test
+.\scripts\run-backend.cmd test
 ```
 
 随着测试数量和输出增加，会让每轮对话耗时和额度消耗越来越高。对于只改前端交互、文档或单个后端模块的小目标，全量测试常常不是最高性价比的验证方式。
@@ -469,7 +476,7 @@ OpenAI Responses strict schema 会强约束 `filePath`、`startLine`、`category
 
 1. 前端样式、交互或展示逻辑改动：优先执行 `.\scripts\run-frontend.cmd build`。
 2. Python 后端局部改动：优先执行相关 pytest 文件，例如 `.\backend-python\.venv\Scripts\python.exe -m pytest tests/contract/test_rule_templates_api_contract.py`，或通过脚本能力可达的最小测试集。
-3. 只有改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容、通知发送或跨模块边界时，才执行 `.\scripts\run-backend-python.cmd test` 全量 Python 测试。
+3. 只有改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容、通知发送或跨模块边界时，才执行 `.\scripts\run-backend.cmd test` 全量 Python 测试。
 4. Java 后端 `backend/` 已停止维护，默认不再执行 Maven 编译或测试；只有用户明确要求对照历史 Java 行为时才读取或运行。
 5. 最终结论中说明“为什么选择这组验证”，避免把全量测试当作无脑默认动作。
 
@@ -494,3 +501,73 @@ rg "focusRuleCodes" backend-python/app frontend/src -g "!**/node_modules/**" -g 
 ```
 
 4. 不要把 `node_modules`、`target`、`dist`、`.venv`、`__pycache__`、`.pytest_cache` 的搜索输出贴入分析结论。
+
+## 22. Windows PowerShell 默认写文件编码和换行符可能破坏 Linux 部署脚本
+
+现象：
+
+离线 Docker 打包后，服务器上的 `load-images.sh` 可能报：
+
+```text
+/usr/bin/env: ‘bash\r’: No such file or directory
+```
+
+`.env.example`、`docker-compose.yml` 里也可能出现 `^M`。
+
+原因：
+
+Windows PowerShell 5 直接使用 `Set-Content` 写文本时，默认可能写成 UTF-16LE，使用 `-Encoding UTF8` 又可能写入 BOM；如果直接复制 Windows 工作区里的文本文件，还可能把 `CRLF` 行尾带到 Linux。对于 Linux shell 脚本、`.env` 和 `docker-compose.yml`，这些编码或换行符差异会让 shebang、变量解析和命令执行异常。
+
+处理方式：
+
+1. 生成 Linux 侧部署文件时，优先用 .NET 显式写 UTF-8 无 BOM：
+
+```powershell
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($path, $content, $utf8NoBom)
+```
+
+2. `scripts/package-docker-deploy.ps1` 输出 `docker-compose.yml`、`.env.example` 和 `load-images.sh` 时，都要显式写成 UTF-8 无 BOM + LF。
+3. 如果上传后的文件里出现 `^M`，优先怀疑打包产物换行符不对，不要先误判为 Docker 或 Linux 权限问题。
+
+## 23. 离线 Docker 升级时，`runtime/.env` 会被保留，修改新包里的 `.env.example` 不会自动生效
+
+现象：
+
+服务器上明明重新打了新包，`deploy/.env.example` 里也改成了新的数据库账号密码，但 `docker compose up -d` 后，后端日志仍然报类似：
+
+```text
+Access denied for user 'ai_review'@'...'
+```
+
+原因：
+
+离线部署脚本 `load-images.sh` 的设计是把固定运行目录放在 `/opt/ai-code-review-platform/runtime/`，并且只在第一次部署时从 `.env.example` 创建 `runtime/.env`。后续升级时脚本只更新 `APP_VERSION`，不会覆盖 `runtime/.env` 里已经存在的 `DATABASE_URL`、GitLab、钉钉或模型配置。
+
+所以如果第一次部署时 `runtime/.env` 里写的是：
+
+```text
+DATABASE_URL=mysql+pymysql://ai_review:...
+```
+
+后来即使重新打包、重新上传，新包里的 `.env.example` 改成了 `root` 或其他账号，运行中的 compose 仍然会继续使用旧的 `runtime/.env`。
+
+处理方式：
+
+1. 永远以服务器上的 `runtime/.env` 作为最终生效配置，不要只改版本目录里的 `.env.example`。
+2. 排查时先执行：
+
+```bash
+cd /opt/ai-code-review-platform/runtime
+grep '^DATABASE_URL=' .env
+docker compose config | grep DATABASE_URL
+docker compose exec backend /bin/sh -lc 'echo "$DATABASE_URL"'
+```
+
+3. 如果 `runtime/.env` 已改，但容器仍是旧值，执行：
+
+```bash
+docker compose up -d --force-recreate backend
+```
+
+4. 如果确认想完全重置运行配置，再手工备份并删除 `runtime/.env`，然后重新执行新版本目录下的 `./load-images.sh` 让它按新的 `.env.example` 重建。

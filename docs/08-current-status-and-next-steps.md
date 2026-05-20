@@ -286,13 +286,7 @@ npm.cmd run build
 
 后端脚本会优先使用仓库本地 `tools/jdk-21`，并自动加载 `.local/gitlab.env`。前端脚本会在缺少 `node_modules` 时自动执行 `npm install`。
 
-已补充 GitLab 真实 MR 联调脚本：
-
-```powershell
-.\scripts\verify-gitlab-diff.cmd
-```
-
-配置文件使用 `.local/gitlab.env`，示例见 `examples/gitlab.env.example`。`.local/` 已加入 `.gitignore`，用于保存 token、MySQL 密码等本地敏感配置。验证脚本会读取 GitLab project detail 和 MR detail，并校验后端创建的任务已使用真实项目名、真实 MR URL 和真实 source/target branch。
+配置文件使用 `.local/gitlab.env`，示例见 `examples/gitlab.env.example`。`.local/` 已加入 `.gitignore`，用于保存 token、MySQL 密码等本地敏感配置。当前真实 GitLab 联调通过手工构造 webhook 请求和 GitLab API 返回结果完成，后端创建的任务已验证会使用真实项目名、真实 MR URL 和真实 source/target branch。
 
 ### 3.9 已完成的真实 GitLab 验证
 
@@ -577,7 +571,7 @@ examples/README.md
 
 当前限制：
 
-- 暂无 GitLab webhook 配置权限，所以继续使用 `verify-gitlab-diff.cmd` 通过令牌和 `projectId + mrIid` 打通真实 MR 审查流程。
+- 暂无 GitLab webhook 配置权限，所以继续通过令牌和 `projectId + mrIid` 手工构造请求打通真实 MR 审查流程。
 - 拿到管理员 webhook 权限后，再把触发方式从本地脚本切换到 GitLab 自动回调。
 
 ### P2：前端手动审查页面

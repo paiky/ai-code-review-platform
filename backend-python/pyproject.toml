@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ai-code-review-backend-python"
 version = "0.1.0"
@@ -5,6 +9,7 @@ description = "Python backend skeleton for the AI code review platform."
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
+    "gunicorn>=23.0.0",
     "httpx>=0.27.0",
     "pymysql>=1.1.0",
     "sqlalchemy>=2.0.0",
@@ -25,3 +30,6 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

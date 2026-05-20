@@ -8,6 +8,10 @@ node_modules
 frontend/node_modules
 frontend/dist
 backend/target
+backend-python/.venv
+backend-python/.pytest_cache
+backend-python/.ruff_cache
+backend-python/**/__pycache__
 local-gitlab
 deploy/.env
 *.log

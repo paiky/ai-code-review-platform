@@ -1,21 +1,19 @@
-FROM maven:3.9-eclipse-temurin-21 AS build
+FROM python:3.12-slim
 
-WORKDIR /workspace
-
-COPY backend/pom.xml backend/pom.xml
-RUN mvn -f backend/pom.xml -q -DskipTests dependency:go-offline
-
-COPY backend/src backend/src
-RUN mvn -f backend/pom.xml -q -DskipTests package
-
-FROM eclipse-temurin:21-jre
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    SERVER_PORT=8080
 
 WORKDIR /app
 
-ENV SERVER_PORT=8080
+COPY backend-python/pyproject.toml /app/pyproject.toml
+COPY backend-python/app /app/app
+COPY backend-python/migrations /app/migrations
 
-COPY --from=build /workspace/backend/target/ai-code-review-backend-*.jar /app/app.jar
+RUN python -m pip install --upgrade pip \
+    && python -m pip install .
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+CMD ["sh", "-c", "python -m app.migrate && exec gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${SERVER_PORT:-8080}"]

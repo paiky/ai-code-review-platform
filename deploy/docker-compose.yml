@@ -1,12 +1,14 @@
 services:
   mysql:
     image: mysql:8.4
+    profiles:
+      - local-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USERNAME}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-ai_code_review}
+      MYSQL_USER: ${MYSQL_USERNAME:-ai_review}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-}
       TZ: Asia/Shanghai
     command:
       - --character-set-server=utf8mb4
@@ -29,32 +31,39 @@ services:
       - .env
     environment:
       SERVER_PORT: ${BACKEND_PORT:-8080}
-      MYSQL_URL: ${MYSQL_URL}
-      MYSQL_USERNAME: ${MYSQL_USERNAME}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      PLATFORM_BASE_URL: ${PLATFORM_BASE_URL}
-      DINGTALK_ENABLED: ${DINGTALK_ENABLED}
-      DINGTALK_WEBHOOK_URL: ${DINGTALK_WEBHOOK_URL}
-      GITLAB_API_ENABLED: ${GITLAB_API_ENABLED}
-      GITLAB_BASE_URL: ${GITLAB_BASE_URL}
-      GITLAB_TOKEN: ${GITLAB_TOKEN}
-      GITLAB_DIFF_PER_PAGE: ${GITLAB_DIFF_PER_PAGE}
-      CODE_QUALITY_REVIEW_ENABLED: ${CODE_QUALITY_REVIEW_ENABLED}
-      CODE_QUALITY_REVIEW_PROVIDER: ${CODE_QUALITY_REVIEW_PROVIDER}
-      CODEX_CLI_COMMAND: ${CODEX_CLI_COMMAND}
-      CODEX_CLI_MODEL: ${CODEX_CLI_MODEL}
-      CODEX_CLI_TIMEOUT_SECONDS: ${CODEX_CLI_TIMEOUT_SECONDS}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_RESPONSES_URL: ${OPENAI_RESPONSES_URL}
-      OPENAI_CODE_REVIEW_MODEL: ${OPENAI_CODE_REVIEW_MODEL}
-      OPENAI_CODE_REVIEW_TIMEOUT_SECONDS: ${OPENAI_CODE_REVIEW_TIMEOUT_SECONDS}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      ANTHROPIC_MESSAGES_URL: ${ANTHROPIC_MESSAGES_URL}
-      ANTHROPIC_CODE_REVIEW_MODEL: ${ANTHROPIC_CODE_REVIEW_MODEL}
-      ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS: ${ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS}
-    depends_on:
-      mysql:
-        condition: service_healthy
+      DATABASE_URL: ${DATABASE_URL:-}
+      PLATFORM_BASE_URL: ${PLATFORM_BASE_URL:-http://localhost:8080}
+      DINGTALK_ENABLED: ${DINGTALK_ENABLED:-true}
+      DINGTALK_WEBHOOK_URL: ${DINGTALK_WEBHOOK_URL:-}
+      GITLAB_API_ENABLED: ${GITLAB_API_ENABLED:-false}
+      GITLAB_BASE_URL: ${GITLAB_BASE_URL:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      GITLAB_DIFF_PER_PAGE: ${GITLAB_DIFF_PER_PAGE:-100}
+      CODE_QUALITY_REVIEW_ENABLED: ${CODE_QUALITY_REVIEW_ENABLED:-false}
+      CODE_QUALITY_REVIEW_PROVIDER: ${CODE_QUALITY_REVIEW_PROVIDER:-DEEPSEEK}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_RESPONSES_URL: ${OPENAI_RESPONSES_URL:-https://api.openai.com/v1/responses}
+      OPENAI_CODE_REVIEW_MODEL: ${OPENAI_CODE_REVIEW_MODEL:-gpt-5.4}
+      OPENAI_CODE_REVIEW_TIMEOUT_SECONDS: ${OPENAI_CODE_REVIEW_TIMEOUT_SECONDS:-120}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MESSAGES_URL: ${ANTHROPIC_MESSAGES_URL:-https://api.anthropic.com/v1/messages}
+      ANTHROPIC_CODE_REVIEW_MODEL: ${ANTHROPIC_CODE_REVIEW_MODEL:-claude-sonnet-4-5}
+      ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS: ${ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS:-120}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_CODE_REVIEW_MODEL: ${DEEPSEEK_CODE_REVIEW_MODEL:-deepseek-v4-pro}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('SERVER_PORT', '8080')}/api/health\", timeout=5).read()",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
 
   frontend:
     build:
@@ -66,7 +75,8 @@ services:
     environment:
       BACKEND_PORT: ${BACKEND_PORT:-8080}
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   mysql-data:

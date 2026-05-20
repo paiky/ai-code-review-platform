@@ -27,7 +27,7 @@ Invoke-RestMethod `
 - `gitlab-mr-webhook.real-no-changed-files.json`
   - 用于真实 GitLab 联调。
   - payload 不带 `changedFiles`，后端会按 `projectId + mrIid` 调 GitLab API 拉取 diff/change。
-  - 使用前需要替换文件中的占位字段，或者优先使用 `scripts/verify-gitlab-diff.cmd`。
+  - 使用前需要替换文件中的占位字段。
 
 - `manual-review-request.json`
   - 用于验证手动审查接口 `POST /api/review-tasks/manual`。
@@ -72,16 +72,7 @@ Invoke-RestMethod `
 
 ### 3. 真实 GitLab diff 联调
 
-建议优先走项目脚本：
-
-```powershell
-New-Item -ItemType Directory -Force .local
-Copy-Item .\examples\gitlab.env.example .local\gitlab.env
-.\scripts\run-backend.cmd
-.\scripts\verify-gitlab-diff.cmd
-```
-
-如果手动发送 webhook，可以基于 `gitlab-mr-webhook.real-no-changed-files.json` 替换占位字段后执行：
+可以基于 `gitlab-mr-webhook.real-no-changed-files.json` 替换占位字段后执行：
 
 ```powershell
 $payload = Get-Content -Raw -Path .\examples\gitlab-mr-webhook.real-no-changed-files.json

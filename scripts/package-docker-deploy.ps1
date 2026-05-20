@@ -26,6 +26,28 @@ function Invoke-Docker {
   }
 }
 
+function Write-Utf8NoBomFile {
+  param(
+    [string]$Path,
+    [string]$Content
+  )
+
+  $Content = $Content -replace "`r`n", "`n"
+  $Content = $Content -replace "`r", "`n"
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
+function Copy-TextFileAsLf {
+  param(
+    [string]$SourcePath,
+    [string]$TargetPath
+  )
+
+  $Content = Get-Content -Raw -Encoding UTF8 -Path $SourcePath
+  Write-Utf8NoBomFile -Path $TargetPath -Content $Content
+}
+
 $DockerVersionOutput = docker version 2>&1
 if ($LASTEXITCODE -ne 0) {
   $Message = ($DockerVersionOutput | Out-String).Trim()
@@ -55,17 +77,20 @@ if ($IncludeMysqlImage) {
   Invoke-Docker save -o (Join-Path $OutputDir "mysql-8.4.tar") $MysqlImage
 }
 
-Copy-Item (Join-Path $DeployDir "docker-compose.runtime.yml") (Join-Path $OutputDir "docker-compose.yml")
-Copy-Item (Join-Path $DeployDir ".env.example") (Join-Path $OutputDir ".env.example")
+Copy-TextFileAsLf (Join-Path $DeployDir "docker-compose.runtime.yml") (Join-Path $OutputDir "docker-compose.yml")
+Copy-TextFileAsLf (Join-Path $DeployDir ".env.example") (Join-Path $OutputDir ".env.example")
 
 $EnvExamplePath = Join-Path $OutputDir ".env.example"
-$EnvExample = Get-Content -Raw -Path $EnvExamplePath
+$EnvExample = Get-Content -Raw -Encoding UTF8 -Path $EnvExamplePath
 $EnvExample = $EnvExample -replace "APP_VERSION=local", "APP_VERSION=$Version"
-Set-Content -Path $EnvExamplePath -Value $EnvExample -NoNewline
+Write-Utf8NoBomFile -Path $EnvExamplePath -Content $EnvExample
 
 $LoadScript = @"
 #!/usr/bin/env bash
 set -euo pipefail
+
+SCRIPT_DIR="`$(cd "`$(dirname "`${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_HOME="`${DEPLOY_HOME:-`$(dirname "`$SCRIPT_DIR")/runtime}"
 
 docker load -i ai-code-review-backend-$Version.tar
 docker load -i ai-code-review-frontend-$Version.tar
@@ -74,15 +99,33 @@ if [ -f mysql-8.4.tar ]; then
   docker load -i mysql-8.4.tar
 fi
 
-if [ ! -f .env ]; then
-  cp .env.example .env
-  echo "Created .env from .env.example. Edit .env before starting services."
+mkdir -p "`$DEPLOY_HOME"
+cp docker-compose.yml "`$DEPLOY_HOME/docker-compose.yml"
+
+ENV_FILE="`$DEPLOY_HOME/.env"
+if [ ! -f "`$ENV_FILE" ]; then
+  cp .env.example "`$ENV_FILE"
+  echo "Created `$ENV_FILE from .env.example. Edit it once before starting services."
+else
+  if grep -q '^APP_VERSION=' "`$ENV_FILE"; then
+    sed -i 's/^APP_VERSION=.*/APP_VERSION=$Version/' "`$ENV_FILE"
+  else
+    TMP_ENV="`$(mktemp)"
+    {
+      echo "APP_VERSION=$Version"
+      cat "`$ENV_FILE"
+    } > "`$TMP_ENV"
+    mv "`$TMP_ENV" "`$ENV_FILE"
+  fi
 fi
 
-echo "Images loaded. Start with: docker compose up -d"
+echo "Images loaded. Runtime files are in: `$DEPLOY_HOME"
+echo "Start or upgrade with:"
+echo "  cd `$DEPLOY_HOME"
+echo "  docker compose up -d"
 "@
 
-Set-Content -Path (Join-Path $OutputDir "load-images.sh") -Value $LoadScript -NoNewline
+Write-Utf8NoBomFile -Path (Join-Path $OutputDir "load-images.sh") -Content $LoadScript
 
 Write-Host ""
 Write-Host "Docker deploy package created:"
@@ -91,5 +134,6 @@ Write-Host ""
 Write-Host "Upload this directory to the Linux server, then run:"
 Write-Host "  chmod +x load-images.sh"
 Write-Host "  ./load-images.sh"
-Write-Host "  vi .env"
+Write-Host "  vi ../runtime/.env"
+Write-Host "  cd ../runtime"
 Write-Host "  docker compose up -d"

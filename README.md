@@ -9,7 +9,7 @@
 - `frontend/`：React + Ant Design 前端。
 - `docs/`：设计、API、schema 与实施计划文档。
 - `examples/`：Webhook 与手动审查示例请求。
-- `scripts/`：本地启动、GitLab 验证脚本。
+- `scripts/`：本地启动与 Docker 打包脚本。
 
 常用文档：
 
@@ -29,11 +29,17 @@
 
 启动、编译、测试、构建应优先使用 `scripts/` 目录下脚本，不要绕过脚本直接按个人习惯执行底层命令。脚本负责统一本地 env、依赖安装和 Windows 命令兼容。
 
+当前默认后端入口：
+
+- `.\scripts\run-backend.cmd`：默认启动或测试 Python FastAPI 后端。
+- `.\scripts\run-backend-python.cmd`：Python 后端直连入口，适合排查脚本行为时使用。
+- `.\scripts\run-backend-java.cmd`：历史 Java 参考后端入口，仅在需要对照 legacy 行为时使用。
+
 验证策略按影响范围选择最小集，不要无意义地默认全量扫描：
 
 - 只改前端样式或交互：优先跑 `.\scripts\run-frontend.cmd build`。
 - 只改 Python 后端局部逻辑：优先跑相关 pytest 文件或测试类。
-- 改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容或跨模块边界时，再跑 `.\scripts\run-backend-python.cmd test` 全量 Python 测试。
+- 改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容或跨模块边界时，再跑 `.\scripts\run-backend.cmd test` 全量 Python 测试。
 - Java Maven 测试默认不跑。
 
 搜索代码时排除依赖和构建产物目录，例如 `frontend/node_modules/`、`frontend/dist/`、`backend/target/`、`backend-python/.venv/`、`__pycache__/`、`.pytest_cache/`。仓库根目录提供 `.rgignore`，优先使用 `rg` 遵守该忽略规则。
@@ -70,7 +76,6 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持 profile / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、MR 自动触发开关、重试、执行过程展示。
 - GitLab MR 自动 AI Review 完成后会向同一个钉钉 webhook 推送“代码质量 Review”结果。
-- 本地 GitLab CE 验证脚本位于 `local-gitlab/` 与 `scripts/verify-gitlab-diff.*`。
 
 ## 环境要求
 
@@ -87,6 +92,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
+| `DATABASE_URL` | 空 | Python SQLAlchemy 连接串，已设置时优先于旧 JDBC 配置 |
 | `MYSQL_URL` | `jdbc:mysql://localhost:3306/ai_code_review?...` | MySQL JDBC URL |
 | `MYSQL_USERNAME` | `root` | MySQL 用户 |
 | `MYSQL_PASSWORD` | `root` | MySQL 密码 |
@@ -115,9 +121,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 PowerShell 示例：
 
 ```powershell
-$env:MYSQL_URL="jdbc:mysql://localhost:3306/ai_code_review?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false"
-$env:MYSQL_USERNAME="root"
-$env:MYSQL_PASSWORD="root"
+$env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?charset=utf8mb4"
 $env:DINGTALK_WEBHOOK_URL=""
 $env:GITLAB_API_ENABLED="false"
 ```
@@ -131,7 +135,7 @@ $env:GITLAB_API_ENABLED="false"
   -> Nginx frontend 容器 :80
   -> React 静态页面
   -> /api 反向代理到 backend:${BACKEND_PORT}
-Spring Boot backend 容器，默认 8080，仅在 Docker 网络内访问
+Python FastAPI backend 容器，默认 8080，仅在 Docker 网络内访问
 MySQL 8.4 容器 + mysql-data 持久化卷
 ```
 
@@ -148,14 +152,31 @@ cp .env.example .env
 ```text
 PUBLIC_HTTP_PORT=8080
 PLATFORM_BASE_URL=http://你的域名或服务器IP:8080
-BACKEND_PORT=8080
-MYSQL_ROOT_PASSWORD=强密码
-MYSQL_USERNAME=ai_review
-MYSQL_PASSWORD=强密码
+DATABASE_URL=mysql+pymysql://ai_review:强密码@192.168.100.88:3306/ai_code_review?charset=utf8mb4
+```
+
+按需再增加这些可选配置：
+
+```text
 DINGTALK_WEBHOOK_URL=钉钉机器人 webhook，可为空
 GITLAB_API_ENABLED=true
 GITLAB_BASE_URL=https://你的 GitLab 地址
 GITLAB_TOKEN=GitLab access token
+CODE_QUALITY_REVIEW_ENABLED=true
+DEEPSEEK_API_KEY=...
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+```
+
+默认部署使用外部 MySQL，不会启动 compose 内置的 `mysql` 容器。如果确实要使用内置 MySQL，再在 `.env` 中增加：
+
+```text
+COMPOSE_PROFILES=local-mysql
+MYSQL_ROOT_PASSWORD=强密码
+MYSQL_DATABASE=ai_code_review
+MYSQL_USERNAME=ai_review
+MYSQL_PASSWORD=强密码
+DATABASE_URL=mysql+pymysql://ai_review:强密码@mysql:3306/ai_code_review?charset=utf8mb4
 ```
 
 启动：
@@ -178,6 +199,11 @@ docker compose logs -f frontend
 curl http://127.0.0.1/actuator/health
 curl http://127.0.0.1/api/health
 ```
+
+说明：
+
+- backend 容器启动时会先执行 `python -m app.migrate`。空 MySQL 会按 `backend-python/migrations/bootstrap_sql/` 顺序初始化历史表结构和内置数据；已有核心表时会自动跳过 bootstrap。
+- 如需单独确认后端 bootstrap / gunicorn 启动过程，可执行 `docker compose logs -f backend`。
 
 平台访问和 GitLab webhook 使用同一个对外端口：`PUBLIC_HTTP_PORT`。默认访问 `http://服务器IP:8080`，GitLab webhook 配 `http://服务器IP:8080/api/webhooks/gitlab/merge-request`。如果服务器的 `8080` 已被占用，可以改 `PUBLIC_HTTP_PORT`，例如 `PUBLIC_HTTP_PORT=18080` 后访问 `http://服务器IP:18080`。`BACKEND_PORT` 默认只在 Docker 内部使用，不会额外占用宿主机端口；如需避开容器内的 `8080` 约定，也可以改成 `BACKEND_PORT=18081`，Nginx 反向代理会自动跟随。
 
@@ -216,30 +242,39 @@ http://你的域名或服务器IP:8080/api/webhooks/gitlab/merge-request
   load-images.sh
 ```
 
-如果服务器无法访问 Docker Hub，还需要把 MySQL 镜像一起打包：
+默认外部 MySQL 部署不需要 MySQL 镜像。如果要启用内置 MySQL，或服务器需要完全离线准备 MySQL 镜像，再把 MySQL 镜像一起打包：
 
 ```powershell
 .\scripts\package-docker-deploy.cmd -IncludeMysqlImage
 ```
 
-将 `.local/docker-deploy/{版本号}/` 整个目录上传到服务器，例如：
+将 `.local/docker-deploy/{版本号}/` 整个目录上传到服务器固定父目录下，例如：
 
 ```bash
-scp -r .local/docker-deploy/{版本号} user@server:/opt/ai-code-review-platform
+scp -r .local/docker-deploy/{版本号} user@server:/opt/ai-code-review-platform/
 ```
 
 服务器执行：
 
 ```bash
-cd /opt/ai-code-review-platform
+cd /opt/ai-code-review-platform/{版本号}
 chmod +x load-images.sh
 ./load-images.sh
-cp .env.example .env
-vi .env
+vi ../runtime/.env
+cd ../runtime
 docker compose up -d
 ```
 
-升级时重新在本地执行 `package-docker-deploy.cmd`，上传新的版本目录到服务器，执行 `./load-images.sh` 后再 `docker compose up -d`。数据库数据保存在 Docker volume `mysql-data` 中，升级应用镜像不会删除数据；不要执行 `docker compose down -v`。
+`load-images.sh` 会把运行用的 `docker-compose.yml` 放到 `/opt/ai-code-review-platform/runtime/`，并且只在第一次部署时创建 `/opt/ai-code-review-platform/runtime/.env`。以后升级时重新上传新版本目录，执行新版本目录里的 `./load-images.sh`，脚本只更新 `APP_VERSION`，不会覆盖你已经配置好的 MySQL、GitLab、钉钉或模型密钥。
+
+升级命令：
+
+```bash
+cd /opt/ai-code-review-platform/{新版本号}
+./load-images.sh
+cd ../runtime
+docker compose up -d
+```
 
 ## 本地启动
 
@@ -249,11 +284,21 @@ docker compose up -d
 CREATE DATABASE ai_code_review DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-启动 Python 后端，默认跑在 8080：
+首次本地启动建议先准备 Python 虚拟环境：
 
 ```powershell
-.\scripts\run-backend-python.cmd dev
-.\scripts\run-backend-python.cmd test
+python -m venv backend-python\.venv
+Push-Location backend-python
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+Pop-Location
+```
+
+默认后端入口现在是 `.\scripts\run-backend.cmd`。常用命令：
+
+```powershell
+.\scripts\run-backend.cmd dev
+.\scripts\run-backend.cmd test
+.\scripts\run-backend.cmd lint
 ```
 
 Python 健康检查：
@@ -263,11 +308,24 @@ curl http://localhost:8080/api/health
 curl http://localhost:8080/actuator/health
 ```
 
+如果是空数据库，先执行一次 bootstrap migration：
+
+```powershell
+.\scripts\run-backend.cmd migrate
+```
+
 阶段 2 已接入 SQLAlchemy 只读查询 API，优先读取 `DATABASE_URL`，未设置时兼容旧 `MYSQL_URL`、`MYSQL_USERNAME`、`MYSQL_PASSWORD`：
 
 ```powershell
 $env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?charset=utf8mb4"
-.\scripts\run-backend-python.cmd dev
+.\scripts\run-backend.cmd dev
+```
+
+如需与 legacy Java 后端并行对照，可以让 Python 临时跑在 18080：
+
+```powershell
+.\scripts\run-backend.cmd dev --port 18080
+.\scripts\run-backend-java.cmd
 ```
 
 当前 Python 只读接口：
@@ -466,18 +524,12 @@ Copy-Item examples/gitlab.env.example .local/gitlab.env
 - `GITLAB_TOKEN`
 - `GITLAB_PROJECT_ID`
 - `GITLAB_MR_IID`
-- MySQL 连接信息
+- MySQL 连接信息（最简单保留 `MYSQL_USERNAME`、`MYSQL_PASSWORD`；如本地库不在默认 `localhost:3306/ai_code_review`，改用 `DATABASE_URL`）
 
 启动 Python 后端：
 
 ```powershell
-.\scripts\run-backend-python.cmd dev
-```
-
-执行验证脚本：
-
-```powershell
-.\scripts\verify-gitlab-diff.cmd
+.\scripts\run-backend.cmd dev
 ```
 
 MR diff 调用：
@@ -637,7 +689,7 @@ http://localhost:5173/?taskId=47
 Python 后端：
 
 ```powershell
-.\scripts\run-backend-python.cmd test
+.\scripts\run-backend.cmd test
 ```
 
 前端：

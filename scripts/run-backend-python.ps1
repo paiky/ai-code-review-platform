@@ -75,6 +75,31 @@ function Invoke-Python {
     $script:exitCode = $LASTEXITCODE
 }
 
+function Resolve-DevPort {
+    param(
+        [string[]] $CommandArgs,
+        [string] $DefaultPort
+    )
+
+    $port = $DefaultPort
+    $remaining = New-Object System.Collections.Generic.List[string]
+
+    for ($index = 0; $index -lt $CommandArgs.Count; $index++) {
+        $arg = $CommandArgs[$index]
+        if ($arg -eq "--port" -and $index + 1 -lt $CommandArgs.Count) {
+            $port = $CommandArgs[$index + 1]
+            $index++
+            continue
+        }
+        $remaining.Add($arg)
+    }
+
+    return @{
+        Port = $port
+        RemainingArgs = $remaining.ToArray()
+    }
+}
+
 if (-not (Test-Path $backendDir)) {
     throw "backend-python directory was not found: $backendDir"
 }
@@ -102,12 +127,16 @@ try {
         "lint" {
             Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m", "ruff", "check", ".") + $remainingArgs)
         }
+        "migrate" {
+            Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m", "app.migrate") + $remainingArgs)
+        }
         "dev" {
             $port = $env:SERVER_PORT
             if ([string]::IsNullOrWhiteSpace($port)) {
                 $port = "8080"
             }
-            Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", $port, "--reload") + $remainingArgs)
+            $resolvedDev = Resolve-DevPort -CommandArgs $remainingArgs -DefaultPort $port
+            Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", $resolvedDev.Port, "--reload") + $resolvedDev.RemainingArgs)
         }
         default {
             Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m") + $Args)
