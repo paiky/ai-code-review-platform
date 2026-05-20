@@ -35,12 +35,6 @@ body {
   flex: 0 0 auto;
 }
 
-.settings-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 16px;
-}
-
 .settings-collapse .ant-collapse-item {
   margin-bottom: 16px;
   border-radius: 10px !important;
@@ -62,14 +56,10 @@ body {
 
 .page-heading {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
+  align-items: center;
+  justify-content: flex-end;
   gap: 16px;
   margin-bottom: 16px;
-}
-
-.page-heading .ant-typography {
-  margin-bottom: 0;
 }
 
 .section-gap {
@@ -370,6 +360,203 @@ body {
   border-radius: 8px;
 }
 
+.release-page-shell {
+  position: relative;
+}
+
+.release-page-shell::before {
+  content: "";
+  position: absolute;
+  inset: 58px 0 auto;
+  height: 220px;
+  border-radius: 32px;
+  background:
+    radial-gradient(circle at top left, rgba(15, 118, 110, 0.18), transparent 55%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(236, 253, 245, 0.88));
+  pointer-events: none;
+  z-index: 0;
+}
+
+.release-list {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.release-entry {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 24px;
+  align-items: stretch;
+  opacity: 0;
+  transform: translateY(18px);
+  animation: releaseRise 0.65s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(var(--item-index, 0) * 110ms);
+}
+
+.release-track {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 100%;
+  padding-left: 10px;
+}
+
+.release-date {
+  color: #5f6b76;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.release-marker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.release-marker-core {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #0f766e, #14b8a6);
+  box-shadow: 0 0 0 8px rgba(20, 184, 166, 0.12);
+  transition: transform 0.24s ease, box-shadow 0.24s ease;
+}
+
+.release-marker-ripple {
+  position: absolute;
+  inset: 2px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 118, 110, 0.42);
+  opacity: 0;
+  transform: scale(0.72);
+}
+
+.release-track-line {
+  position: absolute;
+  left: 27px;
+  top: 48px;
+  bottom: -18px;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(20, 184, 166, 0.45), rgba(148, 163, 184, 0.1));
+}
+
+.release-card {
+  height: 100%;
+  padding: 22px 24px;
+  border: 1px solid #d6e0e3;
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(248, 250, 252, 0.93));
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+  transition: transform 0.24s ease, box-shadow 0.24s ease, border-color 0.24s ease;
+}
+
+.release-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.release-card-head .ant-typography {
+  margin-bottom: 0;
+}
+
+.release-version {
+  display: inline-block;
+  margin-bottom: 8px;
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.release-summary {
+  margin-bottom: 16px !important;
+  color: #334155;
+}
+
+.release-tag {
+  border-radius: 999px;
+  border-color: #b7e4db;
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
+.release-highlights {
+  margin: 0;
+  padding-left: 18px;
+  color: #1f2937;
+  line-height: 1.75;
+}
+
+.release-highlights li + li {
+  margin-top: 8px;
+}
+
+.release-entry.is-active .release-marker-core,
+.release-track:hover .release-marker-core,
+.release-marker:hover .release-marker-core,
+.release-marker:focus-visible .release-marker-core {
+  transform: scale(1.18);
+  box-shadow: 0 0 0 10px rgba(20, 184, 166, 0.16), 0 0 20px rgba(20, 184, 166, 0.32);
+}
+
+.release-entry.is-active .release-marker-ripple,
+.release-track:hover .release-marker-ripple,
+.release-marker:hover .release-marker-ripple,
+.release-marker:focus-visible .release-marker-ripple {
+  opacity: 1;
+  animation: releasePulse 1.35s ease-out infinite;
+}
+
+.release-entry.is-active .release-card,
+.release-card:hover {
+  transform: translateY(-2px);
+  border-color: #74cbbd;
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.1);
+}
+
+@keyframes releaseRise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes releasePulse {
+  0% {
+    opacity: 0.72;
+    transform: scale(0.72);
+  }
+
+  70% {
+    opacity: 0;
+    transform: scale(1.28);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.28);
+  }
+}
+
 @media (max-width: 760px) {
   .page-shell {
     width: calc(100% - 24px);
@@ -390,6 +577,34 @@ body {
 
   .focus-indicator-grid {
     grid-template-columns: 1fr;
+  }
+
+  .release-page-shell::before {
+    inset: 84px 0 auto;
+    height: 180px;
+  }
+
+  .release-entry {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .release-track {
+    padding-left: 0;
+  }
+
+  .release-track-line {
+    left: 17px;
+    top: 48px;
+    bottom: -16px;
+  }
+
+  .release-card {
+    padding: 18px;
+  }
+
+  .release-card-head {
+    flex-direction: column;
   }
 }
 .top-nav .ant-btn-default {

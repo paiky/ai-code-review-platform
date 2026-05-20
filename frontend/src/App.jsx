@@ -19,11 +19,11 @@ import {
   Table,
   Tabs,
   Tag,
-  Timeline,
   Typography
 } from 'antd';
 import {
   ArrowLeftOutlined,
+  ClockCircleOutlined,
   CloseOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -31,7 +31,9 @@ import {
   SettingOutlined,
   UnorderedListOutlined
 } from '@ant-design/icons';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { fetchApi, riskColor, statusColor } from './api.js';
+import { releaseNotes } from './releaseNotes.js';
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -53,6 +55,20 @@ const fineChangeTypes = new Set([
   'MQ_TOPIC_CONFIG',
   'MQ_RETRY_DLQ'
 ]);
+
+const HOME_ROUTE = '/';
+const TASK_LIST_ROUTE = '/tasks';
+const SETTINGS_ROUTE = '/settings';
+const RELEASES_ROUTE = '/releases';
+
+function currentRoute(location) {
+  return `${location.pathname}${location.search || ''}${location.hash || ''}`;
+}
+
+function resolveBackTarget(location, fallbackPath) {
+  const from = location?.state?.from;
+  return typeof from === 'string' && from.trim() ? from : fallbackPath;
+}
 
 function JsonBlock({ value }) {
   return <pre className="json-block">{JSON.stringify(value ?? {}, null, 2)}</pre>;
@@ -379,10 +395,6 @@ function TaskList({ onOpen }) {
   return (
     <div className="page-shell">
       <div className="page-heading">
-        <div>
-          <Title level={3}>审查任务</Title>
-          <Text type="secondary">查看 GitLab MR 触发的变更风险审查记录</Text>
-        </div>
         <Space>
           <Input
             allowClear
@@ -392,7 +404,6 @@ function TaskList({ onOpen }) {
             onChange={event => setKeyword(event.target.value)}
             onPressEnter={() => load({ pageNo: 1 })}
           />
-          <Button icon={<ReloadOutlined />} onClick={() => load({ pageNo: 1 })}>刷新</Button>
           <Button type="primary" onClick={() => load({ pageNo: 1 })}>搜索</Button>
         </Space>
       </div>
@@ -1086,8 +1097,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   return (
     <div className="page-shell">
       <Space className="detail-toolbar">
-        <Button icon={<ArrowLeftOutlined />} onClick={onBack}>返回</Button>
-        <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+        <Button icon={<ArrowLeftOutlined />} onClick={onBack}>返回上一层</Button>
         <Button
           type="primary"
           icon={<ReloadOutlined />}
@@ -1923,9 +1933,6 @@ function TemplateConfig() {
   return (
     <div className="page-shell">
       {contextHolder}
-      <div className="settings-actions">
-        <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-      </div>
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
       <Spin spinning={loading}>
         <Collapse className="settings-collapse" items={collapseItems} />
@@ -1933,47 +1940,167 @@ function TemplateConfig() {
     </div>
   );
 }
-export default function App() {
-  const initialTaskId = new URLSearchParams(window.location.search).get('taskId');
-  const [selectedTaskId, setSelectedTaskId] = useState(initialTaskId ? Number(initialTaskId) : null);
-  const [view, setView] = useState('tasks');
-
-  const openTasks = () => {
-    setSelectedTaskId(null);
-    setView('tasks');
-    window.history.replaceState({}, '', window.location.pathname);
-  };
-
-  const openTemplates = () => {
-    setSelectedTaskId(null);
-    setView('templates');
-    window.history.replaceState({}, '', window.location.pathname);
-  };
+function TaskListPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const openTaskDetail = (taskId) => {
-    setSelectedTaskId(taskId);
-    setView('tasks');
-    window.history.replaceState({}, '', `${window.location.pathname}?taskId=${taskId}`);
+    navigate(`/tasks/${taskId}`, { state: { from: currentRoute(location) } });
   };
+
+  return <TaskList onOpen={openTaskDetail} />;
+}
+
+function TaskDetailPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { taskId } = useParams();
+  const numericTaskId = Number(taskId);
+  const backTarget = resolveBackTarget(location, TASK_LIST_ROUTE);
+
+  if (!Number.isFinite(numericTaskId)) {
+    return (
+      <div className="page-shell">
+        <Alert type="error" showIcon message="任务 ID 无效" />
+      </div>
+    );
+  }
+
+  return (
+    <TaskDetail
+      taskId={numericTaskId}
+      onBack={() => navigate(backTarget)}
+      onOpen={(nextTaskId) => navigate(`/tasks/${nextTaskId}`, { state: { from: backTarget } })}
+    />
+  );
+}
+
+function SettingsPage() {
+  return <TemplateConfig />;
+}
+
+function ReleaseNotesPage() {
+  const [activeReleaseId, setActiveReleaseId] = useState(releaseNotes[0]?.id || null);
+
+  return (
+    <div className="page-shell release-page-shell">
+      <div className="release-list">
+        {releaseNotes.map((item, index) => {
+          const isActive = activeReleaseId === item.id;
+          const isLast = index === releaseNotes.length - 1;
+          return (
+            <article
+              key={item.id}
+              className={`release-entry ${isActive ? 'is-active' : ''}`}
+              style={{ '--item-index': index }}
+              onMouseEnter={() => setActiveReleaseId(item.id)}
+              onFocus={() => setActiveReleaseId(item.id)}
+            >
+              <div className="release-track">
+                <Text className="release-date">{item.releaseDate}</Text>
+                <button
+                  type="button"
+                  className="release-marker"
+                  aria-label={`${item.version} ${item.title}`}
+                  onMouseEnter={() => setActiveReleaseId(item.id)}
+                  onFocus={() => setActiveReleaseId(item.id)}
+                  onClick={() => setActiveReleaseId(item.id)}
+                >
+                  <span className="release-marker-core" />
+                  <span className="release-marker-ripple" />
+                </button>
+                {!isLast && <span className="release-track-line" aria-hidden="true" />}
+              </div>
+              <div className="release-card">
+                <div className="release-card-head">
+                  <div>
+                    <Text className="release-version">{item.version}</Text>
+                    <Title level={4}>{item.title}</Title>
+                  </div>
+                  <Space wrap>
+                    {(item.tags || []).map(tag => (
+                      <Tag key={tag} className="release-tag">
+                        {tag}
+                      </Tag>
+                    ))}
+                  </Space>
+                </div>
+                <Paragraph className="release-summary">{item.summary}</Paragraph>
+                <ul className="release-highlights">
+                  {item.highlights.map(highlight => (
+                    <li key={highlight}>{highlight}</li>
+                  ))}
+                </ul>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function HomePage() {
+  const location = useLocation();
+  const legacyTaskId = new URLSearchParams(location.search).get('taskId');
+
+  if (legacyTaskId) {
+    return <Navigate to={`/tasks/${legacyTaskId}`} replace />;
+  }
+
+  return <TaskListPage />;
+}
+
+function AppFrame() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const route = currentRoute(location);
+  const isTaskRoute = location.pathname === HOME_ROUTE || location.pathname.startsWith(TASK_LIST_ROUTE);
+  const isSettingsRoute = location.pathname.startsWith(SETTINGS_ROUTE);
+  const isReleaseRoute = location.pathname.startsWith(RELEASES_ROUTE);
 
   return (
     <Layout className="app-layout">
       <Header className="app-header">
-        <div className="brand">AI 变更风险审查平台</div>
+        <div className="brand">AI 变更提醒与代码质量审查平台</div>
         <Space className="top-nav">
-          <Button icon={<UnorderedListOutlined />} type={view === 'tasks' ? 'primary' : 'default'} onClick={openTasks}>任务</Button>
-          <Button icon={<SettingOutlined />} type={view === 'templates' ? 'primary' : 'default'} onClick={openTemplates}>设置</Button>
+          <Button
+            icon={<UnorderedListOutlined />}
+            type={isTaskRoute ? 'primary' : 'default'}
+            onClick={() => navigate(TASK_LIST_ROUTE)}
+          >
+            任务
+          </Button>
+          <Button
+            icon={<SettingOutlined />}
+            type={isSettingsRoute ? 'primary' : 'default'}
+            onClick={() => navigate(SETTINGS_ROUTE, { state: { from: route } })}
+          >
+            设置
+          </Button>
+          <Button
+            icon={<ClockCircleOutlined />}
+            type={isReleaseRoute ? 'primary' : 'default'}
+            onClick={() => navigate(RELEASES_ROUTE, { state: { from: route } })}
+          >
+            版本更新
+          </Button>
         </Space>
       </Header>
       <Content>
-        {selectedTaskId ? (
-          <TaskDetail taskId={selectedTaskId} onBack={openTasks} onOpen={openTaskDetail} />
-        ) : view === 'templates' ? (
-          <TemplateConfig />
-        ) : (
-          <TaskList onOpen={openTaskDetail} />
-        )}
+        <Routes>
+          <Route path={HOME_ROUTE} element={<HomePage />} />
+          <Route path={TASK_LIST_ROUTE} element={<TaskListPage />} />
+          <Route path={`${TASK_LIST_ROUTE}/:taskId`} element={<TaskDetailPage />} />
+          <Route path={SETTINGS_ROUTE} element={<SettingsPage />} />
+          <Route path={RELEASES_ROUTE} element={<ReleaseNotesPage />} />
+          <Route path="*" element={<Navigate to={HOME_ROUTE} replace />} />
+        </Routes>
       </Content>
     </Layout>
   );
+}
+
+export default function App() {
+  return <AppFrame />;
 }

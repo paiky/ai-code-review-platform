@@ -71,12 +71,9 @@ def send_test_notification(target_url: str, webhook_name: str | None = None) -> 
         }
     label = webhook_name or "钉钉机器人"
     markdown = (
-        "### 钉钉 Webhook 测试通知\n\n"
-        f"- 名称：{label}\n"
-        "- 结果：平台已成功保存该 webhook 配置。\n"
-        "- 用途：这是新增 webhook 时自动发送的连通性测试消息。"
+        f"大家好，我是{label}，很高兴认识大家。"
     )
-    return _send_to_url(target_url, "钉钉 Webhook 测试通知", markdown, markdown[:500])
+    return _send_to_url(target_url, f"大家好，我是{label}", markdown, markdown[:500])
 
 
 def _send_markdown(
