@@ -8,7 +8,7 @@ from httpx import Response
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
-from app.project_integration.models import Project
+from app.project_integration.models import GitLabMergeRequestEvent, Project
 from app.rule_template.models import RuleTemplate
 
 
@@ -136,6 +136,18 @@ def legacy_review_card_json() -> str:
             ],
         },
         ensure_ascii=False,
+    )
+
+
+def fix_patch_text() -> str:
+    return (
+        "diff --git a/src/OrderService.java b/src/OrderService.java\n"
+        "--- a/src/OrderService.java\n"
+        "+++ b/src/OrderService.java\n"
+        "@@ -9,4 +9,4 @@ public void create(Order order) {\n"
+        "-        order.setStatus(null);\n"
+        "+        order.setStatus(OrderStatus.CREATED);\n"
+        "     }\n"
     )
 
 
@@ -550,6 +562,276 @@ def test_deepseek_manual_review_saves_result_and_progress(
     assert "DEEPSEEK_RESPONSE_RAW" in phases
     assert "DEEPSEEK_PARSE_RESULT" in phases
     assert "deepseek-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
+@respx.mock
+def test_fix_preview_generates_and_caches_patch(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fix-preview-secret")
+    calls = []
+
+    def provider_response(request: httpx.Request) -> Response:
+        calls.append(json.loads(request.content))
+        if len(calls) == 1:
+            return Response(200, json={"choices": [{"message": {"content": review_card_json()}}]})
+        return Response(200, json={"choices": [{"message": {"content": fix_patch_text()}}]})
+
+    respx.post("https://api.deepseek.com/chat/completions").mock(side_effect=provider_response)
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {
+                "id": 1001,
+                "name": "demo-service",
+                "web_url": "https://gitlab.example.com/demo/service",
+            },
+            "object_attributes": {
+                "iid": 21,
+                "action": "open",
+                "source_branch": "feature/fix-preview",
+                "target_branch": "main",
+            },
+            "changedFiles": [
+                {
+                    "path": "src/OrderService.java",
+                    "diffText": (
+                        "@@ -9,4 +9,4 @@ public void create(Order order) {\n"
+                        "+        order.setStatus(null);\n"
+                        "     }"
+                    ),
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+    task_id = created.json()["data"]["taskId"]
+
+    generated = client.post(
+        f"/api/review-tasks/{task_id}/code-quality-fix-preview",
+        json={"findingIndex": 0},
+    )
+    cached = client.post(
+        f"/api/review-tasks/{task_id}/code-quality-fix-preview",
+        json={"findingIndex": 0},
+    )
+
+    assert generated.status_code == 200
+    data = generated.json()["data"]
+    assert data["status"] == "SUCCESS"
+    assert data["filePath"] == "src/OrderService.java"
+    assert data["patchText"].startswith("diff --git ")
+    assert "OrderStatus.CREATED" in data["patchText"]
+    assert cached.json()["data"]["patchText"] == data["patchText"]
+    assert len(calls) == 2
+    progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
+    assert "FIX_PREVIEW_SAVED" in [event["phase"] for event in progress]
+    assert "fix-preview-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
+@respx.mock
+def test_ai_review_auto_generates_fix_previews_after_success(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "auto-fix-secret")
+    calls = []
+
+    def provider_response(request: httpx.Request) -> Response:
+        calls.append(json.loads(request.content))
+        if len(calls) == 1:
+            return Response(200, json={"choices": [{"message": {"content": review_card_json("需要修复")}}]})
+        return Response(200, json={"choices": [{"message": {"content": fix_patch_text()}}]})
+
+    respx.post("https://api.deepseek.com/chat/completions").mock(side_effect=provider_response)
+
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
+            "object_attributes": {"iid": 24, "action": "open", "source_branch": "feature/auto-fix", "target_branch": "main"},
+            "changedFiles": [
+                {
+                    "path": "src/OrderService.java",
+                    "diffText": "@@ -9,4 +9,4 @@ public void create(Order order) {\n+        order.setStatus(null);",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+    task_id = created.json()["data"]["taskId"]
+
+    result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
+    previews = client.get(f"/api/review-tasks/{task_id}/code-quality-fix-previews").json()["data"]
+
+    assert result["status"] == "SUCCESS"
+    assert len(previews) == 1
+    assert previews[0]["status"] == "SUCCESS"
+    assert "OrderStatus.CREATED" in previews[0]["patchText"]
+    assert len(calls) == 2
+    progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
+    phases = [event["phase"] for event in progress]
+    assert "FIX_PREVIEW_AUTO_QUEUED" in phases
+    assert "FIX_PREVIEW_SAVED" in phases
+    assert "auto-fix-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
+@respx.mock
+def test_fix_preview_queues_without_running_provider_immediately(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    from app.code_quality import service
+
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.delenv("CODE_QUALITY_FIX_PREVIEW_INLINE", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fix-preview-secret")
+    submitted: list[dict] = []
+    monkeypatch.setattr(
+        service._executor,
+        "submit",
+        lambda fn, *args, **kwargs: submitted.append({"fn": fn.__name__, "args": args, "kwargs": kwargs}),
+    )
+    respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json()}}]})
+    )
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
+            "object_attributes": {"iid": 25, "action": "open", "source_branch": "feature/queued-fix", "target_branch": "main"},
+            "changedFiles": [
+                {
+                    "path": "src/OrderService.java",
+                    "diffText": "@@ -9,4 +9,4 @@ public void create(Order order) {\n+        order.setStatus(null);",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+    task_id = created.json()["data"]["taskId"]
+
+    response = client.post(f"/api/review-tasks/{task_id}/code-quality-fix-preview", json={"findingIndex": 0})
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "QUEUED"
+    assert submitted[0]["fn"] == "run_auto_fix_preview_job"
+    assert submitted[0]["kwargs"]["priority"] == service.FIX_PREVIEW_JOB_PRIORITY
+    queue = client.get("/api/code-quality-reviews/job-queue").json()["data"]
+    assert queue["activeCount"] == 1
+    assert queue["groups"][0]["fixPreviewJobs"][0]["status"] == "QUEUED"
+
+
+@respx.mock
+def test_fix_preview_rejects_missing_file_diff(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fix-preview-secret")
+    respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json()}}]})
+    )
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
+            "object_attributes": {"iid": 22, "action": "open", "source_branch": "feature/no-diff", "target_branch": "main"},
+            "changedFiles": [{"path": "src/OrderService.java", "diffText": "+        order.setStatus(null);"}],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+    task_id = created.json()["data"]["taskId"]
+    event = db_session.query(GitLabMergeRequestEvent).filter_by(task_id=task_id).one()
+    event.changed_files_summary = json.dumps(
+        {"count": 1, "source": "payload", "files": [{"path": "src/OrderService.java"}]},
+        ensure_ascii=False,
+    )
+    db_session.commit()
+
+    response = client.post(
+        f"/api/review-tasks/{task_id}/code-quality-fix-preview",
+        json={"findingIndex": 0},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "SKIPPED"
+    assert data["errorMessage"] == "Current task did not save diff text for this file"
+    previews = client.get(f"/api/review-tasks/{task_id}/code-quality-fix-previews").json()["data"]
+    assert previews[0]["status"] == "SKIPPED"
+
+
+@respx.mock
+def test_fix_preview_saves_failed_when_provider_returns_non_diff(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fix-preview-secret")
+    calls = []
+
+    def provider_response(request: httpx.Request) -> Response:
+        calls.append(json.loads(request.content))
+        content = review_card_json() if len(calls) == 1 else "建议把状态改成 CREATED。"
+        return Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    respx.post("https://api.deepseek.com/chat/completions").mock(side_effect=provider_response)
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
+            "object_attributes": {"iid": 23, "action": "open", "source_branch": "feature/bad-patch", "target_branch": "main"},
+            "changedFiles": [
+                {
+                    "path": "src/OrderService.java",
+                    "diffText": "@@ -9,4 +9,4 @@ public void create(Order order) {\n+        order.setStatus(null);",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+    task_id = created.json()["data"]["taskId"]
+
+    response = client.post(
+        f"/api/review-tasks/{task_id}/code-quality-fix-preview",
+        json={"findingIndex": 0},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "FAILED"
+    assert data["patchText"] is None
+    assert "unified diff" in data["errorMessage"]
+    result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
+    assert result["status"] == "SUCCESS"
 
 
 @respx.mock
@@ -1005,12 +1287,16 @@ def test_manual_review_returns_running_without_waiting_for_provider(
     from app.code_quality import service
 
     seed_project(db_session, "DEEPSEEK")
-    submitted: list[tuple] = []
+    submitted: list[dict] = []
     monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
     monkeypatch.delenv("CODE_QUALITY_REVIEW_INLINE", raising=False)
     monkeypatch.delenv("CODE_QUALITY_RETRY_INLINE", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "manual-secret")
-    monkeypatch.setattr(service._executor, "submit", lambda *args: submitted.append(args))
+    monkeypatch.setattr(
+        service._executor,
+        "submit",
+        lambda fn, *args, **kwargs: submitted.append({"fn": fn.__name__, "args": args, "kwargs": kwargs}),
+    )
 
     response = client.post("/api/code-quality-reviews/manual", json=manual_request())
 
@@ -1019,6 +1305,9 @@ def test_manual_review_returns_running_without_waiting_for_provider(
     assert data["status"] == "RUNNING"
     assert data["provider"] == "DEEPSEEK"
     assert submitted
+    assert submitted[0]["kwargs"]["priority"] == service.REVIEW_JOB_PRIORITY
+    assert service.REVIEW_JOB_PRIORITY < service.FIX_PREVIEW_JOB_PRIORITY
+    assert service._executor.max_workers == 10
     result = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-result").json()["data"]
     assert result["status"] == "RUNNING"
     progress = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-progress").json()["data"]

@@ -8,12 +8,14 @@ from sqlalchemy import inspect, select, text, update
 from sqlalchemy.orm import Session
 
 from app.code_quality.models import (
+    CodeQualityFixPreview,
     CodeQualityModelProvider,
     CodeQualityPushReviewGateDecision,
     CodeQualityReviewProfile,
     CodeQualityReviewProgressEvent,
     CodeQualityReviewResult,
     CodeQualityReviewSettings,
+    CodeQualitySchedulerJob,
 )
 from app.core.config import get_settings
 from app.core.errors import AppError
@@ -179,6 +181,8 @@ def ensure_code_quality_config_schema(db: Session) -> None:
     ensure_profile_schema(db)
     ensure_provider_schema(db)
     ensure_push_gate_schema(db)
+    ensure_fix_preview_schema(db)
+    ensure_scheduler_job_schema(db)
     ensure_webhook_schema(db)
 
 
@@ -301,6 +305,37 @@ def ensure_push_gate_schema(db: Session) -> None:
     _add_column_if_missing(db, columns, "code_quality_push_review_gate_decisions", "branch_name", "VARCHAR(255) NULL")
     _add_column_if_missing(db, columns, "code_quality_push_review_gate_decisions", "profile_code", "VARCHAR(64) NULL")
     _add_column_if_missing(db, columns, "code_quality_push_review_gate_decisions", "provider", "VARCHAR(64) NULL")
+    db.flush()
+
+
+def ensure_fix_preview_schema(db: Session) -> None:
+    connection = db.connection()
+    inspector = inspect(connection)
+    if not inspector.has_table("code_quality_fix_previews"):
+        CodeQualityFixPreview.__table__.create(connection, checkfirst=True)
+        db.flush()
+        return
+    columns = {column["name"] for column in inspector.get_columns("code_quality_fix_previews")}
+    _add_column_if_missing(db, columns, "code_quality_fix_previews", "project_id", "BIGINT NULL")
+    _add_column_if_missing(db, columns, "code_quality_fix_previews", "model", "VARCHAR(128) NULL")
+    _add_column_if_missing(db, columns, "code_quality_fix_previews", "summary", "VARCHAR(1024) NULL")
+    _add_column_if_missing(db, columns, "code_quality_fix_previews", "warnings_json", "TEXT NULL")
+    db.flush()
+
+
+def ensure_scheduler_job_schema(db: Session) -> None:
+    connection = db.connection()
+    inspector = inspect(connection)
+    if not inspector.has_table("code_quality_scheduler_jobs"):
+        CodeQualitySchedulerJob.__table__.create(connection, checkfirst=True)
+        db.flush()
+        return
+    columns = {column["name"] for column in inspector.get_columns("code_quality_scheduler_jobs")}
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "project_id", "BIGINT NULL")
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "finding_index", "INT NULL")
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "label", "VARCHAR(255) NULL")
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "file_path", "VARCHAR(512) NULL")
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "error_message", "VARCHAR(1024) NULL")
     db.flush()
 
 
@@ -680,6 +715,258 @@ def push_gate_to_dict(record: CodeQualityPushReviewGateDecision) -> dict[str, An
         "createdAt": format_datetime(record.created_at),
         "updatedAt": format_datetime(record.updated_at),
     }
+
+
+def find_fix_preview_response(
+    db: Session,
+    *,
+    task_id: int,
+    finding_index: int,
+) -> dict[str, Any] | None:
+    ensure_fix_preview_schema(db)
+    record = db.scalars(
+        select(CodeQualityFixPreview)
+        .where(CodeQualityFixPreview.task_id == task_id)
+        .where(CodeQualityFixPreview.finding_index == finding_index)
+    ).first()
+    return fix_preview_to_dict(record) if record else None
+
+
+def list_fix_preview_responses(db: Session, task_id: int) -> list[dict[str, Any]]:
+    ensure_fix_preview_schema(db)
+    records = db.scalars(
+        select(CodeQualityFixPreview)
+        .where(CodeQualityFixPreview.task_id == task_id)
+        .order_by(CodeQualityFixPreview.finding_index.asc())
+    ).all()
+    return [fix_preview_to_dict(record) for record in records]
+
+
+def save_fix_preview(
+    db: Session,
+    *,
+    task_id: int,
+    project_id: int,
+    finding_index: int,
+    file_path: str,
+    provider: str,
+    model: str | None,
+    result: dict[str, Any],
+) -> CodeQualityFixPreview:
+    ensure_fix_preview_schema(db)
+    now = datetime.now()
+    existing = db.scalars(
+        select(CodeQualityFixPreview)
+        .where(CodeQualityFixPreview.task_id == task_id)
+        .where(CodeQualityFixPreview.finding_index == finding_index)
+    ).first()
+    values = {
+        "project_id": project_id,
+        "file_path": file_path,
+        "status": result["status"],
+        "provider": provider,
+        "model": model,
+        "summary": _truncate(result.get("summary"), 1024),
+        "patch_text": result.get("patchText"),
+        "warnings_json": json.dumps(result.get("warnings") or [], ensure_ascii=False),
+        "error_message": _truncate(result.get("errorMessage"), 1024),
+        "updated_at": now,
+    }
+    if existing is None:
+        existing = CodeQualityFixPreview(
+            task_id=task_id,
+            finding_index=finding_index,
+            created_at=now,
+            **values,
+        )
+        db.add(existing)
+    else:
+        for key, value in values.items():
+            setattr(existing, key, value)
+    db.flush()
+    return existing
+
+
+def fix_preview_to_dict(record: CodeQualityFixPreview) -> dict[str, Any]:
+    return {
+        "taskId": record.task_id,
+        "findingIndex": record.finding_index,
+        "status": record.status,
+        "filePath": record.file_path,
+        "summary": record.summary,
+        "patchText": record.patch_text,
+        "warnings": read_json(record.warnings_json, []),
+        "provider": record.provider,
+        "model": record.model,
+        "errorMessage": record.error_message,
+        "createdAt": format_datetime(record.created_at),
+        "updatedAt": format_datetime(record.updated_at),
+    }
+
+
+def create_scheduler_job(
+    db: Session,
+    *,
+    job_type: str,
+    task_id: int,
+    project_id: int | None,
+    finding_index: int | None = None,
+    priority: int,
+    label: str | None = None,
+    file_path: str | None = None,
+) -> CodeQualitySchedulerJob:
+    ensure_scheduler_job_schema(db)
+    now = datetime.now()
+    record = CodeQualitySchedulerJob(
+        job_type=job_type,
+        task_id=task_id,
+        project_id=project_id,
+        finding_index=finding_index,
+        status="QUEUED",
+        priority=priority,
+        label=_truncate(label, 255),
+        file_path=_truncate(file_path, 512),
+        error_message=None,
+        queued_at=now,
+        started_at=None,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(record)
+    db.flush()
+    return record
+
+
+def mark_scheduler_job_running(db: Session, job_id: int) -> None:
+    record = db.get(CodeQualitySchedulerJob, job_id)
+    if record is None:
+        return
+    now = datetime.now()
+    record.status = "RUNNING"
+    record.started_at = now
+    record.updated_at = now
+    db.flush()
+
+
+def mark_scheduler_job_finished(
+    db: Session,
+    job_id: int,
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    record = db.get(CodeQualitySchedulerJob, job_id)
+    if record is None:
+        return
+    now = datetime.now()
+    record.status = status
+    record.error_message = _truncate(error_message, 1024)
+    record.finished_at = now
+    record.updated_at = now
+    db.flush()
+
+
+def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, Any]:
+    ensure_scheduler_job_schema(db)
+    active = db.scalars(
+        select(CodeQualitySchedulerJob)
+        .where(CodeQualitySchedulerJob.status.in_(["QUEUED", "RUNNING"]))
+        .order_by(
+            CodeQualitySchedulerJob.priority.asc(),
+            CodeQualitySchedulerJob.queued_at.asc(),
+            CodeQualitySchedulerJob.id.asc(),
+        )
+    ).all()
+    recent = db.scalars(
+        select(CodeQualitySchedulerJob)
+        .where(CodeQualitySchedulerJob.status.in_(["SUCCESS", "FAILED", "SKIPPED"]))
+        .order_by(CodeQualitySchedulerJob.updated_at.desc(), CodeQualitySchedulerJob.id.desc())
+        .limit(limit)
+    ).all()
+    records = _dedupe_scheduler_jobs([*active, *recent])[:limit]
+    task_ids = sorted({record.task_id for record in records})
+    tasks_by_id: dict[int, tuple[Any, Any]] = {}
+    if task_ids:
+        from app.project_integration.models import Project
+        from app.review_record.models import ReviewTask
+
+        rows = db.execute(
+            select(ReviewTask, Project)
+            .join(Project, Project.id == ReviewTask.project_id)
+            .where(ReviewTask.id.in_(task_ids))
+        ).all()
+        tasks_by_id = {task.id: (task, project) for task, project in rows}
+    grouped: dict[int, dict[str, Any]] = {}
+    for record in records:
+        task, project = tasks_by_id.get(record.task_id, (None, None))
+        group = grouped.setdefault(
+            record.task_id,
+            {
+                "taskId": record.task_id,
+                "projectId": record.project_id,
+                "projectName": getattr(project, "name", None),
+                "triggerType": getattr(task, "trigger_type", None),
+                "sourceBranch": getattr(task, "source_branch", None),
+                "targetBranch": getattr(task, "target_branch", None),
+                "externalSourceId": getattr(task, "external_source_id", None),
+                "reviewJob": None,
+                "fixPreviewJobs": [],
+            },
+        )
+        job = scheduler_job_to_dict(record)
+        if record.job_type == "AI_REVIEW":
+            group["reviewJob"] = job
+        else:
+            group["fixPreviewJobs"].append(job)
+    groups = list(grouped.values())
+    groups.sort(key=lambda group: _scheduler_group_sort_key(group))
+    active_count = sum(1 for record in records if record.status in {"QUEUED", "RUNNING"})
+    return {"activeCount": active_count, "groups": groups}
+
+
+def scheduler_job_to_dict(record: CodeQualitySchedulerJob) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "jobType": record.job_type,
+        "taskId": record.task_id,
+        "projectId": record.project_id,
+        "findingIndex": record.finding_index,
+        "status": record.status,
+        "priority": record.priority,
+        "label": record.label,
+        "filePath": record.file_path,
+        "errorMessage": record.error_message,
+        "queuedAt": format_datetime(record.queued_at),
+        "startedAt": format_datetime(record.started_at),
+        "finishedAt": format_datetime(record.finished_at),
+        "createdAt": format_datetime(record.created_at),
+        "updatedAt": format_datetime(record.updated_at),
+    }
+
+
+def _dedupe_scheduler_jobs(records: list[CodeQualitySchedulerJob]) -> list[CodeQualitySchedulerJob]:
+    seen: set[int] = set()
+    result: list[CodeQualitySchedulerJob] = []
+    for record in records:
+        if record.id in seen:
+            continue
+        seen.add(record.id)
+        result.append(record)
+    return result
+
+
+def _scheduler_group_sort_key(group: dict[str, Any]) -> tuple[int, str]:
+    statuses = [group.get("reviewJob", {}).get("status")] if group.get("reviewJob") else []
+    statuses.extend(job.get("status") for job in group.get("fixPreviewJobs", []))
+    rank = 0 if "RUNNING" in statuses else (1 if "QUEUED" in statuses else 2)
+    updated = max(
+        [
+            job.get("updatedAt") or job.get("queuedAt") or ""
+            for job in ([group["reviewJob"]] if group.get("reviewJob") else []) + group.get("fixPreviewJobs", [])
+        ],
+        default="",
+    )
+    return (rank, updated)
 
 
 def has_recent_allowed_push_gate(

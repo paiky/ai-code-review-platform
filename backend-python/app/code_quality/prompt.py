@@ -37,12 +37,48 @@ def render_input(request: dict[str, Any]) -> str:
     )
 
 
+def render_fix_instructions(request: dict[str, Any]) -> str:
+    return (
+        "你是资深代码修复助手。你只为一个 AI Review finding 生成修复预览 patch。\n"
+        "必须只返回 unified diff 文本，不要 Markdown，不要代码围栏，不要解释文字。\n"
+        "patch 必须以 diff --git 开头，并包含 ---、+++、@@ hunk。\n"
+        "只允许修改当前 finding 对应文件和相关行附近代码；不要修改其他文件。\n"
+        "不得引入 diff 外无法确认的新依赖、配置或大范围重构。\n"
+        "如果上下文不足以安全修复，返回一个最小 patch，并在注释或代码附近保留最小必要保护逻辑；不要编造不存在的业务 API。\n"
+        f"目标文件：{request.get('filePath') or '-'}"
+    )
+
+
+def render_fix_input(request: dict[str, Any]) -> str:
+    finding = request.get("finding") or {}
+    return (
+        f"Review mode: FIX_PREVIEW\n"
+        f"File path: {request.get('filePath') or '-'}\n"
+        f"Finding title: {finding.get('title') or '-'}\n"
+        f"Finding category: {finding.get('category') or '-'}\n"
+        f"Finding severity: {finding.get('severity') or '-'}\n"
+        f"Finding line: {finding.get('startLine') or '-'}-{finding.get('endLine') or finding.get('startLine') or '-'}\n"
+        f"Finding body: {finding.get('body') or '-'}\n"
+        f"Finding suggestion: {finding.get('suggestion') or '-'}\n\n"
+        f"Original file diff:\n{request.get('diffText') or '-'}"
+    )
+
+
 def openai_responses_request(model: str, request: dict[str, Any]) -> dict[str, Any]:
     return {
         "model": model,
         "instructions": render_instructions(request),
         "input": render_input(request),
         "text": {"format": json_schema_format()},
+        "store": False,
+    }
+
+
+def openai_responses_fix_request(model: str, request: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "model": model,
+        "instructions": render_fix_instructions(request),
+        "input": render_fix_input(request),
         "store": False,
     }
 
@@ -56,6 +92,15 @@ def anthropic_messages_request(model: str, request: dict[str, Any]) -> dict[str,
     }
 
 
+def anthropic_messages_fix_request(model: str, request: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "model": model,
+        "max_tokens": 4096,
+        "system": render_fix_instructions(request),
+        "messages": [{"role": "user", "content": render_fix_input(request)}],
+    }
+
+
 def openai_chat_compatible_request(model: str, request: dict[str, Any]) -> dict[str, Any]:
     return {
         "model": model,
@@ -63,6 +108,16 @@ def openai_chat_compatible_request(model: str, request: dict[str, Any]) -> dict[
         "messages": [
             {"role": "system", "content": render_instructions(request)},
             {"role": "user", "content": render_input(request)},
+        ],
+    }
+
+
+def openai_chat_compatible_fix_request(model: str, request: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": render_fix_instructions(request)},
+            {"role": "user", "content": render_fix_input(request)},
         ],
     }
 

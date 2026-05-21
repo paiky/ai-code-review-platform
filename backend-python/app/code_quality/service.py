@@ -1,31 +1,40 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from fnmatch import fnmatchcase
 import hashlib
 import os
-from typing import Any
+from itertools import count
+from queue import PriorityQueue
+from threading import Lock, Thread
+from typing import Any, Callable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.code_quality import prompt
-from app.code_quality.providers import run_provider
+from app.code_quality.providers import run_fix_provider, run_provider
 from app.code_quality.repository import (
     append_progress,
+    create_scheduler_job,
     delete_progress,
     find_push_gate_decision,
+    find_fix_preview_response,
     find_result_response,
     get_profile,
     get_provider,
     get_settings_record,
     has_recent_allowed_push_gate,
     list_progress,
+    list_fix_preview_responses,
     list_provider_responses,
+    list_scheduler_queue_snapshot,
+    mark_scheduler_job_finished,
+    mark_scheduler_job_running,
     push_gate_to_dict,
     mark_stale_running_as_failed,
     reset_default_prompt,
+    save_fix_preview,
     save_push_gate_decision,
     save_result,
     set_default_provider,
@@ -50,7 +59,107 @@ from app.review_record.repository import (
 )
 
 
-_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="code-quality-review")
+REVIEW_JOB_PRIORITY = 10
+FIX_PREVIEW_JOB_PRIORITY = 50
+SCHEDULER_MAX_WORKERS = 10
+
+
+class _ProviderJobScheduler:
+    def __init__(self, max_workers: int = SCHEDULER_MAX_WORKERS) -> None:
+        self.max_workers = max_workers
+        self._queue: PriorityQueue[tuple[int, int, int, Callable[..., Any], tuple[Any, ...], dict[str, Any]]] = PriorityQueue()
+        self._counter = count()
+        self._started = False
+        self._lock = Lock()
+
+    def submit(
+        self,
+        fn: Callable[..., Any],
+        *args: Any,
+        job_id: int | None = None,
+        priority: int = FIX_PREVIEW_JOB_PRIORITY,
+        **kwargs: Any,
+    ) -> int | None:
+        self._ensure_started()
+        order = next(self._counter)
+        self._queue.put((priority, order, int(job_id or 0), fn, args, kwargs))
+        return job_id
+
+    def _ensure_started(self) -> None:
+        if self._started:
+            return
+        with self._lock:
+            if self._started:
+                return
+            for index in range(self.max_workers):
+                worker = Thread(
+                    target=self._worker,
+                    name=f"code-quality-provider-scheduler-{index + 1}",
+                    daemon=True,
+                )
+                worker.start()
+            self._started = True
+
+    def _worker(self) -> None:
+        while True:
+            priority, _order, job_id, fn, args, kwargs = self._queue.get()
+            db = SessionLocal()
+            try:
+                if job_id:
+                    mark_scheduler_job_running(db, job_id)
+                    db.commit()
+                outcome = fn(*args, **kwargs)
+                if job_id:
+                    mark_scheduler_job_finished(db, job_id, _scheduler_outcome_status(outcome))
+                    db.commit()
+            except Exception as exception:
+                if job_id:
+                    mark_scheduler_job_finished(db, job_id, "FAILED", str(exception))
+                    db.commit()
+            finally:
+                db.close()
+                self._queue.task_done()
+
+
+_executor = _ProviderJobScheduler()
+
+
+def _scheduler_outcome_status(outcome: Any) -> str:
+    if isinstance(outcome, dict):
+        status = str(outcome.get("status") or "").upper()
+        if status in {"SUCCESS", "FAILED", "SKIPPED"}:
+            return status
+    return "SUCCESS"
+
+
+def _submit_provider_job(
+    db: Session,
+    fn: Callable[..., Any],
+    *args: Any,
+    job_type: str,
+    task_id: int,
+    project_id: int | None,
+    priority: int,
+    label: str | None = None,
+    finding_index: int | None = None,
+    file_path: str | None = None,
+) -> int:
+    job = create_scheduler_job(
+        db,
+        job_type=job_type,
+        task_id=task_id,
+        project_id=project_id,
+        finding_index=finding_index,
+        priority=priority,
+        label=label,
+        file_path=file_path,
+    )
+    db.commit()
+    try:
+        _executor.submit(fn, *args, job_id=job.id, priority=priority)
+    except TypeError:
+        _executor.submit(fn, *args)
+    return int(job.id)
 
 
 def create_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any]:
@@ -67,7 +176,17 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any]
             "overallLevel": result.get("overallLevel"),
             "findingCount": len(result.get("findings") or []),
         }
-    _executor.submit(run_manual_review_job, task_id, dict(request))
+    _submit_provider_job(
+        db,
+        run_manual_review_job,
+        task_id,
+        dict(request),
+        job_type="AI_REVIEW",
+        task_id=task_id,
+        project_id=request.get("projectId"),
+        priority=REVIEW_JOB_PRIORITY,
+        label="手动 AI Review",
+    )
     return response
 
 
@@ -135,6 +254,7 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
     db.commit()
     return {
         "taskId": task.id,
+        "projectId": project.id,
         "status": "RUNNING",
         "profileCode": profile.profile_code,
         "provider": provider.provider_code,
@@ -143,17 +263,19 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
     }
 
 
-def run_manual_review_job(task_id: int, request: dict[str, Any]) -> None:
+def run_manual_review_job(task_id: int, request: dict[str, Any]) -> dict[str, Any]:
     db = SessionLocal()
     try:
-        run_manual_review_now(db, task_id, request)
+        result = run_manual_review_now(db, task_id, request)
         db.commit()
+        return result
     except Exception as exception:
         task = db.get(ReviewTask, task_id)
         if task is not None:
             mark_task_failed(task, str(exception))
             append_progress(db, task_id, "FAILED", "ERROR", "手动 AI Review 后台执行失败", str(exception))
         db.commit()
+        return {"status": "FAILED", "errorMessage": str(exception)}
     finally:
         db.close()
 
@@ -189,7 +311,16 @@ def retry_review_task(db: Session, task_id: int) -> dict[str, Any]:
             "overallLevel": result.get("overallLevel"),
             "findingCount": len(result.get("findings") or []),
         }
-    _executor.submit(run_retry_review_job, task_id)
+    _submit_provider_job(
+        db,
+        run_retry_review_job,
+        task_id,
+        job_type="AI_REVIEW",
+        task_id=task_id,
+        project_id=response.get("projectId"),
+        priority=REVIEW_JOB_PRIORITY,
+        label="重试 AI Review",
+    )
     return response
 
 
@@ -238,6 +369,7 @@ def enqueue_retry_review(db: Session, task_id: int) -> dict[str, Any]:
     db.commit()
     return {
         "taskId": task.id,
+        "projectId": project.id,
         "status": "RUNNING",
         "profileCode": profile.profile_code,
         "provider": provider.provider_code,
@@ -246,16 +378,18 @@ def enqueue_retry_review(db: Session, task_id: int) -> dict[str, Any]:
     }
 
 
-def run_retry_review_job(task_id: int) -> None:
+def run_retry_review_job(task_id: int) -> dict[str, Any]:
     db = SessionLocal()
     try:
-        run_retry_review_now(db, task_id)
+        result = run_retry_review_now(db, task_id)
         db.commit()
+        return result
     except Exception as exception:
         task = db.get(ReviewTask, task_id)
         if task is not None:
             append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", str(exception))
         db.commit()
+        return {"status": "FAILED", "errorMessage": str(exception)}
     finally:
         db.close()
 
@@ -375,7 +509,8 @@ def trigger_auto_review(
             notification_context,
         )
     else:
-        _executor.submit(
+        _submit_provider_job(
+            db,
             run_auto_review_job,
             task.id,
             project.id,
@@ -387,6 +522,11 @@ def trigger_auto_review(
             focus_change_types or [],
             focus_rule_codes or [],
             notification_context or {},
+            job_type="AI_REVIEW",
+            task_id=task.id,
+            project_id=project.id,
+            priority=REVIEW_JOB_PRIORITY,
+            label="MR AI Review",
         )
     return True
 
@@ -491,7 +631,8 @@ def _trigger_push_auto_review(
             notification_context,
         )
     else:
-        _executor.submit(
+        _submit_provider_job(
+            db,
             run_auto_review_job,
             task.id,
             project.id,
@@ -503,6 +644,11 @@ def _trigger_push_auto_review(
             focus_change_types,
             focus_rule_codes,
             notification_context,
+            job_type="AI_REVIEW",
+            task_id=task.id,
+            project_id=project.id,
+            priority=REVIEW_JOB_PRIORITY,
+            label="Push AI Review",
         )
     return True
 
@@ -518,14 +664,14 @@ def run_auto_review_job(
     focus_change_types: list[str],
     focus_rule_codes: list[str],
     notification_context: dict,
-) -> None:
+) -> dict[str, Any]:
     db = SessionLocal()
     try:
         project = find_project_by_id(db, project_id)
         if project is None:
             append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", f"Project not found: {project_id}")
             db.commit()
-            return
+            return {"status": "FAILED", "errorMessage": f"Project not found: {project_id}"}
         profile = get_profile(db, profile_code)
         provider = get_provider(db, provider_code)
         result = _run_review(db, task_id, project, profile, provider, request)
@@ -540,9 +686,11 @@ def run_auto_review_job(
             notification_context,
         )
         db.commit()
+        return result
     except Exception as exception:
         append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", str(exception))
         db.commit()
+        return {"status": "FAILED", "errorMessage": str(exception)}
     finally:
         db.close()
 
@@ -1049,6 +1197,392 @@ def get_progress_response(db: Session, task_id: int) -> list[dict[str, Any]]:
     return list_progress(db, task_id)
 
 
+def get_job_queue_response(db: Session) -> dict[str, Any]:
+    return list_scheduler_queue_snapshot(db)
+
+
+def list_fix_previews_response(db: Session, task_id: int) -> list[dict[str, Any]]:
+    if db.get(ReviewTask, task_id) is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+    return list_fix_preview_responses(db, task_id)
+
+
+def generate_fix_preview_response(db: Session, task_id: int, request: dict[str, Any]) -> dict[str, Any]:
+    finding_index = request.get("findingIndex")
+    if finding_index is None:
+        raise AppError("VALIDATION_ERROR", "findingIndex is required", 400)
+    try:
+        finding_index = int(finding_index)
+    except (TypeError, ValueError) as exception:
+        raise AppError("VALIDATION_ERROR", "findingIndex must be an integer", 400) from exception
+    if finding_index < 0:
+        raise AppError("VALIDATION_ERROR", "findingIndex must be non-negative", 400)
+
+    existing = find_fix_preview_response(db, task_id=task_id, finding_index=finding_index)
+    if existing is not None and not request.get("forceRegenerate"):
+        return existing
+    if not _enabled(db):
+        raise AppError("BAD_REQUEST", "Code quality review is disabled", 400)
+
+    if _fix_preview_inline_enabled():
+        response = _generate_fix_preview(db, task_id, finding_index, bool(request.get("forceRegenerate")))
+        db.commit()
+        return response
+    return _queue_fix_preview(db, task_id, finding_index, bool(request.get("forceRegenerate")))
+
+
+def _queue_fix_preview(
+    db: Session,
+    task_id: int,
+    finding_index: int,
+    force_regenerate: bool,
+) -> dict[str, Any]:
+    task = db.get(ReviewTask, task_id)
+    if task is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+    project = find_project_by_id(db, task.project_id)
+    if project is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
+    review_result = find_result_response(db, task_id)
+    if review_result is None:
+        raise AppError("BAD_REQUEST", f"AI Review result not found: {task_id}", 400)
+    findings = review_result.get("findings") or []
+    if finding_index >= len(findings):
+        raise AppError("BAD_REQUEST", f"Finding index out of range: {finding_index}", 400)
+    finding = findings[finding_index]
+    if not isinstance(finding, dict):
+        raise AppError("BAD_REQUEST", f"Finding is invalid: {finding_index}", 400)
+    file_node = _find_changed_file_for_finding(_changed_files_from_task_event(db, task), finding)
+    if file_node is None:
+        response = _save_fix_preview_status(
+            db,
+            task,
+            project,
+            finding_index,
+            finding.get("filePath") or "",
+            review_result.get("provider") or "-",
+            review_result.get("model"),
+            "SKIPPED",
+            "Changed file for finding was not found",
+        )
+        db.commit()
+        return response
+    file_path = file_node.get("path") or file_node.get("newPath") or finding.get("filePath") or ""
+    if not _single_file_diff_text(file_node).strip():
+        response = _save_fix_preview_status(
+            db,
+            task,
+            project,
+            finding_index,
+            file_path,
+            review_result.get("provider") or "-",
+            review_result.get("model"),
+            "SKIPPED",
+            "Current task did not save diff text for this file",
+        )
+        db.commit()
+        return response
+    response = _save_fix_preview_status(
+        db,
+        task,
+        project,
+        finding_index,
+        file_path,
+        review_result.get("provider") or "-",
+        review_result.get("model"),
+        "QUEUED",
+        "AI 修复预览已进入队列",
+    )
+    append_progress(
+        db,
+        task_id,
+        "FIX_PREVIEW_QUEUED",
+        "INFO",
+        "AI 修复预览已进入队列",
+        f"findingIndex={finding_index}, filePath={file_path}",
+    )
+    _submit_provider_job(
+        db,
+        run_auto_fix_preview_job,
+        task_id,
+        finding_index,
+        job_type="FIX_PREVIEW",
+        task_id=task_id,
+        project_id=project.id,
+        finding_index=finding_index,
+        priority=FIX_PREVIEW_JOB_PRIORITY,
+        label="AI 修复预览",
+        file_path=file_path,
+    )
+    return response
+
+
+def _generate_fix_preview(
+    db: Session,
+    task_id: int,
+    finding_index: int,
+    force_regenerate: bool,
+) -> dict[str, Any]:
+    task = db.get(ReviewTask, task_id)
+    if task is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+    project = find_project_by_id(db, task.project_id)
+    if project is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
+    review_result = find_result_response(db, task_id)
+    if review_result is None:
+        raise AppError("BAD_REQUEST", f"AI Review result not found: {task_id}", 400)
+    findings = review_result.get("findings") or []
+    if finding_index >= len(findings):
+        raise AppError("BAD_REQUEST", f"Finding index out of range: {finding_index}", 400)
+    finding = findings[finding_index]
+    if not isinstance(finding, dict):
+        raise AppError("BAD_REQUEST", f"Finding is invalid: {finding_index}", 400)
+    file_node = _find_changed_file_for_finding(_changed_files_from_task_event(db, task), finding)
+    if file_node is None:
+        return _save_fix_preview_status(
+            db,
+            task,
+            project,
+            finding_index,
+            finding.get("filePath") or "",
+            review_result.get("provider") or "-",
+            review_result.get("model"),
+            "SKIPPED",
+            "Changed file for finding was not found",
+        )
+    diff_text = _single_file_diff_text(file_node)
+    if not diff_text.strip():
+        return _save_fix_preview_status(
+            db,
+            task,
+            project,
+            finding_index,
+            file_node.get("path") or file_node.get("newPath") or finding.get("filePath") or "",
+            review_result.get("provider") or "-",
+            review_result.get("model"),
+            "SKIPPED",
+            "Current task did not save diff text for this file",
+        )
+
+    provider = get_provider(db, review_result.get("provider") or _resolve_provider(db, project, _resolve_profile(db, None, project)).provider_code)
+    model = review_result.get("model") or provider.model_name
+    file_path = file_node.get("path") or file_node.get("newPath") or finding.get("filePath") or ""
+    _save_fix_preview_status(
+        db,
+        task,
+        project,
+        finding_index,
+        file_path,
+        provider.provider_code,
+        model,
+        "RUNNING",
+        "AI 修复预览生成中",
+    )
+    append_progress(
+        db,
+        task_id,
+        "FIX_PREVIEW_REQUEST_BUILT",
+        "INFO",
+        "AI 修复预览请求已构建",
+        f"findingIndex={finding_index}, filePath={file_path}, provider={provider.provider_code}",
+    )
+    db.commit()
+    result = run_fix_provider(
+        db,
+        task_id,
+        provider,
+        {
+            "mode": "FIX_PREVIEW",
+            "filePath": file_path,
+            "model": model,
+            "finding": finding,
+            "diffText": diff_text,
+            "changedFiles": [file_path],
+        },
+    )
+    saved = save_fix_preview(
+        db,
+        task_id=task_id,
+        project_id=project.id,
+        finding_index=finding_index,
+        file_path=file_path,
+        provider=provider.provider_code,
+        model=model,
+        result=result,
+    )
+    append_progress(
+        db,
+        task_id,
+        "FIX_PREVIEW_SAVED",
+        "INFO" if result["status"] == "SUCCESS" else "ERROR",
+        "AI 修复预览已保存" if result["status"] == "SUCCESS" else "AI 修复预览生成失败",
+        f"status={result['status']}, findingIndex={finding_index}",
+    )
+    from app.code_quality.repository import fix_preview_to_dict
+
+    return fix_preview_to_dict(saved)
+
+
+def _save_fix_preview_status(
+    db: Session,
+    task: ReviewTask,
+    project: Project,
+    finding_index: int,
+    file_path: str,
+    provider: str,
+    model: str | None,
+    status: str,
+    message: str,
+) -> dict[str, Any]:
+    saved = save_fix_preview(
+        db,
+        task_id=task.id,
+        project_id=project.id,
+        finding_index=finding_index,
+        file_path=file_path or "-",
+        provider=provider,
+        model=model,
+        result={
+            "status": status,
+            "summary": message if status == "SKIPPED" else None,
+            "patchText": None,
+            "warnings": [message] if status == "SKIPPED" else [],
+            "errorMessage": message if status in {"FAILED", "SKIPPED"} else None,
+        },
+    )
+    from app.code_quality.repository import fix_preview_to_dict
+
+    return fix_preview_to_dict(saved)
+
+
+def _enqueue_auto_fix_previews(
+    db: Session,
+    task_id: int,
+    project: Project,
+    provider,
+    model: str | None,
+    result: dict[str, Any],
+) -> None:
+    findings = result.get("findings") or []
+    if result.get("status") != "SUCCESS" or not findings:
+        return
+    if _inline_enabled() and not _fix_preview_inline_enabled():
+        return
+    task = db.get(ReviewTask, task_id)
+    if task is None:
+        return
+    changed_files = _changed_files_from_task_event(db, task)
+    queued_indexes: list[int] = []
+    for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            continue
+        existing = find_fix_preview_response(db, task_id=task_id, finding_index=index)
+        if existing and existing.get("status") == "SUCCESS":
+            continue
+        file_node = _find_changed_file_for_finding(changed_files, finding)
+        if file_node is None:
+            _save_fix_preview_status(
+                db,
+                task,
+                project,
+                index,
+                finding.get("filePath") or "",
+                provider.provider_code,
+                model,
+                "SKIPPED",
+                "Changed file for finding was not found",
+            )
+            continue
+        file_path = file_node.get("path") or file_node.get("newPath") or finding.get("filePath") or ""
+        if not _single_file_diff_text(file_node).strip():
+            _save_fix_preview_status(
+                db,
+                task,
+                project,
+                index,
+                file_path,
+                provider.provider_code,
+                model,
+                "SKIPPED",
+                "Current task did not save diff text for this file",
+            )
+            continue
+        _save_fix_preview_status(
+            db,
+            task,
+            project,
+            index,
+            file_path,
+            provider.provider_code,
+            model,
+            "QUEUED",
+            "AI 修复预览已进入后台队列",
+        )
+        queued_indexes.append(index)
+    if not queued_indexes:
+        return
+    append_progress(
+        db,
+        task_id,
+        "FIX_PREVIEW_AUTO_QUEUED",
+        "INFO",
+        "AI 修复预览已进入后台队列",
+        f"findingIndexes={queued_indexes}",
+    )
+    db.commit()
+    if _fix_preview_inline_enabled():
+        for index in queued_indexes:
+            _generate_fix_preview(db, task_id, index, True)
+        db.commit()
+    else:
+        for index in queued_indexes:
+            finding = findings[index]
+            file_node = _find_changed_file_for_finding(changed_files, finding)
+            file_path = (
+                file_node.get("path")
+                or file_node.get("newPath")
+                or finding.get("filePath")
+                or ""
+                if file_node
+                else finding.get("filePath") or ""
+            )
+            _submit_provider_job(
+                db,
+                run_auto_fix_preview_job,
+                task_id,
+                index,
+                job_type="FIX_PREVIEW",
+                task_id=task_id,
+                project_id=project.id,
+                finding_index=index,
+                priority=FIX_PREVIEW_JOB_PRIORITY,
+                label="AI 修复预览",
+                file_path=file_path,
+            )
+
+
+def run_auto_fix_preview_job(task_id: int, finding_index: int) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        result = _generate_fix_preview(db, task_id, finding_index, True)
+        db.commit()
+        return result
+    except Exception as exception:
+        append_progress(
+            db,
+            task_id,
+            "FIX_PREVIEW_AUTO_FAILED",
+            "ERROR",
+            "AI 修复预览后台任务失败",
+            f"findingIndex={finding_index}, error={exception}",
+        )
+        db.commit()
+        return {"status": "FAILED", "errorMessage": str(exception)}
+    finally:
+        db.close()
+
+
 def recover_stale_running_reviews_on_startup() -> None:
     from app.core.config import get_settings
 
@@ -1143,6 +1677,14 @@ def _run_review(
         f"status={result['status']}, overallLevel={result.get('overallLevel') or '-'}",
     )
     db.commit()
+    _enqueue_auto_fix_previews(
+        db,
+        task_id,
+        project,
+        provider,
+        request.get("model") or provider.model_name,
+        result,
+    )
     return result
 
 
@@ -1211,19 +1753,7 @@ def _build_review_request(profile, request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _request_from_task_event(db: Session, task: ReviewTask, profile) -> dict[str, Any]:
-    event = db.scalars(
-        select(GitLabMergeRequestEvent).where(GitLabMergeRequestEvent.task_id == task.id)
-    ).first()
-    if event is None:
-        push_event = db.scalars(
-            select(GitLabPushEvent).where(GitLabPushEvent.task_id == task.id)
-        ).first()
-        event_summary = read_json(push_event.changed_files_summary, {}) if push_event else {}
-    else:
-        event_summary = read_json(event.changed_files_summary, {})
-    files = event_summary.get("files") if isinstance(event_summary, dict) else []
-    if not isinstance(files, list):
-        files = []
+    files = _changed_files_from_task_event(db, task)
     return _build_review_request(
         profile,
         {
@@ -1235,6 +1765,58 @@ def _request_from_task_event(db: Session, task: ReviewTask, profile) -> dict[str
             "changedFiles": [file.get("path") for file in files if isinstance(file, dict) and file.get("path")],
         },
     )
+
+
+def _changed_files_from_task_event(db: Session, task: ReviewTask) -> list[dict[str, Any]]:
+    event = db.scalars(
+        select(GitLabMergeRequestEvent).where(GitLabMergeRequestEvent.task_id == task.id)
+    ).first()
+    if event is None:
+        push_event = db.scalars(
+            select(GitLabPushEvent).where(GitLabPushEvent.task_id == task.id)
+        ).first()
+        event_summary = read_json(push_event.changed_files_summary, {}) if push_event else {}
+    else:
+        event_summary = read_json(event.changed_files_summary, {})
+    files = event_summary.get("files") if isinstance(event_summary, dict) else []
+    return files if isinstance(files, list) else []
+
+
+def _find_changed_file_for_finding(changed_files: list[dict[str, Any]], finding: dict[str, Any]) -> dict[str, Any] | None:
+    target = _normalize_path(finding.get("filePath"))
+    if not target:
+        return None
+    for file in changed_files:
+        if not isinstance(file, dict):
+            continue
+        candidates = [
+            _normalize_path(file.get("path")),
+            _normalize_path(file.get("newPath")),
+            _normalize_path(file.get("oldPath")),
+        ]
+        if any(candidate == target or candidate.endswith(f"/{target}") or target.endswith(f"/{candidate}") for candidate in candidates if candidate):
+            return file
+    return None
+
+
+def _normalize_path(value: Any) -> str:
+    text = str(value or "").replace("\\", "/").lstrip("/")
+    if text.startswith("a/") or text.startswith("b/"):
+        text = text[2:]
+    return text
+
+
+def _single_file_diff_text(file: dict[str, Any]) -> str:
+    diff = file.get("diffText") or ""
+    if not diff:
+        return ""
+    path = file.get("path") or file.get("newPath") or file.get("oldPath") or "file"
+    old_path = file.get("oldPath") or path
+    new_path = file.get("newPath") or path
+    if str(diff).lstrip().startswith("diff --git "):
+        return str(diff)
+    header = f"diff --git a/{old_path} b/{new_path}\n--- a/{old_path}\n+++ b/{new_path}"
+    return f"{header}\n{diff}"
 
 
 def _diff_text(changed_files: list[dict[str, Any]]) -> str:
@@ -1267,3 +1849,7 @@ def _inline_enabled() -> bool:
         os.getenv("CODE_QUALITY_REVIEW_INLINE", "false").lower() == "true"
         or os.getenv("CODE_QUALITY_RETRY_INLINE", "false").lower() == "true"
     )
+
+
+def _fix_preview_inline_enabled() -> bool:
+    return os.getenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "false").lower() == "true"

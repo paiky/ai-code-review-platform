@@ -756,3 +756,43 @@ Python 3.12 的 `platform` 模块在 Windows 上会优先调用 WMI 查询系统
 1. `scripts/run-backend-python.ps1` 会为后端启动设置 `AI_REVIEW_SKIP_PYTHON_WMI=1`，并把 `backend-python/` 加入子进程 `PYTHONPATH`，确保 Python 启动阶段自动加载本项目的 `sitecustomize.py`。
 2. `backend-python/sitecustomize.py` 在该变量开启且当前是 Windows 时，让 Python `platform` 模块跳过 WMI，并使用标准库已有的 registry / env fallback。
 3. 这只是本项目本地启动的兼容保护；如果 PowerShell 中 `Get-CimInstance Win32_OperatingSystem` 也会卡住，仍建议后续修复本机 WMI / CIM 服务状态。
+
+## 32. 后台任务的 inline 测试路径不要重新打开 `SessionLocal`
+
+现象：
+
+为后台任务增加 `*_INLINE=true` 测试开关后，contract 测试里明明使用的是测试数据库，但执行到后台任务时却尝试连接本地 MySQL，并可能报：
+
+```text
+RuntimeError: 'cryptography' package is required for sha256_password or caching_sha2_password auth methods
+```
+
+原因：
+
+测试里的 `db_session` / FastAPI dependency override 指向测试库；如果 inline 模式仍复用生产后台函数并在函数内重新创建 `SessionLocal()`，就会绕过测试注入，回到默认运行库配置，进而误连本地 MySQL。
+
+处理方式：
+
+1. 后台任务的真实异步路径可以继续用 `SessionLocal()`。
+2. `*_INLINE=true` 的测试路径应复用当前请求/测试传入的 SQLAlchemy `Session`，不要再新建 session。
+3. 如果确实要测试真实后台路径，用 monkeypatch 替换 executor 的 `submit`，只断言任务已提交，避免测试进程里启动不可控的后台数据库连接。
+
+## 33. 调度器 contract 测试不要启动真实后台 worker
+
+现象：
+
+为 AI Review / 修复预览增加统一调度器后，contract 测试里如果没有开启 inline，也没有 monkeypatch 调度器 `submit`，后台 worker 会用生产 `SessionLocal()` 启动，并可能再次误连本地 MySQL，报：
+
+```text
+RuntimeError: 'cryptography' package is required for sha256_password or caching_sha2_password auth methods
+```
+
+原因：
+
+调度器 worker 属于真实异步路径，它不知道 pytest dependency override 中的测试 Session。即使接口本身使用测试库，后台线程也会回到默认数据库配置。
+
+处理方式：
+
+1. 需要验证同步结果时设置对应 inline 开关，例如 `CODE_QUALITY_REVIEW_INLINE=true` 或 `CODE_QUALITY_FIX_PREVIEW_INLINE=true`。
+2. 需要验证“已排队但不执行”时 monkeypatch `service._executor.submit`，只断言 job 类型、优先级、状态和队列接口响应。
+3. 不要在 contract 测试中等待真实调度器 worker 消费队列；真实 worker 行为留给集成或手工联调验证。

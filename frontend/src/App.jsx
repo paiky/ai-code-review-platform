@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Badge,
   Button,
   Card,
   Col,
@@ -12,6 +13,7 @@ import {
   InputNumber,
   Layout,
   message,
+  Modal,
   Row,
   Select,
   Space,
@@ -21,12 +23,16 @@ import {
   Tabs,
   Tag,
   Timeline,
+  Tooltip,
   Typography
 } from 'antd';
 import {
   ArrowLeftOutlined,
   ClockCircleOutlined,
   CloseOutlined,
+  ClusterOutlined,
+  FileSearchOutlined,
+  LoadingOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
@@ -223,6 +229,126 @@ function codeLocationText(filePath, startLine, endLine) {
   return `${filePath}:${lineRange}`;
 }
 
+function normalizeCodePath(path) {
+  return String(path || '')
+    .replace(/\\/g, '/')
+    .replace(/^[ab]\//, '')
+    .replace(/^\/+/, '');
+}
+
+function findChangedFileForFinding(finding, changedFilesSummary) {
+  const files = Array.isArray(changedFilesSummary?.files) ? changedFilesSummary.files : [];
+  const targetPath = normalizeCodePath(finding?.filePath);
+  if (!targetPath) return null;
+  return files.find(file => {
+    const candidates = [file.path, file.newPath, file.oldPath].map(normalizeCodePath).filter(Boolean);
+    return candidates.some(candidate => (
+      candidate === targetPath
+      || candidate.endsWith(`/${targetPath}`)
+      || targetPath.endsWith(`/${candidate}`)
+    ));
+  }) || null;
+}
+
+function parseUnifiedDiff(diffText) {
+  const lines = String(diffText || '').split(/\r?\n/);
+  const hunks = [];
+  let current = null;
+  let oldLine = 0;
+  let newLine = 0;
+
+  lines.forEach((line, index) => {
+    const hunkMatch = line.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/);
+    if (hunkMatch) {
+      current = {
+        id: `hunk-${hunks.length}`,
+        header: line,
+        oldStart: Number(hunkMatch[1]),
+        newStart: Number(hunkMatch[2]),
+        lines: []
+      };
+      oldLine = current.oldStart;
+      newLine = current.newStart;
+      hunks.push(current);
+      return;
+    }
+
+    if (!current) {
+      if (line.startsWith('diff --') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ') || line === '') {
+        return;
+      }
+      current = {
+        id: 'hunk-raw',
+        header: 'Diff',
+        oldStart: null,
+        newStart: null,
+        lines: []
+      };
+      hunks.push(current);
+    }
+
+    if (line.startsWith('\\')) {
+      current.lines.push({ type: 'meta', text: line, oldLine: null, newLine: null });
+      return;
+    }
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      current.lines.push({ type: 'add', text: line.slice(1), oldLine: null, newLine });
+      newLine += 1;
+      return;
+    }
+    if (line.startsWith('-') && !line.startsWith('---')) {
+      current.lines.push({ type: 'delete', text: line.slice(1), oldLine, newLine: null });
+      oldLine += 1;
+      return;
+    }
+
+    const text = line.startsWith(' ') ? line.slice(1) : line;
+    current.lines.push({
+      type: current.oldStart == null ? 'raw' : 'context',
+      text,
+      oldLine: current.oldStart == null ? null : oldLine,
+      newLine: current.newStart == null ? null : newLine
+    });
+    if (current.oldStart != null) oldLine += 1;
+    if (current.newStart != null) newLine += 1;
+  });
+
+  return hunks;
+}
+
+function buildSideBySideRows(parsedDiff, targetStartLine, targetEndLine) {
+  const start = Number(targetStartLine);
+  const end = Number(targetEndLine ?? targetStartLine);
+  const hasTarget = Number.isFinite(start);
+  const rows = [];
+
+  parsedDiff.forEach(hunk => {
+    rows.push({
+      id: `${hunk.id}-header`,
+      type: 'hunk',
+      oldLine: '',
+      newLine: '',
+      oldText: hunk.header,
+      newText: hunk.header,
+      highlight: false
+    });
+    hunk.lines.forEach((line, index) => {
+      const highlight = hasTarget && line.newLine != null && line.newLine >= start && line.newLine <= end;
+      rows.push({
+        id: `${hunk.id}-${index}`,
+        type: line.type,
+        oldLine: line.oldLine ?? '',
+        newLine: line.newLine ?? '',
+        oldText: line.type === 'add' ? '' : line.text,
+        newText: line.type === 'delete' ? '' : line.text,
+        highlight
+      });
+    });
+  });
+
+  return rows;
+}
+
 const focusIndicatorMeta = {
   DB_SCHEMA_CHANGE: { label: 'DB 表/字段', color: 'volcano' },
   MQ_CONFIG_CHANGE: { label: 'MQ 配置', color: 'blue' },
@@ -374,11 +500,103 @@ function FocusIndicatorPanel({ indicators }) {
   );
 }
 
+function schedulerStatusColor(status) {
+  return {
+    QUEUED: 'default',
+    RUNNING: 'processing',
+    SUCCESS: 'success',
+    FAILED: 'error',
+    SKIPPED: 'warning'
+  }[status] || 'default';
+}
+
+function schedulerStatusLabel(status) {
+  return {
+    QUEUED: '排队中',
+    RUNNING: '运行中',
+    SUCCESS: '已完成',
+    FAILED: '失败',
+    SKIPPED: '已跳过'
+  }[status] || status || '-';
+}
+
+function jobDurationText(job) {
+  const start = parseEventTime(job?.startedAt || job?.queuedAt);
+  const end = parseEventTime(job?.finishedAt || job?.updatedAt);
+  if (!start || !end) return '-';
+  return formatDuration(Math.max(0, (end - start) / 1000));
+}
+
+function JobQueueModal({ open, queue, onClose }) {
+  const groups = Array.isArray(queue?.groups) ? queue.groups : [];
+  const fixColumns = [
+    { title: '风险点', dataIndex: 'findingIndex', width: 90, render: value => value == null ? '-' : `#${value}` },
+    { title: '文件', dataIndex: 'filePath', ellipsis: true, render: value => value || '-' },
+    { title: '状态', dataIndex: 'status', width: 100, render: value => <Tag color={schedulerStatusColor(value)}>{schedulerStatusLabel(value)}</Tag> },
+    { title: '排队时间', dataIndex: 'queuedAt', width: 170, render: value => value || '-' },
+    { title: '开始时间', dataIndex: 'startedAt', width: 170, render: value => value || '-' },
+    { title: '耗时', width: 90, render: (_, row) => jobDurationText(row) },
+    { title: '错误', dataIndex: 'errorMessage', ellipsis: true, render: value => value || '-' }
+  ];
+  return (
+    <Modal title="AI Review 调度队列" open={open} onCancel={onClose} footer={null} width="min(1100px, 96vw)">
+      {groups.length === 0 ? (
+        <Empty description="暂无调度任务" />
+      ) : (
+        <Collapse
+          items={groups.map(group => {
+            const reviewJob = group.reviewJob;
+            const activeFixCount = (group.fixPreviewJobs || []).filter(job => ['QUEUED', 'RUNNING'].includes(job.status)).length;
+            return {
+              key: group.taskId,
+              label: (
+                <Space wrap>
+                  <Text strong>任务 #{group.taskId}</Text>
+                  <Text>{group.projectName || '-'}</Text>
+                  {reviewJob && <Tag color={schedulerStatusColor(reviewJob.status)}>Review {schedulerStatusLabel(reviewJob.status)}</Tag>}
+                  {activeFixCount > 0 && <Tag color="processing">修复预览 {activeFixCount} 个进行中</Tag>}
+                </Space>
+              ),
+              children: (
+                <Space direction="vertical" className="full-width">
+                  {reviewJob ? (
+                    <Descriptions size="small" column={{ xs: 1, md: 3 }}>
+                      <Descriptions.Item label="Review 状态">
+                        <Tag color={schedulerStatusColor(reviewJob.status)}>{schedulerStatusLabel(reviewJob.status)}</Tag>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="排队时间">{reviewJob.queuedAt || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="耗时">{jobDurationText(reviewJob)}</Descriptions.Item>
+                      <Descriptions.Item label="触发类型">{group.triggerType || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="分支">{taskListBranchText(group)}</Descriptions.Item>
+                      <Descriptions.Item label="错误">{reviewJob.errorMessage || '-'}</Descriptions.Item>
+                    </Descriptions>
+                  ) : (
+                    <Alert type="info" showIcon message="该任务当前只有修复预览调度记录" />
+                  )}
+                  <Table
+                    size="small"
+                    rowKey="id"
+                    columns={fixColumns}
+                    dataSource={group.fixPreviewJobs || []}
+                    pagination={false}
+                  />
+                </Space>
+              )
+            };
+          })}
+        />
+      )}
+    </Modal>
+  );
+}
+
 function TaskList({ onOpen }) {
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState('');
   const [tasks, setTasks] = useState([]);
   const [pagination, setPagination] = useState({ pageNo: 1, pageSize: 20, total: 0 });
+  const [jobQueue, setJobQueue] = useState({ activeCount: 0, groups: [] });
+  const [jobQueueOpen, setJobQueueOpen] = useState(false);
   const [error, setError] = useState(null);
 
   const load = async (next = {}) => {
@@ -399,9 +617,25 @@ function TaskList({ onOpen }) {
     }
   };
 
+  const loadJobQueue = async () => {
+    try {
+      const data = await fetchApi('/api/code-quality-reviews/job-queue');
+      setJobQueue(data || { activeCount: 0, groups: [] });
+    } catch {
+      setJobQueue({ activeCount: 0, groups: [] });
+    }
+  };
+
   useEffect(() => {
     load({ pageNo: 1 });
+    loadJobQueue();
   }, []);
+
+  useEffect(() => {
+    if (!jobQueueOpen && !jobQueue?.activeCount) return undefined;
+    const timer = window.setInterval(loadJobQueue, 5000);
+    return () => window.clearInterval(timer);
+  }, [jobQueueOpen, jobQueue?.activeCount]);
 
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 80 },
@@ -419,6 +653,18 @@ function TaskList({ onOpen }) {
     <div className="page-shell">
       <div className="page-heading">
         <Space>
+          <Tooltip title="AI Review 调度队列">
+            <Badge count={jobQueue?.activeCount || 0} size="small">
+              <Button
+                icon={<ClusterOutlined />}
+                type={jobQueue?.activeCount ? 'primary' : 'default'}
+                onClick={() => {
+                  setJobQueueOpen(true);
+                  loadJobQueue();
+                }}
+              />
+            </Badge>
+          </Tooltip>
           <Input
             allowClear
             prefix={<SearchOutlined />}
@@ -445,6 +691,7 @@ function TaskList({ onOpen }) {
           }}
         />
       </Card>
+      <JobQueueModal open={jobQueueOpen} queue={jobQueue} onClose={() => setJobQueueOpen(false)} />
     </div>
   );
 }
@@ -642,6 +889,11 @@ function phaseLabel(phase) {
     JSON_PARSE_FAILED: 'JSON 解析失败',
     SAVE_RESULT: '保存结果',
     RESULT_SAVED: '结果已保存',
+    FIX_PREVIEW_QUEUED: '修复预览已排队',
+    FIX_PREVIEW_AUTO_QUEUED: '修复预览批量排队',
+    FIX_PREVIEW_REQUEST_BUILT: '修复预览请求已构建',
+    FIX_PREVIEW_SAVED: '修复预览已保存',
+    FIX_PREVIEW_AUTO_FAILED: '修复预览失败',
     FINISHED: '已完成',
     FAILED: '失败',
     SAVE_FAILED: '保存失败'
@@ -701,6 +953,10 @@ function isDebugProgressEvent(event) {
 
 function isKeyProgressEvent(event) {
   return keyProgressPhases.has(event?.phase) || ['WARN', 'ERROR'].includes(event?.level);
+}
+
+function isFixPreviewProgressEvent(event) {
+  return String(event?.phase || '').startsWith('FIX_PREVIEW');
 }
 
 function progressStepDescription(event) {
@@ -832,6 +1088,7 @@ function formatDuration(seconds) {
 
 function totalProgressDuration(events) {
   const timestamps = events
+    .filter(event => !isFixPreviewProgressEvent(event))
     .map(event => parseEventTime(event.createdAt))
     .filter(timestamp => timestamp != null);
   if (timestamps.length < 2) return null;
@@ -857,18 +1114,45 @@ function ProgressEventView({ event, showStepDescription = false }) {
   );
 }
 
-function CodeQualityProgressView({ progress }) {
+function CodeQualityProgressView({ progress, running = false, reviewStartedAt, reviewFinishedAt }) {
   const events = Array.isArray(progress) ? progress : [];
-  const keyEvents = events.filter(isKeyProgressEvent);
+  const reviewEvents = events.filter(event => !isFixPreviewProgressEvent(event));
+  const keyEvents = reviewEvents.filter(isKeyProgressEvent);
   const debugEvents = events.filter(isDebugProgressEvent);
   const hiddenEvents = events.filter(event => !isKeyProgressEvent(event) && !isDebugProgressEvent(event));
-  const totalDurationText = formatDuration(totalProgressDuration(events));
+  const startedAt = parseEventTime(reviewStartedAt);
+  const finishedAt = parseEventTime(reviewFinishedAt);
+  const totalDurationText = startedAt && finishedAt
+    ? formatDuration(Math.max(0, (finishedAt - startedAt) / 1000))
+    : formatDuration(totalProgressDuration(reviewEvents));
+  const fallbackStartedAtRef = useRef(Date.now());
+  const [elapsedTick, setElapsedTick] = useState(Date.now());
+  const latestEvent = reviewEvents.length > 0 ? reviewEvents[reviewEvents.length - 1] : null;
+  const runningStartedAt = startedAt || parseEventTime(reviewEvents[0]?.createdAt) || fallbackStartedAtRef.current;
+  const runningUntil = running ? elapsedTick : (finishedAt || elapsedTick);
+  const runningSeconds = Math.max(0, Math.floor((runningUntil - runningStartedAt) / 1000));
+
+  useEffect(() => {
+    if (!running) return undefined;
+    const timer = window.setInterval(() => setElapsedTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [running]);
+
   return (
     <Card title="执行过程">
       {events.length === 0 ? (
         <Empty description="暂无执行过程记录" />
       ) : (
         <Space direction="vertical" size="middle" className="full-width">
+          {running && (
+            <div className="quality-running-bar">
+              <Text strong>AI Review 正在执行</Text>
+              <Tag color="processing">{phaseLabel(latestEvent?.phase)}</Tag>
+              <Text type="secondary" className="quality-running-elapsed">
+                已执行 {runningSeconds} 秒 <LoadingOutlined />
+              </Text>
+            </div>
+          )}
           <Alert
             type="info"
             showIcon
@@ -1027,7 +1311,129 @@ function CodeQualityGateView({ gate, detail }) {
   );
 }
 
-function CodeQualityReviewView({ review, progress, onRetry, retrying }) {
+function DiffViewerModal({ open, finding, changedFile, onClose }) {
+  const diffText = changedFile?.diffText;
+  const rows = useMemo(() => {
+    if (!diffText) return [];
+    return buildSideBySideRows(parseUnifiedDiff(diffText), finding?.startLine, finding?.endLine);
+  }, [diffText, finding?.startLine, finding?.endLine]);
+  const matchedPath = changedFile?.path || changedFile?.newPath || changedFile?.oldPath || finding?.filePath;
+
+  return (
+    <Modal
+      title="查看 Diff"
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width="min(1180px, calc(100vw - 32px))"
+      className="diff-viewer-modal"
+      destroyOnHidden
+    >
+      <Space direction="vertical" size="middle" className="full-width">
+        <div className="diff-viewer-meta">
+          <Text strong>{matchedPath || '-'}</Text>
+          <Space wrap>
+            {changedFile?.changeType && <Tag>{changedFile.changeType}</Tag>}
+            {changedFile?.source && <Tag color="blue">{changedFile.source}</Tag>}
+            {finding?.startLine != null && <Tag color="gold">定位 {codeLocationText(finding.filePath, finding.startLine, finding.endLine)}</Tag>}
+          </Space>
+        </div>
+        {!changedFile ? (
+          <Empty description="没有找到与该问题匹配的变更文件" />
+        ) : !diffText ? (
+          <Empty description="当前任务未保存该文件 diff" />
+        ) : (
+          <div className="diff-viewer-table" role="table" aria-label="Side by side diff">
+            {rows.map(row => (
+              <div
+                key={row.id}
+                className={[
+                  'diff-viewer-row',
+                  `diff-row-${row.type}`,
+                  row.highlight ? 'diff-row-highlight' : ''
+                ].filter(Boolean).join(' ')}
+              >
+                <div className="diff-line-number">{row.oldLine}</div>
+                <pre className="diff-code-cell diff-code-old">{row.oldText}</pre>
+                <div className="diff-line-number">{row.newLine}</div>
+                <pre className="diff-code-cell diff-code-new">{row.newText}</pre>
+              </div>
+            ))}
+          </div>
+        )}
+      </Space>
+    </Modal>
+  );
+}
+
+function PatchPreviewTable({ patchText }) {
+  const rows = useMemo(() => buildSideBySideRows(parseUnifiedDiff(patchText), null, null), [patchText]);
+  return (
+    <div className="diff-viewer-table" role="table" aria-label="Fix preview patch">
+      {rows.map(row => (
+        <div
+          key={row.id}
+          className={['diff-viewer-row', `diff-row-${row.type}`].join(' ')}
+        >
+          <div className="diff-line-number">{row.oldLine}</div>
+          <pre className="diff-code-cell diff-code-old">{row.oldText}</pre>
+          <div className="diff-line-number">{row.newLine}</div>
+          <pre className="diff-code-cell diff-code-new">{row.newText}</pre>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FixPreviewModal({ open, preview, onClose }) {
+  return (
+    <Modal
+      title="AI 修复 Patch 预览"
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width="min(1180px, calc(100vw - 32px))"
+      className="diff-viewer-modal"
+      destroyOnHidden
+    >
+      <Space direction="vertical" size="middle" className="full-width">
+        <div className="diff-viewer-meta">
+          <Text strong>{preview?.filePath || '-'}</Text>
+          <Space wrap>
+            {preview?.provider && <Tag color="blue">{preview.provider}</Tag>}
+            {preview?.model && <Tag>{preview.model}</Tag>}
+            {preview?.status && <Tag color={statusColor(preview.status)}>{preview.status}</Tag>}
+          </Space>
+        </div>
+        {preview?.status === 'FAILED' ? (
+          <Alert
+            type="error"
+            showIcon
+            message="修复预览生成失败"
+            description={preview.errorMessage || '模型没有返回可展示的 unified diff patch。'}
+          />
+        ) : preview?.patchText ? (
+          <>
+            {preview.summary && <Alert type="info" showIcon message={preview.summary} />}
+            <PatchPreviewTable patchText={preview.patchText} />
+          </>
+        ) : (
+          <Empty description="暂无修复预览" />
+        )}
+      </Space>
+    </Modal>
+  );
+}
+
+function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, initialFixPreviews, onRetry, retrying }) {
+  const [diffTarget, setDiffTarget] = useState(null);
+  const [fixPreviewTarget, setFixPreviewTarget] = useState(null);
+  const [fixPreviewByIndex, setFixPreviewByIndex] = useState({});
+  const [fixPreviewLoadingIndex, setFixPreviewLoadingIndex] = useState(null);
+  useEffect(() => {
+    const previews = Array.isArray(initialFixPreviews) ? initialFixPreviews : [];
+    setFixPreviewByIndex(Object.fromEntries(previews.map(item => [item.findingIndex, item])));
+  }, [initialFixPreviews]);
   if (!review) {
     return (
       <Space direction="vertical" size="large" className="full-width">
@@ -1044,6 +1450,31 @@ function CodeQualityReviewView({ review, progress, onRetry, retrying }) {
 
   const findings = Array.isArray(review.findings) ? review.findings : [];
   const summaryText = codeQualitySummary(review, findings);
+  const activeChangedFile = diffTarget?.changedFile || null;
+  const generateFixPreview = async index => {
+    const cached = fixPreviewByIndex[index];
+    if (cached?.status === 'SUCCESS') {
+      setFixPreviewTarget(cached);
+      return;
+    }
+    setFixPreviewLoadingIndex(index);
+    try {
+      const preview = await fetchApi(`/api/review-tasks/${taskId}/code-quality-fix-preview`, {
+        method: 'POST',
+        body: JSON.stringify({ findingIndex: index, forceRegenerate: cached?.status === 'FAILED' })
+      });
+      setFixPreviewByIndex(current => ({ ...current, [index]: preview }));
+      if (preview?.status === 'SUCCESS') {
+        setFixPreviewTarget(preview);
+      } else if (preview?.status === 'QUEUED') {
+        message.info('修复预览已进入队列');
+      }
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setFixPreviewLoadingIndex(null);
+    }
+  };
   return (
     <Space direction="vertical" size="large" className="full-width">
       <Card>
@@ -1088,9 +1519,40 @@ function CodeQualityReviewView({ review, progress, onRetry, retrying }) {
                 <Space direction="vertical" className="full-width">
                   <Descriptions size="small" column={{ xs: 1, md: 2 }}>
                     <Descriptions.Item label="位置" span={2}>
-                      <Text code className="code-location-text">
-                        {codeLocationText(finding.filePath, finding.startLine, finding.endLine)}
-                      </Text>
+                      <Space className="code-location-row" wrap>
+                        <Text code className="code-location-text">
+                          {codeLocationText(finding.filePath, finding.startLine, finding.endLine)}
+                        </Text>
+                        <Button
+                          size="small"
+                          icon={<FileSearchOutlined />}
+                          disabled={!finding.filePath}
+                          onClick={() => setDiffTarget({
+                            finding,
+                            changedFile: findChangedFileForFinding(finding, changedFilesSummary)
+                          })}
+                        >
+                          查看 Diff
+                        </Button>
+                        <Button
+                          size="small"
+                          type="primary"
+                          ghost
+                          loading={fixPreviewLoadingIndex === index || fixPreviewByIndex[index]?.status === 'RUNNING'}
+                          disabled={!taskId || review.status === 'RUNNING' || !finding.filePath}
+                          onClick={() => generateFixPreview(index)}
+                        >
+                          {fixPreviewByIndex[index]?.status === 'SUCCESS'
+                            ? '查看修复预览'
+                            : (fixPreviewByIndex[index]?.status === 'RUNNING'
+                                ? '修复预览生成中'
+                                : (fixPreviewByIndex[index]?.status === 'QUEUED'
+                                    ? '修复预览排队中'
+                                : (fixPreviewByIndex[index]?.status === 'FAILED' || fixPreviewByIndex[index]?.status === 'SKIPPED'
+                                    ? '重新生成修复预览'
+                                    : '生成修复预览')))}
+                        </Button>
+                      </Space>
                     </Descriptions.Item>
                     <Descriptions.Item label="来源">{sourceLabel(finding.source || review.provider)}</Descriptions.Item>
                     <Descriptions.Item label="分类">{categoryLabel(finding.category)}</Descriptions.Item>
@@ -1103,7 +1565,12 @@ function CodeQualityReviewView({ review, progress, onRetry, retrying }) {
           />
         )}
       </Card>
-      <CodeQualityProgressView progress={progress} />
+      <CodeQualityProgressView
+        progress={progress}
+        running={review.status === 'RUNNING'}
+        reviewStartedAt={review.startedAt}
+        reviewFinishedAt={review.finishedAt}
+      />
       {review.rawOutput && (
         <Collapse
           items={[{
@@ -1113,6 +1580,17 @@ function CodeQualityReviewView({ review, progress, onRetry, retrying }) {
           }]}
         />
       )}
+      <DiffViewerModal
+        open={Boolean(diffTarget)}
+        finding={diffTarget?.finding}
+        changedFile={activeChangedFile}
+        onClose={() => setDiffTarget(null)}
+      />
+      <FixPreviewModal
+        open={Boolean(fixPreviewTarget)}
+        preview={fixPreviewTarget}
+        onClose={() => setFixPreviewTarget(null)}
+      />
     </Space>
   );
 }
@@ -1123,14 +1601,17 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   const [codeQualityResult, setCodeQualityResult] = useState(null);
   const [codeQualityProgress, setCodeQualityProgress] = useState([]);
   const [codeQualityGate, setCodeQualityGate] = useState(null);
+  const [fixPreviews, setFixPreviews] = useState([]);
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   const [error, setError] = useState(null);
 
-  const load = async () => {
-    setLoading(true);
-    setError(null);
+  const load = async ({ silent = false } = {}) => {
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const taskDetail = await fetchApi(`/api/review-tasks/${taskId}`);
       setDetail(taskDetail);
@@ -1158,10 +1639,18 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       } catch {
         setCodeQualityProgress([]);
       }
+      try {
+        const previews = await fetchApi(`/api/review-tasks/${taskId}/code-quality-fix-previews`);
+        setFixPreviews(Array.isArray(previews) ? previews : []);
+      } catch {
+        setFixPreviews([]);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
@@ -1170,10 +1659,11 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   }, [taskId]);
 
   useEffect(() => {
-    if (codeQualityResult?.status !== 'RUNNING') return undefined;
-    const timer = window.setInterval(load, 5000);
+    const hasRunningFixPreview = fixPreviews.some(item => ['QUEUED', 'RUNNING'].includes(item?.status));
+    if (codeQualityResult?.status !== 'RUNNING' && !hasRunningFixPreview) return undefined;
+    const timer = window.setInterval(() => load({ silent: true }), 5000);
     return () => window.clearInterval(timer);
-  }, [taskId, codeQualityResult?.status]);
+  }, [taskId, codeQualityResult?.status, fixPreviews]);
 
   const retryCodeQualityReview = async () => {
     setRetrying(true);
@@ -1200,6 +1690,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
         detail: `provider=${retryResult.provider}, profile=${retryResult.profileCode}`,
         createdAt: new Date().toISOString()
       }]);
+      setFixPreviews([]);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1225,14 +1716,14 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   };
 
   const tabItems = useMemo(() => [
-    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewView review={codeQualityResult} progress={codeQualityProgress} onRetry={retryCodeQualityReview} retrying={retrying} /> },
+    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewView taskId={taskId} review={codeQualityResult} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} initialFixPreviews={fixPreviews} onRetry={retryCodeQualityReview} retrying={retrying} /> },
     ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
       ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
       : []),
     { key: 'risk', label: '提醒卡片', children: <RiskCardView riskCard={result?.riskCard} /> },
     { key: 'analysis', label: '分析结果', children: <AnalysisView changeAnalysis={result?.changeAnalysis} /> },
     { key: 'event', label: '原始事件摘要', children: <Row gutter={[16, 16]}><Col xs={24} lg={12}><Card title="changedFiles 摘要"><JsonBlock value={detail?.changedFilesSummary} /></Card></Col><Col xs={24} lg={12}><Card title="raw payload"><JsonBlock value={detail?.rawPayload} /></Card></Col></Row> }
-  ], [detail, result, codeQualityResult, codeQualityProgress, codeQualityGate, retrying]);
+  ], [taskId, detail, result, codeQualityResult, codeQualityProgress, codeQualityGate, fixPreviews, retrying]);
 
   return (
     <div className="page-shell">

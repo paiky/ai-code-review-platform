@@ -25,6 +25,11 @@ async def get_settings(db: Session = Depends(get_db)) -> dict:
     return ok(service.get_settings_response(db))
 
 
+@review_router.get("/job-queue")
+async def get_job_queue(db: Session = Depends(get_db)) -> dict:
+    return ok(service.get_job_queue_response(db))
+
+
 @review_router.put("/settings")
 async def update_settings(request: dict, db: Session = Depends(get_db)) -> dict:
     return ok(service.update_settings(db, request))

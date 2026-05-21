@@ -378,6 +378,7 @@ POST /api/code-quality-reviews/manual
 GET /api/code-quality-reviews/settings
 PUT /api/code-quality-reviews/settings
 POST /api/code-quality-reviews/tasks/{taskId}/retry
+GET /api/code-quality-reviews/job-queue
 GET /api/code-quality-review-profiles
 GET /api/code-quality-review-profiles/{profileCode}
 PUT /api/code-quality-review-profiles/{profileCode}
@@ -389,11 +390,19 @@ POST /api/code-quality-review-providers/{providerCode}/set-default
 GET /api/review-tasks/{taskId}/code-quality-result
 GET /api/review-tasks/{taskId}/code-quality-progress
 GET /api/review-tasks/{taskId}/code-quality-gate
+GET /api/review-tasks/{taskId}/code-quality-fix-previews
+POST /api/review-tasks/{taskId}/code-quality-fix-preview
 ```
 
 Python AI Review 默认关闭；可在设置页直接开启或关闭“代码质量 AI Review 全局能力”。`CODE_QUALITY_REVIEW_ENABLED` 只作为兼容初始化值使用，已有数据库以设置页保存的 `reviewEnabled` 为准。启用后支持 OpenAI Responses、Anthropic Messages、DeepSeek / Custom OpenAI-compatible Chat Completions。Provider API Key 只返回 masked 形式，进度事件会做敏感字段脱敏。阶段 4 自动化验证使用 respx mock 外部模型 API，真实模型凭据联调需要单独确认。
 
 AI Review 当前保持稳定的非流式 HTTP Provider 调用。前端通过 `GET /api/review-tasks/{taskId}/code-quality-progress` 和 `GET /api/review-tasks/{taskId}/code-quality-result` 轮询展示执行过程与结果，不再建立 SSE / WebSocket 连接，也不启用模型 token streaming。
+
+AI Review 质量问题支持两个辅助查看入口：
+
+- `查看 Diff`：基于任务详情中的 `changedFilesSummary.files[].diffText` 展示当前文件左右对照 diff，并按模型返回的 `startLine/endLine` 高亮定位。
+- `生成修复预览`：AI Review 成功后会后台自动为可匹配 diff 的 finding 生成 unified diff patch 预览并保存到 `code_quality_fix_previews`。Provider 调用统一进入 `code_quality_scheduler_jobs` 调度队列，默认全局最多 10 个并发，AI Review 优先于修复预览；修复预览先显示 `QUEUED`，真正占用 Provider 资源时才显示 `RUNNING`。页面也保留单条手动生成 / 失败后重试入口。该能力仅用于查看，不会修改仓库、不提交 GitLab MR。
+- `调度队列`：任务列表页提供队列提示入口，调用 `GET /api/code-quality-reviews/job-queue` 查看当前 AI Review 与 finding 级修复预览的排队、运行和完成明细。
 
 Push webhook 默认只接收 `pushBranchPatterns` 允许的分支。Push 自动 AI Review 默认关闭，需要在 AI Review 配置中开启 `triggerOnPush`，并通过 Push 审核层后才会自动触发。
 

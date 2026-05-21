@@ -1,5 +1,21 @@
 export const releaseNotes = [
   {
+    id: '2026-05-21-ai-review-diff-fix-preview-scheduler',
+    version: 'v0.9.0',
+    releaseDate: '2026-05-21',
+    title: 'AI Review Diff、修复预览与调度队列升级',
+    summary: 'AI Review 从“指出问题”升级到“定位变更、预览修复、可观测调度”的完整闭环，质量问题可以直接查看左右对照 diff，并在后台生成可审阅的 unified diff 修复 patch。',
+    highlights: [
+      '质量问题支持“查看 Diff”弹窗，按文件展示左右对照变更，并高亮模型返回的目标行号。',
+      '每条 finding 支持生成 AI 修复 Patch 预览，只展示 unified diff，不修改仓库、不提交 MR。',
+      'AI Review 成功后会自动为可匹配 diff 的 finding 排队生成修复预览，刷新页面后仍可查看已持久化结果。',
+      '新增统一 Provider 调度队列：AI Review 优先于修复预览，全局最多 10 个并发，修复预览区分排队中与生成中。',
+      '任务列表页新增调度队列入口，可查看 Review 任务及其风险点修复预览的排队、运行和完成明细。',
+      '任务详情页取消轮询时的全屏遮罩，AI Review 运行中仅在执行过程顶部显示轻量 loading 和已执行秒数。'
+    ],
+    tags: ['AI Review', 'Diff 查看', '修复预览', '调度队列']
+  },
+  {
     id: '2026-05-20-routing-release-center',
     version: 'v0.8.0',
     releaseDate: '2026-05-20',

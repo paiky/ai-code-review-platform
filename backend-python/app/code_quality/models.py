@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -106,6 +106,48 @@ class CodeQualityReviewProgressEvent(Base):
     message: Mapped[str] = mapped_column(String(512), nullable=False)
     detail: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[object | None] = mapped_column(DateTime)
+
+
+class CodeQualityFixPreview(Base):
+    __tablename__ = "code_quality_fix_previews"
+    __table_args__ = (
+        UniqueConstraint("task_id", "finding_index", name="uk_code_quality_fix_preview_task_finding"),
+    )
+
+    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    finding_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(128))
+    summary: Mapped[str | None] = mapped_column(String(1024))
+    patch_text: Mapped[str | None] = mapped_column(Text)
+    warnings_json: Mapped[str] = mapped_column(Text, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(String(1024))
+    created_at: Mapped[object | None] = mapped_column(DateTime)
+    updated_at: Mapped[object | None] = mapped_column(DateTime)
+
+
+class CodeQualitySchedulerJob(Base):
+    __tablename__ = "code_quality_scheduler_jobs"
+
+    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    job_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(BigInteger)
+    finding_index: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    label: Mapped[str | None] = mapped_column(String(255))
+    file_path: Mapped[str | None] = mapped_column(String(512))
+    error_message: Mapped[str | None] = mapped_column(String(1024))
+    queued_at: Mapped[object | None] = mapped_column(DateTime)
+    started_at: Mapped[object | None] = mapped_column(DateTime)
+    finished_at: Mapped[object | None] = mapped_column(DateTime)
+    created_at: Mapped[object | None] = mapped_column(DateTime)
+    updated_at: Mapped[object | None] = mapped_column(DateTime)
 
 
 class CodeQualityPushReviewGateDecision(Base):

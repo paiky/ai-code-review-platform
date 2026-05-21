@@ -178,6 +178,23 @@ body {
   min-width: 0;
 }
 
+.quality-running-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid #91caff;
+  border-radius: 6px;
+  background: #f0f7ff;
+}
+
+.quality-running-elapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .progress-message {
   margin-top: 6px;
   font-weight: 600;
@@ -304,6 +321,95 @@ body {
 .code-location-text {
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.code-location-row {
+  max-width: 100%;
+}
+
+.diff-viewer-modal .ant-modal-body {
+  max-height: calc(100vh - 190px);
+  overflow: hidden;
+}
+
+.diff-viewer-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.diff-viewer-table {
+  width: 100%;
+  max-height: calc(100vh - 300px);
+  overflow: auto;
+  border: 1px solid #d7dee2;
+  border-radius: 6px;
+  background: #ffffff;
+  font-family: "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diff-viewer-row {
+  display: grid;
+  grid-template-columns: 64px minmax(360px, 1fr) 64px minmax(360px, 1fr);
+  min-width: 920px;
+  border-bottom: 1px solid #edf1f3;
+}
+
+.diff-viewer-row:last-child {
+  border-bottom: 0;
+}
+
+.diff-line-number {
+  min-height: 22px;
+  padding: 2px 8px;
+  color: #66737c;
+  text-align: right;
+  user-select: none;
+  background: #f4f7f8;
+  border-right: 1px solid #dfe6ea;
+}
+
+.diff-code-cell {
+  min-height: 22px;
+  margin: 0;
+  padding: 2px 10px;
+  overflow: visible;
+  white-space: pre;
+  color: #20292f;
+  background: #ffffff;
+}
+
+.diff-code-old {
+  border-right: 1px solid #dfe6ea;
+}
+
+.diff-row-hunk .diff-line-number,
+.diff-row-hunk .diff-code-cell {
+  color: #46606c;
+  background: #e9f2f6;
+  font-weight: 600;
+}
+
+.diff-row-add .diff-code-new {
+  background: #e9f8ef;
+}
+
+.diff-row-delete .diff-code-old {
+  background: #fdeceb;
+}
+
+.diff-row-meta .diff-code-cell,
+.diff-row-raw .diff-code-cell {
+  color: #58656d;
+  background: #fbfcfc;
+}
+
+.diff-row-highlight .diff-line-number,
+.diff-row-highlight .diff-code-cell {
+  background: #fff3bf;
 }
 
 .focus-indicator-grid {
@@ -575,6 +681,11 @@ body {
   .release-entry {
     grid-template-columns: 1fr;
     gap: 12px;
+  }
+
+  .diff-viewer-meta {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .release-track {
