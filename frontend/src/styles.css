@@ -207,6 +207,13 @@ body {
   margin-top: 8px;
 }
 
+.settings-subsection {
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
 .prompt-textarea {
   margin-top: 8px;
   font-family: Consolas, "SFMono-Regular", monospace;

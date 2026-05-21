@@ -9,7 +9,7 @@ from app.core.errors import AppError
 from app.notification.service import dingtalk_skipped_result
 from app.code_quality.repository import get_settings_record
 from app.project_integration.repository import find_project_by_id
-from app.project_integration.service import handle_merge_request_webhook
+from app.project_integration.service import handle_gitlab_webhook
 from app.review_record.repository import (
     create_review_task,
     get_review_task_detail,
@@ -83,12 +83,12 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict:
 
 def rerun_review_task(db: Session, source_task_id: int) -> dict:
     source = get_review_task_detail(db, source_task_id)
-    if source["triggerType"] != "GITLAB_MR_WEBHOOK":
-        raise AppError("BAD_REQUEST", "Only GitLab MR webhook tasks can be rerun in stage 3", 400)
+    if source["triggerType"] not in {"GITLAB_MR_WEBHOOK", "GITLAB_PUSH_WEBHOOK"}:
+        raise AppError("BAD_REQUEST", "Only GitLab webhook tasks can be rerun", 400)
     raw_payload = source.get("rawPayload")
     if not isinstance(raw_payload, dict):
         raise AppError("BAD_REQUEST", "Source task raw payload is missing", 400)
-    response = handle_merge_request_webhook(db, raw_payload)
+    response = handle_gitlab_webhook(db, None, raw_payload)
     return {
         "sourceTaskId": source_task_id,
         "taskId": response.get("taskId"),

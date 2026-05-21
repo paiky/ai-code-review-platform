@@ -123,6 +123,38 @@ def mock_mr_payload() -> dict:
     }
 
 
+def mock_push_payload() -> dict:
+    return {
+        "object_kind": "push",
+        "event_time": "2026-05-18T10:00:00+08:00",
+        "project": {
+            "id": 1001,
+            "name": "demo-service",
+            "path_with_namespace": "demo/service",
+            "web_url": "https://gitlab.example.com/demo/service",
+        },
+        "ref": "refs/heads/feature/push-rerun",
+        "before": "1111111111111111111111111111111111111111",
+        "after": "2222222222222222222222222222222222222222",
+        "user_name": "Alice",
+        "user_username": "alice",
+        "commits": [
+            {
+                "id": "2222222222222222222222222222222222222222",
+                "added": [],
+                "modified": ["src/main/resources/mapper/OrderMapper.xml"],
+                "removed": [],
+            }
+        ],
+        "changedFiles": [
+            {
+                "path": "src/main/resources/mapper/OrderMapper.xml",
+                "diffText": "+ update orders set status = 'CONFIRMED' where id = #{id}",
+            }
+        ],
+    }
+
+
 def test_mock_mr_webhook_creates_success_task_result_and_notification(
     client: TestClient, db_session: Session
 ) -> None:
@@ -203,6 +235,28 @@ def test_rerun_gitlab_mr_task_replays_raw_payload(client: TestClient, db_session
 
     notifications = client.get(f"/api/review-tasks/{data['taskId']}/notifications").json()["data"]
     assert notifications[0]["createdAt"] is not None
+
+
+def test_rerun_gitlab_push_task_replays_raw_payload(client: TestClient, db_session: Session) -> None:
+    seed_backend_template(db_session)
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=mock_push_payload(),
+        headers={"X-Gitlab-Event": "Push Hook"},
+    ).json()["data"]
+
+    rerun = client.post(f"/api/review-tasks/{created['taskId']}/rerun")
+
+    assert rerun.status_code == 200
+    data = rerun.json()["data"]
+    assert data["sourceTaskId"] == created["taskId"]
+    assert data["status"] == "SUCCESS"
+    assert data["triggerType"] == "GITLAB_PUSH_WEBHOOK"
+    assert data["taskId"] != created["taskId"]
+
+    detail = client.get(f"/api/review-tasks/{data['taskId']}").json()["data"]
+    assert detail["triggerType"] == "GITLAB_PUSH_WEBHOOK"
+    assert detail["sourceBranch"] == "feature/push-rerun"
 
 
 def test_rerun_respects_global_dingtalk_notification_switch(

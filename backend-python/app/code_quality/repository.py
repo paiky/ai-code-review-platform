@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.code_quality.models import (
     CodeQualityModelProvider,
+    CodeQualityPushReviewGateDecision,
     CodeQualityReviewProfile,
     CodeQualityReviewProgressEvent,
     CodeQualityReviewResult,
@@ -16,7 +17,7 @@ from app.code_quality.models import (
 )
 from app.core.config import get_settings
 from app.core.errors import AppError
-from app.core.json_utils import format_datetime, page_response, read_json_array
+from app.core.json_utils import format_datetime, page_response, read_json, read_json_array
 from app.notification.repository import (
     ensure_webhook_schema,
     list_webhooks,
@@ -62,6 +63,7 @@ def ensure_defaults(db: Session) -> None:
         db.add(
             CodeQualityReviewSettings(
                 id=1,
+                review_enabled=settings.code_quality_review_enabled,
                 mr_auto_review_enabled=True,
                 dingtalk_notification_enabled=True,
                 review_provider=settings.code_quality_review_provider,
@@ -137,11 +139,14 @@ def ensure_defaults(db: Session) -> None:
                     ensure_ascii=False,
                 ),
                 ignored_paths=json.dumps(["**/generated/**", "**/target/**", "**/dist/**"], ensure_ascii=False),
-                push_branch_patterns=json.dumps(["main", "develop", "release/*"], ensure_ascii=False),
-                push_max_changed_files=30,
-                push_max_diff_bytes=200000,
+                push_branch_patterns=json.dumps(["develop", "feature/*", "bugfix/*", "hotfix/*"], ensure_ascii=False),
+                push_min_changed_files=10,
+                push_min_diff_bytes=30000,
+                push_min_commit_count=3,
+                push_max_changed_files=80,
+                push_max_diff_bytes=300000,
                 push_debounce_seconds=300,
-                trigger_only_when_risk_matched=True,
+                trigger_only_when_risk_matched=False,
                 codex_prompt=DEFAULT_REVIEW_INSTRUCTIONS,
                 openai_instructions=DEFAULT_REVIEW_INSTRUCTIONS,
                 review_instructions=DEFAULT_REVIEW_INSTRUCTIONS,
@@ -156,6 +161,16 @@ def ensure_defaults(db: Session) -> None:
         profile.openai_instructions = DEFAULT_REVIEW_INSTRUCTIONS
         profile.codex_prompt = DEFAULT_REVIEW_INSTRUCTIONS
         profile.updated_at = datetime.now()
+    if profile is not None:
+        profile.push_branch_patterns = profile.push_branch_patterns or json.dumps(
+            ["develop", "feature/*", "bugfix/*", "hotfix/*"], ensure_ascii=False
+        )
+        profile.push_min_changed_files = profile.push_min_changed_files if profile.push_min_changed_files is not None else 10
+        profile.push_min_diff_bytes = profile.push_min_diff_bytes if profile.push_min_diff_bytes is not None else 30000
+        profile.push_min_commit_count = profile.push_min_commit_count if profile.push_min_commit_count is not None else 3
+        profile.push_max_changed_files = profile.push_max_changed_files if profile.push_max_changed_files is not None else 80
+        profile.push_max_diff_bytes = profile.push_max_diff_bytes if profile.push_max_diff_bytes is not None else 300000
+        profile.push_debounce_seconds = profile.push_debounce_seconds if profile.push_debounce_seconds is not None else 300
     db.flush()
 
 
@@ -163,6 +178,7 @@ def ensure_code_quality_config_schema(db: Session) -> None:
     ensure_settings_schema(db)
     ensure_profile_schema(db)
     ensure_provider_schema(db)
+    ensure_push_gate_schema(db)
     ensure_webhook_schema(db)
 
 
@@ -173,6 +189,14 @@ def ensure_settings_schema(db: Session) -> None:
         CodeQualityReviewSettings.__table__.create(connection, checkfirst=True)
         return
     columns = {column["name"] for column in inspector.get_columns("code_quality_review_settings")}
+    default_review_enabled = "TRUE" if get_settings().code_quality_review_enabled else "FALSE"
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_review_settings",
+        "review_enabled",
+        f"BOOLEAN NOT NULL DEFAULT {default_review_enabled}",
+    )
     _add_column_if_missing(
         db,
         columns,
@@ -232,6 +256,27 @@ def ensure_profile_schema(db: Session) -> None:
         "review_instructions",
         "TEXT NULL",
     )
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_review_profiles",
+        "push_min_changed_files",
+        "INT NULL DEFAULT 10",
+    )
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_review_profiles",
+        "push_min_diff_bytes",
+        "INT NULL DEFAULT 30000",
+    )
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_review_profiles",
+        "push_min_commit_count",
+        "INT NULL DEFAULT 3",
+    )
     db.flush()
 
 
@@ -241,6 +286,21 @@ def ensure_provider_schema(db: Session) -> None:
     if not inspector.has_table("code_quality_model_providers"):
         CodeQualityModelProvider.__table__.create(connection, checkfirst=True)
         db.flush()
+    db.flush()
+
+
+def ensure_push_gate_schema(db: Session) -> None:
+    connection = db.connection()
+    inspector = inspect(connection)
+    if not inspector.has_table("code_quality_push_review_gate_decisions"):
+        CodeQualityPushReviewGateDecision.__table__.create(connection, checkfirst=True)
+        db.flush()
+        return
+    columns = {column["name"] for column in inspector.get_columns("code_quality_push_review_gate_decisions")}
+    _add_column_if_missing(db, columns, "code_quality_push_review_gate_decisions", "project_id", "BIGINT NULL")
+    _add_column_if_missing(db, columns, "code_quality_push_review_gate_decisions", "branch_name", "VARCHAR(255) NULL")
+    _add_column_if_missing(db, columns, "code_quality_push_review_gate_decisions", "profile_code", "VARCHAR(64) NULL")
+    _add_column_if_missing(db, columns, "code_quality_push_review_gate_decisions", "provider", "VARCHAR(64) NULL")
     db.flush()
 
 
@@ -309,6 +369,7 @@ def get_settings_record(db: Session) -> CodeQualityReviewSettings:
 def settings_to_dict(record: CodeQualityReviewSettings) -> dict[str, Any]:
     session = Session.object_session(record)
     return {
+        "reviewEnabled": record.review_enabled,
         "mrAutoReviewEnabled": record.mr_auto_review_enabled,
         "dingtalkNotificationEnabled": record.dingtalk_notification_enabled,
         "dingtalkWebhooks": [webhook_to_dict(item) for item in list_webhooks(session)] if session else [],
@@ -320,6 +381,8 @@ def settings_to_dict(record: CodeQualityReviewSettings) -> dict[str, Any]:
 
 def update_settings_record(db: Session, request: dict[str, Any]) -> dict[str, Any]:
     record = get_settings_record(db)
+    if "reviewEnabled" in request:
+        record.review_enabled = bool(request["reviewEnabled"])
     if "mrAutoReviewEnabled" in request:
         record.mr_auto_review_enabled = bool(request["mrAutoReviewEnabled"])
     if "dingtalkNotificationEnabled" in request:
@@ -385,6 +448,9 @@ def profile_to_dict(profile: CodeQualityReviewProfile) -> dict[str, Any]:
         "enabledCategories": read_json_array(profile.enabled_categories),
         "ignoredPaths": read_json_array(profile.ignored_paths),
         "pushBranchPatterns": read_json_array(profile.push_branch_patterns),
+        "pushMinChangedFiles": profile.push_min_changed_files,
+        "pushMinDiffBytes": profile.push_min_diff_bytes,
+        "pushMinCommitCount": profile.push_min_commit_count,
         "pushMaxChangedFiles": profile.push_max_changed_files,
         "pushMaxDiffBytes": profile.push_max_diff_bytes,
         "pushDebounceSeconds": profile.push_debounce_seconds,
@@ -430,6 +496,12 @@ def update_profile(db: Session, profile_code: str, request: dict[str, Any]) -> d
         profile.push_max_changed_files = request["pushMaxChangedFiles"]
     if "pushMaxDiffBytes" in request:
         profile.push_max_diff_bytes = request["pushMaxDiffBytes"]
+    if "pushMinChangedFiles" in request:
+        profile.push_min_changed_files = request["pushMinChangedFiles"]
+    if "pushMinDiffBytes" in request:
+        profile.push_min_diff_bytes = request["pushMinDiffBytes"]
+    if "pushMinCommitCount" in request:
+        profile.push_min_commit_count = request["pushMinCommitCount"]
     if "pushDebounceSeconds" in request:
         profile.push_debounce_seconds = request["pushDebounceSeconds"]
     if "triggerOnlyWhenRiskMatched" in request:
@@ -530,6 +602,110 @@ def set_default_provider(db: Session, provider_code: str) -> dict[str, Any]:
     record.updated_at = datetime.now()
     db.flush()
     return settings_to_dict(record)
+
+
+def save_push_gate_decision(
+    db: Session,
+    *,
+    task_id: int,
+    project_id: int,
+    branch_name: str | None,
+    profile_code: str | None,
+    provider: str | None,
+    decision: str,
+    ai_review_scheduled: bool,
+    reason_code: str,
+    reason_summary: str,
+    metrics: dict[str, Any],
+    matched_rules: list[dict[str, Any]],
+) -> CodeQualityPushReviewGateDecision:
+    ensure_push_gate_schema(db)
+    now = datetime.now()
+    existing = db.scalars(
+        select(CodeQualityPushReviewGateDecision).where(CodeQualityPushReviewGateDecision.task_id == task_id)
+    ).first()
+    if existing is None:
+        existing = CodeQualityPushReviewGateDecision(
+            task_id=task_id,
+            project_id=project_id,
+            branch_name=branch_name,
+            profile_code=profile_code,
+            provider=provider,
+            decision=decision,
+            ai_review_scheduled=ai_review_scheduled,
+            reason_code=reason_code,
+            reason_summary=_truncate(reason_summary, 512) or reason_summary,
+            metrics_json=json.dumps(metrics, ensure_ascii=False),
+            matched_rules_json=json.dumps(matched_rules, ensure_ascii=False),
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(existing)
+    else:
+        existing.project_id = project_id
+        existing.branch_name = branch_name
+        existing.profile_code = profile_code
+        existing.provider = provider
+        existing.decision = decision
+        existing.ai_review_scheduled = ai_review_scheduled
+        existing.reason_code = reason_code
+        existing.reason_summary = _truncate(reason_summary, 512) or reason_summary
+        existing.metrics_json = json.dumps(metrics, ensure_ascii=False)
+        existing.matched_rules_json = json.dumps(matched_rules, ensure_ascii=False)
+        existing.updated_at = now
+    db.flush()
+    return existing
+
+
+def find_push_gate_decision(db: Session, task_id: int) -> CodeQualityPushReviewGateDecision | None:
+    ensure_push_gate_schema(db)
+    return db.scalars(
+        select(CodeQualityPushReviewGateDecision).where(CodeQualityPushReviewGateDecision.task_id == task_id)
+    ).first()
+
+
+def push_gate_to_dict(record: CodeQualityPushReviewGateDecision) -> dict[str, Any]:
+    return {
+        "taskId": record.task_id,
+        "projectId": record.project_id,
+        "branchName": record.branch_name,
+        "decision": record.decision,
+        "reasonCode": record.reason_code,
+        "reasonSummary": record.reason_summary,
+        "aiReviewScheduled": record.ai_review_scheduled,
+        "profileCode": record.profile_code,
+        "provider": record.provider,
+        "metrics": read_json(record.metrics_json, {}),
+        "matchedRules": read_json(record.matched_rules_json, []),
+        "createdAt": format_datetime(record.created_at),
+        "updatedAt": format_datetime(record.updated_at),
+    }
+
+
+def has_recent_allowed_push_gate(
+    db: Session,
+    *,
+    project_id: int,
+    branch_name: str | None,
+    task_id: int,
+    debounce_seconds: int,
+) -> bool:
+    if not branch_name or debounce_seconds <= 0:
+        return False
+    ensure_push_gate_schema(db)
+    cutoff = datetime.now() - timedelta(seconds=debounce_seconds)
+    return (
+        db.scalars(
+            select(CodeQualityPushReviewGateDecision)
+            .where(CodeQualityPushReviewGateDecision.project_id == project_id)
+            .where(CodeQualityPushReviewGateDecision.branch_name == branch_name)
+            .where(CodeQualityPushReviewGateDecision.task_id != task_id)
+            .where(CodeQualityPushReviewGateDecision.decision == "ALLOWED")
+            .where(CodeQualityPushReviewGateDecision.ai_review_scheduled.is_(True))
+            .where(CodeQualityPushReviewGateDecision.created_at >= cutoff)
+        ).first()
+        is not None
+    )
 
 
 def save_result(

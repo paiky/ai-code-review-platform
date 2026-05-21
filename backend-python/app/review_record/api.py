@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.code_quality.service import get_progress_response, get_result_response
+from app.code_quality.service import get_progress_response, get_push_gate_response, get_result_response
 from app.core.database import get_db
 from app.core.response import ok
 from app.review_record.repository import (
@@ -57,6 +57,11 @@ async def get_code_quality_result(task_id: int, db: Session = Depends(get_db)) -
 @router.get("/{task_id}/code-quality-progress")
 async def get_code_quality_progress(task_id: int, db: Session = Depends(get_db)) -> dict:
     return ok(get_progress_response(db, task_id))
+
+
+@router.get("/{task_id}/code-quality-gate")
+async def get_code_quality_gate(task_id: int, db: Session = Depends(get_db)) -> dict:
+    return ok(get_push_gate_response(db, task_id))
 
 
 @router.get("/{task_id}")

@@ -461,14 +461,14 @@ Content-Type: application/json
 
 说明：
 
-- 该接口默认关闭，需设置 `CODE_QUALITY_REVIEW_ENABLED=true`。
+- 代码质量 AI Review 全局能力默认关闭。`CODE_QUALITY_REVIEW_ENABLED` 只作为兼容初始化值；已有数据库以设置页 / `reviewEnabled` 为准。
 - `OPENAI` 使用 Provider 配置中的 API Key 调用 OpenAI Responses API，并要求 `diffText`。
 - `ANTHROPIC` 使用 Provider 配置中的 API Key 调用 Anthropic Messages API，并要求 `diffText`。
 - `DEEPSEEK` 与 `CUSTOM` 使用 OpenAI-compatible Chat Completions API，并要求 `diffText`。
-- GitLab MR webhook 风险审查成功后，如果全局配置已开启且项目绑定 profile 的 `triggerOnMr=true`，系统会异步触发 AI Code Review，并将结果保存到同一个 `taskId` 下。
+- GitLab MR webhook 风险审查成功后，如果 `reviewEnabled=true` 且项目绑定的 AI Review 配置处于启用状态，系统会异步触发 AI Code Review，并将结果保存到同一个 `taskId` 下。
 - MR 自动 AI Review 启动后会先保存 `RUNNING` 结果，执行完成后更新为 `SUCCESS` 或 `FAILED`，前端可轮询本接口展示进度。
 - 所有 API Provider 自动触发都直接使用 MR diff 文本。
-- MR 自动 AI Review 还受全局开关 `mrAutoReviewEnabled` 控制。关闭后，新的 MR webhook 不会触发 AI Review；手动 Review 和重试不受该开关影响。
+- MR 自动 AI Review 受 `reviewEnabled` 全局能力开关和项目绑定 AI Review 配置的启用状态影响；设置页不再提供单独的 MR 自动触发开关。
 
 ### 7.2 查询代码质量 Review 结果
 
@@ -514,6 +514,7 @@ GET /api/review-tasks/{taskId}/code-quality-result
 说明：
 
 - `status=RUNNING` 时，`finishedAt`、`exitCode`、`rawOutput` 通常为空。
+- 任务存在但尚未创建 AI Review 结果时，接口返回 `200` 且 `data=null`，避免普通 Push / 被 Gate 拦截的任务在详情页产生 404 噪声。
 - 历史 `CODEX_CLI` 结果只作为历史 provider 字符串展示；新版本不再执行 Codex CLI，也不再对 Codex Markdown raw output 做运行时兜底解析。
 - 后端启动时会扫描超过超时阈值仍处于 `RUNNING` 的 AI Review，并标记为 `FAILED`，避免后端重启或 Codex 子进程丢失后页面永久卡住。
 
@@ -554,7 +555,54 @@ GET /api/review-tasks/{taskId}/code-quality-progress
 - API Provider 会记录请求构建、Provider 调用、响应摘要、解析和保存结果等阶段，敏感字段会脱敏或省略。
 - 重试 AI Review 会清空同一任务旧过程事件，并重新写入本轮过程。
 
-### 7.4 AI Review 设置与重试
+### 7.4 查询 Push 审核结论
+
+```http
+GET /api/review-tasks/{taskId}/code-quality-gate
+```
+
+响应 data：
+
+```json
+{
+  "taskId": 10003,
+  "projectId": 1,
+  "branchName": "feature/order-risk",
+  "decision": "ALLOWED",
+  "reasonCode": "RISK_MATCHED",
+  "reasonSummary": "Push 命中重点提醒或高风险变更，允许进入 AI Review。",
+  "aiReviewScheduled": true,
+  "profileCode": "backend-default-ai-review",
+  "provider": "DEEPSEEK",
+  "metrics": {
+    "changedFileCount": 12,
+    "diffBytes": 42000,
+    "commitCount": 4,
+    "riskLevel": "HIGH",
+    "focusRiskItemCount": 2,
+    "matchedChangeTypes": ["DB_SQL", "CACHE_KEY"],
+    "branch": "feature/order-risk",
+    "compareSource": "gitlab_compare_api"
+  },
+  "matchedRules": [
+    {
+      "code": "riskLevel",
+      "label": "风险等级 HIGH",
+      "matched": true
+    }
+  ],
+  "createdAt": "2026-05-21T10:00:00"
+}
+```
+
+说明：
+
+- GitLab Push webhook 会先按 AI Review 配置里的 `pushBranchPatterns` 做入口过滤；不匹配的分支直接返回 `SKIPPED`，不会创建审查任务。
+- 该接口用于解释已进入平台的 GitLab Push 为什么允许或不允许自动触发 AI Review。
+- 没有 Gate 记录时返回稳定空态，`decision` 为 `NOT_EVALUATED`，前端可展示“尚未进入 Push 审核”。
+- Push 审核只影响自动触发；用户点击“重试 AI Review”属于人工显式触发，不受 Gate 拦截。
+
+### 7.5 AI Review 设置与重试
 
 ```http
 GET /api/code-quality-reviews/settings
@@ -569,7 +617,7 @@ POST /api/code-quality-reviews/tasks/{taskId}/retry
 
 ```json
 {
-  "mrAutoReviewEnabled": false,
+  "reviewEnabled": true,
   "dingtalkNotificationEnabled": true,
   "defaultProviderCode": "DEEPSEEK"
 }
@@ -579,7 +627,7 @@ POST /api/code-quality-reviews/tasks/{taskId}/retry
 
 ```json
 {
-  "mrAutoReviewEnabled": false,
+  "reviewEnabled": true,
   "dingtalkNotificationEnabled": true,
   "defaultProviderCode": "DEEPSEEK",
   "updatedAt": "2026-05-09T00:10:00"
@@ -631,7 +679,7 @@ AI Review Provider 当前保持非流式 HTTP 请求；前端通过任务进度�
 }
 ```
 
-### 7.5 代码质量 Review Profile
+### 7.6 代码质量 Review Profile
 
 ```http
 GET /api/code-quality-review-profiles

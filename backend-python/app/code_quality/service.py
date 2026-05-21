@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from fnmatch import fnmatchcase
 import hashlib
 import os
 from typing import Any
@@ -14,14 +15,18 @@ from app.code_quality.providers import run_provider
 from app.code_quality.repository import (
     append_progress,
     delete_progress,
+    find_push_gate_decision,
     find_result_response,
     get_profile,
     get_provider,
     get_settings_record,
+    has_recent_allowed_push_gate,
     list_progress,
     list_provider_responses,
+    push_gate_to_dict,
     mark_stale_running_as_failed,
     reset_default_prompt,
+    save_push_gate_decision,
     save_result,
     set_default_provider,
     settings_to_dict,
@@ -31,7 +36,7 @@ from app.code_quality.repository import (
 )
 from app.core.database import SessionLocal
 from app.core.errors import AppError
-from app.core.json_utils import read_json
+from app.core.json_utils import read_json, read_json_array
 from app.notification.repository import list_webhooks
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.project_integration.repository import find_project_by_id
@@ -67,7 +72,7 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any]
 
 
 def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any]:
-    if not _enabled():
+    if not _enabled(db):
         raise AppError("BAD_REQUEST", "Code quality review is disabled", 400)
     project_id = request.get("projectId")
     if project_id is None:
@@ -189,7 +194,7 @@ def retry_review_task(db: Session, task_id: int) -> dict[str, Any]:
 
 
 def enqueue_retry_review(db: Session, task_id: int) -> dict[str, Any]:
-    if not _enabled():
+    if not _enabled(db):
         raise AppError("BAD_REQUEST", "Code quality review is disabled", 400)
     task = db.get(ReviewTask, task_id)
     if task is None:
@@ -281,18 +286,41 @@ def trigger_auto_review(
     focus_rule_codes: list[str] | None = None,
     notification_context: dict | None = None,
 ) -> bool:
-    if not _enabled():
-        return False
-    settings = get_settings_record(db)
-    if not settings.mr_auto_review_enabled:
-        return False
     task = db.get(ReviewTask, task_id)
-    if task is None or task.trigger_type != "GITLAB_MR_WEBHOOK":
+    if task is None:
+        return False
+    if not _enabled(db):
+        if task.trigger_type == "GITLAB_PUSH_WEBHOOK":
+            _save_push_gate_rejection(
+                db,
+                task=task,
+                changed_files=changed_files,
+                risk_card=risk_card,
+                focus_change_types=focus_change_types,
+                focus_rule_codes=focus_rule_codes,
+                reason_code="GLOBAL_DISABLED",
+                reason_summary="代码质量 AI Review 全局能力未启用，Push 不会进入 AI Review。",
+            )
+        return False
+    if task.trigger_type == "GITLAB_PUSH_WEBHOOK":
+        return _trigger_push_auto_review(
+            db,
+            task=task,
+            project=project,
+            changed_files=changed_files,
+            diff_text=diff_text,
+            rule_result_id=rule_result_id,
+            risk_card=risk_card,
+            focus_change_types=focus_change_types or [],
+            focus_rule_codes=focus_rule_codes or [],
+            notification_context=notification_context or {},
+        )
+    if task.trigger_type != "GITLAB_MR_WEBHOOK":
         return False
     if find_result_response(db, task_id) is not None:
         return False
     profile = _resolve_profile(db, None, project)
-    if not profile.enabled or not profile.trigger_on_mr:
+    if not profile.enabled:
         return False
     provider = _resolve_provider(db, project, profile)
     request = _build_review_request(
@@ -363,6 +391,122 @@ def trigger_auto_review(
     return True
 
 
+def _trigger_push_auto_review(
+    db: Session,
+    *,
+    task: ReviewTask,
+    project: Project,
+    changed_files: list[dict[str, Any]],
+    diff_text: str | None,
+    rule_result_id: int | None,
+    risk_card: dict | None,
+    focus_change_types: list[str],
+    focus_rule_codes: list[str],
+    notification_context: dict,
+) -> bool:
+    if find_result_response(db, task.id) is not None:
+        return False
+    profile = _resolve_profile(db, None, project)
+    if not profile.enabled or not profile.trigger_on_push:
+        _save_push_gate_rejection(
+            db,
+            task=task,
+            changed_files=changed_files,
+            risk_card=risk_card,
+            focus_change_types=focus_change_types,
+            focus_rule_codes=focus_rule_codes,
+            profile_code=profile.profile_code,
+            reason_code="PROFILE_DISABLED",
+            reason_summary="当前 AI Review Profile 未开启 Push 自动触发。",
+        )
+        return False
+    provider = _resolve_provider(db, project, profile)
+    gate = _evaluate_push_gate(
+        db,
+        task=task,
+        profile=profile,
+        provider_code=provider.provider_code,
+        changed_files=changed_files,
+        diff_text=diff_text,
+        risk_card=risk_card,
+        focus_change_types=focus_change_types,
+        focus_rule_codes=focus_rule_codes,
+    )
+    if gate["decision"] != "ALLOWED":
+        save_push_gate_decision(db, **gate)
+        return False
+
+    request_diff_text = diff_text or _diff_text(changed_files)
+    request = _build_review_request(
+        profile,
+        {
+            "mode": "DIFF_TEXT",
+            "baseRef": task.source_branch,
+            "commitSha": task.commit_sha,
+            "title": f"{task.trigger_type} {task.external_source_id or ''}".strip(),
+            "diffText": request_diff_text,
+            "changedFiles": [file.get("path") for file in changed_files if file.get("path")],
+        },
+    )
+    delete_progress(db, task.id)
+    append_progress(
+        db,
+        task.id,
+        "QUEUED",
+        "INFO",
+        "Push AI Review 已通过自动审核并进入队列",
+        f"reasonCode={gate['reason_code']}, provider={provider.provider_code}, profile={profile.profile_code}",
+    )
+    save_result(
+        db,
+        task_id=task.id,
+        project_id=project.id,
+        profile_code=profile.profile_code,
+        provider=provider.provider_code,
+        model=request.get("model") or provider.model_name,
+        result={
+            "status": "RUNNING",
+            "overallLevel": None,
+            "summary": None,
+            "findings": [],
+            "rawOutput": None,
+            "exitCode": None,
+            "errorMessage": None,
+            "startedAt": None,
+            "finishedAt": None,
+        },
+    )
+    gate["ai_review_scheduled"] = True
+    save_push_gate_decision(db, **gate)
+    if _inline_enabled():
+        result = _run_review(db, task.id, project, profile, provider, request)
+        _send_auto_review_notification(
+            db,
+            task.id,
+            result,
+            rule_result_id,
+            risk_card,
+            focus_change_types,
+            focus_rule_codes,
+            notification_context,
+        )
+    else:
+        _executor.submit(
+            run_auto_review_job,
+            task.id,
+            project.id,
+            profile.profile_code,
+            provider.provider_code,
+            request,
+            rule_result_id,
+            risk_card,
+            focus_change_types,
+            focus_rule_codes,
+            notification_context,
+        )
+    return True
+
+
 def run_auto_review_job(
     task_id: int,
     project_id: int,
@@ -401,6 +545,368 @@ def run_auto_review_job(
         db.commit()
     finally:
         db.close()
+
+
+def get_push_gate_response(db: Session, task_id: int) -> dict[str, Any]:
+    task = db.get(ReviewTask, task_id)
+    if task is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+    record = find_push_gate_decision(db, task_id)
+    if record is not None:
+        return push_gate_to_dict(record)
+    return {
+        "taskId": task_id,
+        "projectId": task.project_id,
+        "branchName": task.source_branch,
+        "decision": "NOT_EVALUATED",
+        "reasonCode": "NOT_EVALUATED",
+        "reasonSummary": "该任务尚未进入 Push AI Review 自动审核，或不是 GitLab Push 任务。",
+        "aiReviewScheduled": False,
+        "profileCode": None,
+        "provider": None,
+        "metrics": {},
+        "matchedRules": [],
+        "createdAt": None,
+        "updatedAt": None,
+    }
+
+
+def _save_push_gate_rejection(
+    db: Session,
+    *,
+    task: ReviewTask,
+    changed_files: list[dict[str, Any]],
+    risk_card: dict | None,
+    focus_change_types: list[str] | None,
+    focus_rule_codes: list[str] | None,
+    reason_code: str,
+    reason_summary: str,
+    profile_code: str | None = None,
+    provider: str | None = None,
+) -> None:
+    metrics, matched_rules = _push_gate_metrics_and_rules(
+        task=task,
+        changed_files=changed_files,
+        diff_text=None,
+        risk_card=risk_card,
+        focus_change_types=focus_change_types or [],
+        focus_rule_codes=focus_rule_codes or [],
+    )
+    save_push_gate_decision(
+        db,
+        task_id=task.id,
+        project_id=task.project_id,
+        branch_name=task.source_branch,
+        profile_code=profile_code,
+        provider=provider,
+        decision="REJECTED",
+        ai_review_scheduled=False,
+        reason_code=reason_code,
+        reason_summary=reason_summary,
+        metrics=metrics,
+        matched_rules=matched_rules,
+    )
+
+
+def _evaluate_push_gate(
+    db: Session,
+    *,
+    task: ReviewTask,
+    profile,
+    provider_code: str,
+    changed_files: list[dict[str, Any]],
+    diff_text: str | None,
+    risk_card: dict | None,
+    focus_change_types: list[str],
+    focus_rule_codes: list[str],
+) -> dict[str, Any]:
+    request_diff_text = diff_text or _diff_text(changed_files)
+    metrics, matched_rules = _push_gate_metrics_and_rules(
+        task=task,
+        changed_files=changed_files,
+        diff_text=request_diff_text,
+        risk_card=risk_card,
+        focus_change_types=focus_change_types,
+        focus_rule_codes=focus_rule_codes,
+    )
+    branch_matched = _branch_matches(task.source_branch, read_json_array(profile.push_branch_patterns))
+    matched_rules.append(
+        {
+            "code": "branch",
+            "label": f"分支 {task.source_branch or '-'}",
+            "matched": branch_matched,
+            "detail": ",".join(read_json_array(profile.push_branch_patterns)),
+        }
+    )
+    if not branch_matched:
+        return _push_gate_payload(
+            task,
+            profile.profile_code,
+            provider_code,
+            "REJECTED",
+            False,
+            "BRANCH_NOT_MATCHED",
+            "推送分支不在 Push AI Review 自动触发范围内。",
+            metrics,
+            matched_rules,
+        )
+
+    debounce_seconds = int(profile.push_debounce_seconds or 0)
+    debounced = has_recent_allowed_push_gate(
+        db,
+        project_id=task.project_id,
+        branch_name=task.source_branch,
+        task_id=task.id,
+        debounce_seconds=debounce_seconds,
+    )
+    matched_rules.append(
+        {
+            "code": "debounce",
+            "label": f"{debounce_seconds} 秒内同项目同分支仅触发一次",
+            "matched": not debounced,
+        }
+    )
+    if debounced:
+        return _push_gate_payload(
+            task,
+            profile.profile_code,
+            provider_code,
+            "REJECTED",
+            False,
+            "DEBOUNCED",
+            "同项目同分支近期已有 Push AI Review，本次自动拦截以避免频繁触发。",
+            metrics,
+            matched_rules,
+        )
+
+    diff_available = bool(request_diff_text.strip())
+    matched_rules.append({"code": "diffText", "label": "存在可审查 diff 文本", "matched": diff_available})
+    if not diff_available:
+        return _push_gate_payload(
+            task,
+            profile.profile_code,
+            provider_code,
+            "REJECTED",
+            False,
+            "NO_DIFF_TEXT",
+            "本次 Push 没有可提供给模型审查的 diff 文本，仅保留规则提醒结果。",
+            metrics,
+            matched_rules,
+        )
+
+    too_large = (
+        _over_limit(metrics["changedFileCount"], profile.push_max_changed_files)
+        or _over_limit(metrics["diffBytes"], profile.push_max_diff_bytes)
+    )
+    matched_rules.append(
+        {
+            "code": "hardLimit",
+            "label": "未超过 Push AI Review 硬上限",
+            "matched": not too_large,
+            "detail": f"files<={profile.push_max_changed_files}, diffBytes<={profile.push_max_diff_bytes}",
+        }
+    )
+    if too_large:
+        return _push_gate_payload(
+            task,
+            profile.profile_code,
+            provider_code,
+            "REJECTED",
+            False,
+            "DIFF_TOO_LARGE",
+            "本次 Push 超出 AI Review 自动触发硬上限，避免模型输入失控。",
+            metrics,
+            matched_rules,
+        )
+
+    risk_matched = _risk_matched(metrics)
+    large_change = (
+        _reaches_threshold(metrics["changedFileCount"], profile.push_min_changed_files)
+        or _reaches_threshold(metrics["diffBytes"], profile.push_min_diff_bytes)
+        or _reaches_threshold(metrics["commitCount"], profile.push_min_commit_count)
+    )
+    matched_rules.append({"code": "riskMatched", "label": "命中高风险或重点提醒", "matched": risk_matched})
+    matched_rules.append(
+        {
+            "code": "largeChange",
+            "label": "达到 Push 大变更阈值",
+            "matched": large_change,
+            "detail": f"files>={profile.push_min_changed_files}, diffBytes>={profile.push_min_diff_bytes}, commits>={profile.push_min_commit_count}",
+        }
+    )
+    if profile.trigger_only_when_risk_matched and not risk_matched:
+        return _push_gate_payload(
+            task,
+            profile.profile_code,
+            provider_code,
+            "REJECTED",
+            False,
+            "NOT_SIGNIFICANT",
+            "当前 Profile 要求必须命中重点风险，本次 Push 未达到自动 AI Review 条件。",
+            metrics,
+            matched_rules,
+        )
+    if risk_matched:
+        return _push_gate_payload(
+            task,
+            profile.profile_code,
+            provider_code,
+            "ALLOWED",
+            False,
+            "RISK_MATCHED",
+            "Push 命中重点提醒或高风险变更，允许进入 AI Review。",
+            metrics,
+            matched_rules,
+        )
+    if large_change:
+        return _push_gate_payload(
+            task,
+            profile.profile_code,
+            provider_code,
+            "ALLOWED",
+            False,
+            "LARGE_CHANGE",
+            "Push 达到大变更阈值，允许进入 AI Review。",
+            metrics,
+            matched_rules,
+        )
+    return _push_gate_payload(
+        task,
+        profile.profile_code,
+        provider_code,
+        "REJECTED",
+        False,
+        "NOT_SIGNIFICANT",
+        "本次 Push 未命中重点风险，也未达到大变更阈值。",
+        metrics,
+        matched_rules,
+    )
+
+
+def _push_gate_payload(
+    task: ReviewTask,
+    profile_code: str | None,
+    provider_code: str | None,
+    decision: str,
+    ai_review_scheduled: bool,
+    reason_code: str,
+    reason_summary: str,
+    metrics: dict[str, Any],
+    matched_rules: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "task_id": task.id,
+        "project_id": task.project_id,
+        "branch_name": task.source_branch,
+        "profile_code": profile_code,
+        "provider": provider_code,
+        "decision": decision,
+        "ai_review_scheduled": ai_review_scheduled,
+        "reason_code": reason_code,
+        "reason_summary": reason_summary,
+        "metrics": metrics,
+        "matched_rules": matched_rules,
+    }
+
+
+def _push_gate_metrics_and_rules(
+    *,
+    task: ReviewTask,
+    changed_files: list[dict[str, Any]],
+    diff_text: str | None,
+    risk_card: dict | None,
+    focus_change_types: list[str],
+    focus_rule_codes: list[str],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    risk_items = risk_card.get("riskItems") if isinstance(risk_card, dict) else []
+    if not isinstance(risk_items, list):
+        risk_items = []
+    focus_indicators = risk_card.get("focusIndicators") if isinstance(risk_card, dict) else []
+    if not isinstance(focus_indicators, list):
+        focus_indicators = []
+    matched_change_types = sorted(
+        {
+            item.get("category")
+            for item in risk_items
+            if isinstance(item, dict) and item.get("category")
+        }
+        | {
+            change_type
+            for indicator in focus_indicators
+            if isinstance(indicator, dict) and indicator.get("matched")
+            for change_type in (indicator.get("sourceChangeTypes") or [])
+        }
+    )
+    focus_risk_items = [
+        item
+        for item in risk_items
+        if isinstance(item, dict)
+        and (
+            item.get("category") in focus_change_types
+            or item.get("ruleCode") in focus_rule_codes
+            or item.get("riskLevel") in {"HIGH", "CRITICAL"}
+        )
+    ]
+    metrics = {
+        "changedFileCount": len(changed_files),
+        "diffBytes": len((diff_text or "").encode("utf-8")),
+        "commitCount": _push_commit_count(task, changed_files),
+        "riskLevel": risk_card.get("riskLevel") if isinstance(risk_card, dict) else None,
+        "focusRiskItemCount": len(focus_risk_items),
+        "matchedChangeTypes": matched_change_types,
+        "branch": task.source_branch,
+        "compareSource": _changed_files_source(changed_files),
+    }
+    matched_rules = [
+        {
+            "code": "riskLevel",
+            "label": f"风险等级 {metrics['riskLevel'] or '-'}",
+            "matched": metrics["riskLevel"] in {"HIGH", "CRITICAL"},
+        },
+        {
+            "code": "focusRiskItems",
+            "label": f"重点提醒 {metrics['focusRiskItemCount']} 条",
+            "matched": metrics["focusRiskItemCount"] > 0,
+        },
+    ]
+    return metrics, matched_rules
+
+
+def _push_commit_count(task: ReviewTask, changed_files: list[dict[str, Any]]) -> int:
+    for file in changed_files:
+        if isinstance(file, dict) and file.get("commitCount") is not None:
+            try:
+                return int(file["commitCount"])
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
+def _changed_files_source(changed_files: list[dict[str, Any]]) -> str | None:
+    for file in changed_files:
+        if isinstance(file, dict) and file.get("source"):
+            return str(file["source"])
+    return None
+
+
+def _branch_matches(branch_name: str | None, patterns: list[str]) -> bool:
+    if not patterns:
+        return True
+    if not branch_name:
+        return False
+    return any(fnmatchcase(branch_name, pattern) for pattern in patterns)
+
+
+def _over_limit(value: int, limit: int | None) -> bool:
+    return limit is not None and value > limit
+
+
+def _reaches_threshold(value: int, threshold: int | None) -> bool:
+    return threshold is not None and value >= threshold
+
+
+def _risk_matched(metrics: dict[str, Any]) -> bool:
+    return metrics.get("riskLevel") in {"HIGH", "CRITICAL"} or int(metrics.get("focusRiskItemCount") or 0) > 0
 
 
 def get_settings_response(db: Session) -> dict[str, Any]:
@@ -528,10 +1034,12 @@ def set_default_provider_response(db: Session, provider_code: str) -> dict[str, 
     return response
 
 
-def get_result_response(db: Session, task_id: int) -> dict[str, Any]:
+def get_result_response(db: Session, task_id: int) -> dict[str, Any] | None:
     result = find_result_response(db, task_id)
     if result is None:
-        raise AppError("RESOURCE_NOT_FOUND", f"Code quality review result not found: {task_id}", 404)
+        if db.get(ReviewTask, task_id) is None:
+            raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+        return None
     return result
 
 
@@ -542,8 +1050,6 @@ def get_progress_response(db: Session, task_id: int) -> list[dict[str, Any]]:
 
 
 def recover_stale_running_reviews_on_startup() -> None:
-    if not _enabled():
-        return
     from app.core.config import get_settings
 
     settings = get_settings()
@@ -554,6 +1060,8 @@ def recover_stale_running_reviews_on_startup() -> None:
     )
     db = SessionLocal()
     try:
+        if not _enabled(db):
+            return
         mark_stale_running_as_failed(db, timeout)
         db.commit()
     finally:
@@ -746,10 +1254,12 @@ def _join_instructions(profile_prompt: str | None, request_instructions: str | N
     return request_instructions or profile_prompt
 
 
-def _enabled() -> bool:
-    from app.core.config import get_settings
+def _enabled(db: Session | None = None) -> bool:
+    if db is None:
+        from app.core.config import get_settings
 
-    return get_settings().code_quality_review_enabled
+        return get_settings().code_quality_review_enabled
+    return bool(get_settings_record(db).review_enabled)
 
 
 def _inline_enabled() -> bool:

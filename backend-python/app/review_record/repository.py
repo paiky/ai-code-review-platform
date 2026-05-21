@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
@@ -51,19 +51,27 @@ def list_review_tasks(
     page_size = max(page_size, 1)
     filters = _filters(project_id, status, risk_level, keyword)
 
-    base = select(ReviewTask, Project, ReviewResult).join(Project, Project.id == ReviewTask.project_id).outerjoin(
-        ReviewResult, ReviewResult.task_id == ReviewTask.id
-    )
-    if filters:
-        base = base.where(and_(*filters))
-
     total_stmt = select(func.count()).select_from(ReviewTask).join(Project, Project.id == ReviewTask.project_id)
     if filters:
         total_stmt = total_stmt.where(and_(*filters))
     total = db.scalar(total_stmt) or 0
 
+    page_stmt = select(ReviewTask.id).join(Project, Project.id == ReviewTask.project_id)
+    if filters:
+        page_stmt = page_stmt.where(and_(*filters))
+    task_ids = db.scalars(
+        page_stmt.order_by(ReviewTask.created_at.desc()).limit(page_size).offset((page_no - 1) * page_size)
+    ).all()
+    if not task_ids:
+        return page_response([], page_no, page_size, total)
+
+    ordering = case({task_id: index for index, task_id in enumerate(task_ids)}, value=ReviewTask.id)
     rows = db.execute(
-        base.order_by(ReviewTask.created_at.desc()).limit(page_size).offset((page_no - 1) * page_size)
+        select(ReviewTask, Project, ReviewResult)
+        .join(Project, Project.id == ReviewTask.project_id)
+        .outerjoin(ReviewResult, ReviewResult.task_id == ReviewTask.id)
+        .where(ReviewTask.id.in_(task_ids))
+        .order_by(ordering)
     ).all()
     items = []
     for task, project, result in rows:

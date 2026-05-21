@@ -6,5 +6,9 @@ if not "%EXIT_CODE%"=="0" (
   echo Docker deploy package failed with exit code %EXIT_CODE%.
   echo Review the error output above.
   if not defined NO_PAUSE pause
+  exit /b %EXIT_CODE%
 )
+echo.
+echo Docker deploy package finished successfully.
+if not defined NO_PAUSE pause
 exit /b %EXIT_CODE%

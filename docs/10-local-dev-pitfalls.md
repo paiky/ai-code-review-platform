@@ -62,8 +62,8 @@ GitLab Push Hook 只有被推送的 `ref`，没有 MR 的 `source_branch` 和 `t
 处理方式：
 
 1. Push 展示应使用“推送分支：branch”或 `Push branch commit`，不要复用 MR 的 `source -> target`。
-2. 当前阶段已先跳过 `GITLAB_PUSH_WEBHOOK` 审查，避免 MR 合并后目标分支 push 造成重复审查。
-3. 后续若重新启用 Push 审查，应优先做项目级分支过滤，例如跳过 `main`、`master`、`release/*`、受保护分支等。
+2. 任务列表、任务详情、Gate 审核区都要保持相同语义：Push 展示 `sourceBranch` 作为推送分支，不展示不存在的 `targetBranch`。
+3. 当前 Push AI Review 已通过 Gate 控制自动触发，应优先依赖 Profile 的 `pushBranchPatterns` 过滤分支，例如只允许 `develop`、`feature/*`、`bugfix/*`、`hotfix/*`。
 
 ## 4. API Key / Provider 模式没有历史 CLI 的 stdout/stderr 调试链路
 
@@ -167,6 +167,13 @@ npm error Missing: @emnapi/runtime@1.10.0 from lock file
 1. 顶层前端依赖应固定明确版本，不要使用 `latest`。
 2. 修改依赖后执行 `npm install --package-lock-only --save-exact ...` 更新 lock。
 3. 打包脚本调用 Docker build / save / pull 后必须检查退出码，失败时立即退出，避免生成半成品离线包。
+4. 如果本机 npm 与 Dockerfile 使用的 `node:20-alpine` 内置 npm 版本不同，本机 `npm install --package-lock-only` 可能仍不能生成 Docker `npm ci` 需要的 peer 依赖锁定。此时用与 Dockerfile 一致的 Node 镜像更新 lock，例如：
+
+```powershell
+docker run --rm -v "${PWD}\frontend:/workspace/frontend" -w /workspace/frontend node:20-alpine sh -c "npm install --package-lock-only --ignore-scripts"
+```
+
+5. 不要把仅为满足 peer 解析的 `@emnapi/core` / `@emnapi/runtime` 手写进 `frontend/package.json` 顶层依赖；让 npm 在 `package-lock.json` 中记录 optional peer 即可。
 
 ## 8. PowerShell 默认编码可能把中文文档读成乱码
 
@@ -615,3 +622,137 @@ KEEP_IMAGE_VERSIONS=3 ./load-images.sh
 2. 确认至少存在一个已启用的 webhook，且 URL 保存成功。
 3. 如果页面已经配置但仍不生效，先确认当前容器是否已经升级到包含新 settings 接口响应的版本，再查看 `/api/code-quality-reviews/settings` 返回的 `dingtalkWebhooks`。
 4. 只有在数据库完全没有 webhook 配置时，才考虑是否仍命中了旧环境变量 fallback。
+
+## 26. 任务列表不要在排序分页时携带大 JSON 字段
+
+现象：
+
+访问任务列表接口返回 500：
+
+```text
+GET /api/review-tasks?pageNo=1&pageSize=20
+```
+
+后端直连复现可看到 MySQL 报错：
+
+```text
+Out of sort memory, consider increasing server sort buffer size
+```
+
+原因：
+
+任务列表查询如果直接 join `review_results` 并取出 `risk_card_json`、`change_analysis_json` 等大字段，再按 `review_tasks.created_at` 排序分页，MySQL 可能把大 JSON/TEXT 行一起放进排序缓冲区。数据多或卡片 JSON 较大时，即使只取 20 条，也可能触发 sort buffer 不足。
+
+处理方式：
+
+1. 列表接口先只基于 `review_tasks` 和必要过滤字段查询本页 `task_id`，完成排序和分页。
+2. 再按本页 `task_id` 查询项目、结果和提醒摘要，避免大 JSON 字段参与排序。
+3. 详情页和结果页仍可读取完整 JSON；列表页只拿必要摘要字段。
+
+## 27. Push 审查任务 rerun 不能复用 MR-only 入口
+
+现象：
+
+Push 类型任务点击“重新触发审阅”返回 400：
+
+```text
+POST /api/review-tasks/{taskId}/rerun
+```
+
+原因：
+
+早期 Python rerun 实现只允许 `GITLAB_MR_WEBHOOK`，并直接调用 MR webhook 处理函数。后来产品文档和前端已经把 rerun 定义为支持 GitLab MR / Push，但服务层仍保留 MR-only 判断，导致 Push 任务被错误拒绝。
+
+处理方式：
+
+1. rerun 允许 `GITLAB_MR_WEBHOOK` 和 `GITLAB_PUSH_WEBHOOK`。
+2. 基于保存的 `rawPayload.object_kind` 统一分发到 GitLab webhook 处理入口，而不是直接调用 MR-only 方法。
+3. 补充 Push rerun contract 测试，确认新任务仍是 `GITLAB_PUSH_WEBHOOK`。
+
+## 28. Push 自动已开但仍提示 AI Review 全局能力未启用
+
+现象：
+
+前端 Profile 中已经打开 `triggerOnPush`，重新触发 Push 审查后，任务详情页仍显示：
+
+```text
+代码质量 AI Review 全局能力未启用，Push 不会进入 AI Review。
+```
+
+同时访问普通 Push 任务的结果接口可能在后端日志里看到：
+
+```text
+GET /api/review-tasks/{taskId}/code-quality-result 404 Not Found
+```
+
+原因：
+
+`triggerOnPush` 只是 Profile 级 Push 自动触发开关；旧实现还有一个只能通过环境变量 `CODE_QUALITY_REVIEW_ENABLED` 控制的全局能力开关。用户在页面开启 Push 自动后，这个不可见总开关仍可能是关闭状态。对于被 Gate 拦截或未触发 AI Review 的 Push，前端详情页还会查询 AI Review 结果，旧结果接口用 404 表示“没有结果”，容易被误判成异常。
+
+处理方式：
+
+1. 将 AI Review 全局能力落到 `code_quality_review_settings.review_enabled`，设置页展示并保存 `reviewEnabled`。
+2. `CODE_QUALITY_REVIEW_ENABLED` 只作为兼容初始化值；已有数据库以设置页保存的 `reviewEnabled` 为准。
+3. `GET /api/review-tasks/{taskId}/code-quality-result` 对“任务存在但没有 AI Review 结果”的场景返回 `200` 且 `data=null`，只在任务本身不存在时返回 404。
+4. 已经保存为 `GLOBAL_DISABLED` 的旧 Push Gate 记录不会自动改写；开启全局能力后，需要重新触发一次审阅生成新任务，新的 Gate 才会按当前配置重新判定。
+
+## 29. Push 分支过滤要在任务创建前执行
+
+现象：
+
+GitLab 会把所有 Push 都推到 webhook，例如临时分支、个人分支、主干分支或不需要平台审查的分支。旧实现会先创建审查任务，再由 Push 审核层用 `BRANCH_NOT_MATCHED` 拦截 AI Review，导致任务列表仍被大量无效 Push 记录污染。
+
+原因：
+
+Push 审核层原本只负责“是否自动进入 AI Review”，不负责“是否进入平台审查流程”。如果分支限制放在 Gate 阶段，规则提醒、落库和通知等前置流程已经发生。
+
+处理方式：
+
+1. GitLab Push webhook 入口在创建 `review_tasks` 前读取项目绑定 AI Review 配置的 `pushBranchPatterns`。
+2. 分支不匹配时直接返回 `SKIPPED`，`taskId=null`，不创建审查任务、不拉 diff、不生成提醒卡片，也不触发通知或 AI Review。
+3. 允许分支进入平台后，Push 审核层继续负责 debounce、diff 可用性、硬上限、风险命中和大变更阈值等 AI Review 自动触发判定。
+
+## 30. Python 后端本地默认端口与前端代理必须同步
+
+现象：
+
+`scripts/run-backend-python.ps1` 改成本地默认 `18080` 后，后端能启动，但前端页面仍然请求 `8080`，表现为接口 404 / 代理失败 / 页面数据不刷新。或者相反，前端已经代理到 `18080`，但后端仍跑在 `8080`。
+
+原因：
+
+Python 后端本地脚本、`app.core.config` 默认端口、前端 `VITE_API_PROXY_TARGET` 默认值和 README 本地示例需要成组维护。只改其中一个会让开发环境出现“服务是好的，但前端打错端口”的假故障。
+
+处理方式：
+
+1. 本地 Python 后端默认端口使用 `18080`，避免常见的 `8080` 占用。
+2. `scripts/run-frontend.ps1` 默认代理到 `http://localhost:18080`。
+3. 如果当前 `18080` 已经有一个 Python 后端监听，重复启动第二个后端仍会端口冲突；先停掉旧进程，或显式传 `--port` 使用其他端口。
+4. Docker / 生产部署仍通过 `SERVER_PORT` / `BACKEND_PORT` 显式设置容器内端口，不依赖本地脚本默认值。
+
+## 31. Windows WMI / CIM 查询异常会卡住 Python 后端启动
+
+现象：
+
+```text
+.\scripts\run-backend-python.ps1 dev
+```
+
+长时间没有继续启动。用 `faulthandler` 诊断时可能看到 Python 卡在：
+
+```text
+platform.py -> _wmi_query
+platform.machine()
+sqlalchemy.util.compat
+```
+
+同时 `Get-CimInstance Win32_OperatingSystem` 也可能长期不返回。
+
+原因：
+
+Python 3.12 的 `platform` 模块在 Windows 上会优先调用 WMI 查询系统信息。本机 WMI / CIM 服务异常或查询阻塞时，`platform.system()`、`platform.machine()` 以及依赖它们的 `uvicorn` / `sqlalchemy` 导入链路都会卡住，看起来像是启动脚本没有执行。
+
+处理方式：
+
+1. `scripts/run-backend-python.ps1` 会为后端启动设置 `AI_REVIEW_SKIP_PYTHON_WMI=1`，并把 `backend-python/` 加入子进程 `PYTHONPATH`，确保 Python 启动阶段自动加载本项目的 `sitecustomize.py`。
+2. `backend-python/sitecustomize.py` 在该变量开启且当前是 Windows 时，让 Python `platform` 模块跳过 WMI，并使用标准库已有的 registry / env fallback。
+3. 这只是本项目本地启动的兼容保护；如果 PowerShell 中 `Get-CimInstance Win32_OperatingSystem` 也会卡住，仍建议后续修复本机 WMI / CIM 服务状态。

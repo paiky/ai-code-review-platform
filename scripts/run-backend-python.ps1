@@ -37,6 +37,21 @@ function Import-DotEnvIfPresent {
     }
 }
 
+function Enable-BackendPythonStartupHooks {
+    $env:AI_REVIEW_SKIP_PYTHON_WMI = "1"
+
+    if ([string]::IsNullOrWhiteSpace($env:PYTHONPATH)) {
+        $env:PYTHONPATH = $backendDir
+        return
+    }
+
+    $pathSeparator = [System.IO.Path]::PathSeparator
+    $pythonPaths = $env:PYTHONPATH -split [regex]::Escape([string] $pathSeparator)
+    if ($pythonPaths -notcontains $backendDir) {
+        $env:PYTHONPATH = "$backendDir$pathSeparator$env:PYTHONPATH"
+    }
+}
+
 function Resolve-PythonCommand {
     $venvPython = Join-Path $backendDir ".venv\Scripts\python.exe"
     if (Test-Path $venvPython) {
@@ -105,6 +120,7 @@ if (-not (Test-Path $backendDir)) {
 }
 
 Import-DotEnvIfPresent $localGitLabEnv
+Enable-BackendPythonStartupHooks
 
 $pythonCommand = Resolve-PythonCommand
 $command = "dev"
@@ -133,7 +149,7 @@ try {
         "dev" {
             $port = $env:SERVER_PORT
             if ([string]::IsNullOrWhiteSpace($port)) {
-                $port = "8080"
+                $port = "18080"
             }
             $resolvedDev = Resolve-DevPort -CommandArgs $remainingArgs -DefaultPort $port
             Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", $resolvedDev.Port, "--reload") + $resolvedDev.RemainingArgs)

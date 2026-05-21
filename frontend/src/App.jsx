@@ -9,6 +9,7 @@ import {
   Divider,
   Empty,
   Input,
+  InputNumber,
   Layout,
   message,
   Row,
@@ -19,6 +20,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Timeline,
   Typography
 } from 'antd';
 import {
@@ -184,6 +186,27 @@ function taskTypeLabel(value) {
   if (value === 'GITLAB_PUSH_WEBHOOK') return 'Push';
   if (value === 'CODE_QUALITY_MANUAL') return '手动';
   return value || '-';
+}
+
+function taskTitle(detail) {
+  if (!detail) return '-';
+  if (detail.triggerType === 'GITLAB_PUSH_WEBHOOK') {
+    return `${detail.projectName} Push ${detail.commitSha ? detail.commitSha.slice(0, 8) : ''}`.trim();
+  }
+  if (detail.triggerType === 'GITLAB_MR_WEBHOOK') return `${detail.projectName} MR !${detail.mrId || '-'}`;
+  return `${detail.projectName} ${taskTypeLabel(detail.triggerType)}`;
+}
+
+function branchSummary(detail) {
+  if (!detail) return '-';
+  if (detail.triggerType === 'GITLAB_PUSH_WEBHOOK') return `推送分支：${detail.sourceBranch || '-'}`;
+  return `${detail.sourceBranch || '-'} -> ${detail.targetBranch || '-'}`;
+}
+
+function taskListBranchText(row) {
+  if (!row) return '-';
+  if (row.triggerType === 'GITLAB_PUSH_WEBHOOK') return `推送分支：${row.sourceBranch || '-'}`;
+  return `${row.sourceBranch || '-'} -> ${row.targetBranch || '-'}`;
 }
 
 function cleanAiMarkdown(text) {
@@ -384,7 +407,7 @@ function TaskList({ onOpen }) {
     { title: 'ID', dataIndex: 'id', width: 80 },
     { title: '项目', dataIndex: 'projectName', ellipsis: true },
     { title: '类型', dataIndex: 'triggerType', width: 90, render: value => <Tag>{taskTypeLabel(value)}</Tag> },
-    { title: '分支', width: 260, render: (_, row) => <Text>{row.sourceBranch || '-'}{' -> '}{row.targetBranch || '-'}</Text> },
+    { title: '分支', width: 260, render: (_, row) => <Text>{taskListBranchText(row)}</Text> },
     { title: '状态', dataIndex: 'status', width: 110, render: value => <Tag color={statusColor(value)}>{value || '-'}</Tag> },
     { title: '重点变更', dataIndex: 'focusIndicators', width: 240, render: value => <FocusIndicatorTags indicators={value} muted /> },
     { title: '提醒项', dataIndex: 'riskItemCount', width: 90, render: value => value ?? 0 },
@@ -897,6 +920,113 @@ function CodeQualityProgressView({ progress }) {
   );
 }
 
+function gateDecisionColor(value) {
+  if (value === 'ALLOWED') return 'green';
+  if (value === 'REJECTED') return 'red';
+  return 'default';
+}
+
+function gateDecisionLabel(value) {
+  switch (value) {
+    case 'ALLOWED':
+      return '已放行';
+    case 'REJECTED':
+      return '已拦截';
+    case 'NOT_EVALUATED':
+      return '未审核';
+    default:
+      return value || '-';
+  }
+}
+
+function gateReasonLabel(value) {
+  const labels = {
+    RISK_MATCHED: '命中重点风险',
+    LARGE_CHANGE: '大变更',
+    BRANCH_NOT_MATCHED: '分支不匹配',
+    DEBOUNCED: '频率保护',
+    DIFF_TOO_LARGE: '超过硬上限',
+    NO_DIFF_TEXT: '无可审查 diff',
+    PROFILE_DISABLED: 'Profile 未开启',
+    GLOBAL_DISABLED: '全局未开启',
+    NOT_SIGNIFICANT: '未达到阈值',
+    NOT_EVALUATED: '未审核'
+  };
+  return labels[value] || value || '-';
+}
+
+function CodeQualityGateView({ gate, detail }) {
+  const metrics = gate?.metrics || {};
+  const matchedRules = Array.isArray(gate?.matchedRules) ? gate.matchedRules : [];
+  if (!gate || gate.decision === 'NOT_EVALUATED') {
+    return (
+      <Card>
+        <Empty description={detail?.triggerType === 'GITLAB_PUSH_WEBHOOK' ? '暂无 Push 审核记录' : '该任务未进入 Push 审核'} />
+      </Card>
+    );
+  }
+  const ruleColumns = [
+    { title: '规则', dataIndex: 'label', ellipsis: true },
+    {
+      title: '结果',
+      dataIndex: 'matched',
+      width: 110,
+      render: value => <Tag color={value ? 'green' : 'default'}>{value ? '通过/命中' : '未通过'}</Tag>
+    },
+    { title: '详情', dataIndex: 'detail', ellipsis: true, render: value => value || '-' }
+  ];
+  return (
+    <Space direction="vertical" size="large" className="full-width">
+      <Card>
+        <Space direction="vertical" size="middle" className="full-width">
+          <Space wrap>
+            <Tag color={gateDecisionColor(gate.decision)}>{gateDecisionLabel(gate.decision)}</Tag>
+            <Tag>{gateReasonLabel(gate.reasonCode)}</Tag>
+            {gate.aiReviewScheduled ? <Tag color="green">已进入 AI Review</Tag> : <Tag>未进入 AI Review</Tag>}
+          </Space>
+          <Alert
+            type={gate.decision === 'ALLOWED' ? 'success' : 'warning'}
+            showIcon
+            message={gate.reasonSummary || gateReasonLabel(gate.reasonCode)}
+          />
+          <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
+            <Descriptions.Item label="Profile">{gate.profileCode || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Provider">{gate.provider || '-'}</Descriptions.Item>
+            <Descriptions.Item label="推送分支">{gate.branchName || '-'}</Descriptions.Item>
+            <Descriptions.Item label="审核时间">{gate.createdAt || '-'}</Descriptions.Item>
+          </Descriptions>
+        </Space>
+      </Card>
+      <Card title="审核指标">
+        <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
+          <Descriptions.Item label="文件数">{metrics.changedFileCount ?? '-'}</Descriptions.Item>
+          <Descriptions.Item label="Diff 字节">{metrics.diffBytes ?? '-'}</Descriptions.Item>
+          <Descriptions.Item label="Commit 数">{metrics.commitCount ?? '-'}</Descriptions.Item>
+          <Descriptions.Item label="提醒风险">{metrics.riskLevel || '-'}</Descriptions.Item>
+          <Descriptions.Item label="重点提醒数">{metrics.focusRiskItemCount ?? '-'}</Descriptions.Item>
+          <Descriptions.Item label="Diff 来源">{metrics.compareSource || '-'}</Descriptions.Item>
+          <Descriptions.Item label="命中类型" span={3}>
+            <Space wrap>
+              {(metrics.matchedChangeTypes || []).length > 0
+                ? metrics.matchedChangeTypes.map(type => <Tag key={type}>{changeTypeLabel(type)}</Tag>)
+                : <Text type="secondary">-</Text>}
+            </Space>
+          </Descriptions.Item>
+        </Descriptions>
+      </Card>
+      <Card title="判定规则">
+        <Table
+          rowKey={(row, index) => `${row.code}-${index}`}
+          size="small"
+          columns={ruleColumns}
+          dataSource={matchedRules}
+          pagination={false}
+        />
+      </Card>
+    </Space>
+  );
+}
+
 function CodeQualityReviewView({ review, progress, onRetry, retrying }) {
   if (!review) {
     return (
@@ -992,6 +1122,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   const [result, setResult] = useState(null);
   const [codeQualityResult, setCodeQualityResult] = useState(null);
   const [codeQualityProgress, setCodeQualityProgress] = useState([]);
+  const [codeQualityGate, setCodeQualityGate] = useState(null);
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [rerunning, setRerunning] = useState(false);
@@ -1014,6 +1145,12 @@ function TaskDetail({ taskId, onBack, onOpen }) {
         setCodeQualityResult(qualityResult);
       } catch {
         setCodeQualityResult(null);
+      }
+      try {
+        const gate = await fetchApi(`/api/review-tasks/${taskId}/code-quality-gate`);
+        setCodeQualityGate(gate);
+      } catch {
+        setCodeQualityGate(null);
       }
       try {
         const progress = await fetchApi(`/api/review-tasks/${taskId}/code-quality-progress`);
@@ -1089,10 +1226,13 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 
   const tabItems = useMemo(() => [
     { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewView review={codeQualityResult} progress={codeQualityProgress} onRetry={retryCodeQualityReview} retrying={retrying} /> },
+    ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
+      ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
+      : []),
     { key: 'risk', label: '提醒卡片', children: <RiskCardView riskCard={result?.riskCard} /> },
     { key: 'analysis', label: '分析结果', children: <AnalysisView changeAnalysis={result?.changeAnalysis} /> },
     { key: 'event', label: '原始事件摘要', children: <Row gutter={[16, 16]}><Col xs={24} lg={12}><Card title="changedFiles 摘要"><JsonBlock value={detail?.changedFilesSummary} /></Card></Col><Col xs={24} lg={12}><Card title="raw payload"><JsonBlock value={detail?.rawPayload} /></Card></Col></Row> }
-  ], [detail, result, codeQualityResult, codeQualityProgress, retrying]);
+  ], [detail, result, codeQualityResult, codeQualityProgress, codeQualityGate, retrying]);
 
   return (
     <div className="page-shell">
@@ -1115,8 +1255,8 @@ function TaskDetail({ taskId, onBack, onOpen }) {
             <Card>
               <div className="detail-title-row">
                 <div>
-                  <Title level={3}>{detail.projectName} MR !{detail.mrId}</Title>
-                  <Text type="secondary">{detail.sourceBranch || '-'}{' -> '}{detail.targetBranch || '-'}</Text>
+                  <Title level={3}>{taskTitle(detail)}</Title>
+                  <Text type="secondary">{branchSummary(detail)}</Text>
                 </div>
                 <Space>
                   <Tag color={statusColor(detail.status)}>{detail.status}</Tag>
@@ -1184,7 +1324,7 @@ function TemplateConfig() {
       const nextSelectedTemplateCode = selectedTemplateCode || templateItems.find(item => item.templateCode === 'backend-default')?.templateCode || templateItems[0]?.templateCode || null;
       setAiSettings(settingsData);
       setSettingsDraft({
-        mrAutoReviewEnabled: settingsData?.mrAutoReviewEnabled ?? true,
+        reviewEnabled: settingsData?.reviewEnabled ?? false,
         dingtalkNotificationEnabled: settingsData?.dingtalkNotificationEnabled ?? true,
         dingtalkWebhooks: (settingsData?.dingtalkWebhooks || []).map(item => ({ ...item }))
       });
@@ -1302,7 +1442,7 @@ function TemplateConfig() {
       const settings = await fetchApi('/api/code-quality-reviews/settings', {
         method: 'PUT',
         body: JSON.stringify({
-          mrAutoReviewEnabled: settingsDraft.mrAutoReviewEnabled,
+          reviewEnabled: settingsDraft.reviewEnabled,
           dingtalkNotificationEnabled: settingsDraft.dingtalkNotificationEnabled,
           dingtalkWebhooks: settingsDraft.dingtalkWebhooks.map(item => ({
             id: item.id || undefined,
@@ -1315,7 +1455,7 @@ function TemplateConfig() {
       });
       setAiSettings(settings);
       setSettingsDraft({
-        mrAutoReviewEnabled: settings?.mrAutoReviewEnabled ?? true,
+        reviewEnabled: settings?.reviewEnabled ?? false,
         dingtalkNotificationEnabled: settings?.dingtalkNotificationEnabled ?? true,
         dingtalkWebhooks: (settings?.dingtalkWebhooks || []).map(item => ({ ...item }))
       });
@@ -1455,13 +1595,23 @@ function TemplateConfig() {
         body: JSON.stringify({
           providerCode: profileDraft.providerCode || null,
           reviewInstructions: profileDraft.reviewInstructions,
-          model: profileDraft.model
+          model: profileDraft.model,
+          triggerOnManual: profileDraft.triggerOnManual,
+          triggerOnPush: profileDraft.triggerOnPush,
+          pushBranchPatterns: profileDraft.pushBranchPatterns || [],
+          pushMinChangedFiles: profileDraft.pushMinChangedFiles ?? null,
+          pushMinDiffBytes: profileDraft.pushMinDiffBytes ?? null,
+          pushMinCommitCount: profileDraft.pushMinCommitCount ?? null,
+          pushMaxChangedFiles: profileDraft.pushMaxChangedFiles ?? null,
+          pushMaxDiffBytes: profileDraft.pushMaxDiffBytes ?? null,
+          pushDebounceSeconds: profileDraft.pushDebounceSeconds ?? null,
+          triggerOnlyWhenRiskMatched: profileDraft.triggerOnlyWhenRiskMatched
         })
       });
       setProfiles(current => current.map(item => item.profileCode === updated.profileCode ? updated : item));
       setProfileDraft(updated);
       setPromptPreview(null);
-      messageApi.success('AI Review Profile 已保存');
+      messageApi.success('AI Review 配置已保存');
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -1518,11 +1668,11 @@ function TemplateConfig() {
   const selectedNotificationRule = notificationRuleItems.find(rule => rule.ruleCode === selectedNotificationRuleCode) || notificationRuleItems[0] || null;
   const notificationRulesDirty = JSON.stringify(notificationRuleDraftCodes) !== JSON.stringify(notificationRules?.focusRuleCodes || []);
   const settingsDirty = JSON.stringify({
-    mrAutoReviewEnabled: settingsDraft?.mrAutoReviewEnabled ?? true,
+    reviewEnabled: settingsDraft?.reviewEnabled ?? false,
     dingtalkNotificationEnabled: settingsDraft?.dingtalkNotificationEnabled ?? true,
     dingtalkWebhooks: settingsDraft?.dingtalkWebhooks || []
   }) !== JSON.stringify({
-    mrAutoReviewEnabled: aiSettings?.mrAutoReviewEnabled ?? true,
+    reviewEnabled: aiSettings?.reviewEnabled ?? false,
     dingtalkNotificationEnabled: aiSettings?.dingtalkNotificationEnabled ?? true,
     dingtalkWebhooks: aiSettings?.dingtalkWebhooks || []
   });
@@ -1533,8 +1683,8 @@ function TemplateConfig() {
       key: 'global-settings',
       label: (
         <Space wrap>
-          <Text strong>AI Review 全局设置</Text>
-          <Tag color={(settingsDraft?.mrAutoReviewEnabled ?? true) ? 'green' : 'default'}>MR 自动 {(settingsDraft?.mrAutoReviewEnabled ?? true) ? '开启' : '关闭'}</Tag>
+          <Text strong>全局设置</Text>
+          <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(settingsDraft?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
           <Tag color={(settingsDraft?.dingtalkNotificationEnabled ?? true) ? 'blue' : 'default'}>钉钉 {(settingsDraft?.dingtalkNotificationEnabled ?? true) ? '开启' : '关闭'}</Tag>
           <Tag>{configuredWebhookCount} 个 webhook</Tag>
         </Space>
@@ -1548,17 +1698,17 @@ function TemplateConfig() {
           <Space direction="vertical" size="middle" className="global-settings-stack">
             <div className="global-setting-field">
               <div className="settings-inline-head">
-                <Text strong>GitLab MR 自动触发 AI Review</Text>
+                <Text strong>代码质量 AI Review 全局能力</Text>
                 <Switch
-                  checked={settingsDraft?.mrAutoReviewEnabled ?? true}
+                  checked={settingsDraft?.reviewEnabled ?? false}
                   loading={settingsSaving}
                   checkedChildren="开启"
                   unCheckedChildren="关闭"
-                  onChange={checked => updateSettingsDraft('mrAutoReviewEnabled', checked)}
+                  onChange={checked => updateSettingsDraft('reviewEnabled', checked)}
                 />
               </div>
               <Text type="secondary" className="settings-description">
-                关闭后，新的 MR webhook 仍会执行规则风险审查，但不会启动代码质量 Review。
+                关闭后，手动触发、MR 和 Push 自动流程都不会调用模型；规则提醒与落库仍正常执行。
               </Text>
             </div>
             <div className="global-setting-field">
@@ -1835,7 +1985,7 @@ function TemplateConfig() {
       key: 'profile-settings',
       label: (
         <Space wrap>
-          <Text strong>AI Review Profile</Text>
+          <Text strong>AI Review 配置</Text>
           {selectedProfileCode && <Tag>{selectedProfileCode}</Tag>}
         </Space>
       ),
@@ -1884,14 +2034,95 @@ function TemplateConfig() {
                       />
                     </Col>
                     <Col xs={24}>
-                      <Descriptions size="small" column={{ xs: 1, md: 2 }}>
-                        <Descriptions.Item label="MR 自动">{profileDraft.triggerOnMr ? '开启' : '关闭'}</Descriptions.Item>
-                        <Descriptions.Item label="手动触发">{profileDraft.triggerOnManual ? '开启' : '关闭'}</Descriptions.Item>
-                      </Descriptions>
+                      <Space wrap size="large">
+                        <Space>
+                          <Text strong>手动触发</Text>
+                          <Switch checked={profileDraft.triggerOnManual} onChange={checked => updateProfileDraft('triggerOnManual', checked)} />
+                        </Space>
+                        <Space>
+                          <Text strong>Push 自动</Text>
+                          <Switch checked={profileDraft.triggerOnPush} onChange={checked => updateProfileDraft('triggerOnPush', checked)} />
+                        </Space>
+                        <Space>
+                          <Text strong>仅风险命中</Text>
+                          <Switch checked={profileDraft.triggerOnlyWhenRiskMatched} onChange={checked => updateProfileDraft('triggerOnlyWhenRiskMatched', checked)} />
+                        </Space>
+                      </Space>
                     </Col>
                   </Row>
                 </Col>
               </Row>
+              <div className="settings-subsection">
+                <Space direction="vertical" size="middle" className="full-width">
+                  <Text strong>Push 审核策略</Text>
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24}>
+                      <Text strong>允许分支</Text>
+                      <Select
+                        mode="tags"
+                        className="full-width prompt-field"
+                        value={profileDraft.pushBranchPatterns || []}
+                        onChange={value => updateProfileDraft('pushBranchPatterns', value)}
+                        placeholder="例如 feature/*、bugfix/*、hotfix/*"
+                      />
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Text strong>最小文件数</Text>
+                      <InputNumber
+                        className="full-width prompt-field"
+                        min={0}
+                        value={profileDraft.pushMinChangedFiles}
+                        onChange={value => updateProfileDraft('pushMinChangedFiles', value)}
+                      />
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Text strong>最小 Diff 字节</Text>
+                      <InputNumber
+                        className="full-width prompt-field"
+                        min={0}
+                        value={profileDraft.pushMinDiffBytes}
+                        onChange={value => updateProfileDraft('pushMinDiffBytes', value)}
+                      />
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Text strong>最小 Commit 数</Text>
+                      <InputNumber
+                        className="full-width prompt-field"
+                        min={0}
+                        value={profileDraft.pushMinCommitCount}
+                        onChange={value => updateProfileDraft('pushMinCommitCount', value)}
+                      />
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Text strong>最大文件数</Text>
+                      <InputNumber
+                        className="full-width prompt-field"
+                        min={0}
+                        value={profileDraft.pushMaxChangedFiles}
+                        onChange={value => updateProfileDraft('pushMaxChangedFiles', value)}
+                      />
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Text strong>最大 Diff 字节</Text>
+                      <InputNumber
+                        className="full-width prompt-field"
+                        min={0}
+                        value={profileDraft.pushMaxDiffBytes}
+                        onChange={value => updateProfileDraft('pushMaxDiffBytes', value)}
+                      />
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Text strong>Debounce 秒数</Text>
+                      <InputNumber
+                        className="full-width prompt-field"
+                        min={0}
+                        value={profileDraft.pushDebounceSeconds}
+                        onChange={value => updateProfileDraft('pushDebounceSeconds', value)}
+                      />
+                    </Col>
+                  </Row>
+                </Space>
+              </div>
               <Row gutter={[16, 16]}>
                 <Col xs={24}>
                   <Text strong>Review Instructions</Text>
@@ -1923,7 +2154,7 @@ function TemplateConfig() {
               )}
             </Space>
           ) : (
-            <Empty description="暂无 AI Review Profile" />
+            <Empty description="暂无 AI Review 配置" />
           )}
         </Card>
       )

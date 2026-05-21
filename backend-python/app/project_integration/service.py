@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from fnmatch import fnmatchcase
 import json
 from typing import Any
 
@@ -8,8 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.change_analysis.service import analyze_changes
 from app.code_quality.service import trigger_auto_review
-from app.code_quality.repository import get_settings_record
+from app.code_quality.repository import DEFAULT_PROFILE_CODE, get_profile, get_settings_record
 from app.core.errors import AppError
+from app.core.json_utils import read_json_array
 from app.notification.service import send_risk_card
 from app.project_integration import gitlab_client
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent
@@ -119,6 +121,24 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
     repository_url = project.get("web_url") or (payload.get("repository") or {}).get("homepage") or (payload.get("repository") or {}).get("git_http_url")
     event = _parse_push_event(payload, git_project_id, project_name, repository_url)
     project_record = upsert_gitlab_project(db, git_project_id, project_name, repository_url)
+    branch_gate = _push_webhook_branch_gate(db, project_record, event["branchName"])
+    if not branch_gate["allowed"]:
+        db.commit()
+        return {
+            "taskId": None,
+            "status": "SKIPPED",
+            "gitProjectId": git_project_id,
+            "projectName": project_name,
+            "mrId": None,
+            "branchName": event["branchName"],
+            "reasonCode": "PUSH_BRANCH_NOT_ALLOWED",
+            "message": (
+                "GitLab Push branch is not configured in AI Review Profile pushBranchPatterns; "
+                "platform review flow was skipped."
+            ),
+            "profileCode": branch_gate["profileCode"],
+            "pushBranchPatterns": branch_gate["patterns"],
+        }
     task = create_review_task(
         db,
         project_id=project_record.id,
@@ -325,6 +345,17 @@ def _parse_push_event(
     }
 
 
+def _push_webhook_branch_gate(db: Session, project_record, branch_name: str | None) -> dict[str, Any]:
+    profile_code = project_record.default_code_quality_profile_code or DEFAULT_PROFILE_CODE
+    profile = get_profile(db, profile_code)
+    patterns = read_json_array(profile.push_branch_patterns)
+    return {
+        "allowed": _branch_matches(branch_name, patterns),
+        "profileCode": profile.profile_code,
+        "patterns": patterns,
+    }
+
+
 def _is_opened_mr(event: dict) -> bool:
     state = _nested(event["rawPayload"], "object_attributes", "state") or _nested(
         event["rawPayload"], "object_attributes", "state_name"
@@ -352,6 +383,9 @@ def _build_push_changed_files_summary(payload: dict[str, Any]) -> dict:
     changed_files = payload.get("changedFiles") or payload.get("changed_files")
     if isinstance(changed_files, list):
         files = [_normalize_changed_file(file_node) for file_node in changed_files]
+        for file in files:
+            file["source"] = "payload"
+            file["commitCount"] = len(payload.get("commits") or [])
         return {
             "count": len(files),
             "source": "payload",
@@ -370,6 +404,9 @@ def _build_push_changed_files_summary(payload: dict[str, Any]) -> dict:
             _add_commit_files(files_by_path, commit.get("added"), "ADDED")
             _add_commit_files(files_by_path, commit.get("modified"), "MODIFIED")
             _add_commit_files(files_by_path, commit.get("removed"), "DELETED")
+    for file in files_by_path.values():
+        file["source"] = "push_payload"
+        file["commitCount"] = len(commits) if isinstance(commits, list) else 0
     return {
         "count": len(files_by_path),
         "source": "push_payload",
@@ -383,6 +420,8 @@ def _build_push_changed_files_summary(payload: dict[str, Any]) -> dict:
 
 def _build_gitlab_changed_files_summary(diff_files: list[dict[str, Any]], source: str) -> dict:
     files = [_normalize_gitlab_diff_file(diff_file) for diff_file in diff_files]
+    for file in files:
+        file["source"] = source
     return {"count": len(files), "source": source, "files": files}
 
 
@@ -472,6 +511,14 @@ def _branch_name(ref: str | None) -> str | None:
         return None
     prefix = "refs/heads/"
     return ref[len(prefix) :] if ref.startswith(prefix) else ref
+
+
+def _branch_matches(branch_name: str | None, patterns: list[str]) -> bool:
+    if not patterns:
+        return True
+    if not branch_name:
+        return False
+    return any(fnmatchcase(branch_name, pattern) for pattern in patterns)
 
 
 def _build_commit_url(repository_url: str | None, after_sha: str | None) -> str | None:

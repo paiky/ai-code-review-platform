@@ -25,6 +25,9 @@ class CodeQualityReviewProfile(Base):
     enabled_categories: Mapped[str] = mapped_column(Text, nullable=False)
     ignored_paths: Mapped[str] = mapped_column(Text, nullable=False)
     push_branch_patterns: Mapped[str] = mapped_column(Text, nullable=False)
+    push_min_changed_files: Mapped[int | None] = mapped_column(Integer)
+    push_min_diff_bytes: Mapped[int | None] = mapped_column(Integer)
+    push_min_commit_count: Mapped[int | None] = mapped_column(Integer)
     push_max_changed_files: Mapped[int | None] = mapped_column(Integer)
     push_max_diff_bytes: Mapped[int | None] = mapped_column(Integer)
     push_debounce_seconds: Mapped[int | None] = mapped_column(Integer)
@@ -42,6 +45,7 @@ class CodeQualityReviewSettings(Base):
     __tablename__ = "code_quality_review_settings"
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     mr_auto_review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     dingtalk_notification_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     review_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="DEEPSEEK")
@@ -102,3 +106,22 @@ class CodeQualityReviewProgressEvent(Base):
     message: Mapped[str] = mapped_column(String(512), nullable=False)
     detail: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[object | None] = mapped_column(DateTime)
+
+
+class CodeQualityPushReviewGateDecision(Base):
+    __tablename__ = "code_quality_push_review_gate_decisions"
+
+    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    task_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    branch_name: Mapped[str | None] = mapped_column(String(255))
+    profile_code: Mapped[str | None] = mapped_column(String(64))
+    provider: Mapped[str | None] = mapped_column(String(64))
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    ai_review_scheduled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason_summary: Mapped[str] = mapped_column(String(512), nullable=False)
+    metrics_json: Mapped[str] = mapped_column(Text, nullable=False)
+    matched_rules_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[object | None] = mapped_column(DateTime)
+    updated_at: Mapped[object | None] = mapped_column(DateTime)
