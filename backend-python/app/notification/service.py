@@ -23,9 +23,19 @@ def send_risk_card(
     dingtalk_notification_enabled: bool | None = None,
     focus_rule_codes: list[str] | None = None,
 ) -> dict:
+    notification_card = filter_risk_card(risk_card, focus_change_types, focus_rule_codes)
+    if _event_label(context) == "Push" and not _has_risk_items(notification_card):
+        skipped = {
+            "target": "DINGTALK_PUSH_REVIEW_SUMMARY",
+            "status": "SKIPPED",
+            "requestDigest": "No focused reminders or code quality findings matched.",
+            "responseBody": None,
+            "errorMessage": "No focused reminders or code quality findings matched",
+        }
+        return _aggregate_results([skipped], skipped["requestDigest"])
     markdown = format_markdown(
         task_id,
-        filter_risk_card(risk_card, focus_change_types, focus_rule_codes),
+        notification_card,
         context,
     )
     digest = markdown[:500]
@@ -45,7 +55,7 @@ def send_review_summary(
     notification_card = (
         filter_risk_card(risk_card, focus_change_types, focus_rule_codes) if risk_card else None
     )
-    if not _has_risk_items(notification_card) and not _has_code_quality_notification(code_quality_result):
+    if _should_skip_review_summary(notification_card, code_quality_result, context):
         skipped = {
             "target": "DINGTALK_REVIEW_SUMMARY",
             "status": "SKIPPED",
@@ -229,20 +239,16 @@ def filter_risk_card(
 
 def format_markdown(task_id: int, risk_card: dict, context: dict) -> str:
     settings = get_settings()
-    reminders = _format_reminders(risk_card.get("riskItems", []))
     detail_url = f"{settings.platform_base_url.rstrip('/')}/?taskId={task_id}" if task_id else ""
-    branch = _branch_text(context)
-    author = _author_text(context)
-    title = context.get("title") or "-"
-    link = f"[查看平台详情]({detail_url})" if detail_url else ""
-    return (
+    result = (
         "### 变更提醒\n\n"
-        f"- **作者：** {author}\n"
-        f"- **变更：** {title}\n"
-        f"- **分支：** {branch}\n\n"
-        f"**提醒**\n{reminders}\n\n"
-        f"{link}"
+        f"{_event_label(context)} 作者：{_author_text(context)}\n\n"
+        "#### 配置变更（规则扫描）\n\n"
+        f"{_format_maintenance_reminders(risk_card)}\n\n"
     )
+    if detail_url:
+        result += f"详情：{detail_url}"
+    return result
 
 
 def format_review_summary_markdown(
@@ -253,14 +259,10 @@ def format_review_summary_markdown(
 ) -> str:
     settings = get_settings()
     detail_url = f"{settings.platform_base_url.rstrip('/')}/?taskId={task_id}" if task_id else ""
-    title = str(context.get("title") or "-")
-    if title.startswith("GitLab "):
-        title = title.removeprefix("GitLab ")
     result = (
         "### 变更审查结果\n\n"
-        f"{title}\n"
-        f"作者：{_author_text(context)}\n\n"
-        "#### 维护提醒（规则扫描）\n\n"
+        f"{_event_label(context)} 作者：{_author_text(context)}\n\n"
+        "#### 配置变更（规则扫描）\n\n"
         f"{_format_maintenance_reminders(risk_card)}\n\n"
         "#### 代码质量 Review（AI）\n\n"
         f"{_format_code_quality_summary(code_quality_result)}\n\n"
@@ -283,18 +285,21 @@ def _format_reminders(risk_items: list[dict]) -> str:
 
 def _format_maintenance_reminders(risk_card: dict | None) -> str:
     if not risk_card or not risk_card.get("riskItems"):
-        return "- 暂无需要特别维护的变更。"
-    groups = {_group_key(str(item.get("category") or "")) for item in risk_card.get("riskItems", [])}
-    reminders = []
-    if "DB" in groups:
-        reminders.append("- 数据库变更：请确认脚本是否需要准备")
-    if "MQ" in groups:
-        reminders.append("- MQ 变更：请留意 topic、消费组或消息结构是否需要配置")
-    if "CACHE" in groups:
-        reminders.append("- Redis 变更：请确认缓存 key 是否需要配置")
-    if "CONFIG" in groups:
-        reminders.append("- 配置变更：请确认是否有新的 Nacos 配置")
-    return "\n".join(reminders) if reminders else "- 暂无需要特别维护的变更。"
+        return "暂无需要特别维护的变更。"
+    groups = {
+        _group_key(str(item.get("category") or ""))
+        for item in risk_card.get("riskItems", [])
+    }
+    labels = []
+    for key, label, color in [
+        ("DB", "DB", "#64748b"),
+        ("MQ", "MQ", "#d97706"),
+        ("CONFIG", "Nacos", "#2563eb"),
+        ("CACHE", "Redis", "#dc2626"),
+    ]:
+        if key in groups:
+            labels.append(f'* <font color="{color}">{label}</font>')
+    return "\n".join(labels) if labels else "暂无需要特别维护的变更。"
 
 
 def _format_code_quality_summary(result: dict | None) -> str:
@@ -362,6 +367,24 @@ def _has_code_quality_notification(result: dict | None) -> bool:
     return bool(result.get("findings"))
 
 
+def _has_code_quality_findings(result: dict | None) -> bool:
+    return bool(result and result.get("status") == "SUCCESS" and result.get("findings"))
+
+
+def _should_skip_review_summary(
+    risk_card: dict | None,
+    code_quality_result: dict | None,
+    context: dict,
+) -> bool:
+    has_reminders = _has_risk_items(risk_card)
+    event_label = _event_label(context)
+    if event_label == "MR":
+        return False
+    if event_label == "Push":
+        return not has_reminders and not _has_code_quality_findings(code_quality_result)
+    return not has_reminders and not _has_code_quality_notification(code_quality_result)
+
+
 def _severity_in(finding: dict, *severities: str) -> bool:
     return str(finding.get("severity") or "").upper() in set(severities)
 
@@ -383,6 +406,24 @@ def _author_text(context: dict) -> str:
     if username:
         return f"@{username}"
     return "-"
+
+
+def _event_label(context: dict) -> str:
+    trigger_type = str(context.get("triggerType") or "").upper()
+    if trigger_type == "GITLAB_MR_WEBHOOK":
+        return "MR"
+    if trigger_type == "GITLAB_PUSH_WEBHOOK":
+        return "Push"
+    if trigger_type == "MANUAL":
+        return "Manual"
+    title = str(context.get("title") or "").upper()
+    if "GITLAB_MR_WEBHOOK" in title:
+        return "MR"
+    if "GITLAB_PUSH_WEBHOOK" in title:
+        return "Push"
+    if "MANUAL" in title:
+        return "Manual"
+    return "Manual"
 
 
 def _branch_text(context: dict) -> str:

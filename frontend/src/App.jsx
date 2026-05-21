@@ -873,7 +873,7 @@ function CodeQualityProgressView({ progress }) {
             type="info"
             showIcon
             message={totalDurationText ? `总计耗时 ${totalDurationText}` : '默认只展示关键阶段'}
-            description={`已折叠 ${debugEvents.length} 条 Codex stdout/stderr 调试输出${hiddenEvents.length > 0 ? `，以及 ${hiddenEvents.length} 条辅助事件` : ''}。`}
+            description={`已折叠 ${debugEvents.length} 条 stdout/stderr 调试输出${hiddenEvents.length > 0 ? `，以及 ${hiddenEvents.length} 条辅助事件` : ''}。`}
           />
           <Timeline
             items={keyEvents.map(event => ({

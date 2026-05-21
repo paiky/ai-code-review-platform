@@ -214,6 +214,7 @@ def _process_task(
     mark_task_success(task, risk_card["riskLevel"])
     notification_context = {
         "title": f"{task.trigger_type} {task.external_source_id or ''}".strip(),
+        "triggerType": task.trigger_type,
         "authorName": task.author_name,
         "authorUsername": task.author_username,
         "sourceBranch": task.source_branch,

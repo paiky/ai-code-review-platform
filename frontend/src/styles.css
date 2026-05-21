@@ -371,22 +371,8 @@ body {
   position: relative;
 }
 
-.release-page-shell::before {
-  content: "";
-  position: absolute;
-  inset: 58px 0 auto;
-  height: 220px;
-  border-radius: 32px;
-  background:
-    radial-gradient(circle at top left, rgba(15, 118, 110, 0.18), transparent 55%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(236, 253, 245, 0.88));
-  pointer-events: none;
-  z-index: 0;
-}
-
 .release-list {
   position: relative;
-  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -584,11 +570,6 @@ body {
 
   .focus-indicator-grid {
     grid-template-columns: 1fr;
-  }
-
-  .release-page-shell::before {
-    inset: 84px 0 auto;
-    height: 180px;
   }
 
   .release-entry {
