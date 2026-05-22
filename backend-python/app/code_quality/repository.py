@@ -868,9 +868,11 @@ def mark_scheduler_job_finished(
 
 def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, Any]:
     ensure_scheduler_job_schema(db)
+    cutoff = datetime.now() - timedelta(days=1)
     active = db.scalars(
         select(CodeQualitySchedulerJob)
         .where(CodeQualitySchedulerJob.status.in_(["QUEUED", "RUNNING"]))
+        .where(CodeQualitySchedulerJob.created_at >= cutoff)
         .order_by(
             CodeQualitySchedulerJob.priority.asc(),
             CodeQualitySchedulerJob.queued_at.asc(),
@@ -880,6 +882,7 @@ def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, An
     recent = db.scalars(
         select(CodeQualitySchedulerJob)
         .where(CodeQualitySchedulerJob.status.in_(["SUCCESS", "FAILED", "SKIPPED"]))
+        .where(CodeQualitySchedulerJob.created_at >= cutoff)
         .order_by(CodeQualitySchedulerJob.updated_at.desc(), CodeQualitySchedulerJob.id.desc())
         .limit(limit)
     ).all()

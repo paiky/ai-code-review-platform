@@ -35,6 +35,12 @@ body {
   flex: 0 0 auto;
 }
 
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
 .settings-collapse .ant-collapse-item {
   margin-bottom: 16px;
   border-radius: 10px !important;
@@ -47,6 +53,12 @@ body {
 
 .settings-inner-card .ant-card-body {
   padding: 0;
+}
+
+.settings-action-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 
 .page-shell {
@@ -319,12 +331,19 @@ body {
 }
 
 .code-location-text {
+  display: inline-block;
+  max-width: min(760px, 64vw);
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
 .code-location-row {
   max-width: 100%;
+  align-items: flex-start;
+}
+
+.quality-finding-meta .ant-descriptions-item-content {
+  min-width: 0;
 }
 
 .diff-viewer-modal .ant-modal-body {

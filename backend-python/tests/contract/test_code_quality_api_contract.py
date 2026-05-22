@@ -368,7 +368,7 @@ def test_settings_can_save_multiple_dingtalk_webhooks(
 
 
 @respx.mock
-def test_settings_sends_test_notification_for_new_webhook(
+def test_settings_does_not_send_test_notification_for_new_webhook(
     client: TestClient,
     monkeypatch,
 ) -> None:
@@ -392,10 +392,8 @@ def test_settings_sends_test_notification_for_new_webhook(
     )
 
     assert saved.status_code == 200
-    assert route.called
-    test_results = saved.json()["data"]["webhookTestResults"]
-    assert len(test_results) == 1
-    assert test_results[0]["status"] == "SUCCESS"
+    assert not route.called
+    assert "webhookTestResults" not in saved.json()["data"]
 
 
 def test_settings_update_disables_omitted_webhook(
@@ -446,7 +444,7 @@ def test_settings_update_disables_omitted_webhook(
 
 
 @respx.mock
-def test_settings_sends_test_notification_when_reenabling_existing_webhook(
+def test_settings_does_not_send_test_notification_when_reenabling_existing_webhook(
     client: TestClient,
     monkeypatch,
 ) -> None:
@@ -486,8 +484,8 @@ def test_settings_sends_test_notification_when_reenabling_existing_webhook(
     )
 
     assert updated.status_code == 200
-    assert route.called
-    assert updated.json()["data"]["webhookTestResults"][0]["status"] == "SUCCESS"
+    assert not route.called
+    assert "webhookTestResults" not in updated.json()["data"]
 
 
 def test_settings_rejects_invalid_or_duplicate_dingtalk_webhooks(

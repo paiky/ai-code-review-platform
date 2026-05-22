@@ -46,10 +46,9 @@ from app.code_quality.repository import (
 from app.core.database import SessionLocal
 from app.core.errors import AppError
 from app.core.json_utils import read_json, read_json_array
-from app.notification.repository import list_webhooks
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.project_integration.repository import find_project_by_id
-from app.notification.service import send_review_summary, send_test_notification
+from app.notification.service import send_review_summary
 from app.review_record.models import ReviewTask
 from app.review_record.repository import (
     create_review_task,
@@ -1062,61 +1061,8 @@ def get_settings_response(db: Session) -> dict[str, Any]:
 
 
 def update_settings(db: Session, request: dict[str, Any]) -> dict[str, Any]:
-    test_candidates = []
-    if isinstance(request.get("dingtalkWebhooks"), list):
-        existing_records = {record.id: record for record in list_webhooks(db)}
-        for item in request["dingtalkWebhooks"]:
-            if not isinstance(item, dict):
-                continue
-            enabled = bool(item.get("enabled", True))
-            name = str(item.get("name") or "").strip()
-            webhook_url = str(item.get("webhookUrl") or "").strip()
-            record_id = item.get("id")
-            if not enabled or not webhook_url:
-                continue
-            if record_id is None:
-                test_candidates.append({"name": name, "webhookUrl": webhook_url})
-                continue
-            try:
-                numeric_id = int(record_id)
-            except (TypeError, ValueError):
-                continue
-            existing = existing_records.get(numeric_id)
-            if existing is None:
-                continue
-            was_enabled = bool(existing.enabled) and existing.status == "ENABLED"
-            url_changed = existing.webhook_url.strip() != webhook_url
-            if not was_enabled or url_changed:
-                test_candidates.append({"name": name, "webhookUrl": webhook_url})
     response = update_settings_record(db, request)
     db.commit()
-    if test_candidates:
-        saved_by_url = {
-            str(item.get("webhookUrl") or "").strip(): item
-            for item in response.get("dingtalkWebhooks") or []
-            if str(item.get("webhookUrl") or "").strip()
-        }
-        test_results = []
-        seen_urls: set[str] = set()
-        for item in test_candidates:
-            normalized_url = item["webhookUrl"].lower()
-            if normalized_url in seen_urls:
-                continue
-            seen_urls.add(normalized_url)
-            saved = saved_by_url.get(item["webhookUrl"])
-            if not saved:
-                continue
-            result = send_test_notification(saved["webhookUrl"], saved.get("name"))
-            test_results.append(
-                {
-                    "id": saved.get("id"),
-                    "name": saved.get("name"),
-                    "webhookUrl": saved.get("webhookUrl"),
-                    "status": result.get("status"),
-                    "errorMessage": result.get("errorMessage"),
-                }
-            )
-        response["webhookTestResults"] = test_results
     return response
 
 

@@ -595,8 +595,6 @@ function TaskList({ onOpen }) {
   const [keyword, setKeyword] = useState('');
   const [tasks, setTasks] = useState([]);
   const [pagination, setPagination] = useState({ pageNo: 1, pageSize: 20, total: 0 });
-  const [jobQueue, setJobQueue] = useState({ activeCount: 0, groups: [] });
-  const [jobQueueOpen, setJobQueueOpen] = useState(false);
   const [error, setError] = useState(null);
 
   const load = async (next = {}) => {
@@ -617,25 +615,9 @@ function TaskList({ onOpen }) {
     }
   };
 
-  const loadJobQueue = async () => {
-    try {
-      const data = await fetchApi('/api/code-quality-reviews/job-queue');
-      setJobQueue(data || { activeCount: 0, groups: [] });
-    } catch {
-      setJobQueue({ activeCount: 0, groups: [] });
-    }
-  };
-
   useEffect(() => {
     load({ pageNo: 1 });
-    loadJobQueue();
   }, []);
-
-  useEffect(() => {
-    if (!jobQueueOpen && !jobQueue?.activeCount) return undefined;
-    const timer = window.setInterval(loadJobQueue, 5000);
-    return () => window.clearInterval(timer);
-  }, [jobQueueOpen, jobQueue?.activeCount]);
 
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 80 },
@@ -653,18 +635,6 @@ function TaskList({ onOpen }) {
     <div className="page-shell">
       <div className="page-heading">
         <Space>
-          <Tooltip title="AI Review 调度队列">
-            <Badge count={jobQueue?.activeCount || 0} size="small">
-              <Button
-                icon={<ClusterOutlined />}
-                type={jobQueue?.activeCount ? 'primary' : 'default'}
-                onClick={() => {
-                  setJobQueueOpen(true);
-                  loadJobQueue();
-                }}
-              />
-            </Badge>
-          </Tooltip>
           <Input
             allowClear
             prefix={<SearchOutlined />}
@@ -691,7 +661,6 @@ function TaskList({ onOpen }) {
           }}
         />
       </Card>
-      <JobQueueModal open={jobQueueOpen} queue={jobQueue} onClose={() => setJobQueueOpen(false)} />
     </div>
   );
 }
@@ -1517,8 +1486,8 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
               ),
               children: (
                 <Space direction="vertical" className="full-width">
-                  <Descriptions size="small" column={{ xs: 1, md: 2 }}>
-                    <Descriptions.Item label="位置" span={2}>
+                  <Descriptions size="small" className="quality-finding-meta" column={{ xs: 1, md: 6 }}>
+                    <Descriptions.Item label="位置" span={4}>
                       <Space className="code-location-row" wrap>
                         <Text code className="code-location-text">
                           {codeLocationText(finding.filePath, finding.startLine, finding.endLine)}
@@ -1950,15 +1919,7 @@ function TemplateConfig() {
         dingtalkNotificationEnabled: settings?.dingtalkNotificationEnabled ?? true,
         dingtalkWebhooks: (settings?.dingtalkWebhooks || []).map(item => ({ ...item }))
       });
-      const testResults = settings?.webhookTestResults || [];
-      const failedTestCount = testResults.filter(item => item.status !== 'SUCCESS').length;
-      if (testResults.length === 0) {
-        messageApi.success('全局设置已保存');
-      } else if (failedTestCount === 0) {
-        messageApi.success(`全局设置已保存，已向 ${testResults.length} 个新 webhook 发送测试通知`);
-      } else {
-        messageApi.warning(`全局设置已保存，但有 ${failedTestCount} 个新 webhook 测试通知未成功`);
-      }
+      messageApi.success('全局设置已保存');
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -2087,16 +2048,13 @@ function TemplateConfig() {
           providerCode: profileDraft.providerCode || null,
           reviewInstructions: profileDraft.reviewInstructions,
           model: profileDraft.model,
-          triggerOnManual: profileDraft.triggerOnManual,
-          triggerOnPush: profileDraft.triggerOnPush,
           pushBranchPatterns: profileDraft.pushBranchPatterns || [],
           pushMinChangedFiles: profileDraft.pushMinChangedFiles ?? null,
           pushMinDiffBytes: profileDraft.pushMinDiffBytes ?? null,
           pushMinCommitCount: profileDraft.pushMinCommitCount ?? null,
           pushMaxChangedFiles: profileDraft.pushMaxChangedFiles ?? null,
           pushMaxDiffBytes: profileDraft.pushMaxDiffBytes ?? null,
-          pushDebounceSeconds: profileDraft.pushDebounceSeconds ?? null,
-          triggerOnlyWhenRiskMatched: profileDraft.triggerOnlyWhenRiskMatched
+          pushDebounceSeconds: profileDraft.pushDebounceSeconds ?? null
         })
       });
       setProfiles(current => current.map(item => item.profileCode === updated.profileCode ? updated : item));
@@ -2184,7 +2142,6 @@ function TemplateConfig() {
         <Card
           bordered={false}
           className="settings-inner-card"
-          extra={<Button type="primary" loading={settingsSaving} disabled={!settingsDraft || !settingsDirty} onClick={saveAiSettings}>保存设置</Button>}
         >
           <Space direction="vertical" size="middle" className="global-settings-stack">
             <div className="global-setting-field">
@@ -2280,6 +2237,9 @@ function TemplateConfig() {
                 )}
               </Space>
             </div>
+            <div className="settings-action-row">
+              <Button type="primary" loading={settingsSaving} disabled={!settingsDraft || !settingsDirty} onClick={saveAiSettings}>保存设置</Button>
+            </div>
           </Space>
         </Card>
       )
@@ -2297,7 +2257,6 @@ function TemplateConfig() {
         <Card
           bordered={false}
           className="settings-inner-card"
-          extra={<Button type="primary" loading={notificationSaving} disabled={!notificationRules || !notificationRulesDirty} onClick={saveNotificationRules}>保存配置</Button>}
         >
           <Space direction="vertical" size="middle" className="full-width">
             <Row gutter={[16, 16]} align="middle">
@@ -2380,6 +2339,9 @@ function TemplateConfig() {
                 )}
               </Col>
             </Row>
+            <div className="settings-action-row">
+              <Button type="primary" loading={notificationSaving} disabled={!notificationRules || !notificationRulesDirty} onClick={saveNotificationRules}>保存配置</Button>
+            </div>
           </Space>
         </Card>
       )
@@ -2396,7 +2358,6 @@ function TemplateConfig() {
         <Card
           bordered={false}
           className="settings-inner-card"
-          extra={<Button type="primary" loading={providerSaving} onClick={saveProviderSettings} disabled={!providerDraft}>保存 Provider</Button>}
         >
           <Row gutter={[16, 16]} align="bottom">
             <Col xs={24} md={8}>
@@ -2469,6 +2430,9 @@ function TemplateConfig() {
               </Button>
             </Col>
           </Row>
+          <div className="settings-action-row">
+            <Button type="primary" loading={providerSaving} onClick={saveProviderSettings} disabled={!providerDraft}>保存 Provider</Button>
+          </div>
         </Card>
       )
     },
@@ -2484,13 +2448,6 @@ function TemplateConfig() {
         <Card
           bordered={false}
           className="settings-inner-card"
-          extra={
-            <Space wrap>
-              <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={!profileDraft}>预览 Prompt</Button>
-              <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={!profileDraft}>恢复默认</Button>
-              <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={!profileDraft}>保存 Profile</Button>
-            </Space>
-          }
         >
           {profileDraft ? (
             <Space direction="vertical" size="middle" className="full-width">
@@ -2523,22 +2480,6 @@ function TemplateConfig() {
                         value={profileDraft.model || ''}
                         onChange={event => updateProfileDraft('model', event.target.value)}
                       />
-                    </Col>
-                    <Col xs={24}>
-                      <Space wrap size="large">
-                        <Space>
-                          <Text strong>手动触发</Text>
-                          <Switch checked={profileDraft.triggerOnManual} onChange={checked => updateProfileDraft('triggerOnManual', checked)} />
-                        </Space>
-                        <Space>
-                          <Text strong>Push 自动</Text>
-                          <Switch checked={profileDraft.triggerOnPush} onChange={checked => updateProfileDraft('triggerOnPush', checked)} />
-                        </Space>
-                        <Space>
-                          <Text strong>仅风险命中</Text>
-                          <Switch checked={profileDraft.triggerOnlyWhenRiskMatched} onChange={checked => updateProfileDraft('triggerOnlyWhenRiskMatched', checked)} />
-                        </Space>
-                      </Space>
                     </Col>
                   </Row>
                 </Col>
@@ -2643,6 +2584,13 @@ function TemplateConfig() {
                   }]}
                 />
               )}
+              <div className="settings-action-row">
+                <Space wrap>
+                  <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={!profileDraft}>预览 Prompt</Button>
+                  <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={!profileDraft}>恢复默认</Button>
+                  <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={!profileDraft}>保存 Profile</Button>
+                </Space>
+              </div>
             </Space>
           ) : (
             <Empty description="暂无 AI Review 配置" />
@@ -2780,6 +2728,27 @@ function AppFrame() {
   const isTaskRoute = location.pathname === HOME_ROUTE || location.pathname.startsWith(TASK_LIST_ROUTE);
   const isSettingsRoute = location.pathname.startsWith(SETTINGS_ROUTE);
   const isReleaseRoute = location.pathname.startsWith(RELEASES_ROUTE);
+  const [jobQueue, setJobQueue] = useState({ activeCount: 0, groups: [] });
+  const [jobQueueOpen, setJobQueueOpen] = useState(false);
+
+  const loadJobQueue = async () => {
+    try {
+      const data = await fetchApi('/api/code-quality-reviews/job-queue');
+      setJobQueue(data || { activeCount: 0, groups: [] });
+    } catch {
+      setJobQueue({ activeCount: 0, groups: [] });
+    }
+  };
+
+  useEffect(() => {
+    loadJobQueue();
+  }, []);
+
+  useEffect(() => {
+    if (!jobQueueOpen && !jobQueue?.activeCount) return undefined;
+    const timer = window.setInterval(loadJobQueue, 5000);
+    return () => window.clearInterval(timer);
+  }, [jobQueueOpen, jobQueue?.activeCount]);
 
   return (
     <Layout className="app-layout">
@@ -2808,6 +2777,20 @@ function AppFrame() {
             版本更新
           </Button>
         </Space>
+        <div className="header-actions">
+          <Tooltip title="AI Review 调度队列">
+            <Badge count={jobQueue?.activeCount || 0} size="small">
+              <Button
+                icon={<ClusterOutlined />}
+                type={jobQueue?.activeCount ? 'primary' : 'default'}
+                onClick={() => {
+                  setJobQueueOpen(true);
+                  loadJobQueue();
+                }}
+              />
+            </Badge>
+          </Tooltip>
+        </div>
       </Header>
       <Content>
         <Routes>
@@ -2819,6 +2802,7 @@ function AppFrame() {
           <Route path="*" element={<Navigate to={HOME_ROUTE} replace />} />
         </Routes>
       </Content>
+      <JobQueueModal open={jobQueueOpen} queue={jobQueue} onClose={() => setJobQueueOpen(false)} />
     </Layout>
   );
 }
