@@ -11,18 +11,21 @@ RISK_WEIGHT = {"NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 CHANGE_TYPE_LABELS = {
     "API": "接口",
     "DB": "数据库",
+    "DB_DATA_WRITE": "DB 写入/结构维护",
     "DB_SCHEMA": "DB 表结构",
     "DB_SQL": "SQL",
     "ORM_MAPPING": "ORM/MyBatis 映射",
     "ENTITY_MODEL": "实体模型",
     "DATA_MIGRATION": "数据迁移",
     "CACHE": "缓存",
+    "CACHE_WRITE_DELETE": "缓存写入/删除",
     "CACHE_KEY": "缓存 Key",
     "CACHE_TTL": "缓存 TTL",
     "CACHE_INVALIDATION": "缓存失效",
     "CACHE_READ_WRITE": "缓存读写",
     "CACHE_SERIALIZATION": "缓存序列化",
     "MQ": "MQ",
+    "MQ_CONFIG": "MQ 配置",
     "MQ_PRODUCER": "MQ 生产者",
     "MQ_CONSUMER": "MQ 消费者",
     "MQ_MESSAGE_SCHEMA": "MQ 消息结构",
@@ -32,6 +35,9 @@ CHANGE_TYPE_LABELS = {
 }
 
 RISK_RULES = {
+    "DB_DATA_WRITE_CHANGE_CHECK": ("DB_DATA_WRITE", "HIGH", "DB 写入、表结构或映射变更需要确认", "检测到 DDL、数据写入 SQL、Entity 字段或 MyBatis/ORM 映射变更；纯 select 查询不会触发该提醒。", "可能导致表结构不一致、写入条件错误、字段映射遗漏或历史数据兼容问题。", "HIGH", "出现 DDL / insert / update / delete / Entity / ORM 映射维护信号。", ["确认 insert/update/delete 的 where 条件、影响范围和回滚方案。", "确认实体字段、Mapper 映射与数据库列同步。"], ["BACKEND", "DBA", "QA"]),
+    "CACHE_WRITE_DELETE_CHANGE_CHECK": ("CACHE_WRITE_DELETE", "HIGH", "Redis 写入、过期或删除变更需要确认", "检测到缓存 set/put/expire/delete/evict 等写入或失效逻辑变更；纯 get 查询不会触发该提醒。", "可能导致缓存脏数据、误删、TTL 不符合预期或写入后读写不一致。", "HIGH", "出现 Redis 写入、TTL 或删除信号。", ["确认写入、过期和删除策略符合业务一致性要求。"], ["BACKEND", "SRE", "QA"]),
+    "MQ_CONFIG_CHANGE_CHECK": ("MQ_CONFIG", "HIGH", "MQ exchange、routeKey 或 queue 配置变更需要确认", "检测到 MQ exchange、routeKey/routingKey、queue、topic 或 binding 配置变更；消费业务逻辑不会触发该提醒。", "可能导致消息投递到错误 exchange/queue、路由失败或环境配置不一致。", "HIGH", "出现 MQ 配置维护信号。", ["确认 exchange、queue、routeKey/topic 在各环境和中间件控制台已同步。"], ["BACKEND", "SRE", "QA"]),
     "DB_SCHEMA_CHANGE_CHECK": ("DB_SCHEMA", "HIGH", "数据库表结构变更需要确认兼容与回滚", "检测到 migration、DDL 或表结构语句发生变化，需要确认历史数据兼容、灰度发布和回滚方案。", "可能导致字段缺失、索引异常、历史数据不兼容或上线后无法快速回滚。", "HIGH", "出现明确 DDL / migration schema 信号。", ["确认 DDL 是否兼容历史数据和线上表规模。", "确认是否需要默认值、回填脚本、索引和回滚脚本。"], ["BACKEND", "DBA", "QA"]),
     "DB_SQL_CHANGE_CHECK": ("DB_SQL", "MEDIUM", "SQL 读写逻辑变更需要确认性能与结果兼容", "检测到 Mapper XML、SQL 文件或代码中的 SQL 读写逻辑发生变化，需要确认查询结果、索引和边界数据。", "可能引入慢 SQL、结果集变化、分页异常或写入条件不一致。", "MEDIUM", "出现 SQL select/insert/update/delete 信号，但未直接发现表结构变更。", ["确认 where、join、order by、limit 和返回字段变化符合预期。", "确认核心 SQL 有索引支撑，并检查大数据量下执行计划。"], ["BACKEND", "DBA", "QA"]),
     "ORM_MAPPING_CHANGE_CHECK": ("ORM_MAPPING", "MEDIUM", "ORM / MyBatis 映射变更需要确认字段兼容", "检测到 resultMap、字段映射、ORM 注解或 Mapper 映射结构发生变化，需要确认实体字段与数据库列保持一致。", "可能导致字段为空、类型转换失败、查询结果映射错误或写入字段遗漏。", "MEDIUM", "出现 resultMap / 字段映射 / ORM 注解信号。", ["确认 resultMap、insert、update 和 select 字段集合与实体字段一致。"], ["BACKEND", "DBA", "QA"]),
@@ -181,7 +187,7 @@ def _db_artifacts(
     analysis: dict,
 ) -> list[dict[str, Any]]:
     sql_lines = _sql_lines(evidences)
-    if category in {"DB_SCHEMA", "DB_SQL", "DATA_MIGRATION"} and rule_code != "DB_SCHEMA_SYNC_SUSPECT_CHECK" and sql_lines:
+    if category in {"DB_DATA_WRITE", "DB_SCHEMA", "DB_SQL", "DATA_MIGRATION"} and rule_code != "DB_SCHEMA_SYNC_SUSPECT_CHECK" and sql_lines:
         return [
             _artifact(
                 "SQL",
@@ -198,7 +204,7 @@ def _db_artifacts(
     db_evidences = [
         evidence
         for evidence in analysis.get("evidences", [])
-        if evidence.get("changeType") in {"ENTITY_MODEL", "ORM_MAPPING"}
+        if evidence.get("changeType") in {"DB_DATA_WRITE", "ENTITY_MODEL", "ORM_MAPPING"}
     ]
     return _inferred_db_artifacts(
         category,
@@ -246,6 +252,9 @@ def _mq_artifacts(category: str, evidences: list[dict[str, Any]]) -> list[dict[s
     tag = _first_match(lines, r"(?i)(?:tag|tags)\s*=\s*[\"']([^\"']+)[\"']")
     route_key = _first_match(lines, r"(?i)(?:routingKey|routeKey)\s*=\s*[\"']([^\"']+)[\"']")
     exchange = _first_match(lines, r"(?i)(?:exchange)\s*=\s*[\"']([^\"']+)[\"']")
+    queue = _first_match(lines, r"(?i)\bQUEUE\b[^=]*=\s*[\"']([^\"']+)[\"']")
+    route_key = route_key or _first_match(lines, r"(?i)\b(?:ROUTING_KEY|ROUTE_KEY)\b[^=]*=\s*[\"']([^\"']+)[\"']")
+    exchange = exchange or _first_match(lines, r"(?i)\bEXCHANGE\b[^=]*=\s*[\"']([^\"']+)[\"']")
     content = "\n".join(
         [
             "// MQ 维护配置草稿，请同步确认各环境控制台或配置中心",
@@ -253,6 +262,7 @@ def _mq_artifacts(category: str, evidences: list[dict[str, Any]]) -> list[dict[s
             f"String consumerGroup = \"{group or '<consumerGroup>'}\";",
             f"String tag = \"{tag or '<tag>'}\";",
             f"String exchange = \"{exchange or '<exchange>'}\";",
+            f"String queue = \"{queue or '<queue>'}\";",
             f"String routeKey = \"{route_key or '<routeKey>'}\";",
             "",
             "// 变更来源：",
@@ -265,7 +275,7 @@ def _mq_artifacts(category: str, evidences: list[dict[str, Any]]) -> list[dict[s
             "MQ 配置维护片段",
             "java",
             content,
-            "EXACT" if topic or group or tag or route_key or exchange else "INFERRED",
+            "EXACT" if topic or group or tag or route_key or exchange or queue else "INFERRED",
             _first_file(evidences),
             category,
             "请按实际中间件补齐 queue、exchange、routeKey、topic、tag 和 consumerGroup，并确认生产者与消费者同时兼容。",
@@ -274,27 +284,27 @@ def _mq_artifacts(category: str, evidences: list[dict[str, Any]]) -> list[dict[s
 
 
 def _config_artifacts(evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    lines = _added_lines_preserve_indent(evidences)
-    if not lines:
-        return []
-    file_path = _first_file(evidences)
-    language = "properties" if str(file_path or "").endswith(".properties") else "yaml"
-    content_lines = [line for line in lines if _looks_like_config_line(line) or "@Value(" in line]
-    if not content_lines:
-        content_lines = lines[:20]
-    content = "\n".join(_normalize_config_lines(content_lines))
-    return [
-        _artifact(
-            "NACOS_CONFIG",
-            "可复制 Nacos/配置内容",
-            language,
-            content,
-            "EXACT" if content else "INFERRED",
-            file_path,
-            "CONFIG",
-            "从配置文件或 @Value 新增行提取；复制到 Nacos 前请确认环境、命名空间、默认值和灰度发布策略。",
+    artifacts: list[dict[str, Any]] = []
+    for file_path, grouped in _evidences_by_file(evidences).items():
+        lines = _added_lines_preserve_indent(grouped)
+        if not lines:
+            continue
+        content_lines = _config_content_lines(file_path, lines)
+        if not content_lines:
+            continue
+        artifacts.append(
+            _artifact(
+                "NACOS_CONFIG",
+                _config_artifact_title(file_path),
+                _config_language(file_path),
+                "\n".join(content_lines),
+                "EXACT",
+                file_path,
+                "CONFIG",
+                "从配置文件或 @Value 新增行提取；复制到 Nacos 前请确认环境、命名空间、默认值和灰度发布策略。",
+            )
         )
-    ]
+    return artifacts
 
 
 def _artifact(
@@ -324,14 +334,26 @@ def _sql_lines(evidences: list[dict[str, Any]]) -> list[str]:
     return [
         line.rstrip(";") + ";"
         for line in _added_lines(evidences)
-        if re.search(r"\b(create|alter|drop|select|insert|update|delete)\b", line, re.I)
+        if _looks_like_sql_statement(line)
+        and not re.search(r"^\s*</?\w+", line)
     ]
+
+
+def _looks_like_sql_statement(line: str) -> bool:
+    compact = line.strip().rstrip(";")
+    return bool(
+        re.search(
+            r"^(create\s+table|alter\s+table|drop\s+table|insert\s+into|update\s+\w+|delete\s+from)\b",
+            compact,
+            re.I,
+        )
+    )
 
 
 def _exact_schema_tables(evidences: list[dict[str, Any]]) -> set[str]:
     tables: set[str] = set()
     for evidence in evidences:
-        if evidence.get("changeType") not in {"DB_SCHEMA", "DATA_MIGRATION"}:
+        if evidence.get("changeType") not in {"DB_DATA_WRITE", "DB_SCHEMA", "DATA_MIGRATION"}:
             continue
         for line in _added_lines([evidence]):
             table = _match(line, r"\b(?:create|alter)\s+table\s+[`\"]?([a-zA-Z_][a-zA-Z0-9_]*)[`\"]?")
@@ -381,7 +403,7 @@ def _inferred_db_artifacts(
 def _db_table_contexts(resources: list[dict[str, Any]], evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
     resource_by_path = _resources_by_path(resources)
     contexts: dict[str, dict[str, Any]] = {}
-    for evidence in evidences:
+    for evidence in _prioritized_db_evidences(evidences):
         file_path = str(evidence.get("filePath") or "")
         lines = _added_lines_preserve_indent([evidence])
         table = _table_from_entity_lines(lines) or _resource_table_for_path(resource_by_path, file_path) or _table_from_mapping([evidence])
@@ -404,6 +426,17 @@ def _db_table_contexts(resources: list[dict[str, Any]], evidences: list[dict[str
         _extend_unique_fields(context["fields"], _entity_fields(lines))
         _extend_unique_fields(context["fields"], _mapping_fields(lines))
     return list(contexts.values())
+
+
+def _prioritized_db_evidences(evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    entity_evidences = [
+        evidence
+        for evidence in evidences
+        if _entity_fields(_added_lines_preserve_indent([evidence]))
+    ]
+    if entity_evidences:
+        return entity_evidences
+    return evidences
 
 
 def _resources_by_path(resources: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -563,8 +596,6 @@ def _redis_command(line: str) -> str | None:
         return f"EXPIRE {key} <seconds>"
     if ".set(" in lowered or ".put(" in lowered or "@cacheput" in lowered:
         return f"SET {key} <value>"
-    if ".get(" in lowered or "@cacheable" in lowered:
-        return f"GET {key}"
     return None
 
 
@@ -593,6 +624,14 @@ def _added_lines_preserve_indent(evidences: list[dict[str, Any]]) -> list[str]:
             if line.strip():
                 lines.append(line)
     return list(dict.fromkeys(lines))
+
+
+def _evidences_by_file(evidences: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for evidence in evidences:
+        file_path = str(evidence.get("filePath") or "__unknown__")
+        grouped.setdefault(file_path, []).append(evidence)
+    return grouped
 
 
 def _first_file(evidences: list[dict[str, Any]]) -> str | None:
@@ -635,6 +674,58 @@ def _looks_like_config_line(line: str) -> bool:
     return bool(re.search(r"^\s*[a-zA-Z0-9_.-]+\s*[:=]", line) or re.search(r"^\s+[a-zA-Z0-9_.-]+\s*:", line))
 
 
+def _config_language(file_path: str | None) -> str:
+    path = str(file_path or "").lower()
+    if path.endswith((".yml", ".yaml")):
+        return "yaml"
+    if path.endswith(".properties"):
+        return "properties"
+    return "properties"
+
+
+def _config_artifact_title(file_path: str | None) -> str:
+    if str(file_path or "").lower().endswith((".java", ".kt")):
+        return "@Value 配置内容"
+    return "可复制 Nacos/配置内容"
+
+
+def _config_content_lines(file_path: str | None, lines: list[str]) -> list[str]:
+    path = str(file_path or "").lower()
+    if path.endswith((".yml", ".yaml")):
+        return _yaml_config_lines(lines)
+    if path.endswith(".properties"):
+        return _properties_config_lines(lines)
+    return _java_value_config_lines(lines)
+
+
+def _yaml_config_lines(lines: list[str]) -> list[str]:
+    return [
+        line.rstrip()
+        for line in lines
+        if re.search(r"^\s*[a-zA-Z0-9_.-]+\s*:\s*.*$", line)
+    ]
+
+
+def _properties_config_lines(lines: list[str]) -> list[str]:
+    return [
+        line.strip()
+        for line in lines
+        if re.search(r"^[a-zA-Z0-9_.-]+\s*[:=]\s*.+$", line.strip())
+    ]
+
+
+def _java_value_config_lines(lines: list[str]) -> list[str]:
+    values: list[str] = []
+    for line in lines:
+        if "@Value(" not in line:
+            continue
+        key = _match(line, r"\$\{([^}:\s]+)(?::([^}]*))?}")
+        default = _match(line, r"\$\{[^}:\s]+:([^}]*)}")
+        if key:
+            values.append(f"{key}: {default or '<value>'}")
+    return list(dict.fromkeys(values))
+
+
 def _normalize_config_lines(lines: list[str]) -> list[str]:
     normalized: list[str] = []
     for line in lines:
@@ -658,9 +749,9 @@ def _card_summary(analysis: dict, risk_level: str, risk_items: list[dict]) -> st
 
 def _focus_indicators(analysis: dict, risk_items: list[dict]) -> list[dict]:
     return [
-        _focus("DB_SCHEMA_CHANGE", "DB 表/字段变更", {"DB_SCHEMA", "DATA_MIGRATION", "ENTITY_MODEL", "ORM_MAPPING"}, "HIGH", analysis, risk_items),
-        _focus("MQ_CONFIG_CHANGE", "MQ 配置变更", {"MQ_TOPIC_CONFIG"}, "MEDIUM", analysis, risk_items),
-        _focus("REDIS_CONFIG_CHANGE", "Redis 配置变更", {"CACHE_KEY", "CACHE_TTL", "CACHE_INVALIDATION", "CACHE_READ_WRITE", "CACHE_SERIALIZATION"}, "MEDIUM", analysis, risk_items),
+        _focus("DB_SCHEMA_CHANGE", "DB 表/字段变更", {"DB_DATA_WRITE", "DB_SCHEMA", "DATA_MIGRATION", "ENTITY_MODEL", "ORM_MAPPING"}, "HIGH", analysis, risk_items),
+        _focus("MQ_CONFIG_CHANGE", "MQ 配置变更", {"MQ_CONFIG", "MQ_TOPIC_CONFIG"}, "MEDIUM", analysis, risk_items),
+        _focus("REDIS_CONFIG_CHANGE", "Redis 配置变更", {"CACHE_WRITE_DELETE", "CACHE_KEY", "CACHE_TTL", "CACHE_INVALIDATION", "CACHE_READ_WRITE", "CACHE_SERIALIZATION"}, "MEDIUM", analysis, risk_items),
         _value_focus(analysis, risk_items),
     ]
 

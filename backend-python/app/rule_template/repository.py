@@ -16,12 +16,7 @@ NOTIFICATION_RULE_GROUPS = [
         "groupName": "DB配置变更",
         "color": "volcano",
         "ruleCodes": [
-            "DB_SCHEMA_CHANGE_CHECK",
-            "DB_SQL_CHANGE_CHECK",
-            "ORM_MAPPING_CHANGE_CHECK",
-            "ENTITY_MODEL_CHANGE_CHECK",
-            "DATA_MIGRATION_CHECK",
-            "DB_SCHEMA_SYNC_SUSPECT_CHECK",
+            "DB_DATA_WRITE_CHANGE_CHECK",
         ],
     },
     {
@@ -29,11 +24,7 @@ NOTIFICATION_RULE_GROUPS = [
         "groupName": "MQ配置变更",
         "color": "blue",
         "ruleCodes": [
-            "MQ_PRODUCER_CHANGE_CHECK",
-            "MQ_CONSUMER_CHANGE_CHECK",
-            "MQ_MESSAGE_SCHEMA_CHANGE_CHECK",
-            "MQ_TOPIC_CONFIG_CHANGE_CHECK",
-            "MQ_RETRY_DLQ_CHANGE_CHECK",
+            "MQ_CONFIG_CHANGE_CHECK",
         ],
     },
     {
@@ -41,11 +32,7 @@ NOTIFICATION_RULE_GROUPS = [
         "groupName": "Redis配置变更",
         "color": "green",
         "ruleCodes": [
-            "CACHE_KEY_CHANGE_CHECK",
-            "CACHE_TTL_CHANGE_CHECK",
-            "CACHE_INVALIDATION_CHANGE_CHECK",
-            "CACHE_READ_WRITE_CHANGE_CHECK",
-            "CACHE_SERIALIZATION_CHANGE_CHECK",
+            "CACHE_WRITE_DELETE_CHANGE_CHECK",
         ],
     },
     {
@@ -57,6 +44,23 @@ NOTIFICATION_RULE_GROUPS = [
 ]
 
 RULE_EXAMPLES = {
+    "DB_DATA_WRITE_CHANGE_CHECK": (
+        "OrderMapper.xml\n"
+        "+ update orders set status = #{status} where id = #{id}\n\n"
+        "OrderDO.java\n"
+        "+ @TableField(\"confirm_enabled\")\n"
+        "+ private Boolean confirmEnabled;"
+    ),
+    "CACHE_WRITE_DELETE_CHANGE_CHECK": (
+        "OrderCache.java\n"
+        "+ redisTemplate.opsForValue().set(\"order:detail:\" + id, value)\n"
+        "+ redisTemplate.delete(\"order:list\")"
+    ),
+    "MQ_CONFIG_CHANGE_CHECK": (
+        "RabbitMqBindingConfig.java\n"
+        "+ return new Queue(MqClientConstant.REPORT_POSITION_QUEUE, true, false, false);\n"
+        "+ .with(MqClientConstant.REPORT_POSITION_ROUTING_KEY);"
+    ),
     "DB_SCHEMA_CHANGE_CHECK": "db/migration/V12__alter_order.sql\n+ alter table orders add column confirm_enabled tinyint",
     "DB_SQL_CHANGE_CHECK": "OrderMapper.xml\n+ update orders set status = #{status} where id = #{id}",
     "ORM_MAPPING_CHANGE_CHECK": "OrderMapper.xml\n+ <result column=\"confirm_enabled\" property=\"confirmEnabled\" />",
@@ -84,6 +88,36 @@ RULE_EXAMPLES = {
     ),
 }
 
+LEGACY_RULE_CODE_MAP = {
+    "DB_SCHEMA_CHANGE_CHECK": "DB_DATA_WRITE_CHANGE_CHECK",
+    "DB_SQL_CHANGE_CHECK": "DB_DATA_WRITE_CHANGE_CHECK",
+    "ORM_MAPPING_CHANGE_CHECK": "DB_DATA_WRITE_CHANGE_CHECK",
+    "ENTITY_MODEL_CHANGE_CHECK": "DB_DATA_WRITE_CHANGE_CHECK",
+    "DATA_MIGRATION_CHECK": "DB_DATA_WRITE_CHANGE_CHECK",
+    "DB_SCHEMA_SYNC_SUSPECT_CHECK": "DB_DATA_WRITE_CHANGE_CHECK",
+    "CACHE_KEY_CHANGE_CHECK": "CACHE_WRITE_DELETE_CHANGE_CHECK",
+    "CACHE_TTL_CHANGE_CHECK": "CACHE_WRITE_DELETE_CHANGE_CHECK",
+    "CACHE_INVALIDATION_CHANGE_CHECK": "CACHE_WRITE_DELETE_CHANGE_CHECK",
+    "CACHE_READ_WRITE_CHANGE_CHECK": "CACHE_WRITE_DELETE_CHANGE_CHECK",
+    "MQ_PRODUCER_CHANGE_CHECK": "MQ_CONFIG_CHANGE_CHECK",
+    "MQ_CONSUMER_CHANGE_CHECK": "MQ_CONFIG_CHANGE_CHECK",
+    "MQ_MESSAGE_SCHEMA_CHANGE_CHECK": "MQ_CONFIG_CHANGE_CHECK",
+    "MQ_TOPIC_CONFIG_CHANGE_CHECK": "MQ_CONFIG_CHANGE_CHECK",
+    "MQ_RETRY_DLQ_CHANGE_CHECK": "MQ_CONFIG_CHANGE_CHECK",
+}
+
+
+def normalize_rule_codes(rule_codes: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for value in rule_codes or []:
+        rule_code = str(value or "").strip().upper()
+        if not rule_code:
+            continue
+        rule_code = LEGACY_RULE_CODE_MAP.get(rule_code, rule_code)
+        if rule_code not in normalized:
+            normalized.append(rule_code)
+    return normalized
+
 
 def template_to_dict(template: RuleTemplate) -> dict:
     config = read_json(template.config_json, {})
@@ -92,15 +126,16 @@ def template_to_dict(template: RuleTemplate) -> dict:
     focus_change_types = config.get("focusChangeTypes")
     focus_rule_codes = config.get("focusRuleCodes")
     recommended_checks = config.get("recommendedChecks")
+    enabled_rule_codes = normalize_rule_codes(read_json_array(template.enabled_rule_codes))
     return {
         "id": template.id,
         "templateCode": template.template_code,
         "templateName": template.template_name,
         "targetType": template.target_type,
         "version": template.version,
-        "enabledRuleCodes": read_json_array(template.enabled_rule_codes),
+        "enabledRuleCodes": enabled_rule_codes,
         "focusChangeTypes": focus_change_types if isinstance(focus_change_types, list) else [],
-        "focusRuleCodes": focus_rule_codes if isinstance(focus_rule_codes, list) else [],
+        "focusRuleCodes": normalize_rule_codes(focus_rule_codes) if isinstance(focus_rule_codes, list) else [],
         "recommendedChecks": recommended_checks if isinstance(recommended_checks, list) else [],
         "config": config,
         "status": template.status,

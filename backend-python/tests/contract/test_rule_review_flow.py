@@ -7,6 +7,7 @@ import respx
 from sqlalchemy.orm import Session
 
 from app.project_integration.models import Project
+from app.review_record.models import ReviewResult
 from app.rule_template.models import RuleTemplate
 
 
@@ -20,36 +21,25 @@ def seed_backend_template(db_session: Session) -> None:
             version=1,
             enabled_rule_codes=json.dumps(
                 [
-                    "DB_SCHEMA_CHANGE_CHECK",
-                    "DB_SQL_CHANGE_CHECK",
-                    "ORM_MAPPING_CHANGE_CHECK",
-                    "ENTITY_MODEL_CHANGE_CHECK",
-                    "DATA_MIGRATION_CHECK",
-                    "DB_SCHEMA_SYNC_SUSPECT_CHECK",
-                    "CACHE_KEY_CHANGE_CHECK",
-                    "CACHE_TTL_CHANGE_CHECK",
-                    "CACHE_INVALIDATION_CHANGE_CHECK",
-                    "CACHE_READ_WRITE_CHANGE_CHECK",
-                    "CACHE_SERIALIZATION_CHANGE_CHECK",
-                    "MQ_PRODUCER_CHANGE_CHECK",
-                    "MQ_CONSUMER_CHANGE_CHECK",
-                    "MQ_MESSAGE_SCHEMA_CHANGE_CHECK",
-                    "MQ_TOPIC_CONFIG_CHANGE_CHECK",
-                    "MQ_RETRY_DLQ_CHANGE_CHECK",
+                    "DB_DATA_WRITE_CHANGE_CHECK",
+                    "CACHE_WRITE_DELETE_CHANGE_CHECK",
+                    "MQ_CONFIG_CHANGE_CHECK",
                     "CONFIG_RELEASE_CHECK",
                 ]
             ),
             config_json=json.dumps(
                 {
                     "focusChangeTypes": [
-                        "DB",
-                        "DB_SCHEMA",
-                        "DB_SQL",
-                        "CACHE",
-                        "CACHE_INVALIDATION",
-                        "MQ",
-                        "MQ_PRODUCER",
+                        "DB_DATA_WRITE",
+                        "CACHE_WRITE_DELETE",
+                        "MQ_CONFIG",
                         "CONFIG",
+                    ],
+                    "focusRuleCodes": [
+                        "DB_DATA_WRITE_CHANGE_CHECK",
+                        "CACHE_WRITE_DELETE_CHANGE_CHECK",
+                        "MQ_CONFIG_CHANGE_CHECK",
+                        "CONFIG_RELEASE_CHECK",
                     ],
                     "recommendedChecks": ["确认变更影响范围。"],
                 }
@@ -115,9 +105,9 @@ def mock_mr_payload() -> dict:
                 "diffText": '+ redisTemplate.delete("order:list");',
             },
             {
-                "old_path": "src/main/java/com/demo/order/OrderEventPublisher.java",
-                "new_path": "src/main/java/com/demo/order/OrderEventPublisher.java",
-                "diffText": '+ rabbitTemplate.convertAndSend("order.confirmed", event);',
+                "old_path": "src/main/java/com/demo/order/RabbitMqBindingConfig.java",
+                "new_path": "src/main/java/com/demo/order/RabbitMqBindingConfig.java",
+                "diffText": '+ return new Queue("order-confirmed-queue", true, false, false);\n+ .with("order-confirmed-route");',
             },
         ],
     }
@@ -173,7 +163,7 @@ def test_mock_mr_webhook_creates_success_task_result_and_notification(
 
     result = client.get(f"/api/review-tasks/{task_id}/result").json()["data"]
     assert result["riskLevel"] == "HIGH"
-    assert {"DB_SQL", "CACHE_INVALIDATION", "MQ_PRODUCER"}.issubset(
+    assert {"DB_DATA_WRITE", "CACHE_WRITE_DELETE", "MQ_CONFIG"}.issubset(
         {item["category"] for item in result["riskCard"]["riskItems"]}
     )
 
@@ -208,12 +198,106 @@ def test_manual_review_flow_writes_risk_card(client: TestClient, db_session: Ses
     assert data["status"] == "SUCCESS"
     assert data["riskLevel"] == "HIGH"
     result = client.get(f"/api/review-tasks/{data['taskId']}/result").json()["data"]
-    assert result["changeAnalysis"]["changeTypes"] == ["DB", "DB_SCHEMA"]
-    assert result["riskCard"]["riskItems"][0]["category"] == "DB_SCHEMA"
+    assert result["changeAnalysis"]["changeTypes"] == ["DB", "DB_DATA_WRITE"]
+    assert result["riskCard"]["riskItems"][0]["category"] == "DB_DATA_WRITE"
     artifact = result["riskCard"]["riskItems"][0]["maintenanceArtifacts"][0]
     assert artifact["artifactType"] == "SQL"
     assert artifact["confidence"] == "EXACT"
     assert "alter table orders add column risk_level varchar(32);" in artifact["content"]
+
+
+def test_focus_rule_codes_strictly_filter_generated_risk_card(
+    client: TestClient, db_session: Session
+) -> None:
+    seed_backend_template(db_session)
+    seed_project(db_session)
+    template = db_session.query(RuleTemplate).filter_by(template_code="backend-default").first()
+    template.config_json = json.dumps(
+        {
+            "focusRuleCodes": ["CONFIG_RELEASE_CHECK"],
+            "focusChangeTypes": ["CONFIG"],
+            "recommendedChecks": [],
+        }
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/api/review-tasks/manual",
+        json={
+            "projectId": 1,
+            "sourceBranch": "feature/focus",
+            "targetBranch": "main",
+            "changedFiles": [
+                {
+                    "path": "src/main/resources/mapper/OrderMapper.xml",
+                    "diffText": "+ update orders set status = #{status} where id = #{id}",
+                },
+                {
+                    "path": "src/main/resources/application.yml",
+                    "diffText": "+ order:\n+   enabled: true",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    result = client.get(f"/api/review-tasks/{response.json()['data']['taskId']}/result").json()["data"]
+    assert [item["ruleCode"] for item in result["riskCard"]["riskItems"]] == ["CONFIG_RELEASE_CHECK"]
+
+
+def test_task_result_regenerates_display_card_from_stored_change_analysis(
+    client: TestClient, db_session: Session
+) -> None:
+    seed_backend_template(db_session)
+    seed_project(db_session)
+
+    response = client.post(
+        "/api/review-tasks/manual",
+        json={
+            "projectId": 1,
+            "sourceBranch": "feature/regenerate",
+            "targetBranch": "main",
+            "changedFiles": [
+                {
+                    "path": "src/main/java/com/demo/car/entity/FenceLearningModel.java",
+                    "changeType": "ADDED",
+                    "diffText": (
+                        '+ @TableName("client_fence_learning_model")\n'
+                        '+ public class FenceLearningModel {\n'
+                        '+   @TableId(value = "id", type = IdType.ASSIGN_ID)\n'
+                        '+   private Long id;\n'
+                        '+   @TableField(value = "create_time", fill = FieldFill.INSERT)\n'
+                        '+   private Date createTime;\n'
+                        "+ }"
+                    ),
+                }
+            ],
+        },
+    )
+    task_id = response.json()["data"]["taskId"]
+    review_result = db_session.query(ReviewResult).filter_by(task_id=task_id).one()
+    stale_card = json.loads(review_result.risk_card_json)
+    stale_card["riskItems"][0]["maintenanceArtifacts"] = [
+        {
+            "artifactType": "SQL",
+            "title": "可维护 SQL 片段",
+            "language": "sql",
+            "content": '@TableField(value = "create_time", fill = FieldFill.INSERT);',
+            "confidence": "EXACT",
+            "copyable": True,
+            "sourceFilePath": "src/main/java/com/demo/car/entity/FenceLearningModel.java",
+            "sourceChangeType": "DB_DATA_WRITE",
+            "notes": "stale",
+        }
+    ]
+    review_result.risk_card_json = json.dumps(stale_card, ensure_ascii=False)
+    db_session.commit()
+
+    result = client.get(f"/api/review-tasks/{task_id}/result").json()["data"]
+    artifact = result["riskCard"]["riskItems"][0]["maintenanceArtifacts"][0]
+    assert artifact["confidence"] == "INFERRED"
+    assert "CREATE TABLE client_fence_learning_model" in artifact["content"]
+    assert "@TableField" not in artifact["content"]
 
 
 def test_rerun_gitlab_mr_task_replays_raw_payload(client: TestClient, db_session: Session) -> None:

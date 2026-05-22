@@ -204,10 +204,11 @@ def _process_task(
     diff_text: str | None,
 ) -> dict:
     template = get_enabled_template(db, task.template_code)
+    rule_codes = template.get("focusRuleCodes") or template.get("enabledRuleCodes", [])
     analysis = analyze_changes(changed_files, diff_text)
     risk_card = generate_risk_card(
         analysis,
-        template.get("enabledRuleCodes", []),
+        rule_codes,
         template.get("recommendedChecks", []),
     )
     result = save_review_result(db, task=task, analysis=analysis, risk_card=risk_card)

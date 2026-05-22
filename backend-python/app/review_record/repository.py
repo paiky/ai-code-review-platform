@@ -8,6 +8,12 @@ from app.core.errors import AppError
 from app.core.json_utils import format_datetime, page_response, read_json
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.review_record.models import NotificationRecord, ReviewResult, ReviewTask
+from app.risk_engine.service import generate_risk_card
+from app.rule_template.models import RuleTemplate
+from app.rule_template.repository import normalize_rule_codes
+
+
+RISK_WEIGHT = {"NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
 
 def _focus_indicators(risk_card_json: str | None) -> list:
@@ -148,14 +154,76 @@ def get_review_task_result(db: Session, task_id: int) -> dict:
     result = db.scalars(select(ReviewResult).where(ReviewResult.task_id == task_id)).first()
     if result is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Review result not found: {task_id}", 404)
+    change_analysis = read_json(result.change_analysis_json, None)
+    risk_card = _filter_risk_card_for_template(
+        db,
+        read_json(result.risk_card_json, None),
+        change_analysis,
+        result.template_code,
+    )
     return {
         "taskId": result.task_id,
-        "riskLevel": result.risk_level,
-        "riskItemCount": result.risk_item_count,
-        "summary": result.summary,
-        "changeAnalysis": read_json(result.change_analysis_json, None),
-        "riskCard": read_json(result.risk_card_json, None),
+        "riskLevel": risk_card.get("riskLevel") if isinstance(risk_card, dict) else result.risk_level,
+        "riskItemCount": len(risk_card.get("riskItems", [])) if isinstance(risk_card, dict) else result.risk_item_count,
+        "summary": risk_card.get("summary") if isinstance(risk_card, dict) else result.summary,
+        "changeAnalysis": change_analysis,
+        "riskCard": risk_card,
     }
+
+
+def _filter_risk_card_for_template(
+    db: Session,
+    risk_card: dict | None,
+    change_analysis: dict | None,
+    template_code: str | None,
+) -> dict | None:
+    if not isinstance(risk_card, dict) or not template_code:
+        return risk_card
+    template = db.scalars(
+        select(RuleTemplate)
+        .where(RuleTemplate.status == "ENABLED", RuleTemplate.template_code == template_code)
+        .order_by(RuleTemplate.version.desc())
+        .limit(1)
+    ).first()
+    if template is None:
+        return risk_card
+    config = read_json(template.config_json, {})
+    if not isinstance(config, dict):
+        return risk_card
+    focus_rule_codes = config.get("focusRuleCodes")
+    recommended_checks = config.get("recommendedChecks")
+    if not isinstance(focus_rule_codes, list) or not focus_rule_codes:
+        return risk_card
+    raw_allowed = {str(code or "").strip().upper() for code in focus_rule_codes if str(code or "").strip()}
+    normalized_rule_codes = normalize_rule_codes(focus_rule_codes)
+    normalized_allowed = set(normalized_rule_codes)
+    if not raw_allowed and not normalized_allowed:
+        return risk_card
+    if isinstance(change_analysis, dict):
+        return generate_risk_card(
+            change_analysis,
+            normalized_rule_codes,
+            recommended_checks if isinstance(recommended_checks, list) else [],
+        )
+    clone = dict(risk_card)
+    clone["riskItems"] = [
+        item
+        for item in risk_card.get("riskItems", [])
+        if _item_rule_allowed(item, raw_allowed, normalized_allowed)
+    ]
+    clone["riskLevel"] = max(
+        (item.get("riskLevel") or "LOW" for item in clone["riskItems"]),
+        key=lambda level: RISK_WEIGHT.get(level, 0),
+        default="LOW",
+    )
+    return clone
+
+
+def _item_rule_allowed(item: dict, raw_allowed: set[str], normalized_allowed: set[str]) -> bool:
+    rule_code = str(item.get("ruleCode") or "").strip().upper()
+    if rule_code in raw_allowed:
+        return True
+    return rule_code in normalized_allowed and rule_code not in raw_allowed
 
 
 def list_notifications(db: Session, task_id: int) -> list[dict]:

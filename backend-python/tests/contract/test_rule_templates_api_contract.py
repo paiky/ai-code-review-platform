@@ -59,7 +59,7 @@ def test_rule_templates_api_returns_enabled_templates_and_latest_detail(
     assert detail_response.status_code == 200
     detail = detail_response.json()["data"]
     assert detail["version"] == 2
-    assert detail["enabledRuleCodes"] == ["DB_SCHEMA_CHANGE_CHECK"]
+    assert detail["enabledRuleCodes"] == ["DB_DATA_WRITE_CHANGE_CHECK"]
     assert detail["focusChangeTypes"] == ["DB", "DB_SCHEMA"]
     assert detail["recommendedChecks"] == ["检查数据库迁移脚本"]
     assert detail["config"]["defaultRiskLevel"] == "LOW"
@@ -114,6 +114,9 @@ def test_rule_template_notification_rules_api_returns_grouped_rules(
         "Redis配置变更",
         "Nacos配置变更",
     ]
+    assert data["groups"][0]["rules"][0]["ruleCode"] == "DB_DATA_WRITE_CHANGE_CHECK"
+    assert data["groups"][1]["rules"][0]["ruleCode"] == "MQ_CONFIG_CHANGE_CHECK"
+    assert data["groups"][2]["rules"][0]["ruleCode"] == "CACHE_WRITE_DELETE_CHANGE_CHECK"
     config_rules = data["groups"][3]["rules"]
     assert config_rules[0]["ruleCode"] == "CONFIG_RELEASE_CHECK"
     assert config_rules[0]["enabledInTemplate"] is True
@@ -132,10 +135,10 @@ def test_rule_template_notification_rules_update_preserves_existing_config(
             template_name="后端默认审查模板",
             target_type="BACKEND",
             version=1,
-            enabled_rule_codes=json.dumps(["DB_SQL_CHANGE_CHECK", "CONFIG_RELEASE_CHECK"]),
+            enabled_rule_codes=json.dumps(["DB_DATA_WRITE_CHANGE_CHECK", "CONFIG_RELEASE_CHECK"]),
             config_json=json.dumps(
                 {
-                    "focusChangeTypes": ["DB_SQL"],
+                    "focusChangeTypes": ["DB_DATA_WRITE"],
                     "recommendedChecks": ["确认 SQL 影响范围"],
                     "defaultRiskLevel": "LOW",
                 }
@@ -150,15 +153,15 @@ def test_rule_template_notification_rules_update_preserves_existing_config(
 
     response = client.put(
         "/api/rule-templates/backend-default/notification-rules",
-        json={"focusRuleCodes": ["CONFIG_RELEASE_CHECK", "DB_SQL_CHANGE_CHECK"]},
+        json={"focusRuleCodes": ["CONFIG_RELEASE_CHECK", "DB_DATA_WRITE_CHANGE_CHECK"]},
     )
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["focusRuleCodes"] == ["CONFIG_RELEASE_CHECK", "DB_SQL_CHANGE_CHECK"]
+    assert data["focusRuleCodes"] == ["CONFIG_RELEASE_CHECK", "DB_DATA_WRITE_CHANGE_CHECK"]
     template = db_session.get(RuleTemplate, 4)
     config = json.loads(template.config_json)
-    assert config["focusRuleCodes"] == ["CONFIG_RELEASE_CHECK", "DB_SQL_CHANGE_CHECK"]
-    assert config["focusChangeTypes"] == ["DB_SQL"]
+    assert config["focusRuleCodes"] == ["CONFIG_RELEASE_CHECK", "DB_DATA_WRITE_CHANGE_CHECK"]
+    assert config["focusChangeTypes"] == ["DB_DATA_WRITE"]
     assert config["recommendedChecks"] == ["确认 SQL 影响范围"]
     assert config["defaultRiskLevel"] == "LOW"

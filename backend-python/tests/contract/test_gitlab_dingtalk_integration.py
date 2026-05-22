@@ -20,15 +20,21 @@ def seed_template(db_session: Session) -> None:
             version=1,
             enabled_rule_codes=json.dumps(
                 [
-                    "DB_SQL_CHANGE_CHECK",
-                    "CACHE_INVALIDATION_CHANGE_CHECK",
-                    "MQ_PRODUCER_CHANGE_CHECK",
+                    "DB_DATA_WRITE_CHANGE_CHECK",
+                    "CACHE_WRITE_DELETE_CHANGE_CHECK",
+                    "MQ_CONFIG_CHANGE_CHECK",
                     "CONFIG_RELEASE_CHECK",
                 ]
             ),
             config_json=json.dumps(
                 {
-                    "focusChangeTypes": ["DB_SQL", "CACHE_INVALIDATION", "MQ_PRODUCER", "CONFIG"],
+                    "focusChangeTypes": ["DB_DATA_WRITE", "CACHE_WRITE_DELETE", "MQ_CONFIG", "CONFIG"],
+                    "focusRuleCodes": [
+                        "DB_DATA_WRITE_CHANGE_CHECK",
+                        "CACHE_WRITE_DELETE_CHANGE_CHECK",
+                        "MQ_CONFIG_CHANGE_CHECK",
+                        "CONFIG_RELEASE_CHECK",
+                    ],
                     "recommendedChecks": ["确认变更影响范围。"],
                 }
             ),
@@ -132,7 +138,7 @@ def test_mr_without_changed_files_fetches_gitlab_diffs(
     assert response.status_code == 200
     task_id = response.json()["data"]["taskId"]
     result = client.get(f"/api/review-tasks/{task_id}/result").json()["data"]
-    assert result["changeAnalysis"]["changeTypes"] == ["DB", "DB_SQL"]
+    assert result["changeAnalysis"]["changeTypes"] == ["DB", "DB_DATA_WRITE"]
     detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
     assert detail["changedFilesSummary"]["source"] == "gitlab_api"
 
@@ -274,10 +280,10 @@ def test_dingtalk_filter_prefers_focus_rule_codes_for_value_config(
             template_name="后端默认审查模板",
             target_type="BACKEND",
             version=1,
-            enabled_rule_codes=json.dumps(["DB_SQL_CHANGE_CHECK", "CONFIG_RELEASE_CHECK"]),
+            enabled_rule_codes=json.dumps(["DB_DATA_WRITE_CHANGE_CHECK", "CONFIG_RELEASE_CHECK"]),
             config_json=json.dumps(
                 {
-                    "focusChangeTypes": ["DB_SQL"],
+                    "focusChangeTypes": ["DB_DATA_WRITE"],
                     "focusRuleCodes": ["CONFIG_RELEASE_CHECK"],
                     "recommendedChecks": ["确认配置发布窗口。"],
                 }
@@ -431,7 +437,7 @@ def test_push_without_payload_diff_uses_compare_api(
     assert response.status_code == 200
     task_id = response.json()["data"]["taskId"]
     result = client.get(f"/api/review-tasks/{task_id}/result").json()["data"]
-    assert result["changeAnalysis"]["changeTypes"] == ["DB", "DB_SQL"]
+    assert result["changeAnalysis"]["changeTypes"] == ["DB", "DB_DATA_WRITE"]
     detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
     assert detail["changedFilesSummary"]["source"] == "gitlab_compare_api"
 

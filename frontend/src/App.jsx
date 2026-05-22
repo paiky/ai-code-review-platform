@@ -2052,7 +2052,7 @@ function TemplateConfig() {
       });
       setNotificationRules(updated);
       setNotificationRuleDraftCodes(updated.focusRuleCodes || []);
-      messageApi.success('提醒类型已保存');
+      messageApi.success('启用的卡片提醒类型已保存');
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -2342,7 +2342,7 @@ function TemplateConfig() {
       key: 'notification-rules',
       label: (
         <Space wrap>
-          <Text strong>卡片提醒类型</Text>
+          <Text strong>启用的卡片提醒类型</Text>
           <Tag>{notificationRuleDraftCodes.length} 个已选</Tag>
           {notificationRulesDirty && <Tag color="gold">未保存</Tag>}
         </Space>
@@ -2366,7 +2366,7 @@ function TemplateConfig() {
               </Col>
               <Col xs={24} md={14}>
                 <Space wrap>
-                  <Text type="secondary">已选择 {notificationRuleDraftCodes.length} 个提醒类型</Text>
+                  <Text type="secondary">已启用 {notificationRuleDraftCodes.length} 个卡片提醒类型</Text>
                   {notificationRuleDraftCodes.map(code => <Tag key={code} color="blue">{code}</Tag>)}
                 </Space>
               </Col>

@@ -42,8 +42,14 @@ def seed_template(db_session: Session) -> None:
             template_name="后端默认审查模板",
             target_type="BACKEND",
             version=1,
-            enabled_rule_codes=json.dumps(["DB_SQL_CHANGE_CHECK"]),
-            config_json=json.dumps({"focusChangeTypes": ["DB_SQL"], "recommendedChecks": []}),
+            enabled_rule_codes=json.dumps(["DB_DATA_WRITE_CHANGE_CHECK"]),
+            config_json=json.dumps(
+                {
+                    "focusChangeTypes": ["DB_DATA_WRITE"],
+                    "focusRuleCodes": ["DB_DATA_WRITE_CHANGE_CHECK"],
+                    "recommendedChecks": [],
+                }
+            ),
             status="ENABLED",
             description="stage4",
             created_at=now,
@@ -1094,7 +1100,7 @@ def test_mr_auto_review_sends_combined_review_summary(
             "changedFiles": [
                 {
                     "path": "src/main/resources/mapper/OrderMapper.xml",
-                    "diffText": "+ select id, status from orders where id = #{id}",
+                    "diffText": "+ update orders set status = #{status} where id = #{id}",
                 }
             ],
         },
@@ -1403,7 +1409,7 @@ def test_push_gate_allows_risk_matched_push_and_runs_ai_review(
             changed_files=[
                 {
                     "path": "src/main/resources/mapper/OrderMapper.xml",
-                    "diffText": "+ select id, status from orders where id = #{id}",
+                    "diffText": "+ update orders set status = #{status} where id = #{id}",
                 }
             ],
         ),

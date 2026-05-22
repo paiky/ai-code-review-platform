@@ -50,9 +50,10 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict:
 
     try:
         analysis = analyze_changes(request.get("changedFiles") or [], request.get("diffText"))
+        rule_codes = template.get("focusRuleCodes") or template.get("enabledRuleCodes", [])
         risk_card = generate_risk_card(
             analysis,
-            template.get("enabledRuleCodes", []),
+            rule_codes,
             template.get("recommendedChecks", []),
         )
         result = save_review_result(db, task=task, analysis=analysis, risk_card=risk_card)

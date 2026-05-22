@@ -6,16 +6,19 @@ from typing import Any
 
 
 AGGREGATE_TYPES = {
+    "DB_DATA_WRITE": "DB",
     "DB_SCHEMA": "DB",
     "DB_SQL": "DB",
     "ORM_MAPPING": "DB",
     "ENTITY_MODEL": "DB",
     "DATA_MIGRATION": "DB",
+    "CACHE_WRITE_DELETE": "CACHE",
     "CACHE_KEY": "CACHE",
     "CACHE_TTL": "CACHE",
     "CACHE_INVALIDATION": "CACHE",
     "CACHE_READ_WRITE": "CACHE",
     "CACHE_SERIALIZATION": "CACHE",
+    "MQ_CONFIG": "MQ",
     "MQ_PRODUCER": "MQ",
     "MQ_CONSUMER": "MQ",
     "MQ_MESSAGE_SCHEMA": "MQ",
@@ -26,18 +29,21 @@ AGGREGATE_TYPES = {
 CHANGE_TYPE_ORDER = [
     "API",
     "DB",
+    "DB_DATA_WRITE",
     "DB_SCHEMA",
     "DB_SQL",
     "ORM_MAPPING",
     "ENTITY_MODEL",
     "DATA_MIGRATION",
     "CACHE",
+    "CACHE_WRITE_DELETE",
     "CACHE_KEY",
     "CACHE_TTL",
     "CACHE_INVALIDATION",
     "CACHE_READ_WRITE",
     "CACHE_SERIALIZATION",
     "MQ",
+    "MQ_CONFIG",
     "MQ_PRODUCER",
     "MQ_CONSUMER",
     "MQ_MESSAGE_SCHEMA",
@@ -134,22 +140,22 @@ def _db_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None:
     mapper_path = _path_matches(changed_file, ["mapper", "mybatis", "jpa"])
     entity_path = _path_matches(changed_file, ["entity", "/domain/", "\\domain\\", "/model/", "\\model\\", "/po/", "\\po\\", "/do/", "\\do\\"])
     ddl_matched = _contains_any(content, ["create table", "alter table", "drop table", "add column", "drop column", "modify column", "rename column", "create index", "drop index"])
-    sql_matched = any(re.search(pattern, content, re.I | re.S) for pattern in [r"\bselect\b.+\bfrom\b", r"\binsert\s+into\b", r"\bupdate\b.+\bset\b", r"\bdelete\s+from\b"])
+    write_sql_matched = any(re.search(pattern, content, re.I | re.S) for pattern in [r"\binsert\s+into\b", r"\bupdate\b.+\bset\b", r"\bdelete\s+from\b"])
     orm_matched = _contains_any(content, ["resultMap", "<result ", "<id ", "column=", "property=", "@Table", "@Column", "@JoinColumn", "@OneToMany", "@ManyToOne"])
     entity_matched = re.search(r"@(?:TableField|TableId)\s*\(\s*(?:value\s*=\s*)?[\"']([a-zA-Z_][a-zA-Z0-9_]*)[\"']", content) or (
         entity_path and (_contains_any(content, ["@Entity", "@Table", "@Column", "@TableField", "@TableId", "@TableName"]) or re.search(r"(?m)^\s*[+-]\s*(?:private|protected|public)\s+[\w<>?, ]+\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=|;)", content))
     )
     if ddl_matched:
-        return RuleMatch("DB_SCHEMA", "DB_TABLE", _table_name(content, changed_file), "Detected DDL or migration schema statement", "DB_FINE_GRAINED_RULE")
-    if migration_path and (sql_matched or _contains_any(content, ["backfill", "migrate", "migration", "数据修复", "回填", "历史数据"])):
-        return RuleMatch("DATA_MIGRATION", "DATA_MIGRATION", _table_name(content, changed_file), "Detected migration data change", "DB_FINE_GRAINED_RULE")
+        return RuleMatch("DB_DATA_WRITE", "DB_TABLE", _table_name(content, changed_file), "Detected DB DDL/schema maintenance change", "DB_DATA_WRITE_RULE")
+    if migration_path and (write_sql_matched or _contains_any(content, ["backfill", "migrate", "migration", "数据修复", "回填", "历史数据"])):
+        return RuleMatch("DB_DATA_WRITE", "DATA_MIGRATION", _table_name(content, changed_file), "Detected migration data write change", "DB_DATA_WRITE_RULE")
     if mapper_path and orm_matched:
-        return RuleMatch("ORM_MAPPING", "ORM_MAPPING", _table_name(content, changed_file), "Detected ORM/MyBatis mapping change", "DB_FINE_GRAINED_RULE")
+        return RuleMatch("DB_DATA_WRITE", "ORM_MAPPING", _table_name(content, changed_file), "Detected ORM/MyBatis mapping maintenance change", "DB_DATA_WRITE_RULE")
     if entity_matched:
         field = _first_group(content, r"@(?:TableField|TableId)\s*\(\s*(?:value\s*=\s*)?[\"']([a-zA-Z_][a-zA-Z0-9_]*)[\"']") or _first_group(content, r"(?m)^\s*[+-]\s*(?:private|protected|public)\s+[\w<>?, ]+\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=|;)") or _effective_path(changed_file)
-        return RuleMatch("ENTITY_MODEL", "ENTITY_FIELD", field, "Detected entity model field or ORM annotation change", "DB_FINE_GRAINED_RULE")
-    if sql_matched:
-        return RuleMatch("DB_SQL", "DB_TABLE", _table_name(content, changed_file), "Detected SQL read/write logic change", "DB_FINE_GRAINED_RULE")
+        return RuleMatch("DB_DATA_WRITE", "ENTITY_FIELD", field, "Detected entity model field or ORM annotation maintenance change", "DB_DATA_WRITE_RULE")
+    if write_sql_matched:
+        return RuleMatch("DB_DATA_WRITE", "DB_TABLE", _table_name(content, changed_file), "Detected SQL write logic change", "DB_DATA_WRITE_RULE")
     return None
 
 
@@ -158,39 +164,30 @@ def _cache_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None
         return None
     if _contains_any(content, ["RedisSerializer", "Jackson2JsonRedisSerializer", "GenericJackson2JsonRedisSerializer", "StringRedisSerializer", "serialize(", "deserialize(", "ObjectMapper"]):
         change_type, resource_type, reason = "CACHE_SERIALIZATION", "CACHE_VALUE", "Detected cache serialization or cached value schema change"
-    elif _contains_any(content, ["@CacheEvict", "delete(", "evict(", "invalidate(", "clear(", "unlink("]):
-        change_type, resource_type, reason = "CACHE_INVALIDATION", "CACHE_KEY", "Detected cache invalidation or eviction change"
-    elif _contains_any(content, ["expire(", "expireAt(", "ttl", "time-to-live", "timeToLive", "Duration.of", "TimeUnit."]):
-        change_type, resource_type, reason = "CACHE_TTL", "CACHE_POLICY", "Detected cache TTL or expiration policy change"
-    elif _contains_any(content, ["@Cacheable", "@CachePut", "opsForValue", "opsForHash", "get(", "set(", "put(", "cacheManager"]):
-        change_type, resource_type, reason = "CACHE_READ_WRITE", "CACHE_KEY", "Detected cache read/write path change"
+    elif _contains_any(content, ["@CacheEvict", "@CachePut", "delete(", "evict(", "invalidate(", "clear(", "unlink(", "expire(", "expireAt(", "ttl", "time-to-live", "timeToLive", "Duration.of", "TimeUnit.", ".set(", ".put(", "setIfAbsent", "setnx"]):
+        change_type, resource_type, reason = "CACHE_WRITE_DELETE", "CACHE_KEY", "Detected cache write, TTL or invalidation change"
+    elif _contains_any(content, ["@Cacheable", "get("]):
+        return None
     else:
-        change_type, resource_type, reason = "CACHE_KEY", "CACHE_KEY", "Detected cache key naming or composition change"
+        return None
     name = _first_group(content, r"[\"']([a-zA-Z0-9_.:-]+:[a-zA-Z0-9_.:-]+)[\"']") or _first_group(content, r"(?i)(?:cache[_-]?key|key|prefix)\s*(?:=|:)\s*[\"']([a-zA-Z0-9_.:-]+)[\"']") or _effective_path(changed_file)
-    return RuleMatch(change_type, resource_type, name, reason, "CACHE_FINE_GRAINED_RULE")
+    return RuleMatch(change_type, resource_type, name, reason, "CACHE_WRITE_DELETE_RULE")
 
 
 def _mq_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None:
-    if not (_path_matches(changed_file, ["mq", "message", "producer", "consumer", "listener", "rocketmq", "kafka", "rabbit"]) or _contains_any(content, ["@RocketMQMessageListener", "RocketMQTemplate", "KafkaTemplate", "@KafkaListener", "RabbitTemplate", "@RabbitListener", "sendMessage", "convertAndSend", "topic", "consumerGroup", "rocketmq", "kafka", "rabbitmq"])):
+    if not (_path_matches(changed_file, ["mq", "rocketmq", "kafka", "rabbit"]) or _contains_any(content, ["TopicExchange", "DirectExchange", "FanoutExchange", "Queue(", "BindingBuilder", "routingKey", "routeKey", "exchange", "topic", "queue", "rocketmq", "kafka", "rabbitmq"])):
         return None
-    if _contains_any(content, ["retry", "reconsume", "dead letter", "deadLetter", "dlq", "ack", "nack", "manualAck", "maxAttempts", "delayLevel", "idempotent", "idempotency"]):
-        change_type, resource_type, reason = "MQ_RETRY_DLQ", "MQ_CONSUMER", "Detected MQ retry, dead-letter, ack or idempotency change"
-    elif _contains_any(content, ["RocketMQTemplate", "KafkaTemplate", "RabbitTemplate", "sendMessage", "convertAndSend", "syncSend", "asyncSend", "send("]):
-        change_type, resource_type, reason = "MQ_PRODUCER", "MQ_PRODUCER", "Detected MQ producer send logic change"
-    elif _contains_any(content, ["@RocketMQMessageListener", "@KafkaListener", "@RabbitListener", "MessageListener", "Consumer", "Listener"]):
-        change_type, resource_type, reason = "MQ_CONSUMER", "MQ_CONSUMER", "Detected MQ consumer listener logic change"
-    elif _path_matches(changed_file, ["message", "event", "payload", "dto"]) and re.search(r"(?m)^\s*[+-]\s*(?:private|protected|public)\s+[\w<>?, ]+\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=|;)", content):
-        change_type, resource_type, reason = "MQ_MESSAGE_SCHEMA", "MQ_MESSAGE", "Detected MQ message payload schema change"
-    else:
-        change_type, resource_type, reason = "MQ_TOPIC_CONFIG", "MQ_TOPIC", "Detected MQ topic, group or middleware configuration change"
+    if _contains_any(content, ["@RocketMQMessageListener", "@KafkaListener", "@RabbitListener"]) and not _contains_any(content, ["TopicExchange", "DirectExchange", "FanoutExchange", "Queue(", "BindingBuilder", "routingKey", "routeKey"]):
+        return None
+    if not _contains_any(content, ["TopicExchange", "DirectExchange", "FanoutExchange", "Queue(", "BindingBuilder", "routingKey", "routeKey", "exchange", "topic", "queue", "consumerGroup", "groupId"]):
+        return None
+    change_type, resource_type, reason = "MQ_CONFIG", "MQ_TOPIC", "Detected MQ exchange, queue or route key configuration change"
     name = _first_group(content, r"(?i)(?:topic|topics|destination)\s*=\s*[\"']([a-zA-Z0-9_.:-]+)[\"']") or _first_group(content, r"(?i)(?:send|syncSend|asyncSend|convertAndSend)\s*\(\s*[\"']([a-zA-Z0-9_.:-]+)[\"']") or _effective_path(changed_file)
-    if change_type == "MQ_MESSAGE_SCHEMA":
-        name = _first_group(content, r"(?m)^\s*[+-]\s*(?:private|protected|public)\s+[\w<>?, ]+\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=|;)") or name
-    return RuleMatch(change_type, resource_type, name, reason, "MQ_FINE_GRAINED_RULE")
+    return RuleMatch(change_type, resource_type, name, reason, "MQ_CONFIG_RULE")
 
 
 def _config_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None:
-    if not (_path_matches(changed_file, ["application.yml", "application.yaml", "application.properties", "bootstrap.yml", "bootstrap.yaml", "nacos", "config", ".properties", ".yaml", ".yml"]) or _contains_any(content, ["spring:", "server:", "datasource:", "redis:", "rocketmq:", "kafka:", "nacos", "feature", "enabled:"])):
+    if not _path_matches(changed_file, ["application.yml", "application.yaml", "application.properties", "bootstrap.yml", "bootstrap.yaml", "nacos", ".properties", ".yaml", ".yml"]):
         return None
     name = _first_group(content, r"(?m)^\s*[+-]?\s*([a-zA-Z0-9_.-]+)\s*[:=]") or _effective_path(changed_file)
     return RuleMatch("CONFIG", "CONFIG_KEY", name, "Detected configuration change", "CONFIG_HEURISTIC_RULE")
@@ -263,12 +260,16 @@ def _evidence(change_type: str, changed_file: dict[str, Any], snippet: str, matc
 def _added_lines(changed_file: dict[str, Any]) -> list[str]:
     diff = changed_file.get("diffText") or changed_file.get("diff") or changed_file.get("patch") or ""
     lines: list[str] = []
-    for raw_line in str(diff).splitlines():
+    raw_lines = str(diff).splitlines()
+    looks_like_diff = any(line.startswith(("+", "-", "@@", "diff --", "index ")) for line in raw_lines)
+    for raw_line in raw_lines:
         if raw_line.startswith("+++") or raw_line.startswith("---"):
             continue
         if raw_line.startswith("+"):
             value = raw_line[1:].rstrip()
         elif raw_line.startswith("-") or raw_line.startswith("@@") or raw_line.startswith("diff --") or raw_line.startswith("index "):
+            continue
+        elif looks_like_diff:
             continue
         else:
             value = raw_line.rstrip()
