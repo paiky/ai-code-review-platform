@@ -31,6 +31,8 @@ import {
   ClockCircleOutlined,
   CloseOutlined,
   ClusterOutlined,
+  CopyOutlined,
+  EyeOutlined,
   FileSearchOutlined,
   LoadingOutlined,
   PlusOutlined,
@@ -248,6 +250,10 @@ function findChangedFileForFinding(finding, changedFilesSummary) {
       || targetPath.endsWith(`/${candidate}`)
     ));
   }) || null;
+}
+
+function findChangedFileForEvidence(evidence, changedFilesSummary) {
+  return findChangedFileForFinding({ filePath: evidence?.filePath }, changedFilesSummary);
 }
 
 function parseUnifiedDiff(diffText) {
@@ -590,6 +596,70 @@ function JobQueueModal({ open, queue, onClose }) {
   );
 }
 
+const artifactTypeLabels = {
+  SQL: 'SQL',
+  REDIS_COMMAND: 'Redis 命令',
+  MQ_CONFIG_CODE: 'MQ 配置',
+  NACOS_CONFIG: 'Nacos 配置'
+};
+
+function artifactLanguageLabel(language) {
+  return {
+    sql: 'SQL',
+    text: 'TEXT',
+    java: 'JAVA',
+    yaml: 'YAML',
+    properties: 'PROPERTIES'
+  }[language] || String(language || 'TEXT').toUpperCase();
+}
+
+async function copyTextToClipboard(text) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    message.success('已复制可维护内容');
+  } catch (err) {
+    message.error(err?.message || '复制失败');
+  }
+}
+
+function MaintenanceArtifacts({ artifacts }) {
+  const items = Array.isArray(artifacts) ? artifacts.filter(item => item?.content) : [];
+  if (items.length === 0) return null;
+  return (
+    <Space direction="vertical" size="small" className="full-width">
+      <Text strong>可维护内容</Text>
+      {items.map((artifact, index) => (
+        <div key={`${artifact.artifactType}-${artifact.sourceFilePath}-${index}`} className="maintenance-artifact">
+          <div className="maintenance-artifact-head">
+            <Space wrap size={[6, 6]}>
+              <Text strong>{artifact.title || artifactTypeLabels[artifact.artifactType] || '维护内容'}</Text>
+              <Tag color="blue">{artifactTypeLabels[artifact.artifactType] || artifact.artifactType}</Tag>
+              <Tag>{artifactLanguageLabel(artifact.language)}</Tag>
+              <Tag color={artifact.confidence === 'EXACT' ? 'green' : 'gold'}>{artifact.confidence || 'INFERRED'}</Tag>
+            </Space>
+            {artifact.copyable && (
+              <Tooltip title="复制">
+                <Button
+                  icon={<CopyOutlined />}
+                  size="small"
+                  onClick={() => copyTextToClipboard(artifact.content)}
+                />
+              </Tooltip>
+            )}
+          </div>
+          <pre className="maintenance-artifact-code">{artifact.content}</pre>
+          <Space wrap size={[4, 4]}>
+            {artifact.sourceFilePath && <Tag className="path-tag">{artifact.sourceFilePath}</Tag>}
+            {artifact.sourceChangeType && <Tag>{changeTypeLabel(artifact.sourceChangeType)}</Tag>}
+          </Space>
+          {artifact.notes && <Text type="secondary" className="maintenance-artifact-notes">{artifact.notes}</Text>}
+        </div>
+      ))}
+    </Space>
+  );
+}
+
 function TaskList({ onOpen }) {
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState('');
@@ -665,7 +735,8 @@ function TaskList({ onOpen }) {
   );
 }
 
-function RiskCardView({ riskCard }) {
+function RiskCardView({ riskCard, changedFilesSummary }) {
+  const [diffTarget, setDiffTarget] = useState(null);
   if (!riskCard) return <Empty description="暂无提醒卡片" />;
 
   const riskItems = (riskCard.riskItems || []).filter(item => item.ruleCode !== 'API_COMPATIBILITY_CHECK' && item.category !== 'API');
@@ -680,6 +751,22 @@ function RiskCardView({ riskCard }) {
       dataIndex: 'snippet',
       ellipsis: true,
       render: value => value ? <Text code className="evidence-snippet">{value}</Text> : '-'
+    },
+    {
+      title: 'Diff',
+      width: 92,
+      render: (_, evidence) => (
+        <Tooltip title="查看 Diff">
+          <Button
+            size="small"
+            icon={<EyeOutlined />}
+            onClick={() => setDiffTarget({
+              finding: { filePath: evidence.filePath, startLine: evidence.lineStart, endLine: evidence.lineEnd },
+              changedFile: findChangedFileForEvidence(evidence, changedFilesSummary)
+            })}
+          />
+        </Tooltip>
+      )
     }
   ];
 
@@ -736,6 +823,7 @@ function RiskCardView({ riskCard }) {
                           <Space wrap>{item.relatedSignals.map(signal => <Tag key={signal}>{signal}</Tag>)}</Space>
                         </Space>
                       )}
+                      <MaintenanceArtifacts artifacts={item.maintenanceArtifacts} />
                       <Divider />
                       <Text strong>命中证据</Text>
                       <Table
@@ -754,6 +842,12 @@ function RiskCardView({ riskCard }) {
           }))}
         />}
       </Card>
+      <DiffViewerModal
+        open={!!diffTarget}
+        finding={diffTarget?.finding}
+        changedFile={diffTarget?.changedFile}
+        onClose={() => setDiffTarget(null)}
+      />
     </Space>
   );
 }
@@ -1689,7 +1783,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
       ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
       : []),
-    { key: 'risk', label: '提醒卡片', children: <RiskCardView riskCard={result?.riskCard} /> },
+    { key: 'risk', label: '提醒卡片', children: <RiskCardView riskCard={result?.riskCard} changedFilesSummary={detail?.changedFilesSummary} /> },
     { key: 'analysis', label: '分析结果', children: <AnalysisView changeAnalysis={result?.changeAnalysis} /> },
     { key: 'event', label: '原始事件摘要', children: <Row gutter={[16, 16]}><Col xs={24} lg={12}><Card title="changedFiles 摘要"><JsonBlock value={detail?.changedFilesSummary} /></Card></Col><Col xs={24} lg={12}><Card title="raw payload"><JsonBlock value={detail?.rawPayload} /></Card></Col></Row> }
   ], [taskId, detail, result, codeQualityResult, codeQualityProgress, codeQualityGate, fixPreviews, retrying]);

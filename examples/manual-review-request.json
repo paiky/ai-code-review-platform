@@ -1,6 +1,6 @@
 {
   "projectId": 1,
-  "templateCode": "general-default",
+  "templateCode": "backend-default",
   "sourceBranch": "feature/manual-review",
   "targetBranch": "main",
   "authorName": "Manual Tester",
@@ -18,6 +18,41 @@
       "newPath": "src/main/resources/application.yml",
       "changeType": "MODIFIED",
       "diffText": "+ order:\n+   feature-enabled: true"
+    },
+    {
+      "path": "db/migration/V12__alter_orders.sql",
+      "oldPath": "db/migration/V12__alter_orders.sql",
+      "newPath": "db/migration/V12__alter_orders.sql",
+      "changeType": "MODIFIED",
+      "diffText": "+ alter table orders add column risk_level varchar(32)"
+    },
+    {
+      "path": "src/main/java/com/demo/order/entity/OrderDO.java",
+      "oldPath": "src/main/java/com/demo/order/entity/OrderDO.java",
+      "newPath": "src/main/java/com/demo/order/entity/OrderDO.java",
+      "changeType": "MODIFIED",
+      "diffText": "+ private String supportDeviceModel;"
+    },
+    {
+      "path": "src/main/java/com/demo/order/OrderCacheService.java",
+      "oldPath": "src/main/java/com/demo/order/OrderCacheService.java",
+      "newPath": "src/main/java/com/demo/order/OrderCacheService.java",
+      "changeType": "MODIFIED",
+      "diffText": "+ redisTemplate.opsForValue().set(\"order:detail:\" + id, value);\n+ redisTemplate.delete(\"order:list\");"
+    },
+    {
+      "path": "src/main/java/com/demo/order/OrderPaidConsumer.java",
+      "oldPath": "src/main/java/com/demo/order/OrderPaidConsumer.java",
+      "newPath": "src/main/java/com/demo/order/OrderPaidConsumer.java",
+      "changeType": "MODIFIED",
+      "diffText": "+ @RocketMQMessageListener(topic = \"order-paid-topic\", consumerGroup = \"order-service\")"
+    },
+    {
+      "path": "config/nacos/order-service.yaml",
+      "oldPath": "config/nacos/order-service.yaml",
+      "newPath": "config/nacos/order-service.yaml",
+      "changeType": "MODIFIED",
+      "diffText": "+ risk-review:\n+   enabled: true"
     }
   ]
 }

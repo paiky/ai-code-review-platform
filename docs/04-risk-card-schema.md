@@ -92,6 +92,7 @@ DB 细分风险项必须携带以下解释字段：
 | `reason` | string 或 null | 否 | 命中原因，应说明为什么判定该风险 |
 | `relatedSignals` | array | 是 | 组合风险关联信号，例如 `entity model changed`、`migration or DDL not detected` |
 | `evidences` | array | 是 | 命中的文件、片段和规则 |
+| `maintenanceArtifacts` | array | 是 | 可复制维护产物，例如 SQL、Redis 命令、MQ 配置伪代码、Nacos 配置 |
 
 前端展示要求：
 
@@ -100,6 +101,8 @@ DB 细分风险项必须携带以下解释字段：
 - 有 `relatedSignals` 时展示为标签。
 - `evidences` 至少展示文件路径、matcher 和 snippet。
 - DB 组合风险必须让用户能看出“由哪些信号组合而来”。
+- DB / Redis / MQ / Nacos 配置等重点提醒应优先展示 `maintenanceArtifacts`；`confidence=EXACT` 表示直接来自 diff，`confidence=INFERRED` 表示由实体、映射或代码片段推断，需要人工确认后使用。
+- DB 推断维护产物按表拆分：新增 Entity + `@TableName` 输出 `CREATE TABLE` 草稿，已有 Entity / Mapper 字段变更输出 `ALTER TABLE` 草稿；同表存在真实 DDL 时优先展示真实 SQL。
 
 ## 4. JSON Schema
 
@@ -204,7 +207,8 @@ DB 细分风险项必须携带以下解释字段：
         "evidences",
         "recommendedChecks",
         "suggestedReviewRoles",
-        "relatedSignals"
+        "relatedSignals",
+        "maintenanceArtifacts"
       ],
       "properties": {
         "riskId": { "type": "string" },
@@ -236,7 +240,45 @@ DB 细分风险项必须携带以下解释字段：
         "relatedSignals": {
           "type": "array",
           "items": { "type": "string" }
+        },
+        "maintenanceArtifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/maintenanceArtifact" }
         }
+      }
+    },
+    "maintenanceArtifact": {
+      "type": "object",
+      "required": [
+        "artifactType",
+        "title",
+        "language",
+        "content",
+        "confidence",
+        "copyable",
+        "sourceFilePath",
+        "sourceChangeType",
+        "notes"
+      ],
+      "properties": {
+        "artifactType": {
+          "type": "string",
+          "enum": ["SQL", "REDIS_COMMAND", "MQ_CONFIG_CODE", "NACOS_CONFIG"]
+        },
+        "title": { "type": "string" },
+        "language": {
+          "type": "string",
+          "enum": ["sql", "text", "java", "yaml", "properties"]
+        },
+        "content": { "type": "string" },
+        "confidence": {
+          "type": "string",
+          "enum": ["EXACT", "INFERRED"]
+        },
+        "copyable": { "type": "boolean" },
+        "sourceFilePath": { "type": ["string", "null"] },
+        "sourceChangeType": { "$ref": "#/$defs/changeType" },
+        "notes": { "type": "string" }
       }
     },
     "impactedResource": {
@@ -372,7 +414,20 @@ DB 细分风险项必须携带以下解释字段：
   "suggestedReviewRoles": ["BACKEND", "DBA", "QA"],
   "confidence": "MEDIUM",
   "reason": "出现 SQL select/insert/update/delete 信号，但未直接发现表结构变更。",
-  "relatedSignals": []
+  "relatedSignals": [],
+  "maintenanceArtifacts": [
+    {
+      "artifactType": "SQL",
+      "title": "可维护 SQL 片段",
+      "language": "sql",
+      "content": "select id, status from orders where id = #{id};",
+      "confidence": "EXACT",
+      "copyable": true,
+      "sourceFilePath": "src/main/resources/mapper/OrderMapper.xml",
+      "sourceChangeType": "DB_SQL",
+      "notes": "从本次 diff 新增 SQL 行提取，执行前仍需确认执行计划和索引。"
+    }
+  ]
 }
 ```
 
@@ -400,6 +455,19 @@ DB 细分风险项必须携带以下解释字段：
     "entity model changed",
     "ORM/MyBatis mapping changed",
     "migration or DDL not detected"
+  ],
+  "maintenanceArtifacts": [
+    {
+      "artifactType": "SQL",
+      "title": "待补数据库变更草稿",
+      "language": "sql",
+      "content": "-- INFERRED: 请确认表名、字段类型、默认值、索引和回滚脚本。\nALTER TABLE <table_name> ADD COLUMN support_device_model varchar(255) NULL;",
+      "confidence": "INFERRED",
+      "copyable": true,
+      "sourceFilePath": "src/main/java/com/demo/car/entity/Car.java",
+      "sourceChangeType": "DB_SCHEMA",
+      "notes": "该 SQL 由实体字段或 ORM/MyBatis 映射推断生成，请人工确认后使用。"
+    }
   ]
 }
 ```

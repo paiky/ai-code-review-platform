@@ -330,6 +330,43 @@ body {
   vertical-align: bottom;
 }
 
+.maintenance-artifact {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #d8e1e6;
+  border-radius: 6px;
+  background: #fbfcfd;
+}
+
+.maintenance-artifact-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.maintenance-artifact-code {
+  max-height: 280px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid #d7dee2;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #20292f;
+  font-family: "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.maintenance-artifact-notes {
+  display: block;
+  line-height: 1.55;
+}
+
 .code-location-text {
   display: inline-block;
   max-width: min(760px, 64vw);

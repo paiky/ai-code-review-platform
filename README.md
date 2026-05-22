@@ -70,7 +70,9 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - DB 细分识别覆盖 `DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION`。
 - MQ / 缓存细分识别覆盖 producer、consumer、消息结构、topic 配置、重试死信、cache key、TTL、失效、读写、序列化等场景。
 - `@Value` 配置占位符变更会进入重点变更提醒。
-- 提醒卡片在前端按 DB / MQ / Redis/缓存 / 配置分组展示。
+- 提醒卡片在前端按 DB / MQ / Redis/缓存 / 配置分组展示，并为重点提醒生成可复制维护内容：SQL 草稿、Redis 命令、MQ 配置伪代码、Nacos 配置块。
+- DB 维护 SQL 会优先使用真实 DDL；没有 SQL 文件时按 Entity / Mapper 和变更类型推断 `CREATE TABLE` 或 `ALTER TABLE`，并标记为 `INFERRED`。
+- 提醒项保留原命中证据，并可在详情页直接查看对应文件 diff。
 - 钉钉消息按模板 `focusChangeTypes` 过滤提醒来源，只输出简洁提醒和平台详情链接。
 - 审查任务、变更分析结果、提醒卡片、通知记录均落库。
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek 和 OpenAI-compatible 自定义模型 Provider。
@@ -540,7 +542,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:18080/api/review-tasks/$ta
 前端任务详情页包含：
 
 - 代码质量 Review
-- 提醒卡片
+- 提醒卡片：按提醒类型展示可复制维护内容、命中证据和 Diff 查看入口
 - 分析结果
 - 原始事件摘要
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
+from typing import Any
 from uuid import uuid4
 
 
@@ -88,7 +90,12 @@ def _matches(rule_code: str, change_type: str, change_types: list[str]) -> bool:
 def _risk_item(sequence: int, rule_code: str, rule: tuple, analysis: dict) -> dict:
     change_type, risk_level, title, description, impact, confidence, reason, checks, roles = rule
     category = "DB_SCHEMA" if rule_code == "DB_SCHEMA_SYNC_SUSPECT_CHECK" else change_type
-    evidences = [_risk_evidence(evidence) for evidence in analysis["evidences"] if _evidence_matches(rule_code, change_type, evidence["changeType"])]
+    matching_evidences = [
+        evidence
+        for evidence in analysis["evidences"]
+        if _evidence_matches(rule_code, change_type, evidence["changeType"])
+    ]
+    evidences = [_risk_evidence(evidence) for evidence in matching_evidences]
     resources = [resource for resource in analysis["impactedResources"] if resource.get("evidence") and _evidence_matches(rule_code, change_type, resource["evidence"]["changeType"])]
     return {
         "riskId": f"{rule_code}-{sequence:03d}",
@@ -105,6 +112,13 @@ def _risk_item(sequence: int, rule_code: str, rule: tuple, analysis: dict) -> di
         "confidence": confidence,
         "reason": reason,
         "relatedSignals": _related_signals(rule_code, analysis["changeTypes"]),
+        "maintenanceArtifacts": _maintenance_artifacts(
+            rule_code,
+            category,
+            resources,
+            matching_evidences,
+            analysis,
+        ),
     }
 
 
@@ -135,6 +149,504 @@ def _related_signals(rule_code: str, change_types: list[str]) -> list[str]:
     if "DB_SCHEMA" not in change_types:
         signals.append("未检测到 migration 或 DDL")
     return signals
+
+
+def _maintenance_artifacts(
+    rule_code: str,
+    category: str,
+    resources: list[dict[str, Any]],
+    evidences: list[dict[str, Any]],
+    analysis: dict,
+) -> list[dict[str, Any]]:
+    if _is_db_category(category):
+        return _db_artifacts(rule_code, category, resources, evidences, analysis)
+    if category.startswith("CACHE"):
+        return _cache_artifacts(category, evidences)
+    if category.startswith("MQ"):
+        return _mq_artifacts(category, evidences)
+    if category == "CONFIG":
+        return _config_artifacts(evidences)
+    return []
+
+
+def _is_db_category(category: str) -> bool:
+    return category.startswith("DB") or category in {"ORM_MAPPING", "ENTITY_MODEL", "DATA_MIGRATION"}
+
+
+def _db_artifacts(
+    rule_code: str,
+    category: str,
+    resources: list[dict[str, Any]],
+    evidences: list[dict[str, Any]],
+    analysis: dict,
+) -> list[dict[str, Any]]:
+    sql_lines = _sql_lines(evidences)
+    if category in {"DB_SCHEMA", "DB_SQL", "DATA_MIGRATION"} and rule_code != "DB_SCHEMA_SYNC_SUSPECT_CHECK" and sql_lines:
+        return [
+            _artifact(
+                "SQL",
+                "可维护 SQL 片段",
+                "sql",
+                _join_statement_lines(sql_lines),
+                "EXACT",
+                _first_file(evidences),
+                category,
+                "从本次 diff 新增 SQL 行提取，仍建议在目标环境执行前确认执行计划、锁表影响和回滚脚本。",
+            )
+        ]
+
+    db_evidences = [
+        evidence
+        for evidence in analysis.get("evidences", [])
+        if evidence.get("changeType") in {"ENTITY_MODEL", "ORM_MAPPING"}
+    ]
+    return _inferred_db_artifacts(
+        category,
+        analysis.get("impactedResources", []),
+        db_evidences or evidences,
+        _exact_schema_tables(analysis.get("evidences", [])),
+    )
+
+
+def _cache_artifacts(category: str, evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    commands: list[str] = []
+    confidence = "EXACT"
+    for line in _added_lines(evidences):
+        command = _redis_command(line)
+        if command:
+            commands.append(command)
+            if "<" in command:
+                confidence = "INFERRED"
+        elif _contains_any(line, ["redis", "cache", "expire", "delete", "evict", "opsfor"]):
+            commands.append(f"# {line}")
+            confidence = "INFERRED"
+    if not commands:
+        return []
+    return [
+        _artifact(
+            "REDIS_COMMAND",
+            "可维护 Redis 命令",
+            "text",
+            "\n".join(dict.fromkeys(commands)),
+            confidence,
+            _first_file(evidences),
+            category,
+            "命令由缓存相关新增行转换；包含占位符时需按线上 key、value 和 TTL 人工补齐。",
+        )
+    ]
+
+
+def _mq_artifacts(category: str, evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    lines = _added_lines(evidences)
+    if not lines:
+        return []
+    topic = _first_match(lines, r"(?i)(?:topic|topics|destination)\s*=\s*[\"']([^\"']+)[\"']")
+    topic = topic or _first_match(lines, r"(?i)(?:send|syncSend|asyncSend|convertAndSend)\s*\(\s*[\"']([^\"']+)[\"']")
+    group = _first_match(lines, r"(?i)(?:consumerGroup|groupId|group)\s*=\s*[\"']([^\"']+)[\"']")
+    tag = _first_match(lines, r"(?i)(?:tag|tags)\s*=\s*[\"']([^\"']+)[\"']")
+    route_key = _first_match(lines, r"(?i)(?:routingKey|routeKey)\s*=\s*[\"']([^\"']+)[\"']")
+    exchange = _first_match(lines, r"(?i)(?:exchange)\s*=\s*[\"']([^\"']+)[\"']")
+    content = "\n".join(
+        [
+            "// MQ 维护配置草稿，请同步确认各环境控制台或配置中心",
+            f"String topic = \"{topic or '<topic>'}\";",
+            f"String consumerGroup = \"{group or '<consumerGroup>'}\";",
+            f"String tag = \"{tag or '<tag>'}\";",
+            f"String exchange = \"{exchange or '<exchange>'}\";",
+            f"String routeKey = \"{route_key or '<routeKey>'}\";",
+            "",
+            "// 变更来源：",
+            *[f"// {line}" for line in lines[:12]],
+        ]
+    )
+    return [
+        _artifact(
+            "MQ_CONFIG_CODE",
+            "MQ 配置维护片段",
+            "java",
+            content,
+            "EXACT" if topic or group or tag or route_key or exchange else "INFERRED",
+            _first_file(evidences),
+            category,
+            "请按实际中间件补齐 queue、exchange、routeKey、topic、tag 和 consumerGroup，并确认生产者与消费者同时兼容。",
+        )
+    ]
+
+
+def _config_artifacts(evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    lines = _added_lines_preserve_indent(evidences)
+    if not lines:
+        return []
+    file_path = _first_file(evidences)
+    language = "properties" if str(file_path or "").endswith(".properties") else "yaml"
+    content_lines = [line for line in lines if _looks_like_config_line(line) or "@Value(" in line]
+    if not content_lines:
+        content_lines = lines[:20]
+    content = "\n".join(_normalize_config_lines(content_lines))
+    return [
+        _artifact(
+            "NACOS_CONFIG",
+            "可复制 Nacos/配置内容",
+            language,
+            content,
+            "EXACT" if content else "INFERRED",
+            file_path,
+            "CONFIG",
+            "从配置文件或 @Value 新增行提取；复制到 Nacos 前请确认环境、命名空间、默认值和灰度发布策略。",
+        )
+    ]
+
+
+def _artifact(
+    artifact_type: str,
+    title: str,
+    language: str,
+    content: str,
+    confidence: str,
+    source_file_path: str | None,
+    source_change_type: str,
+    notes: str,
+) -> dict[str, Any]:
+    return {
+        "artifactType": artifact_type,
+        "title": title,
+        "language": language,
+        "content": content.strip(),
+        "confidence": confidence,
+        "copyable": True,
+        "sourceFilePath": source_file_path,
+        "sourceChangeType": source_change_type,
+        "notes": notes,
+    }
+
+
+def _sql_lines(evidences: list[dict[str, Any]]) -> list[str]:
+    return [
+        line.rstrip(";") + ";"
+        for line in _added_lines(evidences)
+        if re.search(r"\b(create|alter|drop|select|insert|update|delete)\b", line, re.I)
+    ]
+
+
+def _exact_schema_tables(evidences: list[dict[str, Any]]) -> set[str]:
+    tables: set[str] = set()
+    for evidence in evidences:
+        if evidence.get("changeType") not in {"DB_SCHEMA", "DATA_MIGRATION"}:
+            continue
+        for line in _added_lines([evidence]):
+            table = _match(line, r"\b(?:create|alter)\s+table\s+[`\"]?([a-zA-Z_][a-zA-Z0-9_]*)[`\"]?")
+            if table:
+                tables.add(table)
+    return tables
+
+
+def _inferred_db_artifacts(
+    category: str,
+    resources: list[dict[str, Any]],
+    evidences: list[dict[str, Any]],
+    exact_schema_tables: set[str],
+) -> list[dict[str, Any]]:
+    contexts = _db_table_contexts(resources, evidences)
+    artifacts: list[dict[str, Any]] = []
+    for context in contexts:
+        if context["table"] in exact_schema_tables:
+            continue
+        fields = context["fields"]
+        if not fields:
+            continue
+        is_added_table = context["operation"] == "ADDED" and context["table"] != "<table_name>"
+        if is_added_table:
+            title = "推断建表 SQL 草稿"
+            content = _create_table_sql(context["table"], fields)
+            notes = "该建表 SQL 由新增 Entity / Mapper 推断生成，请人工确认主键、字段类型、默认值、索引、字符集和回滚脚本。"
+        else:
+            title = "推断改表 SQL 草稿"
+            content = _alter_table_sql(context["table"], fields)
+            notes = "该改表 SQL 由实体字段或 ORM/MyBatis 映射推断生成，请人工确认新增表还是已有表改字段，以及字段类型、默认值、索引和回滚脚本。"
+        artifacts.append(
+            _artifact(
+                "SQL",
+                title,
+                "sql",
+                content,
+                "INFERRED",
+                context["sourceFilePath"],
+                category,
+                notes,
+            )
+        )
+    return artifacts
+
+
+def _db_table_contexts(resources: list[dict[str, Any]], evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    resource_by_path = _resources_by_path(resources)
+    contexts: dict[str, dict[str, Any]] = {}
+    for evidence in evidences:
+        file_path = str(evidence.get("filePath") or "")
+        lines = _added_lines_preserve_indent([evidence])
+        table = _table_from_entity_lines(lines) or _resource_table_for_path(resource_by_path, file_path) or _table_from_mapping([evidence])
+        if not table:
+            table = "<table_name>"
+        operation = _resource_operation_for_path(resource_by_path, file_path) or "UNKNOWN"
+        context = contexts.setdefault(
+            table,
+            {
+                "table": table,
+                "operation": operation,
+                "sourceFilePath": file_path or None,
+                "fields": [],
+            },
+        )
+        if context["operation"] != "ADDED" and operation == "ADDED":
+            context["operation"] = "ADDED"
+        if not context["sourceFilePath"] and file_path:
+            context["sourceFilePath"] = file_path
+        _extend_unique_fields(context["fields"], _entity_fields(lines))
+        _extend_unique_fields(context["fields"], _mapping_fields(lines))
+    return list(contexts.values())
+
+
+def _resources_by_path(resources: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for resource in resources:
+        file_path = str(resource.get("filePath") or "")
+        if file_path:
+            grouped.setdefault(file_path, []).append(resource)
+    return grouped
+
+
+def _resource_table_for_path(resource_by_path: dict[str, list[dict[str, Any]]], file_path: str) -> str | None:
+    for resource in resource_by_path.get(file_path, []):
+        if resource.get("resourceType") in {"DB_TABLE", "ORM_MAPPING"}:
+            name = str(resource.get("name") or "")
+            if name and not name.startswith("src/"):
+                return name
+    return None
+
+
+def _resource_operation_for_path(resource_by_path: dict[str, list[dict[str, Any]]], file_path: str) -> str | None:
+    for resource in resource_by_path.get(file_path, []):
+        operation = resource.get("operation")
+        if operation:
+            return str(operation).upper()
+    return None
+
+
+def _table_from_entity_lines(lines: list[str]) -> str | None:
+    for line in lines:
+        table = _match(line, r"@TableName\s*\(\s*(?:value\s*=\s*)?[\"']([^\"']+)[\"']")
+        if table:
+            return table
+    return None
+
+
+def _entity_fields(lines: list[str]) -> list[dict[str, str]]:
+    fields: list[dict[str, str]] = []
+    pending_column: str | None = None
+    pending_primary = False
+    for line in lines:
+        compact = line.strip()
+        table_field = _match(compact, r"@TableField\s*\(\s*(?:value\s*=\s*)?[\"']([^\"']+)[\"']")
+        table_id = _match(compact, r"@TableId\s*\(\s*(?:value\s*=\s*)?[\"']([^\"']+)[\"']")
+        if table_field:
+            pending_column = table_field
+            pending_primary = False
+            continue
+        if table_id:
+            pending_column = table_id
+            pending_primary = True
+            continue
+        match = re.search(r"\b(?:private|protected|public)\s+([\w<>?, ]+)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=|;)", compact)
+        if not match:
+            continue
+        field_name = match.group(2)
+        if field_name == "serialVersionUID" or "static final" in compact:
+            pending_column = None
+            pending_primary = False
+            continue
+        fields.append(
+            {
+                "column": pending_column or _camel_to_snake(field_name),
+                "type": _sql_type_for_java(match.group(1).strip().split()[-1]),
+                "primary": "true" if pending_primary or field_name == "id" else "false",
+            }
+        )
+        pending_column = None
+        pending_primary = False
+    return fields
+
+
+def _mapping_fields(lines: list[str]) -> list[dict[str, str]]:
+    fields: list[dict[str, str]] = []
+    for line in lines:
+        column = _match(line, r"column\s*=\s*[\"']([^\"']+)[\"']")
+        if not column or column == "*":
+            continue
+        fields.append(
+            {
+                "column": column,
+                "type": "varchar(255)",
+                "primary": "true" if column == "id" else "false",
+            }
+        )
+    return fields
+
+
+def _extend_unique_fields(target: list[dict[str, str]], fields: list[dict[str, str]]) -> None:
+    existing = {field["column"] for field in target}
+    for field in fields:
+        if field["column"] in existing:
+            continue
+        target.append(field)
+        existing.add(field["column"])
+
+
+def _create_table_sql(table: str, fields: list[dict[str, str]]) -> str:
+    lines = ["-- INFERRED: 请确认主键、字段类型、默认值、索引、字符集和回滚脚本。", f"CREATE TABLE {table} ("]
+    primary_keys = [field["column"] for field in fields if field.get("primary") == "true"]
+    column_lines = [f"  {field['column']} {field['type']} NULL" for field in fields]
+    if primary_keys:
+        column_lines.append(f"  PRIMARY KEY ({', '.join(primary_keys[:1])})")
+    lines.append(",\n".join(column_lines))
+    lines.append(") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;")
+    return "\n".join(lines)
+
+
+def _alter_table_sql(table: str, fields: list[dict[str, str]]) -> str:
+    lines = ["-- INFERRED: 请确认新增表还是已有表改字段，以及字段类型、默认值、索引和回滚脚本。"]
+    for field in fields:
+        lines.append(f"ALTER TABLE {table} ADD COLUMN {field['column']} {field['type']} NULL;")
+    return "\n".join(lines)
+
+
+def _sql_type_for_java(java_type: str) -> str:
+    return {
+        "String": "varchar(255)",
+        "Long": "bigint",
+        "long": "bigint",
+        "Integer": "int",
+        "int": "int",
+        "Boolean": "tinyint(1)",
+        "boolean": "tinyint(1)",
+        "BigDecimal": "decimal(18,2)",
+        "Double": "decimal(18,6)",
+        "double": "decimal(18,6)",
+        "Float": "decimal(18,6)",
+        "float": "decimal(18,6)",
+        "LocalDateTime": "datetime",
+        "LocalDate": "date",
+        "Date": "datetime",
+    }.get(java_type, "varchar(255)")
+
+
+def _resource_name(resources: list[dict[str, Any]], resource_type: str) -> str | None:
+    for resource in resources:
+        if resource.get("resourceType") == resource_type:
+            return resource.get("name")
+    return None
+
+
+def _table_from_mapping(evidences: list[dict[str, Any]]) -> str | None:
+    for line in _added_lines(evidences):
+        value = _match(line, r"\b(?:from|into|update|table|join)\s+[`\"]?([a-zA-Z_][a-zA-Z0-9_]*)[`\"]?")
+        if value:
+            return value
+    return None
+
+
+def _redis_command(line: str) -> str | None:
+    key = _quoted_cache_key(line) or "<key>"
+    lowered = line.lower()
+    if "delete(" in lowered or "evict" in lowered or "unlink(" in lowered:
+        return f"DEL {key}"
+    if "expire" in lowered or "ttl" in lowered:
+        return f"EXPIRE {key} <seconds>"
+    if ".set(" in lowered or ".put(" in lowered or "@cacheput" in lowered:
+        return f"SET {key} <value>"
+    if ".get(" in lowered or "@cacheable" in lowered:
+        return f"GET {key}"
+    return None
+
+
+def _quoted_cache_key(line: str) -> str | None:
+    return _match(line, r"[\"']([a-zA-Z0-9_.:-]+:[a-zA-Z0-9_.:-]+)[\"']") or _match(
+        line,
+        r"(?i)(?:cache[_-]?key|key|prefix|value)\s*=\s*[\"']([^\"']+)[\"']",
+    )
+
+
+def _added_lines(evidences: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for evidence in evidences:
+        for line in evidence.get("addedLines") or []:
+            line = str(line).strip()
+            if line:
+                lines.append(line)
+    return list(dict.fromkeys(lines))
+
+
+def _added_lines_preserve_indent(evidences: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for evidence in evidences:
+        for line in evidence.get("addedLines") or []:
+            line = str(line).rstrip()
+            if line.strip():
+                lines.append(line)
+    return list(dict.fromkeys(lines))
+
+
+def _first_file(evidences: list[dict[str, Any]]) -> str | None:
+    for evidence in evidences:
+        file_path = evidence.get("filePath")
+        if file_path:
+            return str(file_path)
+    return None
+
+
+def _first_match(lines: list[str], pattern: str) -> str | None:
+    for line in lines:
+        value = _match(line, pattern)
+        if value:
+            return value
+    return None
+
+
+def _match(value: str, pattern: str) -> str | None:
+    match = re.search(pattern, value or "", re.I)
+    return match.group(1) if match else None
+
+
+def _contains_any(value: str | None, keywords: list[str]) -> bool:
+    normalized = (value or "").lower()
+    return any(keyword.lower() in normalized for keyword in keywords)
+
+
+def _join_statement_lines(lines: list[str]) -> str:
+    return "\n".join(dict.fromkeys(line.strip() for line in lines if line.strip()))
+
+
+def _camel_to_snake(value: str) -> str:
+    if "_" in value:
+        return value
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
+
+
+def _looks_like_config_line(line: str) -> bool:
+    return bool(re.search(r"^\s*[a-zA-Z0-9_.-]+\s*[:=]", line) or re.search(r"^\s+[a-zA-Z0-9_.-]+\s*:", line))
+
+
+def _normalize_config_lines(lines: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for line in lines:
+        compact = line.strip()
+        value = line.rstrip()
+        if compact.startswith("@Value("):
+            key = _match(compact, r"\$\{([^}:\s]+)(?::([^}]*))?}")
+            default = _match(compact, r"\$\{[^}:\s]+:([^}]*)}")
+            if key:
+                value = f"{key}: {default or '<value>'}"
+        normalized.append(value)
+    return normalized
 
 
 def _card_summary(analysis: dict, risk_level: str, risk_items: list[dict]) -> str:
@@ -183,4 +695,3 @@ def _value_focus(analysis: dict, risk_items: list[dict]) -> dict:
         "evidences": evidences,
         "sourceChangeTypes": ["CONFIG"] if matched else [],
     }
-

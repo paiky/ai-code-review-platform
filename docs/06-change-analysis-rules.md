@@ -89,6 +89,20 @@ MVP 版变更分析器用于根据 changed files、单文件 diff 文本和全�
 - `changedFiles`：每个文件命中了哪些变更类型。
 - `impactedResources`：受影响资源，如接口、表、缓存 key、MQ topic、配置 key。
 - `evidences`：命中的证据，包含文件、片段、规则名称。
+- `evidences.addedLines`：用于风险卡片生成可复制维护产物的新增行集合，不替代原始 diff。
+
+### 3.1 可维护产物生成口径
+
+规则引擎会在 RiskCard 的重点 `riskItems[].maintenanceArtifacts` 中生成可复制维护内容，仅覆盖 DB、Redis/缓存、MQ、Nacos/配置四类：
+
+- `confidence=EXACT`：内容直接来自 diff 新增行，例如 migration DDL、Mapper SQL、配置文件新增 key。
+- `confidence=INFERRED`：内容由实体字段、ORM 映射或代码调用推断生成，必须在页面和 notes 中提示人工确认后使用。
+- DB 明确 DDL / SQL 变更输出 `SQL`；实体字段、Mapper XML 字段变更但没有 DDL 时，输出 `ALTER TABLE ... ADD COLUMN ...` 草稿。
+- 新增 Entity 且存在 `@TableName` 时，DB 推断优先输出 `CREATE TABLE ...` 草稿；已有 Entity 或 Mapper 字段变更时输出 `ALTER TABLE ... ADD COLUMN ...` 草稿。
+- DB 推断必须按表分组生成，每张表一个维护产物；如果同一张表已存在真实 `CREATE TABLE / ALTER TABLE`，不再重复生成推断 SQL。
+- Redis/缓存变更输出 `REDIS_COMMAND`，优先转换 `set/get/delete/expire/@CacheEvict/@Cacheable`；无法确认 key 或 value 时保留占位符。
+- MQ 变更输出 `MQ_CONFIG_CODE`，以 Java/伪代码列出 topic、exchange、queue、routeKey、consumerGroup 等可维护配置。
+- Nacos/配置变更输出 `NACOS_CONFIG`，从 YAML / properties / `@Value` 新增行提取可复制配置块。
 
 ## 4. 规则扩展点
 

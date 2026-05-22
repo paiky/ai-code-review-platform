@@ -1,5 +1,20 @@
 export const releaseNotes = [
   {
+    id: '2026-05-22-maintainable-reminder-artifacts',
+    version: 'v0.10.0',
+    releaseDate: '2026-05-22',
+    title: '提醒项可维护内容升级',
+    summary: '提醒卡片从“提示风险”进一步升级为“给出可复制维护产物”，DB、Redis、MQ 与 Nacos 配置提醒会尽量产出可保存、可维护的脚本或配置片段。',
+    highlights: [
+      '提醒项新增“可维护内容”区域，支持复制 SQL、Redis 命令、MQ 配置伪代码与 Nacos 配置块。',
+      'DB 提醒优先展示真实 DDL；没有 SQL 文件时，会根据 Entity / Mapper 和变更类型推断 `CREATE TABLE` 或 `ALTER TABLE` 草稿，并标记 `INFERRED`。',
+      '新增表场景会按 `@TableName` 生成 `CREATE TABLE` 草稿，已有表字段变更则生成 `ALTER TABLE ... ADD COLUMN ...` 草稿。',
+      '多张表同时命中时按表拆分维护 SQL，避免把不同表字段混到同一段脚本里。',
+      '提醒项保留原命中证据，并新增 Diff 查看入口，可直接查看对应文件的左右对照变更。'
+    ],
+    tags: ['提醒卡片', '维护 SQL', 'DB 规则', 'Diff 查看']
+  },
+  {
     id: '2026-05-21-ai-review-diff-fix-preview-scheduler',
     version: 'v0.9.0',
     releaseDate: '2026-05-21',

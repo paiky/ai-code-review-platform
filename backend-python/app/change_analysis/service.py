@@ -256,7 +256,25 @@ def _evidence(change_type: str, changed_file: dict[str, Any], snippet: str, matc
         "lineEnd": None,
         "snippet": compact,
         "matcher": matcher,
+        "addedLines": _added_lines(changed_file),
     }
+
+
+def _added_lines(changed_file: dict[str, Any]) -> list[str]:
+    diff = changed_file.get("diffText") or changed_file.get("diff") or changed_file.get("patch") or ""
+    lines: list[str] = []
+    for raw_line in str(diff).splitlines():
+        if raw_line.startswith("+++") or raw_line.startswith("---"):
+            continue
+        if raw_line.startswith("+"):
+            value = raw_line[1:].rstrip()
+        elif raw_line.startswith("-") or raw_line.startswith("@@") or raw_line.startswith("diff --") or raw_line.startswith("index "):
+            continue
+        else:
+            value = raw_line.rstrip()
+        if value.strip():
+            lines.append(value)
+    return lines[:80]
 
 
 def _summary(changed_file_count: int, change_types: list[str]) -> str:
@@ -265,4 +283,3 @@ def _summary(changed_file_count: int, change_types: list[str]) -> str:
     if not change_types:
         return f"Analyzed {changed_file_count} changed file(s); no MVP change type matched."
     return f"Analyzed {changed_file_count} changed file(s); matched change types: {', '.join(change_types)}."
-

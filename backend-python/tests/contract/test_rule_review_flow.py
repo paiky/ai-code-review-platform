@@ -210,6 +210,10 @@ def test_manual_review_flow_writes_risk_card(client: TestClient, db_session: Ses
     result = client.get(f"/api/review-tasks/{data['taskId']}/result").json()["data"]
     assert result["changeAnalysis"]["changeTypes"] == ["DB", "DB_SCHEMA"]
     assert result["riskCard"]["riskItems"][0]["category"] == "DB_SCHEMA"
+    artifact = result["riskCard"]["riskItems"][0]["maintenanceArtifacts"][0]
+    assert artifact["artifactType"] == "SQL"
+    assert artifact["confidence"] == "EXACT"
+    assert "alter table orders add column risk_level varchar(32);" in artifact["content"]
 
 
 def test_rerun_gitlab_mr_task_replays_raw_payload(client: TestClient, db_session: Session) -> None:
