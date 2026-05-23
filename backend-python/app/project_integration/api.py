@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.response import ok
 from app.project_integration.repository import (
+    create_project,
     create_project_group,
     list_enabled_projects,
     list_project_groups,
@@ -43,9 +44,15 @@ async def update_group(group_id: int, request: dict[str, Any], db: Session = Dep
 async def list_projects(
     group_id: int | None = Query(default=None, alias="groupId"),
     target_type: str | None = Query(default=None, alias="targetType"),
+    include_disabled: bool = Query(default=False, alias="includeDisabled"),
     db: Session = Depends(get_db),
 ) -> dict:
-    return ok(list_enabled_projects(db, group_id=group_id, target_type=target_type))
+    return ok(list_enabled_projects(db, group_id=group_id, target_type=target_type, include_disabled=include_disabled))
+
+
+@router.post("")
+async def create_project_record(request: dict[str, Any], db: Session = Depends(get_db)) -> dict:
+    return ok(create_project(db, request))
 
 
 @router.put("/{project_id}/group")

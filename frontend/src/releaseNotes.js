@@ -1,5 +1,22 @@
 export const releaseNotes = [
   {
+    id: '2026-05-23-multi-target-project-groups',
+    version: 'v0.11.0',
+    releaseDate: '2026-05-23',
+    title: '多端接入、项目组与 AI Review 配置升级',
+    summary: '平台从单一后端审查模型升级为项目可多端接入，新增项目组、端类型配置、路径识别和多端 AI Review Profile，并修复设置页在多端场景下的关键体验问题。',
+    highlights: [
+      '新增项目组与项目端类型配置，任务列表可按项目组、项目和端类型筛选。',
+      'GitLab webhook 会根据 changed files 自动识别 BACKEND、WEB_PC、iOS、Android 和跨端项目，并记录识别依据。',
+      '支持预创建还没有触发 webhook 的 GitLab 项目，首次 webhook 进入时可复用已配置项目组和端类型。',
+      'PC / APP 端默认使用各自 AI Review Profile，提醒卡片默认只对后端端类型显示。',
+      '项目端类型配置支持按 webhook 识别结果一键回填路径匹配，减少手动维护成本。',
+      'AI Review Profile 的“恢复默认”会恢复当前 Profile 自己的默认 Prompt，不再把 PC / APP 模板覆盖成后端模板。',
+      'Push 审核策略中最大文件数和最大 Diff 字节默认改为 -1，表示不设置硬上限。'
+    ],
+    tags: ['多端接入', '项目组', '路径识别', 'AI Review', 'Push 审核']
+  },
+  {
     id: '2026-05-22-maintainable-reminder-artifacts',
     version: 'v0.10.0',
     releaseDate: '2026-05-22',

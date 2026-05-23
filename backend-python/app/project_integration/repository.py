@@ -2,13 +2,15 @@ from datetime import datetime
 from fnmatch import fnmatchcase
 import json
 from threading import Lock
+from typing import Any
 
 from sqlalchemy import Select, func, inspect, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.json_utils import page_response
 from app.core.errors import AppError
-from app.core.json_utils import read_json_array
+from app.core.json_utils import read_json, read_json_array
 from app.project_integration.models import Project, ProjectGroup, ProjectTargetConfig
 
 
@@ -51,6 +53,21 @@ TARGET_TYPE_DEFAULTS = {
     },
 }
 
+PATH_DETECTION_RULES = [
+    ("APP_IOS", ["ios/**", "**/*.swift", "**/*.m", "**/*.mm", "Podfile"]),
+    ("APP_ANDROID", ["android/**", "**/*.kt", "**/*.kts", "build.gradle", "settings.gradle", "**/*.gradle"]),
+    ("WEB_PC", ["frontend/**", "web/**", "src/**/*.tsx", "src/**/*.jsx", "src/**/*.vue", "package.json"]),
+    ("APP_CROSS_PLATFORM", ["flutter/**", "**/*.dart", "pubspec.yaml", "rn/**", "miniapp/**"]),
+    ("BACKEND", ["src/main/java/**", "src/main/resources/**", "pom.xml", "backend-python/**", "backend/**"]),
+]
+
+PROJECT_NAME_DETECTION_RULES = [
+    ("APP_IOS", ["ios", "iphone"]),
+    ("APP_ANDROID", ["android"]),
+    ("WEB_PC", ["web", "frontend", "h5", "pc"]),
+    ("BACKEND", ["server", "service", "backend", "api"]),
+]
+
 _SCHEMA_LOCK = Lock()
 _SCHEMA_ENSURED_ENGINE_IDS: set[int] = set()
 
@@ -71,6 +88,8 @@ def ensure_project_config_schema(db: Session) -> None:
         project_columns = {column["name"] for column in inspector.get_columns("projects")} if inspector.has_table("projects") else set()
         _add_column_if_missing(db, project_columns, "projects", "group_id", "BIGINT NULL")
         _add_column_if_missing(db, project_columns, "projects", "supported_target_types", "TEXT NULL")
+        _add_column_if_missing(db, project_columns, "projects", "detected_target_types", "TEXT NULL")
+        _add_column_if_missing(db, project_columns, "projects", "target_detection_json", "TEXT NULL")
         task_columns = {column["name"] for column in inspector.get_columns("review_tasks")} if inspector.has_table("review_tasks") else set()
         _add_column_if_missing(db, task_columns, "review_tasks", "target_type", "VARCHAR(32) NULL")
         _add_column_if_missing(db, task_columns, "review_tasks", "target_types_json", "TEXT NULL")
@@ -123,6 +142,8 @@ def project_to_dict(project: Project) -> dict:
         "gitProjectId": project.git_project_id,
         "repositoryUrl": project.repository_url,
         "supportedTargetTypes": read_json_array(project.supported_target_types) or ["BACKEND"],
+        "detectedTargetTypes": read_json_array(project.detected_target_types),
+        "targetDetection": read_json(project.target_detection_json, None),
         "defaultTemplateCode": project.default_template_code,
         "defaultCodeQualityProfileCode": project.default_code_quality_profile_code,
         "defaultCodeQualityProviderCode": project.default_code_quality_provider_code,
@@ -134,24 +155,78 @@ def list_enabled_projects(
     db: Session,
     group_id: int | None = None,
     target_type: str | None = None,
+    include_disabled: bool = False,
 ) -> dict:
     ensure_project_config_schema(db)
     _ensure_default_project_group(db)
     db.commit()
-    stmt: Select[tuple[Project]] = select(Project).where(Project.status == "ENABLED")
+    stmt: Select[tuple[Project]] = select(Project)
+    if not include_disabled:
+        stmt = stmt.where(Project.status == "ENABLED")
     if group_id is not None:
         stmt = stmt.where(Project.group_id == group_id)
     if target_type:
         stmt = stmt.where(Project.supported_target_types.like(f"%{target_type}%"))
     stmt = stmt.order_by(Project.id.desc())
     items = [project_to_dict(project) for project in db.scalars(stmt).all()]
-    total_stmt = select(func.count()).select_from(Project).where(Project.status == "ENABLED")
+    total_stmt = select(func.count()).select_from(Project)
+    if not include_disabled:
+        total_stmt = total_stmt.where(Project.status == "ENABLED")
     if group_id is not None:
         total_stmt = total_stmt.where(Project.group_id == group_id)
     if target_type:
         total_stmt = total_stmt.where(Project.supported_target_types.like(f"%{target_type}%"))
     total = db.scalar(total_stmt) or 0
     return page_response(items, 1, len(items), total)
+
+
+def create_project(db: Session, request: dict) -> dict:
+    ensure_project_config_schema(db)
+    name = str(request.get("name") or "").strip()
+    git_provider = str(request.get("gitProvider") or "GITLAB").strip().upper()
+    git_project_id = str(request.get("gitProjectId") or "").strip()
+    if not name:
+        raise AppError("VALIDATION_ERROR", "name is required", 400)
+    if not git_project_id:
+        raise AppError("VALIDATION_ERROR", "gitProjectId is required", 400)
+    existing = db.scalars(
+        select(Project).where(Project.git_provider == git_provider, Project.git_project_id == git_project_id)
+    ).first()
+    if existing is not None:
+        raise AppError("VALIDATION_ERROR", f"Project already exists: {git_provider}/{git_project_id}", 400)
+    group_id = request.get("groupId")
+    group = db.get(ProjectGroup, int(group_id)) if group_id is not None else _ensure_default_project_group(db)
+    if group is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Project group not found: {group_id}", 404)
+    if group.status != "ENABLED":
+        raise AppError("VALIDATION_ERROR", f"Project group is disabled: {group_id}", 400)
+    target_types = _requested_target_types(request)
+    primary = target_types[0]
+    defaults = TARGET_TYPE_DEFAULTS.get(primary, TARGET_TYPE_DEFAULTS["BACKEND"])
+    now = datetime.now()
+    project = Project(
+        group_id=group.id,
+        name=name,
+        git_provider=git_provider,
+        git_project_id=git_project_id,
+        repository_url=_blank_to_none(request.get("repositoryUrl")),
+        supported_target_types=json.dumps(target_types, ensure_ascii=False),
+        detected_target_types=None,
+        target_detection_json=None,
+        default_template_code=request.get("defaultTemplateCode") or defaults["templateCode"],
+        default_code_quality_profile_code=request.get("defaultCodeQualityProfileCode") or defaults["profileCode"],
+        default_code_quality_provider_code=_blank_to_none(request.get("defaultCodeQualityProviderCode")),
+        dingtalk_webhook_id=None,
+        status=request.get("status") or "ENABLED",
+        description=_blank_to_none(request.get("description")) or "Manually created before GitLab webhook",
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(project)
+    db.flush()
+    _create_manual_target_configs(db, project, target_types)
+    db.commit()
+    return project_to_dict(project)
 
 
 def find_project_by_id(db: Session, project_id: int) -> Project | None:
@@ -166,27 +241,40 @@ def find_project_by_git_project_id(db: Session, git_project_id: str) -> Project 
     ).first()
 
 
-def upsert_gitlab_project(db: Session, git_project_id: str, project_name: str, repository_url: str | None) -> Project:
+def upsert_gitlab_project(
+    db: Session,
+    git_project_id: str,
+    project_name: str,
+    repository_url: str | None,
+    changed_files: list[dict[str, Any]] | None = None,
+) -> Project:
     ensure_project_config_schema(db)
     now = datetime.now()
+    detection = detect_project_target_types(project_name, changed_files or [])
     project = find_project_by_git_project_id(db, git_project_id)
     if project:
         project.name = project_name
         project.repository_url = repository_url
         project.status = "ENABLED"
+        _store_target_detection(project, detection)
         project.updated_at = now
         db.flush()
         return project
 
+    detected_types = detection.get("targetTypes") or ["BACKEND"]
+    primary = detected_types[0]
+    defaults = TARGET_TYPE_DEFAULTS.get(primary, TARGET_TYPE_DEFAULTS["BACKEND"])
     project = Project(
         group_id=_ensure_default_project_group(db).id,
         name=project_name,
         git_provider="GITLAB",
         git_project_id=git_project_id,
         repository_url=repository_url,
-        supported_target_types=json.dumps(["BACKEND"], ensure_ascii=False),
-        default_template_code="backend-default",
-        default_code_quality_profile_code="backend-default-ai-review",
+        supported_target_types=json.dumps(detected_types, ensure_ascii=False),
+        detected_target_types=json.dumps(detected_types, ensure_ascii=False),
+        target_detection_json=json.dumps(detection, ensure_ascii=False),
+        default_template_code=defaults["templateCode"],
+        default_code_quality_profile_code=defaults["profileCode"],
         default_code_quality_provider_code=None,
         dingtalk_webhook_id=None,
         status="ENABLED",
@@ -195,6 +283,37 @@ def upsert_gitlab_project(db: Session, git_project_id: str, project_name: str, r
         updated_at=now,
     )
     db.add(project)
+    db.flush()
+    _create_detected_target_configs(db, project, detected_types)
+    return project
+
+
+def update_project_target_detection(
+    db: Session,
+    project: Project,
+    project_name: str | None,
+    changed_files: list[dict[str, Any]] | None,
+) -> Project:
+    detection = detect_project_target_types(project_name or project.name, changed_files or [])
+    _store_target_detection(project, detection)
+    existing_configs = db.scalars(
+        select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project.id)
+    ).all()
+    auto_created = existing_configs and all(config.description == "自动识别创建的端类型配置" for config in existing_configs)
+    can_rebuild_auto_configs = not existing_configs or auto_created
+    if can_rebuild_auto_configs:
+        detected_types = detection.get("targetTypes") or ["BACKEND"]
+        primary = detected_types[0]
+        defaults = TARGET_TYPE_DEFAULTS.get(primary, TARGET_TYPE_DEFAULTS["BACKEND"])
+        for config in existing_configs:
+            db.delete(config)
+        if existing_configs:
+            db.flush()
+        project.supported_target_types = json.dumps(detected_types, ensure_ascii=False)
+        project.default_template_code = defaults["templateCode"]
+        project.default_code_quality_profile_code = defaults["profileCode"]
+        _create_detected_target_configs(db, project, detected_types)
+    project.updated_at = datetime.now()
     db.flush()
     return project
 
@@ -221,19 +340,28 @@ def project_group_to_dict(group: ProjectGroup) -> dict:
 def create_project_group(db: Session, request: dict) -> dict:
     ensure_project_config_schema(db)
     now = datetime.now()
+    group_name = str(request.get("groupName") or request.get("name") or "").strip()
+    group_code = _blank_to_none(request.get("groupCode"))
+    if not group_name:
+        raise AppError("VALIDATION_ERROR", "groupName is required", 400)
+    if not group_code:
+        raise AppError("VALIDATION_ERROR", "groupCode is required", 400)
+    _assert_group_code_available(db, group_code)
     group = ProjectGroup(
-        group_name=str(request.get("groupName") or request.get("name") or "").strip(),
-        group_code=_blank_to_none(request.get("groupCode")),
+        group_name=group_name,
+        group_code=group_code,
         default_provider_code=_blank_to_none(request.get("defaultProviderCode")),
         status=request.get("status") or "ENABLED",
         description=_blank_to_none(request.get("description")),
         created_at=now,
         updated_at=now,
     )
-    if not group.group_name:
-        raise AppError("VALIDATION_ERROR", "groupName is required", 400)
     db.add(group)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise AppError("VALIDATION_ERROR", f"Project group code already exists: {group_code}", 400) from exc
     return project_group_to_dict(group)
 
 
@@ -244,16 +372,28 @@ def update_project_group(db: Session, group_id: int, request: dict) -> dict:
         raise AppError("RESOURCE_NOT_FOUND", f"Project group not found: {group_id}", 404)
     if "groupName" in request or "name" in request:
         group.group_name = str(request.get("groupName") or request.get("name") or "").strip()
+        if not group.group_name:
+            raise AppError("VALIDATION_ERROR", "groupName is required", 400)
     if "groupCode" in request:
-        group.group_code = _blank_to_none(request.get("groupCode"))
+        next_code = _blank_to_none(request.get("groupCode"))
+        if not next_code:
+            raise AppError("VALIDATION_ERROR", "groupCode is required", 400)
+        _assert_default_group_code_not_changed(group, next_code)
+        _assert_group_code_available(db, next_code, exclude_group_id=group.id)
+        group.group_code = next_code
     if "defaultProviderCode" in request:
         group.default_provider_code = _blank_to_none(request.get("defaultProviderCode"))
     if "status" in request:
+        _assert_default_group_can_keep_status(group, request["status"])
         group.status = request["status"]
     if "description" in request:
         group.description = _blank_to_none(request.get("description"))
     group.updated_at = datetime.now()
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise AppError("VALIDATION_ERROR", f"Project group code already exists: {group.group_code}", 400) from exc
     return project_group_to_dict(group)
 
 
@@ -265,6 +405,8 @@ def update_project_group_binding(db: Session, project_id: int, request: dict) ->
     group = db.get(ProjectGroup, int(group_id)) if group_id is not None else None
     if group_id is not None and group is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project group not found: {group_id}", 404)
+    if group is not None and group.status != "ENABLED":
+        raise AppError("VALIDATION_ERROR", f"Project group is disabled: {group_id}", 400)
     project.group_id = group.id if group else None
     project.updated_at = datetime.now()
     db.commit()
@@ -275,12 +417,13 @@ def list_project_target_configs(db: Session, project_id: int) -> list[dict]:
     project = find_project_by_id(db, project_id)
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
-    ensure_default_target_configs(db, project)
     configs = db.scalars(
         select(ProjectTargetConfig)
         .where(ProjectTargetConfig.project_id == project_id)
         .order_by(ProjectTargetConfig.target_type.asc())
     ).all()
+    if not configs:
+        return [_default_target_config_response(project)]
     return [target_config_to_dict(config) for config in configs]
 
 
@@ -288,6 +431,8 @@ def upsert_project_target_config(db: Session, project_id: int, target_type: str,
     project = find_project_by_id(db, project_id)
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
+    if db.scalar(select(func.count()).select_from(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project_id)) == 0:
+        ensure_default_target_configs(db, project)
     normalized = normalize_target_type(target_type)
     defaults = TARGET_TYPE_DEFAULTS.get(normalized, TARGET_TYPE_DEFAULTS["GENERAL"])
     config = find_target_config(db, project_id, normalized)
@@ -302,7 +447,7 @@ def upsert_project_target_config(db: Session, project_id: int, target_type: str,
             path_patterns=json.dumps(request.get("pathPatterns") or defaults["pathPatterns"], ensure_ascii=False),
             reminder_card_enabled=bool(request.get("reminderCardEnabled", defaults["reminderCardEnabled"])),
             enabled=bool(request.get("enabled", True)),
-            description=_blank_to_none(request.get("description")),
+            description=_blank_to_none(request.get("description")) or "手动维护的端类型配置",
             created_at=now,
             updated_at=now,
         )
@@ -322,6 +467,8 @@ def upsert_project_target_config(db: Session, project_id: int, target_type: str,
             config.enabled = bool(request["enabled"])
         if "description" in request:
             config.description = _blank_to_none(request.get("description"))
+        elif config.description == "自动识别创建的端类型配置":
+            config.description = "手动维护的端类型配置"
         config.updated_at = now
     _sync_project_supported_target_types(db, project)
     db.commit()
@@ -329,8 +476,10 @@ def upsert_project_target_config(db: Session, project_id: int, target_type: str,
 
 
 def ensure_default_target_configs(db: Session, project: Project) -> None:
-    existing = find_target_config(db, project.id, "BACKEND")
-    if existing is None:
+    existing_configs = db.scalars(
+        select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project.id)
+    ).all()
+    if not existing_configs:
         defaults = TARGET_TYPE_DEFAULTS["BACKEND"]
         now = datetime.now()
         db.add(
@@ -409,6 +558,22 @@ def target_config_to_dict(config: ProjectTargetConfig) -> dict:
     }
 
 
+def _default_target_config_response(project: Project) -> dict:
+    defaults = TARGET_TYPE_DEFAULTS["BACKEND"]
+    return {
+        "id": None,
+        "projectId": project.id,
+        "targetType": "BACKEND",
+        "templateCode": project.default_template_code or defaults["templateCode"],
+        "codeQualityProfileCode": project.default_code_quality_profile_code or defaults["profileCode"],
+        "providerCode": project.default_code_quality_provider_code,
+        "pathPatterns": defaults["pathPatterns"],
+        "reminderCardEnabled": True,
+        "enabled": True,
+        "description": "默认后端端类型配置（未保存）",
+    }
+
+
 def normalize_target_type(value: str | None) -> str:
     normalized = str(value or "BACKEND").strip().upper().replace("-", "_")
     return normalized if normalized in TARGET_TYPE_DEFAULTS else "GENERAL"
@@ -424,10 +589,67 @@ def _match_target_types(configs: list[ProjectTargetConfig], changed_files: list[
     return matched
 
 
+def detect_project_target_types(project_name: str | None, changed_files: list[dict[str, Any]]) -> dict:
+    evidences: list[dict[str, str]] = []
+    matched: list[str] = []
+    paths = [
+        str(file.get("path") or file.get("newPath") or file.get("oldPath") or "")
+        for file in changed_files
+        if isinstance(file, dict)
+    ]
+    for target_type, patterns in PATH_DETECTION_RULES:
+        for path in paths:
+            matched_pattern = next((pattern for pattern in patterns if _path_matches(path, pattern)), None)
+            if not matched_pattern:
+                continue
+            _append_unique_target(matched, target_type)
+            evidences.append(
+                {
+                    "targetType": target_type,
+                    "source": "PATH",
+                    "value": path,
+                    "pattern": matched_pattern,
+                    "reason": f"{path} matches {matched_pattern}",
+                }
+            )
+            break
+    normalized_name = str(project_name or "").lower()
+    for target_type, keywords in PROJECT_NAME_DETECTION_RULES:
+        keyword = next((item for item in keywords if item in normalized_name), None)
+        if not keyword:
+            continue
+        _append_unique_target(matched, target_type)
+        evidences.append(
+            {
+                "targetType": target_type,
+                "source": "PROJECT_NAME",
+                "value": project_name or "",
+                "pattern": keyword,
+                "reason": f"project name contains {keyword}",
+            }
+        )
+    if not matched:
+        matched = ["BACKEND"]
+        evidences.append(
+            {
+                "targetType": "BACKEND",
+                "source": "FALLBACK",
+                "value": project_name or "",
+                "pattern": "default",
+                "reason": "no frontend or app signal matched; fallback to BACKEND",
+            }
+        )
+    return {
+        "targetTypes": matched,
+        "evidences": evidences,
+        "updatedAt": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
 def _path_matches(path: str, pattern: str) -> bool:
     normalized_path = path.replace("\\", "/")
     normalized_pattern = str(pattern or "").replace("\\", "/")
-    return fnmatchcase(normalized_path, normalized_pattern)
+    return fnmatchcase(normalized_path, normalized_pattern) or fnmatchcase(normalized_path, f"**/{normalized_pattern}")
 
 
 def _sync_project_supported_target_types(db: Session, project: Project) -> None:
@@ -449,3 +671,92 @@ def _blank_to_none(value) -> str | None:
         return None
     text_value = str(value).strip()
     return text_value or None
+
+
+def _store_target_detection(project: Project, detection: dict) -> None:
+    project.detected_target_types = json.dumps(detection.get("targetTypes") or [], ensure_ascii=False)
+    project.target_detection_json = json.dumps(detection, ensure_ascii=False)
+
+
+def _create_detected_target_configs(db: Session, project: Project, detected_types: list[str]) -> None:
+    single_target = len(detected_types) == 1
+    now = datetime.now()
+    for target_type in detected_types:
+        normalized = normalize_target_type(target_type)
+        defaults = TARGET_TYPE_DEFAULTS.get(normalized, TARGET_TYPE_DEFAULTS["GENERAL"])
+        db.add(
+            ProjectTargetConfig(
+                project_id=project.id,
+                target_type=normalized,
+                template_code=defaults["templateCode"],
+                code_quality_profile_code=defaults["profileCode"],
+                provider_code=project.default_code_quality_provider_code,
+                path_patterns=json.dumps(["**/*"] if single_target else defaults["pathPatterns"], ensure_ascii=False),
+                reminder_card_enabled=bool(defaults["reminderCardEnabled"]),
+                enabled=True,
+                description="自动识别创建的端类型配置",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    db.flush()
+
+
+def _create_manual_target_configs(db: Session, project: Project, target_types: list[str]) -> None:
+    single_target = len(target_types) == 1
+    now = datetime.now()
+    for target_type in target_types:
+        normalized = normalize_target_type(target_type)
+        defaults = TARGET_TYPE_DEFAULTS.get(normalized, TARGET_TYPE_DEFAULTS["GENERAL"])
+        db.add(
+            ProjectTargetConfig(
+                project_id=project.id,
+                target_type=normalized,
+                template_code=defaults["templateCode"],
+                code_quality_profile_code=defaults["profileCode"],
+                provider_code=project.default_code_quality_provider_code,
+                path_patterns=json.dumps(["**/*"] if single_target else defaults["pathPatterns"], ensure_ascii=False),
+                reminder_card_enabled=bool(defaults["reminderCardEnabled"]),
+                enabled=True,
+                description="手动预创建的端类型配置",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    db.flush()
+
+
+def _requested_target_types(request: dict) -> list[str]:
+    raw_values = request.get("targetTypes")
+    if not isinstance(raw_values, list):
+        raw_values = [request.get("targetType") or "BACKEND"]
+    normalized: list[str] = []
+    for value in raw_values:
+        target_type = normalize_target_type(value)
+        if target_type not in normalized:
+            normalized.append(target_type)
+    return normalized or ["BACKEND"]
+
+
+def _append_unique_target(targets: list[str], target_type: str) -> None:
+    if target_type not in targets:
+        targets.append(target_type)
+
+
+def _assert_group_code_available(db: Session, group_code: str, exclude_group_id: int | None = None) -> None:
+    stmt = select(ProjectGroup).where(ProjectGroup.group_code == group_code)
+    if exclude_group_id is not None:
+        stmt = stmt.where(ProjectGroup.id != exclude_group_id)
+    existing = db.scalars(stmt).first()
+    if existing is not None:
+        raise AppError("VALIDATION_ERROR", f"Project group code already exists: {group_code}", 400)
+
+
+def _assert_default_group_code_not_changed(group: ProjectGroup, next_code: str) -> None:
+    if group.group_code == "default" and next_code != "default":
+        raise AppError("VALIDATION_ERROR", "Default project group code cannot be changed", 400)
+
+
+def _assert_default_group_can_keep_status(group: ProjectGroup, next_status: str) -> None:
+    if group.group_code == "default" and next_status != "ENABLED":
+        raise AppError("VALIDATION_ERROR", "Default project group cannot be disabled", 400)

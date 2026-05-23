@@ -17,6 +17,8 @@ class Project(Base):
     git_project_id: Mapped[str] = mapped_column(String(128), nullable=False)
     repository_url: Mapped[str | None] = mapped_column(String(512))
     supported_target_types: Mapped[str | None] = mapped_column(Text)
+    detected_target_types: Mapped[str | None] = mapped_column(Text)
+    target_detection_json: Mapped[str | None] = mapped_column(Text)
     default_template_code: Mapped[str] = mapped_column(String(64), nullable=False)
     default_code_quality_profile_code: Mapped[str | None] = mapped_column(String(64))
     default_code_quality_provider_code: Mapped[str | None] = mapped_column(String(64))

@@ -247,6 +247,12 @@ body {
   background: #fafafa;
 }
 
+.project-config-save-row {
+  align-items: flex-end;
+  height: 100%;
+  margin-top: 0;
+}
+
 .prompt-textarea {
   margin-top: 8px;
   font-family: Consolas, "SFMono-Regular", monospace;

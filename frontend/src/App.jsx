@@ -78,9 +78,58 @@ const TARGET_TYPE_OPTIONS = [
   { label: '跨端应用', value: 'APP_CROSS_PLATFORM' },
   { label: '通用', value: 'GENERAL' }
 ];
+const TARGET_TYPE_DEFAULT_PATH_PATTERNS = {
+  BACKEND: ['backend-python/**', 'backend/**', 'src/main/**', 'src/test/**', 'pom.xml', 'requirements*.txt'],
+  WEB_PC: ['frontend/**', 'web/**', 'src/**/*.tsx', 'src/**/*.jsx', 'src/**/*.vue'],
+  APP_IOS: ['ios/**', '**/*.swift', '**/*.m', '**/*.mm'],
+  APP_ANDROID: ['android/**', '**/*.kt', '**/*.kts', '**/*.gradle'],
+  APP_CROSS_PLATFORM: ['flutter/**', 'rn/**', 'miniapp/**', '**/*.dart'],
+  GENERAL: ['**/*']
+};
 
 function targetTypeLabel(value) {
   return TARGET_TYPE_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function defaultTemplateCodeForTargetType(targetType) {
+  if (targetType === 'BACKEND') return 'backend-default';
+  if (targetType === 'GENERAL') return 'general-default';
+  return 'frontend-default';
+}
+
+function defaultProfileCodeForTargetType(targetType) {
+  return {
+    BACKEND: 'backend-default-ai-review',
+    WEB_PC: 'web-pc-default-ai-review',
+    APP_IOS: 'app-ios-default-ai-review',
+    APP_ANDROID: 'app-android-default-ai-review',
+    APP_CROSS_PLATFORM: 'app-cross-platform-default-ai-review',
+    GENERAL: 'backend-default-ai-review'
+  }[targetType] || 'backend-default-ai-review';
+}
+
+function defaultReminderCardEnabledForTargetType(targetType) {
+  return targetType === 'BACKEND';
+}
+
+function defaultPathPatternsForTargetType(targetType) {
+  return TARGET_TYPE_DEFAULT_PATH_PATTERNS[targetType] || TARGET_TYPE_DEFAULT_PATH_PATTERNS.GENERAL;
+}
+
+function profileLabel(profile) {
+  const labels = {
+    'backend-default-ai-review': '后端默认 AI Review',
+    'web-pc-default-ai-review': 'PC Web / H5 默认 AI Review',
+    'app-ios-default-ai-review': 'iOS 默认 AI Review',
+    'app-android-default-ai-review': 'Android 默认 AI Review',
+    'app-cross-platform-default-ai-review': '跨端应用默认 AI Review'
+  };
+  return labels[profile?.profileCode] || profile?.profileName || profile?.profileCode || '-';
+}
+
+function isBackendRuleTemplate(template) {
+  if (!template) return false;
+  return template.templateCode === 'backend-default' || template.targetType === 'BACKEND';
 }
 
 function currentRoute(location) {
@@ -1901,10 +1950,22 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 function TemplateConfig() {
   const [templates, setTemplates] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultProviderCode: null });
+  const [editingGroupId, setEditingGroupId] = useState(null);
+  const [editingGroupDraft, setEditingGroupDraft] = useState(null);
+  const [projectGroupFilter, setProjectGroupFilter] = useState(null);
+  const [projectDraft, setProjectDraft] = useState({
+    name: '',
+    gitProjectId: '',
+    repositoryUrl: '',
+    groupId: null,
+    targetType: 'BACKEND'
+  });
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState(null);
+  const [projectConfigDraft, setProjectConfigDraft] = useState(null);
   const [projectTargetConfigs, setProjectTargetConfigs] = useState([]);
-  const [selectedTargetType, setSelectedTargetType] = useState('BACKEND');
+  const [selectedTargetType, setSelectedTargetType] = useState(null);
   const [targetConfigDraft, setTargetConfigDraft] = useState(null);
   const [selectedTemplateCode, setSelectedTemplateCode] = useState(null);
   const [notificationRules, setNotificationRules] = useState(null);
@@ -1922,9 +1983,17 @@ function TemplateConfig() {
   const [providerApiKeyDraft, setProviderApiKeyDraft] = useState('');
   const [loading, setLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [projectGroupCreating, setProjectGroupCreating] = useState(false);
+  const [projectGroupSavingId, setProjectGroupSavingId] = useState(null);
+  const [projectGroupDisablingId, setProjectGroupDisablingId] = useState(null);
+  const [projectCreating, setProjectCreating] = useState(false);
+  const [projectConfigSaving, setProjectConfigSaving] = useState(false);
+  const [targetConfigSaving, setTargetConfigSaving] = useState(false);
+  const [projectConfigReloading, setProjectConfigReloading] = useState(false);
   const [notificationSaving, setNotificationSaving] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [pushPolicySaving, setPushPolicySaving] = useState(false);
   const [promptPreviewLoading, setPromptPreviewLoading] = useState(false);
   const [error, setError] = useState(null);
   const [messageApi, contextHolder] = message.useMessage();
@@ -1939,7 +2008,7 @@ function TemplateConfig() {
         fetchApi('/api/code-quality-review-providers'),
         fetchApi('/api/rule-templates'),
         fetchApi('/api/project-groups'),
-        fetchApi('/api/projects')
+        fetchApi('/api/projects?includeDisabled=true')
       ]);
       const profileItems = Array.isArray(profileData) ? profileData : (profileData.items || []);
       const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
@@ -1948,7 +2017,11 @@ function TemplateConfig() {
       const nextSelectedProviderCode = settingsData?.defaultProviderCode || selectedProviderCode || providerItems[0]?.providerCode || 'DEEPSEEK';
       const nextSelectedTemplateCode = selectedTemplateCode || templateItems.find(item => item.templateCode === 'backend-default')?.templateCode || templateItems[0]?.templateCode || null;
       const projectItems = projectData.items || [];
-      const nextSelectedProjectId = selectedProjectId || projectItems[0]?.id || null;
+      const nextSelectedProjectId = projectGroupFilter
+        ? (projectItems.some(project => project.id === selectedProjectId && project.groupId === projectGroupFilter)
+          ? selectedProjectId
+          : projectItems.find(project => project.groupId === projectGroupFilter)?.id || null)
+        : null;
       setAiSettings(settingsData);
       setSettingsDraft({
         reviewEnabled: settingsData?.reviewEnabled ?? false,
@@ -1960,11 +2033,19 @@ function TemplateConfig() {
       setProjects(projectItems);
       setSelectedProjectId(nextSelectedProjectId);
       if (nextSelectedProjectId) {
+        const nextProject = projectItems.find(project => project.id === nextSelectedProjectId);
         const configs = await fetchApi(`/api/projects/${nextSelectedProjectId}/target-configs`);
         setProjectTargetConfigs(configs || []);
-        const target = selectedTargetType || configs?.[0]?.targetType || 'BACKEND';
+        const enabledTarget = (configs || []).find(item => item.enabled !== false)?.targetType;
+        const target = selectedTargetType || enabledTarget || configs?.[0]?.targetType || nextProject?.supportedTargetTypes?.[0] || 'BACKEND';
+        setProjectConfigDraft({ groupId: nextProject?.groupId || null, targetType: target });
         setSelectedTargetType(target);
         setTargetConfigDraft((configs || []).find(item => item.targetType === target) || null);
+      } else {
+        setProjectConfigDraft(null);
+        setProjectTargetConfigs([]);
+        setSelectedTargetType(null);
+        setTargetConfigDraft(null);
       }
       setSelectedTemplateCode(nextSelectedTemplateCode);
       setProviders(providerItems);
@@ -1975,7 +2056,7 @@ function TemplateConfig() {
       setSelectedProfileCode(nextSelectedProfileCode);
       setProfileDraft(profileItems.find(item => item.profileCode === nextSelectedProfileCode) || profileItems[0] || null);
       setPromptPreview(null);
-      if (nextSelectedTemplateCode) {
+      if (nextSelectedTemplateCode && isBackendRuleTemplate(templateItems.find(item => item.templateCode === nextSelectedTemplateCode))) {
         const rules = await fetchApi(`/api/rule-templates/${nextSelectedTemplateCode}/notification-rules`);
         setNotificationRules(rules);
         setNotificationRuleDraftCodes(rules.focusRuleCodes || []);
@@ -2007,58 +2088,364 @@ function TemplateConfig() {
     setSelectedNotificationRuleCode(firstSelected || firstRule || null);
   };
 
-  const loadProjectTargetConfigs = async (projectId, targetType = selectedTargetType) => {
+  const loadProjectTargetConfigs = async (projectId, targetType = selectedTargetType, projectList = projects) => {
     if (!projectId) {
+      setSelectedProjectId(null);
+      setProjectConfigDraft(null);
+      setSelectedTargetType(null);
       setProjectTargetConfigs([]);
       setTargetConfigDraft(null);
       return;
     }
     const configs = await fetchApi(`/api/projects/${projectId}/target-configs`);
     setProjectTargetConfigs(configs || []);
-    const nextTargetType = targetType || configs?.[0]?.targetType || 'BACKEND';
+    const project = projectList.find(item => item.id === projectId);
+    const enabledTarget = (configs || []).find(item => item.enabled !== false)?.targetType;
+    const nextTargetType = targetType || enabledTarget || configs?.[0]?.targetType || project?.supportedTargetTypes?.[0] || 'BACKEND';
+    setProjectConfigDraft({ groupId: project?.groupId || null, targetType: nextTargetType });
     setSelectedTargetType(nextTargetType);
     setTargetConfigDraft((configs || []).find(item => item.targetType === nextTargetType) || null);
+  };
+
+  const reloadProjectGroupsAndProjects = async (
+    preferredProjectId = selectedProjectId,
+    preferredTargetType = selectedTargetType,
+    groupFilterOverride = projectGroupFilter
+  ) => {
+    const [groupData, projectData] = await Promise.all([
+      fetchApi('/api/project-groups'),
+      fetchApi('/api/projects?includeDisabled=true')
+    ]);
+    const groupItems = groupData.items || [];
+    const projectItems = projectData.items || [];
+    const activeGroupFilter = groupFilterOverride || null;
+    const nextSelectedProjectId = activeGroupFilter && projectItems.some(project => project.id === preferredProjectId && project.groupId === activeGroupFilter)
+      ? preferredProjectId
+      : (activeGroupFilter ? projectItems.find(project => project.groupId === activeGroupFilter)?.id || null : null);
+    setGroups(groupItems);
+    setProjects(projectItems);
+    setSelectedProjectId(nextSelectedProjectId);
+    if (nextSelectedProjectId) {
+      await loadProjectTargetConfigs(nextSelectedProjectId, preferredTargetType, projectItems);
+    } else {
+      setProjectConfigDraft(null);
+      setProjectTargetConfigs([]);
+      setSelectedTargetType(null);
+      setTargetConfigDraft(null);
+    }
+  };
+
+  const refreshProjectConfigData = async () => {
+    setProjectConfigReloading(true);
+    try {
+      await reloadProjectGroupsAndProjects();
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setProjectConfigReloading(false);
+    }
   };
 
   const selectProjectForTargetConfig = async (projectId) => {
     setSelectedProjectId(projectId);
     try {
-      await loadProjectTargetConfigs(projectId, selectedTargetType);
+      await loadProjectTargetConfigs(projectId, null);
     } catch (err) {
       messageApi.error(err.message);
     }
   };
 
+  const clearSelectedProjectConfig = () => {
+    setSelectedProjectId(null);
+    setProjectConfigDraft(null);
+    setProjectTargetConfigs([]);
+    setSelectedTargetType(null);
+    setTargetConfigDraft(null);
+  };
+
+  const selectProjectGroupFilter = async (groupId) => {
+    const nextGroupId = groupId || null;
+    setProjectGroupFilter(nextGroupId);
+    if (!nextGroupId) {
+      clearSelectedProjectConfig();
+      return;
+    }
+    const nextProject = projects.find(project => project.groupId === nextGroupId);
+    if (nextProject) {
+      await selectProjectForTargetConfig(nextProject.id);
+    } else {
+      clearSelectedProjectConfig();
+    }
+  };
+
+  const updateProjectConfigDraft = (field, value) => {
+    setProjectConfigDraft(current => ({ ...(current || {}), [field]: value }));
+    if (field === 'targetType' && value) {
+      selectTargetTypeForConfig(value);
+    }
+  };
+
   const selectTargetTypeForConfig = (targetType) => {
     setSelectedTargetType(targetType);
+    setProjectConfigDraft(current => current ? { ...current, targetType } : current);
     setTargetConfigDraft(projectTargetConfigs.find(item => item.targetType === targetType) || {
       targetType,
-      templateCode: targetType === 'BACKEND' ? 'backend-default' : 'frontend-default',
-      codeQualityProfileCode: {
-        WEB_PC: 'web-pc-default-ai-review',
-        APP_IOS: 'app-ios-default-ai-review',
-        APP_ANDROID: 'app-android-default-ai-review',
-        APP_CROSS_PLATFORM: 'app-cross-platform-default-ai-review'
-      }[targetType] || 'backend-default-ai-review',
+      templateCode: defaultTemplateCodeForTargetType(targetType),
+      codeQualityProfileCode: defaultProfileCodeForTargetType(targetType),
       providerCode: null,
       pathPatterns: [],
-      reminderCardEnabled: targetType === 'BACKEND',
+      reminderCardEnabled: defaultReminderCardEnabledForTargetType(targetType),
       enabled: true
     });
+  };
+
+  const applyDetectedTargetType = (targetType) => {
+    const detectedType = targetType || currentProject?.detectedTargetTypes?.[0];
+    if (!detectedType) return;
+    const defaults = {
+      BACKEND: { profileCode: 'backend-default-ai-review', reminderCardEnabled: true },
+      WEB_PC: { profileCode: 'web-pc-default-ai-review', reminderCardEnabled: false },
+      APP_IOS: { profileCode: 'app-ios-default-ai-review', reminderCardEnabled: false },
+      APP_ANDROID: { profileCode: 'app-android-default-ai-review', reminderCardEnabled: false },
+      APP_CROSS_PLATFORM: { profileCode: 'app-cross-platform-default-ai-review', reminderCardEnabled: false },
+      GENERAL: { profileCode: 'backend-default-ai-review', reminderCardEnabled: false }
+    }[detectedType] || { profileCode: 'backend-default-ai-review', reminderCardEnabled: false };
+    setSelectedTargetType(detectedType);
+    setProjectConfigDraft(current => current ? { ...current, targetType: detectedType } : current);
+    setTargetConfigDraft({
+      ...(projectTargetConfigs.find(item => item.targetType === detectedType) || {}),
+      targetType: detectedType,
+      templateCode: defaultTemplateCodeForTargetType(detectedType),
+      codeQualityProfileCode: defaults.profileCode,
+      providerCode: null,
+      pathPatterns: buildDetectedPathPatterns(detectedType),
+      reminderCardEnabled: defaults.reminderCardEnabled,
+      enabled: true
+    });
+  };
+
+  const buildDetectedPathPatterns = (targetType = selectedTargetType) => {
+    return buildDetectedPathPatternResult(targetType).patterns;
+  };
+
+  const buildDetectedPathPatternResult = (targetType = selectedTargetType) => {
+    const pathEvidencePatterns = detectionEvidences
+      .filter(item => item.targetType === targetType && item.source === 'PATH' && item.pattern)
+      .map(item => item.pattern);
+    const uniquePatterns = [...new Set(pathEvidencePatterns)];
+    if (uniquePatterns.length > 0) {
+      return { patterns: uniquePatterns, source: 'WEBHOOK_PATH_EVIDENCE' };
+    }
+    if ((detectedTargetTypes || []).includes(targetType)) {
+      return {
+        patterns: detectedTargetTypes.length === 1 ? ['**/*'] : defaultPathPatternsForTargetType(targetType),
+        source: detectedTargetTypes.length === 1 ? 'SINGLE_TARGET_FALLBACK' : 'TARGET_TYPE_DEFAULT'
+      };
+    }
+    return { patterns: defaultPathPatternsForTargetType(targetType), source: 'TARGET_TYPE_DEFAULT' };
+  };
+
+  const refreshTargetPathPatterns = () => {
+    if (!targetConfigDraft) return;
+    const result = buildDetectedPathPatternResult(selectedTargetType);
+    const patterns = result.patterns;
+    updateTargetConfigDraft('pathPatterns', patterns);
+    if (result.source === 'WEBHOOK_PATH_EVIDENCE') {
+      messageApi.success(`已根据 ${targetTypeLabel(selectedTargetType)} 的 webhook 路径证据回填路径匹配`);
+    } else if (result.source === 'SINGLE_TARGET_FALLBACK') {
+      messageApi.info(`当前项目只识别到 ${targetTypeLabel(selectedTargetType)}，已回填 **/*`);
+    } else {
+      messageApi.info(`未找到 ${targetTypeLabel(selectedTargetType)} 的 webhook 路径证据，已使用端类型默认路径`);
+    }
   };
 
   const updateTargetConfigDraft = (field, value) => {
     setTargetConfigDraft(current => current ? { ...current, [field]: value } : current);
   };
 
+  const updateGroupDraft = (field, value) => {
+    setGroupDraft(current => ({ ...current, [field]: value }));
+  };
+
+  const startEditGroup = (group) => {
+    setEditingGroupId(group.id);
+    setEditingGroupDraft({ ...group });
+  };
+
+  const updateEditingGroupDraft = (field, value) => {
+    setEditingGroupDraft(current => current ? { ...current, [field]: value } : current);
+  };
+
+  const createProjectGroup = async () => {
+    const groupName = groupDraft.groupName.trim();
+    const groupCode = groupDraft.groupCode.trim();
+    if (!groupName || !groupCode) {
+      messageApi.error('项目组名称和编码不能为空');
+      return;
+    }
+    setProjectGroupCreating(true);
+    try {
+      await fetchApi('/api/project-groups', {
+        method: 'POST',
+        body: JSON.stringify({
+          groupName,
+          groupCode,
+          description: groupDraft.description?.trim() || null,
+          defaultProviderCode: groupDraft.defaultProviderCode || null
+        })
+      });
+      setGroupDraft({ groupName: '', groupCode: '', description: '', defaultProviderCode: null });
+      await reloadProjectGroupsAndProjects();
+      messageApi.success('项目组已创建');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setProjectGroupCreating(false);
+    }
+  };
+
+  const saveEditingProjectGroup = async () => {
+    if (!editingGroupDraft) return;
+    const groupName = editingGroupDraft.groupName.trim();
+    const groupCode = editingGroupDraft.groupCode.trim();
+    if (!groupName || !groupCode) {
+      messageApi.error('项目组名称和编码不能为空');
+      return;
+    }
+    setProjectGroupSavingId(editingGroupDraft.id);
+    try {
+      await fetchApi(`/api/project-groups/${editingGroupDraft.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          groupName,
+          groupCode,
+          description: editingGroupDraft.description?.trim() || null,
+          defaultProviderCode: editingGroupDraft.defaultProviderCode || null,
+          status: editingGroupDraft.status || 'ENABLED'
+        })
+      });
+      setEditingGroupId(null);
+      setEditingGroupDraft(null);
+      await reloadProjectGroupsAndProjects();
+      messageApi.success('项目组已保存');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setProjectGroupSavingId(null);
+    }
+  };
+
+  const disableProjectGroup = async (group) => {
+    setProjectGroupDisablingId(group.id);
+    try {
+      await fetchApi(`/api/project-groups/${group.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: 'DISABLED' })
+      });
+      if (projectGroupFilter === group.id) setProjectGroupFilter(null);
+      await reloadProjectGroupsAndProjects();
+      messageApi.success('项目组已停用');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setProjectGroupDisablingId(null);
+    }
+  };
+
+  const saveSelectedProjectConfig = async () => {
+    if (!selectedProjectId || !projectConfigDraft?.groupId || !projectConfigDraft?.targetType) {
+      messageApi.error('请选择项目组、项目和所属端类型');
+      return;
+    }
+    setProjectConfigSaving(true);
+    try {
+      const updatedProject = await fetchApi(`/api/projects/${selectedProjectId}/group`, {
+        method: 'PUT',
+        body: JSON.stringify({ groupId: projectConfigDraft.groupId })
+      });
+      const normalizedTargetType = projectConfigDraft.targetType;
+      const existing = projectTargetConfigs.find(item => item.targetType === normalizedTargetType);
+      const updated = await fetchApi(`/api/projects/${selectedProjectId}/target-configs/${normalizedTargetType}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          templateCode: defaultTemplateCodeForTargetType(normalizedTargetType),
+          codeQualityProfileCode: existing?.codeQualityProfileCode || defaultProfileCodeForTargetType(normalizedTargetType),
+          providerCode: existing?.providerCode || null,
+          pathPatterns: existing?.pathPatterns?.length ? existing.pathPatterns : ['**/*'],
+          reminderCardEnabled: existing?.reminderCardEnabled ?? defaultReminderCardEnabledForTargetType(normalizedTargetType),
+          enabled: true
+        })
+      });
+      const disableTargets = projectTargetConfigs
+        .filter(item => item.targetType !== normalizedTargetType && item.enabled !== false)
+        .map(item => fetchApi(`/api/projects/${selectedProjectId}/target-configs/${item.targetType}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            templateCode: item.templateCode || defaultTemplateCodeForTargetType(item.targetType),
+            codeQualityProfileCode: item.codeQualityProfileCode || defaultProfileCodeForTargetType(item.targetType),
+            providerCode: item.providerCode || null,
+            pathPatterns: item.pathPatterns || [],
+            reminderCardEnabled: item.reminderCardEnabled,
+            enabled: false
+          })
+        }));
+      if (disableTargets.length > 0) await Promise.all(disableTargets);
+      setProjects(current => current.map(project => project.id === updatedProject.id ? updatedProject : project));
+      setSelectedTargetType(normalizedTargetType);
+      setTargetConfigDraft(updated);
+      setProjectConfigDraft({ groupId: updatedProject.groupId || null, targetType: normalizedTargetType });
+      setProjectGroupFilter(updatedProject.groupId || null);
+      await reloadProjectGroupsAndProjects(selectedProjectId, normalizedTargetType, updatedProject.groupId || null);
+      messageApi.success('项目配置已保存');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setProjectConfigSaving(false);
+    }
+  };
+
+  const updateProjectDraft = (field, value) => {
+    setProjectDraft(current => ({ ...current, [field]: value }));
+  };
+
+  const createProjectRecord = async () => {
+    const name = projectDraft.name.trim();
+    const gitProjectId = projectDraft.gitProjectId.trim();
+    if (!name || !gitProjectId) {
+      messageApi.error('项目名称和 GitLab 项目 ID 不能为空');
+      return;
+    }
+    setProjectCreating(true);
+    try {
+      const created = await fetchApi('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          gitProvider: 'GITLAB',
+          gitProjectId,
+          repositoryUrl: projectDraft.repositoryUrl.trim() || null,
+          groupId: projectDraft.groupId || groups[0]?.id || null,
+          targetType: projectDraft.targetType || 'BACKEND'
+        })
+      });
+      setProjectDraft({ name: '', gitProjectId: '', repositoryUrl: '', groupId: created.groupId || null, targetType: 'BACKEND' });
+      await reloadProjectGroupsAndProjects(created.id);
+      messageApi.success('项目已预创建，后续 webhook 会复用该 GitLab 项目 ID');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setProjectCreating(false);
+    }
+  };
+
   const saveProjectTargetConfig = async () => {
     if (!selectedProjectId || !targetConfigDraft) return;
-    setSettingsSaving(true);
+    setTargetConfigSaving(true);
     try {
       const updated = await fetchApi(`/api/projects/${selectedProjectId}/target-configs/${selectedTargetType}`, {
         method: 'PUT',
         body: JSON.stringify({
-          templateCode: targetConfigDraft.templateCode,
+          templateCode: defaultTemplateCodeForTargetType(selectedTargetType),
           codeQualityProfileCode: targetConfigDraft.codeQualityProfileCode,
           providerCode: targetConfigDraft.providerCode || null,
           pathPatterns: targetConfigDraft.pathPatterns || [],
@@ -2071,11 +2458,12 @@ function TemplateConfig() {
         : [...projectTargetConfigs, updated];
       setProjectTargetConfigs(configs);
       setTargetConfigDraft(updated);
+      await reloadProjectGroupsAndProjects(selectedProjectId);
       messageApi.success('项目端类型配置已保存');
     } catch (err) {
       messageApi.error(err.message);
     } finally {
-      setSettingsSaving(false);
+      setTargetConfigSaving(false);
     }
   };
 
@@ -2180,6 +2568,11 @@ function TemplateConfig() {
     setSelectedTemplateCode(templateCode);
     setNotificationRules(null);
     setNotificationRuleDraftCodes([]);
+    const template = templates.find(item => item.templateCode === templateCode);
+    if (!isBackendRuleTemplate(template)) {
+      setSelectedNotificationRuleCode(null);
+      return;
+    }
     try {
       await loadNotificationRules(templateCode);
     } catch (err) {
@@ -2296,7 +2689,27 @@ function TemplateConfig() {
         body: JSON.stringify({
           providerCode: profileDraft.providerCode || null,
           reviewInstructions: profileDraft.reviewInstructions,
-          model: profileDraft.model,
+          model: profileDraft.model
+        })
+      });
+      setProfiles(current => current.map(item => item.profileCode === updated.profileCode ? updated : item));
+      setProfileDraft(updated);
+      setPromptPreview(null);
+      messageApi.success('AI Review 配置已保存');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const savePushReviewPolicy = async () => {
+    if (!profileDraft) return;
+    setPushPolicySaving(true);
+    try {
+      const updated = await fetchApi(`/api/code-quality-review-profiles/${profileDraft.profileCode}`, {
+        method: 'PUT',
+        body: JSON.stringify({
           pushBranchPatterns: profileDraft.pushBranchPatterns || [],
           pushMinChangedFiles: profileDraft.pushMinChangedFiles ?? null,
           pushMinDiffBytes: profileDraft.pushMinDiffBytes ?? null,
@@ -2308,12 +2721,11 @@ function TemplateConfig() {
       });
       setProfiles(current => current.map(item => item.profileCode === updated.profileCode ? updated : item));
       setProfileDraft(updated);
-      setPromptPreview(null);
-      messageApi.success('AI Review 配置已保存');
+      messageApi.success('Push 审核策略已保存');
     } catch (err) {
       messageApi.error(err.message);
     } finally {
-      setProfileSaving(false);
+      setPushPolicySaving(false);
     }
   };
 
@@ -2332,15 +2744,17 @@ function TemplateConfig() {
 
   const resetProfilePrompt = async () => {
     if (!profileDraft) return;
+    const profileCode = selectedProfileCode || profileDraft.profileCode;
     setProfileSaving(true);
     try {
-      const updated = await fetchApi(`/api/code-quality-review-profiles/${profileDraft.profileCode}/reset-default-prompt`, {
+      const updated = await fetchApi(`/api/code-quality-review-profiles/${profileCode}/reset-default-prompt`, {
         method: 'POST'
       });
       setProfiles(current => current.map(item => item.profileCode === updated.profileCode ? updated : item));
+      setSelectedProfileCode(updated.profileCode);
       setProfileDraft(updated);
       setPromptPreview(null);
-      messageApi.success('Agent Prompt 已恢复默认');
+      messageApi.success(`${updated.profileName || updated.profileCode} 已恢复默认 Prompt`);
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -2349,19 +2763,22 @@ function TemplateConfig() {
   };
 
   const profileOptions = profiles.map(profile => ({
-    label: `${profile.profileName} (${profile.profileCode})`,
+    label: profileLabel(profile),
     value: profile.profileCode
   }));
   const providerOptions = providers.map(provider => ({
     label: provider.providerName || sourceLabel(provider.providerCode),
     value: provider.providerCode
   }));
+  const groupProviderOptions = [{ label: '不指定', value: '' }, ...providerOptions];
   const profileProviderOptions = [{ label: '使用当前模型 Provider', value: '' }, ...providerOptions];
   const providerApiKeyPlaceholder = '留空表示不更新当前 API Key';
   const templateOptions = templates.map(template => ({
     label: `${template.templateName} (${template.templateCode})`,
     value: template.templateCode
   }));
+  const selectedTemplate = templates.find(template => template.templateCode === selectedTemplateCode) || null;
+  const selectedTemplateSupportsNotificationRules = isBackendRuleTemplate(selectedTemplate);
   const notificationRuleItems = notificationRules?.groups?.flatMap(group => group.rules || []) || [];
   const selectedNotificationRule = notificationRuleItems.find(rule => rule.ruleCode === selectedNotificationRuleCode) || notificationRuleItems[0] || null;
   const notificationRulesDirty = JSON.stringify(notificationRuleDraftCodes) !== JSON.stringify(notificationRules?.focusRuleCodes || []);
@@ -2375,6 +2792,81 @@ function TemplateConfig() {
     dingtalkWebhooks: aiSettings?.dingtalkWebhooks || []
   });
   const configuredWebhookCount = (settingsDraft?.dingtalkWebhooks || []).filter(item => item.enabled !== false).length;
+  const filteredProjects = projectGroupFilter
+    ? projects.filter(project => project.groupId === projectGroupFilter)
+    : [];
+  const currentProject = projects.find(project => project.id === selectedProjectId) || null;
+  const targetDetection = currentProject?.targetDetection;
+  const detectionEvidences = Array.isArray(targetDetection?.evidences) ? targetDetection.evidences : [];
+  const detectedTargetTypes = currentProject?.detectedTargetTypes || targetDetection?.targetTypes || [];
+  const detectionDiffersFromConfig = detectedTargetTypes.some(type => !(currentProject?.supportedTargetTypes || []).includes(type));
+  const groupColumns = [
+    {
+      title: '项目组',
+      dataIndex: 'groupName',
+      width: 190,
+      render: (_, group) => editingGroupId === group.id ? (
+        <Input value={editingGroupDraft?.groupName || ''} onChange={event => updateEditingGroupDraft('groupName', event.target.value)} />
+      ) : (
+        <Space wrap>
+          <Text strong>{group.groupName}</Text>
+          {group.groupCode === 'default' && <Tag>默认</Tag>}
+        </Space>
+      )
+    },
+    {
+      title: '编码',
+      dataIndex: 'groupCode',
+      width: 160,
+      render: (_, group) => editingGroupId === group.id ? (
+        <Input disabled={group.groupCode === 'default'} value={editingGroupDraft?.groupCode || ''} onChange={event => updateEditingGroupDraft('groupCode', event.target.value)} />
+      ) : group.groupCode
+    },
+    {
+      title: '默认 Provider',
+      dataIndex: 'defaultProviderCode',
+      width: 180,
+      render: (_, group) => editingGroupId === group.id ? (
+        <Select className="full-width" value={editingGroupDraft?.defaultProviderCode || ''} options={groupProviderOptions} onChange={value => updateEditingGroupDraft('defaultProviderCode', value || null)} />
+      ) : (group.defaultProviderCode || '-')
+    },
+    {
+      title: '描述',
+      dataIndex: 'description',
+      render: (_, group) => editingGroupId === group.id ? (
+        <Input value={editingGroupDraft?.description || ''} onChange={event => updateEditingGroupDraft('description', event.target.value)} />
+      ) : (group.description || '-')
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: value => <Tag color={value === 'ENABLED' ? 'green' : 'default'}>{value === 'ENABLED' ? '启用' : '停用'}</Tag>
+    },
+    {
+      title: '操作',
+      width: 190,
+      render: (_, group) => editingGroupId === group.id ? (
+        <Space wrap>
+          <Button type="primary" size="small" loading={projectGroupSavingId === group.id} onClick={saveEditingProjectGroup}>保存</Button>
+          <Button size="small" onClick={() => { setEditingGroupId(null); setEditingGroupDraft(null); }}>取消</Button>
+        </Space>
+      ) : (
+        <Space wrap>
+          <Button size="small" onClick={() => startEditGroup(group)}>编辑</Button>
+          <Button
+            danger
+            size="small"
+            disabled={group.groupCode === 'default'}
+            loading={projectGroupDisablingId === group.id}
+            onClick={() => disableProjectGroup(group)}
+          >
+            停用
+          </Button>
+        </Space>
+      )
+    }
+  ];
 
   const collapseItems = [
     {
@@ -2504,47 +2996,242 @@ function TemplateConfig() {
       children: (
         <Card bordered={false} className="settings-inner-card">
           <Space direction="vertical" size="middle" className="full-width">
-            <Row gutter={[16, 16]}>
-              <Col xs={24} md={8}>
-                <Text strong>项目组</Text>
-                <Select
-                  disabled
-                  className="full-width prompt-field"
-                  value={projects.find(project => project.id === selectedProjectId)?.groupId}
-                  options={groups.map(group => ({ label: group.groupName, value: group.id }))}
-                  placeholder="项目所属项目组"
-                />
-              </Col>
-              <Col xs={24} md={8}>
-                <Text strong>项目</Text>
-                <Select
-                  showSearch
-                  className="full-width prompt-field"
-                  value={selectedProjectId}
-                  options={projects.map(project => ({ label: project.name, value: project.id }))}
-                  onChange={selectProjectForTargetConfig}
-                />
-              </Col>
-              <Col xs={24} md={8}>
-                <Text strong>端类型</Text>
-                <Select
-                  className="full-width prompt-field"
-                  value={selectedTargetType}
-                  options={TARGET_TYPE_OPTIONS}
-                  onChange={selectTargetTypeForConfig}
-                />
-              </Col>
-            </Row>
-            {targetConfigDraft ? (
-              <>
-                <Row gutter={[16, 16]}>
-                  <Col xs={24} md={8}>
-                    <Text strong>规则模板</Text>
+            <div className="settings-subsection">
+              <Space direction="vertical" size="middle" className="full-width">
+                <div className="settings-inline-head">
+                  <Space wrap>
+                    <Text strong>项目组管理</Text>
+                    <Tag>{groups.length} 个项目组</Tag>
+                  </Space>
+                  <Button icon={<ReloadOutlined />} onClick={refreshProjectConfigData} loading={projectConfigReloading}>刷新</Button>
+                </div>
+                <Row gutter={[12, 12]} align="bottom">
+                  <Col xs={24} md={5}>
+                    <Text strong>名称</Text>
+                    <Input
+                      className="prompt-field"
+                      value={groupDraft.groupName}
+                      placeholder="例如 移动业务组"
+                      onChange={event => updateGroupDraft('groupName', event.target.value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={5}>
+                    <Text strong>编码</Text>
+                    <Input
+                      className="prompt-field"
+                      value={groupDraft.groupCode}
+                      placeholder="例如 mobile"
+                      onChange={event => updateGroupDraft('groupCode', event.target.value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={5}>
+                    <Text strong>默认 Provider</Text>
                     <Select
                       className="full-width prompt-field"
-                      value={targetConfigDraft.templateCode}
-                      options={templateOptions}
-                      onChange={value => updateTargetConfigDraft('templateCode', value)}
+                      value={groupDraft.defaultProviderCode || ''}
+                      options={groupProviderOptions}
+                      onChange={value => updateGroupDraft('defaultProviderCode', value || null)}
+                    />
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Text strong>描述</Text>
+                    <Input
+                      className="prompt-field"
+                      value={groupDraft.description}
+                      placeholder="可选"
+                      onChange={event => updateGroupDraft('description', event.target.value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={3}>
+                    <Button block type="primary" icon={<PlusOutlined />} loading={projectGroupCreating} onClick={createProjectGroup}>
+                      新增
+                    </Button>
+                  </Col>
+                </Row>
+                <Table
+                  size="small"
+                  rowKey="id"
+                  pagination={false}
+                  columns={groupColumns}
+                  dataSource={groups}
+                  scroll={{ x: 980 }}
+                />
+              </Space>
+            </div>
+            <div className="settings-subsection">
+              <Space direction="vertical" size="middle" className="full-width">
+                <Space wrap>
+                  <Text strong>预创建 GitLab 项目</Text>
+                  <Text type="secondary">适合 webhook 接入前先配置项目组和端类型</Text>
+                </Space>
+                <Row gutter={[12, 12]} align="bottom">
+                  <Col xs={24} md={5}>
+                    <Text strong>项目名称</Text>
+                    <Input
+                      className="prompt-field"
+                      value={projectDraft.name}
+                      placeholder="例如 mobile-ios"
+                      onChange={event => updateProjectDraft('name', event.target.value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={4}>
+                    <Text strong>GitLab 项目 ID</Text>
+                    <Input
+                      className="prompt-field"
+                      value={projectDraft.gitProjectId}
+                      placeholder="例如 12345"
+                      onChange={event => updateProjectDraft('gitProjectId', event.target.value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={5}>
+                    <Text strong>所属项目组</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      value={projectDraft.groupId || groups[0]?.id}
+                      options={groups.map(group => ({ label: group.groupName, value: group.id }))}
+                      onChange={value => updateProjectDraft('groupId', value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={4}>
+                    <Text strong>端类型</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      value={projectDraft.targetType}
+                      options={TARGET_TYPE_OPTIONS}
+                      onChange={value => updateProjectDraft('targetType', value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={4}>
+                    <Text strong>仓库地址</Text>
+                    <Input
+                      className="prompt-field"
+                      value={projectDraft.repositoryUrl}
+                      placeholder="可选"
+                      onChange={event => updateProjectDraft('repositoryUrl', event.target.value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={2}>
+                    <Button block type="primary" loading={projectCreating} onClick={createProjectRecord}>
+                      创建
+                    </Button>
+                  </Col>
+                </Row>
+              </Space>
+            </div>
+            <div className="settings-subsection">
+              <Space direction="vertical" size="middle" className="full-width">
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} md={8}>
+                    <Text strong>项目组筛选</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      allowClear
+                      value={projectGroupFilter}
+                      options={groups.map(group => ({ label: group.groupName, value: group.id }))}
+                      placeholder="全部项目组"
+                      onChange={selectProjectGroupFilter}
+                    />
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Text strong>项目</Text>
+                    <Select
+                      showSearch
+                      className="full-width prompt-field"
+                      value={selectedProjectId || undefined}
+                      options={filteredProjects.map(project => ({
+                        label: `${project.name}${project.status !== 'ENABLED' ? ` (${project.status})` : ''}`,
+                        value: project.id
+                      }))}
+                      placeholder={projectGroupFilter ? '请选择项目' : '请先选择项目组'}
+                      disabled={!projectGroupFilter}
+                      onChange={selectProjectForTargetConfig}
+                    />
+                  </Col>
+                </Row>
+                {selectedProjectId && (
+                  <Row gutter={[16, 16]} align="bottom">
+                    <Col xs={24} md={8}>
+                      <Text strong>当前项目所属项目组</Text>
+                      <Select
+                        className="full-width prompt-field"
+                        value={projectConfigDraft?.groupId || undefined}
+                        options={groups.map(group => ({ label: group.groupName, value: group.id }))}
+                        onChange={value => updateProjectConfigDraft('groupId', value)}
+                      />
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Text strong>当前项目所属端类型</Text>
+                      <Select
+                        className="full-width prompt-field"
+                        value={projectConfigDraft?.targetType || undefined}
+                        options={TARGET_TYPE_OPTIONS}
+                        loading={projectConfigSaving}
+                        onChange={value => updateProjectConfigDraft('targetType', value)}
+                      />
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <div className="settings-action-row project-config-save-row">
+                        <Button type="primary" loading={projectConfigSaving} onClick={saveSelectedProjectConfig}>
+                          保存项目配置
+                        </Button>
+                      </div>
+                    </Col>
+                  </Row>
+                )}
+              </Space>
+            </div>
+            <div className="settings-subsection">
+              {targetConfigDraft ? (
+                <>
+                <Space direction="vertical" size="middle" className="full-width">
+                  <div className="settings-inline-head">
+                    <Space wrap>
+                      <Text strong>端类型自动识别</Text>
+                      {(detectedTargetTypes.length ? detectedTargetTypes : ['BACKEND']).map(type => (
+                        <Tag key={type} color={type === 'BACKEND' ? 'blue' : 'green'}>{targetTypeLabel(type)}</Tag>
+                      ))}
+                      {targetDetection?.updatedAt && <Tag>{targetDetection.updatedAt}</Tag>}
+                    </Space>
+                    <Space wrap>
+                      {detectedTargetTypes.map(type => (
+                        <Button key={type} size="small" onClick={() => applyDetectedTargetType(type)}>
+                          设为{targetTypeLabel(type)}
+                        </Button>
+                      ))}
+                    </Space>
+                  </div>
+                  {detectionDiffersFromConfig && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="最近变更命中的端类型尚未出现在项目支持端类型中，可以用右侧按钮生成一套端类型配置。"
+                    />
+                  )}
+                  {detectionEvidences.length > 0 ? (
+                    <Table
+                      size="small"
+                      rowKey={(row, index) => `${row.targetType}-${row.source}-${row.value}-${index}`}
+                      pagination={false}
+                      columns={[
+                        { title: '端类型', dataIndex: 'targetType', width: 150, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
+                        { title: '来源', dataIndex: 'source', width: 130, render: value => ({ PATH: '路径', PROJECT_NAME: '项目名', FALLBACK: '兜底' }[value] || value) },
+                        { title: '命中值', dataIndex: 'value', ellipsis: true, render: value => value || '-' },
+                        { title: '规则', dataIndex: 'pattern', width: 180, render: value => value || '-' }
+                      ]}
+                      dataSource={detectionEvidences}
+                      scroll={{ x: 860 }}
+                    />
+                  ) : (
+                    <Empty description="暂无自动识别依据，下一次 webhook 后会更新" />
+                  )}
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} md={8}>
+                    <Text strong>端类型</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      value={selectedTargetType}
+                      options={TARGET_TYPE_OPTIONS}
+                      onChange={selectTargetTypeForConfig}
                     />
                   </Col>
                   <Col xs={24} md={8}>
@@ -2566,7 +3253,22 @@ function TemplateConfig() {
                     />
                   </Col>
                   <Col xs={24}>
-                    <Text strong>路径匹配</Text>
+                    <Text type="secondary">
+                      规则模板随端类型自动选择：{defaultTemplateCodeForTargetType(selectedTargetType)}。后端端类型默认显示提醒卡片，PC / APP 默认以 AI Review 为主。
+                    </Text>
+                  </Col>
+                  <Col xs={24}>
+                    <div className="settings-inline-head">
+                      <Text strong>路径匹配</Text>
+                      <Button
+                        size="small"
+                        icon={<ReloadOutlined />}
+                        onClick={refreshTargetPathPatterns}
+                        disabled={!targetConfigDraft}
+                      >
+                        按 webhook 识别回填
+                      </Button>
+                    </div>
                     <Select
                       mode="tags"
                       className="full-width prompt-field"
@@ -2588,23 +3290,26 @@ function TemplateConfig() {
                   </Col>
                   <Col xs={24} md={8}>
                     <Space direction="vertical">
-                      <Text strong>配置状态</Text>
+                      <Text strong>启用该端类型</Text>
                       <Switch
                         checked={targetConfigDraft.enabled !== false}
                         checkedChildren="启用"
                         unCheckedChildren="停用"
                         onChange={checked => updateTargetConfigDraft('enabled', checked)}
                       />
+                      <Text type="secondary">停用后不参与 webhook 路径匹配和端类型自动选择。</Text>
                     </Space>
                   </Col>
                 </Row>
                 <div className="settings-action-row">
-                  <Button type="primary" loading={settingsSaving} onClick={saveProjectTargetConfig}>保存端类型配置</Button>
+                  <Button type="primary" loading={targetConfigSaving} onClick={saveProjectTargetConfig}>保存端类型配置</Button>
                 </div>
-              </>
-            ) : (
-              <Empty description="请选择项目和端类型" />
-            )}
+                </Space>
+                </>
+              ) : (
+                <Empty description="请选择项目和端类型" />
+              )}
+            </div>
           </Space>
         </Card>
       )
@@ -2637,76 +3342,88 @@ function TemplateConfig() {
               </Col>
               <Col xs={24} md={14}>
                 <Space wrap>
-                  <Text type="secondary">已启用 {notificationRuleDraftCodes.length} 个卡片提醒类型</Text>
-                  {notificationRuleDraftCodes.map(code => <Tag key={code} color="blue">{code}</Tag>)}
+                  {selectedTemplateSupportsNotificationRules ? (
+                    <>
+                      <Text type="secondary">已启用 {notificationRuleDraftCodes.length} 个卡片提醒类型</Text>
+                      {notificationRuleDraftCodes.map(code => <Tag key={code} color="blue">{code}</Tag>)}
+                    </>
+                  ) : (
+                    <Text type="secondary">当前端类型模板暂不配置后端提醒卡片类型。</Text>
+                  )}
                 </Space>
               </Col>
             </Row>
-            <Row gutter={[16, 16]}>
-              <Col xs={24} lg={12}>
-                {notificationRules ? (
-                  <Collapse
-                    defaultActiveKey={(notificationRules.groups || []).map(group => group.groupCode)}
-                    items={(notificationRules.groups || []).map(group => ({
-                      key: group.groupCode,
-                      label: (
-                        <Space wrap>
-                          <Tag color={group.color}>{group.rules?.length || 0}</Tag>
-                          <Text strong>{group.groupName}</Text>
+            {selectedTemplateSupportsNotificationRules ? (
+              <>
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} lg={12}>
+                    {notificationRules ? (
+                      <Collapse
+                        defaultActiveKey={(notificationRules.groups || []).map(group => group.groupCode)}
+                        items={(notificationRules.groups || []).map(group => ({
+                          key: group.groupCode,
+                          label: (
+                            <Space wrap>
+                              <Tag color={group.color}>{group.rules?.length || 0}</Tag>
+                              <Text strong>{group.groupName}</Text>
+                            </Space>
+                          ),
+                          children: (
+                            <Space wrap size={[8, 8]}>
+                              {(group.rules || []).map(rule => {
+                                const checked = notificationRuleDraftCodes.includes(rule.ruleCode);
+                                return (
+                                  <Tag.CheckableTag
+                                    key={rule.ruleCode}
+                                    checked={checked}
+                                    className={`notification-rule-tag ${checked ? 'is-selected' : ''}`}
+                                    onClick={() => toggleNotificationRule(rule.ruleCode)}
+                                  >
+                                    {rule.title}
+                                  </Tag.CheckableTag>
+                                );
+                              })}
+                            </Space>
+                          )
+                        }))}
+                      />
+                    ) : (
+                      <Empty description="暂无提醒类型配置" />
+                    )}
+                  </Col>
+                  <Col xs={24} lg={12}>
+                    {selectedNotificationRule ? (
+                      <div className="notification-rule-detail">
+                        <Space direction="vertical" size="middle" className="full-width">
+                          <Space wrap>
+                            <Tag color={riskColor(selectedNotificationRule.riskLevel)}>{severityLabel(selectedNotificationRule.riskLevel)}</Tag>
+                            <Tag>{selectedNotificationRule.changeType}</Tag>
+                            {!selectedNotificationRule.enabledInTemplate && <Tag color="warning">模板未启用</Tag>}
+                          </Space>
+                          <Title level={5}>{selectedNotificationRule.title}</Title>
+                          <Paragraph>{selectedNotificationRule.description}</Paragraph>
+                          <Text type="secondary">{selectedNotificationRule.impact}</Text>
+                          <Divider />
+                          <Text strong>建议检查</Text>
+                          <ul className="notification-rule-checks">
+                            {(selectedNotificationRule.recommendedChecks || []).map(check => <li key={check}>{check}</li>)}
+                          </ul>
+                          <Text strong>示例</Text>
+                          <pre className="notification-rule-example">{selectedNotificationRule.example || '-'}</pre>
                         </Space>
-                      ),
-                      children: (
-                        <Space wrap size={[8, 8]}>
-                          {(group.rules || []).map(rule => {
-                            const checked = notificationRuleDraftCodes.includes(rule.ruleCode);
-                            return (
-                              <Tag.CheckableTag
-                                key={rule.ruleCode}
-                                checked={checked}
-                                className={`notification-rule-tag ${checked ? 'is-selected' : ''}`}
-                                onClick={() => toggleNotificationRule(rule.ruleCode)}
-                              >
-                                {rule.title}
-                              </Tag.CheckableTag>
-                            );
-                          })}
-                        </Space>
-                      )
-                    }))}
-                  />
-                ) : (
-                  <Empty description="暂无提醒类型配置" />
-                )}
-              </Col>
-              <Col xs={24} lg={12}>
-                {selectedNotificationRule ? (
-                  <div className="notification-rule-detail">
-                    <Space direction="vertical" size="middle" className="full-width">
-                      <Space wrap>
-                        <Tag color={riskColor(selectedNotificationRule.riskLevel)}>{severityLabel(selectedNotificationRule.riskLevel)}</Tag>
-                        <Tag>{selectedNotificationRule.changeType}</Tag>
-                        {!selectedNotificationRule.enabledInTemplate && <Tag color="warning">模板未启用</Tag>}
-                      </Space>
-                      <Title level={5}>{selectedNotificationRule.title}</Title>
-                      <Paragraph>{selectedNotificationRule.description}</Paragraph>
-                      <Text type="secondary">{selectedNotificationRule.impact}</Text>
-                      <Divider />
-                      <Text strong>建议检查</Text>
-                      <ul className="notification-rule-checks">
-                        {(selectedNotificationRule.recommendedChecks || []).map(check => <li key={check}>{check}</li>)}
-                      </ul>
-                      <Text strong>示例</Text>
-                      <pre className="notification-rule-example">{selectedNotificationRule.example || '-'}</pre>
-                    </Space>
-                  </div>
-                ) : (
-                  <Empty description="请选择提醒类型" />
-                )}
-              </Col>
-            </Row>
-            <div className="settings-action-row">
-              <Button type="primary" loading={notificationSaving} disabled={!notificationRules || !notificationRulesDirty} onClick={saveNotificationRules}>保存配置</Button>
-            </div>
+                      </div>
+                    ) : (
+                      <Empty description="请选择提醒类型" />
+                    )}
+                  </Col>
+                </Row>
+                <div className="settings-action-row">
+                  <Button type="primary" loading={notificationSaving} disabled={!notificationRules || !notificationRulesDirty} onClick={saveNotificationRules}>保存配置</Button>
+                </div>
+              </>
+            ) : (
+              <Empty description="当前模板暂无卡片提醒类型配置" />
+            )}
           </Space>
         </Card>
       )
@@ -2817,41 +3534,82 @@ function TemplateConfig() {
           {profileDraft ? (
             <Space direction="vertical" size="middle" className="full-width">
               <Row gutter={[16, 16]}>
-                <Col xs={24} lg={10}>
-                  <Text strong>Profile</Text>
+                <Col xs={24} md={12}>
+                  <Text strong>Provider 覆盖</Text>
                   <Select
                     className="full-width prompt-field"
-                    value={selectedProfileCode}
-                    options={profileOptions}
-                    onChange={selectProfile}
+                    value={profileDraft.providerCode || ''}
+                    options={profileProviderOptions}
+                    onChange={value => updateProfileDraft('providerCode', value || null)}
                   />
                 </Col>
-                <Col xs={24} lg={14}>
-                  <Row gutter={[12, 12]}>
-                    <Col xs={24} md={12}>
-                      <Text strong>Provider 覆盖</Text>
-                      <Select
-                        className="full-width prompt-field"
-                        value={profileDraft.providerCode || ''}
-                        options={profileProviderOptions}
-                        onChange={value => updateProfileDraft('providerCode', value || null)}
-                      />
-                    </Col>
-                    <Col xs={24} md={12}>
-                      <Text strong>模型覆盖</Text>
-                      <Input
-                        className="prompt-field"
-                        placeholder="留空使用后端默认模型"
-                        value={profileDraft.model || ''}
-                        onChange={event => updateProfileDraft('model', event.target.value)}
-                      />
-                    </Col>
-                  </Row>
+                <Col xs={24} md={12}>
+                  <Text strong>模型覆盖</Text>
+                  <Input
+                    className="prompt-field"
+                    placeholder="留空使用后端默认模型"
+                    value={profileDraft.model || ''}
+                    onChange={event => updateProfileDraft('model', event.target.value)}
+                  />
                 </Col>
               </Row>
               <div className="settings-subsection">
                 <Space direction="vertical" size="middle" className="full-width">
-                  <Text strong>Push 审核策略</Text>
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24} lg={10}>
+                      <Text strong>Profile</Text>
+                      <Select
+                        className="full-width prompt-field"
+                        value={selectedProfileCode}
+                        options={profileOptions}
+                        onChange={selectProfile}
+                      />
+                    </Col>
+                  </Row>
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24}>
+                      <Text strong>Review Instructions</Text>
+                      <Input.TextArea
+                        className="prompt-textarea"
+                        value={profileDraft.reviewInstructions || ''}
+                        onChange={event => updateProfileDraft('reviewInstructions', event.target.value)}
+                        autoSize={{ minRows: 8, maxRows: 16 }}
+                      />
+                    </Col>
+                  </Row>
+                  {promptPreview && (
+                    <Collapse
+                      defaultActiveKey={['preview']}
+                      items={[{
+                        key: 'preview',
+                        label: (
+                          <Space wrap>
+                            <Text strong>Prompt 预览</Text>
+                            <Tag>{promptPreview.provider}</Tag>
+                            {promptPreview.model && <Tag>{promptPreview.model}</Tag>}
+                            <Tag>{promptPreview.promptLength} 字符</Tag>
+                            <Tag>{promptPreview.promptHash?.slice(0, 12)}</Tag>
+                          </Space>
+                        ),
+                        children: <pre className="prompt-preview-block">{promptPreview.prompt}</pre>
+                      }]}
+                    />
+                  )}
+                  <div className="settings-action-row">
+                    <Space wrap>
+                      <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={!profileDraft}>预览 Prompt</Button>
+                      <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={!profileDraft}>恢复当前 Profile 默认 Prompt</Button>
+                      <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={!profileDraft}>保存 Profile</Button>
+                    </Space>
+                  </div>
+                </Space>
+              </div>
+              <div className="settings-subsection">
+                <Space direction="vertical" size="middle" className="full-width">
+                  <Space direction="vertical" size={4}>
+                    <Text strong>Push 审核策略</Text>
+                    <Text type="secondary">用于判断 GitLab Push 事件是否允许自动进入 AI Review；未放行的 Push 仍会保留规则提醒和审查记录。</Text>
+                  </Space>
                   <Row gutter={[16, 16]}>
                     <Col xs={24}>
                       <Text strong>允许分支</Text>
@@ -2894,19 +3652,21 @@ function TemplateConfig() {
                       <Text strong>最大文件数</Text>
                       <InputNumber
                         className="full-width prompt-field"
-                        min={0}
+                        min={-1}
                         value={profileDraft.pushMaxChangedFiles}
                         onChange={value => updateProfileDraft('pushMaxChangedFiles', value)}
                       />
+                      <Text type="secondary">-1 表示无限制</Text>
                     </Col>
                     <Col xs={24} md={8}>
                       <Text strong>最大 Diff 字节</Text>
                       <InputNumber
                         className="full-width prompt-field"
-                        min={0}
+                        min={-1}
                         value={profileDraft.pushMaxDiffBytes}
                         onChange={value => updateProfileDraft('pushMaxDiffBytes', value)}
                       />
+                      <Text type="secondary">-1 表示无限制</Text>
                     </Col>
                     <Col xs={24} md={8}>
                       <Text strong>Debounce 秒数</Text>
@@ -2918,42 +3678,16 @@ function TemplateConfig() {
                       />
                     </Col>
                   </Row>
-                </Space>
-              </div>
-              <Row gutter={[16, 16]}>
-                <Col xs={24}>
-                  <Text strong>Review Instructions</Text>
-                  <Input.TextArea
-                    className="prompt-textarea"
-                    value={profileDraft.reviewInstructions || ''}
-                    onChange={event => updateProfileDraft('reviewInstructions', event.target.value)}
-                    autoSize={{ minRows: 8, maxRows: 16 }}
-                  />
-                </Col>
-              </Row>
-              {promptPreview && (
-                <Collapse
-                  defaultActiveKey={['preview']}
-                  items={[{
-                    key: 'preview',
-                    label: (
-                      <Space wrap>
-                        <Text strong>Prompt 预览</Text>
-                        <Tag>{promptPreview.provider}</Tag>
-                        {promptPreview.model && <Tag>{promptPreview.model}</Tag>}
-                        <Tag>{promptPreview.promptLength} 字符</Tag>
-                        <Tag>{promptPreview.promptHash?.slice(0, 12)}</Tag>
-                      </Space>
-                    ),
-                    children: <pre className="prompt-preview-block">{promptPreview.prompt}</pre>
-                  }]}
-                />
-              )}
-              <div className="settings-action-row">
-                <Space wrap>
-                  <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={!profileDraft}>预览 Prompt</Button>
-                  <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={!profileDraft}>恢复默认</Button>
-                  <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={!profileDraft}>保存 Profile</Button>
+                  <div className="settings-action-row">
+                    <Button
+                      type="primary"
+                      loading={pushPolicySaving}
+                      onClick={savePushReviewPolicy}
+                      disabled={!profileDraft}
+                    >
+                      保存 Push 审核策略
+                    </Button>
+                  </div>
                 </Space>
               </div>
             </Space>

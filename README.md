@@ -155,7 +155,14 @@ PLATFORM_BASE_URL=http://你的域名或服务器IP:8080
 DATABASE_URL=mysql+pymysql://ai_review:强密码@192.168.100.88:3306/ai_code_review?charset=utf8mb4
 ```
 
-按需再增加这些可选配置：
+`PUBLIC_HTTP_PORT` 是前端容器暴露到宿主机的访问端口，浏览器访问和 GitLab webhook 都走这个端口。`PLATFORM_BASE_URL` 是后端生成外链用的基础地址，例如钉钉机器人消息里的“查看平台详情”链接；它不会改变前端容器实际监听或暴露的端口。两者通常应该配置为同一个用户可访问地址，例如：
+
+```text
+PUBLIC_HTTP_PORT=15173
+PLATFORM_BASE_URL=http://192.168.100.241:15173
+```
+
+按需再配置这些可选项：
 
 ```text
 GITLAB_API_ENABLED=true
@@ -204,6 +211,7 @@ curl http://127.0.0.1/api/health
 - backend 容器启动时会先执行 `python -m app.migrate`。空 MySQL 会按 `backend-python/migrations/bootstrap_sql/` 顺序初始化历史表结构和内置数据；已有核心表时会自动跳过 bootstrap。
 - 如需单独确认后端 bootstrap / gunicorn 启动过程，可执行 `docker compose logs -f backend`。
 - 钉钉 webhook 不再通过 `.env` 默认配置。部署完成后，请进入前端“设置”页，在“全局设置”中手动添加一个或多个钉钉 webhook。
+- GitLab webhook 接收能力不依赖 `GITLAB_TOKEN`。如果 webhook payload 已携带 changed files，平台可以直接审查；如果 MR payload 没有 diff、Push 需要 compare 补拉，或任务“重新触发审阅”需要重新拉 GitLab diff，则必须配置 `GITLAB_API_ENABLED=true`、`GITLAB_BASE_URL` 和 `GITLAB_TOKEN`。
 
 平台访问和 GitLab webhook 使用同一个对外端口：`PUBLIC_HTTP_PORT`。默认访问 `http://服务器IP:8080`，GitLab webhook 配 `http://服务器IP:8080/api/webhooks/gitlab/merge-request`。如果服务器的 `8080` 已被占用，可以改 `PUBLIC_HTTP_PORT`，例如 `PUBLIC_HTTP_PORT=18080` 后访问 `http://服务器IP:18080`。`BACKEND_PORT` 默认只在 Docker 内部使用，不会额外占用宿主机端口；如需避开容器内的 `8080` 约定，也可以改成 `BACKEND_PORT=18081`，Nginx 反向代理会自动跟随。
 
@@ -414,12 +422,12 @@ Push 审核层默认策略：
 - `pushMinChangedFiles`：`10`
 - `pushMinDiffBytes`：`30000`
 - `pushMinCommitCount`：`3`
-- `pushMaxChangedFiles`：`80`
-- `pushMaxDiffBytes`：`300000`
+- `pushMaxChangedFiles`：`-1`，表示不限制最大文件数
+- `pushMaxDiffBytes`：`-1`，表示不限制最大 Diff 字节数
 - `pushDebounceSeconds`：`300`
 - `triggerOnlyWhenRiskMatched`：`false`
 
-放行需要先满足分支、debounce、diff 可用性和硬上限要求；随后只要命中 `HIGH/CRITICAL` 风险、重点提醒类型，或达到文件数 / diff 大小 / commit 数大变更阈值之一，就会进入 AI Review 队列。未放行的 Push 仍会完成规则提醒、通知记录和落库。
+放行需要先满足分支、debounce、diff 可用性和硬上限要求；最大文件数 / 最大 Diff 字节数配置为 `-1` 时不启用对应硬上限。随后只要命中 `HIGH/CRITICAL` 风险、重点提醒类型，或达到文件数 / diff 大小 / commit 数大变更阈值之一，就会进入 AI Review 队列。未放行的 Push 仍会完成规则提醒、通知记录和落库。
 
 已补充非流式 Provider 诊断事件：`PROVIDER_SELECTED`、`REQUEST_VALIDATED`、`HTTP_REQUEST_START`、`HTTP_RESPONSE_HEADERS`、`HTTP_RESPONSE_BODY_PREVIEW`、`OUTPUT_EXTRACTED`、`JSON_PARSE_START`、`JSON_PARSE_FAILED`、`RESULT_SAVED`。这些阶段用于定位 API Key / endpoint / HTTP 状态 / 超时 / 协议响应 / JSON 解析问题；失败会落库为 `FAILED`，不会长期停留在 `RUNNING`。
 
@@ -609,13 +617,40 @@ BACKEND / WEB_PC / APP_IOS / APP_ANDROID / APP_CROSS_PLATFORM / GENERAL
 
 后端项目默认仍使用 `backend-default` 和 `backend-default-ai-review`，并展示“提醒卡片”。PC / APP 端默认以代码质量 AI Review 为主，后端维护类提醒卡片默认关闭；如确实需要，也可以在项目端类型配置中开启 `reminderCardEnabled`。
 
+项目组用于项目归类和任务列表筛选。可以在前端“设置 -> 项目组 / 端类型配置”中新增项目组、编辑名称 / 编码 / 描述 / 默认 Provider、停用非默认项目组，并把已有项目绑定到指定项目组。第一阶段项目组不代表权限边界，也不做项目组级模板或钉钉 webhook 继承；未绑定项目会自动归入“默认项目组”。
+
+首次接入新的 GitLab 项目时，平台会根据 webhook / GitLab diff 中的 changed files，以及 GitLab 项目名或 namespace，自动识别端类型并保存识别依据。典型规则包括：
+
+```text
+ios/**、**/*.swift、Podfile -> APP_IOS
+android/**、**/*.kt、build.gradle、settings.gradle -> APP_ANDROID
+frontend/**、web/**、src/**/*.tsx、src/**/*.jsx、package.json -> WEB_PC
+flutter/**、**/*.dart、pubspec.yaml、rn/**、miniapp/** -> APP_CROSS_PLATFORM
+src/main/java/**、src/main/resources/**、pom.xml、backend-python/** -> BACKEND
+```
+
+如果新项目只命中一个端类型，平台会自动创建该端类型配置，并默认使用 `**/*` 作为路径匹配，适合“单端单仓库”。如果是混合仓库，会保留多个端类型的默认路径规则。已有项目的人工端类型配置不会被自动覆盖；设置页会展示“端类型自动识别”依据，并提供一键设为对应端类型的操作。
+
 模板接口：
 
 ```powershell
 curl http://localhost:18080/api/rule-templates
 curl http://localhost:18080/api/rule-templates/backend-default
 curl http://localhost:18080/api/project-groups
+curl "http://localhost:18080/api/projects?includeDisabled=true"
 curl http://localhost:18080/api/projects/1/target-configs
+```
+
+如果希望 GitLab webhook 第一次进入前就先配置项目组和端类型，可以在前端“设置 -> 项目组 / 端类型配置 -> 预创建 GitLab 项目”填写 GitLab 项目 ID。后续 webhook 只要 payload 中的 `project.id` 与这里的 `gitProjectId` 一致，就会复用这条项目记录和已配置的端类型。
+
+接口示例：
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:18080/api/projects" `
+  -ContentType "application/json" `
+  -Body '{"name":"mobile-ios","gitProvider":"GITLAB","gitProjectId":"12345","targetType":"APP_IOS","repositoryUrl":"https://gitlab.example.com/app/mobile-ios"}'
 ```
 
 项目默认模板绑定：

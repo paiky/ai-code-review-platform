@@ -821,3 +821,120 @@ GET /api/health
 2. 默认项目组这类基础数据初始化要明确提交；不要在 GET 请求里 `flush` 后让 session close 回滚，导致下次请求再次初始化。
 3. 如果已经卡住，先单独访问或执行一次 schema 补齐，或重启后端；修复后 `/api/project-groups` 和 `/api/projects` 应快速返回。
 4. 长期建议仍通过 migration 正式升级 schema，运行时补齐只作为旧库兼容保护。
+
+## 35. Vite 8 CLI 在 Windows / Rolldown 下可能错误发射绝对路径资源
+
+现象：
+
+执行前端构建时失败：
+
+```powershell
+.\scripts\run-frontend.cmd build
+```
+
+错误类似：
+
+```text
+[plugin vite:build-html]
+The "fileName" or "name" properties of emitted chunks and assets must be strings that are neither absolute nor relative paths, received "D:/projects/.../frontend/index.html".
+```
+
+原因：
+
+当前前端依赖使用 Vite 8，底层构建器切到 Rolldown。在 Windows 路径下，Vite CLI 的 app builder 可能把 `index.html` 的绝对路径传给 `emitFile`，导致构建失败。相同配置下，调用 Vite programmatic `build()` 可以正常构建。
+
+处理方式：
+
+1. 前端 `npm run build` 通过 `frontend/scripts/vite-build.mjs` 调用 Vite `build()`，避免 CLI app builder 的 Windows 路径问题。
+2. 仍然通过仓库入口执行构建：
+
+```powershell
+.\scripts\run-frontend.cmd build
+```
+
+3. 如果后续升级 Vite 后 CLI 行为恢复正常，可以再评估是否切回 `vite build`。
+
+## 36. 查询接口不要隐式创建项目端类型配置
+
+现象：
+
+访问项目端类型配置接口偶发很慢，甚至超时：
+
+```text
+GET /api/projects/{projectId}/target-configs
+```
+
+后端日志可能出现：
+
+```text
+pymysql.err.OperationalError: (1205, 'Lock wait timeout exceeded; try restarting transaction')
+```
+
+原因：
+
+旧实现为了兼容没有 `project_target_configs` 的历史项目，在 GET 接口里调用 `ensure_default_target_configs`。这个函数会插入默认 BACKEND 配置，并更新 `projects.supported_target_types`。如果前端设置页、webhook、保存配置等请求并发访问同一个项目，就可能在 MySQL 上等待行锁，最终触发 1205。
+
+处理方式：
+
+1. `GET /api/projects/{projectId}/target-configs` 必须保持纯读。
+2. 历史项目没有端类型配置时，GET 只返回一个 `id=null` 的虚拟默认 BACKEND 配置供前端展示。
+3. 只有保存端类型配置、webhook 自动创建项目、手动预创建项目或任务解析主链路才允许真正写入 `project_target_configs`。
+4. 以后新增查询接口时，不要为了“顺手补默认值”在 GET 路径里写库。
+
+## 37. 多端 AI Review Profile 恢复默认不能复用后端默认 Prompt
+
+现象：
+
+在设置页切换到 PC / APP 的 AI Review Profile 后点击“恢复默认”，页面返回成功，但对应 Profile 的 `reviewInstructions` 变成后端模板内容，例如出现：
+
+```text
+你是资深后端代码质量审核助手
+```
+
+原因：
+
+旧的 `POST /api/code-quality-review-profiles/{profileCode}/reset-default-prompt` 虽然接收了当前 `profileCode`，但后端实现固定写入 `DEFAULT_REVIEW_INSTRUCTIONS`。多端接入后，PC / iOS / Android / 跨端都有自己的内置默认 prompt，恢复逻辑必须按 `profileCode` 查默认定义，不能再假设只有后端默认模板。
+
+处理方式：
+
+1. 后端维护内置 Profile 默认定义映射，恢复默认时按 `profileCode` 写回对应 prompt。
+2. 加载内置 Profile 时，如果发现 PC / APP Profile 被误覆盖成后端默认 prompt，可以自动修复回端侧默认内容。
+3. 前端按钮文案应明确为“恢复当前 Profile 默认 Prompt”，调用时使用当前选中的 `profileCode`。
+4. 增加 contract 测试覆盖：PC Profile 恢复默认后必须包含 PC Web / H5 关注点，且不能包含后端默认 prompt。
+
+## 38. Docker 部署端口和平台外链不是同一个变量
+
+现象：
+
+远程服务器 `runtime/.env` 中配置：
+
+```text
+PUBLIC_HTTP_PORT=18080
+PLATFORM_BASE_URL=192.168.100.241:15173
+```
+
+浏览器仍然需要访问 `192.168.100.241:18080`，而不是 `15173`。任务详情页点击“重新触发审阅”还可能报：
+
+```text
+GitLab diff is not provided and GitLab API is disabled
+```
+
+原因：
+
+`PUBLIC_HTTP_PORT` 是 Docker Compose 暴露前端 Nginx 的宿主机端口，决定用户访问哪个端口。`PLATFORM_BASE_URL` 只由后端用于生成外链，例如钉钉机器人消息里的详情链接，不会改变容器端口映射。并且 `PLATFORM_BASE_URL` 应包含协议，例如 `http://192.168.100.241:15173`。
+
+重新触发审阅会复用原始 webhook payload。如果原始 payload 没有 changed files / diff，后端需要调用 GitLab API 补拉 diff；Docker 环境未配置 `GITLAB_API_ENABLED=true`、`GITLAB_BASE_URL`、`GITLAB_TOKEN` 时，就会报 GitLab API disabled。本地正常通常是因为 `.local/gitlab.env` 已启用 GitLab API，或原始测试 payload 自带 changed files。
+
+处理方式：
+
+1. 希望浏览器访问 `15173`，应配置 `PUBLIC_HTTP_PORT=15173`，并把 `PLATFORM_BASE_URL` 配成同一个可访问地址：`http://192.168.100.241:15173`。
+2. GitLab webhook 接收本身不一定需要 token；payload 自带 changed files 时可以直接处理。
+3. MR payload 缺少 diff、Push compare 补拉、任务重新触发审阅需要 GitLab API 时，必须在部署 `.env` 中配置：
+
+```text
+GITLAB_API_ENABLED=true
+GITLAB_BASE_URL=https://你的 GitLab 地址
+GITLAB_TOKEN=GitLab access token
+```
+
+4. 修改 `runtime/.env` 后执行 `docker compose up -d --force-recreate backend frontend`，确保容器拿到新环境变量。

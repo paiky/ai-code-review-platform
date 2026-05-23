@@ -109,6 +109,53 @@ LEGACY_DEFAULT_REVIEW_INSTRUCTIONS = {
     "只报告会影响线上正确性、数据一致性、安全、事务边界、SQL 性能、缓存一致性、MQ 一致性、异常处理或测试覆盖的问题。\n不报告纯代码风格、命名偏好、无明确影响的重构建议。\n每个问题都要说明触发条件、潜在影响和建议修复方式。",
 }
 
+DEFAULT_PROFILE_DEFINITIONS = {
+    DEFAULT_PROFILE_CODE: {
+        "profile_name": "Backend default AI code review",
+        "instructions": DEFAULT_REVIEW_INSTRUCTIONS,
+        "enabled_categories": [
+            "CORRECTNESS",
+            "SECURITY",
+            "TRANSACTION",
+            "SQL_PERFORMANCE",
+            "CACHE_CONSISTENCY",
+            "MQ_CONSISTENCY",
+            "EXCEPTION_HANDLING",
+            "TEST_GAP",
+        ],
+        "ignored_paths": ["**/generated/**", "**/target/**", "**/dist/**"],
+        "description": "Default backend AI code quality review profile.",
+    },
+    "web-pc-default-ai-review": {
+        "profile_name": "Web PC default AI code review",
+        "instructions": WEB_PC_REVIEW_INSTRUCTIONS,
+        "enabled_categories": ["CORRECTNESS", "SECURITY", "PERFORMANCE", "API_CONTRACT", "TEST_GAP"],
+        "ignored_paths": ["**/dist/**", "**/node_modules/**", "**/coverage/**", "**/*.snap"],
+        "description": "Default PC Web / H5 AI code quality review profile.",
+    },
+    "app-ios-default-ai-review": {
+        "profile_name": "iOS default AI code review",
+        "instructions": APP_IOS_REVIEW_INSTRUCTIONS,
+        "enabled_categories": ["CORRECTNESS", "SECURITY", "PERFORMANCE", "EXCEPTION_HANDLING", "TEST_GAP"],
+        "ignored_paths": ["**/Pods/**", "**/DerivedData/**", "**/*.xcuserstate"],
+        "description": "Default iOS AI code quality review profile.",
+    },
+    "app-android-default-ai-review": {
+        "profile_name": "Android default AI code review",
+        "instructions": APP_ANDROID_REVIEW_INSTRUCTIONS,
+        "enabled_categories": ["CORRECTNESS", "SECURITY", "PERFORMANCE", "EXCEPTION_HANDLING", "TEST_GAP"],
+        "ignored_paths": ["**/build/**", "**/.gradle/**", "**/generated/**"],
+        "description": "Default Android AI code quality review profile.",
+    },
+    "app-cross-platform-default-ai-review": {
+        "profile_name": "Cross-platform app default AI code review",
+        "instructions": APP_CROSS_PLATFORM_REVIEW_INSTRUCTIONS,
+        "enabled_categories": ["CORRECTNESS", "SECURITY", "PERFORMANCE", "API_CONTRACT", "TEST_GAP"],
+        "ignored_paths": ["**/build/**", "**/dist/**", "**/node_modules/**", "**/.dart_tool/**"],
+        "description": "Default cross-platform app AI code quality review profile.",
+    },
+}
+
 
 def ensure_defaults(db: Session) -> None:
     ensure_code_quality_config_schema(db)
@@ -164,75 +211,56 @@ def ensure_defaults(db: Session) -> None:
     )
     _upsert_default_provider(db, "CUSTOM", "自定义 OpenAI-compatible", "OPENAI_CHAT_COMPATIBLE", None, None, None, False, 40)
 
-    profile = _upsert_default_profile(
-        db,
-        DEFAULT_PROFILE_CODE,
-        "Backend default AI code review",
-        DEFAULT_REVIEW_INSTRUCTIONS,
-        [
-            "CORRECTNESS",
-            "SECURITY",
-            "TRANSACTION",
-            "SQL_PERFORMANCE",
-            "CACHE_CONSISTENCY",
-            "MQ_CONSISTENCY",
-            "EXCEPTION_HANDLING",
-            "TEST_GAP",
-        ],
-        ["**/generated/**", "**/target/**", "**/dist/**"],
-        "Default backend AI code quality review profile.",
-    )
+    profile = _upsert_built_in_profile(db, DEFAULT_PROFILE_CODE)
     if (profile.review_instructions or "").strip() in LEGACY_DEFAULT_REVIEW_INSTRUCTIONS:
         profile.review_instructions = DEFAULT_REVIEW_INSTRUCTIONS
         profile.openai_instructions = DEFAULT_REVIEW_INSTRUCTIONS
         profile.codex_prompt = DEFAULT_REVIEW_INSTRUCTIONS
         profile.updated_at = datetime.now()
-    _upsert_default_profile(
-        db,
-        "web-pc-default-ai-review",
-        "Web PC default AI code review",
-        WEB_PC_REVIEW_INSTRUCTIONS,
-        ["CORRECTNESS", "SECURITY", "PERFORMANCE", "API_CONTRACT", "TEST_GAP"],
-        ["**/dist/**", "**/node_modules/**", "**/coverage/**", "**/*.snap"],
-        "Default PC Web / H5 AI code quality review profile.",
-    )
-    _upsert_default_profile(
-        db,
-        "app-ios-default-ai-review",
-        "iOS default AI code review",
-        APP_IOS_REVIEW_INSTRUCTIONS,
-        ["CORRECTNESS", "SECURITY", "PERFORMANCE", "EXCEPTION_HANDLING", "TEST_GAP"],
-        ["**/Pods/**", "**/DerivedData/**", "**/*.xcuserstate"],
-        "Default iOS AI code quality review profile.",
-    )
-    _upsert_default_profile(
-        db,
-        "app-android-default-ai-review",
-        "Android default AI code review",
-        APP_ANDROID_REVIEW_INSTRUCTIONS,
-        ["CORRECTNESS", "SECURITY", "PERFORMANCE", "EXCEPTION_HANDLING", "TEST_GAP"],
-        ["**/build/**", "**/.gradle/**", "**/generated/**"],
-        "Default Android AI code quality review profile.",
-    )
-    _upsert_default_profile(
-        db,
-        "app-cross-platform-default-ai-review",
-        "Cross-platform app default AI code review",
-        APP_CROSS_PLATFORM_REVIEW_INSTRUCTIONS,
-        ["CORRECTNESS", "SECURITY", "PERFORMANCE", "API_CONTRACT", "TEST_GAP"],
-        ["**/build/**", "**/dist/**", "**/node_modules/**", "**/.dart_tool/**"],
-        "Default cross-platform app AI code quality review profile.",
-    )
+    for profile_code in DEFAULT_PROFILE_DEFINITIONS:
+        if profile_code == DEFAULT_PROFILE_CODE:
+            continue
+        _upsert_built_in_profile(db, profile_code)
     profile.push_branch_patterns = profile.push_branch_patterns or json.dumps(
         ["develop", "feature/*", "bugfix/*", "hotfix/*"], ensure_ascii=False
     )
     profile.push_min_changed_files = profile.push_min_changed_files if profile.push_min_changed_files is not None else 10
     profile.push_min_diff_bytes = profile.push_min_diff_bytes if profile.push_min_diff_bytes is not None else 30000
     profile.push_min_commit_count = profile.push_min_commit_count if profile.push_min_commit_count is not None else 3
-    profile.push_max_changed_files = profile.push_max_changed_files if profile.push_max_changed_files is not None else 80
-    profile.push_max_diff_bytes = profile.push_max_diff_bytes if profile.push_max_diff_bytes is not None else 300000
+    profile.push_max_changed_files = _default_unlimited(profile.push_max_changed_files, 80)
+    profile.push_max_diff_bytes = _default_unlimited(profile.push_max_diff_bytes, 300000)
     profile.push_debounce_seconds = profile.push_debounce_seconds if profile.push_debounce_seconds is not None else 300
     db.flush()
+
+
+def _upsert_built_in_profile(db: Session, profile_code: str) -> CodeQualityReviewProfile:
+    definition = _default_profile_definition(profile_code)
+    profile = _upsert_default_profile(
+        db,
+        profile_code,
+        definition["profile_name"],
+        definition["instructions"],
+        definition["enabled_categories"],
+        definition["ignored_paths"],
+        definition["description"],
+    )
+    if profile_code != DEFAULT_PROFILE_CODE and _is_backend_prompt(profile.review_instructions):
+        profile.review_instructions = definition["instructions"]
+        profile.openai_instructions = definition["instructions"]
+        profile.codex_prompt = definition["instructions"]
+        profile.updated_at = datetime.now()
+    return profile
+
+
+def _default_profile_definition(profile_code: str) -> dict[str, Any]:
+    definition = DEFAULT_PROFILE_DEFINITIONS.get(profile_code)
+    if definition is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Default profile definition not found: {profile_code}", 404)
+    return definition
+
+
+def _is_backend_prompt(value: str | None) -> bool:
+    return (value or "").strip() == DEFAULT_REVIEW_INSTRUCTIONS.strip()
 
 
 def ensure_code_quality_config_schema(db: Session) -> None:
@@ -482,8 +510,8 @@ def _upsert_default_profile(
             push_min_changed_files=10,
             push_min_diff_bytes=30000,
             push_min_commit_count=3,
-            push_max_changed_files=80,
-            push_max_diff_bytes=300000,
+            push_max_changed_files=-1,
+            push_max_diff_bytes=-1,
             push_debounce_seconds=300,
             trigger_only_when_risk_matched=False,
             codex_prompt=instructions,
@@ -504,8 +532,8 @@ def _upsert_default_profile(
     profile.push_min_changed_files = profile.push_min_changed_files if profile.push_min_changed_files is not None else 10
     profile.push_min_diff_bytes = profile.push_min_diff_bytes if profile.push_min_diff_bytes is not None else 30000
     profile.push_min_commit_count = profile.push_min_commit_count if profile.push_min_commit_count is not None else 3
-    profile.push_max_changed_files = profile.push_max_changed_files if profile.push_max_changed_files is not None else 80
-    profile.push_max_diff_bytes = profile.push_max_diff_bytes if profile.push_max_diff_bytes is not None else 300000
+    profile.push_max_changed_files = _default_unlimited(profile.push_max_changed_files, 80)
+    profile.push_max_diff_bytes = _default_unlimited(profile.push_max_diff_bytes, 300000)
     profile.push_debounce_seconds = profile.push_debounce_seconds if profile.push_debounce_seconds is not None else 300
     if not (profile.review_instructions or "").strip():
         profile.review_instructions = instructions
@@ -673,9 +701,11 @@ def update_profile(db: Session, profile_code: str, request: dict[str, Any]) -> d
 
 def reset_default_prompt(db: Session, profile_code: str) -> dict[str, Any]:
     profile = get_profile(db, profile_code)
-    profile.review_instructions = DEFAULT_REVIEW_INSTRUCTIONS
-    profile.openai_instructions = DEFAULT_REVIEW_INSTRUCTIONS
-    profile.codex_prompt = DEFAULT_REVIEW_INSTRUCTIONS
+    definition = _default_profile_definition(profile.profile_code)
+    default_prompt = definition["instructions"]
+    profile.review_instructions = default_prompt
+    profile.openai_instructions = default_prompt
+    profile.codex_prompt = default_prompt
     profile.updated_at = datetime.now()
     db.flush()
     return profile_to_dict(profile)
@@ -1477,6 +1507,12 @@ def _blank_to_none(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _default_unlimited(value: int | None, legacy_default: int) -> int:
+    if value is None or value == legacy_default:
+        return -1
+    return value
 
 
 def _truncate(value: str | None, max_length: int) -> str | None:

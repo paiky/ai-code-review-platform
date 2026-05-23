@@ -298,6 +298,62 @@ def test_rendered_prompt_uses_java_stronger_default(
     assert "每个 finding 都必须说明" in prompt
 
 
+def test_default_push_hard_limits_are_unlimited(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+
+    response = client.get("/api/code-quality-review-profiles/backend-default-ai-review")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["pushMaxChangedFiles"] == -1
+    assert data["pushMaxDiffBytes"] == -1
+
+
+def test_reset_default_prompt_uses_selected_profile_default(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    changed = client.put(
+        "/api/code-quality-review-profiles/web-pc-default-ai-review",
+        json={"reviewInstructions": "临时改成一段自定义 PC Prompt"},
+    )
+    assert changed.status_code == 200
+
+    reset = client.post("/api/code-quality-review-profiles/web-pc-default-ai-review/reset-default-prompt")
+
+    assert reset.status_code == 200
+    data = reset.json()["data"]
+    assert data["profileCode"] == "web-pc-default-ai-review"
+    assert "资深 PC Web / H5" in data["reviewInstructions"]
+    assert "资深后端" not in data["reviewInstructions"]
+
+
+def test_loading_profiles_repairs_pc_profile_overwritten_by_backend_default(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    backend = client.get("/api/code-quality-review-profiles/backend-default-ai-review").json()["data"]
+    overwritten = client.put(
+        "/api/code-quality-review-profiles/web-pc-default-ai-review",
+        json={"reviewInstructions": backend["reviewInstructions"]},
+    )
+    assert overwritten.status_code == 200
+
+    profiles = client.get("/api/code-quality-review-profiles")
+
+    assert profiles.status_code == 200
+    pc_profile = next(
+        item for item in profiles.json()["data"]["items"] if item["profileCode"] == "web-pc-default-ai-review"
+    )
+    assert "资深 PC Web / H5" in pc_profile["reviewInstructions"]
+    assert "资深后端" not in pc_profile["reviewInstructions"]
+
+
 def test_settings_returns_empty_dingtalk_webhook_list(
     client: TestClient,
     monkeypatch,

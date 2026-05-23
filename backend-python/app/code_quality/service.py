@@ -1059,7 +1059,7 @@ def _branch_matches(branch_name: str | None, patterns: list[str]) -> bool:
 
 
 def _over_limit(value: int, limit: int | None) -> bool:
-    return limit is not None and value > limit
+    return limit is not None and limit >= 0 and value > limit
 
 
 def _reaches_threshold(value: int, threshold: int | None) -> bool:

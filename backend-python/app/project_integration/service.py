@@ -15,7 +15,7 @@ from app.core.json_utils import read_json_array
 from app.notification.service import send_risk_card
 from app.project_integration import gitlab_client
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent
-from app.project_integration.repository import resolve_project_target_config, upsert_gitlab_project
+from app.project_integration.repository import resolve_project_target_config, update_project_target_detection, upsert_gitlab_project
 from app.review_record.repository import (
     create_review_task,
     mark_task_failed,
@@ -50,7 +50,11 @@ def handle_merge_request_webhook(db: Session, payload: dict[str, Any]) -> dict:
 
     event = _enrich_mr_detail(event)
     project = upsert_gitlab_project(
-        db, event["gitProjectId"], event["projectName"], event["repositoryUrl"]
+        db,
+        event["gitProjectId"],
+        event["projectName"],
+        event["repositoryUrl"],
+        event["changedFilesSummary"].get("files", []),
     )
     target_config = resolve_project_target_config(
         db,
@@ -102,6 +106,12 @@ def handle_merge_request_webhook(db: Session, payload: dict[str, Any]) -> dict:
             mr_record.changed_files_summary = json.dumps(
                 event["changedFilesSummary"], ensure_ascii=False
             )
+            update_project_target_detection(
+                db,
+                project,
+                event["projectName"],
+                event["changedFilesSummary"].get("files", []),
+            )
         result = _process_task(db, task, event["changedFilesSummary"].get("files", []), None)
         db.commit()
         return {
@@ -113,7 +123,8 @@ def handle_merge_request_webhook(db: Session, payload: dict[str, Any]) -> dict:
             "riskLevel": result["riskCard"]["riskLevel"],
         }
     except Exception as exception:
-        mark_task_failed(task, str(exception))
+        if task is not None:
+            mark_task_failed(task, str(exception))
         db.commit()
         raise
 
@@ -128,7 +139,13 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
     project_name = project.get("path_with_namespace") or project.get("name") or f"gitlab-project-{git_project_id}"
     repository_url = project.get("web_url") or (payload.get("repository") or {}).get("homepage") or (payload.get("repository") or {}).get("git_http_url")
     event = _parse_push_event(payload, git_project_id, project_name, repository_url)
-    project_record = upsert_gitlab_project(db, git_project_id, project_name, repository_url)
+    project_record = upsert_gitlab_project(
+        db,
+        git_project_id,
+        project_name,
+        repository_url,
+        event["changedFilesSummary"].get("files", []),
+    )
     branch_gate = _push_webhook_branch_gate(db, project_record, event["branchName"])
     if not branch_gate["allowed"]:
         db.commit()
@@ -147,56 +164,60 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
             "profileCode": branch_gate["profileCode"],
             "pushBranchPatterns": branch_gate["patterns"],
         }
-    target_config = resolve_project_target_config(
-        db,
-        project_record,
-        event["changedFilesSummary"].get("files", []),
-    )
-    task = create_review_task(
-        db,
-        project_id=project_record.id,
-        trigger_type="GITLAB_PUSH_WEBHOOK",
-        external_source_id=event["afterSha"],
-        external_url=event["externalUrl"],
-        source_branch=event["branchName"],
-        target_branch=None,
-        commit_sha=event["afterSha"],
-        before_sha=event["beforeSha"],
-        after_sha=event["afterSha"],
-        author_name=event["authorName"],
-        author_username=event["authorUsername"],
-        template_code=target_config["templateCode"],
-        target_type=target_config["targetType"],
-        target_types=target_config["targetTypes"],
-        code_quality_profile_code=target_config["profileCode"],
-    )
-    now = datetime.now()
-    push_record = GitLabPushEvent(
-        task_id=task.id,
-        git_project_id=git_project_id,
-        project_name=project_name,
-        ref=event["ref"],
-        branch_name=event["branchName"],
-        before_sha=event["beforeSha"],
-        after_sha=event["afterSha"],
-        event_time=event["eventTime"],
-        author_name=event["authorName"],
-        author_username=event["authorUsername"],
-        changed_files_summary=json.dumps(event["changedFilesSummary"], ensure_ascii=False),
-        raw_payload=json.dumps(payload, ensure_ascii=False),
-        created_at=now,
-        updated_at=now,
-    )
-    db.add(push_record)
+    task = None
     try:
         if event["changedFilesSummary"].get("source") != "payload":
             event["changedFilesSummary"] = _build_gitlab_changed_files_summary(
                 gitlab_client.compare(git_project_id, event["beforeSha"], event["afterSha"]),
                 "gitlab_compare_api",
             )
-            push_record.changed_files_summary = json.dumps(
-                event["changedFilesSummary"], ensure_ascii=False
+            project_record = update_project_target_detection(
+                db,
+                project_record,
+                project_name,
+                event["changedFilesSummary"].get("files", []),
             )
+        target_config = resolve_project_target_config(
+            db,
+            project_record,
+            event["changedFilesSummary"].get("files", []),
+        )
+        task = create_review_task(
+            db,
+            project_id=project_record.id,
+            trigger_type="GITLAB_PUSH_WEBHOOK",
+            external_source_id=event["afterSha"],
+            external_url=event["externalUrl"],
+            source_branch=event["branchName"],
+            target_branch=None,
+            commit_sha=event["afterSha"],
+            before_sha=event["beforeSha"],
+            after_sha=event["afterSha"],
+            author_name=event["authorName"],
+            author_username=event["authorUsername"],
+            template_code=target_config["templateCode"],
+            target_type=target_config["targetType"],
+            target_types=target_config["targetTypes"],
+            code_quality_profile_code=target_config["profileCode"],
+        )
+        now = datetime.now()
+        push_record = GitLabPushEvent(
+            task_id=task.id,
+            git_project_id=git_project_id,
+            project_name=project_name,
+            ref=event["ref"],
+            branch_name=event["branchName"],
+            before_sha=event["beforeSha"],
+            after_sha=event["afterSha"],
+            event_time=event["eventTime"],
+            author_name=event["authorName"],
+            author_username=event["authorUsername"],
+            changed_files_summary=json.dumps(event["changedFilesSummary"], ensure_ascii=False),
+            raw_payload=json.dumps(payload, ensure_ascii=False),
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(push_record)
         result = _process_task(db, task, event["changedFilesSummary"].get("files", []), None)
         db.commit()
         return {
@@ -208,7 +229,8 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
             "riskLevel": result["riskCard"]["riskLevel"],
         }
     except Exception as exception:
-        mark_task_failed(task, str(exception))
+        if task is not None:
+            mark_task_failed(task, str(exception))
         db.commit()
         raise
 

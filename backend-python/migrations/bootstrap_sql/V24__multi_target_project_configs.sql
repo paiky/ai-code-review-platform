@@ -21,7 +21,9 @@ ON DUPLICATE KEY UPDATE
 
 ALTER TABLE projects
   ADD COLUMN group_id BIGINT NULL AFTER id,
-  ADD COLUMN supported_target_types JSON NULL AFTER repository_url;
+  ADD COLUMN supported_target_types JSON NULL AFTER repository_url,
+  ADD COLUMN detected_target_types JSON NULL AFTER supported_target_types,
+  ADD COLUMN target_detection_json JSON NULL AFTER detected_target_types;
 
 UPDATE projects
 SET group_id = (SELECT id FROM project_groups WHERE group_code = 'default' LIMIT 1)
