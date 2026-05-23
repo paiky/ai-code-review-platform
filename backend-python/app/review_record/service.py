@@ -8,7 +8,7 @@ from app.change_analysis.service import analyze_changes
 from app.core.errors import AppError
 from app.notification.service import dingtalk_skipped_result
 from app.code_quality.repository import get_settings_record
-from app.project_integration.repository import find_project_by_id
+from app.project_integration.repository import find_project_by_id, resolve_project_target_config
 from app.project_integration.service import handle_gitlab_webhook
 from app.review_record.repository import (
     create_review_task,
@@ -30,7 +30,16 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict:
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
 
-    template_code = request.get("templateCode") or project.default_template_code
+    changed_files = request.get("changedFiles") or []
+    target_config = resolve_project_target_config(
+        db,
+        project,
+        changed_files,
+        request.get("targetType"),
+        request.get("targetTypes"),
+    )
+    template_code = request.get("templateCode") or target_config["templateCode"]
+    profile_code = request.get("profileCode") or target_config["profileCode"]
     template = get_enabled_template(db, template_code)
     task = create_review_task(
         db,
@@ -46,17 +55,26 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict:
         author_name=request.get("authorName"),
         author_username=request.get("authorUsername"),
         template_code=template_code,
+        target_type=target_config["targetType"],
+        target_types=target_config["targetTypes"],
+        code_quality_profile_code=profile_code,
     )
 
     try:
-        analysis = analyze_changes(request.get("changedFiles") or [], request.get("diffText"))
+        analysis = analyze_changes(changed_files, request.get("diffText"))
         rule_codes = template.get("focusRuleCodes") or template.get("enabledRuleCodes", [])
         risk_card = generate_risk_card(
             analysis,
             rule_codes,
             template.get("recommendedChecks", []),
         )
-        result = save_review_result(db, task=task, analysis=analysis, risk_card=risk_card)
+        result = save_review_result(
+            db,
+            task=task,
+            analysis=analysis,
+            risk_card=risk_card,
+            reminder_card_enabled=target_config["reminderCardEnabled"],
+        )
         mark_task_success(task, risk_card["riskLevel"])
         notification = dingtalk_skipped_result(db, get_settings_record(db).dingtalk_notification_enabled)
         save_notification_record(
@@ -74,6 +92,10 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict:
             "taskId": task.id,
             "status": "SUCCESS",
             "templateCode": template_code,
+            "targetType": target_config["targetType"],
+            "targetTypes": target_config["targetTypes"],
+            "profileCode": profile_code,
+            "reminderCardEnabled": target_config["reminderCardEnabled"],
             "riskLevel": risk_card["riskLevel"],
         }
     except Exception as exception:

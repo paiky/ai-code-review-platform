@@ -15,7 +15,7 @@ from app.core.json_utils import read_json_array
 from app.notification.service import send_risk_card
 from app.project_integration import gitlab_client
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent
-from app.project_integration.repository import upsert_gitlab_project
+from app.project_integration.repository import resolve_project_target_config, upsert_gitlab_project
 from app.review_record.repository import (
     create_review_task,
     mark_task_failed,
@@ -52,6 +52,11 @@ def handle_merge_request_webhook(db: Session, payload: dict[str, Any]) -> dict:
     project = upsert_gitlab_project(
         db, event["gitProjectId"], event["projectName"], event["repositoryUrl"]
     )
+    target_config = resolve_project_target_config(
+        db,
+        project,
+        event["changedFilesSummary"].get("files", []),
+    )
     task = create_review_task(
         db,
         project_id=project.id,
@@ -65,7 +70,10 @@ def handle_merge_request_webhook(db: Session, payload: dict[str, Any]) -> dict:
         after_sha=None,
         author_name=event["authorName"],
         author_username=event["authorUsername"],
-        template_code=project.default_template_code,
+        template_code=target_config["templateCode"],
+        target_type=target_config["targetType"],
+        target_types=target_config["targetTypes"],
+        code_quality_profile_code=target_config["profileCode"],
     )
     now = datetime.now()
     mr_record = GitLabMergeRequestEvent(
@@ -139,6 +147,11 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
             "profileCode": branch_gate["profileCode"],
             "pushBranchPatterns": branch_gate["patterns"],
         }
+    target_config = resolve_project_target_config(
+        db,
+        project_record,
+        event["changedFilesSummary"].get("files", []),
+    )
     task = create_review_task(
         db,
         project_id=project_record.id,
@@ -152,7 +165,10 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
         after_sha=event["afterSha"],
         author_name=event["authorName"],
         author_username=event["authorUsername"],
-        template_code=project_record.default_template_code,
+        template_code=target_config["templateCode"],
+        target_type=target_config["targetType"],
+        target_types=target_config["targetTypes"],
+        code_quality_profile_code=target_config["profileCode"],
     )
     now = datetime.now()
     push_record = GitLabPushEvent(
@@ -203,6 +219,12 @@ def _process_task(
     changed_files: list[dict[str, Any]],
     diff_text: str | None,
 ) -> dict:
+    project = task_project(db, task.project_id)
+    target_config = resolve_project_target_config(db, project, changed_files)
+    task.target_type = target_config["targetType"]
+    task.target_types_json = json.dumps(target_config["targetTypes"], ensure_ascii=False)
+    task.template_code = target_config["templateCode"]
+    task.code_quality_profile_code = target_config["profileCode"]
     template = get_enabled_template(db, task.template_code)
     rule_codes = template.get("focusRuleCodes") or template.get("enabledRuleCodes", [])
     analysis = analyze_changes(changed_files, diff_text)
@@ -211,7 +233,13 @@ def _process_task(
         rule_codes,
         template.get("recommendedChecks", []),
     )
-    result = save_review_result(db, task=task, analysis=analysis, risk_card=risk_card)
+    result = save_review_result(
+        db,
+        task=task,
+        analysis=analysis,
+        risk_card=risk_card,
+        reminder_card_enabled=target_config["reminderCardEnabled"],
+    )
     mark_task_success(task, risk_card["riskLevel"])
     notification_context = {
         "title": f"{task.trigger_type} {task.external_source_id or ''}".strip(),
@@ -224,7 +252,7 @@ def _process_task(
     ai_review_scheduled = trigger_auto_review(
         db,
         task_id=task.id,
-        project=task_project(db, task.project_id),
+        project=project,
         changed_files=changed_files,
         diff_text=diff_text,
         rule_result_id=result.id,

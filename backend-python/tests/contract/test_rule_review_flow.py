@@ -53,6 +53,31 @@ def seed_backend_template(db_session: Session) -> None:
     db_session.commit()
 
 
+def seed_frontend_template(db_session: Session) -> None:
+    now = datetime(2026, 5, 18, 10, 0, 0)
+    db_session.add(
+        RuleTemplate(
+            template_code="frontend-default",
+            template_name="前端默认审查模板",
+            target_type="FRONTEND",
+            version=1,
+            enabled_rule_codes=json.dumps(["CONFIG_RELEASE_CHECK"]),
+            config_json=json.dumps(
+                {
+                    "focusChangeTypes": ["CONFIG"],
+                    "focusRuleCodes": ["CONFIG_RELEASE_CHECK"],
+                    "recommendedChecks": ["确认端侧配置和接口契约。"],
+                }
+            ),
+            status="ENABLED",
+            description="frontend",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.commit()
+
+
 def seed_project(db_session: Session) -> None:
     now = datetime(2026, 5, 18, 10, 0, 0)
     db_session.add(
@@ -204,6 +229,45 @@ def test_manual_review_flow_writes_risk_card(client: TestClient, db_session: Ses
     assert artifact["artifactType"] == "SQL"
     assert artifact["confidence"] == "EXACT"
     assert "alter table orders add column risk_level varchar(32);" in artifact["content"]
+
+
+def test_manual_review_target_type_uses_frontend_profile_and_hides_card(
+    client: TestClient, db_session: Session
+) -> None:
+    seed_backend_template(db_session)
+    seed_frontend_template(db_session)
+    seed_project(db_session)
+
+    response = client.post(
+        "/api/review-tasks/manual",
+        json={
+            "projectId": 1,
+            "targetType": "WEB_PC",
+            "sourceBranch": "feature/web",
+            "targetBranch": "main",
+            "changedFiles": [
+                {
+                    "path": "frontend/src/pages/OrderPage.jsx",
+                    "changeType": "MODIFIED",
+                    "diffText": "+ const enabled = import.meta.env.VITE_ORDER_ENABLED;",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["targetType"] == "WEB_PC"
+    assert data["profileCode"] == "web-pc-default-ai-review"
+    assert data["reminderCardEnabled"] is False
+
+    detail = client.get(f"/api/review-tasks/{data['taskId']}").json()["data"]
+    assert detail["targetType"] == "WEB_PC"
+    assert detail["codeQualityProfileCode"] == "web-pc-default-ai-review"
+
+    result = client.get(f"/api/review-tasks/{data['taskId']}/result").json()["data"]
+    assert result["targetType"] == "WEB_PC"
+    assert result["reminderCardEnabled"] is False
 
 
 def test_focus_rule_codes_strictly_filter_generated_risk_card(

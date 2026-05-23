@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError
 from app.core.json_utils import format_datetime, page_response, read_json
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
+from app.project_integration.repository import ensure_project_config_schema
 from app.review_record.models import NotificationRecord, ReviewResult, ReviewTask
 from app.risk_engine.service import generate_risk_card
 from app.rule_template.models import RuleTemplate
@@ -23,7 +24,14 @@ def _focus_indicators(risk_card_json: str | None) -> list:
     return []
 
 
-def _filters(project_id: int | None, status: str | None, risk_level: str | None, keyword: str | None):
+def _filters(
+    project_id: int | None,
+    status: str | None,
+    risk_level: str | None,
+    keyword: str | None,
+    group_id: int | None,
+    target_type: str | None,
+):
     clauses = []
     if project_id is not None:
         clauses.append(ReviewTask.project_id == project_id)
@@ -31,6 +39,10 @@ def _filters(project_id: int | None, status: str | None, risk_level: str | None,
         clauses.append(ReviewTask.status == status)
     if risk_level:
         clauses.append(ReviewTask.risk_level == risk_level)
+    if group_id is not None:
+        clauses.append(Project.group_id == group_id)
+    if target_type:
+        clauses.append(ReviewTask.target_types_json.like(f"%{target_type}%"))
     if keyword:
         like = f"%{keyword}%"
         clauses.append(
@@ -50,12 +62,15 @@ def list_review_tasks(
     status: str | None,
     risk_level: str | None,
     keyword: str | None,
+    group_id: int | None,
+    target_type: str | None,
     page_no: int,
     page_size: int,
 ) -> dict:
+    ensure_project_config_schema(db)
     page_no = max(page_no, 1)
     page_size = max(page_size, 1)
-    filters = _filters(project_id, status, risk_level, keyword)
+    filters = _filters(project_id, status, risk_level, keyword, group_id, target_type)
 
     total_stmt = select(func.count()).select_from(ReviewTask).join(Project, Project.id == ReviewTask.project_id)
     if filters:
@@ -86,6 +101,7 @@ def list_review_tasks(
                 "id": task.id,
                 "projectId": task.project_id,
                 "projectName": project.name,
+                "groupId": project.group_id,
                 "triggerType": task.trigger_type,
                 "externalSourceId": task.external_source_id,
                 "externalUrl": task.external_url,
@@ -93,6 +109,9 @@ def list_review_tasks(
                 "targetBranch": task.target_branch,
                 "authorName": task.author_name,
                 "templateCode": task.template_code,
+                "targetType": task.target_type,
+                "targetTypes": read_json(task.target_types_json, []) if task.target_types_json else [],
+                "codeQualityProfileCode": task.code_quality_profile_code,
                 "status": task.status,
                 "riskLevel": task.risk_level,
                 "riskItemCount": result.risk_item_count if result else None,
@@ -105,6 +124,7 @@ def list_review_tasks(
 
 
 def get_review_task_detail(db: Session, task_id: int) -> dict:
+    ensure_project_config_schema(db)
     row = db.execute(
         select(ReviewTask, Project, GitLabMergeRequestEvent, GitLabPushEvent)
         .join(Project, Project.id == ReviewTask.project_id)
@@ -129,6 +149,7 @@ def get_review_task_detail(db: Session, task_id: int) -> dict:
         "id": task.id,
         "projectId": task.project_id,
         "projectName": project.name,
+        "groupId": project.group_id,
         "gitProjectId": project.git_project_id,
         "triggerType": task.trigger_type,
         "mrId": mr_id,
@@ -139,6 +160,9 @@ def get_review_task_detail(db: Session, task_id: int) -> dict:
         "authorName": task.author_name,
         "authorUsername": task.author_username,
         "templateCode": task.template_code,
+        "targetType": task.target_type,
+        "targetTypes": read_json(task.target_types_json, []) if task.target_types_json else [],
+        "codeQualityProfileCode": task.code_quality_profile_code,
         "status": task.status,
         "riskLevel": task.risk_level,
         "eventAction": event_action,
@@ -163,6 +187,8 @@ def get_review_task_result(db: Session, task_id: int) -> dict:
     )
     return {
         "taskId": result.task_id,
+        "targetType": result.target_type,
+        "reminderCardEnabled": bool(result.reminder_card_enabled) if result.reminder_card_enabled is not None else True,
         "riskLevel": risk_card.get("riskLevel") if isinstance(risk_card, dict) else result.risk_level,
         "riskItemCount": len(risk_card.get("riskItems", [])) if isinstance(risk_card, dict) else result.risk_item_count,
         "summary": risk_card.get("summary") if isinstance(risk_card, dict) else result.summary,
@@ -268,6 +294,9 @@ def create_review_task(
     author_name: str | None,
     author_username: str | None,
     template_code: str,
+    target_type: str | None = None,
+    target_types: list[str] | None = None,
+    code_quality_profile_code: str | None = None,
 ) -> ReviewTask:
     now = datetime.now()
     task = ReviewTask(
@@ -283,6 +312,9 @@ def create_review_task(
         author_name=author_name,
         author_username=author_username,
         template_code=template_code,
+        target_type=target_type,
+        target_types_json=json.dumps(target_types or ([target_type] if target_type else []), ensure_ascii=False),
+        code_quality_profile_code=code_quality_profile_code,
         status="RUNNING",
         started_at=now,
         created_at=now,
@@ -316,12 +348,15 @@ def save_review_result(
     task: ReviewTask,
     analysis: dict,
     risk_card: dict,
+    reminder_card_enabled: bool = True,
 ) -> ReviewResult:
     now = datetime.now()
     result = ReviewResult(
         task_id=task.id,
         project_id=task.project_id,
         template_code=task.template_code,
+        target_type=task.target_type,
+        reminder_card_enabled=reminder_card_enabled,
         risk_level=risk_card["riskLevel"],
         risk_item_count=len(risk_card["riskItems"]),
         change_analysis_json=json.dumps(analysis, ensure_ascii=False),

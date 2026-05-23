@@ -601,11 +601,21 @@ PRIVATE-TOKEN: {GITLAB_TOKEN}
 | `frontend-default` | 前端项目 |
 | `general-default` | 通用项目 |
 
+多端接入第一阶段已经引入项目组和端类型配置。一个项目可以绑定多个端类型，当前内置：
+
+```text
+BACKEND / WEB_PC / APP_IOS / APP_ANDROID / APP_CROSS_PLATFORM / GENERAL
+```
+
+后端项目默认仍使用 `backend-default` 和 `backend-default-ai-review`，并展示“提醒卡片”。PC / APP 端默认以代码质量 AI Review 为主，后端维护类提醒卡片默认关闭；如确实需要，也可以在项目端类型配置中开启 `reminderCardEnabled`。
+
 模板接口：
 
 ```powershell
 curl http://localhost:18080/api/rule-templates
 curl http://localhost:18080/api/rule-templates/backend-default
+curl http://localhost:18080/api/project-groups
+curl http://localhost:18080/api/projects/1/target-configs
 ```
 
 项目默认模板绑定：
@@ -616,6 +626,16 @@ Invoke-RestMethod `
   -Uri "http://localhost:18080/api/projects/1/default-template" `
   -ContentType "application/json" `
   -Body '{"templateCode":"frontend-default"}'
+```
+
+端类型配置示例：
+
+```powershell
+Invoke-RestMethod `
+  -Method Put `
+  -Uri "http://localhost:18080/api/projects/1/target-configs/WEB_PC" `
+  -ContentType "application/json" `
+  -Body '{"templateCode":"frontend-default","codeQualityProfileCode":"web-pc-default-ai-review","pathPatterns":["frontend/**","web/**"],"reminderCardEnabled":false,"enabled":true}'
 ```
 
 钉钉推送会按模板 `focusChangeTypes` 过滤提醒来源。后端默认模板当前不再推送低信号 API 兼容性提醒。

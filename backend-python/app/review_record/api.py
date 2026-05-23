@@ -35,6 +35,8 @@ async def rerun(task_id: int, db: Session = Depends(get_db)) -> dict:
 @router.get("")
 async def find_review_tasks(
     project_id: int | None = Query(default=None, alias="projectId"),
+    group_id: int | None = Query(default=None, alias="groupId"),
+    target_type: str | None = Query(default=None, alias="targetType"),
     status: str | None = None,
     risk_level: str | None = Query(default=None, alias="riskLevel"),
     keyword: str | None = None,
@@ -42,7 +44,7 @@ async def find_review_tasks(
     page_size: int = Query(default=20, alias="pageSize"),
     db: Session = Depends(get_db),
 ) -> dict:
-    return ok(list_review_tasks(db, project_id, status, risk_level, keyword, page_no, page_size))
+    return ok(list_review_tasks(db, project_id, status, risk_level, keyword, group_id, target_type, page_no, page_size))
 
 
 @router.get("/{task_id}/result")

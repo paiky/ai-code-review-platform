@@ -49,6 +49,58 @@ JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必
 - 异常与观测：异常吞掉、错误码误导、补偿缺失、关键日志和监控缺口。
 - 测试缺口：当本次变更涉及核心业务分支、数据一致性或高风险边界时，指出缺少的关键测试。"""
 
+WEB_PC_REVIEW_INSTRUCTIONS = """你是资深 PC Web / H5 代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
+JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
+
+只报告会影响真实用户体验、线上正确性、安全、权限、接口契约、状态一致性、性能或关键测试覆盖的问题。不要报告纯样式偏好、命名、格式或主观重构建议。
+
+重点检查：
+- 组件状态、表单校验、异步请求、加载/空态/错误态。
+- 路由、菜单、按钮权限和越权访问。
+- API 入参、响应字段、错误码和后端契约兼容。
+- 浏览器兼容、可访问性、国际化和时间/金额/枚举展示。
+- 大列表、重复渲染、请求风暴、资源体积和缓存策略。
+- 核心页面和异常路径的测试缺口。"""
+
+APP_IOS_REVIEW_INSTRUCTIONS = """你是资深 iOS 代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
+JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
+
+只报告可能导致崩溃、数据错误、安全问题、线上体验退化、兼容性问题或关键测试缺口的问题。不要报告纯风格或主观重构建议。
+
+重点检查：
+- ViewController / SwiftUI 生命周期、状态同步和重复触发。
+- 主线程阻塞、后台线程 UI 更新、并发竞争。
+- 内存泄漏、循环引用、资源释放和大对象持有。
+- 权限、隐私、Keychain、日志敏感信息。
+- 网络错误、弱网、离线、重试、超时和取消。
+- iOS 版本兼容、深链、通知、存储迁移和崩溃风险。"""
+
+APP_ANDROID_REVIEW_INSTRUCTIONS = """你是资深 Android 代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
+JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
+
+只报告可能导致崩溃、ANR、数据错误、安全问题、兼容性问题、线上体验退化或关键测试缺口的问题。不要报告纯风格或主观重构建议。
+
+重点检查：
+- Activity / Fragment / Compose 生命周期、状态恢复和重复订阅。
+- 主线程耗时、协程/线程取消、并发竞争和资源泄漏。
+- Context 泄漏、注册反注册、观察者和回调释放。
+- 权限、隐私、日志敏感信息和本地存储安全。
+- 网络错误、弱网、离线、重试、超时和分页边界。
+- Android 版本兼容、Gradle 配置、混淆、通知、深链和 ANR 风险。"""
+
+APP_CROSS_PLATFORM_REVIEW_INSTRUCTIONS = """你是资深跨端应用代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
+JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
+
+只报告可能导致跨端行为不一致、崩溃、数据错误、安全问题、性能退化、打包发布问题或关键测试缺口的问题。不要报告纯风格或主观重构建议。
+
+重点检查：
+- Flutter / React Native / 小程序等跨端状态管理和生命周期。
+- 平台差异、权限、桥接调用、原生模块返回值和异常处理。
+- 网络错误、弱网、离线、缓存、本地存储和同步策略。
+- 打包配置、环境变量、资源引用、路由和深链。
+- 大列表、重复渲染、图片资源、启动性能和内存占用。
+- 核心业务流和端差异的测试缺口。"""
+
 LEGACY_DEFAULT_REVIEW_INSTRUCTIONS = {
     "Only report actionable correctness, data consistency, security, transaction, SQL performance, cache consistency, MQ consistency, exception handling, and test gap issues. Do not report style-only issues.",
     "Only report actionable code quality issues.",
@@ -112,67 +164,74 @@ def ensure_defaults(db: Session) -> None:
     )
     _upsert_default_provider(db, "CUSTOM", "自定义 OpenAI-compatible", "OPENAI_CHAT_COMPATIBLE", None, None, None, False, 40)
 
-    profile = find_profile_by_code(db, DEFAULT_PROFILE_CODE, ensure=False)
-    if profile is None:
-        db.add(
-            CodeQualityReviewProfile(
-                profile_code=DEFAULT_PROFILE_CODE,
-                profile_name="Backend default AI code review",
-                enabled=True,
-                provider="OPENAI_API",
-                provider_code=None,
-                model=None,
-                trigger_on_manual=True,
-                trigger_on_mr=True,
-                trigger_on_push=False,
-                severity_threshold="MAJOR",
-                block_on_severities=json.dumps(["CRITICAL"], ensure_ascii=False),
-                enabled_categories=json.dumps(
-                    [
-                        "CORRECTNESS",
-                        "SECURITY",
-                        "TRANSACTION",
-                        "SQL_PERFORMANCE",
-                        "CACHE_CONSISTENCY",
-                        "MQ_CONSISTENCY",
-                        "EXCEPTION_HANDLING",
-                        "TEST_GAP",
-                    ],
-                    ensure_ascii=False,
-                ),
-                ignored_paths=json.dumps(["**/generated/**", "**/target/**", "**/dist/**"], ensure_ascii=False),
-                push_branch_patterns=json.dumps(["develop", "feature/*", "bugfix/*", "hotfix/*"], ensure_ascii=False),
-                push_min_changed_files=10,
-                push_min_diff_bytes=30000,
-                push_min_commit_count=3,
-                push_max_changed_files=80,
-                push_max_diff_bytes=300000,
-                push_debounce_seconds=300,
-                trigger_only_when_risk_matched=False,
-                codex_prompt=DEFAULT_REVIEW_INSTRUCTIONS,
-                openai_instructions=DEFAULT_REVIEW_INSTRUCTIONS,
-                review_instructions=DEFAULT_REVIEW_INSTRUCTIONS,
-                status="ENABLED",
-                description="Default backend AI code quality review profile.",
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
-            )
-        )
-    elif (profile.review_instructions or "").strip() in LEGACY_DEFAULT_REVIEW_INSTRUCTIONS:
+    profile = _upsert_default_profile(
+        db,
+        DEFAULT_PROFILE_CODE,
+        "Backend default AI code review",
+        DEFAULT_REVIEW_INSTRUCTIONS,
+        [
+            "CORRECTNESS",
+            "SECURITY",
+            "TRANSACTION",
+            "SQL_PERFORMANCE",
+            "CACHE_CONSISTENCY",
+            "MQ_CONSISTENCY",
+            "EXCEPTION_HANDLING",
+            "TEST_GAP",
+        ],
+        ["**/generated/**", "**/target/**", "**/dist/**"],
+        "Default backend AI code quality review profile.",
+    )
+    if (profile.review_instructions or "").strip() in LEGACY_DEFAULT_REVIEW_INSTRUCTIONS:
         profile.review_instructions = DEFAULT_REVIEW_INSTRUCTIONS
         profile.openai_instructions = DEFAULT_REVIEW_INSTRUCTIONS
         profile.codex_prompt = DEFAULT_REVIEW_INSTRUCTIONS
         profile.updated_at = datetime.now()
-    if profile is not None:
-        profile.push_branch_patterns = profile.push_branch_patterns or json.dumps(
-            ["develop", "feature/*", "bugfix/*", "hotfix/*"], ensure_ascii=False
-        )
-        profile.push_min_changed_files = profile.push_min_changed_files if profile.push_min_changed_files is not None else 10
-        profile.push_min_diff_bytes = profile.push_min_diff_bytes if profile.push_min_diff_bytes is not None else 30000
-        profile.push_min_commit_count = profile.push_min_commit_count if profile.push_min_commit_count is not None else 3
-        profile.push_max_changed_files = profile.push_max_changed_files if profile.push_max_changed_files is not None else 80
-        profile.push_max_diff_bytes = profile.push_max_diff_bytes if profile.push_max_diff_bytes is not None else 300000
-        profile.push_debounce_seconds = profile.push_debounce_seconds if profile.push_debounce_seconds is not None else 300
+    _upsert_default_profile(
+        db,
+        "web-pc-default-ai-review",
+        "Web PC default AI code review",
+        WEB_PC_REVIEW_INSTRUCTIONS,
+        ["CORRECTNESS", "SECURITY", "PERFORMANCE", "API_CONTRACT", "TEST_GAP"],
+        ["**/dist/**", "**/node_modules/**", "**/coverage/**", "**/*.snap"],
+        "Default PC Web / H5 AI code quality review profile.",
+    )
+    _upsert_default_profile(
+        db,
+        "app-ios-default-ai-review",
+        "iOS default AI code review",
+        APP_IOS_REVIEW_INSTRUCTIONS,
+        ["CORRECTNESS", "SECURITY", "PERFORMANCE", "EXCEPTION_HANDLING", "TEST_GAP"],
+        ["**/Pods/**", "**/DerivedData/**", "**/*.xcuserstate"],
+        "Default iOS AI code quality review profile.",
+    )
+    _upsert_default_profile(
+        db,
+        "app-android-default-ai-review",
+        "Android default AI code review",
+        APP_ANDROID_REVIEW_INSTRUCTIONS,
+        ["CORRECTNESS", "SECURITY", "PERFORMANCE", "EXCEPTION_HANDLING", "TEST_GAP"],
+        ["**/build/**", "**/.gradle/**", "**/generated/**"],
+        "Default Android AI code quality review profile.",
+    )
+    _upsert_default_profile(
+        db,
+        "app-cross-platform-default-ai-review",
+        "Cross-platform app default AI code review",
+        APP_CROSS_PLATFORM_REVIEW_INSTRUCTIONS,
+        ["CORRECTNESS", "SECURITY", "PERFORMANCE", "API_CONTRACT", "TEST_GAP"],
+        ["**/build/**", "**/dist/**", "**/node_modules/**", "**/.dart_tool/**"],
+        "Default cross-platform app AI code quality review profile.",
+    )
+    profile.push_branch_patterns = profile.push_branch_patterns or json.dumps(
+        ["develop", "feature/*", "bugfix/*", "hotfix/*"], ensure_ascii=False
+    )
+    profile.push_min_changed_files = profile.push_min_changed_files if profile.push_min_changed_files is not None else 10
+    profile.push_min_diff_bytes = profile.push_min_diff_bytes if profile.push_min_diff_bytes is not None else 30000
+    profile.push_min_commit_count = profile.push_min_commit_count if profile.push_min_commit_count is not None else 3
+    profile.push_max_changed_files = profile.push_max_changed_files if profile.push_max_changed_files is not None else 80
+    profile.push_max_diff_bytes = profile.push_max_diff_bytes if profile.push_max_diff_bytes is not None else 300000
+    profile.push_debounce_seconds = profile.push_debounce_seconds if profile.push_debounce_seconds is not None else 300
     db.flush()
 
 
@@ -393,6 +452,69 @@ def _upsert_default_provider(
     provider.sort_order = sort_order
 
 
+def _upsert_default_profile(
+    db: Session,
+    profile_code: str,
+    profile_name: str,
+    instructions: str,
+    enabled_categories: list[str],
+    ignored_paths: list[str],
+    description: str,
+) -> CodeQualityReviewProfile:
+    profile = find_profile_by_code(db, profile_code, ensure=False)
+    now = datetime.now()
+    if profile is None:
+        profile = CodeQualityReviewProfile(
+            profile_code=profile_code,
+            profile_name=profile_name,
+            enabled=True,
+            provider="OPENAI_API",
+            provider_code=None,
+            model=None,
+            trigger_on_manual=True,
+            trigger_on_mr=True,
+            trigger_on_push=False,
+            severity_threshold="MAJOR",
+            block_on_severities=json.dumps(["CRITICAL"], ensure_ascii=False),
+            enabled_categories=json.dumps(enabled_categories, ensure_ascii=False),
+            ignored_paths=json.dumps(ignored_paths, ensure_ascii=False),
+            push_branch_patterns=json.dumps(["develop", "feature/*", "bugfix/*", "hotfix/*"], ensure_ascii=False),
+            push_min_changed_files=10,
+            push_min_diff_bytes=30000,
+            push_min_commit_count=3,
+            push_max_changed_files=80,
+            push_max_diff_bytes=300000,
+            push_debounce_seconds=300,
+            trigger_only_when_risk_matched=False,
+            codex_prompt=instructions,
+            openai_instructions=instructions,
+            review_instructions=instructions,
+            status="ENABLED",
+            description=description,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(profile)
+        db.flush()
+        return profile
+    profile.profile_name = profile.profile_name or profile_name
+    profile.enabled_categories = profile.enabled_categories or json.dumps(enabled_categories, ensure_ascii=False)
+    profile.ignored_paths = profile.ignored_paths or json.dumps(ignored_paths, ensure_ascii=False)
+    profile.push_branch_patterns = profile.push_branch_patterns or json.dumps(["develop", "feature/*", "bugfix/*", "hotfix/*"], ensure_ascii=False)
+    profile.push_min_changed_files = profile.push_min_changed_files if profile.push_min_changed_files is not None else 10
+    profile.push_min_diff_bytes = profile.push_min_diff_bytes if profile.push_min_diff_bytes is not None else 30000
+    profile.push_min_commit_count = profile.push_min_commit_count if profile.push_min_commit_count is not None else 3
+    profile.push_max_changed_files = profile.push_max_changed_files if profile.push_max_changed_files is not None else 80
+    profile.push_max_diff_bytes = profile.push_max_diff_bytes if profile.push_max_diff_bytes is not None else 300000
+    profile.push_debounce_seconds = profile.push_debounce_seconds if profile.push_debounce_seconds is not None else 300
+    if not (profile.review_instructions or "").strip():
+        profile.review_instructions = instructions
+        profile.openai_instructions = instructions
+        profile.codex_prompt = instructions
+    profile.description = profile.description or description
+    return profile
+
+
 def get_settings_record(db: Session) -> CodeQualityReviewSettings:
     ensure_defaults(db)
     record = db.get(CodeQualityReviewSettings, 1)
@@ -442,7 +564,7 @@ def list_enabled_profiles(db: Session) -> dict[str, Any]:
     profiles = db.scalars(
         select(CodeQualityReviewProfile)
         .where(CodeQualityReviewProfile.enabled.is_(True), CodeQualityReviewProfile.status == "ENABLED")
-        .order_by(CodeQualityReviewProfile.id.desc())
+        .order_by(CodeQualityReviewProfile.id.asc())
     ).all()
     items = [profile_to_dict(profile) for profile in profiles]
     return page_response(items, 1, len(items), len(items))

@@ -796,3 +796,28 @@ RuntimeError: 'cryptography' package is required for sha256_password or caching_
 1. 需要验证同步结果时设置对应 inline 开关，例如 `CODE_QUALITY_REVIEW_INLINE=true` 或 `CODE_QUALITY_FIX_PREVIEW_INLINE=true`。
 2. 需要验证“已排队但不执行”时 monkeypatch `service._executor.submit`，只断言 job 类型、优先级、状态和队列接口响应。
 3. 不要在 contract 测试中等待真实调度器 worker 消费队列；真实 worker 行为留给集成或手工联调验证。
+
+## 34. 运行时补 schema 不能在多个请求里并发 DDL
+
+现象：
+
+重启后前端一直转圈，多个 `/api/**` 接口没有响应，例如：
+
+```text
+GET /api/project-groups
+GET /api/projects
+GET /api/health
+```
+
+端口已经监听，TCP 连接也能建立，但请求一直超时。
+
+原因：
+
+多端项目组能力引入了 `project_groups`、`project_target_configs` 和任务端类型字段。旧库首次访问这些接口时会触发 Python 运行时 schema 补齐。如果前端重启后并发请求 `/api/project-groups`、`/api/projects`、设置页配置接口，多个请求可能同时执行 `CREATE TABLE` / `ALTER TABLE` / 默认数据初始化。由于本地 uvicorn 单 worker 且接口中有同步数据库操作，一旦某个请求卡在 DDL 或 metadata lock，其它 `/api` 请求也会一起转圈。
+
+处理方式：
+
+1. 运行时 schema 补齐必须加进程内锁，同一个 SQLAlchemy engine 只执行一次。
+2. 默认项目组这类基础数据初始化要明确提交；不要在 GET 请求里 `flush` 后让 session close 回滚，导致下次请求再次初始化。
+3. 如果已经卡住，先单独访问或执行一次 schema 补齐，或重启后端；修复后 `/api/project-groups` 和 `/api/projects` 应快速返回。
+4. 长期建议仍通过 migration 正式升级 schema，运行时补齐只作为旧库兼容保护。

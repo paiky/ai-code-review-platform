@@ -47,7 +47,7 @@ from app.core.database import SessionLocal
 from app.core.errors import AppError
 from app.core.json_utils import read_json, read_json_array
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
-from app.project_integration.repository import find_project_by_id
+from app.project_integration.repository import find_project_by_id, resolve_project_target_config
 from app.notification.service import send_review_summary
 from app.review_record.models import ReviewTask
 from app.review_record.repository import (
@@ -198,14 +198,25 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
     project = find_project_by_id(db, int(project_id))
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
-    profile = _resolve_profile(db, request.get("profileCode"), project)
+    changed_files = [
+        item if isinstance(item, dict) else {"path": item}
+        for item in request.get("changedFiles") or []
+    ]
+    target_config = resolve_project_target_config(
+        db,
+        project,
+        changed_files,
+        request.get("targetType"),
+        request.get("targetTypes"),
+    )
+    profile = _resolve_profile(db, request.get("profileCode") or target_config["profileCode"], project)
     if not profile.enabled or not profile.trigger_on_manual:
         raise AppError(
             "BAD_REQUEST",
             f"Code quality review profile does not allow manual trigger: {profile.profile_code}",
             400,
         )
-    provider = _resolve_provider(db, project, profile)
+    provider = _resolve_provider(db, project, profile, target_config["targetType"])
     task = create_review_task(
         db,
         project_id=project.id,
@@ -219,7 +230,10 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
         after_sha=None,
         author_name=None,
         author_username=None,
-        template_code=profile.profile_code,
+        template_code=target_config["templateCode"],
+        target_type=target_config["targetType"],
+        target_types=target_config["targetTypes"],
+        code_quality_profile_code=profile.profile_code,
     )
     delete_progress(db, task.id)
     append_progress(
@@ -286,8 +300,8 @@ def run_manual_review_now(db: Session, task_id: int, request: dict[str, Any]) ->
     project = find_project_by_id(db, task.project_id)
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
-    profile = _resolve_profile(db, request.get("profileCode"), project)
-    provider = _resolve_provider(db, project, profile)
+    profile = _resolve_profile(db, request.get("profileCode") or task.code_quality_profile_code, project)
+    provider = _resolve_provider(db, project, profile, task.target_type)
     review_request = _build_review_request(profile, request)
     result = _run_review(db, task.id, project, profile, provider, review_request)
     if result["status"] == "SUCCESS":
@@ -334,8 +348,8 @@ def enqueue_retry_review(db: Session, task_id: int) -> dict[str, Any]:
     project = find_project_by_id(db, task.project_id)
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
-    profile = _resolve_profile(db, None, project)
-    provider = _resolve_provider(db, project, profile)
+    profile = _resolve_profile(db, task.code_quality_profile_code, project)
+    provider = _resolve_provider(db, project, profile, task.target_type)
     request = _request_from_task_event(db, task, profile)
     delete_progress(db, task.id)
     append_progress(
@@ -400,8 +414,8 @@ def run_retry_review_now(db: Session, task_id: int) -> dict[str, Any]:
     project = find_project_by_id(db, task.project_id)
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
-    profile = _resolve_profile(db, None, project)
-    provider = _resolve_provider(db, project, profile)
+    profile = _resolve_profile(db, task.code_quality_profile_code, project)
+    provider = _resolve_provider(db, project, profile, task.target_type)
     request = _request_from_task_event(db, task, profile)
     return _run_review(db, task.id, project, profile, provider, request)
 
@@ -452,10 +466,10 @@ def trigger_auto_review(
         return False
     if find_result_response(db, task_id) is not None:
         return False
-    profile = _resolve_profile(db, None, project)
+    profile = _resolve_profile(db, task.code_quality_profile_code, project)
     if not profile.enabled:
         return False
-    provider = _resolve_provider(db, project, profile)
+    provider = _resolve_provider(db, project, profile, task.target_type)
     request = _build_review_request(
         profile,
         {
@@ -545,7 +559,7 @@ def _trigger_push_auto_review(
 ) -> bool:
     if find_result_response(db, task.id) is not None:
         return False
-    profile = _resolve_profile(db, None, project)
+    profile = _resolve_profile(db, task.code_quality_profile_code, project)
     if not profile.enabled or not profile.trigger_on_push:
         _save_push_gate_rejection(
             db,
@@ -559,7 +573,7 @@ def _trigger_push_auto_review(
             reason_summary="当前 AI Review Profile 未开启 Push 自动触发。",
         )
         return False
-    provider = _resolve_provider(db, project, profile)
+    provider = _resolve_provider(db, project, profile, task.target_type)
     gate = _evaluate_push_gate(
         db,
         task=task,
@@ -1676,8 +1690,13 @@ def _resolve_profile(db: Session, profile_code: str | None, project: Project):
     return profile
 
 
-def _resolve_provider(db: Session, project: Project, profile):
+def _resolve_provider(db: Session, project: Project, profile, target_type: str | None = None):
     provider_code = profile.provider_code or project.default_code_quality_provider_code
+    if not provider_code and target_type:
+        from app.project_integration.repository import find_target_config
+
+        target_config = find_target_config(db, project.id, target_type)
+        provider_code = target_config.provider_code if target_config else None
     if not provider_code:
         provider_code = get_settings_record(db).default_provider_code
     return get_provider(db, provider_code)

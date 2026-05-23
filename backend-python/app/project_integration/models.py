@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -11,15 +11,53 @@ class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    group_id: Mapped[int | None] = mapped_column(BigInteger)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     git_provider: Mapped[str] = mapped_column(String(32), nullable=False)
     git_project_id: Mapped[str] = mapped_column(String(128), nullable=False)
     repository_url: Mapped[str | None] = mapped_column(String(512))
+    supported_target_types: Mapped[str | None] = mapped_column(Text)
     default_template_code: Mapped[str] = mapped_column(String(64), nullable=False)
     default_code_quality_profile_code: Mapped[str | None] = mapped_column(String(64))
     default_code_quality_provider_code: Mapped[str | None] = mapped_column(String(64))
     dingtalk_webhook_id: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(512))
+    created_at: Mapped[object | None] = mapped_column(DateTime)
+    updated_at: Mapped[object | None] = mapped_column(DateTime)
+
+
+class ProjectGroup(Base):
+    __tablename__ = "project_groups"
+    __table_args__ = (
+        UniqueConstraint("group_code", name="uk_project_group_code"),
+    )
+
+    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    group_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    group_code: Mapped[str | None] = mapped_column(String(64))
+    default_provider_code: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ENABLED")
+    description: Mapped[str | None] = mapped_column(String(512))
+    created_at: Mapped[object | None] = mapped_column(DateTime)
+    updated_at: Mapped[object | None] = mapped_column(DateTime)
+
+
+class ProjectTargetConfig(Base):
+    __tablename__ = "project_target_configs"
+    __table_args__ = (
+        UniqueConstraint("project_id", "target_type", name="uk_project_target_config"),
+    )
+
+    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    template_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_quality_profile_code: Mapped[str | None] = mapped_column(String(64))
+    provider_code: Mapped[str | None] = mapped_column(String(64))
+    path_patterns: Mapped[str] = mapped_column(Text, nullable=False)
+    reminder_card_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     description: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[object | None] = mapped_column(DateTime)
     updated_at: Mapped[object | None] = mapped_column(DateTime)

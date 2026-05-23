@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -23,6 +23,9 @@ class ReviewTask(Base):
     author_name: Mapped[str | None] = mapped_column(String(128))
     author_username: Mapped[str | None] = mapped_column(String(128))
     template_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_type: Mapped[str | None] = mapped_column(String(32))
+    target_types_json: Mapped[str | None] = mapped_column(Text)
+    code_quality_profile_code: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     risk_level: Mapped[str | None] = mapped_column(String(32))
     error_message: Mapped[str | None] = mapped_column(String(1024))
@@ -39,6 +42,8 @@ class ReviewResult(Base):
     task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     template_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_type: Mapped[str | None] = mapped_column(String(32))
+    reminder_card_enabled: Mapped[bool | None] = mapped_column(Boolean)
     risk_level: Mapped[str] = mapped_column(String(32), nullable=False)
     risk_item_count: Mapped[int] = mapped_column(Integer, nullable=False)
     change_analysis_json: Mapped[str] = mapped_column(Text, nullable=False)

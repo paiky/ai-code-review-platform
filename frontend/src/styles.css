@@ -82,6 +82,10 @@ body {
   width: 100%;
 }
 
+.task-filter-select {
+  min-width: 150px;
+}
+
 .detail-toolbar {
   margin-bottom: 16px;
 }

@@ -70,6 +70,18 @@ const HOME_ROUTE = '/';
 const TASK_LIST_ROUTE = '/tasks';
 const SETTINGS_ROUTE = '/settings';
 const RELEASES_ROUTE = '/releases';
+const TARGET_TYPE_OPTIONS = [
+  { label: '后端', value: 'BACKEND' },
+  { label: 'PC Web / H5', value: 'WEB_PC' },
+  { label: 'iOS', value: 'APP_IOS' },
+  { label: 'Android', value: 'APP_ANDROID' },
+  { label: '跨端应用', value: 'APP_CROSS_PLATFORM' },
+  { label: '通用', value: 'GENERAL' }
+];
+
+function targetTypeLabel(value) {
+  return TARGET_TYPE_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
 
 function currentRoute(location) {
   return `${location.pathname}${location.search || ''}${location.hash || ''}`;
@@ -663,6 +675,11 @@ function MaintenanceArtifacts({ artifacts }) {
 function TaskList({ onOpen }) {
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState('');
+  const [groups, setGroups] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [groupId, setGroupId] = useState(null);
+  const [projectId, setProjectId] = useState(null);
+  const [targetType, setTargetType] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [pagination, setPagination] = useState({ pageNo: 1, pageSize: 20, total: 0 });
   const [error, setError] = useState(null);
@@ -675,6 +692,9 @@ function TaskList({ onOpen }) {
     try {
       const params = new URLSearchParams({ pageNo, pageSize });
       if (keyword.trim()) params.set('keyword', keyword.trim());
+      if (groupId) params.set('groupId', groupId);
+      if (projectId) params.set('projectId', projectId);
+      if (targetType) params.set('targetType', targetType);
       const data = await fetchApi(`/api/review-tasks?${params.toString()}`);
       setTasks(data.items || []);
       setPagination({ pageNo: data.pageNo, pageSize: data.pageSize, total: data.total });
@@ -686,12 +706,21 @@ function TaskList({ onOpen }) {
   };
 
   useEffect(() => {
+    Promise.all([
+      fetchApi('/api/project-groups'),
+      fetchApi('/api/projects')
+    ]).then(([groupData, projectData]) => {
+      setGroups(groupData.items || []);
+      setProjects(projectData.items || []);
+    }).catch(err => setError(err.message));
     load({ pageNo: 1 });
   }, []);
 
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 80 },
+    { title: '项目组', dataIndex: 'groupId', width: 130, render: value => groups.find(group => group.id === value)?.groupName || '-' },
     { title: '项目', dataIndex: 'projectName', ellipsis: true },
+    { title: '端类型', dataIndex: 'targetType', width: 120, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
     { title: '类型', dataIndex: 'triggerType', width: 90, render: value => <Tag>{taskTypeLabel(value)}</Tag> },
     { title: '分支', width: 260, render: (_, row) => <Text>{taskListBranchText(row)}</Text> },
     { title: '状态', dataIndex: 'status', width: 110, render: value => <Tag color={statusColor(value)}>{value || '-'}</Tag> },
@@ -705,6 +734,36 @@ function TaskList({ onOpen }) {
     <div className="page-shell">
       <div className="page-heading">
         <Space>
+          <Select
+            allowClear
+            className="task-filter-select"
+            placeholder="项目组"
+            value={groupId}
+            options={groups.map(group => ({ label: group.groupName, value: group.id }))}
+            onChange={value => {
+              setGroupId(value || null);
+              setProjectId(null);
+            }}
+          />
+          <Select
+            allowClear
+            showSearch
+            className="task-filter-select"
+            placeholder="项目"
+            value={projectId}
+            options={projects
+              .filter(project => !groupId || project.groupId === groupId)
+              .map(project => ({ label: project.name, value: project.id }))}
+            onChange={value => setProjectId(value || null)}
+          />
+          <Select
+            allowClear
+            className="task-filter-select"
+            placeholder="端类型"
+            value={targetType}
+            options={TARGET_TYPE_OPTIONS}
+            onChange={value => setTargetType(value || null)}
+          />
           <Input
             allowClear
             prefix={<SearchOutlined />}
@@ -1783,7 +1842,9 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
       ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
       : []),
-    { key: 'risk', label: '提醒卡片', children: <RiskCardView riskCard={result?.riskCard} changedFilesSummary={detail?.changedFilesSummary} /> },
+    ...(result?.reminderCardEnabled !== false
+      ? [{ key: 'risk', label: '提醒卡片', children: <RiskCardView riskCard={result?.riskCard} changedFilesSummary={detail?.changedFilesSummary} /> }]
+      : []),
     { key: 'analysis', label: '分析结果', children: <AnalysisView changeAnalysis={result?.changeAnalysis} /> },
     { key: 'event', label: '原始事件摘要', children: <Row gutter={[16, 16]}><Col xs={24} lg={12}><Card title="changedFiles 摘要"><JsonBlock value={detail?.changedFilesSummary} /></Card></Col><Col xs={24} lg={12}><Card title="raw payload"><JsonBlock value={detail?.rawPayload} /></Card></Col></Row> }
   ], [taskId, detail, result, codeQualityResult, codeQualityProgress, codeQualityGate, fixPreviews, retrying]);
@@ -1823,6 +1884,8 @@ function TaskDetail({ taskId, onBack, onOpen }) {
                 <Descriptions.Item label="触发类型">{detail.triggerType}</Descriptions.Item>
                 <Descriptions.Item label="作者">{detail.authorName || detail.authorUsername || '-'}</Descriptions.Item>
                 <Descriptions.Item label="模板">{detail.templateCode}</Descriptions.Item>
+                <Descriptions.Item label="端类型">{targetTypeLabel(detail.targetType)}</Descriptions.Item>
+                <Descriptions.Item label="Profile">{detail.codeQualityProfileCode || '-'}</Descriptions.Item>
                 <Descriptions.Item label="事件时间">{detail.eventTime || '-'}</Descriptions.Item>
               </Descriptions>
             </Card>
@@ -1837,6 +1900,12 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 
 function TemplateConfig() {
   const [templates, setTemplates] = useState([]);
+  const [groups, setGroups] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [selectedProjectId, setSelectedProjectId] = useState(null);
+  const [projectTargetConfigs, setProjectTargetConfigs] = useState([]);
+  const [selectedTargetType, setSelectedTargetType] = useState('BACKEND');
+  const [targetConfigDraft, setTargetConfigDraft] = useState(null);
   const [selectedTemplateCode, setSelectedTemplateCode] = useState(null);
   const [notificationRules, setNotificationRules] = useState(null);
   const [notificationRuleDraftCodes, setNotificationRuleDraftCodes] = useState([]);
@@ -1864,11 +1933,13 @@ function TemplateConfig() {
     setLoading(true);
     setError(null);
     try {
-      const [settingsData, profileData, providerData, templateData] = await Promise.all([
+      const [settingsData, profileData, providerData, templateData, groupData, projectData] = await Promise.all([
         fetchApi('/api/code-quality-reviews/settings'),
         fetchApi('/api/code-quality-review-profiles'),
         fetchApi('/api/code-quality-review-providers'),
-        fetchApi('/api/rule-templates')
+        fetchApi('/api/rule-templates'),
+        fetchApi('/api/project-groups'),
+        fetchApi('/api/projects')
       ]);
       const profileItems = Array.isArray(profileData) ? profileData : (profileData.items || []);
       const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
@@ -1876,6 +1947,8 @@ function TemplateConfig() {
       const nextSelectedProfileCode = selectedProfileCode || profileItems[0]?.profileCode || null;
       const nextSelectedProviderCode = settingsData?.defaultProviderCode || selectedProviderCode || providerItems[0]?.providerCode || 'DEEPSEEK';
       const nextSelectedTemplateCode = selectedTemplateCode || templateItems.find(item => item.templateCode === 'backend-default')?.templateCode || templateItems[0]?.templateCode || null;
+      const projectItems = projectData.items || [];
+      const nextSelectedProjectId = selectedProjectId || projectItems[0]?.id || null;
       setAiSettings(settingsData);
       setSettingsDraft({
         reviewEnabled: settingsData?.reviewEnabled ?? false,
@@ -1883,6 +1956,16 @@ function TemplateConfig() {
         dingtalkWebhooks: (settingsData?.dingtalkWebhooks || []).map(item => ({ ...item }))
       });
       setTemplates(templateItems);
+      setGroups(groupData.items || []);
+      setProjects(projectItems);
+      setSelectedProjectId(nextSelectedProjectId);
+      if (nextSelectedProjectId) {
+        const configs = await fetchApi(`/api/projects/${nextSelectedProjectId}/target-configs`);
+        setProjectTargetConfigs(configs || []);
+        const target = selectedTargetType || configs?.[0]?.targetType || 'BACKEND';
+        setSelectedTargetType(target);
+        setTargetConfigDraft((configs || []).find(item => item.targetType === target) || null);
+      }
       setSelectedTemplateCode(nextSelectedTemplateCode);
       setProviders(providerItems);
       setSelectedProviderCode(nextSelectedProviderCode);
@@ -1922,6 +2005,78 @@ function TemplateConfig() {
     const firstSelected = rules.focusRuleCodes?.[0];
     const firstRule = rules.groups?.flatMap(group => group.rules || [])?.[0]?.ruleCode;
     setSelectedNotificationRuleCode(firstSelected || firstRule || null);
+  };
+
+  const loadProjectTargetConfigs = async (projectId, targetType = selectedTargetType) => {
+    if (!projectId) {
+      setProjectTargetConfigs([]);
+      setTargetConfigDraft(null);
+      return;
+    }
+    const configs = await fetchApi(`/api/projects/${projectId}/target-configs`);
+    setProjectTargetConfigs(configs || []);
+    const nextTargetType = targetType || configs?.[0]?.targetType || 'BACKEND';
+    setSelectedTargetType(nextTargetType);
+    setTargetConfigDraft((configs || []).find(item => item.targetType === nextTargetType) || null);
+  };
+
+  const selectProjectForTargetConfig = async (projectId) => {
+    setSelectedProjectId(projectId);
+    try {
+      await loadProjectTargetConfigs(projectId, selectedTargetType);
+    } catch (err) {
+      messageApi.error(err.message);
+    }
+  };
+
+  const selectTargetTypeForConfig = (targetType) => {
+    setSelectedTargetType(targetType);
+    setTargetConfigDraft(projectTargetConfigs.find(item => item.targetType === targetType) || {
+      targetType,
+      templateCode: targetType === 'BACKEND' ? 'backend-default' : 'frontend-default',
+      codeQualityProfileCode: {
+        WEB_PC: 'web-pc-default-ai-review',
+        APP_IOS: 'app-ios-default-ai-review',
+        APP_ANDROID: 'app-android-default-ai-review',
+        APP_CROSS_PLATFORM: 'app-cross-platform-default-ai-review'
+      }[targetType] || 'backend-default-ai-review',
+      providerCode: null,
+      pathPatterns: [],
+      reminderCardEnabled: targetType === 'BACKEND',
+      enabled: true
+    });
+  };
+
+  const updateTargetConfigDraft = (field, value) => {
+    setTargetConfigDraft(current => current ? { ...current, [field]: value } : current);
+  };
+
+  const saveProjectTargetConfig = async () => {
+    if (!selectedProjectId || !targetConfigDraft) return;
+    setSettingsSaving(true);
+    try {
+      const updated = await fetchApi(`/api/projects/${selectedProjectId}/target-configs/${selectedTargetType}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          templateCode: targetConfigDraft.templateCode,
+          codeQualityProfileCode: targetConfigDraft.codeQualityProfileCode,
+          providerCode: targetConfigDraft.providerCode || null,
+          pathPatterns: targetConfigDraft.pathPatterns || [],
+          reminderCardEnabled: targetConfigDraft.reminderCardEnabled,
+          enabled: targetConfigDraft.enabled
+        })
+      });
+      const configs = projectTargetConfigs.some(item => item.targetType === updated.targetType)
+        ? projectTargetConfigs.map(item => item.targetType === updated.targetType ? updated : item)
+        : [...projectTargetConfigs, updated];
+      setProjectTargetConfigs(configs);
+      setTargetConfigDraft(updated);
+      messageApi.success('项目端类型配置已保存');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setSettingsSaving(false);
+    }
   };
 
   const updateSettingsDraft = (field, value) => {
@@ -2334,6 +2489,122 @@ function TemplateConfig() {
             <div className="settings-action-row">
               <Button type="primary" loading={settingsSaving} disabled={!settingsDraft || !settingsDirty} onClick={saveAiSettings}>保存设置</Button>
             </div>
+          </Space>
+        </Card>
+      )
+    },
+    {
+      key: 'project-target-configs',
+      label: (
+        <Space wrap>
+          <Text strong>项目组 / 端类型配置</Text>
+          {targetConfigDraft?.targetType && <Tag>{targetTypeLabel(targetConfigDraft.targetType)}</Tag>}
+        </Space>
+      ),
+      children: (
+        <Card bordered={false} className="settings-inner-card">
+          <Space direction="vertical" size="middle" className="full-width">
+            <Row gutter={[16, 16]}>
+              <Col xs={24} md={8}>
+                <Text strong>项目组</Text>
+                <Select
+                  disabled
+                  className="full-width prompt-field"
+                  value={projects.find(project => project.id === selectedProjectId)?.groupId}
+                  options={groups.map(group => ({ label: group.groupName, value: group.id }))}
+                  placeholder="项目所属项目组"
+                />
+              </Col>
+              <Col xs={24} md={8}>
+                <Text strong>项目</Text>
+                <Select
+                  showSearch
+                  className="full-width prompt-field"
+                  value={selectedProjectId}
+                  options={projects.map(project => ({ label: project.name, value: project.id }))}
+                  onChange={selectProjectForTargetConfig}
+                />
+              </Col>
+              <Col xs={24} md={8}>
+                <Text strong>端类型</Text>
+                <Select
+                  className="full-width prompt-field"
+                  value={selectedTargetType}
+                  options={TARGET_TYPE_OPTIONS}
+                  onChange={selectTargetTypeForConfig}
+                />
+              </Col>
+            </Row>
+            {targetConfigDraft ? (
+              <>
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} md={8}>
+                    <Text strong>规则模板</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      value={targetConfigDraft.templateCode}
+                      options={templateOptions}
+                      onChange={value => updateTargetConfigDraft('templateCode', value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Text strong>AI Review Profile</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      value={targetConfigDraft.codeQualityProfileCode}
+                      options={profileOptions}
+                      onChange={value => updateTargetConfigDraft('codeQualityProfileCode', value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Text strong>Provider 覆盖</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      value={targetConfigDraft.providerCode || ''}
+                      options={profileProviderOptions}
+                      onChange={value => updateTargetConfigDraft('providerCode', value || null)}
+                    />
+                  </Col>
+                  <Col xs={24}>
+                    <Text strong>路径匹配</Text>
+                    <Select
+                      mode="tags"
+                      className="full-width prompt-field"
+                      value={targetConfigDraft.pathPatterns || []}
+                      placeholder="例如 frontend/**、ios/**、android/**"
+                      onChange={value => updateTargetConfigDraft('pathPatterns', value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Space direction="vertical">
+                      <Text strong>提醒卡片</Text>
+                      <Switch
+                        checked={targetConfigDraft.reminderCardEnabled !== false}
+                        checkedChildren="显示"
+                        unCheckedChildren="隐藏"
+                        onChange={checked => updateTargetConfigDraft('reminderCardEnabled', checked)}
+                      />
+                    </Space>
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Space direction="vertical">
+                      <Text strong>配置状态</Text>
+                      <Switch
+                        checked={targetConfigDraft.enabled !== false}
+                        checkedChildren="启用"
+                        unCheckedChildren="停用"
+                        onChange={checked => updateTargetConfigDraft('enabled', checked)}
+                      />
+                    </Space>
+                  </Col>
+                </Row>
+                <div className="settings-action-row">
+                  <Button type="primary" loading={settingsSaving} onClick={saveProjectTargetConfig}>保存端类型配置</Button>
+                </div>
+              </>
+            ) : (
+              <Empty description="请选择项目和端类型" />
+            )}
           </Space>
         </Card>
       )

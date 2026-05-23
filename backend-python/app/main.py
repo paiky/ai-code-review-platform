@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.response import ok
 from app.core.tracing import trace_id_middleware
+from app.project_integration.api import group_router
 from app.project_integration.api import router as project_router
 from app.project_integration.api import webhook_router
 from app.review_record.api import router as review_task_router
@@ -46,6 +47,7 @@ def create_app() -> FastAPI:
     )
     register_exception_handlers(app)
     app.include_router(project_router)
+    app.include_router(group_router)
     app.include_router(webhook_router)
     app.include_router(review_task_router)
     app.include_router(rule_template_router)
