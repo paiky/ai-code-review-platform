@@ -1454,16 +1454,29 @@ def enable_push_profile(client: TestClient) -> None:
         json={
             "triggerOnPush": True,
             "triggerOnlyWhenRiskMatched": False,
-            "pushBranchPatterns": ["feature/*", "bugfix/*", "hotfix/*"],
-            "pushMinChangedFiles": 10,
-            "pushMinDiffBytes": 30000,
-            "pushMinCommitCount": 3,
-            "pushMaxChangedFiles": 80,
-            "pushMaxDiffBytes": 300000,
-            "pushDebounceSeconds": 300,
         },
     )
     assert response.status_code == 200
+    update_default_push_policy(client, pushBranchPatterns=["feature/*", "bugfix/*", "hotfix/*"])
+
+
+def update_default_push_policy(client: TestClient, **overrides) -> dict:
+    groups_response = client.get("/api/project-groups")
+    assert groups_response.status_code == 200
+    default_group = next(item for item in groups_response.json()["data"]["items"] if item["groupCode"] == "default")
+    payload = {
+        "pushBranchPatterns": default_group["pushBranchPatterns"],
+        "pushMinChangedFiles": default_group["pushMinChangedFiles"],
+        "pushMinDiffBytes": default_group["pushMinDiffBytes"],
+        "pushMinCommitCount": default_group["pushMinCommitCount"],
+        "pushMaxChangedFiles": default_group["pushMaxChangedFiles"],
+        "pushMaxDiffBytes": default_group["pushMaxDiffBytes"],
+        "pushDebounceSeconds": default_group["pushDebounceSeconds"],
+        **overrides,
+    }
+    response = client.put(f"/api/project-groups/{default_group['id']}", json=payload)
+    assert response.status_code == 200
+    return response.json()["data"]
 
 
 def test_push_gate_returns_stable_empty_response_for_non_evaluated_task(
@@ -1606,10 +1619,7 @@ def test_push_gate_rejects_branch_no_diff_and_too_large(
         json=push_payload(branch="feature/no-diff", changed_files=[{"path": "src/OrderService.java"}]),
         headers={"X-Gitlab-Event": "Push Hook"},
     ).json()["data"]["taskId"]
-    client.put(
-        "/api/code-quality-review-profiles/backend-default-ai-review",
-        json={"pushMaxDiffBytes": 3},
-    )
+    update_default_push_policy(client, pushMaxDiffBytes=3)
     too_large_task = client.post(
         "/api/webhooks/gitlab/merge-request",
         json=push_payload(branch="feature/too-large", changed_files=[{"path": "docs/a.md", "diffText": "+ too large"}]),
@@ -1621,6 +1631,33 @@ def test_push_gate_rejects_branch_no_diff_and_too_large(
     assert main_response["reasonCode"] == "PUSH_BRANCH_NOT_ALLOWED"
     assert client.get(f"/api/review-tasks/{no_diff_task}/code-quality-gate").json()["data"]["reasonCode"] == "NO_DIFF_TEXT"
     assert client.get(f"/api/review-tasks/{too_large_task}/code-quality-gate").json()["data"]["reasonCode"] == "DIFF_TOO_LARGE"
+
+
+def test_push_branch_filter_uses_project_group_policy(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    enable_push_profile(client)
+    update_default_push_policy(client, pushBranchPatterns=["release/*"])
+
+    skipped = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=push_payload(branch="feature/group-policy", changed_files=[{"path": "docs/a.md", "diffText": "+ update"}]),
+        headers={"X-Gitlab-Event": "Push Hook"},
+    ).json()["data"]
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=push_payload(branch="release/1.0", changed_files=[{"path": "docs/a.md", "diffText": "+ update"}]),
+        headers={"X-Gitlab-Event": "Push Hook"},
+    ).json()["data"]
+
+    assert skipped["status"] == "SKIPPED"
+    assert skipped["reasonCode"] == "PUSH_BRANCH_NOT_ALLOWED"
+    assert skipped["pushBranchPatterns"] == ["release/*"]
+    assert created["taskId"] is not None
 
 
 def test_push_gate_debounces_recent_allowed_push(

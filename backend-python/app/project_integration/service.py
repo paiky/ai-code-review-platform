@@ -9,13 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.change_analysis.service import analyze_changes
 from app.code_quality.service import trigger_auto_review
-from app.code_quality.repository import DEFAULT_PROFILE_CODE, get_profile, get_settings_record
+from app.code_quality.repository import get_settings_record
 from app.core.errors import AppError
-from app.core.json_utils import read_json_array
 from app.notification.service import send_risk_card
 from app.project_integration import gitlab_client
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent
-from app.project_integration.repository import resolve_project_target_config, update_project_target_detection, upsert_gitlab_project
+from app.project_integration.repository import get_project_group_push_policy, resolve_project_target_config, update_project_target_detection, upsert_gitlab_project
 from app.review_record.repository import (
     create_review_task,
     mark_task_failed,
@@ -158,7 +157,7 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
             "branchName": event["branchName"],
             "reasonCode": "PUSH_BRANCH_NOT_ALLOWED",
             "message": (
-                "GitLab Push branch is not configured in AI Review Profile pushBranchPatterns; "
+                "GitLab Push branch is not configured in project group pushBranchPatterns; "
                 "platform review flow was skipped."
             ),
             "profileCode": branch_gate["profileCode"],
@@ -398,12 +397,10 @@ def _parse_push_event(
 
 
 def _push_webhook_branch_gate(db: Session, project_record, branch_name: str | None) -> dict[str, Any]:
-    profile_code = project_record.default_code_quality_profile_code or DEFAULT_PROFILE_CODE
-    profile = get_profile(db, profile_code)
-    patterns = read_json_array(profile.push_branch_patterns)
+    patterns = get_project_group_push_policy(db, project_record)["pushBranchPatterns"]
     return {
         "allowed": _branch_matches(branch_name, patterns),
-        "profileCode": profile.profile_code,
+        "profileCode": project_record.default_code_quality_profile_code,
         "patterns": patterns,
     }
 

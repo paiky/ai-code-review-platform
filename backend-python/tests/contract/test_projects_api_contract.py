@@ -7,6 +7,17 @@ from app.project_integration.models import Project, ProjectTargetConfig
 from app.rule_template.models import RuleTemplate
 
 
+DEFAULT_PUSH_POLICY = {
+    "pushBranchPatterns": ["master"],
+    "pushMinChangedFiles": 10,
+    "pushMinDiffBytes": 30000,
+    "pushMinCommitCount": 3,
+    "pushMaxChangedFiles": -1,
+    "pushMaxDiffBytes": -1,
+    "pushDebounceSeconds": 300,
+}
+
+
 def seed_template(db_session: Session, template_code: str, target_type: str) -> None:
     now = datetime(2026, 5, 18, 10, 0, 0)
     db_session.add(
@@ -148,6 +159,7 @@ def test_project_groups_and_target_configs_can_be_managed(client: TestClient, db
     )
     assert group_response.status_code == 200
     group = group_response.json()["data"]
+    assert {key: group[key] for key in DEFAULT_PUSH_POLICY} == DEFAULT_PUSH_POLICY
 
     bind_response = client.put("/api/projects/10/group", json={"groupId": group["id"]})
     assert bind_response.status_code == 200
@@ -262,13 +274,33 @@ def test_project_group_update_and_binding_validation(client: TestClient, db_sess
 
     update_response = client.put(
         f"/api/project-groups/{group['id']}",
-        json={"groupName": "PC 业务组", "description": "管理端项目", "defaultProviderCode": "DEEPSEEK"},
+        json={
+            "groupName": "PC 业务组",
+            "description": "管理端项目",
+            "defaultProviderCode": "DEEPSEEK",
+            "pushBranchPatterns": ["release/*"],
+            "pushMinChangedFiles": 2,
+            "pushMinDiffBytes": 1024,
+            "pushMinCommitCount": 1,
+            "pushMaxChangedFiles": 20,
+            "pushMaxDiffBytes": 50000,
+            "pushDebounceSeconds": 60,
+        },
     )
     assert update_response.status_code == 200
     updated = update_response.json()["data"]
     assert updated["groupName"] == "PC 业务组"
     assert updated["description"] == "管理端项目"
     assert updated["defaultProviderCode"] == "DEEPSEEK"
+    assert {key: updated[key] for key in DEFAULT_PUSH_POLICY} == {
+        "pushBranchPatterns": ["release/*"],
+        "pushMinChangedFiles": 2,
+        "pushMinDiffBytes": 1024,
+        "pushMinCommitCount": 1,
+        "pushMaxChangedFiles": 20,
+        "pushMaxDiffBytes": 50000,
+        "pushDebounceSeconds": 60,
+    }
 
     missing_group_response = client.put("/api/projects/20/group", json={"groupId": 9999})
     assert missing_group_response.status_code == 404

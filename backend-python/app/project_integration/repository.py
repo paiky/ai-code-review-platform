@@ -53,6 +53,16 @@ TARGET_TYPE_DEFAULTS = {
     },
 }
 
+DEFAULT_PUSH_REVIEW_POLICY = {
+    "pushBranchPatterns": ["master"],
+    "pushMinChangedFiles": 10,
+    "pushMinDiffBytes": 30000,
+    "pushMinCommitCount": 3,
+    "pushMaxChangedFiles": -1,
+    "pushMaxDiffBytes": -1,
+    "pushDebounceSeconds": 300,
+}
+
 PATH_DETECTION_RULES = [
     ("APP_IOS", ["ios/**", "**/*.swift", "**/*.m", "**/*.mm", "Podfile"]),
     ("APP_ANDROID", ["android/**", "**/*.kt", "**/*.kts", "build.gradle", "settings.gradle", "**/*.gradle"]),
@@ -81,8 +91,19 @@ def ensure_project_config_schema(db: Session) -> None:
             return
         connection = db.connection()
         inspector = inspect(connection)
+        project_groups_created = False
         if not inspector.has_table("project_groups"):
             ProjectGroup.__table__.create(connection, checkfirst=True)
+            project_groups_created = True
+        if not project_groups_created:
+            group_columns = {column["name"] for column in inspector.get_columns("project_groups")} if inspector.has_table("project_groups") else set()
+            _add_column_if_missing(db, group_columns, "project_groups", "push_branch_patterns", "TEXT NULL")
+            _add_column_if_missing(db, group_columns, "project_groups", "push_min_changed_files", "INT NULL DEFAULT 10")
+            _add_column_if_missing(db, group_columns, "project_groups", "push_min_diff_bytes", "INT NULL DEFAULT 30000")
+            _add_column_if_missing(db, group_columns, "project_groups", "push_min_commit_count", "INT NULL DEFAULT 3")
+            _add_column_if_missing(db, group_columns, "project_groups", "push_max_changed_files", "INT NULL DEFAULT -1")
+            _add_column_if_missing(db, group_columns, "project_groups", "push_max_diff_bytes", "INT NULL DEFAULT -1")
+            _add_column_if_missing(db, group_columns, "project_groups", "push_debounce_seconds", "INT NULL DEFAULT 300")
         if not inspector.has_table("project_target_configs"):
             ProjectTargetConfig.__table__.create(connection, checkfirst=True)
         project_columns = {column["name"] for column in inspector.get_columns("projects")} if inspector.has_table("projects") else set()
@@ -117,6 +138,7 @@ def _ensure_default_project_group(db: Session) -> ProjectGroup:
             group_name="默认项目组",
             group_code="default",
             default_provider_code=None,
+            **_push_policy_columns({}),
             status="ENABLED",
             description="系统默认项目组",
             created_at=now,
@@ -334,6 +356,7 @@ def project_group_to_dict(group: ProjectGroup) -> dict:
         "defaultProviderCode": group.default_provider_code,
         "status": group.status,
         "description": group.description,
+        **push_policy_to_dict(group),
     }
 
 
@@ -351,6 +374,7 @@ def create_project_group(db: Session, request: dict) -> dict:
         group_name=group_name,
         group_code=group_code,
         default_provider_code=_blank_to_none(request.get("defaultProviderCode")),
+        **_push_policy_columns(request),
         status=request.get("status") or "ENABLED",
         description=_blank_to_none(request.get("description")),
         created_at=now,
@@ -383,6 +407,7 @@ def update_project_group(db: Session, group_id: int, request: dict) -> dict:
         group.group_code = next_code
     if "defaultProviderCode" in request:
         group.default_provider_code = _blank_to_none(request.get("defaultProviderCode"))
+    _update_group_push_policy(group, request)
     if "status" in request:
         _assert_default_group_can_keep_status(group, request["status"])
         group.status = request["status"]
@@ -395,6 +420,26 @@ def update_project_group(db: Session, group_id: int, request: dict) -> dict:
         db.rollback()
         raise AppError("VALIDATION_ERROR", f"Project group code already exists: {group.group_code}", 400) from exc
     return project_group_to_dict(group)
+
+
+def get_project_group_push_policy(db: Session, project: Project) -> dict[str, Any]:
+    ensure_project_config_schema(db)
+    group = db.get(ProjectGroup, project.group_id) if project.group_id else None
+    if group is None:
+        group = _ensure_default_project_group(db)
+    return push_policy_to_dict(group)
+
+
+def push_policy_to_dict(group: ProjectGroup | None) -> dict[str, Any]:
+    return {
+        "pushBranchPatterns": read_json_array(getattr(group, "push_branch_patterns", None)) or list(DEFAULT_PUSH_REVIEW_POLICY["pushBranchPatterns"]),
+        "pushMinChangedFiles": _policy_int(getattr(group, "push_min_changed_files", None), "pushMinChangedFiles"),
+        "pushMinDiffBytes": _policy_int(getattr(group, "push_min_diff_bytes", None), "pushMinDiffBytes"),
+        "pushMinCommitCount": _policy_int(getattr(group, "push_min_commit_count", None), "pushMinCommitCount"),
+        "pushMaxChangedFiles": _policy_int(getattr(group, "push_max_changed_files", None), "pushMaxChangedFiles"),
+        "pushMaxDiffBytes": _policy_int(getattr(group, "push_max_diff_bytes", None), "pushMaxDiffBytes"),
+        "pushDebounceSeconds": _policy_int(getattr(group, "push_debounce_seconds", None), "pushDebounceSeconds"),
+    }
 
 
 def update_project_group_binding(db: Session, project_id: int, request: dict) -> dict:
@@ -671,6 +716,48 @@ def _blank_to_none(value) -> str | None:
         return None
     text_value = str(value).strip()
     return text_value or None
+
+
+def _push_policy_columns(request: dict[str, Any]) -> dict[str, Any]:
+    policy = {**DEFAULT_PUSH_REVIEW_POLICY, **{key: request[key] for key in DEFAULT_PUSH_REVIEW_POLICY if key in request}}
+    return {
+        "push_branch_patterns": json.dumps(policy["pushBranchPatterns"] or [], ensure_ascii=False),
+        "push_min_changed_files": _int_or_default(policy.get("pushMinChangedFiles"), "pushMinChangedFiles"),
+        "push_min_diff_bytes": _int_or_default(policy.get("pushMinDiffBytes"), "pushMinDiffBytes"),
+        "push_min_commit_count": _int_or_default(policy.get("pushMinCommitCount"), "pushMinCommitCount"),
+        "push_max_changed_files": _int_or_default(policy.get("pushMaxChangedFiles"), "pushMaxChangedFiles"),
+        "push_max_diff_bytes": _int_or_default(policy.get("pushMaxDiffBytes"), "pushMaxDiffBytes"),
+        "push_debounce_seconds": _int_or_default(policy.get("pushDebounceSeconds"), "pushDebounceSeconds"),
+    }
+
+
+def _update_group_push_policy(group: ProjectGroup, request: dict[str, Any]) -> None:
+    if "pushBranchPatterns" in request:
+        group.push_branch_patterns = json.dumps(request.get("pushBranchPatterns") or [], ensure_ascii=False)
+    fields = {
+        "pushMinChangedFiles": "push_min_changed_files",
+        "pushMinDiffBytes": "push_min_diff_bytes",
+        "pushMinCommitCount": "push_min_commit_count",
+        "pushMaxChangedFiles": "push_max_changed_files",
+        "pushMaxDiffBytes": "push_max_diff_bytes",
+        "pushDebounceSeconds": "push_debounce_seconds",
+    }
+    for json_field, column_name in fields.items():
+        if json_field in request:
+            setattr(group, column_name, _int_or_default(request.get(json_field), json_field))
+
+
+def _policy_int(value: Any, field: str) -> int:
+    return _int_or_default(value, field)
+
+
+def _int_or_default(value: Any, field: str) -> int:
+    if value is None:
+        return int(DEFAULT_PUSH_REVIEW_POLICY[field])
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(DEFAULT_PUSH_REVIEW_POLICY[field])
 
 
 def _store_target_detection(project: Project, detection: dict) -> None:

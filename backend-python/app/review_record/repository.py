@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.code_quality.models import CodeQualityReviewResult
 from app.core.errors import AppError
 from app.core.json_utils import format_datetime, page_response, read_json
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
@@ -101,14 +102,23 @@ def list_review_tasks(
 
     ordering = case({task_id: index for index, task_id in enumerate(task_ids)}, value=ReviewTask.id)
     rows = db.execute(
-        select(ReviewTask, Project, ReviewResult)
+        select(ReviewTask, Project, ReviewResult, CodeQualityReviewResult)
         .join(Project, Project.id == ReviewTask.project_id)
         .outerjoin(ReviewResult, ReviewResult.task_id == ReviewTask.id)
+        .outerjoin(CodeQualityReviewResult, CodeQualityReviewResult.task_id == ReviewTask.id)
         .where(ReviewTask.id.in_(task_ids))
         .order_by(ordering)
     ).all()
     items = []
-    for task, project, result in rows:
+    for task, project, result, code_quality_result in rows:
+        list_risk_card = None
+        if result is not None:
+            list_risk_card = _filter_risk_card_for_template(
+                db,
+                read_json(result.risk_card_json, None),
+                read_json(result.change_analysis_json, None),
+                result.template_code,
+            )
         items.append(
             {
                 "id": task.id,
@@ -126,9 +136,9 @@ def list_review_tasks(
                 "targetTypes": read_json(task.target_types_json, []) if task.target_types_json else [],
                 "codeQualityProfileCode": task.code_quality_profile_code,
                 "status": task.status,
-                "riskLevel": task.risk_level,
-                "riskItemCount": result.risk_item_count if result else None,
-                "focusIndicators": _focus_indicators(result.risk_card_json if result else None),
+                "riskLevel": list_risk_card.get("riskLevel") if isinstance(list_risk_card, dict) else task.risk_level,
+                "riskItemCount": code_quality_result.finding_count if code_quality_result else 0,
+                "focusIndicators": list_risk_card.get("focusIndicators", []) if isinstance(list_risk_card, dict) else _focus_indicators(result.risk_card_json if result else None),
                 "createdAt": format_datetime(task.created_at),
                 "finishedAt": format_datetime(task.finished_at),
             }

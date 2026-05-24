@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.project_integration.models import GitLabMergeRequestEvent, Project
+from app.code_quality.models import CodeQualityReviewResult
 from app.review_record.models import NotificationRecord, ReviewResult, ReviewTask
 
 
@@ -70,11 +71,36 @@ def seed_review_task(db_session: Session) -> None:
             risk_card_json=json.dumps(
                 {
                     "riskLevel": "HIGH",
-                    "riskItems": [],
+                    "riskItems": [
+                        {"riskId": "risk-1", "riskLevel": "HIGH", "category": "DB", "ruleCode": "DB_SCHEMA_CHANGE"},
+                        {"riskId": "risk-2", "riskLevel": "MEDIUM", "category": "CACHE", "ruleCode": "CACHE_CHANGE"},
+                    ],
                     "focusIndicators": [{"category": "DB_SCHEMA", "riskLevel": "HIGH"}],
                 }
             ),
             summary="涉及数据库和缓存变更",
+            created_at=finished_at,
+            updated_at=finished_at,
+        )
+    )
+    db_session.add(
+        CodeQualityReviewResult(
+            id=50001,
+            task_id=10001,
+            project_id=1,
+            profile_code="backend-default-ai-review",
+            provider="DEEPSEEK",
+            model="deepseek-chat",
+            status="SUCCESS",
+            overall_level="HIGH",
+            summary="发现 2 个代码质量风险点",
+            finding_count=2,
+            findings_json="[]",
+            raw_output=None,
+            exit_code=None,
+            error_message=None,
+            started_at=created_at,
+            finished_at=finished_at,
             created_at=finished_at,
             updated_at=finished_at,
         )
@@ -152,6 +178,29 @@ def test_review_tasks_read_api_contract(client: TestClient, db_session: Session)
     notifications = notification_response.json()["data"]
     assert notifications[0]["channel"] == "DINGTALK"
     assert notifications[0]["status"] == "SKIPPED"
+
+
+def test_review_task_list_counts_ai_review_findings_instead_of_rule_reminders(
+    client: TestClient, db_session: Session
+) -> None:
+    seed_review_task(db_session)
+    result = db_session.get(ReviewResult, 20001)
+    result.risk_item_count = 4
+    risk_card = json.loads(result.risk_card_json)
+    risk_card["riskItems"] = [
+        {"riskId": f"risk-{index}", "riskLevel": "MEDIUM", "category": "DB", "ruleCode": "DB_SCHEMA_CHANGE"}
+        for index in range(7)
+    ]
+    result.risk_card_json = json.dumps(risk_card)
+    code_quality_result = db_session.get(CodeQualityReviewResult, 50001)
+    code_quality_result.finding_count = 7
+    db_session.commit()
+
+    list_response = client.get("/api/review-tasks", params={"keyword": "risk-demo"})
+
+    assert list_response.status_code == 200
+    item = list_response.json()["data"]["items"][0]
+    assert item["riskItemCount"] == 7
 
 
 def test_review_tasks_target_type_filter_falls_back_to_project_config_for_legacy_tasks(

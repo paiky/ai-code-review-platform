@@ -78,7 +78,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持配置 / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、自动触发、重试、执行过程展示。
 - GitLab MR 自动 AI Review 完成后会向设置页中已启用的全部钉钉 webhook 推送“代码质量 Review”结果。
-- GitLab Push webhook 会先按 AI Review 配置中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会在规则提醒卡片生成后，根据提醒风险、重点变更类型、文件数、diff 大小、commit 数和 debounce 策略自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
+- GitLab Push webhook 会先按项目组 Push 审核策略中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会在规则提醒卡片生成后，根据提醒风险、重点变更类型、文件数、diff 大小、commit 数和 debounce 策略自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
 
 ## 环境要求
 
@@ -435,11 +435,11 @@ AI Review 质量问题支持两个辅助查看入口：
 - `生成修复预览`：AI Review 成功后会后台自动为可匹配 diff 的 finding 生成 unified diff patch 预览并保存到 `code_quality_fix_previews`。Provider 调用统一进入 `code_quality_scheduler_jobs` 调度队列，默认全局最多 10 个并发，AI Review 优先于修复预览；修复预览先显示 `QUEUED`，真正占用 Provider 资源时才显示 `RUNNING`。页面也保留单条手动生成 / 失败后重试入口。该能力仅用于查看，不会修改仓库、不提交 GitLab MR。
 - `调度队列`：任务列表页提供队列提示入口，调用 `GET /api/code-quality-reviews/job-queue` 查看当前 AI Review 与 finding 级修复预览的排队、运行和完成明细。活跃任务不受时间窗口限制，已完成 / 失败 / 跳过任务默认展示最近 48 小时内更新或创建的记录。
 
-Push webhook 默认只接收 `pushBranchPatterns` 允许的分支。Push 自动 AI Review 默认关闭，需要在 AI Review 配置中开启 `triggerOnPush`，并通过 Push 审核层后才会自动触发。
+Push webhook 默认只接收项目组 Push 审核策略中 `pushBranchPatterns` 允许的分支。Push 自动 AI Review 默认关闭，需要在 AI Review Profile 中开启 `triggerOnPush`，并通过项目组 Push 审核层后才会自动触发。
 
 Push 审核层默认策略：
 
-- `pushBranchPatterns`：`["develop", "feature/*", "bugfix/*", "hotfix/*"]`
+- `pushBranchPatterns`：`["master"]`
 - `pushMinChangedFiles`：`10`
 - `pushMinDiffBytes`：`30000`
 - `pushMinCommitCount`：`3`
@@ -512,6 +512,7 @@ V21__code_quality_fix_previews.sql
 V22__code_quality_scheduler_jobs.sql
 V23__consolidated_card_reminder_rules.sql
 V24__multi_target_project_configs.sql
+V25__project_group_push_review_policy.sql
 ```
 
 `backend/src/main/resources/db/migration` 中的 Java Flyway SQL 保留为历史基线和行为对照，不再是当前默认运行路径。
@@ -653,7 +654,7 @@ BACKEND / WEB_PC / APP_IOS / APP_ANDROID / APP_CROSS_PLATFORM / GENERAL
 
 后端项目默认仍使用 `backend-default` 和 `backend-default-ai-review`，并展示“提醒卡片”。PC / APP 端默认以代码质量 AI Review 为主，后端维护类提醒卡片默认关闭；如确实需要，也可以在项目端类型配置中开启 `reminderCardEnabled`。
 
-项目组用于项目归类和任务列表筛选。可以在前端“设置 -> 项目组 / 端类型配置”中新增项目组、编辑名称 / 编码 / 描述 / 默认 Provider、停用非默认项目组，并把已有项目绑定到指定项目组。第一阶段项目组不代表权限边界，也不做项目组级模板或钉钉 webhook 继承；未绑定项目会自动归入“默认项目组”。
+项目组用于项目归类、任务列表筛选和 Push 审核策略控制。可以在前端“设置 -> 项目组 / 端类型配置”中新增项目组、编辑名称 / 编码 / 描述 / 默认 Provider、停用非默认项目组，并把已有项目绑定到指定项目组；在“设置 -> AI Review 设置 -> Push 审核策略”中按项目组维护允许分支、大小阈值、硬上限和 debounce。第一阶段项目组不代表权限边界，也不做项目组级模板或钉钉 webhook 继承；未绑定项目会自动归入“默认项目组”。
 
 首次接入新的 GitLab 项目时，平台会根据 webhook / GitLab diff 中的 changed files，以及 GitLab 项目名或 namespace，自动识别端类型并保存识别依据。典型规则包括：
 
@@ -753,7 +754,7 @@ Provider 说明：
 - 设置全局默认 Provider，以及项目级默认 Provider。
 - 按项目组、项目和端类型绑定 AI Review Profile、Provider 覆盖、路径匹配和提醒卡片展示策略。
 - 查看、编辑、预览、恢复 AI Review Profile 的 Review Instructions。
-- 配置 Push 审核策略，控制 Push 是否允许自动进入 AI Review。
+- 按项目组配置 Push 审核策略，控制该项目组下的 Push 是否允许自动进入 AI Review。
 
 手动触发代码质量 Review：
 
@@ -807,7 +808,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:18080/api/code-quality-rev
 顶部导航：
 
 - `任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程、AI Review 调度队列入口。
-- `设置`：全局设置、钉钉 webhook、项目组 / 端类型配置、卡片提醒类型、AI Review Profile 和 Push 审核策略。
+- `设置`：全局设置、模型 Provider 配置、AI Review 设置、项目组 / 端类型配置、启用的卡片提醒类型；Push 审核策略在 AI Review 设置中按项目组维护。
 - `版本更新`：查看近期功能变化、部署注意和验证提示。
 
 任务详情页的“重新触发审阅”会从当前任务复制出一条新的审查任务，适合调试规则、钉钉模板和前端展示，不需要再次真实 push 或更新 MR。

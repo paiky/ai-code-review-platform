@@ -87,6 +87,15 @@ const TARGET_TYPE_DEFAULT_PATH_PATTERNS = {
   APP_CROSS_PLATFORM: ['flutter/**', 'rn/**', 'miniapp/**', '**/*.dart'],
   GENERAL: ['**/*']
 };
+const DEFAULT_PUSH_REVIEW_POLICY = {
+  pushBranchPatterns: ['master'],
+  pushMinChangedFiles: 10,
+  pushMinDiffBytes: 30000,
+  pushMinCommitCount: 3,
+  pushMaxChangedFiles: -1,
+  pushMaxDiffBytes: -1,
+  pushDebounceSeconds: 300
+};
 
 function targetTypeLabel(value) {
   return TARGET_TYPE_OPTIONS.find(item => item.value === value)?.label || value || '-';
@@ -115,6 +124,14 @@ function defaultReminderCardEnabledForTargetType(targetType) {
 
 function defaultPathPatternsForTargetType(targetType) {
   return TARGET_TYPE_DEFAULT_PATH_PATTERNS[targetType] || TARGET_TYPE_DEFAULT_PATH_PATTERNS.GENERAL;
+}
+
+function pushPolicyFromGroup(group) {
+  return {
+    ...DEFAULT_PUSH_REVIEW_POLICY,
+    ...(group || {}),
+    pushBranchPatterns: Array.isArray(group?.pushBranchPatterns) ? group.pushBranchPatterns : [...DEFAULT_PUSH_REVIEW_POLICY.pushBranchPatterns]
+  };
 }
 
 function requestJobQueueRefresh() {
@@ -530,6 +547,7 @@ function buildReminderGroups(riskItems) {
 function FocusIndicatorTags({ indicators, muted = false }) {
   const matchedIndicators = orderedFocusIndicators(indicators).filter(item => item.matched);
   if (matchedIndicators.length === 0) return muted ? <Text type="secondary">-</Text> : null;
+
   return (
     <Space wrap size={[4, 4]}>
       {matchedIndicators.map(item => (
@@ -808,7 +826,7 @@ function TaskList({ onOpen }) {
     { title: '分支', width: 260, render: (_, row) => <Text>{taskListBranchText(row)}</Text> },
     { title: '状态', dataIndex: 'status', width: 110, render: value => <Tag color={statusColor(value)}>{value || '-'}</Tag> },
     { title: '重点变更', dataIndex: 'focusIndicators', width: 240, render: value => <FocusIndicatorTags indicators={value} muted /> },
-    { title: '提醒项', dataIndex: 'riskItemCount', width: 90, render: value => value ?? 0 },
+    { title: '风险点', dataIndex: 'riskItemCount', width: 90, render: value => value ?? 0 },
     { title: '创建时间', dataIndex: 'createdAt', width: 180 },
     { title: '操作', width: 90, render: (_, row) => <Button type="link" onClick={() => onOpen(row.id)}>详情</Button> }
   ];
@@ -2033,6 +2051,8 @@ function TemplateConfig() {
   const [providerDraft, setProviderDraft] = useState(null);
   const [selectedProfileCode, setSelectedProfileCode] = useState(null);
   const [profileDraft, setProfileDraft] = useState(null);
+  const [selectedPushPolicyGroupId, setSelectedPushPolicyGroupId] = useState(null);
+  const [pushPolicyDraft, setPushPolicyDraft] = useState(null);
   const [promptPreview, setPromptPreview] = useState(null);
   const [aiSettings, setAiSettings] = useState(null);
   const [settingsDraft, setSettingsDraft] = useState(null);
@@ -2073,6 +2093,10 @@ function TemplateConfig() {
       const nextSelectedProviderCode = settingsData?.defaultProviderCode || selectedProviderCode || providerItems[0]?.providerCode || 'DEEPSEEK';
       const nextSelectedTemplateCode = selectedTemplateCode || templateItems.find(item => item.templateCode === 'backend-default')?.templateCode || templateItems[0]?.templateCode || null;
       const projectItems = projectData.items || [];
+      const groupItems = groupData.items || [];
+      const nextPushPolicyGroupId = selectedPushPolicyGroupId && groupItems.some(group => group.id === selectedPushPolicyGroupId)
+        ? selectedPushPolicyGroupId
+        : groupItems[0]?.id || null;
       const nextSelectedProjectId = projectGroupFilter
         ? (projectItems.some(project => project.id === selectedProjectId && project.groupId === projectGroupFilter)
           ? selectedProjectId
@@ -2085,7 +2109,9 @@ function TemplateConfig() {
         dingtalkWebhooks: (settingsData?.dingtalkWebhooks || []).map(item => ({ ...item }))
       });
       setTemplates(templateItems);
-      setGroups(groupData.items || []);
+      setGroups(groupItems);
+      setSelectedPushPolicyGroupId(nextPushPolicyGroupId);
+      setPushPolicyDraft(pushPolicyFromGroup(groupItems.find(group => group.id === nextPushPolicyGroupId)));
       setProjects(projectItems);
       setSelectedProjectId(nextSelectedProjectId);
       if (nextSelectedProjectId) {
@@ -2736,6 +2762,15 @@ function TemplateConfig() {
     setProfileDraft(current => current ? { ...current, [field]: value } : current);
   };
 
+  const selectPushPolicyGroup = (groupId) => {
+    setSelectedPushPolicyGroupId(groupId);
+    setPushPolicyDraft(pushPolicyFromGroup(groups.find(group => group.id === groupId)));
+  };
+
+  const updatePushPolicyDraft = (field, value) => {
+    setPushPolicyDraft(current => current ? { ...current, [field]: value } : current);
+  };
+
   const saveProfilePrompt = async () => {
     if (!profileDraft) return;
     setProfileSaving(true);
@@ -2760,23 +2795,23 @@ function TemplateConfig() {
   };
 
   const savePushReviewPolicy = async () => {
-    if (!profileDraft) return;
+    if (!selectedPushPolicyGroupId || !pushPolicyDraft) return;
     setPushPolicySaving(true);
     try {
-      const updated = await fetchApi(`/api/code-quality-review-profiles/${profileDraft.profileCode}`, {
+      const updated = await fetchApi(`/api/project-groups/${selectedPushPolicyGroupId}`, {
         method: 'PUT',
         body: JSON.stringify({
-          pushBranchPatterns: profileDraft.pushBranchPatterns || [],
-          pushMinChangedFiles: profileDraft.pushMinChangedFiles ?? null,
-          pushMinDiffBytes: profileDraft.pushMinDiffBytes ?? null,
-          pushMinCommitCount: profileDraft.pushMinCommitCount ?? null,
-          pushMaxChangedFiles: profileDraft.pushMaxChangedFiles ?? null,
-          pushMaxDiffBytes: profileDraft.pushMaxDiffBytes ?? null,
-          pushDebounceSeconds: profileDraft.pushDebounceSeconds ?? null
+          pushBranchPatterns: pushPolicyDraft.pushBranchPatterns || [],
+          pushMinChangedFiles: pushPolicyDraft.pushMinChangedFiles ?? null,
+          pushMinDiffBytes: pushPolicyDraft.pushMinDiffBytes ?? null,
+          pushMinCommitCount: pushPolicyDraft.pushMinCommitCount ?? null,
+          pushMaxChangedFiles: pushPolicyDraft.pushMaxChangedFiles ?? null,
+          pushMaxDiffBytes: pushPolicyDraft.pushMaxDiffBytes ?? null,
+          pushDebounceSeconds: pushPolicyDraft.pushDebounceSeconds ?? null
         })
       });
-      setProfiles(current => current.map(item => item.profileCode === updated.profileCode ? updated : item));
-      setProfileDraft(updated);
+      setGroups(current => current.map(item => item.id === updated.id ? updated : item));
+      setPushPolicyDraft(pushPolicyFromGroup(updated));
       messageApi.success('Push 审核策略已保存');
     } catch (err) {
       messageApi.error(err.message);
@@ -3578,7 +3613,7 @@ function TemplateConfig() {
       key: 'profile-settings',
       label: (
         <Space wrap>
-          <Text strong>AI Review 配置</Text>
+          <Text strong>AI Review 设置</Text>
           {selectedProfileCode && <Tag>{selectedProfileCode}</Tag>}
         </Space>
       ),
@@ -3664,17 +3699,27 @@ function TemplateConfig() {
                 <Space direction="vertical" size="middle" className="full-width">
                   <Space direction="vertical" size={4}>
                     <Text strong>Push 审核策略</Text>
-                    <Text type="secondary">用于判断 GitLab Push 事件是否允许自动进入 AI Review；未放行的 Push 仍会保留规则提醒和审查记录。</Text>
+                    <Text type="secondary">按项目组判断 GitLab Push 事件是否允许自动进入 AI Review；未放行的 Push 仍会保留规则提醒和审查记录。</Text>
                   </Space>
                   <Row gutter={[16, 16]}>
+                    <Col xs={24} md={10}>
+                      <Text strong>项目组</Text>
+                      <Select
+                        className="full-width prompt-field"
+                        value={selectedPushPolicyGroupId || undefined}
+                        options={groups.map(group => ({ label: group.groupName, value: group.id }))}
+                        onChange={selectPushPolicyGroup}
+                        placeholder="请选择项目组"
+                      />
+                    </Col>
                     <Col xs={24}>
                       <Text strong>允许分支</Text>
                       <Select
                         mode="tags"
                         className="full-width prompt-field"
-                        value={profileDraft.pushBranchPatterns || []}
-                        onChange={value => updateProfileDraft('pushBranchPatterns', value)}
-                        placeholder="例如 feature/*、bugfix/*、hotfix/*"
+                        value={pushPolicyDraft?.pushBranchPatterns || []}
+                        onChange={value => updatePushPolicyDraft('pushBranchPatterns', value)}
+                        placeholder="例如 master、release/*"
                       />
                     </Col>
                     <Col xs={24} md={8}>
@@ -3682,8 +3727,8 @@ function TemplateConfig() {
                       <InputNumber
                         className="full-width prompt-field"
                         min={0}
-                        value={profileDraft.pushMinChangedFiles}
-                        onChange={value => updateProfileDraft('pushMinChangedFiles', value)}
+                        value={pushPolicyDraft?.pushMinChangedFiles}
+                        onChange={value => updatePushPolicyDraft('pushMinChangedFiles', value)}
                       />
                     </Col>
                     <Col xs={24} md={8}>
@@ -3691,8 +3736,8 @@ function TemplateConfig() {
                       <InputNumber
                         className="full-width prompt-field"
                         min={0}
-                        value={profileDraft.pushMinDiffBytes}
-                        onChange={value => updateProfileDraft('pushMinDiffBytes', value)}
+                        value={pushPolicyDraft?.pushMinDiffBytes}
+                        onChange={value => updatePushPolicyDraft('pushMinDiffBytes', value)}
                       />
                     </Col>
                     <Col xs={24} md={8}>
@@ -3700,8 +3745,8 @@ function TemplateConfig() {
                       <InputNumber
                         className="full-width prompt-field"
                         min={0}
-                        value={profileDraft.pushMinCommitCount}
-                        onChange={value => updateProfileDraft('pushMinCommitCount', value)}
+                        value={pushPolicyDraft?.pushMinCommitCount}
+                        onChange={value => updatePushPolicyDraft('pushMinCommitCount', value)}
                       />
                     </Col>
                     <Col xs={24} md={8}>
@@ -3709,8 +3754,8 @@ function TemplateConfig() {
                       <InputNumber
                         className="full-width prompt-field"
                         min={-1}
-                        value={profileDraft.pushMaxChangedFiles}
-                        onChange={value => updateProfileDraft('pushMaxChangedFiles', value)}
+                        value={pushPolicyDraft?.pushMaxChangedFiles}
+                        onChange={value => updatePushPolicyDraft('pushMaxChangedFiles', value)}
                       />
                       <Text type="secondary">-1 表示无限制</Text>
                     </Col>
@@ -3719,8 +3764,8 @@ function TemplateConfig() {
                       <InputNumber
                         className="full-width prompt-field"
                         min={-1}
-                        value={profileDraft.pushMaxDiffBytes}
-                        onChange={value => updateProfileDraft('pushMaxDiffBytes', value)}
+                        value={pushPolicyDraft?.pushMaxDiffBytes}
+                        onChange={value => updatePushPolicyDraft('pushMaxDiffBytes', value)}
                       />
                       <Text type="secondary">-1 表示无限制</Text>
                     </Col>
@@ -3729,8 +3774,8 @@ function TemplateConfig() {
                       <InputNumber
                         className="full-width prompt-field"
                         min={0}
-                        value={profileDraft.pushDebounceSeconds}
-                        onChange={value => updateProfileDraft('pushDebounceSeconds', value)}
+                        value={pushPolicyDraft?.pushDebounceSeconds}
+                        onChange={value => updatePushPolicyDraft('pushDebounceSeconds', value)}
                       />
                     </Col>
                   </Row>
@@ -3739,7 +3784,7 @@ function TemplateConfig() {
                       type="primary"
                       loading={pushPolicySaving}
                       onClick={savePushReviewPolicy}
-                      disabled={!profileDraft}
+                      disabled={!pushPolicyDraft || !selectedPushPolicyGroupId}
                     >
                       保存 Push 审核策略
                     </Button>
@@ -3748,19 +3793,23 @@ function TemplateConfig() {
               </div>
             </Space>
           ) : (
-            <Empty description="暂无 AI Review 配置" />
+            <Empty description="暂无 AI Review 设置" />
           )}
         </Card>
       )
     }
   ];
 
+  const orderedCollapseItems = ['global-settings', 'provider-settings', 'profile-settings', 'project-target-configs', 'notification-rules']
+    .map(key => collapseItems.find(item => item.key === key))
+    .filter(Boolean);
+
   return (
     <div className="page-shell">
       {contextHolder}
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
       <Spin spinning={loading}>
-        <Collapse className="settings-collapse" items={collapseItems} />
+        <Collapse className="settings-collapse" items={orderedCollapseItems} />
       </Spin>
     </div>
   );

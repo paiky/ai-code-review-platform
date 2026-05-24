@@ -47,7 +47,7 @@ from app.core.database import SessionLocal
 from app.core.errors import AppError
 from app.core.json_utils import read_json, read_json_array
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
-from app.project_integration.repository import find_project_by_id, resolve_project_target_config
+from app.project_integration.repository import find_project_by_id, get_project_group_push_policy, resolve_project_target_config
 from app.notification.service import send_review_summary
 from app.review_record.models import ReviewTask
 from app.review_record.repository import (
@@ -574,10 +574,12 @@ def _trigger_push_auto_review(
         )
         return False
     provider = _resolve_provider(db, project, profile, task.target_type)
+    push_policy = get_project_group_push_policy(db, project)
     gate = _evaluate_push_gate(
         db,
         task=task,
         profile=profile,
+        push_policy=push_policy,
         provider_code=provider.provider_code,
         changed_files=changed_files,
         diff_text=diff_text,
@@ -774,6 +776,7 @@ def _evaluate_push_gate(
     *,
     task: ReviewTask,
     profile,
+    push_policy: dict[str, Any],
     provider_code: str,
     changed_files: list[dict[str, Any]],
     diff_text: str | None,
@@ -790,13 +793,14 @@ def _evaluate_push_gate(
         focus_change_types=focus_change_types,
         focus_rule_codes=focus_rule_codes,
     )
-    branch_matched = _branch_matches(task.source_branch, read_json_array(profile.push_branch_patterns))
+    branch_patterns = push_policy.get("pushBranchPatterns") or []
+    branch_matched = _branch_matches(task.source_branch, branch_patterns)
     matched_rules.append(
         {
             "code": "branch",
             "label": f"分支 {task.source_branch or '-'}",
             "matched": branch_matched,
-            "detail": ",".join(read_json_array(profile.push_branch_patterns)),
+            "detail": ",".join(branch_patterns),
         }
     )
     if not branch_matched:
@@ -812,7 +816,7 @@ def _evaluate_push_gate(
             matched_rules,
         )
 
-    debounce_seconds = int(profile.push_debounce_seconds or 0)
+    debounce_seconds = int(push_policy.get("pushDebounceSeconds") or 0)
     debounced = has_recent_allowed_push_gate(
         db,
         project_id=task.project_id,
@@ -856,15 +860,15 @@ def _evaluate_push_gate(
         )
 
     too_large = (
-        _over_limit(metrics["changedFileCount"], profile.push_max_changed_files)
-        or _over_limit(metrics["diffBytes"], profile.push_max_diff_bytes)
+        _over_limit(metrics["changedFileCount"], push_policy.get("pushMaxChangedFiles"))
+        or _over_limit(metrics["diffBytes"], push_policy.get("pushMaxDiffBytes"))
     )
     matched_rules.append(
         {
             "code": "hardLimit",
             "label": "未超过 Push AI Review 硬上限",
             "matched": not too_large,
-            "detail": f"files<={profile.push_max_changed_files}, diffBytes<={profile.push_max_diff_bytes}",
+            "detail": f"files<={push_policy.get('pushMaxChangedFiles')}, diffBytes<={push_policy.get('pushMaxDiffBytes')}",
         }
     )
     if too_large:
@@ -882,9 +886,9 @@ def _evaluate_push_gate(
 
     risk_matched = _risk_matched(metrics)
     large_change = (
-        _reaches_threshold(metrics["changedFileCount"], profile.push_min_changed_files)
-        or _reaches_threshold(metrics["diffBytes"], profile.push_min_diff_bytes)
-        or _reaches_threshold(metrics["commitCount"], profile.push_min_commit_count)
+        _reaches_threshold(metrics["changedFileCount"], push_policy.get("pushMinChangedFiles"))
+        or _reaches_threshold(metrics["diffBytes"], push_policy.get("pushMinDiffBytes"))
+        or _reaches_threshold(metrics["commitCount"], push_policy.get("pushMinCommitCount"))
     )
     matched_rules.append({"code": "riskMatched", "label": "命中高风险或重点提醒", "matched": risk_matched})
     matched_rules.append(
@@ -892,7 +896,7 @@ def _evaluate_push_gate(
             "code": "largeChange",
             "label": "达到 Push 大变更阈值",
             "matched": large_change,
-            "detail": f"files>={profile.push_min_changed_files}, diffBytes>={profile.push_min_diff_bytes}, commits>={profile.push_min_commit_count}",
+            "detail": f"files>={push_policy.get('pushMinChangedFiles')}, diffBytes>={push_policy.get('pushMinDiffBytes')}, commits>={push_policy.get('pushMinCommitCount')}",
         }
     )
     if profile.trigger_only_when_risk_matched and not risk_matched:
