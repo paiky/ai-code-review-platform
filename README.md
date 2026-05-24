@@ -297,6 +297,28 @@ cd ../runtime
 docker compose up -d
 ```
 
+如果升级后需要回滚到上一个仍保留的旧镜像，不需要重新上传代码包。先在运行目录确认当前版本和本机还保留的镜像：
+
+```bash
+cd /opt/ai-code-review-platform/runtime
+grep '^APP_VERSION=' .env
+docker images | grep ai-code-review
+```
+
+假设要回滚到旧版本 `{旧版本号}`，修改 `runtime/.env` 中的 `APP_VERSION`，再按旧镜像重建容器：
+
+```bash
+cd /opt/ai-code-review-platform/runtime
+sed -i 's/^APP_VERSION=.*/APP_VERSION={旧版本号}/' .env
+docker compose up -d --force-recreate
+docker compose ps
+docker compose logs -f backend
+```
+
+这相当于停止当前应用容器并用指定旧镜像重新创建，仍复用当前 `docker-compose.yml`、网络、卷、端口映射和 `.env` 配置。不要优先手写 `docker run`，否则容易漏掉前后端网络、MySQL 连接、Nginx 反向代理、restart policy 等 compose 配置。
+
+注意：镜像回滚不会自动回滚数据库 schema。如果新版本已经执行了不兼容的数据库变更，旧镜像可能无法正常读取新表结构。当前迁移原则应尽量保持向前兼容，优先新增表 / 新增列，避免在可回滚版本内删除或重命名旧字段。
+
 ## 本地启动
 
 创建数据库：
