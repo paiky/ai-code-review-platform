@@ -1025,9 +1025,9 @@ def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, An
         select(CodeQualitySchedulerJob)
         .where(CodeQualitySchedulerJob.status.in_(["QUEUED", "RUNNING"]))
         .order_by(
-            CodeQualitySchedulerJob.priority.asc(),
-            CodeQualitySchedulerJob.queued_at.asc(),
-            CodeQualitySchedulerJob.id.asc(),
+            CodeQualitySchedulerJob.updated_at.desc(),
+            CodeQualitySchedulerJob.queued_at.desc(),
+            CodeQualitySchedulerJob.id.desc(),
         )
     ).all()
     recent = db.scalars(
@@ -1078,7 +1078,7 @@ def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, An
         else:
             group["fixPreviewJobs"].append(job)
     groups = list(grouped.values())
-    groups.sort(key=lambda group: _scheduler_group_sort_key(group))
+    groups.sort(key=lambda group: _scheduler_group_sort_key(group), reverse=True)
     active_count = sum(1 for record in records if record.status in {"QUEUED", "RUNNING"})
     return {"activeCount": active_count, "groups": groups}
 
@@ -1114,10 +1114,7 @@ def _dedupe_scheduler_jobs(records: list[CodeQualitySchedulerJob]) -> list[CodeQ
     return result
 
 
-def _scheduler_group_sort_key(group: dict[str, Any]) -> tuple[int, str]:
-    statuses = [group.get("reviewJob", {}).get("status")] if group.get("reviewJob") else []
-    statuses.extend(job.get("status") for job in group.get("fixPreviewJobs", []))
-    rank = 0 if "RUNNING" in statuses else (1 if "QUEUED" in statuses else 2)
+def _scheduler_group_sort_key(group: dict[str, Any]) -> str:
     updated = max(
         [
             job.get("updatedAt") or job.get("queuedAt") or ""
@@ -1125,7 +1122,7 @@ def _scheduler_group_sort_key(group: dict[str, Any]) -> tuple[int, str]:
         ],
         default="",
     )
-    return (rank, updated)
+    return updated
 
 
 def has_recent_allowed_push_gate(

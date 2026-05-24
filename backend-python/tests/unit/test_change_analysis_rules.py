@@ -43,7 +43,11 @@ def test_mq_and_cache_rules_focus_on_config_and_write_delete() -> None:
             },
             {
                 "path": "src/main/java/com/demo/order/RabbitMqBindingConfig.java",
-                "diffText": '+ return new Queue("order-paid-queue", true, false, false);\n+ .with("order-paid-route");',
+                "diffText": (
+                    '+ return new Queue("order-paid-queue", true, false, false);\n'
+                    '+ return new DirectExchange("order-paid-exchange");\n'
+                    '+ public static final String ORDER_PAID_ROUTING_KEY = "order-paid-route";'
+                ),
             },
         ]
     )
@@ -55,7 +59,7 @@ def test_mq_and_cache_rules_focus_on_config_and_write_delete() -> None:
     assert "MQ" in analysis["changeTypes"]
 
 
-def test_read_only_cache_and_mq_consumer_do_not_match() -> None:
+def test_read_only_cache_mq_consumer_and_mq_send_only_do_not_match() -> None:
     analysis = analyze_changes(
         [
             {
@@ -66,8 +70,56 @@ def test_read_only_cache_and_mq_consumer_do_not_match() -> None:
                 "path": "src/main/java/com/demo/order/OrderPaidConsumer.java",
                 "diffText": '+ @RocketMQMessageListener(topic = "order-paid-topic", consumerGroup = "order-service")',
             },
+            {
+                "path": "src/main/java/com/demo/order/OrderPaidProducer.java",
+                "diffText": '+ rocketMQTemplate.convertAndSend("order-paid-topic", event);',
+            },
         ]
     )
 
     assert "CACHE" not in analysis["changeTypes"]
     assert "MQ" not in analysis["changeTypes"]
+
+
+def test_value_config_rule_ignores_unchanged_diff_context() -> None:
+    analysis = analyze_changes(
+        [
+            {
+                "path": "src/main/java/com/demo/PackageService.java",
+                "diffText": (
+                    "@@ -120,6 +120,9 @@ public class PackageService {\n"
+                    '     @Value("${automaticallySubscribe.newPackage:2000536007248433153}")\n'
+                    "     private Long newPackageId;\n"
+                    " \n"
+                    "+    @Resource\n"
+                    "+    private TimingService timingService;\n"
+                    "+\n"
+                ),
+            }
+        ]
+    )
+
+    assert "CONFIG" not in analysis["changeTypes"]
+    assert not any(evidence["matcher"] == "VALUE_CONFIG_HEURISTIC_RULE" for evidence in analysis["evidences"])
+
+
+def test_value_config_rule_detects_added_value_line() -> None:
+    analysis = analyze_changes(
+        [
+            {
+                "path": "src/main/java/com/demo/PackageService.java",
+                "diffText": (
+                    "@@ -120,6 +120,7 @@ public class PackageService {\n"
+                    '+    @Value("${automaticallySubscribe.newPackage:2000536007248433153}")\n'
+                    "+    private Long newPackageId;\n"
+                ),
+            }
+        ]
+    )
+
+    assert "CONFIG" in analysis["changeTypes"]
+    assert any(
+        evidence["matcher"] == "VALUE_CONFIG_HEURISTIC_RULE"
+        and "automaticallySubscribe.newPackage" in evidence["snippet"]
+        for evidence in analysis["evidences"]
+    )

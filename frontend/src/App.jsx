@@ -70,6 +70,7 @@ const HOME_ROUTE = '/';
 const TASK_LIST_ROUTE = '/tasks';
 const SETTINGS_ROUTE = '/settings';
 const RELEASES_ROUTE = '/releases';
+const JOB_QUEUE_REFRESH_EVENT = 'ai-review-job-queue-refresh';
 const TARGET_TYPE_OPTIONS = [
   { label: '后端', value: 'BACKEND' },
   { label: 'PC Web / H5', value: 'WEB_PC' },
@@ -114,6 +115,10 @@ function defaultReminderCardEnabledForTargetType(targetType) {
 
 function defaultPathPatternsForTargetType(targetType) {
   return TARGET_TYPE_DEFAULT_PATH_PATTERNS[targetType] || TARGET_TYPE_DEFAULT_PATH_PATTERNS.GENERAL;
+}
+
+function requestJobQueueRefresh() {
+  window.dispatchEvent(new Event(JOB_QUEUE_REFRESH_EVENT));
 }
 
 function profileLabel(profile) {
@@ -417,10 +422,10 @@ function buildSideBySideRows(parsedDiff, targetStartLine, targetEndLine) {
 }
 
 const focusIndicatorMeta = {
-  DB_SCHEMA_CHANGE: { label: 'DB 表/字段', color: 'volcano' },
-  MQ_CONFIG_CHANGE: { label: 'MQ 配置', color: 'blue' },
-  REDIS_CONFIG_CHANGE: { label: 'Redis 配置', color: 'green' },
-  VALUE_CONFIG_CHANGE: { label: '@Value', color: 'purple' }
+  DB_SCHEMA_CHANGE: { label: 'DB 表/字段', color: 'default' },
+  MQ_CONFIG_CHANGE: { label: 'MQ 配置', color: 'gold' },
+  REDIS_CONFIG_CHANGE: { label: 'Redis 配置', color: 'red' },
+  VALUE_CONFIG_CHANGE: { label: '@Value', color: 'blue' }
 };
 
 const focusIndicatorOrder = [
@@ -487,19 +492,19 @@ function riskCardSummaryText(riskCard, riskItems) {
 }
 
 function reminderGroupKey(category) {
-  if (['DB', 'DB_SCHEMA', 'DB_SQL', 'ORM_MAPPING', 'ENTITY_MODEL', 'DATA_MIGRATION'].includes(category)) return 'DB';
-  if (['MQ', 'MQ_PRODUCER', 'MQ_CONSUMER', 'MQ_MESSAGE_SCHEMA', 'MQ_TOPIC_CONFIG', 'MQ_RETRY_DLQ'].includes(category)) return 'MQ';
-  if (['CACHE', 'CACHE_KEY', 'CACHE_TTL', 'CACHE_INVALIDATION', 'CACHE_READ_WRITE', 'CACHE_SERIALIZATION'].includes(category)) return 'CACHE';
+  if (['DB', 'DB_DATA_WRITE', 'DB_SCHEMA', 'DB_SQL', 'ORM_MAPPING', 'ENTITY_MODEL', 'DATA_MIGRATION'].includes(category)) return 'DB';
+  if (['MQ', 'MQ_CONFIG', 'MQ_PRODUCER', 'MQ_CONSUMER', 'MQ_MESSAGE_SCHEMA', 'MQ_TOPIC_CONFIG', 'MQ_RETRY_DLQ'].includes(category)) return 'MQ';
+  if (['CACHE', 'CACHE_WRITE_DELETE', 'CACHE_KEY', 'CACHE_TTL', 'CACHE_INVALIDATION', 'CACHE_READ_WRITE', 'CACHE_SERIALIZATION'].includes(category)) return 'CACHE';
   if (category === 'CONFIG') return 'CONFIG';
   return category || 'OTHER';
 }
 
 const reminderGroupMeta = {
-  DB: { label: 'DB 变更提醒', color: 'volcano', sort: 1 },
-  MQ: { label: 'MQ 变更提醒', color: 'blue', sort: 2 },
-  CACHE: { label: 'Redis/缓存提醒', color: 'green', sort: 3 },
-  CONFIG: { label: '配置提醒', color: 'purple', sort: 4 },
-  OTHER: { label: '其他提醒', color: 'default', sort: 99 }
+  DB: { label: 'DB配置', titleColor: '#526a7a', sort: 1 },
+  MQ: { label: 'MQ配置', titleColor: '#d48806', sort: 2 },
+  CACHE: { label: 'Redis配置', titleColor: '#cf1322', sort: 3 },
+  CONFIG: { label: 'Nacos配置', titleColor: '#1677ff', sort: 4 },
+  OTHER: { label: '其他提醒', titleColor: '#595959', sort: 99 }
 };
 
 function buildReminderGroups(riskItems) {
@@ -508,7 +513,7 @@ function buildReminderGroups(riskItems) {
     const key = reminderGroupKey(item.category);
     const meta = reminderGroupMeta[key] || {
       label: `${changeTypeLabel(item.category)}提醒`,
-      color: 'default',
+      titleColor: '#595959',
       sort: 90
     };
     if (!groups.has(key)) {
@@ -879,6 +884,8 @@ function RiskCardView({ riskCard, changedFilesSummary }) {
 
   const riskItems = (riskCard.riskItems || []).filter(item => item.ruleCode !== 'API_COMPATIBILITY_CHECK' && item.category !== 'API');
   const reminderGroups = buildReminderGroups(riskItems);
+  const firstReminderGroupKey = reminderGroups[0]?.key;
+  const firstReminderItemKey = reminderGroups[0]?.items?.[0]?.riskId;
   const roles = riskCard.suggestedReviewRoles || [];
 
   const evidenceColumns = [
@@ -921,12 +928,14 @@ function RiskCardView({ riskCard, changedFilesSummary }) {
         {reminderGroups.length === 0 ? (
           <Empty description="暂无提醒项" />
         ) : <Collapse
+          key={riskCard.cardId || firstReminderGroupKey || 'reminder-groups'}
+          defaultActiveKey={firstReminderGroupKey ? [firstReminderGroupKey] : []}
           items={reminderGroups.map(group => ({
             key: group.key,
             label: (
               <Space className="risk-item-heading" wrap>
-                <Tag color={group.color}>{group.items.length} 条</Tag>
-                <Text strong>{group.label}</Text>
+                <Tag>{group.items.length} 条</Tag>
+                <Text strong style={{ color: group.titleColor }}>{group.label}</Text>
                 {group.categories.map(category => (
                   <Tag key={category} color={fineChangeTypes.has(category) ? 'blue' : 'default'}>
                     {changeTypeLabel(category)}
@@ -938,6 +947,7 @@ function RiskCardView({ riskCard, changedFilesSummary }) {
               <Collapse
                 className="reminder-item-list"
                 ghost
+                defaultActiveKey={group.key === firstReminderGroupKey && firstReminderItemKey ? [firstReminderItemKey] : []}
                 items={group.items.map(item => ({
                   key: item.riskId,
                   label: (
@@ -1679,6 +1689,7 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
       if (preview?.status === 'SUCCESS') {
         setFixPreviewTarget(preview);
       } else if (preview?.status === 'QUEUED') {
+        requestJobQueueRefresh();
         message.info('修复预览已进入队列');
       }
     } catch (err) {
@@ -1905,6 +1916,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
         createdAt: new Date().toISOString()
       }]);
       setFixPreviews([]);
+      requestJobQueueRefresh();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1917,6 +1929,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     setError(null);
     try {
       const rerunResult = await fetchApi(`/api/review-tasks/${taskId}/rerun`, { method: 'POST' });
+      requestJobQueueRefresh();
       if (rerunResult?.taskId) {
         onOpen(rerunResult.taskId);
       } else {
@@ -3899,10 +3912,23 @@ function AppFrame() {
   }, []);
 
   useEffect(() => {
-    if (!jobQueueOpen && !jobQueue?.activeCount) return undefined;
-    const timer = window.setInterval(loadJobQueue, 5000);
-    return () => window.clearInterval(timer);
-  }, [jobQueueOpen, jobQueue?.activeCount]);
+    const refreshIfVisible = () => {
+      if (document.visibilityState === 'visible') {
+        loadJobQueue();
+      }
+    };
+    const timer = window.setInterval(refreshIfVisible, 5000);
+    window.addEventListener(JOB_QUEUE_REFRESH_EVENT, loadJobQueue);
+    document.addEventListener('visibilitychange', refreshIfVisible);
+    window.addEventListener('focus', loadJobQueue);
+    refreshIfVisible();
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener(JOB_QUEUE_REFRESH_EVENT, loadJobQueue);
+      document.removeEventListener('visibilitychange', refreshIfVisible);
+      window.removeEventListener('focus', loadJobQueue);
+    };
+  }, []);
 
   return (
     <Layout className="app-layout">

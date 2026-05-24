@@ -160,11 +160,11 @@ def _db_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None:
 
 
 def _cache_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None:
-    if not (_path_matches(changed_file, ["cache", "redis", "caffeine", "ehcache"]) or _contains_any(content, ["RedisTemplate", "StringRedisTemplate", "@Cacheable", "@CacheEvict", "@CachePut", "cacheManager", "opsForValue", "expire(", "delete(", "RedisSerializer"])):
+    if not (_path_matches(changed_file, ["cache", "redis", "caffeine", "ehcache"]) or _contains_any(content, ["RedisTemplate", "StringRedisTemplate", "IRedisService", "redisService", "@Cacheable", "@CacheEvict", "@CachePut", "cacheManager", "opsForValue", "sadd(", "expire(", "delete(", ".del(", "RedisSerializer"])):
         return None
     if _contains_any(content, ["RedisSerializer", "Jackson2JsonRedisSerializer", "GenericJackson2JsonRedisSerializer", "StringRedisSerializer", "serialize(", "deserialize(", "ObjectMapper"]):
         change_type, resource_type, reason = "CACHE_SERIALIZATION", "CACHE_VALUE", "Detected cache serialization or cached value schema change"
-    elif _contains_any(content, ["@CacheEvict", "@CachePut", "delete(", "evict(", "invalidate(", "clear(", "unlink(", "expire(", "expireAt(", "ttl", "time-to-live", "timeToLive", "Duration.of", "TimeUnit.", ".set(", ".put(", "setIfAbsent", "setnx"]):
+    elif _contains_any(content, ["@CacheEvict", "@CachePut", "delete(", ".del(", "sadd(", "evict(", "invalidate(", "clear(", "unlink(", "expire(", "expireAt(", "ttl", "time-to-live", "timeToLive", "Duration.of", "TimeUnit.", ".set(", ".put(", "setIfAbsent", "setnx"]):
         change_type, resource_type, reason = "CACHE_WRITE_DELETE", "CACHE_KEY", "Detected cache write, TTL or invalidation change"
     elif _contains_any(content, ["@Cacheable", "get("]):
         return None
@@ -175,15 +175,36 @@ def _cache_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None
 
 
 def _mq_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None:
-    if not (_path_matches(changed_file, ["mq", "rocketmq", "kafka", "rabbit"]) or _contains_any(content, ["TopicExchange", "DirectExchange", "FanoutExchange", "Queue(", "BindingBuilder", "routingKey", "routeKey", "exchange", "topic", "queue", "rocketmq", "kafka", "rabbitmq"])):
+    changed_content = "\n".join(_changed_lines(changed_file))
+    if not changed_content:
         return None
-    if _contains_any(content, ["@RocketMQMessageListener", "@KafkaListener", "@RabbitListener"]) and not _contains_any(content, ["TopicExchange", "DirectExchange", "FanoutExchange", "Queue(", "BindingBuilder", "routingKey", "routeKey"]):
+    if not _mq_config_changed(changed_content):
         return None
-    if not _contains_any(content, ["TopicExchange", "DirectExchange", "FanoutExchange", "Queue(", "BindingBuilder", "routingKey", "routeKey", "exchange", "topic", "queue", "consumerGroup", "groupId"]):
-        return None
-    change_type, resource_type, reason = "MQ_CONFIG", "MQ_TOPIC", "Detected MQ exchange, queue or route key configuration change"
-    name = _first_group(content, r"(?i)(?:topic|topics|destination)\s*=\s*[\"']([a-zA-Z0-9_.:-]+)[\"']") or _first_group(content, r"(?i)(?:send|syncSend|asyncSend|convertAndSend)\s*\(\s*[\"']([a-zA-Z0-9_.:-]+)[\"']") or _effective_path(changed_file)
+    change_type, resource_type, reason = "MQ_CONFIG", "MQ_TOPIC", "Detected MQ queue, exchange or route key declaration change"
+    name = (
+        _first_group(changed_content, r"(?i)new\s+Queue\s*\(\s*[\"']([a-zA-Z0-9_.:-]+)[\"']")
+        or _first_group(changed_content, r"(?i)new\s+(?:TopicExchange|DirectExchange|FanoutExchange|HeadersExchange|CustomExchange)\s*\(\s*[\"']([a-zA-Z0-9_.:-]+)[\"']")
+        or _first_group(changed_content, r"(?i)(?:routingKey|routeKey)\s*=\s*[\"']([a-zA-Z0-9_.:-]+)[\"']")
+        or _first_group(changed_content, r"(?i)\b(?:ROUTING_KEY|ROUTE_KEY|QUEUE|EXCHANGE)\b[^=]*=\s*[\"']([^\"']+)[\"']")
+        or _effective_path(changed_file)
+    )
     return RuleMatch(change_type, resource_type, name, reason, "MQ_CONFIG_RULE")
+
+
+def _mq_config_changed(content: str) -> bool:
+    if re.search(r"\bnew\s+(?:Queue|TopicExchange|DirectExchange|FanoutExchange|HeadersExchange|CustomExchange)\s*\(", content):
+        return True
+    if re.search(r"\b(?:QueueBuilder|ExchangeBuilder)\.", content):
+        return True
+    if "BindingBuilder" in content:
+        return True
+    if re.search(r"\.with\s*\(", content) and _contains_any(content, ["routeKey", "routingKey", "ROUTE_KEY", "ROUTING_KEY"]):
+        return True
+    if re.search(r"(?i)\b(?:routingKey|routeKey)\s*=", content):
+        return True
+    if re.search(r"\b(?:ROUTING_KEY|ROUTE_KEY)\b[^=]*=", content):
+        return True
+    return False
 
 
 def _config_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None:
@@ -194,9 +215,10 @@ def _config_match(changed_file: dict[str, Any], content: str) -> RuleMatch | Non
 
 
 def _value_config_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None:
-    if "@Value(" not in content:
+    changed_content = "\n".join(_changed_lines(changed_file))
+    if "@Value(" not in changed_content:
         return None
-    name = _first_group(content, r"\$\{([^}:\s]+)(?::[^}]*)?}") or _effective_path(changed_file)
+    name = _first_group(changed_content, r"\$\{([^}:\s]+)(?::[^}]*)?}") or _effective_path(changed_file)
     return RuleMatch("CONFIG", "CONFIG_KEY", name, "Detected @Value config key change", "VALUE_CONFIG_HEURISTIC_RULE")
 
 
@@ -276,6 +298,25 @@ def _added_lines(changed_file: dict[str, Any]) -> list[str]:
         if value.strip():
             lines.append(value)
     return lines[:80]
+
+
+def _changed_lines(changed_file: dict[str, Any]) -> list[str]:
+    diff = changed_file.get("diffText") or changed_file.get("diff") or changed_file.get("patch") or ""
+    lines: list[str] = []
+    raw_lines = str(diff).splitlines()
+    looks_like_diff = any(line.startswith(("+", "-", "@@", "diff --", "index ")) for line in raw_lines)
+    for raw_line in raw_lines:
+        if raw_line.startswith(("+++", "---", "@@", "diff --", "index ")):
+            continue
+        if raw_line.startswith(("+", "-")):
+            value = raw_line[1:].rstrip()
+        elif looks_like_diff:
+            continue
+        else:
+            value = raw_line.rstrip()
+        if value.strip():
+            lines.append(value)
+    return lines[:120]
 
 
 def _summary(changed_file_count: int, change_types: list[str]) -> str:

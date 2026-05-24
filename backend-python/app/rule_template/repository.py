@@ -59,6 +59,7 @@ RULE_EXAMPLES = {
     "MQ_CONFIG_CHANGE_CHECK": (
         "RabbitMqBindingConfig.java\n"
         "+ return new Queue(MqClientConstant.REPORT_POSITION_QUEUE, true, false, false);\n"
+        "+ return new DirectExchange(MqClientConstant.REPORT_POSITION_EXCHANGE);\n"
         "+ .with(MqClientConstant.REPORT_POSITION_ROUTING_KEY);"
     ),
     "DB_SCHEMA_CHANGE_CHECK": "db/migration/V12__alter_order.sql\n+ alter table orders add column confirm_enabled tinyint",

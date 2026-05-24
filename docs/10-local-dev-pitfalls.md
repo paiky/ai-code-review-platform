@@ -979,3 +979,25 @@ code_quality_scheduler_jobs.created_at >= now - 1 day
 1. `QUEUED` / `RUNNING` 活跃任务不加时间窗口，避免当前仍在执行的任务被隐藏。
 2. `SUCCESS` / `FAILED` / `SKIPPED` 最近任务按 `updated_at >= now - 2 days` 或 `created_at >= now - 2 days` 展示；48 小时窗口能覆盖 UTC / 北京时间展示差异导致的边界误判。
 3. 排查环境差异时优先查看 `code_quality_scheduler_jobs.status`、`created_at`、`updated_at`，而不是只看任务表。
+
+## 41. `@Value` 规则不能把 diff 上下文行当成配置变更
+
+现象：
+
+提醒卡片命中 `@Value 配置变更`，并显示类似：
+
+```text
+automaticallySubscribe.newPackage
+```
+
+但在 GitLab MR diff 中，该 `@Value("${automaticallySubscribe.newPackage:...}")` 行没有 `+` / `-`，只是为了展示附近新增代码而带出的上下文行。
+
+原因：
+
+GitLab API 返回的 unified diff 会包含 hunk 上下文行。旧的 `VALUE_CONFIG_HEURISTIC_RULE` 直接扫描整段 diff 文本，只要上下文中出现 `@Value(` 就会命中；虽然 evidence 的 `addedLines` 里没有该配置行，规则本身仍被错误触发。
+
+处理方式：
+
+1. `@Value` 配置规则只扫描真正变化的 diff 行，也就是 `+` / `-` 行，忽略 `@@`、文件头和上下文行。
+2. 排查类似问题时同时看 `changed_files_summary.files[].diffText` 和 `review_results.change_analysis_json.evidences[].addedLines`；如果配置字段只出现在 diffText 上下文、不在 changed lines 中，应视为误报。
+3. 前端 Diff 弹窗展示的是 GitLab 原始 diff，上下文行出现配置名不代表配置本身发生了变更。

@@ -871,6 +871,7 @@ def test_job_queue_keeps_active_jobs_and_recently_updated_finished_jobs(
     assert 91001 in task_ids
     assert 91002 in task_ids
     assert 91003 not in task_ids
+    assert [group["taskId"] for group in queue["groups"][:2]] == [91002, 91001]
 
 
 @respx.mock

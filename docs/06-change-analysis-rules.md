@@ -100,8 +100,8 @@ MVP 版变更分析器用于根据 changed files、单文件 diff 文本和全�
 - DB 明确 DDL / SQL 变更输出 `SQL`；实体字段、Mapper XML 字段变更但没有 DDL 时，输出 `ALTER TABLE ... ADD COLUMN ...` 草稿。
 - 新增 Entity 且存在 `@TableName` 时，DB 推断优先输出 `CREATE TABLE ...` 草稿；已有 Entity 或 Mapper 字段变更时输出 `ALTER TABLE ... ADD COLUMN ...` 草稿。
 - DB 推断必须按表分组生成，每张表一个维护产物；如果同一张表已存在真实 `CREATE TABLE / ALTER TABLE`，不再重复生成推断 SQL。
-- Redis/缓存变更输出 `REDIS_COMMAND`，优先转换 `set/get/delete/expire/@CacheEvict/@Cacheable`；无法确认 key 或 value 时保留占位符。
-- MQ 变更输出 `MQ_CONFIG_CODE`，以 Java/伪代码列出 topic、exchange、queue、routeKey、consumerGroup 等可维护配置。
+- Redis/缓存变更输出 `REDIS_COMMAND`，内容为 Redis key、写入/删除/过期操作和关键代码片段清单；不生成需要直接执行的 Redis 命令。
+- MQ 配置变更输出 `MQ_CONFIG_CODE`，内容为 exchange、queue、routeKey、binding 的变更信息清单；只有发送队列消息不触发 MQ 配置提醒，不生成需要执行的维护脚本。
 - Nacos/配置变更输出 `NACOS_CONFIG`，从 YAML / properties / `@Value` 新增行提取可复制配置块。
 
 ## 4. 规则扩展点
@@ -379,15 +379,15 @@ public interface ChangeAnalysisRule {
 | `MQ_PRODUCER` | 消息生产逻辑变更 | `RocketMQTemplate`、`KafkaTemplate`、`RabbitTemplate`、send/convertAndSend 变化 | HIGH |
 | `MQ_CONSUMER` | 消息消费逻辑变更 | listener 注解、consumer method、消费业务逻辑变化 | HIGH |
 | `MQ_MESSAGE_SCHEMA` | 消息体契约变更 | message DTO 字段增删改、序列化字段、事件版本变化 | HIGH |
-| `MQ_TOPIC_CONFIG` | topic、tag、group、destination 配置变更 | topic/tag/consumerGroup/groupId/destination 变化 | HIGH |
+| `MQ_TOPIC_CONFIG` | queue、exchange、routeKey 声明或绑定配置变更 | `new Queue`、`TopicExchange` / `DirectExchange`、`BindingBuilder`、routeKey/routingKey 常量或绑定变化 | HIGH |
 | `MQ_RETRY_DLQ` | 重试、死信、ack 或异常处理变更 | retry、dead letter、ack/nack、异常捕获、幂等 key 变化 | HIGH |
 
 命中原则：
 
-- 发送 API 或 producer 类变化优先命中 `MQ_PRODUCER`。
+- 发送 API 或 producer 类变化属于消息生产逻辑，不触发 MQ 配置提醒。
 - listener 注解或 consumer 类变化优先命中 `MQ_CONSUMER`。
 - 消息 DTO / event payload 变化命中 `MQ_MESSAGE_SCHEMA`，不直接等同于 topic 配置变化。
-- topic、tag、consumerGroup、destination 变化命中 `MQ_TOPIC_CONFIG`。
+- 创建 queue、exchange、routeKey 或 binding 变化命中 `MQ_TOPIC_CONFIG` / 当前提醒卡片中的 `MQ_CONFIG`。
 - ack、重试、死信、异常处理、幂等 key 变化命中 `MQ_RETRY_DLQ`。
 
 组合风险：

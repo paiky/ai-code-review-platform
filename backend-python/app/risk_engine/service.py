@@ -37,7 +37,7 @@ CHANGE_TYPE_LABELS = {
 RISK_RULES = {
     "DB_DATA_WRITE_CHANGE_CHECK": ("DB_DATA_WRITE", "HIGH", "DB 写入、表结构或映射变更需要确认", "检测到 DDL、数据写入 SQL、Entity 字段或 MyBatis/ORM 映射变更；纯 select 查询不会触发该提醒。", "可能导致表结构不一致、写入条件错误、字段映射遗漏或历史数据兼容问题。", "HIGH", "出现 DDL / insert / update / delete / Entity / ORM 映射维护信号。", ["确认 insert/update/delete 的 where 条件、影响范围和回滚方案。", "确认实体字段、Mapper 映射与数据库列同步。"], ["BACKEND", "DBA", "QA"]),
     "CACHE_WRITE_DELETE_CHANGE_CHECK": ("CACHE_WRITE_DELETE", "HIGH", "Redis 写入、过期或删除变更需要确认", "检测到缓存 set/put/expire/delete/evict 等写入或失效逻辑变更；纯 get 查询不会触发该提醒。", "可能导致缓存脏数据、误删、TTL 不符合预期或写入后读写不一致。", "HIGH", "出现 Redis 写入、TTL 或删除信号。", ["确认写入、过期和删除策略符合业务一致性要求。"], ["BACKEND", "SRE", "QA"]),
-    "MQ_CONFIG_CHANGE_CHECK": ("MQ_CONFIG", "HIGH", "MQ exchange、routeKey 或 queue 配置变更需要确认", "检测到 MQ exchange、routeKey/routingKey、queue、topic 或 binding 配置变更；消费业务逻辑不会触发该提醒。", "可能导致消息投递到错误 exchange/queue、路由失败或环境配置不一致。", "HIGH", "出现 MQ 配置维护信号。", ["确认 exchange、queue、routeKey/topic 在各环境和中间件控制台已同步。"], ["BACKEND", "SRE", "QA"]),
+    "MQ_CONFIG_CHANGE_CHECK": ("MQ_CONFIG", "HIGH", "MQ exchange、routeKey 或 queue 配置变更需要确认", "检测到创建 queue、exchange 或 routeKey 的配置变更；只有发送队列消息不会触发该提醒。", "可能导致消息投递到错误 exchange/queue、路由失败或环境配置不一致。", "HIGH", "出现 MQ queue / exchange / routeKey 声明或绑定维护信号。", ["确认 exchange、queue、routeKey 在各环境和中间件控制台已同步。"], ["BACKEND", "SRE", "QA"]),
     "DB_SCHEMA_CHANGE_CHECK": ("DB_SCHEMA", "HIGH", "数据库表结构变更需要确认兼容与回滚", "检测到 migration、DDL 或表结构语句发生变化，需要确认历史数据兼容、灰度发布和回滚方案。", "可能导致字段缺失、索引异常、历史数据不兼容或上线后无法快速回滚。", "HIGH", "出现明确 DDL / migration schema 信号。", ["确认 DDL 是否兼容历史数据和线上表规模。", "确认是否需要默认值、回填脚本、索引和回滚脚本。"], ["BACKEND", "DBA", "QA"]),
     "DB_SQL_CHANGE_CHECK": ("DB_SQL", "MEDIUM", "SQL 读写逻辑变更需要确认性能与结果兼容", "检测到 Mapper XML、SQL 文件或代码中的 SQL 读写逻辑发生变化，需要确认查询结果、索引和边界数据。", "可能引入慢 SQL、结果集变化、分页异常或写入条件不一致。", "MEDIUM", "出现 SQL select/insert/update/delete 信号，但未直接发现表结构变更。", ["确认 where、join、order by、limit 和返回字段变化符合预期。", "确认核心 SQL 有索引支撑，并检查大数据量下执行计划。"], ["BACKEND", "DBA", "QA"]),
     "ORM_MAPPING_CHANGE_CHECK": ("ORM_MAPPING", "MEDIUM", "ORM / MyBatis 映射变更需要确认字段兼容", "检测到 resultMap、字段映射、ORM 注解或 Mapper 映射结构发生变化，需要确认实体字段与数据库列保持一致。", "可能导致字段为空、类型转换失败、查询结果映射错误或写入字段遗漏。", "MEDIUM", "出现 resultMap / 字段映射 / ORM 注解信号。", ["确认 resultMap、insert、update 和 select 字段集合与实体字段一致。"], ["BACKEND", "DBA", "QA"]),
@@ -215,70 +215,253 @@ def _db_artifacts(
 
 
 def _cache_artifacts(category: str, evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    commands: list[str] = []
-    confidence = "EXACT"
-    for line in _added_lines(evidences):
-        command = _redis_command(line)
-        if command:
-            commands.append(command)
-            if "<" in command:
-                confidence = "INFERRED"
-        elif _contains_any(line, ["redis", "cache", "expire", "delete", "evict", "opsfor"]):
-            commands.append(f"# {line}")
-            confidence = "INFERRED"
-    if not commands:
+    lines = _added_lines(evidences)
+    keys = _redis_keys(lines)
+    operations = _redis_operations(lines)
+    source_lines = _redis_source_lines(lines)
+    if not keys and not operations and not source_lines:
         return []
     return [
         _artifact(
             "REDIS_COMMAND",
-            "可维护 Redis 命令",
+            "Redis 配置变更信息",
             "text",
-            "\n".join(dict.fromkeys(commands)),
-            confidence,
+            _redis_summary_content(keys, operations, source_lines),
+            "EXACT" if keys or operations else "INFERRED",
             _first_file(evidences),
             category,
-            "命令由缓存相关新增行转换；包含占位符时需按线上 key、value 和 TTL 人工补齐。",
+            "该清单仅用于提示本次新增或修改了 Redis key、写入、删除或过期逻辑；请结合业务场景确认 key 兼容、清理范围和 TTL。",
         )
     ]
+
+
+def _redis_keys(lines: list[str]) -> list[str]:
+    keys: list[str] = []
+    for line in lines:
+        clean = _clean_code_line(line)
+        if not _redis_related(clean):
+            continue
+        for pattern in [
+            r"\b[A-Z0-9_]*(?:REDIS|CACHE)[A-Z0-9_]*\b\s*=\s*([^;]+)",
+            r"\b(?:setKey|cacheKey|redisKey|key)\s*=\s*([^;]+)",
+            r"(?:redisService|redisTemplate|StringRedisTemplate)\.\w+\s*\(\s*([^,\)]+)",
+            r"(?:opsForValue|opsForSet|opsForHash)\s*\(\s*\)\.\w+\s*\(\s*([^,\)]+)",
+        ]:
+            value = _match(clean, pattern)
+            if value:
+                keys.append(_clean_redis_value(value))
+        quoted = _quoted_cache_key(clean)
+        if quoted:
+            keys.append(quoted)
+    return list(dict.fromkeys(value for value in keys if value and value not in {"this", "null"}))
+
+
+def _redis_operations(lines: list[str]) -> list[str]:
+    operations: list[str] = []
+    for line in lines:
+        lowered = line.lower()
+        if any(value in lowered for value in ["sadd(", ".add(", "opsforset"]):
+            operations.append("SET_ADD")
+        if any(value in lowered for value in [".set(", ".put(", "setifabsent", "setnx", "opsforvalue"]):
+            operations.append("SET_VALUE")
+        if any(value in lowered for value in ["del(", "delete(", "evict(", "unlink("]):
+            operations.append("DELETE")
+        if any(value in lowered for value in ["expire", "ttl", "time-to-live", "timeout"]):
+            operations.append("EXPIRE")
+    return list(dict.fromkeys(operations))
+
+
+def _redis_source_lines(lines: list[str]) -> list[str]:
+    result: list[str] = []
+    for line in lines:
+        clean = _clean_code_line(line)
+        if not clean or clean.startswith(("import ", "private ", "public class ", "protected ")):
+            continue
+        if clean.startswith("//") and not _redis_related(clean):
+            continue
+        if _redis_source_line_relevant(clean):
+            result.append(clean)
+    return list(dict.fromkeys(result))[:20]
+
+
+def _redis_summary_content(keys: list[str], operations: list[str], source_lines: list[str]) -> str:
+    lines = ["Redis 配置变更信息："]
+    if keys:
+        lines.append(f"- Key: {', '.join(keys)}")
+    if operations:
+        lines.append(f"- 操作: {', '.join(_redis_operation_label(value) for value in operations)}")
+    if len(lines) == 1:
+        lines.append("- 检测到 Redis key / 写入 / 删除 / 过期相关变更。")
+    if source_lines:
+        lines.extend(["", "关键新增行：", *[f"- {line}" for line in source_lines]])
+    return "\n".join(lines)
+
+
+def _redis_operation_label(value: str) -> str:
+    return {
+        "SET_ADD": "Set 添加",
+        "SET_VALUE": "写入/更新",
+        "DELETE": "删除/失效",
+        "EXPIRE": "过期/TTL",
+    }.get(value, value)
+
+
+def _redis_related(line: str) -> bool:
+    return _contains_any(line, ["redis", "cache", "opsFor", "expire", "delete(", "evict(", "sadd(", "setKey", "LOCK_KEY"])
+
+
+def _redis_source_line_relevant(line: str) -> bool:
+    lowered = line.lower()
+    if re.search(r"\b[A-Z0-9_]*(?:REDIS|CACHE)[A-Z0-9_]*\b\s*=", line):
+        return True
+    return any(
+        value in lowered
+        for value in [
+            "redisservice.",
+            "redistemplate.",
+            "opsfor",
+            ".sadd(",
+            ".set(",
+            ".put(",
+            ".del(",
+            ".delete(",
+            ".expire(",
+            ".evict(",
+            "setkey =",
+            "cachekey =",
+            "rediskey =",
+        ]
+    )
+
+
+def _clean_redis_value(value: str) -> str:
+    compact = str(value or "").strip().rstrip(";")
+    if (compact.startswith('"') and compact.endswith('"')) or (compact.startswith("'") and compact.endswith("'")):
+        compact = compact[1:-1]
+    return compact.strip()
+
+
+def _mq_values(lines: list[str], kind: str) -> list[str]:
+    patterns = {
+        "exchange": [
+            r"new\s+(?:TopicExchange|DirectExchange|FanoutExchange|HeadersExchange|CustomExchange)\s*\(\s*([^,\)]+)",
+            r"\b[A-Z0-9_]*EXCHANGE\b[^=]*=\s*([^;]+)",
+        ],
+        "queue": [
+            r"new\s+Queue\s*\(\s*([^,\)]+)",
+            r"\b[A-Z0-9_]*QUEUE\b[^=]*=\s*([^;]+)",
+        ],
+        "routeKey": [
+            r"\.with\s*\(\s*([^)]+)\)",
+            r"\b[A-Z0-9_]*(?:ROUTING_KEY|ROUTE_KEY)\b[^=]*=\s*([^;]+)",
+            r"(?i)\b(?:routingKey|routeKey)\s*=\s*([^;]+)",
+        ],
+    }[kind]
+    values: list[str] = []
+    for line in lines:
+        for pattern in patterns:
+            value = _match(line, pattern)
+            if value:
+                values.append(_clean_mq_value(value))
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _mq_binding_methods(lines: list[str]) -> list[str]:
+    bindings: list[str] = []
+    for index, line in enumerate(lines):
+        if "BindingBuilder.bind" not in line:
+            continue
+        method = None
+        for previous in reversed(lines[max(0, index - 4) : index]):
+            method = _match(previous, r"\b(?:public|private|protected)?\s*Binding\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(")
+            if method:
+                break
+        bindings.append(method or _clean_code_line(line))
+    return list(dict.fromkeys(bindings))
+
+
+def _mq_source_lines(lines: list[str]) -> list[str]:
+    result: list[str] = []
+    keywords = [
+        "new Queue",
+        "TopicExchange",
+        "DirectExchange",
+        "FanoutExchange",
+        "HeadersExchange",
+        "CustomExchange",
+        "BindingBuilder",
+        ".to(",
+        ".with(",
+        "ROUTING_KEY",
+        "ROUTE_KEY",
+        "QUEUE",
+        "EXCHANGE",
+    ]
+    for line in lines:
+        clean = _clean_code_line(line)
+        if not clean or clean in {"}", "};"}:
+            continue
+        if clean.startswith("//") and not any(keyword in clean for keyword in keywords):
+            continue
+        if any(keyword in clean for keyword in keywords):
+            result.append(clean)
+    return list(dict.fromkeys(result))[:20]
+
+
+def _mq_summary_content(
+    exchanges: list[str],
+    queues: list[str],
+    route_keys: list[str],
+    bindings: list[str],
+    source_lines: list[str],
+) -> str:
+    lines = ["MQ 配置变更信息："]
+    if exchanges:
+        lines.append(f"- Exchange: {', '.join(exchanges)}")
+    if queues:
+        lines.append(f"- Queue: {', '.join(queues)}")
+    if route_keys:
+        lines.append(f"- RouteKey: {', '.join(route_keys)}")
+    if bindings:
+        lines.append(f"- Binding: {', '.join(bindings)}")
+    if len(lines) == 1:
+        lines.append("- 检测到 queue / exchange / routeKey / binding 相关配置变更。")
+    if source_lines:
+        lines.extend(["", "关键新增行：", *[f"- {line}" for line in source_lines]])
+    return "\n".join(lines)
+
+
+def _clean_mq_value(value: str) -> str:
+    compact = str(value or "").strip().rstrip(";")
+    if (compact.startswith('"') and compact.endswith('"')) or (compact.startswith("'") and compact.endswith("'")):
+        compact = compact[1:-1]
+    return compact.strip()
+
+
+def _clean_code_line(line: str) -> str:
+    return re.sub(r"\s+", " ", str(line or "").strip())
 
 
 def _mq_artifacts(category: str, evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
     lines = _added_lines(evidences)
     if not lines:
         return []
-    topic = _first_match(lines, r"(?i)(?:topic|topics|destination)\s*=\s*[\"']([^\"']+)[\"']")
-    topic = topic or _first_match(lines, r"(?i)(?:send|syncSend|asyncSend|convertAndSend)\s*\(\s*[\"']([^\"']+)[\"']")
-    group = _first_match(lines, r"(?i)(?:consumerGroup|groupId|group)\s*=\s*[\"']([^\"']+)[\"']")
-    tag = _first_match(lines, r"(?i)(?:tag|tags)\s*=\s*[\"']([^\"']+)[\"']")
-    route_key = _first_match(lines, r"(?i)(?:routingKey|routeKey)\s*=\s*[\"']([^\"']+)[\"']")
-    exchange = _first_match(lines, r"(?i)(?:exchange)\s*=\s*[\"']([^\"']+)[\"']")
-    queue = _first_match(lines, r"(?i)\bQUEUE\b[^=]*=\s*[\"']([^\"']+)[\"']")
-    route_key = route_key or _first_match(lines, r"(?i)\b(?:ROUTING_KEY|ROUTE_KEY)\b[^=]*=\s*[\"']([^\"']+)[\"']")
-    exchange = exchange or _first_match(lines, r"(?i)\bEXCHANGE\b[^=]*=\s*[\"']([^\"']+)[\"']")
-    content = "\n".join(
-        [
-            "// MQ 维护配置草稿，请同步确认各环境控制台或配置中心",
-            f"String topic = \"{topic or '<topic>'}\";",
-            f"String consumerGroup = \"{group or '<consumerGroup>'}\";",
-            f"String tag = \"{tag or '<tag>'}\";",
-            f"String exchange = \"{exchange or '<exchange>'}\";",
-            f"String queue = \"{queue or '<queue>'}\";",
-            f"String routeKey = \"{route_key or '<routeKey>'}\";",
-            "",
-            "// 变更来源：",
-            *[f"// {line}" for line in lines[:12]],
-        ]
-    )
+    exchange_values = _mq_values(lines, "exchange")
+    queue_values = _mq_values(lines, "queue")
+    route_key_values = _mq_values(lines, "routeKey")
+    bindings = _mq_binding_methods(lines)
+    source_lines = _mq_source_lines(lines)
+    content = _mq_summary_content(exchange_values, queue_values, route_key_values, bindings, source_lines)
     return [
         _artifact(
             "MQ_CONFIG_CODE",
-            "MQ 配置维护片段",
-            "java",
+            "MQ 配置变更信息",
+            "text",
             content,
-            "EXACT" if topic or group or tag or route_key or exchange or queue else "INFERRED",
+            "EXACT" if exchange_values or queue_values or route_key_values or bindings else "INFERRED",
             _first_file(evidences),
             category,
-            "请按实际中间件补齐 queue、exchange、routeKey、topic、tag 和 consumerGroup，并确认生产者与消费者同时兼容。",
+            "该清单仅用于提示本次新增或修改了 MQ queue、exchange、routeKey / binding；请到各环境中间件控制台或配置中心确认同步。",
         )
     ]
 

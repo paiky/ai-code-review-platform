@@ -216,11 +216,112 @@ def test_risk_card_generates_cache_mq_and_config_artifacts() -> None:
         for item in card["riskItems"]
         for artifact in item["maintenanceArtifacts"]
     ]
-    assert any(artifact["artifactType"] == "REDIS_COMMAND" and "SET order:detail:" in artifact["content"] for artifact in artifacts)
-    assert any(artifact["artifactType"] == "REDIS_COMMAND" and "GET " not in artifact["content"] for artifact in artifacts)
-    assert any(artifact["artifactType"] == "MQ_CONFIG_CODE" and 'String exchange = "order.exchange";' in artifact["content"] for artifact in artifacts)
+    assert any(
+        artifact["artifactType"] == "REDIS_COMMAND"
+        and "Redis 配置变更信息：" in artifact["content"]
+        and "order:detail:" in artifact["content"]
+        and "order:list" in artifact["content"]
+        and "GET " not in artifact["content"]
+        for artifact in artifacts
+    )
+    assert any(
+        artifact["artifactType"] == "MQ_CONFIG_CODE"
+        and "- Exchange: order.exchange" in artifact["content"]
+        and "- Queue: order.queue" in artifact["content"]
+        and "- RouteKey: order.route" in artifact["content"]
+        and "String topic" not in artifact["content"]
+        for artifact in artifacts
+    )
     assert any(artifact["artifactType"] == "NACOS_CONFIG" and "risk-review:" in artifact["content"] for artifact in artifacts)
     assert any(artifact["artifactType"] == "NACOS_CONFIG" and "order.confirm.enabled: false" in artifact["content"] for artifact in artifacts)
+
+
+def test_mq_artifact_summarizes_binding_config_without_placeholder_code() -> None:
+    analysis = analyze_changes(
+        [
+            {
+                "path": "src/main/java/com/demo/order/RabbitMqBindingConfig.java",
+                "diffText": (
+                    "+    @Bean\n"
+                    "+    public TopicExchange reportPositionExchange() {\n"
+                    "+        return new TopicExchange(MqClientConstant.REPORT_POSITION_EXCHANGE, false, false);\n"
+                    "+    }\n"
+                    "+    @Bean\n"
+                    "+    public Queue reportPositionQueue() {\n"
+                    "+        return new Queue(MqClientConstant.REPORT_POSITION_QUEUE, true, false, false);\n"
+                    "+    }\n"
+                    "+    @Bean\n"
+                    "+    public Binding reportPositionBinding() {\n"
+                    "+        return BindingBuilder.bind(reportPositionQueue())\n"
+                    "+                .to(reportPositionExchange())\n"
+                    "+                .with(MqClientConstant.REPORT_POSITION_ROUTING_KEY);\n"
+                    "+    }\n"
+                    "+    @Bean\n"
+                    "+    public Queue reportProcessQueue() {\n"
+                    "+        return new Queue(MqClientConstant.REPORT_PROCESS_QUEUE, true, false, false);\n"
+                    "+    }\n"
+                    "+    @Bean\n"
+                    "+    public Binding reportProcessBinding() {\n"
+                    "+        return BindingBuilder.bind(reportProcessQueue())\n"
+                    "+                .to(reportPositionExchange())\n"
+                    "+                .with(MqClientConstant.REPORT_PROCESS_ROUTING_KEY);\n"
+                    "+    }\n"
+                ),
+            }
+        ]
+    )
+
+    card = generate_risk_card(analysis, ["MQ_CONFIG_CHANGE_CHECK"])
+
+    artifact = card["riskItems"][0]["maintenanceArtifacts"][0]
+    assert artifact["title"] == "MQ 配置变更信息"
+    assert artifact["language"] == "text"
+    assert "String topic" not in artifact["content"]
+    assert "<queue>" not in artifact["content"]
+    assert "// MQ" not in artifact["content"]
+    assert "- Exchange: MqClientConstant.REPORT_POSITION_EXCHANGE" in artifact["content"]
+    assert "- Queue: MqClientConstant.REPORT_POSITION_QUEUE, MqClientConstant.REPORT_PROCESS_QUEUE" in artifact["content"]
+    assert "- RouteKey: MqClientConstant.REPORT_POSITION_ROUTING_KEY, MqClientConstant.REPORT_PROCESS_ROUTING_KEY" in artifact["content"]
+    assert "- Binding: reportPositionBinding, reportProcessBinding" in artifact["content"]
+    assert "关键新增行：" in artifact["content"]
+
+
+def test_redis_artifact_summarizes_keys_and_relevant_code_only() -> None:
+    analysis = analyze_changes(
+        [
+            {
+                "path": "src/main/java/com/demo/report/AutoReportQualityUserJob.java",
+                "diffText": (
+                    '+ public static final String REDIS_POI_ARRIVE_TIME = "poiArriveTime";\n'
+                    '+ public static final String REDIS_LAST_POI_NAME = "lastPoiName";\n'
+                    '+ import com.demo.RedisConstant;\n'
+                    '+ private IRedisService redisService;\n'
+                    '+ boolean locked = redissonUtils.tryLockWithDog(LOCK_KEY, 100, 120_000);\n'
+                    '+ log.info("AutoReportQualityUserJob：未查询到符合条件的优质用户，清空 Redis Set");\n'
+                    '+ redisService.del(RedisConstant.AUTO_REPORT_QUALITY_USER_SET);\n'
+                    '+ String setKey = RedisConstant.AUTO_REPORT_QUALITY_USER_SET;\n'
+                    '+ redisService.del(setKey);\n'
+                    '+ redisService.sadd(setKey, String.valueOf(userId));'
+                ),
+            }
+        ]
+    )
+
+    card = generate_risk_card(analysis, ["CACHE_WRITE_DELETE_CHANGE_CHECK"])
+
+    artifact = card["riskItems"][0]["maintenanceArtifacts"][0]
+    assert artifact["title"] == "Redis 配置变更信息"
+    assert artifact["language"] == "text"
+    assert "REDIS_POI_ARRIVE_TIME" in artifact["content"]
+    assert "RedisConstant.AUTO_REPORT_QUALITY_USER_SET" in artifact["content"]
+    assert "删除/失效" in artifact["content"]
+    assert "Set 添加" in artifact["content"]
+    assert "redisService.del(setKey);" in artifact["content"]
+    assert "redisService.sadd(setKey, String.valueOf(userId));" in artifact["content"]
+    assert "import com.demo.RedisConstant" not in artifact["content"]
+    assert "private IRedisService" not in artifact["content"]
+    assert "redissonUtils.tryLockWithDog" not in artifact["content"]
+    assert "log.info" not in artifact["content"]
 
 
 def test_config_artifacts_split_yaml_and_java_value_sources() -> None:
