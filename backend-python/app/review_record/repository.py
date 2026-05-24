@@ -42,7 +42,20 @@ def _filters(
     if group_id is not None:
         clauses.append(Project.group_id == group_id)
     if target_type:
-        clauses.append(ReviewTask.target_types_json.like(f"%{target_type}%"))
+        clauses.append(
+            or_(
+                ReviewTask.target_type == target_type,
+                ReviewTask.target_types_json.like(f"%{target_type}%"),
+                and_(
+                    or_(
+                        ReviewTask.target_types_json.is_(None),
+                        ReviewTask.target_types_json == "",
+                        ReviewTask.target_types_json == "[]",
+                    ),
+                    Project.supported_target_types.like(f"%{target_type}%"),
+                ),
+            )
+        )
     if keyword:
         like = f"%{keyword}%"
         clauses.append(

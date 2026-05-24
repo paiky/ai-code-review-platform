@@ -154,9 +154,75 @@ def test_review_tasks_read_api_contract(client: TestClient, db_session: Session)
     assert notifications[0]["status"] == "SKIPPED"
 
 
+def test_review_tasks_target_type_filter_falls_back_to_project_config_for_legacy_tasks(
+    client: TestClient, db_session: Session
+) -> None:
+    created_at = datetime(2026, 5, 18, 10, 0, 0)
+    db_session.add(
+        Project(
+            id=2,
+            group_id=1,
+            name="legacy-backend-service",
+            git_provider="GITLAB",
+            git_project_id="2002",
+            repository_url="https://gitlab.example.com/demo/legacy-backend",
+            supported_target_types=json.dumps(["BACKEND"]),
+            detected_target_types=None,
+            target_detection_json=None,
+            default_template_code="backend-default",
+            default_code_quality_profile_code="backend-default-ai-review",
+            default_code_quality_provider_code=None,
+            dingtalk_webhook_id=None,
+            status="ENABLED",
+            description=None,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+    )
+    db_session.add(
+        ReviewTask(
+            id=10002,
+            project_id=2,
+            trigger_type="GITLAB_MR_WEBHOOK",
+            external_source_id="13",
+            external_url="https://gitlab.example.com/demo/legacy-backend/-/merge_requests/13",
+            source_branch="feature/legacy",
+            target_branch="main",
+            commit_sha="abcdef654321",
+            before_sha=None,
+            after_sha=None,
+            author_name="Alice",
+            author_username="alice",
+            template_code="backend-default",
+            target_type=None,
+            target_types_json=None,
+            code_quality_profile_code=None,
+            status="SUCCESS",
+            risk_level="LOW",
+            error_message=None,
+            started_at=created_at,
+            finished_at=created_at,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+    )
+    db_session.commit()
+
+    backend_response = client.get("/api/review-tasks", params={"targetType": "BACKEND"})
+
+    assert backend_response.status_code == 200
+    backend_data = backend_response.json()["data"]
+    assert backend_data["total"] == 1
+    assert backend_data["items"][0]["id"] == 10002
+
+    web_response = client.get("/api/review-tasks", params={"targetType": "WEB_PC"})
+
+    assert web_response.status_code == 200
+    assert web_response.json()["data"]["total"] == 0
+
+
 def test_review_task_detail_not_found_uses_unified_error(client: TestClient) -> None:
     response = client.get("/api/review-tasks/404")
 
     assert response.status_code == 404
     assert response.json()["code"] == "RESOURCE_NOT_FOUND"
-

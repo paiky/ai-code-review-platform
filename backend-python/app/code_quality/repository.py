@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import inspect, select, text, update
+from sqlalchemy import inspect, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.code_quality.models import (
@@ -1020,11 +1020,10 @@ def mark_scheduler_job_finished(
 
 def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, Any]:
     ensure_scheduler_job_schema(db)
-    cutoff = datetime.now() - timedelta(days=1)
+    cutoff = datetime.now() - timedelta(days=2)
     active = db.scalars(
         select(CodeQualitySchedulerJob)
         .where(CodeQualitySchedulerJob.status.in_(["QUEUED", "RUNNING"]))
-        .where(CodeQualitySchedulerJob.created_at >= cutoff)
         .order_by(
             CodeQualitySchedulerJob.priority.asc(),
             CodeQualitySchedulerJob.queued_at.asc(),
@@ -1034,7 +1033,12 @@ def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, An
     recent = db.scalars(
         select(CodeQualitySchedulerJob)
         .where(CodeQualitySchedulerJob.status.in_(["SUCCESS", "FAILED", "SKIPPED"]))
-        .where(CodeQualitySchedulerJob.created_at >= cutoff)
+        .where(
+            or_(
+                CodeQualitySchedulerJob.updated_at >= cutoff,
+                CodeQualitySchedulerJob.created_at >= cutoff,
+            )
+        )
         .order_by(CodeQualitySchedulerJob.updated_at.desc(), CodeQualitySchedulerJob.id.desc())
         .limit(limit)
     ).all()

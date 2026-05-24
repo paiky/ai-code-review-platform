@@ -253,6 +253,45 @@ body {
   margin-top: 0;
 }
 
+.job-queue-review-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.job-queue-review-descriptions,
+.job-queue-review-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.job-queue-review-meta {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(230px, 1.2fr) minmax(90px, 120px) minmax(190px, 1fr);
+  column-gap: 18px;
+  row-gap: 10px;
+}
+
+.job-queue-meta-item {
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.job-queue-meta-item.is-wide {
+  grid-column: span 2;
+}
+
+.job-queue-meta-label {
+  flex: 0 0 auto;
+}
+
+.job-queue-meta-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .prompt-textarea {
   margin-top: 8px;
   font-family: Consolas, "SFMono-Regular", monospace;

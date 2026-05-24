@@ -938,3 +938,44 @@ GITLAB_TOKEN=GitLab access token
 ```
 
 4. 修改 `runtime/.env` 后执行 `docker compose up -d --force-recreate backend frontend`，确保容器拿到新环境变量。
+
+## 39. 任务列表端类型筛选要兼容历史任务空端类型
+
+现象：
+
+在“项目组 / 端类型配置”里把某个项目手动设置为后端后，任务列表筛选“端类型 = 后端”仍看不到该项目的历史任务。
+
+原因：
+
+项目配置保存的是 `projects.supported_target_types` 和 `project_target_configs`，用于后续 webhook / 手动审查创建新任务时选择端类型。任务列表筛选则查 `review_tasks.target_type` / `review_tasks.target_types_json`，这是任务创建时的快照。多端字段落地前创建的历史任务可能没有写入 `target_types_json`，因此只按任务字段筛选会漏掉这些历史数据。
+
+处理方式：
+
+1. 新任务仍优先使用任务自己的 `target_type` / `target_types_json` 做筛选，保证任务快照语义稳定。
+2. 当历史任务的 `target_types_json` 为 `NULL`、空字符串或 `[]` 时，任务列表筛选可回退匹配项目当前 `supported_target_types`。
+3. 不要为了列表展示直接批量改写历史任务端类型；如果后续需要正式回填，应单独做可审计的数据迁移或管理脚本。
+
+## 40. AI Review 调度队列不要只按 created_at 判断最近一天
+
+现象：
+
+测试环境和本地连接同一个数据库时，AI Review 调度队列弹窗看到的任务数量不一致，或者最近完成的任务没有出现在队列里。
+
+原因：
+
+调度队列用于展示当前排队 / 运行任务，以及最近完成的 AI Review / 修复预览任务。旧查询对所有状态都使用：
+
+```text
+code_quality_scheduler_jobs.created_at >= now - 1 day
+```
+
+这会漏掉两类情况：
+
+1. `QUEUED` / `RUNNING` 任务创建时间超过一天，但仍是当前活跃任务。
+2. 任务创建时间较早，但最近才完成，`updated_at` / `finished_at` 在一天内。
+
+处理方式：
+
+1. `QUEUED` / `RUNNING` 活跃任务不加时间窗口，避免当前仍在执行的任务被隐藏。
+2. `SUCCESS` / `FAILED` / `SKIPPED` 最近任务按 `updated_at >= now - 2 days` 或 `created_at >= now - 2 days` 展示；48 小时窗口能覆盖 UTC / 北京时间展示差异导致的边界误判。
+3. 排查环境差异时优先查看 `code_quality_scheduler_jobs.status`、`created_at`、`updated_at`，而不是只看任务表。

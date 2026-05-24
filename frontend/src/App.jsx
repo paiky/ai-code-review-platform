@@ -594,8 +594,19 @@ function jobDurationText(job) {
   return formatDuration(Math.max(0, (end - start) / 1000));
 }
 
-function JobQueueModal({ open, queue, onClose }) {
+function JobQueueModal({ open, queue, onClose, onOpenTask, onOpenFixPreview }) {
   const groups = Array.isArray(queue?.groups) ? queue.groups : [];
+  const metaItems = (group, reviewJob) => [
+    {
+      label: 'Review 状态',
+      value: <Tag color={schedulerStatusColor(reviewJob.status)}>{schedulerStatusLabel(reviewJob.status)}</Tag>
+    },
+    { label: '排队时间', value: reviewJob.queuedAt || '-' },
+    { label: '耗时', value: jobDurationText(reviewJob) },
+    { label: '触发类型', value: group.triggerType || '-' },
+    { label: '分支', value: taskListBranchText(group), wide: true },
+    { label: '错误', value: reviewJob.errorMessage || '-', wide: true }
+  ];
   const fixColumns = [
     { title: '风险点', dataIndex: 'findingIndex', width: 90, render: value => value == null ? '-' : `#${value}` },
     { title: '文件', dataIndex: 'filePath', ellipsis: true, render: value => value || '-' },
@@ -603,7 +614,21 @@ function JobQueueModal({ open, queue, onClose }) {
     { title: '排队时间', dataIndex: 'queuedAt', width: 170, render: value => value || '-' },
     { title: '开始时间', dataIndex: 'startedAt', width: 170, render: value => value || '-' },
     { title: '耗时', width: 90, render: (_, row) => jobDurationText(row) },
-    { title: '错误', dataIndex: 'errorMessage', ellipsis: true, render: value => value || '-' }
+    { title: '错误', dataIndex: 'errorMessage', ellipsis: true, render: value => value || '-' },
+    {
+      title: '操作',
+      width: 130,
+      render: (_, row) => (
+        <Space size={4}>
+          <Button type="link" size="small" onClick={() => onOpenTask?.(row.taskId)}>详情</Button>
+          {row.findingIndex != null && (
+            <Button type="link" size="small" onClick={() => onOpenFixPreview?.(row.taskId, row.findingIndex)}>
+              风险点
+            </Button>
+          )}
+        </Space>
+      )
+    }
   ];
   return (
     <Modal title="AI Review 调度队列" open={open} onCancel={onClose} footer={null} width="min(1100px, 96vw)">
@@ -627,18 +652,22 @@ function JobQueueModal({ open, queue, onClose }) {
               children: (
                 <Space direction="vertical" className="full-width">
                   {reviewJob ? (
-                    <Descriptions size="small" column={{ xs: 1, md: 3 }}>
-                      <Descriptions.Item label="Review 状态">
-                        <Tag color={schedulerStatusColor(reviewJob.status)}>{schedulerStatusLabel(reviewJob.status)}</Tag>
-                      </Descriptions.Item>
-                      <Descriptions.Item label="排队时间">{reviewJob.queuedAt || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="耗时">{jobDurationText(reviewJob)}</Descriptions.Item>
-                      <Descriptions.Item label="触发类型">{group.triggerType || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="分支">{taskListBranchText(group)}</Descriptions.Item>
-                      <Descriptions.Item label="错误">{reviewJob.errorMessage || '-'}</Descriptions.Item>
-                    </Descriptions>
+                    <div className="job-queue-review-row">
+                      <div className="job-queue-review-meta">
+                        {metaItems(group, reviewJob).map(item => (
+                          <div key={item.label} className={item.wide ? 'job-queue-meta-item is-wide' : 'job-queue-meta-item'}>
+                            <Text type="secondary" className="job-queue-meta-label">{item.label}：</Text>
+                            <span className="job-queue-meta-value">{item.value}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <Button type="link" onClick={() => onOpenTask?.(group.taskId)}>查看任务详情</Button>
+                    </div>
                   ) : (
-                    <Alert type="info" showIcon message="该任务当前只有修复预览调度记录" />
+                    <div className="job-queue-review-row">
+                      <Alert className="job-queue-review-descriptions" type="info" showIcon message="该任务当前只有修复预览调度记录" />
+                      <Button type="link" onClick={() => onOpenTask?.(group.taskId)}>查看任务详情</Button>
+                    </div>
                   )}
                   <Table
                     size="small"
@@ -835,6 +864,7 @@ function TaskList({ onOpen }) {
             current: pagination.pageNo,
             pageSize: pagination.pageSize,
             total: pagination.total,
+            showTotal: total => `共 ${total} 条`,
             onChange: (pageNo, pageSize) => load({ pageNo, pageSize })
           }}
         />
@@ -1597,14 +1627,25 @@ function FixPreviewModal({ open, preview, onClose }) {
 }
 
 function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, initialFixPreviews, onRetry, retrying }) {
+  const location = useLocation();
   const [diffTarget, setDiffTarget] = useState(null);
   const [fixPreviewTarget, setFixPreviewTarget] = useState(null);
   const [fixPreviewByIndex, setFixPreviewByIndex] = useState({});
   const [fixPreviewLoadingIndex, setFixPreviewLoadingIndex] = useState(null);
+  const [activeFindingKeys, setActiveFindingKeys] = useState([]);
   useEffect(() => {
     const previews = Array.isArray(initialFixPreviews) ? initialFixPreviews : [];
     setFixPreviewByIndex(Object.fromEntries(previews.map(item => [item.findingIndex, item])));
   }, [initialFixPreviews]);
+  useEffect(() => {
+    const match = /^#fix-preview-(\d+)$/.exec(location.hash || '');
+    if (!match) return;
+    const key = `finding-${match[1]}`;
+    setActiveFindingKeys(current => current.includes(key) ? current : [...current, key]);
+    window.setTimeout(() => {
+      document.getElementById(`fix-preview-${match[1]}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 180);
+  }, [location.hash, review?.id]);
   if (!review) {
     return (
       <Space direction="vertical" size="large" className="full-width">
@@ -1676,8 +1717,10 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
           <Empty description="暂无结构化问题" />
         ) : (
           <Collapse
+            activeKey={activeFindingKeys}
+            onChange={keys => setActiveFindingKeys(Array.isArray(keys) ? keys : [keys])}
             items={findings.map((finding, index) => ({
-              key: `${finding.filePath || 'file'}-${finding.startLine || index}-${index}`,
+              key: `finding-${index}`,
               label: (
                 <Space className="risk-item-heading" wrap>
                   <Tag color={severityColor(finding.severity)}>{severityLabel(finding.severity)}</Tag>
@@ -1687,7 +1730,7 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
                 </Space>
               ),
               children: (
-                <Space direction="vertical" className="full-width">
+                <Space direction="vertical" className="full-width" id={`fix-preview-${index}`}>
                   <Descriptions size="small" className="quality-finding-meta" column={{ xs: 1, md: 6 }}>
                     <Descriptions.Item label="位置" span={4}>
                       <Space className="code-location-row" wrap>
@@ -3839,6 +3882,18 @@ function AppFrame() {
     }
   };
 
+  const openTaskFromQueue = (taskId) => {
+    if (!taskId) return;
+    setJobQueueOpen(false);
+    navigate(`/tasks/${taskId}`, { state: { from: route } });
+  };
+
+  const openFixPreviewFromQueue = (taskId, findingIndex) => {
+    if (!taskId || findingIndex == null) return;
+    setJobQueueOpen(false);
+    navigate(`/tasks/${taskId}#fix-preview-${findingIndex}`, { state: { from: route } });
+  };
+
   useEffect(() => {
     loadJobQueue();
   }, []);
@@ -3901,7 +3956,13 @@ function AppFrame() {
           <Route path="*" element={<Navigate to={HOME_ROUTE} replace />} />
         </Routes>
       </Content>
-      <JobQueueModal open={jobQueueOpen} queue={jobQueue} onClose={() => setJobQueueOpen(false)} />
+      <JobQueueModal
+        open={jobQueueOpen}
+        queue={jobQueue}
+        onClose={() => setJobQueueOpen(false)}
+        onOpenTask={openTaskFromQueue}
+        onOpenFixPreview={openFixPreviewFromQueue}
+      />
     </Layout>
   );
 }

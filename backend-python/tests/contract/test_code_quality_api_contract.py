@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 import httpx
@@ -8,6 +8,7 @@ from httpx import Response
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
+from app.code_quality.models import CodeQualitySchedulerJob
 from app.project_integration.models import GitLabMergeRequestEvent, Project
 from app.rule_template.models import RuleTemplate
 
@@ -798,6 +799,78 @@ def test_fix_preview_queues_without_running_provider_immediately(
     queue = client.get("/api/code-quality-reviews/job-queue").json()["data"]
     assert queue["activeCount"] == 1
     assert queue["groups"][0]["fixPreviewJobs"][0]["status"] == "QUEUED"
+
+
+def test_job_queue_keeps_active_jobs_and_recently_updated_finished_jobs(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    now = datetime.now()
+    old = now - timedelta(days=3)
+    within_queue_window = now - timedelta(hours=36)
+    db_session.add_all(
+        [
+            CodeQualitySchedulerJob(
+                id=91001,
+                job_type="AI_REVIEW",
+                task_id=91001,
+                project_id=1,
+                finding_index=None,
+                status="QUEUED",
+                priority=10,
+                label="old active",
+                file_path=None,
+                error_message=None,
+                queued_at=old,
+                started_at=None,
+                finished_at=None,
+                created_at=old,
+                updated_at=old,
+            ),
+            CodeQualitySchedulerJob(
+                id=91002,
+                job_type="FIX_PREVIEW",
+                task_id=91002,
+                project_id=1,
+                finding_index=0,
+                status="SUCCESS",
+                priority=20,
+                label="recently finished",
+                file_path="src/OrderService.java",
+                error_message=None,
+                queued_at=old,
+                started_at=old,
+                finished_at=within_queue_window,
+                created_at=old,
+                updated_at=within_queue_window,
+            ),
+            CodeQualitySchedulerJob(
+                id=91003,
+                job_type="FIX_PREVIEW",
+                task_id=91003,
+                project_id=1,
+                finding_index=1,
+                status="SUCCESS",
+                priority=20,
+                label="old finished",
+                file_path="src/Old.java",
+                error_message=None,
+                queued_at=old,
+                started_at=old,
+                finished_at=old,
+                created_at=old,
+                updated_at=old,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    queue = client.get("/api/code-quality-reviews/job-queue").json()["data"]
+
+    task_ids = {group["taskId"] for group in queue["groups"]}
+    assert 91001 in task_ids
+    assert 91002 in task_ids
+    assert 91003 not in task_ids
 
 
 @respx.mock
