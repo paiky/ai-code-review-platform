@@ -1,5 +1,7 @@
 ﻿# MVP 架构设计
 
+> 状态说明：本文是早期 MVP 历史架构设计，保留用于理解产品起点和规则提醒主链路。当前默认实现以后端 `backend-python/`（Python FastAPI）和前端 `frontend/` 为准，`backend/` Java Spring Boot 后端已停止维护，仅作为历史行为参考。新开发请优先参考 `AGENTS.md`、`README.md` 和最新 `docs/` 阶段文档。
+
 ## 1. 架构原则
 
 - 模块化：每个核心能力独立成模块，模块之间通过清晰 DTO / VO 传递数据。

@@ -19,7 +19,9 @@ AI 变更提醒与代码质量审查平台
 7. 通过钉钉推送规则提醒或合并后的 AI Review 结果
 8. 按项目 / 全局配置触发代码质量 AI Review，支持手动触发、MR 自动触发、重试与进度展示
 9. 支持 AI Review provider、profile、prompt、默认 provider、钉钉 webhook 等设置管理
-10. 支持本地脚本启动、测试、迁移与 Docker 部署打包
+10. 支持项目组、端类型、项目端类型配置和多端默认 AI Review Profile
+11. 支持 AI Review 调度队列、finding 级修复预览和 Push 审核策略
+12. 支持本地脚本启动、测试、迁移与 Docker 部署打包
 
 ## Tech principles
 - 模块化
@@ -34,6 +36,7 @@ AI 变更提醒与代码质量审查平台
 - backend: Python FastAPI (`backend-python/`) is the active backend.
 - legacy backend: Java Spring Boot (`backend/`) is no longer maintained and should only be used as historical reference when explicitly needed.
 - db: MySQL
+- runtime: Python 3.12+ for active backend; JDK / Maven are only needed for the legacy Java reference backend.
 - cache: Redis related change analysis is supported; runtime cache dependency remains optional by feature
 - messaging: keep abstraction, focus on MQ / event change analysis rather than heavy runtime messaging infrastructure
 - frontend: React + Ant Design (`frontend/`) is the active frontend
@@ -55,7 +58,7 @@ AI 变更提醒与代码质量审查平台
 ## Required outputs
 - 提醒卡片 JSON schema
 - 审查记录、通知记录、AI Review 结果与进度事件表结构
-- 审查任务列表 / 详情页、模板配置 / 设置页
+- 任务列表 / 任务详情页 / 设置页 / 版本更新页
 - GitLab webhook controller / manual review API / rerun API
 - DingTalk notifier 与通知配置
 - rule engine with configurable templates and focus change types

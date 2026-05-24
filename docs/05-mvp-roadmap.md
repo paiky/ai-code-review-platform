@@ -1,5 +1,7 @@
 ﻿# MVP 实施路线图
 
+> 状态说明：本文是早期 MVP 历史路线图，其中 Spring Boot 骨架阶段已完成并在后续被 Python 后端重构取代。当前主线以后端 `backend-python/`、前端 `frontend/`、`README.md` 和 `AGENTS.md` 为准；本文仅用于回看最初分阶段目标。
+
 ## 1. 实施原则
 
 - 每次只做一个小目标。

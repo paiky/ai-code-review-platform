@@ -82,12 +82,11 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 
 ## 环境要求
 
-- JDK 21+
-- Maven 3.6+
+- Python 3.12+
 - MySQL 8.0+
-- Node.js 18+，推荐 20+
+- Node.js 20+
 
-如果本机默认 Java 不是 21，可以将 JDK 21 解压到仓库内 `tools/jdk-21`，项目脚本会优先使用该目录。
+JDK 21+ 和 Maven 3.6+ 仅在需要启动历史 Java 参考后端 `backend/` 时使用。日常开发、测试和部署默认使用 `backend-python/` 与 `frontend/`。
 
 ## 后端配置
 
@@ -434,7 +433,7 @@ AI Review 质量问题支持两个辅助查看入口：
 
 - `查看 Diff`：基于任务详情中的 `changedFilesSummary.files[].diffText` 展示当前文件左右对照 diff，并按模型返回的 `startLine/endLine` 高亮定位。
 - `生成修复预览`：AI Review 成功后会后台自动为可匹配 diff 的 finding 生成 unified diff patch 预览并保存到 `code_quality_fix_previews`。Provider 调用统一进入 `code_quality_scheduler_jobs` 调度队列，默认全局最多 10 个并发，AI Review 优先于修复预览；修复预览先显示 `QUEUED`，真正占用 Provider 资源时才显示 `RUNNING`。页面也保留单条手动生成 / 失败后重试入口。该能力仅用于查看，不会修改仓库、不提交 GitLab MR。
-- `调度队列`：任务列表页提供队列提示入口，调用 `GET /api/code-quality-reviews/job-queue` 查看当前 AI Review 与 finding 级修复预览的排队、运行和完成明细。
+- `调度队列`：任务列表页提供队列提示入口，调用 `GET /api/code-quality-reviews/job-queue` 查看当前 AI Review 与 finding 级修复预览的排队、运行和完成明细。活跃任务不受时间窗口限制，已完成 / 失败 / 跳过任务默认展示最近 48 小时内更新或创建的记录。
 
 Push webhook 默认只接收 `pushBranchPatterns` 允许的分支。Push 自动 AI Review 默认关闭，需要在 AI Review 配置中开启 `triggerOnPush`，并通过 Push 审核层后才会自动触发。
 
@@ -484,7 +483,9 @@ curl http://localhost:18080/actuator/health
 
 ## 数据库迁移
 
-Flyway migration 位于 `backend/src/main/resources/db/migration`，当前包含：
+当前主后端使用 Python bootstrap migration。空库初始化时，后端启动会先执行 `python -m app.migrate`，按 `backend-python/migrations/bootstrap_sql/` 中的 SQL 版本顺序创建历史表结构和内置数据；已有核心表时会自动跳过 bootstrap。
+
+当前 Python bootstrap SQL 包含：
 
 ```text
 V1__init_mvp_schema.sql
@@ -505,7 +506,15 @@ V15__remove_api_compatibility_from_backend_templates.sql
 V16__stronger_default_ai_review_prompt.sql
 V17__dingtalk_notification_global_switch.sql
 V18__code_quality_model_providers.sql
+V19__push_ai_review_gate.sql
+V20__code_quality_review_global_switch.sql
+V21__code_quality_fix_previews.sql
+V22__code_quality_scheduler_jobs.sql
+V23__consolidated_card_reminder_rules.sql
+V24__multi_target_project_configs.sql
 ```
+
+`backend/src/main/resources/db/migration` 中的 Java Flyway SQL 保留为历史基线和行为对照，不再是当前默认运行路径。
 
 主要表：
 
@@ -521,6 +530,11 @@ V18__code_quality_model_providers.sql
 - `code_quality_review_results`
 - `code_quality_review_progress_events`
 - `code_quality_review_settings`
+- `code_quality_fix_previews`
+- `code_quality_scheduler_jobs`
+- `code_quality_push_review_gate_decisions`
+- `project_groups`
+- `project_target_configs`
 
 ## 本地演示
 
@@ -631,7 +645,7 @@ PRIVATE-TOKEN: {GITLAB_TOKEN}
 | `frontend-default` | 前端项目 |
 | `general-default` | 通用项目 |
 
-多端接入第一阶段已经引入项目组和端类型配置。一个项目可以绑定多个端类型，当前内置：
+多端接入第一阶段已经引入项目组和端类型配置。当前产品默认按“单仓单端”使用：一个 GitLab 项目通常归属一个端类型；底层 `supported_target_types` 和 `project_target_configs` 仍保留多端扩展能力，混合仓库拆分审查属于后续阶段。当前内置端类型：
 
 ```text
 BACKEND / WEB_PC / APP_IOS / APP_ANDROID / APP_CROSS_PLATFORM / GENERAL
@@ -651,7 +665,7 @@ flutter/**、**/*.dart、pubspec.yaml、rn/**、miniapp/** -> APP_CROSS_PLATFORM
 src/main/java/**、src/main/resources/**、pom.xml、backend-python/** -> BACKEND
 ```
 
-如果新项目只命中一个端类型，平台会自动创建该端类型配置，并默认使用 `**/*` 作为路径匹配，适合“单端单仓库”。如果是混合仓库，会保留多个端类型的默认路径规则。已有项目的人工端类型配置不会被自动覆盖；设置页会展示“端类型自动识别”依据，并提供一键设为对应端类型的操作。
+如果新项目只命中一个端类型，平台会自动创建该端类型配置，并默认使用 `**/*` 作为路径匹配，适合“单端单仓库”。如果是混合仓库，会保留多个端类型的默认路径规则作为后续拆分审查的基础。已有项目的人工端类型配置不会被自动覆盖；设置页会展示“端类型自动识别”依据，并支持手动保存“当前项目所属端类型”。
 
 模板接口：
 
@@ -730,16 +744,16 @@ Provider 说明：
 - `DEEPSEEK`：调用 DeepSeek OpenAI-compatible Chat Completions API，默认 base URL 为 `https://api.deepseek.com`。
 - `CUSTOM`：调用自定义 OpenAI-compatible Chat Completions API，需要配置端点 URL、模型名称和 API Key。
 
-前端“模板配置”页可以：
+前端“设置”页可以：
 
-- 控制 GitLab MR 是否自动触发 AI Review。
 - 控制代码质量 AI Review 全局能力；关闭后手动触发、MR 和 Push 自动流程都不会调用模型。
 - 控制是否全局发送钉钉推送；关闭后审查和落库仍正常执行。
 - 配置多个钉钉 webhook；开启钉钉推送后会向全部已启用 webhook 群发同一条通知。
 - 配置 OpenAI / Anthropic / DeepSeek / 自定义 Provider 的模型端点 URL、模型名称和 API Key。
-- 在支持的 Provider 维度开启或关闭 AI Review 流式输出；当前支持 OpenAI 和 DeepSeek。
 - 设置全局默认 Provider，以及项目级默认 Provider。
-- 查看、编辑、预览、恢复 AI Review 配置 prompt。
+- 按项目组、项目和端类型绑定 AI Review Profile、Provider 覆盖、路径匹配和提醒卡片展示策略。
+- 查看、编辑、预览、恢复 AI Review Profile 的 Review Instructions。
+- 配置 Push 审核策略，控制 Push 是否允许自动进入 AI Review。
 
 手动触发代码质量 Review：
 
@@ -792,8 +806,9 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:18080/api/code-quality-rev
 
 顶部导航：
 
-- `审查任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程。
-- `模板配置`：项目默认模板、全局设置、API Key、AI Review 配置 prompt。
+- `任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程、AI Review 调度队列入口。
+- `设置`：全局设置、钉钉 webhook、项目组 / 端类型配置、卡片提醒类型、AI Review Profile 和 Push 审核策略。
+- `版本更新`：查看近期功能变化、部署注意和验证提示。
 
 任务详情页的“重新触发审阅”会从当前任务复制出一条新的审查任务，适合调试规则、钉钉模板和前端展示，不需要再次真实 push 或更新 MR。
 

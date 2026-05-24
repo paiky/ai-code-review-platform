@@ -1,5 +1,7 @@
 ﻿# 当前进度状态与下一步计划
 
+> 状态说明：本文是早期阶段状态快照，记录了 Java/Spring Boot MVP 到真实 GitLab diff 联调阶段的进展。当前平台已切换为 Python FastAPI 主后端，并继续扩展 AI Review、项目组、端类型和 Docker 部署能力；最新状态以 `README.md`、`AGENTS.md`、`docs/21-multi-target-review-plan.md` 和后续计划文档为准。
+
 ## 0. 给新对话的快速摘要
 
 如果只想快速理解当前项目状态，请先看这一节。
