@@ -349,11 +349,19 @@ def list_project_groups(db: Session) -> dict:
 
 
 def project_group_to_dict(group: ProjectGroup) -> dict:
+    session = Session.object_session(group)
+    dingtalk_webhooks = []
+    if session is not None:
+        from app.notification.repository import project_group_webhooks_to_dict
+
+        dingtalk_webhooks = project_group_webhooks_to_dict(session, int(group.id))
     return {
         "id": group.id,
         "groupCode": group.group_code,
         "groupName": group.group_name,
         "defaultProviderCode": group.default_provider_code,
+        "dingtalkWebhooks": dingtalk_webhooks,
+        "enabledDingtalkWebhookCount": len([item for item in dingtalk_webhooks if item.get("enabled")]),
         "status": group.status,
         "description": group.description,
         **push_policy_to_dict(group),
@@ -382,6 +390,11 @@ def create_project_group(db: Session, request: dict) -> dict:
     )
     db.add(group)
     try:
+        if "dingtalkWebhooks" in request:
+            from app.notification.repository import upsert_webhooks
+
+            db.flush()
+            upsert_webhooks(db, request.get("dingtalkWebhooks") or [], int(group.id))
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -413,6 +426,10 @@ def update_project_group(db: Session, group_id: int, request: dict) -> dict:
         group.status = request["status"]
     if "description" in request:
         group.description = _blank_to_none(request.get("description"))
+    if "dingtalkWebhooks" in request:
+        from app.notification.repository import upsert_webhooks
+
+        upsert_webhooks(db, request.get("dingtalkWebhooks") or [], int(group.id))
     group.updated_at = datetime.now()
     try:
         db.commit()

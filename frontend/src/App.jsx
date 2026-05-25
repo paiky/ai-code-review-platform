@@ -2068,7 +2068,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 function TemplateConfig() {
   const [templates, setTemplates] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultProviderCode: null });
+  const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultProviderCode: null, dingtalkWebhooks: [] });
   const [editingGroupId, setEditingGroupId] = useState(null);
   const [editingGroupDraft, setEditingGroupDraft] = useState(null);
   const [projectGroupFilter, setProjectGroupFilter] = useState(null);
@@ -2149,8 +2149,7 @@ function TemplateConfig() {
       setAiSettings(settingsData);
       setSettingsDraft({
         reviewEnabled: settingsData?.reviewEnabled ?? false,
-        dingtalkNotificationEnabled: settingsData?.dingtalkNotificationEnabled ?? true,
-        dingtalkWebhooks: (settingsData?.dingtalkWebhooks || []).map(item => ({ ...item }))
+        dingtalkNotificationEnabled: settingsData?.dingtalkNotificationEnabled ?? true
       });
       setTemplates(templateItems);
       setGroups(groupItems);
@@ -2402,11 +2401,88 @@ function TemplateConfig() {
     setEditingGroupDraft(current => current ? { ...current, [field]: value } : current);
   };
 
+  const normalizeWebhookPayload = (webhooks = []) => webhooks.map(item => ({
+    id: item.id || undefined,
+    name: (item.name || '').trim(),
+    channel: 'DINGTALK',
+    webhookUrl: (item.webhookUrl || '').trim(),
+    enabled: item.enabled !== false
+  }));
+
+  const validateWebhookDrafts = (webhooks = []) => {
+    const enabledUrls = new Set();
+    for (const item of webhooks) {
+      const name = (item.name || '').trim();
+      const webhookUrl = (item.webhookUrl || '').trim();
+      if (!name) return 'Webhook 名称不能为空';
+      if (!webhookUrl) return 'Webhook 地址不能为空';
+      try {
+        const parsed = new URL(webhookUrl);
+        if (!['http:', 'https:'].includes(parsed.protocol)) return 'Webhook 地址必须以 http:// 或 https:// 开头';
+      } catch {
+        return 'Webhook 地址格式不正确';
+      }
+      if (item.enabled !== false) {
+        const normalized = webhookUrl.toLowerCase();
+        if (enabledUrls.has(normalized)) return '同一项目组内已启用的 webhook 地址不能重复';
+        enabledUrls.add(normalized);
+      }
+    }
+    return null;
+  };
+
+  const updateGroupWebhookDraft = (target, index, field, value) => {
+    const updater = current => {
+      if (!current) return current;
+      const dingtalkWebhooks = (current.dingtalkWebhooks || []).map((item, itemIndex) => (
+        itemIndex === index ? { ...item, [field]: value } : item
+      ));
+      return { ...current, dingtalkWebhooks };
+    };
+    if (target === 'editing') {
+      setEditingGroupDraft(updater);
+    } else {
+      setGroupDraft(updater);
+    }
+  };
+
+  const addGroupWebhookDraft = (target) => {
+    const updater = current => ({
+      ...(current || {}),
+      dingtalkWebhooks: [
+        ...((current || {}).dingtalkWebhooks || []),
+        { id: null, name: '', channel: 'DINGTALK', webhookUrl: '', enabled: true, status: 'ENABLED' }
+      ]
+    });
+    if (target === 'editing') {
+      setEditingGroupDraft(updater);
+    } else {
+      setGroupDraft(updater);
+    }
+  };
+
+  const removeGroupWebhookDraft = (target, index) => {
+    const updater = current => current ? {
+      ...current,
+      dingtalkWebhooks: (current.dingtalkWebhooks || []).filter((_, itemIndex) => itemIndex !== index)
+    } : current;
+    if (target === 'editing') {
+      setEditingGroupDraft(updater);
+    } else {
+      setGroupDraft(updater);
+    }
+  };
+
   const createProjectGroup = async () => {
     const groupName = groupDraft.groupName.trim();
     const groupCode = groupDraft.groupCode.trim();
     if (!groupName || !groupCode) {
       messageApi.error('项目组名称和编码不能为空');
+      return;
+    }
+    const validationError = validateWebhookDrafts(groupDraft.dingtalkWebhooks || []);
+    if (validationError) {
+      messageApi.error(validationError);
       return;
     }
     setProjectGroupCreating(true);
@@ -2417,10 +2493,11 @@ function TemplateConfig() {
           groupName,
           groupCode,
           description: groupDraft.description?.trim() || null,
-          defaultProviderCode: groupDraft.defaultProviderCode || null
+          defaultProviderCode: groupDraft.defaultProviderCode || null,
+          dingtalkWebhooks: normalizeWebhookPayload(groupDraft.dingtalkWebhooks || [])
         })
       });
-      setGroupDraft({ groupName: '', groupCode: '', description: '', defaultProviderCode: null });
+      setGroupDraft({ groupName: '', groupCode: '', description: '', defaultProviderCode: null, dingtalkWebhooks: [] });
       await reloadProjectGroupsAndProjects();
       messageApi.success('项目组已创建');
     } catch (err) {
@@ -2438,6 +2515,11 @@ function TemplateConfig() {
       messageApi.error('项目组名称和编码不能为空');
       return;
     }
+    const validationError = validateWebhookDrafts(editingGroupDraft.dingtalkWebhooks || []);
+    if (validationError) {
+      messageApi.error(validationError);
+      return;
+    }
     setProjectGroupSavingId(editingGroupDraft.id);
     try {
       await fetchApi(`/api/project-groups/${editingGroupDraft.id}`, {
@@ -2447,7 +2529,8 @@ function TemplateConfig() {
           groupCode,
           description: editingGroupDraft.description?.trim() || null,
           defaultProviderCode: editingGroupDraft.defaultProviderCode || null,
-          status: editingGroupDraft.status || 'ENABLED'
+          status: editingGroupDraft.status || 'ENABLED',
+          dingtalkWebhooks: normalizeWebhookPayload(editingGroupDraft.dingtalkWebhooks || [])
         })
       });
       setEditingGroupId(null);
@@ -2597,90 +2680,21 @@ function TemplateConfig() {
     setSettingsDraft(current => current ? { ...current, [field]: value } : current);
   };
 
-  const updateWebhookDraft = (index, field, value) => {
-    setSettingsDraft(current => {
-      if (!current) return current;
-      const dingtalkWebhooks = current.dingtalkWebhooks.map((item, itemIndex) => (
-        itemIndex === index ? { ...item, [field]: value } : item
-      ));
-      return { ...current, dingtalkWebhooks };
-    });
-  };
-
-  const addWebhookDraft = () => {
-    setSettingsDraft(current => {
-      if (!current) return current;
-      return {
-        ...current,
-        dingtalkWebhooks: [
-          ...current.dingtalkWebhooks,
-          { id: null, name: '', channel: 'DINGTALK', webhookUrl: '', enabled: true, status: 'ENABLED' }
-        ]
-      };
-    });
-  };
-
-  const removeWebhookDraft = (index) => {
-    setSettingsDraft(current => {
-      if (!current) return current;
-      return {
-        ...current,
-        dingtalkWebhooks: current.dingtalkWebhooks.filter((_, itemIndex) => itemIndex !== index)
-      };
-    });
-  };
-
-  const validateSettingsDraft = () => {
-    const webhooks = settingsDraft?.dingtalkWebhooks || [];
-    const enabledUrls = new Set();
-    for (const item of webhooks) {
-      const name = (item.name || '').trim();
-      const webhookUrl = (item.webhookUrl || '').trim();
-      if (!name) return 'Webhook 名称不能为空';
-      if (!webhookUrl) return 'Webhook 地址不能为空';
-      try {
-        const parsed = new URL(webhookUrl);
-        if (!['http:', 'https:'].includes(parsed.protocol)) return 'Webhook 地址必须以 http:// 或 https:// 开头';
-      } catch {
-        return 'Webhook 地址格式不正确';
-      }
-      if (item.enabled) {
-        const normalized = webhookUrl.toLowerCase();
-        if (enabledUrls.has(normalized)) return '已启用的 webhook 地址不能重复';
-        enabledUrls.add(normalized);
-      }
-    }
-    return null;
-  };
-
   const saveAiSettings = async () => {
     if (!settingsDraft) return;
-    const validationError = validateSettingsDraft();
-    if (validationError) {
-      messageApi.error(validationError);
-      return;
-    }
     setSettingsSaving(true);
     try {
       const settings = await fetchApi('/api/code-quality-reviews/settings', {
         method: 'PUT',
         body: JSON.stringify({
           reviewEnabled: settingsDraft.reviewEnabled,
-          dingtalkNotificationEnabled: settingsDraft.dingtalkNotificationEnabled,
-          dingtalkWebhooks: settingsDraft.dingtalkWebhooks.map(item => ({
-            id: item.id || undefined,
-            name: (item.name || '').trim(),
-            channel: 'DINGTALK',
-            webhookUrl: (item.webhookUrl || '').trim(),
-            enabled: item.enabled !== false
-          }))
+          dingtalkNotificationEnabled: settingsDraft.dingtalkNotificationEnabled
         })
       });
       setAiSettings(settings);
       setSettingsDraft({
         reviewEnabled: settings?.reviewEnabled ?? false,
-        dingtalkNotificationEnabled: settings?.dingtalkNotificationEnabled ?? true,
-        dingtalkWebhooks: (settings?.dingtalkWebhooks || []).map(item => ({ ...item }))
+        dingtalkNotificationEnabled: settings?.dingtalkNotificationEnabled ?? true
       });
       messageApi.success('全局设置已保存');
     } catch (err) {
@@ -2919,14 +2933,12 @@ function TemplateConfig() {
   const notificationRulesDirty = JSON.stringify(notificationRuleDraftCodes) !== JSON.stringify(notificationRules?.focusRuleCodes || []);
   const settingsDirty = JSON.stringify({
     reviewEnabled: settingsDraft?.reviewEnabled ?? false,
-    dingtalkNotificationEnabled: settingsDraft?.dingtalkNotificationEnabled ?? true,
-    dingtalkWebhooks: settingsDraft?.dingtalkWebhooks || []
+    dingtalkNotificationEnabled: settingsDraft?.dingtalkNotificationEnabled ?? true
   }) !== JSON.stringify({
     reviewEnabled: aiSettings?.reviewEnabled ?? false,
-    dingtalkNotificationEnabled: aiSettings?.dingtalkNotificationEnabled ?? true,
-    dingtalkWebhooks: aiSettings?.dingtalkWebhooks || []
+    dingtalkNotificationEnabled: aiSettings?.dingtalkNotificationEnabled ?? true
   });
-  const configuredWebhookCount = (settingsDraft?.dingtalkWebhooks || []).filter(item => item.enabled !== false).length;
+  const configuredWebhookCount = groups.reduce((total, group) => total + (group.enabledDingtalkWebhookCount || 0), 0);
   const filteredProjects = projectGroupFilter
     ? projects.filter(project => project.groupId === projectGroupFilter)
     : [];
@@ -2935,6 +2947,62 @@ function TemplateConfig() {
   const detectionEvidences = Array.isArray(targetDetection?.evidences) ? targetDetection.evidences : [];
   const detectedTargetTypes = currentProject?.detectedTargetTypes || targetDetection?.targetTypes || [];
   const detectionDiffersFromConfig = detectedTargetTypes.some(type => !(currentProject?.supportedTargetTypes || []).includes(type));
+  const renderWebhookDraftList = (webhooks, target) => (
+    <Space direction="vertical" size="middle" className="full-width webhook-list">
+      {(webhooks || []).length > 0 ? (
+        (webhooks || []).map((item, index) => (
+          <div key={item.id || `${target}-draft-${index}`} className="webhook-item">
+            <Row gutter={[12, 12]} align="middle">
+              <Col xs={24} lg={6}>
+                <Text strong>名称</Text>
+                <Input
+                  className="prompt-field"
+                  value={item.name || ''}
+                  placeholder="例如 移动业务群"
+                  onChange={event => updateGroupWebhookDraft(target, index, 'name', event.target.value)}
+                />
+              </Col>
+              <Col xs={24} lg={13}>
+                <Text strong>Webhook URL</Text>
+                <Input
+                  className="prompt-field"
+                  value={item.webhookUrl || ''}
+                  placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."
+                  onChange={event => updateGroupWebhookDraft(target, index, 'webhookUrl', event.target.value)}
+                />
+              </Col>
+              <Col xs={12} lg={3}>
+                <Text strong>启用</Text>
+                <div className="prompt-field">
+                  <Switch
+                    checked={item.enabled !== false}
+                    checkedChildren="开启"
+                    unCheckedChildren="关闭"
+                    onChange={checked => updateGroupWebhookDraft(target, index, 'enabled', checked)}
+                  />
+                </div>
+              </Col>
+              <Col xs={12} lg={2}>
+                <Text strong>操作</Text>
+                <div className="prompt-field webhook-remove-cell">
+                  <Button
+                    danger
+                    type="text"
+                    size="small"
+                    className="webhook-remove-button"
+                    icon={<CloseOutlined />}
+                    onClick={() => removeGroupWebhookDraft(target, index)}
+                  />
+                </div>
+              </Col>
+            </Row>
+          </div>
+        ))
+      ) : (
+        <Empty description="暂未配置钉钉机器人" />
+      )}
+    </Space>
+  );
   const groupColumns = [
     {
       title: '项目组',
@@ -2964,6 +3032,12 @@ function TemplateConfig() {
       render: (_, group) => editingGroupId === group.id ? (
         <Select className="full-width" value={editingGroupDraft?.defaultProviderCode || ''} options={groupProviderOptions} onChange={value => updateEditingGroupDraft('defaultProviderCode', value || null)} />
       ) : (group.defaultProviderCode || '-')
+    },
+    {
+      title: '钉钉机器人',
+      dataIndex: 'enabledDingtalkWebhookCount',
+      width: 140,
+      render: value => <Tag color={value > 0 ? 'blue' : 'default'}>{value || 0} 个启用</Tag>
     },
     {
       title: '描述',
@@ -3011,7 +3085,7 @@ function TemplateConfig() {
           <Text strong>全局设置</Text>
           <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(settingsDraft?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
           <Tag color={(settingsDraft?.dingtalkNotificationEnabled ?? true) ? 'blue' : 'default'}>钉钉 {(settingsDraft?.dingtalkNotificationEnabled ?? true) ? '开启' : '关闭'}</Tag>
-          <Tag>{configuredWebhookCount} 个 webhook</Tag>
+          <Tag>{configuredWebhookCount} 个项目组机器人</Tag>
         </Space>
       ),
       children: (
@@ -3050,69 +3124,12 @@ function TemplateConfig() {
                 关闭后，规则审查和 AI Review 仍会正常执行与落库，但不会向钉钉发送消息。
               </Text>
             </div>
-            <div className="global-setting-field full-width">
-              <div className="settings-inline-head">
-                <Text strong>钉钉机器人 Webhook</Text>
-                <Button icon={<PlusOutlined />} onClick={addWebhookDraft}>新增 Webhook</Button>
-              </div>
-              <Text type="secondary" className="settings-description">
-                支持配置多个 webhook。开启钉钉推送后，平台会向所有已启用的 webhook 群发通知。
-              </Text>
-              <Space direction="vertical" size="middle" className="full-width webhook-list">
-                {(settingsDraft?.dingtalkWebhooks || []).length > 0 ? (
-                  (settingsDraft?.dingtalkWebhooks || []).map((item, index) => (
-                    <div key={item.id || `draft-${index}`} className="webhook-item">
-                      <Row gutter={[12, 12]} align="middle">
-                        <Col xs={24} lg={6}>
-                          <Text strong>名称</Text>
-                          <Input
-                            className="prompt-field"
-                            value={item.name || ''}
-                            placeholder="例如 研发群"
-                            onChange={event => updateWebhookDraft(index, 'name', event.target.value)}
-                          />
-                        </Col>
-                        <Col xs={24} lg={13}>
-                          <Text strong>Webhook URL</Text>
-                          <Input
-                            className="prompt-field"
-                            value={item.webhookUrl || ''}
-                            placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."
-                            onChange={event => updateWebhookDraft(index, 'webhookUrl', event.target.value)}
-                          />
-                        </Col>
-                        <Col xs={12} lg={3}>
-                          <Text strong>启用</Text>
-                          <div className="prompt-field">
-                            <Switch
-                              checked={item.enabled !== false}
-                              checkedChildren="开启"
-                              unCheckedChildren="关闭"
-                              onChange={checked => updateWebhookDraft(index, 'enabled', checked)}
-                            />
-                          </div>
-                        </Col>
-                        <Col xs={12} lg={2}>
-                          <Text strong>操作</Text>
-                          <div className="prompt-field webhook-remove-cell">
-                            <Button
-                              danger
-                              type="text"
-                              size="small"
-                              className="webhook-remove-button"
-                              icon={<CloseOutlined />}
-                              onClick={() => removeWebhookDraft(index)}
-                            />
-                          </div>
-                        </Col>
-                      </Row>
-                    </div>
-                  ))
-                ) : (
-                  <Empty description="暂未配置钉钉 webhook" />
-                )}
-              </Space>
-            </div>
+            <Alert
+              type="info"
+              showIcon
+              message="钉钉机器人按项目组配置"
+              description="项目通知会优先推送到所属项目组机器人；该项目组未配置时回退默认项目组机器人。"
+            />
             <div className="settings-action-row">
               <Button type="primary" loading={settingsSaving} disabled={!settingsDraft || !settingsDirty} onClick={saveAiSettings}>保存设置</Button>
             </div>
@@ -3183,6 +3200,14 @@ function TemplateConfig() {
                     </Button>
                   </Col>
                 </Row>
+                <div className="settings-inline-head">
+                  <Space wrap>
+                    <Text strong>新项目组钉钉机器人</Text>
+                    <Text type="secondary">可先留空，后续编辑项目组时再配置</Text>
+                  </Space>
+                  <Button icon={<PlusOutlined />} onClick={() => addGroupWebhookDraft('create')}>新增机器人</Button>
+                </div>
+                {renderWebhookDraftList(groupDraft.dingtalkWebhooks || [], 'create')}
                 <Table
                   size="small"
                   rowKey="id"
@@ -3191,6 +3216,21 @@ function TemplateConfig() {
                   dataSource={groups}
                   scroll={{ x: 980 }}
                 />
+                {editingGroupDraft && (
+                  <div className="settings-subsection">
+                    <div className="settings-inline-head">
+                      <Space wrap>
+                        <Text strong>{editingGroupDraft.groupName || '项目组'} 钉钉机器人</Text>
+                        <Tag>{(editingGroupDraft.dingtalkWebhooks || []).filter(item => item.enabled !== false).length} 个启用</Tag>
+                      </Space>
+                      <Button icon={<PlusOutlined />} onClick={() => addGroupWebhookDraft('editing')}>新增机器人</Button>
+                    </div>
+                    <Text type="secondary" className="settings-description">
+                      该项目组下项目的规则提醒和 AI Review 结果会优先推送到这些机器人；未配置时回退默认项目组机器人。
+                    </Text>
+                    {renderWebhookDraftList(editingGroupDraft.dingtalkWebhooks || [], 'editing')}
+                  </div>
+                )}
               </Space>
             </div>
             <div className="settings-subsection">

@@ -874,6 +874,56 @@ def test_job_queue_keeps_active_jobs_and_recently_updated_finished_jobs(
     assert [group["taskId"] for group in queue["groups"][:2]] == [91002, 91001]
 
 
+def test_job_queue_schema_adds_scheduler_indexes(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    response = client.get("/api/code-quality-reviews/job-queue")
+
+    assert response.status_code == 200
+    inspector = inspect(db_session.get_bind())
+    indexes = {index["name"] for index in inspector.get_indexes("code_quality_scheduler_jobs")}
+    assert "idx_code_quality_scheduler_jobs_status_priority" in indexes
+    assert "idx_code_quality_scheduler_jobs_task" in indexes
+    assert "idx_code_quality_scheduler_jobs_status_updated" in indexes
+    assert "idx_code_quality_scheduler_jobs_status_queue" in indexes
+
+
+def test_job_queue_limits_loaded_active_jobs_but_reports_total_active_count(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    now = datetime.now()
+    db_session.add_all(
+        [
+            CodeQualitySchedulerJob(
+                id=92000 + index,
+                job_type="AI_REVIEW",
+                task_id=92000 + index,
+                project_id=1,
+                finding_index=None,
+                status="QUEUED",
+                priority=10,
+                label=f"active {index}",
+                file_path=None,
+                error_message=None,
+                queued_at=now - timedelta(seconds=index),
+                started_at=None,
+                finished_at=None,
+                created_at=now - timedelta(seconds=index),
+                updated_at=now - timedelta(seconds=index),
+            )
+            for index in range(150)
+        ]
+    )
+    db_session.commit()
+
+    queue = client.get("/api/code-quality-reviews/job-queue").json()["data"]
+
+    assert queue["activeCount"] == 150
+    assert len(queue["groups"]) == 100
+
+
 @respx.mock
 def test_fix_preview_rejects_missing_file_diff(
     client: TestClient,

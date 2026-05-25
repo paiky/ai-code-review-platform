@@ -1001,3 +1001,38 @@ GitLab API 返回的 unified diff 会包含 hunk 上下文行。旧的 `VALUE_CO
 1. `@Value` 配置规则只扫描真正变化的 diff 行，也就是 `+` / `-` 行，忽略 `@@`、文件头和上下文行。
 2. 排查类似问题时同时看 `changed_files_summary.files[].diffText` 和 `review_results.change_analysis_json.evidences[].addedLines`；如果配置字段只出现在 diffText 上下文、不在 changed lines 中，应视为误报。
 3. 前端 Diff 弹窗展示的是 GitLab 原始 diff，上下文行出现配置名不代表配置本身发生了变更。
+
+## 42. 运行时 webhook 归属回填不要挂在普通查询请求上
+
+现象：
+
+访问多个接口都变慢或超时，例如：
+
+```text
+GET /api/code-quality-reviews/job-queue
+GET /api/code-quality-reviews/settings
+GET /api/code-quality-review-providers
+```
+
+MySQL `SHOW PROCESSLIST` 里可能看到后端连接长时间卡在：
+
+```sql
+UPDATE notification_webhooks
+SET project_group_id = ...
+WHERE project_group_id IS NULL
+```
+
+原因：
+
+项目组级钉钉机器人改造后，旧全局 webhook 需要兼容默认项目组。如果在每次 `ensure_webhook_schema()` 中无条件执行 `UPDATE ... WHERE project_group_id IS NULL`，普通 GET 请求也会反复触发 DML。uvicorn 本地开发通常是单 worker，FastAPI 接口虽然是 `async def`，内部同步数据库调用一旦等待 metadata lock 或行锁，就会拖住同进程里的其它接口。
+
+同时，`code_quality_scheduler_jobs` 如果缺少 `status / updated_at / task_id` 等索引，队列弹窗查询会退化为全表扫描和 filesort。数据量小时不是主因，但会放大后续慢查询。
+
+处理方式：
+
+1. `ensure_webhook_schema()` 只能做进程内加锁、engine 级一次性 schema 检查。
+2. 只有首次新增 `project_group_id` 列时才允许执行历史回填；已有列但仍为 `NULL` 的旧 webhook，在查询默认项目组时按默认组兼容读取，不要在普通请求里反复 UPDATE。
+3. 为 `notification_webhooks(project_group_id, channel, enabled, status)` 补索引，减少按项目组查机器人时的扫描。
+4. 为 `code_quality_scheduler_jobs` 补齐 `status, priority, queued_at`、`task_id, job_type`、`status, updated_at, id`、`status, updated_at, queued_at, id` 索引。
+5. 队列接口的活跃任务查询必须有上限，并用单独 `count` 返回活跃总数；最近完成任务优先按 `updated_at` 窗口查询，避免 `updated_at OR created_at` 破坏索引。
+6. 如果线上已经有卡住的 UPDATE，先用 `SHOW PROCESSLIST` 确认锁等待；必要时 kill 对应后端连接，再部署修复后的后端。

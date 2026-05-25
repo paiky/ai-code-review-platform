@@ -6,7 +6,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.notification.repository import list_enabled_webhooks
+from app.notification.repository import enabled_webhooks_for_task, has_any_enabled_webhook_for_task
 
 
 def dingtalk_skipped_result(
@@ -42,7 +42,7 @@ def send_risk_card(
         context,
     )
     digest = markdown[:500]
-    return _send_markdown(db, "变更提醒", markdown, digest, dingtalk_notification_enabled)
+    return _send_markdown(db, task_id, "变更提醒", markdown, digest, dingtalk_notification_enabled)
 
 
 def send_review_summary(
@@ -72,7 +72,7 @@ def send_review_summary(
         return _aggregate_results([skipped], skipped["requestDigest"])
     markdown = format_review_summary_markdown(task_id, notification_card, code_quality_result, context)
     digest = markdown[:500]
-    return _send_markdown(db, "变更审查结果", markdown, digest, dingtalk_notification_enabled)
+    return _send_markdown(db, task_id, "变更审查结果", markdown, digest, dingtalk_notification_enabled)
 
 
 def send_test_notification(target_url: str, webhook_name: str | None = None) -> dict:
@@ -94,17 +94,18 @@ def send_test_notification(target_url: str, webhook_name: str | None = None) -> 
 
 def _send_markdown(
     db: Session,
+    task_id: int,
     title: str,
     markdown: str,
     digest: str,
     dingtalk_notification_enabled: bool | None,
 ) -> dict:
     settings = get_settings()
-    skipped = _resolve_skipped_result(db, digest, dingtalk_notification_enabled)
+    skipped = _resolve_skipped_result(db, digest, dingtalk_notification_enabled, task_id)
     if skipped is not None:
         return _aggregate_results([skipped], digest)
 
-    webhooks = list_enabled_webhooks(db)
+    webhooks = enabled_webhooks_for_task(db, task_id)
     if not webhooks:
         return _aggregate_results(
             [_send_to_url(settings.dingtalk_webhook_url, title, markdown, digest)],
@@ -120,6 +121,7 @@ def _resolve_skipped_result(
     db: Session,
     digest: str | None,
     dingtalk_notification_enabled: bool | None,
+    task_id: int | None = None,
 ) -> dict | None:
     settings = get_settings()
     if dingtalk_notification_enabled is False:
@@ -139,8 +141,7 @@ def _resolve_skipped_result(
             "errorMessage": None,
         }
 
-    webhooks = list_enabled_webhooks(db)
-    if webhooks:
+    if has_any_enabled_webhook_for_task(db, task_id):
         return None
 
     if settings.dingtalk_webhook_url.strip():

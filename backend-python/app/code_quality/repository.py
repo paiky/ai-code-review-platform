@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import inspect, or_, select, text, update
+from sqlalchemy import func, inspect, select, text, update
 from sqlalchemy.orm import Session
 
 from app.code_quality.models import (
@@ -415,6 +415,30 @@ def ensure_scheduler_job_schema(db: Session) -> None:
     inspector = inspect(connection)
     if not inspector.has_table("code_quality_scheduler_jobs"):
         CodeQualitySchedulerJob.__table__.create(connection, checkfirst=True)
+        _add_index_if_missing(
+            db,
+            "code_quality_scheduler_jobs",
+            "idx_code_quality_scheduler_jobs_status_priority",
+            "status, priority, queued_at",
+        )
+        _add_index_if_missing(
+            db,
+            "code_quality_scheduler_jobs",
+            "idx_code_quality_scheduler_jobs_task",
+            "task_id, job_type",
+        )
+        _add_index_if_missing(
+            db,
+            "code_quality_scheduler_jobs",
+            "idx_code_quality_scheduler_jobs_status_updated",
+            "status, updated_at, id",
+        )
+        _add_index_if_missing(
+            db,
+            "code_quality_scheduler_jobs",
+            "idx_code_quality_scheduler_jobs_status_queue",
+            "status, updated_at, queued_at, id",
+        )
         db.flush()
         return
     columns = {column["name"] for column in inspector.get_columns("code_quality_scheduler_jobs")}
@@ -423,6 +447,30 @@ def ensure_scheduler_job_schema(db: Session) -> None:
     _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "label", "VARCHAR(255) NULL")
     _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "file_path", "VARCHAR(512) NULL")
     _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "error_message", "VARCHAR(1024) NULL")
+    _add_index_if_missing(
+        db,
+        "code_quality_scheduler_jobs",
+        "idx_code_quality_scheduler_jobs_status_priority",
+        "status, priority, queued_at",
+    )
+    _add_index_if_missing(
+        db,
+        "code_quality_scheduler_jobs",
+        "idx_code_quality_scheduler_jobs_task",
+        "task_id, job_type",
+    )
+    _add_index_if_missing(
+        db,
+        "code_quality_scheduler_jobs",
+        "idx_code_quality_scheduler_jobs_status_updated",
+        "status, updated_at, id",
+    )
+    _add_index_if_missing(
+        db,
+        "code_quality_scheduler_jobs",
+        "idx_code_quality_scheduler_jobs_status_queue",
+        "status, updated_at, queued_at, id",
+    )
     db.flush()
 
 
@@ -437,6 +485,15 @@ def _add_column_if_missing(
         return
     db.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"))
     columns.add(column_name)
+    db.flush()
+
+
+def _add_index_if_missing(db: Session, table_name: str, index_name: str, columns_sql: str) -> None:
+    inspector = inspect(db.connection())
+    existing = {index["name"] for index in inspector.get_indexes(table_name)}
+    if index_name in existing:
+        return
+    db.execute(text(f"CREATE INDEX {index_name} ON {table_name} ({columns_sql})"))
     db.flush()
 
 
@@ -1021,6 +1078,12 @@ def mark_scheduler_job_finished(
 def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, Any]:
     ensure_scheduler_job_schema(db)
     cutoff = datetime.now() - timedelta(days=2)
+    fetch_limit = max(int(limit), 1)
+    active_count = db.scalar(
+        select(func.count())
+        .select_from(CodeQualitySchedulerJob)
+        .where(CodeQualitySchedulerJob.status.in_(["QUEUED", "RUNNING"]))
+    ) or 0
     active = db.scalars(
         select(CodeQualitySchedulerJob)
         .where(CodeQualitySchedulerJob.status.in_(["QUEUED", "RUNNING"]))
@@ -1029,20 +1092,16 @@ def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, An
             CodeQualitySchedulerJob.queued_at.desc(),
             CodeQualitySchedulerJob.id.desc(),
         )
+        .limit(fetch_limit * 2)
     ).all()
     recent = db.scalars(
         select(CodeQualitySchedulerJob)
         .where(CodeQualitySchedulerJob.status.in_(["SUCCESS", "FAILED", "SKIPPED"]))
-        .where(
-            or_(
-                CodeQualitySchedulerJob.updated_at >= cutoff,
-                CodeQualitySchedulerJob.created_at >= cutoff,
-            )
-        )
+        .where(CodeQualitySchedulerJob.updated_at >= cutoff)
         .order_by(CodeQualitySchedulerJob.updated_at.desc(), CodeQualitySchedulerJob.id.desc())
-        .limit(limit)
+        .limit(fetch_limit)
     ).all()
-    records = _dedupe_scheduler_jobs([*active, *recent])[:limit]
+    records = _dedupe_scheduler_jobs([*active, *recent])[:fetch_limit]
     task_ids = sorted({record.task_id for record in records})
     tasks_by_id: dict[int, tuple[Any, Any]] = {}
     if task_ids:
@@ -1079,7 +1138,6 @@ def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, An
             group["fixPreviewJobs"].append(job)
     groups = list(grouped.values())
     groups.sort(key=lambda group: _scheduler_group_sort_key(group), reverse=True)
-    active_count = sum(1 for record in records if record.status in {"QUEUED", "RUNNING"})
     return {"activeCount": active_count, "groups": groups}
 
 
