@@ -4,8 +4,8 @@ from typing import Any
 
 
 def render_instructions(request: dict[str, Any]) -> str:
-    base = (
-        "你是资深后端代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。\n"
+    protocol = (
+        "平台统一输出协议：只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。\n"
         "JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。\n"
         "必须返回这个 JSON 结构："
         '{"summary": string, "overallLevel": "LOW|MEDIUM|HIGH|CRITICAL", '
@@ -20,10 +20,10 @@ def render_instructions(request: dict[str, Any]) -> str:
         "不要编造输入中不存在的文件或行号；缺少证据时不要报告，除非潜在影响很高且必须人工确认。\n"
         "你可以参考上下文，但最终只能报告由 changed files 白名单中的 diff 引入的问题。"
     )
-    instructions = request.get("instructions")
+    instructions = str(request.get("instructions") or "").strip()
     if instructions:
-        return f"{base}\n\n用户自定义审核规则：\n{instructions}"
-    return base
+        return f"{instructions}\n\n{protocol}"
+    return protocol
 
 
 def render_input(request: dict[str, Any]) -> str:
