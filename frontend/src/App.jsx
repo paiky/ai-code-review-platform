@@ -2149,7 +2149,8 @@ function TemplateConfig() {
       setAiSettings(settingsData);
       setSettingsDraft({
         reviewEnabled: settingsData?.reviewEnabled ?? false,
-        dingtalkNotificationEnabled: settingsData?.dingtalkNotificationEnabled ?? true
+        dingtalkNotificationEnabled: settingsData?.dingtalkNotificationEnabled ?? true,
+        autoFixPreviewEnabled: settingsData?.autoFixPreviewEnabled ?? false
       });
       setTemplates(templateItems);
       setGroups(groupItems);
@@ -2688,13 +2689,15 @@ function TemplateConfig() {
         method: 'PUT',
         body: JSON.stringify({
           reviewEnabled: settingsDraft.reviewEnabled,
-          dingtalkNotificationEnabled: settingsDraft.dingtalkNotificationEnabled
+          dingtalkNotificationEnabled: settingsDraft.dingtalkNotificationEnabled,
+          autoFixPreviewEnabled: settingsDraft.autoFixPreviewEnabled
         })
       });
       setAiSettings(settings);
       setSettingsDraft({
         reviewEnabled: settings?.reviewEnabled ?? false,
-        dingtalkNotificationEnabled: settings?.dingtalkNotificationEnabled ?? true
+        dingtalkNotificationEnabled: settings?.dingtalkNotificationEnabled ?? true,
+        autoFixPreviewEnabled: settings?.autoFixPreviewEnabled ?? false
       });
       messageApi.success('全局设置已保存');
     } catch (err) {
@@ -2933,10 +2936,12 @@ function TemplateConfig() {
   const notificationRulesDirty = JSON.stringify(notificationRuleDraftCodes) !== JSON.stringify(notificationRules?.focusRuleCodes || []);
   const settingsDirty = JSON.stringify({
     reviewEnabled: settingsDraft?.reviewEnabled ?? false,
-    dingtalkNotificationEnabled: settingsDraft?.dingtalkNotificationEnabled ?? true
+    dingtalkNotificationEnabled: settingsDraft?.dingtalkNotificationEnabled ?? true,
+    autoFixPreviewEnabled: settingsDraft?.autoFixPreviewEnabled ?? false
   }) !== JSON.stringify({
     reviewEnabled: aiSettings?.reviewEnabled ?? false,
-    dingtalkNotificationEnabled: aiSettings?.dingtalkNotificationEnabled ?? true
+    dingtalkNotificationEnabled: aiSettings?.dingtalkNotificationEnabled ?? true,
+    autoFixPreviewEnabled: aiSettings?.autoFixPreviewEnabled ?? false
   });
   const configuredWebhookCount = groups.reduce((total, group) => total + (group.enabledDingtalkWebhookCount || 0), 0);
   const filteredProjects = projectGroupFilter
@@ -3085,6 +3090,7 @@ function TemplateConfig() {
           <Text strong>全局设置</Text>
           <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(settingsDraft?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
           <Tag color={(settingsDraft?.dingtalkNotificationEnabled ?? true) ? 'blue' : 'default'}>钉钉 {(settingsDraft?.dingtalkNotificationEnabled ?? true) ? '开启' : '关闭'}</Tag>
+          <Tag color={(settingsDraft?.autoFixPreviewEnabled ?? false) ? 'purple' : 'default'}>自动修复预览 {(settingsDraft?.autoFixPreviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
           <Tag>{configuredWebhookCount} 个项目组机器人</Tag>
         </Space>
       ),
@@ -3122,6 +3128,21 @@ function TemplateConfig() {
               </div>
               <Text type="secondary" className="settings-description">
                 关闭后，规则审查和 AI Review 仍会正常执行与落库，但不会向钉钉发送消息。
+              </Text>
+            </div>
+            <div className="global-setting-field">
+              <div className="settings-inline-head">
+                <Text strong>自动生成修复预览</Text>
+                <Switch
+                  checked={settingsDraft?.autoFixPreviewEnabled ?? false}
+                  loading={settingsSaving}
+                  checkedChildren="开启"
+                  unCheckedChildren="关闭"
+                  onChange={checked => updateSettingsDraft('autoFixPreviewEnabled', checked)}
+                />
+              </div>
+              <Text type="secondary" className="settings-description">
+                关闭后，AI Review 完成不会自动为风险点调用模型生成 Patch；仍可在任务详情中手动点击“生成修复预览”。
               </Text>
             </div>
             <Alert

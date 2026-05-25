@@ -12,9 +12,10 @@ export const releaseNotes = [
       '完成 Android 项目 webhook 到 AI Review 再到钉钉推送的测试环境闭环验证，并补充 GitLab token 权限排查结论。',
       '本地启动端口和平台外链配置已梳理，可通过 `SERVER_PORT` / `PUBLIC_HTTP_PORT` / `PLATFORM_BASE_URL` 统一本地和部署访问入口。',
       'Docker 环境支持通过 `TZ=Asia/Shanghai` 统一后端容器时区，减少测试环境任务时间与本地展示不一致。',
-      '修复调度队列和设置接口偶发变慢：运行时 webhook 归属补齐不再挂在普通查询请求上，并为调度队列表补齐关键索引。'
+      '修复调度队列和设置接口偶发变慢：运行时 webhook 归属补齐不再挂在普通查询请求上，并为调度队列表补齐关键索引。',
+      '新增“自动生成修复预览”全局开关，可关闭 AI Review 后自动批量生成 Patch，保留任务详情中的手动生成能力以控制 token 消耗。'
     ],
-    tags: ['多端 Prompt', '项目组通知', 'Android 联调', '调度队列', '部署配置']
+    tags: ['多端 Prompt', '项目组通知', 'Android 联调', '修复预览', '部署配置']
   },
   {
     id: '2026-05-23-multi-target-project-groups',

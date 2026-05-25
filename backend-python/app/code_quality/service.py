@@ -1437,6 +1437,8 @@ def _enqueue_auto_fix_previews(
     model: str | None,
     result: dict[str, Any],
 ) -> None:
+    if not get_settings_record(db).auto_fix_preview_enabled:
+        return
     findings = result.get("findings") or []
     if result.get("status") != "SUCCESS" or not findings:
         return

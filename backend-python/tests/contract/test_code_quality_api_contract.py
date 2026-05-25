@@ -280,6 +280,7 @@ def test_config_endpoints_repair_legacy_code_quality_schema(
     profile_columns = {column["name"] for column in inspector.get_columns("code_quality_review_profiles")}
     assert "review_enabled" in setting_columns
     assert "default_provider_code" in setting_columns
+    assert "auto_fix_preview_enabled" in setting_columns
     assert "provider_code" in profile_columns
     assert "review_instructions" in profile_columns
 
@@ -365,6 +366,7 @@ def test_settings_returns_empty_dingtalk_webhook_list(
 
     assert response.status_code == 200
     assert response.json()["data"]["reviewEnabled"] is True
+    assert response.json()["data"]["autoFixPreviewEnabled"] is False
     assert response.json()["data"]["dingtalkWebhooks"] == []
 
 
@@ -708,6 +710,8 @@ def test_ai_review_auto_generates_fix_previews_after_success(
     monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
     monkeypatch.setenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "true")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "auto-fix-secret")
+    enabled = client.put("/api/code-quality-reviews/settings", json={"autoFixPreviewEnabled": True})
+    assert enabled.status_code == 200
     calls = []
 
     def provider_response(request: httpx.Request) -> Response:
@@ -748,6 +752,53 @@ def test_ai_review_auto_generates_fix_previews_after_success(
     assert "FIX_PREVIEW_AUTO_QUEUED" in phases
     assert "FIX_PREVIEW_SAVED" in phases
     assert "auto-fix-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
+@respx.mock
+def test_ai_review_does_not_auto_generate_fix_previews_when_disabled(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "auto-fix-disabled-secret")
+    calls = []
+
+    def provider_response(request: httpx.Request) -> Response:
+        calls.append(json.loads(request.content))
+        return Response(200, json={"choices": [{"message": {"content": review_card_json("需要手动修复预览")}}]})
+
+    respx.post("https://api.deepseek.com/chat/completions").mock(side_effect=provider_response)
+
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
+            "object_attributes": {"iid": 25, "action": "open", "source_branch": "feature/manual-fix", "target_branch": "main"},
+            "changedFiles": [
+                {
+                    "path": "src/OrderService.java",
+                    "diffText": "@@ -9,4 +9,4 @@ public void create(Order order) {\n+        order.setStatus(null);",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+    task_id = created.json()["data"]["taskId"]
+
+    result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
+    previews = client.get(f"/api/review-tasks/{task_id}/code-quality-fix-previews").json()["data"]
+
+    assert result["status"] == "SUCCESS"
+    assert previews == []
+    assert len(calls) == 1
+    progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
+    phases = [event["phase"] for event in progress]
+    assert "FIX_PREVIEW_AUTO_QUEUED" not in phases
 
 
 @respx.mock

@@ -167,6 +167,7 @@ def ensure_defaults(db: Session) -> None:
                 review_enabled=settings.code_quality_review_enabled,
                 mr_auto_review_enabled=True,
                 dingtalk_notification_enabled=True,
+                auto_fix_preview_enabled=False,
                 review_provider=settings.code_quality_review_provider,
                 default_provider_code=_provider_code(settings.code_quality_review_provider),
                 openai_api_key=None,
@@ -294,6 +295,13 @@ def ensure_settings_schema(db: Session) -> None:
         "code_quality_review_settings",
         "dingtalk_notification_enabled",
         "BOOLEAN NOT NULL DEFAULT TRUE",
+    )
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_review_settings",
+        "auto_fix_preview_enabled",
+        "BOOLEAN NOT NULL DEFAULT FALSE",
     )
     _add_column_if_missing(
         db,
@@ -614,6 +622,7 @@ def settings_to_dict(record: CodeQualityReviewSettings) -> dict[str, Any]:
         "reviewEnabled": record.review_enabled,
         "mrAutoReviewEnabled": record.mr_auto_review_enabled,
         "dingtalkNotificationEnabled": record.dingtalk_notification_enabled,
+        "autoFixPreviewEnabled": record.auto_fix_preview_enabled,
         "dingtalkWebhooks": [webhook_to_dict(item) for item in list_webhooks(session)] if session else [],
         "reviewProvider": record.default_provider_code or _provider_code(record.review_provider),
         "defaultProviderCode": record.default_provider_code or _provider_code(record.review_provider),
@@ -629,6 +638,8 @@ def update_settings_record(db: Session, request: dict[str, Any]) -> dict[str, An
         record.mr_auto_review_enabled = bool(request["mrAutoReviewEnabled"])
     if "dingtalkNotificationEnabled" in request:
         record.dingtalk_notification_enabled = bool(request["dingtalkNotificationEnabled"])
+    if "autoFixPreviewEnabled" in request:
+        record.auto_fix_preview_enabled = bool(request["autoFixPreviewEnabled"])
     if "dingtalkWebhooks" in request:
         payload = request["dingtalkWebhooks"] or []
         if not isinstance(payload, list):
