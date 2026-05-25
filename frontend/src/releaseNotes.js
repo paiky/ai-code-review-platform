@@ -1,5 +1,22 @@
 export const releaseNotes = [
   {
+    id: '2026-05-25-multi-target-review-ops',
+    version: 'v0.12.0',
+    releaseDate: '2026-05-25',
+    title: '多端 AI Review 联调与项目组通知升级',
+    summary: '围绕 Android 项目接入完成一轮真实联调，修正多端 Prompt 读取、项目组级钉钉机器人路由和调度队列性能问题，让多端审查从配置到通知更接近真实团队使用方式。',
+    highlights: [
+      'AI Review system prompt 现在以当前端类型 Profile 的 `reviewInstructions` 作为开头，Android / iOS / Web / 后端会读取各自设置中的默认 Prompt。',
+      '项目组支持维护多个钉钉机器人，任务通知会优先发送到所属项目组机器人；未配置时回退默认项目组机器人。',
+      '设置页的全局配置保留 AI Review 与钉钉推送总开关，机器人配置下沉到项目组管理中。',
+      '完成 Android 项目 webhook 到 AI Review 再到钉钉推送的测试环境闭环验证，并补充 GitLab token 权限排查结论。',
+      '本地启动端口和平台外链配置已梳理，可通过 `SERVER_PORT` / `PUBLIC_HTTP_PORT` / `PLATFORM_BASE_URL` 统一本地和部署访问入口。',
+      'Docker 环境支持通过 `TZ=Asia/Shanghai` 统一后端容器时区，减少测试环境任务时间与本地展示不一致。',
+      '修复调度队列和设置接口偶发变慢：运行时 webhook 归属补齐不再挂在普通查询请求上，并为调度队列表补齐关键索引。'
+    ],
+    tags: ['多端 Prompt', '项目组通知', 'Android 联调', '调度队列', '部署配置']
+  },
+  {
     id: '2026-05-23-multi-target-project-groups',
     version: 'v0.11.0',
     releaseDate: '2026-05-23',
