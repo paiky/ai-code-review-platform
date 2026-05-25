@@ -432,6 +432,7 @@ def trigger_auto_review(
     focus_change_types: list[str] | None = None,
     focus_rule_codes: list[str] | None = None,
     notification_context: dict | None = None,
+    reminder_card_enabled: bool = True,
 ) -> bool:
     task = db.get(ReviewTask, task_id)
     if task is None:
@@ -461,6 +462,7 @@ def trigger_auto_review(
             focus_change_types=focus_change_types or [],
             focus_rule_codes=focus_rule_codes or [],
             notification_context=notification_context or {},
+            reminder_card_enabled=reminder_card_enabled,
         )
     if task.trigger_type != "GITLAB_MR_WEBHOOK":
         return False
@@ -520,6 +522,7 @@ def trigger_auto_review(
             focus_change_types,
             focus_rule_codes,
             notification_context,
+            reminder_card_enabled,
         )
     else:
         _submit_provider_job(
@@ -535,6 +538,7 @@ def trigger_auto_review(
             focus_change_types or [],
             focus_rule_codes or [],
             notification_context or {},
+            reminder_card_enabled,
             job_type="AI_REVIEW",
             task_id=task.id,
             project_id=project.id,
@@ -556,6 +560,7 @@ def _trigger_push_auto_review(
     focus_change_types: list[str],
     focus_rule_codes: list[str],
     notification_context: dict,
+    reminder_card_enabled: bool,
 ) -> bool:
     if find_result_response(db, task.id) is not None:
         return False
@@ -644,6 +649,7 @@ def _trigger_push_auto_review(
             focus_change_types,
             focus_rule_codes,
             notification_context,
+            reminder_card_enabled,
         )
     else:
         _submit_provider_job(
@@ -659,6 +665,7 @@ def _trigger_push_auto_review(
             focus_change_types,
             focus_rule_codes,
             notification_context,
+            reminder_card_enabled,
             job_type="AI_REVIEW",
             task_id=task.id,
             project_id=project.id,
@@ -679,6 +686,7 @@ def run_auto_review_job(
     focus_change_types: list[str],
     focus_rule_codes: list[str],
     notification_context: dict,
+    reminder_card_enabled: bool = True,
 ) -> dict[str, Any]:
     db = SessionLocal()
     try:
@@ -699,6 +707,7 @@ def run_auto_review_job(
             focus_change_types,
             focus_rule_codes,
             notification_context,
+            reminder_card_enabled,
         )
         db.commit()
         return result
@@ -1661,6 +1670,7 @@ def _send_auto_review_notification(
     focus_change_types: list[str] | None,
     focus_rule_codes: list[str] | None,
     notification_context: dict | None,
+    reminder_card_enabled: bool = True,
 ) -> None:
     notification = send_review_summary(
         db,
@@ -1671,6 +1681,7 @@ def _send_auto_review_notification(
         notification_context or {},
         get_settings_record(db).dingtalk_notification_enabled,
         focus_rule_codes or [],
+        reminder_card_enabled=reminder_card_enabled,
     )
     save_notification_records(
         db,

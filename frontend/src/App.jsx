@@ -897,14 +897,41 @@ function TaskList({ onOpen }) {
 }
 
 function RiskCardView({ riskCard, changedFilesSummary }) {
+  const location = useLocation();
   const [diffTarget, setDiffTarget] = useState(null);
-  if (!riskCard) return <Empty description="暂无提醒卡片" />;
+  const [activeReminderGroupKeys, setActiveReminderGroupKeys] = useState([]);
+  const [activeReminderItemKeys, setActiveReminderItemKeys] = useState([]);
 
-  const riskItems = (riskCard.riskItems || []).filter(item => item.ruleCode !== 'API_COMPATIBILITY_CHECK' && item.category !== 'API');
-  const reminderGroups = buildReminderGroups(riskItems);
+  const riskItems = useMemo(
+    () => (riskCard?.riskItems || []).filter(item => item.ruleCode !== 'API_COMPATIBILITY_CHECK' && item.category !== 'API'),
+    [riskCard]
+  );
+  const reminderGroups = useMemo(() => buildReminderGroups(riskItems), [riskItems]);
   const firstReminderGroupKey = reminderGroups[0]?.key;
   const firstReminderItemKey = reminderGroups[0]?.items?.[0]?.riskId;
-  const roles = riskCard.suggestedReviewRoles || [];
+  const roles = riskCard?.suggestedReviewRoles || [];
+
+  useEffect(() => {
+    if (!riskCard) return;
+    setActiveReminderGroupKeys(firstReminderGroupKey ? [firstReminderGroupKey] : []);
+    setActiveReminderItemKeys(firstReminderItemKey ? [firstReminderItemKey] : []);
+  }, [riskCard, firstReminderGroupKey, firstReminderItemKey]);
+
+  useEffect(() => {
+    if (!riskCard) return;
+    const match = /^#risk-item-(.+)$/.exec(location.hash || '');
+    if (!match) return;
+    const riskId = decodeURIComponent(match[1]);
+    const group = reminderGroups.find(item => item.items.some(riskItem => riskItem.riskId === riskId));
+    if (!group) return;
+    setActiveReminderGroupKeys(current => current.includes(group.key) ? current : [...current, group.key]);
+    setActiveReminderItemKeys(current => current.includes(riskId) ? current : [...current, riskId]);
+    window.setTimeout(() => {
+      document.getElementById(`risk-item-${riskId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 180);
+  }, [location.hash, riskCard, reminderGroups]);
+
+  if (!riskCard) return <Empty description="暂无提醒卡片" />;
 
   const evidenceColumns = [
     { title: '文件', dataIndex: 'filePath', ellipsis: true },
@@ -947,7 +974,8 @@ function RiskCardView({ riskCard, changedFilesSummary }) {
           <Empty description="暂无提醒项" />
         ) : <Collapse
           key={riskCard.cardId || firstReminderGroupKey || 'reminder-groups'}
-          defaultActiveKey={firstReminderGroupKey ? [firstReminderGroupKey] : []}
+          activeKey={activeReminderGroupKeys}
+          onChange={keys => setActiveReminderGroupKeys(Array.isArray(keys) ? keys : [keys].filter(Boolean))}
           items={reminderGroups.map(group => ({
             key: group.key,
             label: (
@@ -965,7 +993,8 @@ function RiskCardView({ riskCard, changedFilesSummary }) {
               <Collapse
                 className="reminder-item-list"
                 ghost
-                defaultActiveKey={group.key === firstReminderGroupKey && firstReminderItemKey ? [firstReminderItemKey] : []}
+                activeKey={activeReminderItemKeys}
+                onChange={keys => setActiveReminderItemKeys(Array.isArray(keys) ? keys : [keys].filter(Boolean))}
                 items={group.items.map(item => ({
                   key: item.riskId,
                   label: (
@@ -975,7 +1004,7 @@ function RiskCardView({ riskCard, changedFilesSummary }) {
                     </Space>
                   ),
                   children: (
-                    <Space direction="vertical" className="full-width">
+                    <Space id={`risk-item-${item.riskId}`} direction="vertical" className="full-width">
                       <Descriptions size="small" column={{ xs: 1, md: 2 }}>
                         <Descriptions.Item label="规则">{item.ruleCode || '-'}</Descriptions.Item>
                         <Descriptions.Item label="类型">{changeTypeLabel(item.category)}</Descriptions.Item>
@@ -1839,6 +1868,7 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
 }
 
 function TaskDetail({ taskId, onBack, onOpen }) {
+  const location = useLocation();
   const [detail, setDetail] = useState(null);
   const [result, setResult] = useState(null);
   const [codeQualityResult, setCodeQualityResult] = useState(null);
@@ -1849,6 +1879,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   const [retrying, setRetrying] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   const [error, setError] = useState(null);
+  const [activeTabKey, setActiveTabKey] = useState('quality');
 
   const load = async ({ silent = false } = {}) => {
     if (!silent) {
@@ -1900,6 +1931,16 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   useEffect(() => {
     load();
   }, [taskId]);
+
+  useEffect(() => {
+    if (/^#risk-item-/.test(location.hash || '')) {
+      setActiveTabKey('risk');
+      return;
+    }
+    if (/^#fix-preview-/.test(location.hash || '')) {
+      setActiveTabKey('quality');
+    }
+  }, [location.hash, taskId]);
 
   useEffect(() => {
     const hasRunningFixPreview = fixPreviews.some(item => ['QUEUED', 'RUNNING'].includes(item?.status));
@@ -1971,6 +2012,9 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     { key: 'analysis', label: '分析结果', children: <AnalysisView changeAnalysis={result?.changeAnalysis} /> },
     { key: 'event', label: '原始事件摘要', children: <Row gutter={[16, 16]}><Col xs={24} lg={12}><Card title="changedFiles 摘要"><JsonBlock value={detail?.changedFilesSummary} /></Card></Col><Col xs={24} lg={12}><Card title="raw payload"><JsonBlock value={detail?.rawPayload} /></Card></Col></Row> }
   ], [taskId, detail, result, codeQualityResult, codeQualityProgress, codeQualityGate, fixPreviews, retrying]);
+  const displayedActiveTabKey = tabItems.some(item => item.key === activeTabKey)
+    ? activeTabKey
+    : tabItems[0]?.key;
 
   return (
     <div className="page-shell">
@@ -2012,7 +2056,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
                 <Descriptions.Item label="事件时间">{detail.eventTime || '-'}</Descriptions.Item>
               </Descriptions>
             </Card>
-            <Tabs items={tabItems} />
+            <Tabs activeKey={displayedActiveTabKey} onChange={setActiveTabKey} items={tabItems} />
           </Space>
         ) : !loading ? <Empty description="任务不存在" /> : null}
       </Spin>

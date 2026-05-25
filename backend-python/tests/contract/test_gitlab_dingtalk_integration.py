@@ -47,6 +47,31 @@ def seed_template(db_session: Session) -> None:
     db_session.commit()
 
 
+def seed_frontend_template(db_session: Session) -> None:
+    now = datetime(2026, 5, 18, 10, 0, 0)
+    db_session.add(
+        RuleTemplate(
+            template_code="frontend-default",
+            template_name="前端默认审查模板",
+            target_type="WEB_PC",
+            version=1,
+            enabled_rule_codes=json.dumps(["CONFIG_RELEASE_CHECK"]),
+            config_json=json.dumps(
+                {
+                    "focusChangeTypes": ["CONFIG"],
+                    "focusRuleCodes": ["CONFIG_RELEASE_CHECK"],
+                    "recommendedChecks": ["确认端侧配置和接口契约。"],
+                }
+            ),
+            status="ENABLED",
+            description="frontend",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.commit()
+
+
 def mr_payload_without_changed_files() -> dict:
     return {
         "object_kind": "merge_request",
@@ -68,6 +93,29 @@ def no_findings_review_card_json() -> str:
             "summary": "未发现需要修复的问题",
             "overallLevel": "LOW",
             "findings": [],
+        },
+        ensure_ascii=False,
+    )
+
+
+def review_card_with_finding_json() -> str:
+    return json.dumps(
+        {
+            "summary": "发现一个问题",
+            "overallLevel": "HIGH",
+            "findings": [
+                {
+                    "severity": "HIGH",
+                    "category": "CORRECTNESS",
+                    "filePath": "src/OrderService.java",
+                    "startLine": 12,
+                    "endLine": 12,
+                    "title": "空状态可能导致后续流程异常",
+                    "body": "新增代码把订单状态设置为空，后续状态机可能无法处理。",
+                    "suggestion": "保持明确状态值。",
+                    "confidence": "HIGH",
+                }
+            ],
         },
         ensure_ascii=False,
     )
@@ -424,7 +472,7 @@ def test_push_without_payload_diff_uses_compare_api(
                     "name": "demo-service",
                     "web_url": "https://gitlab.example.test/demo/service",
                 },
-                "ref": "refs/heads/feature/push",
+                "ref": "refs/heads/master",
                 "before": "before-sha",
                 "after": "after-sha",
                 "user_name": "Alice",
@@ -472,7 +520,7 @@ def test_push_without_reminders_skips_dingtalk_delivery(
                     "name": "demo-service",
                     "web_url": "https://gitlab.example.test/demo/service",
                 },
-                "ref": "refs/heads/feature/push",
+                "ref": "refs/heads/master",
                 "before": "before-sha",
                 "after": "after-sha",
                 "user_name": "Alice",
@@ -492,7 +540,7 @@ def test_push_without_reminders_skips_dingtalk_delivery(
     task_id = response.json()["data"]["taskId"]
     notifications = client.get(f"/api/review-tasks/{task_id}/notifications").json()["data"]
     assert notifications[0]["status"] == "SKIPPED"
-    assert notifications[0]["target"] == "DINGTALK_PUSH_REVIEW_SUMMARY"
+    assert notifications[0]["target"] == "DINGTALK_RISK_CARD"
 
 
 def test_push_with_reminders_uses_colored_type_tags(
@@ -525,7 +573,7 @@ def test_push_with_reminders_uses_colored_type_tags(
                     "name": "demo-service",
                     "web_url": "https://gitlab.example.test/demo/service",
                 },
-                "ref": "refs/heads/feature/push",
+                "ref": "refs/heads/master",
                 "before": "before-sha",
                 "after": "after-sha",
                 "user_name": "Alice",
@@ -544,7 +592,8 @@ def test_push_with_reminders_uses_colored_type_tags(
     body = json.loads(route.calls[0].request.content)
     markdown = body["markdown"]["text"]
     assert "配置变更（规则扫描）" in markdown
-    assert '* <font color="#64748b">DB</font>' in markdown
+    assert '* [<font color="#64748b">DB</font>]' in markdown
+    assert f"/tasks/{response.json()['data']['taskId']}#risk-item-" in markdown
     assert "数据库变更：请确认脚本是否需要准备" not in markdown
 
 
@@ -600,6 +649,123 @@ def test_mr_summary_without_findings_still_sends_and_uses_platform_base_url(
     markdown = body["markdown"]["text"]
     assert "MR 作者：Alice(@alice)" in markdown
     assert "GITLAB_MR_WEBHOOK" not in markdown
-    assert "暂无需要特别维护的变更。" in markdown
+    assert "配置变更（规则扫描）" not in markdown
+    assert "暂无需要特别维护的变更。" not in markdown
     assert "未发现需要修复的问题。" in markdown
-    assert f"详情：http://example.com/app/?taskId={task_id}" in markdown
+    assert f"详情：http://example.com/app/tasks/{task_id}" in markdown
+
+
+def test_mr_summary_without_reminders_links_ai_findings_and_hides_rule_section(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    monkeypatch.setenv("PLATFORM_BASE_URL", "http://example.com/app")
+    save_dingtalk_webhooks(
+        client,
+        [
+            {
+                "name": "研发群",
+                "channel": "DINGTALK",
+                "webhookUrl": "https://dingtalk.example.test/robot/send",
+                "enabled": True,
+            }
+        ],
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.deepseek.com/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": review_card_with_finding_json()}}]},
+            )
+        )
+        route = router.post("https://dingtalk.example.test/robot/send").mock(
+            return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
+        )
+        response = client.post(
+            "/api/webhooks/gitlab/merge-request",
+            json={
+                **mr_payload_without_changed_files(),
+                "changedFiles": [
+                    {
+                        "path": "docs/readme.md",
+                        "diffText": "+ update docs only",
+                    }
+                ],
+            },
+            headers={"X-Gitlab-Event": "Merge Request Hook"},
+        )
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    body = json.loads(route.calls[0].request.content)
+    markdown = body["markdown"]["text"]
+    assert "配置变更（规则扫描）" not in markdown
+    assert f"[空状态可能导致后续流程异常。](http://example.com/app/tasks/{task_id}#fix-preview-0)" in markdown
+
+
+def test_web_project_ai_summary_hides_rule_section_when_reminder_card_disabled(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_template(db_session)
+    seed_frontend_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    save_dingtalk_webhooks(
+        client,
+        [
+            {
+                "name": "前端群",
+                "channel": "DINGTALK",
+                "webhookUrl": "https://dingtalk.example.test/robot/send",
+                "enabled": True,
+            }
+        ],
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.deepseek.com/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": review_card_with_finding_json()}}]},
+            )
+        )
+        route = router.post("https://dingtalk.example.test/robot/send").mock(
+            return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
+        )
+        response = client.post(
+            "/api/webhooks/gitlab/merge-request",
+            json={
+                **mr_payload_without_changed_files(),
+                "project": {
+                    "id": 2002,
+                    "name": "demo-web",
+                    "web_url": "https://gitlab.example.test/demo/web",
+                },
+                "changedFiles": [
+                    {
+                        "path": "src/pages/Home.tsx",
+                        "diffText": "+ const enabled = import.meta.env.VITE_ORDER_ENABLED;",
+                    }
+                ],
+            },
+            headers={"X-Gitlab-Event": "Merge Request Hook"},
+        )
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    result = client.get(f"/api/review-tasks/{task_id}/result").json()["data"]
+    body = json.loads(route.calls[0].request.content)
+    markdown = body["markdown"]["text"]
+    assert result["targetType"] == "WEB_PC"
+    assert result["reminderCardEnabled"] is False
+    assert "配置变更（规则扫描）" not in markdown
+    assert "Nacos" not in markdown

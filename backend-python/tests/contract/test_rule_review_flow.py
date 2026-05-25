@@ -148,7 +148,7 @@ def mock_push_payload() -> dict:
             "path_with_namespace": "demo/service",
             "web_url": "https://gitlab.example.com/demo/service",
         },
-        "ref": "refs/heads/feature/push-rerun",
+        "ref": "refs/heads/master",
         "before": "1111111111111111111111111111111111111111",
         "after": "2222222222222222222222222222222222222222",
         "user_name": "Alice",
@@ -408,7 +408,7 @@ def test_rerun_gitlab_push_task_replays_raw_payload(client: TestClient, db_sessi
 
     detail = client.get(f"/api/review-tasks/{data['taskId']}").json()["data"]
     assert detail["triggerType"] == "GITLAB_PUSH_WEBHOOK"
-    assert detail["sourceBranch"] == "feature/push-rerun"
+    assert detail["sourceBranch"] == "master"
 
 
 def test_rerun_respects_global_dingtalk_notification_switch(

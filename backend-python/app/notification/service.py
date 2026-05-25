@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import httpx
 from sqlalchemy.orm import Session
 
@@ -22,15 +24,16 @@ def send_risk_card(
     context: dict,
     dingtalk_notification_enabled: bool | None = None,
     focus_rule_codes: list[str] | None = None,
+    reminder_card_enabled: bool = True,
 ) -> dict:
     notification_card = filter_risk_card(risk_card, focus_change_types, focus_rule_codes)
-    if _event_label(context) == "Push" and not _has_risk_items(notification_card):
+    if not reminder_card_enabled or not _has_risk_items(notification_card):
         skipped = {
-            "target": "DINGTALK_PUSH_REVIEW_SUMMARY",
+            "target": "DINGTALK_RISK_CARD",
             "status": "SKIPPED",
-            "requestDigest": "No focused reminders or code quality findings matched.",
+            "requestDigest": "No focused reminders matched.",
             "responseBody": None,
-            "errorMessage": "No focused reminders or code quality findings matched",
+            "errorMessage": "No focused reminders matched",
         }
         return _aggregate_results([skipped], skipped["requestDigest"])
     markdown = format_markdown(
@@ -51,10 +54,13 @@ def send_review_summary(
     context: dict,
     dingtalk_notification_enabled: bool | None = None,
     focus_rule_codes: list[str] | None = None,
+    reminder_card_enabled: bool = True,
 ) -> dict:
     notification_card = (
         filter_risk_card(risk_card, focus_change_types, focus_rule_codes) if risk_card else None
     )
+    if not reminder_card_enabled:
+        notification_card = None
     if _should_skip_review_summary(notification_card, code_quality_result, context):
         skipped = {
             "target": "DINGTALK_REVIEW_SUMMARY",
@@ -238,13 +244,12 @@ def filter_risk_card(
 
 
 def format_markdown(task_id: int, risk_card: dict, context: dict) -> str:
-    settings = get_settings()
-    detail_url = f"{settings.platform_base_url.rstrip('/')}/?taskId={task_id}" if task_id else ""
+    detail_url = _task_detail_url(task_id)
     result = (
         "### 变更提醒\n\n"
         f"{_event_label(context)} 作者：{_author_text(context)}\n\n"
         "#### 配置变更（规则扫描）\n\n"
-        f"{_format_maintenance_reminders(risk_card)}\n\n"
+        f"{_format_maintenance_reminders(task_id, risk_card)}\n\n"
     )
     if detail_url:
         result += f"详情：{detail_url}"
@@ -257,15 +262,19 @@ def format_review_summary_markdown(
     code_quality_result: dict | None,
     context: dict,
 ) -> str:
-    settings = get_settings()
-    detail_url = f"{settings.platform_base_url.rstrip('/')}/?taskId={task_id}" if task_id else ""
+    detail_url = _task_detail_url(task_id)
     result = (
         "### 变更审查结果\n\n"
         f"{_event_label(context)} 作者：{_author_text(context)}\n\n"
-        "#### 配置变更（规则扫描）\n\n"
-        f"{_format_maintenance_reminders(risk_card)}\n\n"
+    )
+    if _has_risk_items(risk_card):
+        result += (
+            "#### 配置变更（规则扫描）\n\n"
+            f"{_format_maintenance_reminders(task_id, risk_card)}\n\n"
+        )
+    result += (
         "#### 代码质量 Review（AI）\n\n"
-        f"{_format_code_quality_summary(code_quality_result)}\n\n"
+        f"{_format_code_quality_summary(task_id, code_quality_result)}\n\n"
     )
     if detail_url:
         result += f"详情：{detail_url}"
@@ -283,13 +292,12 @@ def _format_reminders(risk_items: list[dict]) -> str:
     return "\n".join(f"- {label}：共 {count} 条提醒。" for label, count in groups.items())
 
 
-def _format_maintenance_reminders(risk_card: dict | None) -> str:
+def _format_maintenance_reminders(task_id: int, risk_card: dict | None) -> str:
     if not risk_card or not risk_card.get("riskItems"):
         return "暂无需要特别维护的变更。"
-    groups = {
-        _group_key(str(item.get("category") or ""))
-        for item in risk_card.get("riskItems", [])
-    }
+    grouped_items: dict[str, dict] = {}
+    for item in risk_card.get("riskItems", []):
+        grouped_items.setdefault(_group_key(str(item.get("category") or "")), item)
     labels = []
     for key, label, color in [
         ("DB", "DB", "#64748b"),
@@ -297,12 +305,14 @@ def _format_maintenance_reminders(risk_card: dict | None) -> str:
         ("CONFIG", "Nacos", "#2563eb"),
         ("CACHE", "Redis", "#dc2626"),
     ]:
-        if key in groups:
-            labels.append(f'* <font color="{color}">{label}</font>')
+        item = grouped_items.get(key)
+        if item:
+            text = f'<font color="{color}">{label}</font>'
+            labels.append(f"* {_risk_item_link(task_id, item, text)}")
     return "\n".join(labels) if labels else "暂无需要特别维护的变更。"
 
 
-def _format_code_quality_summary(result: dict | None) -> str:
+def _format_code_quality_summary(task_id: int, result: dict | None) -> str:
     if not result:
         return "- 未执行代码质量 Review。"
     if result.get("status") != "SUCCESS":
@@ -310,25 +320,63 @@ def _format_code_quality_summary(result: dict | None) -> str:
     findings = result.get("findings") or []
     if not findings:
         return "- 未发现需要修复的问题。"
-    urgent = [finding for finding in findings if _severity_in(finding, "CRITICAL", "HIGH")]
-    possible = [finding for finding in findings if _severity_in(finding, "MAJOR", "MEDIUM")]
+    indexed_findings = list(enumerate(findings))
+    urgent = [item for item in indexed_findings if _severity_in(item[1], "CRITICAL", "HIGH")]
+    possible = [item for item in indexed_findings if _severity_in(item[1], "MAJOR", "MEDIUM")]
     suggestions = [
-        finding
-        for finding in findings
-        if not _severity_in(finding, "CRITICAL", "HIGH", "MAJOR", "MEDIUM")
+        item
+        for item in indexed_findings
+        if not _severity_in(item[1], "CRITICAL", "HIGH", "MAJOR", "MEDIUM")
     ]
     sections = []
-    _append_finding_section(sections, "紧急需要修复", urgent)
-    _append_finding_section(sections, "可能需要修复", possible)
-    _append_finding_section(sections, "建议关注", suggestions)
+    _append_finding_section(sections, task_id, "紧急需要修复", urgent)
+    _append_finding_section(sections, task_id, "可能需要修复", possible)
+    _append_finding_section(sections, task_id, "建议关注", suggestions)
     return "\n\n".join(sections) if sections else "- 未发现需要修复的问题。"
 
 
-def _append_finding_section(sections: list[str], title: str, findings: list[dict]) -> None:
+def _append_finding_section(
+    sections: list[str],
+    task_id: int,
+    title: str,
+    findings: list[tuple[int, dict]],
+) -> None:
     if not findings:
         return
-    items = "\n".join(f"- {_concise_finding_title(finding.get('title'))}" for finding in findings[:5])
+    items = "\n".join(
+        f"- {_finding_link(task_id, index, _concise_finding_title(finding.get('title')))}"
+        for index, finding in findings[:5]
+    )
     sections.append(f"**{title}：{len(findings)} 个**\n{items}")
+
+
+def _task_detail_url(task_id: int | None, anchor: str | None = None) -> str:
+    if not task_id:
+        return ""
+    base_url = get_settings().platform_base_url.rstrip("/")
+    url = f"{base_url}/tasks/{task_id}"
+    return f"{url}#{anchor}" if anchor else url
+
+
+def _risk_item_link(task_id: int, item: dict, text: str) -> str:
+    risk_id = item.get("riskId")
+    if not risk_id:
+        return text
+    return _markdown_link(text, _task_detail_url(task_id, f"risk-item-{quote(str(risk_id), safe='')}"))
+
+
+def _finding_link(task_id: int, index: int, text: str) -> str:
+    return _markdown_link(text, _task_detail_url(task_id, f"fix-preview-{index}"))
+
+
+def _markdown_link(text: str, url: str) -> str:
+    if not url:
+        return text
+    return f"[{_escape_markdown_link_text(text)}]({url})"
+
+
+def _escape_markdown_link_text(text: str) -> str:
+    return str(text).replace("[", "\\[").replace("]", "\\]")
 
 
 def _group_label(category: str) -> str:

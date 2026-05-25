@@ -281,6 +281,7 @@ def _process_task(
         focus_change_types=template.get("focusChangeTypes", []),
         focus_rule_codes=template.get("focusRuleCodes", []),
         notification_context=notification_context,
+        reminder_card_enabled=target_config["reminderCardEnabled"],
     )
     if not ai_review_scheduled:
         settings = get_settings_record(db)
@@ -292,6 +293,7 @@ def _process_task(
             notification_context,
             settings.dingtalk_notification_enabled,
             focus_rule_codes=template.get("focusRuleCodes", []),
+            reminder_card_enabled=target_config["reminderCardEnabled"],
         )
         save_notification_records(
             db,
