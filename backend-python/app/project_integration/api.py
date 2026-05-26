@@ -11,8 +11,10 @@ from app.project_integration.repository import (
     list_enabled_projects,
     list_project_groups,
     list_project_target_configs,
+    list_target_type_path_mappings,
     update_project_group,
     update_project_group_binding,
+    update_target_type_path_mappings,
     upsert_project_target_config,
 )
 from app.project_integration.service import handle_gitlab_webhook
@@ -23,6 +25,7 @@ webhook_router = APIRouter(prefix="/api/webhooks/gitlab", tags=["gitlab-webhooks
 
 
 group_router = APIRouter(prefix="/api/project-groups", tags=["project-groups"])
+target_mapping_router = APIRouter(prefix="/api/target-type-path-mappings", tags=["target-type-path-mappings"])
 
 
 @group_router.get("")
@@ -38,6 +41,16 @@ async def create_group(request: dict[str, Any], db: Session = Depends(get_db)) -
 @group_router.put("/{group_id}")
 async def update_group(group_id: int, request: dict[str, Any], db: Session = Depends(get_db)) -> dict:
     return ok(update_project_group(db, group_id, request))
+
+
+@target_mapping_router.get("")
+async def find_target_type_path_mappings(db: Session = Depends(get_db)) -> dict:
+    return ok(list_target_type_path_mappings(db))
+
+
+@target_mapping_router.put("")
+async def save_target_type_path_mappings(request: dict[str, Any], db: Session = Depends(get_db)) -> dict:
+    return ok(update_target_type_path_mappings(db, request))
 
 
 @router.get("")

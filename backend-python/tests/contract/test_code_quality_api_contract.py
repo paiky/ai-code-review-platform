@@ -37,25 +37,45 @@ def seed_project(db_session: Session, provider_code: str | None = None) -> None:
 
 def seed_template(db_session: Session) -> None:
     now = datetime(2026, 5, 18, 10, 0, 0)
-    db_session.add(
-        RuleTemplate(
-            template_code="backend-default",
-            template_name="后端默认审查模板",
-            target_type="BACKEND",
-            version=1,
-            enabled_rule_codes=json.dumps(["DB_DATA_WRITE_CHANGE_CHECK"]),
-            config_json=json.dumps(
-                {
-                    "focusChangeTypes": ["DB_DATA_WRITE"],
-                    "focusRuleCodes": ["DB_DATA_WRITE_CHANGE_CHECK"],
-                    "recommendedChecks": [],
-                }
+    db_session.add_all(
+        [
+            RuleTemplate(
+                template_code="backend-default",
+                template_name="后端默认审查模板",
+                target_type="BACKEND",
+                version=1,
+                enabled_rule_codes=json.dumps(["DB_DATA_WRITE_CHANGE_CHECK"]),
+                config_json=json.dumps(
+                    {
+                        "focusChangeTypes": ["DB_DATA_WRITE"],
+                        "focusRuleCodes": ["DB_DATA_WRITE_CHANGE_CHECK"],
+                        "recommendedChecks": [],
+                    }
+                ),
+                status="ENABLED",
+                description="stage4",
+                created_at=now,
+                updated_at=now,
             ),
-            status="ENABLED",
-            description="stage4",
-            created_at=now,
-            updated_at=now,
-        )
+            RuleTemplate(
+                template_code="general-default",
+                template_name="通用默认审查模板",
+                target_type="GENERAL",
+                version=1,
+                enabled_rule_codes=json.dumps([]),
+                config_json=json.dumps(
+                    {
+                        "focusChangeTypes": [],
+                        "focusRuleCodes": [],
+                        "recommendedChecks": [],
+                    }
+                ),
+                status="ENABLED",
+                description="stage4",
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
     )
     db_session.commit()
 
@@ -104,14 +124,14 @@ def push_payload(branch: str = "feature/push-ai", changed_files: list[dict] | No
     }
 
 
-def review_card_json(summary: str = "发现一个问题") -> str:
+def review_card_json(summary: str = "发现一个问题", severity: str = "MAJOR") -> str:
     return json.dumps(
         {
             "summary": summary,
             "overallLevel": "HIGH",
             "findings": [
                 {
-                    "severity": "MAJOR",
+                    "severity": severity,
                     "category": "CORRECTNESS",
                     "filePath": "src/OrderService.java",
                     "startLine": 12,
@@ -717,7 +737,7 @@ def test_ai_review_auto_generates_fix_previews_after_success(
     def provider_response(request: httpx.Request) -> Response:
         calls.append(json.loads(request.content))
         if len(calls) == 1:
-            return Response(200, json={"choices": [{"message": {"content": review_card_json("需要修复")}}]})
+            return Response(200, json={"choices": [{"message": {"content": review_card_json("需要修复", "CRITICAL")}}]})
         return Response(200, json={"choices": [{"message": {"content": fix_patch_text()}}]})
 
     respx.post("https://api.deepseek.com/chat/completions").mock(side_effect=provider_response)
@@ -752,6 +772,147 @@ def test_ai_review_auto_generates_fix_previews_after_success(
     assert "FIX_PREVIEW_AUTO_QUEUED" in phases
     assert "FIX_PREVIEW_SAVED" in phases
     assert "auto-fix-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
+@respx.mock
+def test_auto_review_uses_project_group_profile_before_target_type_profile(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    seed_project(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "group-profile-secret")
+    group = client.post(
+        "/api/project-groups",
+        json={
+            "groupName": "PC 业务组",
+            "groupCode": "pc",
+            "defaultCodeQualityProfileCode": "web-pc-default-ai-review",
+        },
+    ).json()["data"]
+    bind = client.put("/api/projects/1/group", json={"groupId": group["id"]})
+    assert bind.status_code == 200
+
+    respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("组模板优先", "MAJOR")}}]})
+    )
+
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
+            "object_attributes": {"iid": 34, "action": "open", "source_branch": "feature/group-profile", "target_branch": "main"},
+            "changedFiles": [
+                {
+                    "path": "src/main/java/com/demo/OrderService.java",
+                    "diffText": "@@ -9,4 +9,4 @@ public void create(Order order) {\n+        order.setStatus(null);",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+    task_id = created.json()["data"]["taskId"]
+
+    result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
+    assert result["status"] == "SUCCESS"
+    assert result["profileCode"] == "web-pc-default-ai-review"
+    progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
+    assert "group-profile-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
+def test_non_default_project_group_without_profile_records_ai_review_failure(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    seed_project(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    group = client.post(
+        "/api/project-groups",
+        json={"groupName": "未配置模板组", "groupCode": "without-profile"},
+    ).json()["data"]
+    bind = client.put("/api/projects/1/group", json={"groupId": group["id"]})
+    assert bind.status_code == 200
+
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
+            "object_attributes": {"iid": 35, "action": "open", "source_branch": "feature/no-group-profile", "target_branch": "main"},
+            "changedFiles": [
+                {
+                    "path": "src/main/java/com/demo/OrderService.java",
+                    "diffText": "@@ -9,4 +9,4 @@ public void create(Order order) {\n+        order.setStatus(null);",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+    task_id = created.json()["data"]["taskId"]
+
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    assert detail["status"] == "SUCCESS"
+    assert detail["codeQualityProfileCode"] is None
+    result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
+    assert result["status"] == "FAILED"
+    assert "项目所属项目组未设置 AI Review 模板" in result["errorMessage"]
+
+
+@respx.mock
+def test_ai_review_does_not_auto_generate_fix_previews_for_non_critical_findings(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "auto-fix-non-critical-secret")
+    enabled = client.put("/api/code-quality-reviews/settings", json={"autoFixPreviewEnabled": True})
+    assert enabled.status_code == 200
+    calls = []
+
+    def provider_response(request: httpx.Request) -> Response:
+        calls.append(json.loads(request.content))
+        return Response(200, json={"choices": [{"message": {"content": review_card_json("非紧急问题", "MAJOR")}}]})
+
+    respx.post("https://api.deepseek.com/chat/completions").mock(side_effect=provider_response)
+
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
+            "object_attributes": {"iid": 26, "action": "open", "source_branch": "feature/non-critical-fix", "target_branch": "main"},
+            "changedFiles": [
+                {
+                    "path": "src/OrderService.java",
+                    "diffText": "@@ -9,4 +9,4 @@ public void create(Order order) {\n+        order.setStatus(null);",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+    task_id = created.json()["data"]["taskId"]
+
+    result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
+    previews = client.get(f"/api/review-tasks/{task_id}/code-quality-fix-previews").json()["data"]
+
+    assert result["status"] == "SUCCESS"
+    assert result["findings"][0]["severity"] == "MAJOR"
+    assert previews == []
+    assert len(calls) == 1
+    progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
+    phases = [event["phase"] for event in progress]
+    assert "FIX_PREVIEW_AUTO_QUEUED" not in phases
 
 
 @respx.mock
@@ -1617,7 +1778,7 @@ def test_push_gate_rejects_small_push_as_not_significant(
 
     created = client.post(
         "/api/webhooks/gitlab/merge-request",
-        json=push_payload(changed_files=[{"path": "docs/readme.md", "diffText": "+ typo"}]),
+        json=push_payload(changed_files=[{"path": "src/OrderService.java", "diffText": "+ typo"}]),
         headers={"X-Gitlab-Event": "Push Hook"},
     ).json()["data"]
     gate = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-gate").json()["data"]
@@ -1685,7 +1846,7 @@ def test_push_gate_allows_large_push_without_risk_match(
         return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("Large Push 完成")}}]})
     )
     files = [
-        {"path": f"docs/change-{index}.md", "diffText": "+ documentation update"}
+        {"path": f"src/Change{index}.java", "diffText": "+ documentation update"}
         for index in range(10)
     ]
 
@@ -1773,7 +1934,7 @@ def test_push_gate_debounces_recent_allowed_push(
     monkeypatch.delenv("CODE_QUALITY_REVIEW_INLINE", raising=False)
     monkeypatch.setattr(service._executor, "submit", lambda *args: None)
     enable_push_profile(client)
-    files = [{"path": f"docs/change-{index}.md", "diffText": "+ documentation update"} for index in range(10)]
+    files = [{"path": f"src/Change{index}.java", "diffText": "+ documentation update"} for index in range(10)]
 
     first = client.post(
         "/api/webhooks/gitlab/merge-request",

@@ -11,14 +11,14 @@ from sqlalchemy.orm import Session
 from app.core.json_utils import page_response
 from app.core.errors import AppError
 from app.core.json_utils import read_json, read_json_array
-from app.project_integration.models import Project, ProjectGroup, ProjectTargetConfig
+from app.project_integration.models import Project, ProjectGroup, ProjectTargetConfig, TargetTypePathMapping
 
 
 TARGET_TYPE_DEFAULTS = {
     "BACKEND": {
         "templateCode": "backend-default",
         "profileCode": "backend-default-ai-review",
-        "pathPatterns": ["backend-python/**", "backend/**", "src/main/**", "src/test/**", "pom.xml", "requirements*.txt"],
+        "pathPatterns": ["backend-python/**", "backend/**", "src/main/**", "src/test/**", "src/*.java", "src/**/*.java", "pom.xml", "requirements*.txt"],
         "reminderCardEnabled": True,
     },
     "WEB_PC": {
@@ -47,7 +47,7 @@ TARGET_TYPE_DEFAULTS = {
     },
     "GENERAL": {
         "templateCode": "general-default",
-        "profileCode": "backend-default-ai-review",
+        "profileCode": None,
         "pathPatterns": ["**/*"],
         "reminderCardEnabled": False,
     },
@@ -68,14 +68,7 @@ PATH_DETECTION_RULES = [
     ("APP_ANDROID", ["android/**", "**/*.kt", "**/*.kts", "build.gradle", "settings.gradle", "**/*.gradle"]),
     ("WEB_PC", ["frontend/**", "web/**", "src/**/*.tsx", "src/**/*.jsx", "src/**/*.vue", "package.json"]),
     ("APP_CROSS_PLATFORM", ["flutter/**", "**/*.dart", "pubspec.yaml", "rn/**", "miniapp/**"]),
-    ("BACKEND", ["src/main/java/**", "src/main/resources/**", "pom.xml", "backend-python/**", "backend/**"]),
-]
-
-PROJECT_NAME_DETECTION_RULES = [
-    ("APP_IOS", ["ios", "iphone"]),
-    ("APP_ANDROID", ["android"]),
-    ("WEB_PC", ["web", "frontend", "h5", "pc"]),
-    ("BACKEND", ["server", "service", "backend", "api"]),
+    ("BACKEND", ["src/main/java/**", "src/main/resources/**", "src/*.java", "src/**/*.java", "pom.xml", "backend-python/**", "backend/**"]),
 ]
 
 _SCHEMA_LOCK = Lock()
@@ -97,6 +90,7 @@ def ensure_project_config_schema(db: Session) -> None:
             project_groups_created = True
         if not project_groups_created:
             group_columns = {column["name"] for column in inspector.get_columns("project_groups")} if inspector.has_table("project_groups") else set()
+            _add_column_if_missing(db, group_columns, "project_groups", "default_code_quality_profile_code", "VARCHAR(64) NULL")
             _add_column_if_missing(db, group_columns, "project_groups", "push_branch_patterns", "TEXT NULL")
             _add_column_if_missing(db, group_columns, "project_groups", "push_min_changed_files", "INT NULL DEFAULT 10")
             _add_column_if_missing(db, group_columns, "project_groups", "push_min_diff_bytes", "INT NULL DEFAULT 30000")
@@ -104,6 +98,8 @@ def ensure_project_config_schema(db: Session) -> None:
             _add_column_if_missing(db, group_columns, "project_groups", "push_max_changed_files", "INT NULL DEFAULT -1")
             _add_column_if_missing(db, group_columns, "project_groups", "push_max_diff_bytes", "INT NULL DEFAULT -1")
             _add_column_if_missing(db, group_columns, "project_groups", "push_debounce_seconds", "INT NULL DEFAULT 300")
+        if not inspector.has_table("target_type_path_mappings"):
+            TargetTypePathMapping.__table__.create(connection, checkfirst=True)
         if not inspector.has_table("project_target_configs"):
             ProjectTargetConfig.__table__.create(connection, checkfirst=True)
         project_columns = {column["name"] for column in inspector.get_columns("projects")} if inspector.has_table("projects") else set()
@@ -119,6 +115,7 @@ def ensure_project_config_schema(db: Session) -> None:
         _add_column_if_missing(db, result_columns, "review_results", "target_type", "VARCHAR(32) NULL")
         _add_column_if_missing(db, result_columns, "review_results", "reminder_card_enabled", "BOOLEAN NULL")
         db.flush()
+        _ensure_default_target_type_path_mappings(db)
         _SCHEMA_ENSURED_ENGINE_IDS.add(engine_id)
 
 
@@ -130,13 +127,47 @@ def _add_column_if_missing(db: Session, columns: set[str], table_name: str, colu
     db.flush()
 
 
+def _default_path_mapping_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "targetType": target_type,
+            "pathPatterns": list(patterns),
+            "enabled": True,
+            "sortOrder": index * 10,
+            "description": "系统默认端类型路径映射",
+        }
+        for index, (target_type, patterns) in enumerate(PATH_DETECTION_RULES, start=1)
+    ]
+
+
+def _ensure_default_target_type_path_mappings(db: Session) -> None:
+    existing_count = db.scalar(select(func.count()).select_from(TargetTypePathMapping)) or 0
+    if existing_count > 0:
+        return
+    now = datetime.now()
+    for row in _default_path_mapping_rows():
+        db.add(
+            TargetTypePathMapping(
+                target_type=row["targetType"],
+                path_patterns=json.dumps(row["pathPatterns"], ensure_ascii=False),
+                enabled=bool(row["enabled"]),
+                sort_order=int(row["sortOrder"]),
+                description=row["description"],
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    db.flush()
+
+
 def _ensure_default_project_group(db: Session) -> ProjectGroup:
     group = db.scalars(select(ProjectGroup).where(ProjectGroup.group_code == "default")).first()
     if group is None:
         now = datetime.now()
         group = ProjectGroup(
-            group_name="默认项目组",
+            group_name="默认通用项目组",
             group_code="default",
+            default_code_quality_profile_code=None,
             default_provider_code=None,
             **_push_policy_columns({}),
             status="ENABLED",
@@ -145,6 +176,10 @@ def _ensure_default_project_group(db: Session) -> ProjectGroup:
             updated_at=now,
         )
         db.add(group)
+        db.flush()
+    elif group.group_name == "默认项目组":
+        group.group_name = "默认通用项目组"
+        group.updated_at = datetime.now()
         db.flush()
     db.execute(text("UPDATE projects SET group_id = :group_id WHERE group_id IS NULL"), {"group_id": group.id})
     return group
@@ -272,7 +307,7 @@ def upsert_gitlab_project(
 ) -> Project:
     ensure_project_config_schema(db)
     now = datetime.now()
-    detection = detect_project_target_types(project_name, changed_files or [])
+    detection = detect_project_target_types(db, changed_files or [])
     project = find_project_by_git_project_id(db, git_project_id)
     if project:
         project.name = project_name
@@ -316,7 +351,7 @@ def update_project_target_detection(
     project_name: str | None,
     changed_files: list[dict[str, Any]] | None,
 ) -> Project:
-    detection = detect_project_target_types(project_name or project.name, changed_files or [])
+    detection = detect_project_target_types(db, changed_files or [])
     _store_target_detection(project, detection)
     existing_configs = db.scalars(
         select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project.id)
@@ -359,6 +394,7 @@ def project_group_to_dict(group: ProjectGroup) -> dict:
         "id": group.id,
         "groupCode": group.group_code,
         "groupName": group.group_name,
+        "defaultCodeQualityProfileCode": group.default_code_quality_profile_code,
         "defaultProviderCode": group.default_provider_code,
         "dingtalkWebhooks": dingtalk_webhooks,
         "enabledDingtalkWebhookCount": len([item for item in dingtalk_webhooks if item.get("enabled")]),
@@ -381,6 +417,7 @@ def create_project_group(db: Session, request: dict) -> dict:
     group = ProjectGroup(
         group_name=group_name,
         group_code=group_code,
+        default_code_quality_profile_code=_blank_to_none(request.get("defaultCodeQualityProfileCode")),
         default_provider_code=_blank_to_none(request.get("defaultProviderCode")),
         **_push_policy_columns(request),
         status=request.get("status") or "ENABLED",
@@ -420,6 +457,8 @@ def update_project_group(db: Session, group_id: int, request: dict) -> dict:
         group.group_code = next_code
     if "defaultProviderCode" in request:
         group.default_provider_code = _blank_to_none(request.get("defaultProviderCode"))
+    if "defaultCodeQualityProfileCode" in request:
+        group.default_code_quality_profile_code = _blank_to_none(request.get("defaultCodeQualityProfileCode"))
     _update_group_push_policy(group, request)
     if "status" in request:
         _assert_default_group_can_keep_status(group, request["status"])
@@ -439,12 +478,91 @@ def update_project_group(db: Session, group_id: int, request: dict) -> dict:
     return project_group_to_dict(group)
 
 
+def list_target_type_path_mappings(db: Session) -> list[dict[str, Any]]:
+    ensure_project_config_schema(db)
+    mappings = db.scalars(
+        select(TargetTypePathMapping).order_by(TargetTypePathMapping.sort_order.asc(), TargetTypePathMapping.id.asc())
+    ).all()
+    return [target_type_path_mapping_to_dict(mapping) for mapping in mappings]
+
+
+def update_target_type_path_mappings(db: Session, request: dict[str, Any]) -> list[dict[str, Any]]:
+    ensure_project_config_schema(db)
+    items = request.get("items") if isinstance(request, dict) else None
+    if not isinstance(items, list):
+        raise AppError("VALIDATION_ERROR", "items must be a list", 400)
+    existing_by_type = {
+        mapping.target_type: mapping
+        for mapping in db.scalars(select(TargetTypePathMapping)).all()
+    }
+    now = datetime.now()
+    seen: set[str] = set()
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise AppError("VALIDATION_ERROR", "items must contain mapping objects", 400)
+        target_type = normalize_target_type(item.get("targetType"))
+        if target_type == "GENERAL":
+            raise AppError("VALIDATION_ERROR", "GENERAL does not support path mapping", 400)
+        if target_type in seen:
+            raise AppError("VALIDATION_ERROR", f"Duplicate target type mapping: {target_type}", 400)
+        seen.add(target_type)
+        path_patterns = item.get("pathPatterns") or []
+        if not isinstance(path_patterns, list):
+            raise AppError("VALIDATION_ERROR", "pathPatterns must be a list", 400)
+        mapping = existing_by_type.get(target_type)
+        if mapping is None:
+            mapping = TargetTypePathMapping(
+                target_type=target_type,
+                path_patterns=json.dumps(path_patterns, ensure_ascii=False),
+                enabled=bool(item.get("enabled", True)),
+                sort_order=int(item.get("sortOrder") if item.get("sortOrder") is not None else (index + 1) * 10),
+                description=_blank_to_none(item.get("description")),
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(mapping)
+        else:
+            mapping.path_patterns = json.dumps(path_patterns, ensure_ascii=False)
+            mapping.enabled = bool(item.get("enabled", True))
+            mapping.sort_order = int(item.get("sortOrder") if item.get("sortOrder") is not None else mapping.sort_order)
+            mapping.description = _blank_to_none(item.get("description"))
+            mapping.updated_at = now
+    db.commit()
+    return list_target_type_path_mappings(db)
+
+
+def target_type_path_mapping_to_dict(mapping: TargetTypePathMapping) -> dict[str, Any]:
+    return {
+        "id": mapping.id,
+        "targetType": mapping.target_type,
+        "pathPatterns": read_json_array(mapping.path_patterns),
+        "enabled": bool(mapping.enabled),
+        "sortOrder": int(mapping.sort_order or 0),
+        "description": mapping.description,
+    }
+
+
 def get_project_group_push_policy(db: Session, project: Project) -> dict[str, Any]:
     ensure_project_config_schema(db)
     group = db.get(ProjectGroup, project.group_id) if project.group_id else None
     if group is None:
         group = _ensure_default_project_group(db)
     return push_policy_to_dict(group)
+
+
+def resolve_project_review_profile_code(db: Session, project: Project, target_type: str | None) -> str | None:
+    ensure_project_config_schema(db)
+    group = db.get(ProjectGroup, project.group_id) if project.group_id else None
+    if group is None:
+        group = _ensure_default_project_group(db)
+    group_profile = _blank_to_none(group.default_code_quality_profile_code)
+    if group_profile:
+        return group_profile
+    normalized_target_type = normalize_target_type(target_type)
+    if group.group_code == "default" and normalized_target_type != "GENERAL":
+        defaults = TARGET_TYPE_DEFAULTS.get(normalized_target_type, TARGET_TYPE_DEFAULTS["GENERAL"])
+        return defaults.get("profileCode")
+    return None
 
 
 def push_policy_to_dict(group: ProjectGroup | None) -> dict[str, Any]:
@@ -487,6 +605,18 @@ def list_project_target_configs(db: Session, project_id: int) -> list[dict]:
     if not configs:
         return [_default_target_config_response(project)]
     return [target_config_to_dict(config) for config in configs]
+
+
+def ambiguous_auto_detected_target_types(db: Session, project: Project) -> list[str]:
+    target_types = read_json_array(project.detected_target_types)
+    if len(target_types) <= 1:
+        return []
+    configs = db.scalars(
+        select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project.id)
+    ).all()
+    if configs and not all(config.description == "自动识别创建的端类型配置" for config in configs):
+        return []
+    return target_types
 
 
 def upsert_project_target_config(db: Session, project_id: int, target_type: str, request: dict) -> dict:
@@ -599,7 +729,7 @@ def resolve_project_target_config(
         "targetType": primary,
         "targetTypes": matched_types,
         "templateCode": (config.template_code if config else None) or defaults["templateCode"] or project.default_template_code,
-        "profileCode": (config.code_quality_profile_code if config else None) or defaults["profileCode"] or project.default_code_quality_profile_code,
+        "profileCode": resolve_project_review_profile_code(db, project, primary),
         "providerCode": (config.provider_code if config else None) or project.default_code_quality_provider_code,
         "reminderCardEnabled": bool(config.reminder_card_enabled) if config else bool(defaults["reminderCardEnabled"]),
     }
@@ -651,7 +781,7 @@ def _match_target_types(configs: list[ProjectTargetConfig], changed_files: list[
     return matched
 
 
-def detect_project_target_types(project_name: str | None, changed_files: list[dict[str, Any]]) -> dict:
+def detect_project_target_types(db: Session, changed_files: list[dict[str, Any]]) -> dict:
     evidences: list[dict[str, str]] = []
     matched: list[str] = []
     paths = [
@@ -659,7 +789,14 @@ def detect_project_target_types(project_name: str | None, changed_files: list[di
         for file in changed_files
         if isinstance(file, dict)
     ]
-    for target_type, patterns in PATH_DETECTION_RULES:
+    mappings = db.scalars(
+        select(TargetTypePathMapping)
+        .where(TargetTypePathMapping.enabled.is_(True))
+        .order_by(TargetTypePathMapping.sort_order.asc(), TargetTypePathMapping.id.asc())
+    ).all()
+    for mapping in mappings:
+        target_type = mapping.target_type
+        patterns = read_json_array(mapping.path_patterns)
         for path in paths:
             matched_pattern = next((pattern for pattern in patterns if _path_matches(path, pattern)), None)
             if not matched_pattern:
@@ -675,30 +812,15 @@ def detect_project_target_types(project_name: str | None, changed_files: list[di
                 }
             )
             break
-    normalized_name = str(project_name or "").lower()
-    for target_type, keywords in PROJECT_NAME_DETECTION_RULES:
-        keyword = next((item for item in keywords if item in normalized_name), None)
-        if not keyword:
-            continue
-        _append_unique_target(matched, target_type)
-        evidences.append(
-            {
-                "targetType": target_type,
-                "source": "PROJECT_NAME",
-                "value": project_name or "",
-                "pattern": keyword,
-                "reason": f"project name contains {keyword}",
-            }
-        )
     if not matched:
-        matched = ["BACKEND"]
+        matched = ["GENERAL"]
         evidences.append(
             {
-                "targetType": "BACKEND",
+                "targetType": "GENERAL",
                 "source": "FALLBACK",
-                "value": project_name or "",
-                "pattern": "default",
-                "reason": "no frontend or app signal matched; fallback to BACKEND",
+                "value": "",
+                "pattern": "no path mapping matched",
+                "reason": "no target type path mapping matched; fallback to GENERAL",
             }
         )
     return {

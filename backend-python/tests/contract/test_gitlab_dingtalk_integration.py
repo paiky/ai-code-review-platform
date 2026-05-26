@@ -14,37 +14,57 @@ from app.rule_template.models import RuleTemplate
 
 def seed_template(db_session: Session) -> None:
     now = datetime(2026, 5, 18, 10, 0, 0)
-    db_session.add(
-        RuleTemplate(
-            template_code="backend-default",
-            template_name="后端默认审查模板",
-            target_type="BACKEND",
-            version=1,
-            enabled_rule_codes=json.dumps(
-                [
-                    "DB_DATA_WRITE_CHANGE_CHECK",
-                    "CACHE_WRITE_DELETE_CHANGE_CHECK",
-                    "MQ_CONFIG_CHANGE_CHECK",
-                    "CONFIG_RELEASE_CHECK",
-                ]
-            ),
-            config_json=json.dumps(
-                {
-                    "focusChangeTypes": ["DB_DATA_WRITE", "CACHE_WRITE_DELETE", "MQ_CONFIG", "CONFIG"],
-                    "focusRuleCodes": [
+    db_session.add_all(
+        [
+            RuleTemplate(
+                template_code="backend-default",
+                template_name="后端默认审查模板",
+                target_type="BACKEND",
+                version=1,
+                enabled_rule_codes=json.dumps(
+                    [
                         "DB_DATA_WRITE_CHANGE_CHECK",
                         "CACHE_WRITE_DELETE_CHANGE_CHECK",
                         "MQ_CONFIG_CHANGE_CHECK",
                         "CONFIG_RELEASE_CHECK",
-                    ],
-                    "recommendedChecks": ["确认变更影响范围。"],
-                }
+                    ]
+                ),
+                config_json=json.dumps(
+                    {
+                        "focusChangeTypes": ["DB_DATA_WRITE", "CACHE_WRITE_DELETE", "MQ_CONFIG", "CONFIG"],
+                        "focusRuleCodes": [
+                            "DB_DATA_WRITE_CHANGE_CHECK",
+                            "CACHE_WRITE_DELETE_CHANGE_CHECK",
+                            "MQ_CONFIG_CHANGE_CHECK",
+                            "CONFIG_RELEASE_CHECK",
+                        ],
+                        "recommendedChecks": ["确认变更影响范围。"],
+                    }
+                ),
+                status="ENABLED",
+                description="stage3b",
+                created_at=now,
+                updated_at=now,
             ),
-            status="ENABLED",
-            description="stage3b",
-            created_at=now,
-            updated_at=now,
-        )
+            RuleTemplate(
+                template_code="general-default",
+                template_name="通用默认审查模板",
+                target_type="GENERAL",
+                version=1,
+                enabled_rule_codes=json.dumps([]),
+                config_json=json.dumps(
+                    {
+                        "focusChangeTypes": [],
+                        "focusRuleCodes": [],
+                        "recommendedChecks": [],
+                    }
+                ),
+                status="ENABLED",
+                description="stage3b",
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
     )
     db_session.commit()
 
@@ -358,7 +378,7 @@ def test_dingtalk_success_is_recorded(
     )
 
     with respx.mock(assert_all_called=True) as router:
-        router.post("https://dingtalk.example.test/robot/send").mock(
+        route = router.post("https://dingtalk.example.test/robot/send").mock(
             return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
         )
         response = client.post(
@@ -381,6 +401,8 @@ def test_dingtalk_success_is_recorded(
     notifications = client.get(f"/api/review-tasks/{task_id}/notifications").json()["data"]
     assert notifications[0]["status"] == "SUCCESS"
     assert notifications[0]["responseBody"] == '{"errcode":0,"errmsg":"ok"}'
+    body = json.loads(route.calls[0].request.content)
+    assert "项目：demo-service" in body["markdown"]["text"]
 
 
 def test_dingtalk_filter_prefers_focus_rule_codes_for_value_config(
@@ -761,7 +783,7 @@ def test_push_without_reminders_skips_dingtalk_delivery(
                 "user_username": "alice",
                 "changedFiles": [
                     {
-                        "path": "docs/readme.md",
+                        "path": "src/OrderService.java",
                         "diffText": "+ update docs only",
                     }
                 ],
@@ -825,6 +847,7 @@ def test_push_with_reminders_uses_colored_type_tags(
     assert response.status_code == 200
     body = json.loads(route.calls[0].request.content)
     markdown = body["markdown"]["text"]
+    assert "项目：demo-service" in markdown
     assert "配置变更（规则扫描）" in markdown
     assert '* [<font color="#64748b">DB</font>]' in markdown
     assert f"/tasks/{response.json()['data']['taskId']}#risk-item-" in markdown
@@ -869,7 +892,7 @@ def test_mr_summary_without_findings_still_sends_and_uses_platform_base_url(
                 **mr_payload_without_changed_files(),
                 "changedFiles": [
                     {
-                        "path": "docs/readme.md",
+                        "path": "src/OrderService.java",
                         "diffText": "+ update docs only",
                     }
                 ],
@@ -881,6 +904,7 @@ def test_mr_summary_without_findings_still_sends_and_uses_platform_base_url(
     task_id = response.json()["data"]["taskId"]
     body = json.loads(route.calls[0].request.content)
     markdown = body["markdown"]["text"]
+    assert "项目：demo-service" in markdown
     assert "MR 作者：Alice(@alice)" in markdown
     assert "GITLAB_MR_WEBHOOK" not in markdown
     assert "配置变更（规则扫描）" not in markdown
@@ -927,7 +951,7 @@ def test_mr_summary_without_reminders_links_ai_findings_and_hides_rule_section(
                 **mr_payload_without_changed_files(),
                 "changedFiles": [
                     {
-                        "path": "docs/readme.md",
+                        "path": "src/OrderService.java",
                         "diffText": "+ update docs only",
                     }
                 ],

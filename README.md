@@ -73,7 +73,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 提醒卡片在前端按 DB / MQ / Redis/缓存 / 配置分组展示，并为重点提醒生成可复制维护内容：SQL 草稿、Redis 命令、MQ 配置伪代码、Nacos 配置块。
 - DB 维护 SQL 会优先使用真实 DDL；没有 SQL 文件时按 Entity / Mapper 和变更类型推断 `CREATE TABLE` 或 `ALTER TABLE`，并标记为 `INFERRED`。
 - 提醒项保留原命中证据，并可在详情页直接查看对应文件 diff。
-- 钉钉消息按模板 `focusChangeTypes` 过滤提醒来源，只输出简洁提醒和平台详情链接。
+- 钉钉消息按模板 `focusChangeTypes` 过滤提醒来源，并带上项目名称、简洁提醒和平台详情链接。
 - 审查任务、变更分析结果、提醒卡片、通知记录均落库。
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持配置 / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、自动触发、重试、执行过程展示。
@@ -432,7 +432,7 @@ AI Review 当前保持稳定的非流式 HTTP Provider 调用。前端通过 `GE
 AI Review 质量问题支持两个辅助查看入口：
 
 - `查看 Diff`：基于任务详情中的 `changedFilesSummary.files[].diffText` 展示当前文件左右对照 diff，并按模型返回的 `startLine/endLine` 高亮定位。
-- `生成修复预览`：AI Review 成功后会后台自动为可匹配 diff 的 finding 生成 unified diff patch 预览并保存到 `code_quality_fix_previews`。Provider 调用统一进入 `code_quality_scheduler_jobs` 调度队列，默认全局最多 10 个并发，AI Review 优先于修复预览；修复预览先显示 `QUEUED`，真正占用 Provider 资源时才显示 `RUNNING`。页面也保留单条手动生成 / 失败后重试入口。该能力仅用于查看，不会修改仓库、不提交 GitLab MR。
+- `生成修复预览`：AI Review 成功后，如果全局“自动修复预览”开关开启，会后台自动为可匹配 diff 的 `CRITICAL`（紧急）finding 生成 unified diff patch 预览并保存到 `code_quality_fix_previews`；非紧急 finding 默认不自动占用模型资源，仍可在页面单条手动生成 / 失败后重试。Provider 调用统一进入 `code_quality_scheduler_jobs` 调度队列，默认全局最多 10 个并发，AI Review 优先于修复预览；修复预览先显示 `QUEUED`，真正占用 Provider 资源时才显示 `RUNNING`。该能力仅用于查看，不会修改仓库、不提交 GitLab MR。
 - `调度队列`：任务列表页提供队列提示入口，调用 `GET /api/code-quality-reviews/job-queue` 查看当前 AI Review 与 finding 级修复预览的排队、运行和完成明细。活跃任务不受时间窗口限制，已完成 / 失败 / 跳过任务默认展示最近 48 小时内更新或创建的记录。
 
 Push webhook 默认只接收项目组 Push 审核策略中 `pushBranchPatterns` 允许的分支。Push 自动 AI Review 默认关闭，需要在 AI Review Profile 中开启 `triggerOnPush`，并通过项目组 Push 审核层后才会自动触发。
@@ -513,6 +513,8 @@ V22__code_quality_scheduler_jobs.sql
 V23__consolidated_card_reminder_rules.sql
 V24__multi_target_project_configs.sql
 V25__project_group_push_review_policy.sql
+V26__code_quality_auto_fix_preview_switch.sql
+V27__project_group_profile_and_target_type_path_mappings.sql
 ```
 
 `backend/src/main/resources/db/migration` 中的 Java Flyway SQL 保留为历史基线和行为对照，不再是当前默认运行路径。
@@ -654,19 +656,19 @@ BACKEND / WEB_PC / APP_IOS / APP_ANDROID / APP_CROSS_PLATFORM / GENERAL
 
 后端项目默认仍使用 `backend-default` 和 `backend-default-ai-review`，并展示“提醒卡片”。PC / APP 端默认以代码质量 AI Review 为主，后端维护类提醒卡片默认关闭；如确实需要，也可以在项目端类型配置中开启 `reminderCardEnabled`。
 
-项目组用于项目归类、任务列表筛选和 Push 审核策略控制。可以在前端“设置 -> 项目组 / 端类型配置”中新增项目组、编辑名称 / 编码 / 描述 / 默认 Provider、停用非默认项目组，并把已有项目绑定到指定项目组；在“设置 -> AI Review 设置 -> Push 审核策略”中按项目组维护允许分支、大小阈值、硬上限和 debounce。第一阶段项目组不代表权限边界，也不做项目组级模板或钉钉 webhook 继承；未绑定项目会自动归入“默认项目组”。
+项目组用于项目归类、任务列表筛选、默认 AI Review Profile、默认 Provider 和 Push 审核策略控制。可以在前端“设置 -> 项目组 / 端类型配置”中新增项目组、编辑名称 / 编码 / AI Review 模板 / 默认 Provider、停用非默认项目组，并把已有项目绑定到指定项目组；在“设置 -> AI Review 设置 -> Push 审核策略”中按项目组维护允许分支、大小阈值、硬上限和 debounce。第一阶段项目组不代表权限边界；未绑定或 webhook 新进入的项目会自动归入“默认通用项目组”。
 
-首次接入新的 GitLab 项目时，平台会根据 webhook / GitLab diff 中的 changed files，以及 GitLab 项目名或 namespace，自动识别端类型并保存识别依据。典型规则包括：
+首次接入新的 GitLab 项目时，平台会先根据“设置 -> 项目组 / 端类型配置 -> 端类型路径映射”中的全局路径规则匹配 changed files，自动识别端类型并保存识别依据。典型默认规则包括：
 
 ```text
 ios/**、**/*.swift、Podfile -> APP_IOS
 android/**、**/*.kt、build.gradle、settings.gradle -> APP_ANDROID
 frontend/**、web/**、src/**/*.tsx、src/**/*.jsx、package.json -> WEB_PC
 flutter/**、**/*.dart、pubspec.yaml、rn/**、miniapp/** -> APP_CROSS_PLATFORM
-src/main/java/**、src/main/resources/**、pom.xml、backend-python/** -> BACKEND
+src/main/java/**、src/main/resources/**、src/*.java、pom.xml、backend-python/** -> BACKEND
 ```
 
-如果新项目只命中一个端类型，平台会自动创建该端类型配置，并默认使用 `**/*` 作为路径匹配，适合“单端单仓库”。如果是混合仓库，会保留多个端类型的默认路径规则作为后续拆分审查的基础。已有项目的人工端类型配置不会被自动覆盖；设置页会展示“端类型自动识别”依据，并支持手动保存“当前项目所属端类型”。
+如果新项目只命中一个端类型，平台会自动创建该端类型配置，并默认使用 `**/*` 作为项目内路径匹配，适合“单端单仓库”。如果没有命中任何端类型，会设置为 `GENERAL`；`GENERAL` 不再兜底到后端 AI Review 模板，如果项目组也未设置 AI Review 模板，AI Review 会落为 `FAILED` 并提示“项目所属项目组未设置 AI Review 模板”。如果同一次变更命中多个端类型，平台会创建一条失败任务，提示调整全局端类型路径映射。已有项目的人工端类型配置不会被自动覆盖；设置页会展示“端类型自动识别”依据，并支持手动保存“当前项目所属端类型”。
 
 模板接口：
 
@@ -674,20 +676,9 @@ src/main/java/**、src/main/resources/**、pom.xml、backend-python/** -> BACKEN
 curl http://localhost:18080/api/rule-templates
 curl http://localhost:18080/api/rule-templates/backend-default
 curl http://localhost:18080/api/project-groups
+curl http://localhost:18080/api/target-type-path-mappings
 curl "http://localhost:18080/api/projects?includeDisabled=true"
 curl http://localhost:18080/api/projects/1/target-configs
-```
-
-如果希望 GitLab webhook 第一次进入前就先配置项目组和端类型，可以在前端“设置 -> 项目组 / 端类型配置 -> 预创建 GitLab 项目”填写 GitLab 项目 ID。后续 webhook 只要 payload 中的 `project.id` 与这里的 `gitProjectId` 一致，就会复用这条项目记录和已配置的端类型。
-
-接口示例：
-
-```powershell
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "http://localhost:18080/api/projects" `
-  -ContentType "application/json" `
-  -Body '{"name":"mobile-ios","gitProvider":"GITLAB","gitProjectId":"12345","targetType":"APP_IOS","repositoryUrl":"https://gitlab.example.com/app/mobile-ios"}'
 ```
 
 项目默认模板绑定：
@@ -752,7 +743,7 @@ Provider 说明：
 - 配置多个钉钉 webhook；开启钉钉推送后会向全部已启用 webhook 群发同一条通知。
 - 配置 OpenAI / Anthropic / DeepSeek / 自定义 Provider 的模型端点 URL、模型名称和 API Key。
 - 设置全局默认 Provider，以及项目级默认 Provider。
-- 按项目组、项目和端类型绑定 AI Review Profile、Provider 覆盖、路径匹配和提醒卡片展示策略。
+- 按项目组绑定默认 AI Review Profile，按端类型路径映射识别新项目端类型，并在项目端类型配置中维护 Provider 覆盖、项目内路径匹配和提醒卡片展示策略。
 - 查看、编辑、预览、恢复 AI Review Profile 的 Review Instructions。
 - 按项目组配置 Push 审核策略，控制该项目组下的 Push 是否允许自动进入 AI Review。
 

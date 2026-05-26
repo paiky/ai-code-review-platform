@@ -38,6 +38,7 @@ class ProjectGroup(Base):
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
     group_name: Mapped[str] = mapped_column(String(128), nullable=False)
     group_code: Mapped[str | None] = mapped_column(String(64))
+    default_code_quality_profile_code: Mapped[str | None] = mapped_column(String(64))
     default_provider_code: Mapped[str | None] = mapped_column(String(64))
     push_branch_patterns: Mapped[str | None] = mapped_column(Text)
     push_min_changed_files: Mapped[int | None] = mapped_column(Integer)
@@ -47,6 +48,22 @@ class ProjectGroup(Base):
     push_max_diff_bytes: Mapped[int | None] = mapped_column(Integer)
     push_debounce_seconds: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ENABLED")
+    description: Mapped[str | None] = mapped_column(String(512))
+    created_at: Mapped[object | None] = mapped_column(DateTime)
+    updated_at: Mapped[object | None] = mapped_column(DateTime)
+
+
+class TargetTypePathMapping(Base):
+    __tablename__ = "target_type_path_mappings"
+    __table_args__ = (
+        UniqueConstraint("target_type", name="uk_target_type_path_mapping"),
+    )
+
+    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    path_patterns: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     description: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[object | None] = mapped_column(DateTime)
     updated_at: Mapped[object | None] = mapped_column(DateTime)

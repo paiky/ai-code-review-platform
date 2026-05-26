@@ -110,7 +110,7 @@ def test_projects_api_returns_enabled_projects_page(client: TestClient, db_sessi
         {
             "id": 2,
             "groupId": 1,
-            "groupName": "默认项目组",
+            "groupName": "默认通用项目组",
             "name": "demo-service",
             "gitProvider": "GITLAB",
             "gitProjectId": "1001",
@@ -159,6 +159,7 @@ def test_project_groups_and_target_configs_can_be_managed(client: TestClient, db
     )
     assert group_response.status_code == 200
     group = group_response.json()["data"]
+    assert group["defaultCodeQualityProfileCode"] is None
     assert {key: group[key] for key in DEFAULT_PUSH_POLICY} == DEFAULT_PUSH_POLICY
 
     bind_response = client.put("/api/projects/10/group", json={"groupId": group["id"]})
@@ -277,6 +278,7 @@ def test_project_group_update_and_binding_validation(client: TestClient, db_sess
         json={
             "groupName": "PC 业务组",
             "description": "管理端项目",
+            "defaultCodeQualityProfileCode": "web-pc-default-ai-review",
             "defaultProviderCode": "DEEPSEEK",
             "pushBranchPatterns": ["release/*"],
             "pushMinChangedFiles": 2,
@@ -291,6 +293,7 @@ def test_project_group_update_and_binding_validation(client: TestClient, db_sess
     updated = update_response.json()["data"]
     assert updated["groupName"] == "PC 业务组"
     assert updated["description"] == "管理端项目"
+    assert updated["defaultCodeQualityProfileCode"] == "web-pc-default-ai-review"
     assert updated["defaultProviderCode"] == "DEEPSEEK"
     assert {key: updated[key] for key in DEFAULT_PUSH_POLICY} == {
         "pushBranchPatterns": ["release/*"],
@@ -455,7 +458,7 @@ def test_existing_project_detection_does_not_overwrite_target_configs(
     assert project["supportedTargetTypes"] == ["BACKEND"]
 
 
-def test_new_multi_target_project_records_multiple_detected_types(client: TestClient, db_session: Session) -> None:
+def test_new_multi_target_project_creates_failed_task_when_multiple_types_match(client: TestClient, db_session: Session) -> None:
     seed_template(db_session, "backend-default", "BACKEND")
     seed_template(db_session, "frontend-default", "FRONTEND")
 
@@ -473,8 +476,81 @@ def test_new_multi_target_project_records_multiple_detected_types(client: TestCl
     )
 
     assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["status"] == "FAILED"
+    assert payload["reasonCode"] == "TARGET_TYPE_AMBIGUOUS"
+    task_id = payload["taskId"]
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    assert detail["status"] == "FAILED"
+    assert set(detail["targetTypes"]) == {"WEB_PC", "BACKEND"}
+    assert "端类型路径映射命中多个端类型" in detail["errorMessage"]
     project = next(item for item in client.get("/api/projects").json()["data"]["items"] if item["gitProjectId"] == "4004")
     assert set(project["detectedTargetTypes"]) == {"WEB_PC", "BACKEND"}
     assert set(project["supportedTargetTypes"]) == {"WEB_PC", "BACKEND"}
-    configs = client.get(f"/api/projects/{project['id']}/target-configs").json()["data"]
-    assert {item["targetType"] for item in configs} == {"WEB_PC", "BACKEND"}
+
+
+def test_target_type_path_mappings_can_be_updated_and_drive_new_project_detection(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    seed_template(db_session, "frontend-default", "FRONTEND")
+
+    mappings_response = client.get("/api/target-type-path-mappings")
+    assert mappings_response.status_code == 200
+    mappings = mappings_response.json()["data"]
+    assert any(item["targetType"] == "WEB_PC" for item in mappings)
+
+    updated = [
+        {
+            **item,
+            "pathPatterns": ["client-web/**"] if item["targetType"] == "WEB_PC" else item["pathPatterns"],
+        }
+        for item in mappings
+    ]
+    save_response = client.put("/api/target-type-path-mappings", json={"items": updated})
+    assert save_response.status_code == 200
+
+    response = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=mr_payload(
+            4005,
+            "platform/client",
+            [{"path": "client-web/src/App.jsx", "diffText": "+ export default App"}],
+        ),
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    assert detail["targetType"] == "WEB_PC"
+    assert detail["codeQualityProfileCode"] == "web-pc-default-ai-review"
+
+
+def test_unmatched_new_project_uses_general_and_records_ai_review_profile_failure(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session, "general-default", "GENERAL")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+
+    response = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=mr_payload(
+            4006,
+            "docs/unknown",
+            [{"path": "docs/guide.md", "diffText": "+ docs only"}],
+        ),
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    assert detail["status"] == "SUCCESS"
+    assert detail["targetType"] == "GENERAL"
+    assert detail["codeQualityProfileCode"] is None
+    result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
+    assert result["status"] == "FAILED"
+    assert "项目所属项目组未设置 AI Review 模板" in result["errorMessage"]

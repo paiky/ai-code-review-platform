@@ -80,11 +80,11 @@ const TARGET_TYPE_OPTIONS = [
   { label: '通用', value: 'GENERAL' }
 ];
 const TARGET_TYPE_DEFAULT_PATH_PATTERNS = {
-  BACKEND: ['backend-python/**', 'backend/**', 'src/main/**', 'src/test/**', 'pom.xml', 'requirements*.txt'],
-  WEB_PC: ['frontend/**', 'web/**', 'src/**/*.tsx', 'src/**/*.jsx', 'src/**/*.vue'],
-  APP_IOS: ['ios/**', '**/*.swift', '**/*.m', '**/*.mm'],
-  APP_ANDROID: ['android/**', '**/*.kt', '**/*.kts', '**/*.gradle'],
-  APP_CROSS_PLATFORM: ['flutter/**', 'rn/**', 'miniapp/**', '**/*.dart'],
+  BACKEND: ['src/main/java/**', 'src/main/resources/**', 'src/*.java', 'src/**/*.java', 'pom.xml', 'backend-python/**', 'backend/**'],
+  WEB_PC: ['frontend/**', 'web/**', 'src/**/*.tsx', 'src/**/*.jsx', 'src/**/*.vue', 'package.json'],
+  APP_IOS: ['ios/**', '**/*.swift', '**/*.m', '**/*.mm', 'Podfile'],
+  APP_ANDROID: ['android/**', '**/*.kt', '**/*.kts', 'build.gradle', 'settings.gradle', '**/*.gradle'],
+  APP_CROSS_PLATFORM: ['flutter/**', '**/*.dart', 'pubspec.yaml', 'rn/**', 'miniapp/**'],
   GENERAL: ['**/*']
 };
 const DEFAULT_PUSH_REVIEW_POLICY = {
@@ -105,17 +105,6 @@ function defaultTemplateCodeForTargetType(targetType) {
   if (targetType === 'BACKEND') return 'backend-default';
   if (targetType === 'GENERAL') return 'general-default';
   return 'frontend-default';
-}
-
-function defaultProfileCodeForTargetType(targetType) {
-  return {
-    BACKEND: 'backend-default-ai-review',
-    WEB_PC: 'web-pc-default-ai-review',
-    APP_IOS: 'app-ios-default-ai-review',
-    APP_ANDROID: 'app-android-default-ai-review',
-    APP_CROSS_PLATFORM: 'app-cross-platform-default-ai-review',
-    GENERAL: 'backend-default-ai-review'
-  }[targetType] || 'backend-default-ai-review';
 }
 
 function defaultReminderCardEnabledForTargetType(targetType) {
@@ -200,7 +189,7 @@ function severityColor(value) {
 function severityLabel(value) {
   switch (value) {
     case 'CRITICAL':
-      return '严重';
+      return '紧急';
     case 'HIGH':
     case 'MAJOR':
       return '高风险';
@@ -2055,6 +2044,9 @@ function TaskDetail({ taskId, onBack, onOpen }) {
                 <Descriptions.Item label="Profile">{detail.codeQualityProfileCode || '-'}</Descriptions.Item>
                 <Descriptions.Item label="事件时间">{detail.eventTime || '-'}</Descriptions.Item>
               </Descriptions>
+              {detail.errorMessage && (
+                <Alert className="section-gap" type="error" showIcon message="任务执行失败" description={detail.errorMessage} />
+              )}
             </Card>
             <Tabs activeKey={displayedActiveTabKey} onChange={setActiveTabKey} items={tabItems} />
           </Space>
@@ -2068,7 +2060,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 function TemplateConfig() {
   const [templates, setTemplates] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultProviderCode: null, dingtalkWebhooks: [] });
+  const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, dingtalkWebhooks: [] });
   const [editingGroupId, setEditingGroupId] = useState(null);
   const [editingGroupDraft, setEditingGroupDraft] = useState(null);
   const [projectGroupFilter, setProjectGroupFilter] = useState(null);
@@ -2083,6 +2075,7 @@ function TemplateConfig() {
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [projectConfigDraft, setProjectConfigDraft] = useState(null);
   const [projectTargetConfigs, setProjectTargetConfigs] = useState([]);
+  const [targetPathMappings, setTargetPathMappings] = useState([]);
   const [selectedTargetType, setSelectedTargetType] = useState(null);
   const [targetConfigDraft, setTargetConfigDraft] = useState(null);
   const [selectedTemplateCode, setSelectedTemplateCode] = useState(null);
@@ -2109,6 +2102,7 @@ function TemplateConfig() {
   const [projectCreating, setProjectCreating] = useState(false);
   const [projectConfigSaving, setProjectConfigSaving] = useState(false);
   const [targetConfigSaving, setTargetConfigSaving] = useState(false);
+  const [targetPathMappingSaving, setTargetPathMappingSaving] = useState(false);
   const [projectConfigReloading, setProjectConfigReloading] = useState(false);
   const [notificationSaving, setNotificationSaving] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
@@ -2122,13 +2116,14 @@ function TemplateConfig() {
     setLoading(true);
     setError(null);
     try {
-      const [settingsData, profileData, providerData, templateData, groupData, projectData] = await Promise.all([
+      const [settingsData, profileData, providerData, templateData, groupData, projectData, pathMappingData] = await Promise.all([
         fetchApi('/api/code-quality-reviews/settings'),
         fetchApi('/api/code-quality-review-profiles'),
         fetchApi('/api/code-quality-review-providers'),
         fetchApi('/api/rule-templates'),
         fetchApi('/api/project-groups'),
-        fetchApi('/api/projects?includeDisabled=true')
+        fetchApi('/api/projects?includeDisabled=true'),
+        fetchApi('/api/target-type-path-mappings')
       ]);
       const profileItems = Array.isArray(profileData) ? profileData : (profileData.items || []);
       const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
@@ -2154,6 +2149,7 @@ function TemplateConfig() {
       });
       setTemplates(templateItems);
       setGroups(groupItems);
+      setTargetPathMappings(Array.isArray(pathMappingData) ? pathMappingData : []);
       setSelectedPushPolicyGroupId(nextPushPolicyGroupId);
       setPushPolicyDraft(pushPolicyFromGroup(groupItems.find(group => group.id === nextPushPolicyGroupId)));
       setProjects(projectItems);
@@ -2264,6 +2260,8 @@ function TemplateConfig() {
   const refreshProjectConfigData = async () => {
     setProjectConfigReloading(true);
     try {
+      const mappings = await fetchApi('/api/target-type-path-mappings');
+      setTargetPathMappings(Array.isArray(mappings) ? mappings : []);
       await reloadProjectGroupsAndProjects();
     } catch (err) {
       messageApi.error(err.message);
@@ -2317,7 +2315,6 @@ function TemplateConfig() {
     setTargetConfigDraft(projectTargetConfigs.find(item => item.targetType === targetType) || {
       targetType,
       templateCode: defaultTemplateCodeForTargetType(targetType),
-      codeQualityProfileCode: defaultProfileCodeForTargetType(targetType),
       providerCode: null,
       pathPatterns: [],
       reminderCardEnabled: defaultReminderCardEnabledForTargetType(targetType),
@@ -2329,20 +2326,19 @@ function TemplateConfig() {
     const detectedType = targetType || currentProject?.detectedTargetTypes?.[0];
     if (!detectedType) return;
     const defaults = {
-      BACKEND: { profileCode: 'backend-default-ai-review', reminderCardEnabled: true },
-      WEB_PC: { profileCode: 'web-pc-default-ai-review', reminderCardEnabled: false },
-      APP_IOS: { profileCode: 'app-ios-default-ai-review', reminderCardEnabled: false },
-      APP_ANDROID: { profileCode: 'app-android-default-ai-review', reminderCardEnabled: false },
-      APP_CROSS_PLATFORM: { profileCode: 'app-cross-platform-default-ai-review', reminderCardEnabled: false },
-      GENERAL: { profileCode: 'backend-default-ai-review', reminderCardEnabled: false }
-    }[detectedType] || { profileCode: 'backend-default-ai-review', reminderCardEnabled: false };
+      BACKEND: { reminderCardEnabled: true },
+      WEB_PC: { reminderCardEnabled: false },
+      APP_IOS: { reminderCardEnabled: false },
+      APP_ANDROID: { reminderCardEnabled: false },
+      APP_CROSS_PLATFORM: { reminderCardEnabled: false },
+      GENERAL: { reminderCardEnabled: false }
+    }[detectedType] || { reminderCardEnabled: false };
     setSelectedTargetType(detectedType);
     setProjectConfigDraft(current => current ? { ...current, targetType: detectedType } : current);
     setTargetConfigDraft({
       ...(projectTargetConfigs.find(item => item.targetType === detectedType) || {}),
       targetType: detectedType,
       templateCode: defaultTemplateCodeForTargetType(detectedType),
-      codeQualityProfileCode: defaults.profileCode,
       providerCode: null,
       pathPatterns: buildDetectedPathPatterns(detectedType),
       reminderCardEnabled: defaults.reminderCardEnabled,
@@ -2494,11 +2490,12 @@ function TemplateConfig() {
           groupName,
           groupCode,
           description: groupDraft.description?.trim() || null,
+          defaultCodeQualityProfileCode: groupDraft.defaultCodeQualityProfileCode || null,
           defaultProviderCode: groupDraft.defaultProviderCode || null,
           dingtalkWebhooks: normalizeWebhookPayload(groupDraft.dingtalkWebhooks || [])
         })
       });
-      setGroupDraft({ groupName: '', groupCode: '', description: '', defaultProviderCode: null, dingtalkWebhooks: [] });
+      setGroupDraft({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, dingtalkWebhooks: [] });
       await reloadProjectGroupsAndProjects();
       messageApi.success('项目组已创建');
     } catch (err) {
@@ -2529,6 +2526,7 @@ function TemplateConfig() {
           groupName,
           groupCode,
           description: editingGroupDraft.description?.trim() || null,
+          defaultCodeQualityProfileCode: editingGroupDraft.defaultCodeQualityProfileCode || null,
           defaultProviderCode: editingGroupDraft.defaultProviderCode || null,
           status: editingGroupDraft.status || 'ENABLED',
           dingtalkWebhooks: normalizeWebhookPayload(editingGroupDraft.dingtalkWebhooks || [])
@@ -2579,7 +2577,6 @@ function TemplateConfig() {
         method: 'PUT',
         body: JSON.stringify({
           templateCode: defaultTemplateCodeForTargetType(normalizedTargetType),
-          codeQualityProfileCode: existing?.codeQualityProfileCode || defaultProfileCodeForTargetType(normalizedTargetType),
           providerCode: existing?.providerCode || null,
           pathPatterns: existing?.pathPatterns?.length ? existing.pathPatterns : ['**/*'],
           reminderCardEnabled: existing?.reminderCardEnabled ?? defaultReminderCardEnabledForTargetType(normalizedTargetType),
@@ -2592,7 +2589,6 @@ function TemplateConfig() {
           method: 'PUT',
           body: JSON.stringify({
             templateCode: item.templateCode || defaultTemplateCodeForTargetType(item.targetType),
-            codeQualityProfileCode: item.codeQualityProfileCode || defaultProfileCodeForTargetType(item.targetType),
             providerCode: item.providerCode || null,
             pathPatterns: item.pathPatterns || [],
             reminderCardEnabled: item.reminderCardEnabled,
@@ -2656,7 +2652,6 @@ function TemplateConfig() {
         method: 'PUT',
         body: JSON.stringify({
           templateCode: defaultTemplateCodeForTargetType(selectedTargetType),
-          codeQualityProfileCode: targetConfigDraft.codeQualityProfileCode,
           providerCode: targetConfigDraft.providerCode || null,
           pathPatterns: targetConfigDraft.pathPatterns || [],
           reminderCardEnabled: targetConfigDraft.reminderCardEnabled,
@@ -2674,6 +2669,61 @@ function TemplateConfig() {
       messageApi.error(err.message);
     } finally {
       setTargetConfigSaving(false);
+    }
+  };
+
+  const targetPathMappingDrafts = TARGET_TYPE_OPTIONS
+    .filter(item => item.value !== 'GENERAL')
+    .map((option, index) => {
+      const existing = targetPathMappings.find(item => item.targetType === option.value);
+      return existing || {
+        targetType: option.value,
+        pathPatterns: defaultPathPatternsForTargetType(option.value),
+        enabled: true,
+        sortOrder: (index + 1) * 10,
+        description: '系统默认端类型路径映射'
+      };
+    });
+
+  const updateTargetPathMappingDraft = (targetType, field, value) => {
+    setTargetPathMappings(current => {
+      const drafts = TARGET_TYPE_OPTIONS
+        .filter(item => item.value !== 'GENERAL')
+        .map((option, index) => {
+          const existing = current.find(item => item.targetType === option.value);
+          return existing || {
+            targetType: option.value,
+            pathPatterns: defaultPathPatternsForTargetType(option.value),
+            enabled: true,
+            sortOrder: (index + 1) * 10,
+            description: '系统默认端类型路径映射'
+          };
+        });
+      return drafts.map(item => item.targetType === targetType ? { ...item, [field]: value } : item);
+    });
+  };
+
+  const saveTargetPathMappings = async () => {
+    setTargetPathMappingSaving(true);
+    try {
+      const updated = await fetchApi('/api/target-type-path-mappings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          items: targetPathMappingDrafts.map((item, index) => ({
+            targetType: item.targetType,
+            pathPatterns: item.pathPatterns || [],
+            enabled: item.enabled !== false,
+            sortOrder: item.sortOrder ?? (index + 1) * 10,
+            description: item.description || null
+          }))
+        })
+      });
+      setTargetPathMappings(Array.isArray(updated) ? updated : []);
+      messageApi.success('端类型路径映射已保存');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setTargetPathMappingSaving(false);
     }
   };
 
@@ -2923,6 +2973,7 @@ function TemplateConfig() {
     value: provider.providerCode
   }));
   const groupProviderOptions = [{ label: '不指定', value: '' }, ...providerOptions];
+  const groupProfileOptions = [{ label: '不指定', value: '' }, ...profileOptions];
   const profileProviderOptions = [{ label: '使用当前模型 Provider', value: '' }, ...providerOptions];
   const providerApiKeyPlaceholder = '留空表示不更新当前 API Key';
   const templateOptions = templates.map(template => ({
@@ -3029,6 +3080,17 @@ function TemplateConfig() {
       render: (_, group) => editingGroupId === group.id ? (
         <Input disabled={group.groupCode === 'default'} value={editingGroupDraft?.groupCode || ''} onChange={event => updateEditingGroupDraft('groupCode', event.target.value)} />
       ) : group.groupCode
+    },
+    {
+      title: 'AI Review 模板',
+      dataIndex: 'defaultCodeQualityProfileCode',
+      width: 220,
+      render: (_, group) => editingGroupId === group.id ? (
+        <Select className="full-width" value={editingGroupDraft?.defaultCodeQualityProfileCode || ''} options={groupProfileOptions} onChange={value => updateEditingGroupDraft('defaultCodeQualityProfileCode', value || null)} />
+      ) : (() => {
+        const profile = profiles.find(item => item.profileCode === group.defaultCodeQualityProfileCode);
+        return profile ? profileLabel(profile) : (group.defaultCodeQualityProfileCode || '-');
+      })()
     },
     {
       title: '默认 Provider',
@@ -3179,7 +3241,7 @@ function TemplateConfig() {
                   <Button icon={<ReloadOutlined />} onClick={refreshProjectConfigData} loading={projectConfigReloading}>刷新</Button>
                 </div>
                 <Row gutter={[12, 12]} align="bottom">
-                  <Col xs={24} md={5}>
+                  <Col xs={24} md={4}>
                     <Text strong>名称</Text>
                     <Input
                       className="prompt-field"
@@ -3188,13 +3250,22 @@ function TemplateConfig() {
                       onChange={event => updateGroupDraft('groupName', event.target.value)}
                     />
                   </Col>
-                  <Col xs={24} md={5}>
+                  <Col xs={24} md={4}>
                     <Text strong>编码</Text>
                     <Input
                       className="prompt-field"
                       value={groupDraft.groupCode}
                       placeholder="例如 mobile"
                       onChange={event => updateGroupDraft('groupCode', event.target.value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={5}>
+                    <Text strong>AI Review 模板</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      value={groupDraft.defaultCodeQualityProfileCode || ''}
+                      options={groupProfileOptions}
+                      onChange={value => updateGroupDraft('defaultCodeQualityProfileCode', value || null)}
                     />
                   </Col>
                   <Col xs={24} md={5}>
@@ -3206,7 +3277,7 @@ function TemplateConfig() {
                       onChange={value => updateGroupDraft('defaultProviderCode', value || null)}
                     />
                   </Col>
-                  <Col xs={24} md={6}>
+                  <Col xs={24} md={4}>
                     <Text strong>描述</Text>
                     <Input
                       className="prompt-field"
@@ -3215,7 +3286,7 @@ function TemplateConfig() {
                       onChange={event => updateGroupDraft('description', event.target.value)}
                     />
                   </Col>
-                  <Col xs={24} md={3}>
+                  <Col xs={24} md={2}>
                     <Button block type="primary" icon={<PlusOutlined />} loading={projectGroupCreating} onClick={createProjectGroup}>
                       新增
                     </Button>
@@ -3235,7 +3306,7 @@ function TemplateConfig() {
                   pagination={false}
                   columns={groupColumns}
                   dataSource={groups}
-                  scroll={{ x: 980 }}
+                  scroll={{ x: 1180 }}
                 />
                 {editingGroupDraft && (
                   <div className="settings-subsection">
@@ -3256,62 +3327,55 @@ function TemplateConfig() {
             </div>
             <div className="settings-subsection">
               <Space direction="vertical" size="middle" className="full-width">
-                <Space wrap>
-                  <Text strong>预创建 GitLab 项目</Text>
-                  <Text type="secondary">适合 webhook 接入前先配置项目组和端类型</Text>
-                </Space>
-                <Row gutter={[12, 12]} align="bottom">
-                  <Col xs={24} md={5}>
-                    <Text strong>项目名称</Text>
-                    <Input
-                      className="prompt-field"
-                      value={projectDraft.name}
-                      placeholder="例如 mobile-ios"
-                      onChange={event => updateProjectDraft('name', event.target.value)}
-                    />
-                  </Col>
-                  <Col xs={24} md={4}>
-                    <Text strong>GitLab 项目 ID</Text>
-                    <Input
-                      className="prompt-field"
-                      value={projectDraft.gitProjectId}
-                      placeholder="例如 12345"
-                      onChange={event => updateProjectDraft('gitProjectId', event.target.value)}
-                    />
-                  </Col>
-                  <Col xs={24} md={5}>
-                    <Text strong>所属项目组</Text>
-                    <Select
-                      className="full-width prompt-field"
-                      value={projectDraft.groupId || groups[0]?.id}
-                      options={groups.map(group => ({ label: group.groupName, value: group.id }))}
-                      onChange={value => updateProjectDraft('groupId', value)}
-                    />
-                  </Col>
-                  <Col xs={24} md={4}>
-                    <Text strong>端类型</Text>
-                    <Select
-                      className="full-width prompt-field"
-                      value={projectDraft.targetType}
-                      options={TARGET_TYPE_OPTIONS}
-                      onChange={value => updateProjectDraft('targetType', value)}
-                    />
-                  </Col>
-                  <Col xs={24} md={4}>
-                    <Text strong>仓库地址</Text>
-                    <Input
-                      className="prompt-field"
-                      value={projectDraft.repositoryUrl}
-                      placeholder="可选"
-                      onChange={event => updateProjectDraft('repositoryUrl', event.target.value)}
-                    />
-                  </Col>
-                  <Col xs={24} md={2}>
-                    <Button block type="primary" loading={projectCreating} onClick={createProjectRecord}>
-                      创建
-                    </Button>
-                  </Col>
-                </Row>
+                <div className="settings-inline-head">
+                  <Space wrap>
+                    <Text strong>端类型路径映射</Text>
+                    <Tag>{targetPathMappingDrafts.filter(item => item.enabled !== false).length} 个启用</Tag>
+                  </Space>
+                  <Button type="primary" loading={targetPathMappingSaving} onClick={saveTargetPathMappings}>
+                    保存路径映射
+                  </Button>
+                </div>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Webhook 新项目会先按这里的路径映射识别端类型；同一次变更命中多个端类型时会生成失败任务，提示调整映射。"
+                />
+                <Table
+                  size="small"
+                  rowKey="targetType"
+                  pagination={false}
+                  dataSource={targetPathMappingDrafts}
+                  columns={[
+                    { title: '端类型', dataIndex: 'targetType', width: 160, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
+                    {
+                      title: '路径匹配',
+                      dataIndex: 'pathPatterns',
+                      render: (_, row) => (
+                        <Select
+                          mode="tags"
+                          className="full-width"
+                          value={row.pathPatterns || []}
+                          onChange={value => updateTargetPathMappingDraft(row.targetType, 'pathPatterns', value)}
+                        />
+                      )
+                    },
+                    {
+                      title: '启用',
+                      dataIndex: 'enabled',
+                      width: 100,
+                      render: (_, row) => (
+                        <Switch
+                          checked={row.enabled !== false}
+                          checkedChildren="启用"
+                          unCheckedChildren="停用"
+                          onChange={checked => updateTargetPathMappingDraft(row.targetType, 'enabled', checked)}
+                        />
+                      )
+                    }
+                  ]}
+                  scroll={{ x: 920 }}
+                />
               </Space>
             </div>
             <div className="settings-subsection">
@@ -3431,15 +3495,6 @@ function TemplateConfig() {
                     />
                   </Col>
                   <Col xs={24} md={8}>
-                    <Text strong>AI Review Profile</Text>
-                    <Select
-                      className="full-width prompt-field"
-                      value={targetConfigDraft.codeQualityProfileCode}
-                      options={profileOptions}
-                      onChange={value => updateTargetConfigDraft('codeQualityProfileCode', value)}
-                    />
-                  </Col>
-                  <Col xs={24} md={8}>
                     <Text strong>Provider 覆盖</Text>
                     <Select
                       className="full-width prompt-field"
@@ -3450,7 +3505,7 @@ function TemplateConfig() {
                   </Col>
                   <Col xs={24}>
                     <Text type="secondary">
-                      规则模板随端类型自动选择：{defaultTemplateCodeForTargetType(selectedTargetType)}。后端端类型默认显示提醒卡片，PC / APP 默认以 AI Review 为主。
+                      规则模板随端类型自动选择：{defaultTemplateCodeForTargetType(selectedTargetType)}。AI Review 模板优先使用项目组配置；默认通用项目组会对具体端类型使用内置模板。
                     </Text>
                   </Col>
                   <Col xs={24}>

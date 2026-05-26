@@ -468,7 +468,9 @@ def trigger_auto_review(
         return False
     if find_result_response(db, task_id) is not None:
         return False
-    profile = _resolve_profile(db, task.code_quality_profile_code, project)
+    profile = _resolve_auto_profile_or_save_failure(db, task, project)
+    if profile is None:
+        return False
     if not profile.enabled:
         return False
     provider = _resolve_provider(db, project, profile, task.target_type)
@@ -564,7 +566,9 @@ def _trigger_push_auto_review(
 ) -> bool:
     if find_result_response(db, task.id) is not None:
         return False
-    profile = _resolve_profile(db, task.code_quality_profile_code, project)
+    profile = _resolve_auto_profile_or_save_failure(db, task, project)
+    if profile is None:
+        return False
     if not profile.enabled or not profile.trigger_on_push:
         _save_push_gate_rejection(
             db,
@@ -1338,7 +1342,17 @@ def _generate_fix_preview(
             "Current task did not save diff text for this file",
         )
 
-    provider = get_provider(db, review_result.get("provider") or _resolve_provider(db, project, _resolve_profile(db, None, project)).provider_code)
+    provider_code = review_result.get("provider")
+    if not provider_code and task.code_quality_profile_code:
+        provider_code = _resolve_provider(
+            db,
+            project,
+            _resolve_profile(db, task.code_quality_profile_code, project),
+            task.target_type,
+        ).provider_code
+    if not provider_code:
+        provider_code = get_settings_record(db).default_provider_code
+    provider = get_provider(db, provider_code)
     model = review_result.get("model") or provider.model_name
     file_path = file_node.get("path") or file_node.get("newPath") or finding.get("filePath") or ""
     _save_fix_preview_status(
@@ -1452,6 +1466,8 @@ def _enqueue_auto_fix_previews(
     for index, finding in enumerate(findings):
         if not isinstance(finding, dict):
             continue
+        if not _should_auto_generate_fix_preview(finding):
+            continue
         existing = find_fix_preview_response(db, task_id=task_id, finding_index=index)
         if existing and existing.get("status") == "SUCCESS":
             continue
@@ -1535,6 +1551,10 @@ def _enqueue_auto_fix_previews(
                 label="AI 修复预览",
                 file_path=file_path,
             )
+
+
+def _should_auto_generate_fix_preview(finding: dict[str, Any]) -> bool:
+    return str(finding.get("severity") or "").strip().upper() == "CRITICAL"
 
 
 def run_auto_fix_preview_job(task_id: int, finding_index: int) -> dict[str, Any]:
@@ -1702,9 +1722,57 @@ def _send_auto_review_notification(
 
 
 def _resolve_profile(db: Session, profile_code: str | None, project: Project):
-    selected = profile_code or project.default_code_quality_profile_code or "backend-default-ai-review"
+    selected = profile_code
+    if not selected:
+        raise AppError("CODE_QUALITY_PROFILE_NOT_CONFIGURED", "项目所属项目组未设置 AI Review 模板", 400)
     profile = get_profile(db, selected)
     return profile
+
+
+def _resolve_auto_profile_or_save_failure(db: Session, task: ReviewTask, project: Project):
+    try:
+        return _resolve_profile(db, task.code_quality_profile_code, project)
+    except AppError as exception:
+        message = (
+            "项目所属项目组未设置 AI Review 模板"
+            if not task.code_quality_profile_code
+            else f"项目所属项目组设置的 AI Review 模板不可用：{task.code_quality_profile_code}"
+        )
+        _save_missing_profile_failure(db, task, project, message or exception.message)
+        return None
+
+
+def _save_missing_profile_failure(db: Session, task: ReviewTask, project: Project, message: str) -> None:
+    now = datetime.now()
+    delete_progress(db, task.id)
+    append_progress(
+        db,
+        task.id,
+        "PROFILE_NOT_CONFIGURED",
+        "ERROR",
+        "AI Review 模板未配置",
+        message,
+    )
+    save_result(
+        db,
+        task_id=task.id,
+        project_id=project.id,
+        profile_code=task.code_quality_profile_code or "UNCONFIGURED",
+        provider="-",
+        model=None,
+        result={
+            "status": "FAILED",
+            "overallLevel": None,
+            "summary": None,
+            "findings": [],
+            "rawOutput": None,
+            "exitCode": None,
+            "errorMessage": message,
+            "startedAt": now,
+            "finishedAt": now,
+        },
+    )
+    db.flush()
 
 
 def _resolve_provider(db: Session, project: Project, profile, target_type: str | None = None):
