@@ -268,6 +268,8 @@ function sourceLabel(value) {
       return 'Anthropic / Claude';
     case 'DEEPSEEK':
       return 'DeepSeek';
+    case 'XIAOMIMO':
+      return 'XiaoMIMO / Xiaomi MiMo';
     case 'CUSTOM':
       return '自定义模型';
     case 'CODEX_CLI':
@@ -1144,6 +1146,10 @@ function phaseLabel(phase) {
     DEEPSEEK_RESPONSE: 'DeepSeek 已响应',
     DEEPSEEK_PARSED: '解析 DeepSeek 输出',
     DEEPSEEK_FAILED: 'DeepSeek 执行失败',
+    XIAOMIMO_REQUEST: '调用 XiaoMIMO',
+    XIAOMIMO_RESPONSE: 'XiaoMIMO 已响应',
+    XIAOMIMO_PARSED: '解析 XiaoMIMO 输出',
+    XIAOMIMO_FAILED: 'XiaoMIMO 执行失败',
     CUSTOM_REQUEST: '调用自定义 Provider',
     CUSTOM_RESPONSE: '自定义 Provider 已响应',
     CUSTOM_PARSED: '解析自定义 Provider 输出',
@@ -1190,6 +1196,9 @@ const keyProgressPhases = new Set([
   'DEEPSEEK_REQUEST',
   'DEEPSEEK_RESPONSE',
   'DEEPSEEK_PARSED',
+  'XIAOMIMO_REQUEST',
+  'XIAOMIMO_RESPONSE',
+  'XIAOMIMO_PARSED',
   'CUSTOM_REQUEST',
   'CUSTOM_RESPONSE',
   'CUSTOM_PARSED',
@@ -1211,6 +1220,7 @@ const keyProgressPhases = new Set([
   'OPENAI_FAILED',
   'ANTHROPIC_FAILED',
   'DEEPSEEK_FAILED',
+  'XIAOMIMO_FAILED',
   'CUSTOM_FAILED'
 ]);
 
@@ -1270,6 +1280,12 @@ function progressStepDescription(event) {
       return 'DeepSeek API 已返回响应。';
     case 'DEEPSEEK_PARSED':
       return 'DeepSeek 输出已解析为结构化质量问题；评审建议见上方“质量问题”。';
+    case 'XIAOMIMO_REQUEST':
+      return '开始调用 XiaoMIMO API。';
+    case 'XIAOMIMO_RESPONSE':
+      return 'XiaoMIMO API 已返回响应。';
+    case 'XIAOMIMO_PARSED':
+      return 'XiaoMIMO 输出已解析为结构化质量问题；评审建议见上方“质量问题”。';
     case 'CUSTOM_REQUEST':
       return '开始调用自定义 OpenAI-compatible Provider。';
     case 'CUSTOM_RESPONSE':
@@ -1303,6 +1319,7 @@ function progressStepDescription(event) {
     case 'OPENAI_FAILED':
     case 'ANTHROPIC_FAILED':
     case 'DEEPSEEK_FAILED':
+    case 'XIAOMIMO_FAILED':
     case 'CUSTOM_FAILED':
       return '该阶段失败，需要查看错误详情。';
     default:
@@ -2126,6 +2143,8 @@ function TemplateConfig() {
   const [projectConfigReloading, setProjectConfigReloading] = useState(false);
   const [notificationSaving, setNotificationSaving] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
+  const [providerTesting, setProviderTesting] = useState(false);
+  const [providerTestResult, setProviderTestResult] = useState(null);
   const [profileSaving, setProfileSaving] = useState(false);
   const [pushPolicySaving, setPushPolicySaving] = useState(false);
   const [promptPreviewLoading, setPromptPreviewLoading] = useState(false);
@@ -2772,10 +2791,12 @@ function TemplateConfig() {
     setSelectedProviderCode(providerCode);
     setProviderDraft(providers.find(provider => provider.providerCode === providerCode) || null);
     setProviderApiKeyDraft('');
+    setProviderTestResult(null);
   };
 
   const updateProviderDraft = (field, value) => {
     setProviderDraft(current => current ? { ...current, [field]: value } : current);
+    setProviderTestResult(null);
   };
 
   const saveProviderSettings = async () => {
@@ -2802,6 +2823,7 @@ function TemplateConfig() {
       setSelectedProviderCode(providerCode);
       setProviderDraft(providerItems.find(item => item.providerCode === providerCode) || null);
       setProviderApiKeyDraft('');
+      setProviderTestResult(null);
       messageApi.success(`${sourceLabel(providerCode)} Provider 已保存`);
     } catch (err) {
       messageApi.error(err.message);
@@ -2822,11 +2844,39 @@ function TemplateConfig() {
       setProviders(providerItems);
       setProviderDraft(providerItems.find(item => item.providerCode === providerDraft.providerCode) || null);
       setProviderApiKeyDraft('');
+      setProviderTestResult(null);
       messageApi.success(`${sourceLabel(providerDraft.providerCode)} Key 已清除`);
     } catch (err) {
       messageApi.error(err.message);
     } finally {
       setProviderSaving(false);
+    }
+  };
+
+  const testProviderConnection = async () => {
+    if (!providerDraft || providerTesting) return;
+    setProviderTesting(true);
+    setProviderTestResult(null);
+    try {
+      const body = {
+        endpointUrl: providerDraft.endpointUrl,
+        modelName: providerDraft.modelName
+      };
+      if (providerApiKeyDraft.trim()) body.apiKey = providerApiKeyDraft.trim();
+      const result = await fetchApi(`/api/code-quality-review-providers/${providerDraft.providerCode}/test`, {
+        method: 'POST',
+        body: JSON.stringify(body)
+      });
+      setProviderTestResult(result);
+      if (result?.success) {
+        messageApi.success(`${sourceLabel(providerDraft.providerCode)} 联通性测试成功`);
+      } else {
+        messageApi.error(result?.errorMessage || `${sourceLabel(providerDraft.providerCode)} 联通性测试失败`);
+      }
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setProviderTesting(false);
     }
   };
 
@@ -3682,8 +3732,31 @@ function TemplateConfig() {
             </Col>
           </Row>
           <div className="settings-action-row">
-            <Button type="primary" loading={providerSaving} onClick={saveProviderSettings} disabled={!providerDraft}>保存 Provider</Button>
+            <Space wrap>
+              <Button
+                icon={<ReloadOutlined />}
+                loading={providerTesting}
+                onClick={testProviderConnection}
+                disabled={!providerDraft || providerSaving}
+              >
+                测试联通性
+              </Button>
+              <Button type="primary" loading={providerSaving} onClick={saveProviderSettings} disabled={!providerDraft || providerTesting}>保存 Provider</Button>
+            </Space>
           </div>
+          {providerTestResult && (
+            <Alert
+              className="prompt-field"
+              showIcon
+              type={providerTestResult.success ? 'success' : 'error'}
+              message={providerTestResult.success ? `${sourceLabel(providerTestResult.providerCode)} 联通性正常` : `${sourceLabel(providerTestResult.providerCode)} 联通性失败`}
+              description={
+                providerTestResult.success
+                  ? `endpoint=${providerTestResult.endpointUrl || '-'}，model=${providerTestResult.modelName || '-'}，耗时 ${providerTestResult.latencyMs ?? '-'} ms`
+                  : (providerTestResult.errorMessage || providerTestResult.responsePreview || '请检查 API Key、端点 URL、模型名称和网络连通性。')
+              }
+            />
+          )}
         </Card>
       )
     },

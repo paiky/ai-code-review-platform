@@ -76,7 +76,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 提醒项保留原命中证据，并可在详情页直接查看对应文件 diff。
 - 钉钉消息按模板 `focusChangeTypes` 过滤提醒来源，并带上项目名称、简洁提醒和平台详情链接。
 - 审查任务、变更分析结果、提醒卡片、通知记录均落库。
-- 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek 和 OpenAI-compatible 自定义模型 Provider。
+- 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持配置 / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、自动触发、重试、执行过程展示。
 - GitLab MR 自动 AI Review 完成后会向设置页中已启用的全部钉钉 webhook 推送“代码质量 Review”结果。
 - GitLab Push webhook 会先按项目组 Push 审核策略中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会在规则提醒卡片生成后，根据提醒风险、重点变更类型、文件数、diff 大小、commit 数和 debounce 策略自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
@@ -118,6 +118,10 @@ JDK 21+ 和 Maven 3.6+ 仅在需要启动历史 Java 参考后端 `backend/` 时
 | `DEEPSEEK_API_KEY` | 空 | DeepSeek API key，首次初始化 Provider 时可作为默认值 |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek OpenAI-compatible base URL |
 | `DEEPSEEK_CODE_REVIEW_MODEL` | `deepseek-v4-pro` | DeepSeek provider 模型 |
+| `XIAOMIMO_API_KEY` | 空 | XiaoMIMO API key，首次初始化 Provider 时可作为默认值 |
+| `XIAOMIMO_BASE_URL` | `https://api.xiaomimimo.com/v1` | XiaoMIMO OpenAI-compatible base URL |
+| `XIAOMIMO_CODE_REVIEW_MODEL` | `mimo-v2.5-pro` | XiaoMIMO provider 模型 |
+| `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS` | `120` | XiaoMIMO 请求超时时间 |
 
 PowerShell 示例：
 
@@ -170,6 +174,7 @@ GITLAB_BASE_URL=https://你的 GitLab 地址
 GITLAB_TOKEN=GitLab access token
 CODE_QUALITY_REVIEW_ENABLED=true
 DEEPSEEK_API_KEY=...
+XIAOMIMO_API_KEY=...
 OPENAI_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
@@ -418,6 +423,7 @@ GET /api/code-quality-review-profiles/{profileCode}/rendered-prompt
 POST /api/code-quality-review-profiles/{profileCode}/reset-default-prompt
 GET /api/code-quality-review-providers
 PUT /api/code-quality-review-providers/{providerCode}
+POST /api/code-quality-review-providers/{providerCode}/test
 POST /api/code-quality-review-providers/{providerCode}/set-default
 GET /api/review-tasks/{taskId}/code-quality-result
 GET /api/review-tasks/{taskId}/code-quality-progress
@@ -426,7 +432,7 @@ GET /api/review-tasks/{taskId}/code-quality-fix-previews
 POST /api/review-tasks/{taskId}/code-quality-fix-preview
 ```
 
-Python AI Review 默认关闭；可在设置页直接开启或关闭“代码质量 AI Review 全局能力”。`CODE_QUALITY_REVIEW_ENABLED` 只作为兼容初始化值使用，已有数据库以设置页保存的 `reviewEnabled` 为准。启用后支持 OpenAI Responses、Anthropic Messages、DeepSeek / Custom OpenAI-compatible Chat Completions。Provider API Key 只返回 masked 形式，进度事件会做敏感字段脱敏。阶段 4 自动化验证使用 respx mock 外部模型 API，真实模型凭据联调需要单独确认。
+Python AI Review 默认关闭；可在设置页直接开启或关闭“代码质量 AI Review 全局能力”。`CODE_QUALITY_REVIEW_ENABLED` 只作为兼容初始化值使用，已有数据库以设置页保存的 `reviewEnabled` 为准。启用后支持 OpenAI Responses、Anthropic Messages、DeepSeek / XiaoMIMO / Custom OpenAI-compatible Chat Completions。Provider API Key 只返回 masked 形式，进度事件会做敏感字段脱敏。设置页 Provider 配置支持用当前表单里的端点、模型和临时 API Key 发起一次最小请求测试联通性，不会保存该临时 Key。阶段 4 自动化验证使用 respx mock 外部模型 API，真实模型凭据联调需要单独确认。
 
 AI Review 当前保持稳定的非流式 HTTP Provider 调用。前端通过 `GET /api/review-tasks/{taskId}/code-quality-progress` 和 `GET /api/review-tasks/{taskId}/code-quality-result` 轮询展示执行过程与结果，不再建立 SSE / WebSocket 连接，也不启用模型 token streaming。
 
@@ -736,6 +742,7 @@ Provider 说明：
 - `OPENAI`：调用 OpenAI Responses API。
 - `ANTHROPIC`：调用 Anthropic Messages API。
 - `DEEPSEEK`：调用 DeepSeek OpenAI-compatible Chat Completions API，默认 base URL 为 `https://api.deepseek.com`。
+- `XIAOMIMO`：调用 XiaoMIMO / Xiaomi MiMo OpenAI-compatible Chat Completions API，默认 base URL 为 `https://api.xiaomimimo.com/v1`，默认模型为 `mimo-v2.5-pro`。
 - `CUSTOM`：调用自定义 OpenAI-compatible Chat Completions API，需要配置端点 URL、模型名称和 API Key。
 
 前端“设置”页可以：
@@ -743,7 +750,7 @@ Provider 说明：
 - 控制代码质量 AI Review 全局能力；关闭后手动触发、MR 和 Push 自动流程都不会调用模型。
 - 控制是否全局发送钉钉推送；关闭后审查和落库仍正常执行。
 - 配置多个钉钉 webhook；开启钉钉推送后会向全部已启用 webhook 群发同一条通知。
-- 配置 OpenAI / Anthropic / DeepSeek / 自定义 Provider 的模型端点 URL、模型名称和 API Key。
+- 配置 OpenAI / Anthropic / DeepSeek / XiaoMIMO / 自定义 Provider 的模型端点 URL、模型名称和 API Key，并测试当前配置联通性。
 - 设置全局默认 Provider，以及项目级默认 Provider。
 - 按项目组绑定默认 AI Review Profile，通过全局端类型路径映射识别新项目端类型，并在项目端类型配置中维护 Provider 覆盖、提醒卡片展示和端类型启停策略。
 - 查看、编辑、预览、恢复 AI Review Profile 的 Review Instructions。

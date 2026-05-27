@@ -27,6 +27,10 @@ def isolate_external_integrations(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("XIAOMIMO_API_KEY", raising=False)
+    monkeypatch.delenv("XIAOMIMO_BASE_URL", raising=False)
+    monkeypatch.delenv("XIAOMIMO_CODE_REVIEW_MODEL", raising=False)
+    monkeypatch.delenv("XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS", raising=False)
 
 
 @pytest.fixture()

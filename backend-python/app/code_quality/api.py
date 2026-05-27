@@ -77,6 +77,11 @@ async def update_provider(provider_code: str, request: dict, db: Session = Depen
     return ok(service.update_provider_response(db, provider_code, request))
 
 
+@provider_router.post("/{provider_code}/test")
+async def test_provider(provider_code: str, request: dict, db: Session = Depends(get_db)) -> dict:
+    return ok(service.test_provider_response(db, provider_code, request))
+
+
 @provider_router.post("/{provider_code}/set-default")
 async def set_default_provider(provider_code: str, db: Session = Depends(get_db)) -> dict:
     return ok(service.set_default_provider_response(db, provider_code))

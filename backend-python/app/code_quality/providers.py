@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from time import perf_counter
 from typing import Any, Callable
 
 import httpx
@@ -72,6 +73,61 @@ def run_fix_provider(
         return _run_openai_compatible_fix(db, task_id, provider, fix_request)
     _validation_failed(db, task_id, f"Unsupported provider type: {provider.provider_type}")
     raise AppError("BAD_REQUEST", f"Unsupported provider type: {provider.provider_type}", 400)
+
+
+def test_provider_connection(
+    provider: CodeQualityModelProvider,
+    request: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    request = request or {}
+    started_at = datetime.now()
+    try:
+        prepared = _provider_connection_request(provider, request)
+        started = perf_counter()
+        with httpx.Client(timeout=prepared["timeout_seconds"]) as client:
+            response = client.post(
+                prepared["endpoint"],
+                json=prepared["body"],
+                headers=prepared["headers"],
+            )
+        latency_ms = int((perf_counter() - started) * 1000)
+        raw = response.text
+        if response.is_error:
+            error_message = (
+                f"http_status_error: status={response.status_code}, "
+                f"body={_abbreviate(raw, 1000)}"
+            )
+            return _provider_connection_result(
+                provider,
+                prepared,
+                "FAILED",
+                latency_ms,
+                error_message=error_message,
+                response_preview=raw,
+                started_at=started_at,
+            )
+        output_text = prepared["output_extractor"](raw)
+        return _provider_connection_result(
+            provider,
+            prepared,
+            "SUCCESS",
+            latency_ms,
+            response_preview=output_text,
+            started_at=started_at,
+        )
+    except Exception as exception:
+        prepared = {
+            "endpoint": _blank_to_none(request.get("endpointUrl")) or provider.endpoint_url,
+            "model": _blank_to_none(request.get("modelName")) or provider.model_name,
+        }
+        return _provider_connection_result(
+            provider,
+            prepared,
+            "FAILED",
+            None,
+            error_message=_provider_error_message(exception, 30),
+            started_at=started_at,
+        )
 
 
 def _run_openai_responses(
@@ -244,8 +300,7 @@ def _run_openai_compatible(
     provider: CodeQualityModelProvider,
     review_request: dict[str, Any],
 ) -> dict[str, Any]:
-    settings = get_settings()
-    api_key = provider.api_key or (settings.deepseek_api_key if provider.provider_code == "DEEPSEEK" else "")
+    api_key = provider.api_key or _openai_compatible_env_api_key(provider.provider_code)
     endpoint_base = provider.endpoint_url
     model = review_request.get("model") or provider.model_name
     validation_error = _validation_error(
@@ -275,7 +330,7 @@ def _run_openai_compatible(
         model=model,
         body=body,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        timeout_seconds=settings.openai_code_review_timeout_seconds,
+        timeout_seconds=_openai_compatible_timeout_seconds(provider.provider_code),
         output_extractor=_extract_openai_compatible_output,
         review_request=review_request,
     )
@@ -287,8 +342,7 @@ def _run_openai_compatible_fix(
     provider: CodeQualityModelProvider,
     fix_request: dict[str, Any],
 ) -> dict[str, Any]:
-    settings = get_settings()
-    api_key = provider.api_key or (settings.deepseek_api_key if provider.provider_code == "DEEPSEEK" else "")
+    api_key = provider.api_key or _openai_compatible_env_api_key(provider.provider_code)
     endpoint_base = provider.endpoint_url
     model = fix_request.get("model") or provider.model_name
     validation_error = _validation_error(
@@ -316,10 +370,204 @@ def _run_openai_compatible_fix(
         model=model,
         body=prompt.openai_chat_compatible_fix_request(model, fix_request),
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        timeout_seconds=settings.openai_code_review_timeout_seconds,
+        timeout_seconds=_openai_compatible_timeout_seconds(provider.provider_code),
         output_extractor=_extract_openai_compatible_output,
         request=fix_request,
     )
+
+
+def _openai_compatible_env_api_key(provider_code: str) -> str:
+    settings = get_settings()
+    if provider_code == "DEEPSEEK":
+        return settings.deepseek_api_key
+    if provider_code == "XIAOMIMO":
+        return settings.xiaomimo_api_key
+    return ""
+
+
+def _openai_compatible_timeout_seconds(provider_code: str) -> int:
+    settings = get_settings()
+    if provider_code == "XIAOMIMO":
+        return settings.xiaomimo_code_review_timeout_seconds
+    return settings.openai_code_review_timeout_seconds
+
+
+def _provider_connection_request(
+    provider: CodeQualityModelProvider,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    settings = get_settings()
+    provider_type = provider.provider_type
+    if provider_type == "OPENAI_RESPONSES":
+        endpoint = _request_value(
+            request,
+            "endpointUrl",
+            provider.endpoint_url or settings.openai_responses_url,
+        )
+        model = _request_value(
+            request,
+            "modelName",
+            provider.model_name or settings.openai_code_review_model,
+        )
+        api_key = _request_value(request, "apiKey", provider.api_key or settings.openai_api_key)
+        validation_error = _connection_validation_error(
+            provider.provider_code,
+            api_key,
+            endpoint,
+            model,
+        )
+        if validation_error:
+            raise ValueError(validation_error)
+        return {
+            "endpoint": endpoint,
+            "model": model,
+            "timeout_seconds": _connection_timeout_seconds(
+                request,
+                settings.openai_code_review_timeout_seconds,
+            ),
+            "body": {"model": model, "input": "Reply with the single word pong.", "store": False},
+            "headers": {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            "output_extractor": _extract_openai_output,
+        }
+    if provider_type == "ANTHROPIC_MESSAGES":
+        endpoint = _request_value(
+            request,
+            "endpointUrl",
+            provider.endpoint_url or settings.anthropic_messages_url,
+        )
+        model = _request_value(
+            request,
+            "modelName",
+            provider.model_name or settings.anthropic_code_review_model,
+        )
+        api_key = _request_value(request, "apiKey", provider.api_key or settings.anthropic_api_key)
+        validation_error = _connection_validation_error(
+            provider.provider_code,
+            api_key,
+            endpoint,
+            model,
+        )
+        if validation_error:
+            raise ValueError(validation_error)
+        return {
+            "endpoint": endpoint,
+            "model": model,
+            "timeout_seconds": _connection_timeout_seconds(
+                request,
+                settings.anthropic_code_review_timeout_seconds,
+            ),
+            "body": {
+                "model": model,
+                "max_tokens": 32,
+                "messages": [{"role": "user", "content": "Reply with the single word pong."}],
+            },
+            "headers": {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            "output_extractor": _extract_anthropic_output,
+        }
+    if provider_type == "OPENAI_CHAT_COMPATIBLE":
+        endpoint_base = _request_value(request, "endpointUrl", provider.endpoint_url)
+        endpoint = _chat_completions_url(endpoint_base) if endpoint_base else None
+        model = _request_value(request, "modelName", provider.model_name)
+        api_key = _request_value(
+            request,
+            "apiKey",
+            provider.api_key or _openai_compatible_env_api_key(provider.provider_code),
+        )
+        validation_error = _connection_validation_error(
+            provider.provider_code,
+            api_key,
+            endpoint_base,
+            model,
+        )
+        if validation_error:
+            raise ValueError(validation_error)
+        return {
+            "endpoint": endpoint,
+            "model": model,
+            "timeout_seconds": _connection_timeout_seconds(
+                request,
+                _openai_compatible_timeout_seconds(provider.provider_code),
+            ),
+            "body": {
+                "model": model,
+                "messages": [{"role": "user", "content": "Reply with the single word pong."}],
+            },
+            "headers": {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            "output_extractor": _extract_openai_compatible_output,
+        }
+    raise ValueError(f"Unsupported provider type: {provider_type}")
+
+
+def _connection_validation_error(
+    provider_code: str,
+    api_key: str | None,
+    endpoint_url: str | None,
+    model: str | None,
+) -> str | None:
+    if not api_key:
+        return f"{provider_code} API key is required for provider connectivity test"
+    if not endpoint_url:
+        return f"{provider_code} endpointUrl is required for provider connectivity test"
+    if not model:
+        return f"{provider_code} modelName is required for provider connectivity test"
+    return None
+
+
+def _request_value(request: dict[str, Any], key: str, fallback: str | None) -> str | None:
+    if key in request:
+        return _blank_to_none(request.get(key))
+    return _blank_to_none(fallback)
+
+
+def _blank_to_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _connection_timeout_seconds(request: dict[str, Any], default_timeout: int) -> int:
+    raw = request.get("timeoutSeconds")
+    if raw is not None:
+        try:
+            return min(max(int(raw), 1), 120)
+        except (TypeError, ValueError):
+            return 30
+    return min(max(int(default_timeout or 30), 1), 30)
+
+
+def _provider_connection_result(
+    provider: CodeQualityModelProvider,
+    prepared: dict[str, Any],
+    status: str,
+    latency_ms: int | None,
+    *,
+    error_message: str | None = None,
+    response_preview: str | None = None,
+    started_at: datetime,
+) -> dict[str, Any]:
+    return {
+        "providerCode": provider.provider_code,
+        "providerType": provider.provider_type,
+        "endpointUrl": prepared.get("endpoint"),
+        "modelName": prepared.get("model"),
+        "status": status,
+        "success": status == "SUCCESS",
+        "latencyMs": latency_ms,
+        "message": (
+            "Provider connectivity test succeeded"
+            if status == "SUCCESS"
+            else "Provider connectivity test failed"
+        ),
+        "responsePreview": _abbreviate(response_preview, 500),
+        "errorMessage": scrub_sensitive(error_message),
+        "startedAt": started_at.isoformat(),
+        "finishedAt": datetime.now().isoformat(),
+    }
 
 
 def _run_json_http_provider(

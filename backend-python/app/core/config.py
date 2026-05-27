@@ -34,6 +34,10 @@ class Settings:
     deepseek_api_key: str
     deepseek_base_url: str
     deepseek_code_review_model: str
+    xiaomimo_api_key: str
+    xiaomimo_base_url: str
+    xiaomimo_code_review_model: str
+    xiaomimo_code_review_timeout_seconds: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -75,6 +79,12 @@ class Settings:
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
             deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             deepseek_code_review_model=os.getenv("DEEPSEEK_CODE_REVIEW_MODEL", "deepseek-v4-pro"),
+            xiaomimo_api_key=os.getenv("XIAOMIMO_API_KEY", ""),
+            xiaomimo_base_url=os.getenv("XIAOMIMO_BASE_URL", "https://api.xiaomimimo.com/v1"),
+            xiaomimo_code_review_model=os.getenv("XIAOMIMO_CODE_REVIEW_MODEL", "mimo-v2.5-pro"),
+            xiaomimo_code_review_timeout_seconds=int(
+                os.getenv("XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS", "120")
+            ),
         )
 
 

@@ -210,6 +210,17 @@ def ensure_defaults(db: Session) -> None:
         True,
         30,
     )
+    _upsert_default_provider(
+        db,
+        "XIAOMIMO",
+        "XiaoMIMO / Xiaomi MiMo",
+        "OPENAI_CHAT_COMPATIBLE",
+        settings.xiaomimo_base_url,
+        settings.xiaomimo_code_review_model,
+        settings.xiaomimo_api_key,
+        True,
+        35,
+    )
     _upsert_default_provider(db, "CUSTOM", "自定义 OpenAI-compatible", "OPENAI_CHAT_COMPATIBLE", None, None, None, False, 40)
 
     profile = _upsert_built_in_profile(db, DEFAULT_PROFILE_CODE)

@@ -208,6 +208,24 @@ def test_provider_update_masks_api_key(
     assert "sk-test-secret-123456" not in json.dumps(response.json(), ensure_ascii=False)
 
 
+def test_xiaomimo_provider_update_masks_api_key(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+
+    response = client.put(
+        "/api/code-quality-review-providers/XIAOMIMO",
+        json={"apiKey": "mimo-secret-123456", "modelName": "mimo-v2.5-pro"},
+    )
+
+    assert response.status_code == 200
+    xiaomimo = next(item for item in response.json()["data"] if item["providerCode"] == "XIAOMIMO")
+    assert xiaomimo["apiKeyConfigured"] is True
+    assert xiaomimo["apiKeyMasked"] == "mimo...3456"
+    assert "mimo-secret-123456" not in json.dumps(response.json(), ensure_ascii=False)
+
+
 def test_provider_list_exposes_basic_provider_config(
     client: TestClient,
     monkeypatch,
@@ -218,11 +236,101 @@ def test_provider_list_exposes_basic_provider_config(
 
     assert response.status_code == 200
     providers = {item["providerCode"]: item for item in response.json()["data"]}
-    assert set(providers) == {"OPENAI", "ANTHROPIC", "DEEPSEEK", "CUSTOM"}
+    assert set(providers) == {"OPENAI", "ANTHROPIC", "DEEPSEEK", "XIAOMIMO", "CUSTOM"}
     assert providers["OPENAI"]["providerType"] == "OPENAI_RESPONSES"
     assert providers["DEEPSEEK"]["providerType"] == "OPENAI_CHAT_COMPATIBLE"
+    assert providers["XIAOMIMO"]["providerType"] == "OPENAI_CHAT_COMPATIBLE"
+    assert providers["XIAOMIMO"]["endpointUrl"] == "https://api.xiaomimimo.com/v1"
+    assert providers["XIAOMIMO"]["modelName"] == "mimo-v2.5-pro"
     assert "capabilities" not in providers["OPENAI"]
     assert "streamingConfig" not in providers["OPENAI"]
+
+
+@respx.mock
+def test_provider_connectivity_uses_unsaved_xiaomimo_draft(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    route = respx.post("https://draft-xiaomimo.example.com/v1/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": "pong"}}]})
+    )
+
+    response = client.post(
+        "/api/code-quality-review-providers/XIAOMIMO/test",
+        json={
+            "endpointUrl": "https://draft-xiaomimo.example.com/v1",
+            "modelName": "draft-mimo-model",
+            "apiKey": "draft-xiaomimo-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "SUCCESS"
+    assert data["success"] is True
+    assert data["endpointUrl"] == "https://draft-xiaomimo.example.com/v1/chat/completions"
+    assert data["modelName"] == "draft-mimo-model"
+    request = route.calls[0].request
+    assert request.headers["authorization"] == "Bearer draft-xiaomimo-secret"
+    assert json.loads(request.content.decode("utf-8"))["model"] == "draft-mimo-model"
+    assert "draft-xiaomimo-secret" not in json.dumps(response.json(), ensure_ascii=False)
+
+
+def test_provider_connectivity_missing_key_returns_failed_result(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+
+    response = client.post(
+        "/api/code-quality-review-providers/XIAOMIMO/test",
+        json={"endpointUrl": "https://api.xiaomimimo.com/v1", "modelName": "mimo-v2.5-pro"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "FAILED"
+    assert data["success"] is False
+    assert "API key is required" in data["errorMessage"]
+
+
+@respx.mock
+def test_xiaomimo_provider_uses_openai_compatible_request(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("XIAOMIMO_API_KEY", "xiaomimo-secret")
+    seed_project(db_session, "XIAOMIMO")
+    route = respx.post("https://api.xiaomimimo.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={"choices": [{"message": {"content": review_card_json("XiaoMIMO 完成")}}]},
+        )
+    )
+
+    response = client.post("/api/code-quality-reviews/manual", json=manual_request())
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "SUCCESS"
+    assert data["provider"] == "XIAOMIMO"
+    request_body = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert request_body["model"] == "mimo-v2.5-pro"
+    result = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-result").json()["data"]
+    assert result["model"] == "mimo-v2.5-pro"
+    assert result["findings"][0]["source"] == "XIAOMIMO"
+    progress = client.get(
+        f"/api/review-tasks/{data['taskId']}/code-quality-progress"
+    ).json()["data"]
+    phases = [event["phase"] for event in progress]
+    assert "XIAOMIMO_REQUEST" in phases
+    assert "XIAOMIMO_RESPONSE" in phases
+    assert "XIAOMIMO_PARSE_RESULT" in phases
+    assert "xiaomimo-secret" not in json.dumps(progress, ensure_ascii=False)
 
 
 def test_config_endpoints_repair_legacy_code_quality_schema(
@@ -293,6 +401,7 @@ def test_config_endpoints_repair_legacy_code_quality_schema(
         "OPENAI",
         "ANTHROPIC",
         "DEEPSEEK",
+        "XIAOMIMO",
         "CUSTOM",
     }
     inspector = inspect(db_session.get_bind())

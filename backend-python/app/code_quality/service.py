@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.code_quality import prompt
-from app.code_quality.providers import run_fix_provider, run_provider
+from app.code_quality.providers import run_fix_provider, run_provider, test_provider_connection
 from app.code_quality.repository import (
     append_progress,
     create_scheduler_job,
@@ -1151,6 +1151,15 @@ def update_provider_response(db: Session, provider_code: str, request: dict[str,
     response = update_provider(db, provider_code, request)
     db.commit()
     return response
+
+
+def test_provider_response(
+    db: Session,
+    provider_code: str,
+    request: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    provider = get_provider(db, provider_code)
+    return test_provider_connection(provider, request or {})
 
 
 def set_default_provider_response(db: Session, provider_code: str) -> dict[str, Any]:
