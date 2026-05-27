@@ -1183,6 +1183,84 @@ def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, An
     return {"activeCount": active_count, "groups": groups}
 
 
+def list_ai_review_failure_notifications(db: Session, limit: int = 100) -> dict[str, Any]:
+    ensure_scheduler_job_schema(db)
+    cutoff = datetime.now() - timedelta(hours=24)
+    fetch_limit = max(int(limit), 1)
+    failure_count = db.scalar(
+        select(func.count())
+        .select_from(CodeQualitySchedulerJob)
+        .where(CodeQualitySchedulerJob.job_type == "AI_REVIEW")
+        .where(CodeQualitySchedulerJob.status == "FAILED")
+        .where(CodeQualitySchedulerJob.created_at >= cutoff)
+    ) or 0
+    records = db.scalars(
+        select(CodeQualitySchedulerJob)
+        .where(CodeQualitySchedulerJob.job_type == "AI_REVIEW")
+        .where(CodeQualitySchedulerJob.status == "FAILED")
+        .where(CodeQualitySchedulerJob.created_at >= cutoff)
+        .order_by(CodeQualitySchedulerJob.created_at.desc(), CodeQualitySchedulerJob.id.desc())
+        .limit(fetch_limit)
+    ).all()
+    task_ids = sorted({record.task_id for record in records})
+    tasks_by_id: dict[int, tuple[Any, Any]] = {}
+    results_by_task_id: dict[int, CodeQualityReviewResult] = {}
+    if task_ids:
+        from app.project_integration.models import Project
+        from app.review_record.models import ReviewTask
+
+        task_rows = db.execute(
+            select(ReviewTask, Project)
+            .join(Project, Project.id == ReviewTask.project_id)
+            .where(ReviewTask.id.in_(task_ids))
+        ).all()
+        tasks_by_id = {task.id: (task, project) for task, project in task_rows}
+        result_rows = db.scalars(
+            select(CodeQualityReviewResult).where(CodeQualityReviewResult.task_id.in_(task_ids))
+        ).all()
+        results_by_task_id = {result.task_id: result for result in result_rows}
+    return {
+        "failureCount": failure_count,
+        "items": [
+            ai_review_failure_notification_to_dict(
+                record,
+                tasks_by_id.get(record.task_id, (None, None)),
+                results_by_task_id.get(record.task_id),
+            )
+            for record in records
+        ],
+    }
+
+
+def ai_review_failure_notification_to_dict(
+    record: CodeQualitySchedulerJob,
+    task_and_project: tuple[Any, Any],
+    result: CodeQualityReviewResult | None,
+) -> dict[str, Any]:
+    task, project = task_and_project
+    return {
+        "id": record.id,
+        "taskId": record.task_id,
+        "projectId": record.project_id or getattr(task, "project_id", None),
+        "projectName": getattr(project, "name", None),
+        "triggerType": getattr(task, "trigger_type", None),
+        "sourceBranch": getattr(task, "source_branch", None),
+        "targetBranch": getattr(task, "target_branch", None),
+        "externalSourceId": getattr(task, "external_source_id", None),
+        "profileCode": getattr(result, "profile_code", None),
+        "provider": getattr(result, "provider", None),
+        "model": getattr(result, "model", None),
+        "status": record.status,
+        "label": record.label,
+        "errorMessage": record.error_message or getattr(result, "error_message", None),
+        "queuedAt": format_datetime(record.queued_at),
+        "startedAt": format_datetime(record.started_at),
+        "finishedAt": format_datetime(record.finished_at),
+        "createdAt": format_datetime(record.created_at),
+        "updatedAt": format_datetime(record.updated_at),
+    }
+
+
 def scheduler_job_to_dict(record: CodeQualitySchedulerJob) -> dict[str, Any]:
     return {
         "id": record.id,

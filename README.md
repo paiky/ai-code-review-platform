@@ -441,6 +441,7 @@ AI Review 质量问题支持两个辅助查看入口：
 - `查看 Diff`：基于任务详情中的 `changedFilesSummary.files[].diffText` 展示当前文件左右对照 diff，并按模型返回的 `startLine/endLine` 高亮定位。
 - `生成修复预览`：AI Review 成功后，如果全局“自动修复预览”开关开启，会后台自动为所选风险等级且可匹配 diff 的 finding 生成 unified diff patch 预览并保存到 `code_quality_fix_previews`；默认只处理 `CRITICAL`（紧急），也可在设置页额外允许 `MAJOR`（高风险）或 `MINOR`（中风险）。未被自动选中的 finding 仍可在页面单条手动生成 / 失败后重试。Provider 调用统一进入 `code_quality_scheduler_jobs` 调度队列，默认全局最多 10 个并发，AI Review 优先于修复预览；修复预览先显示 `QUEUED`，真正占用 Provider 资源时才显示 `RUNNING`。该能力仅用于查看，不会修改仓库、不提交 GitLab MR。
 - `调度队列`：任务列表页提供队列提示入口，调用 `GET /api/code-quality-reviews/job-queue` 查看当前 AI Review 与 finding 级修复预览的排队、运行和完成明细。活跃任务不受时间窗口限制，已完成 / 失败 / 跳过任务默认展示最近 24 小时内更新的记录。
+- `失败通知`：右上角通知图标调用 `GET /api/code-quality-reviews/failure-notifications`，只展示最近 24 小时内 AI Review 执行失败记录，角标显示失败数。AI Review 执行失败会同步把任务状态标记为 `FAILED`，避免任务列表仍显示 `SUCCESS`。
 
 Push webhook 默认只接收项目组 Push 审核策略中 `pushBranchPatterns` 允许的分支。Push 自动 AI Review 默认关闭，需要在 AI Review Profile 中开启 `triggerOnPush`，并通过项目组 Push 审核层后才会自动触发。
 
@@ -809,6 +810,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:18080/api/code-quality-rev
 顶部导航：
 
 - `任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程、AI Review 调度队列入口。
+- 右上角通知图标：查看最近 24 小时内 AI Review 执行失败记录，并可跳转任务详情。
 - `设置`：全局设置、模型 Provider 配置、AI Review 设置、项目组 / 端类型配置、启用的卡片提醒类型；Push 审核策略在 AI Review 设置中按项目组维护。
 - `版本更新`：查看近期功能变化、部署注意和验证提示。
 

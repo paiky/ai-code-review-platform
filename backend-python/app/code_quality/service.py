@@ -25,6 +25,7 @@ from app.code_quality.repository import (
     get_provider,
     get_settings_record,
     has_recent_allowed_push_gate,
+    list_ai_review_failure_notifications,
     list_progress,
     list_fix_preview_responses,
     list_provider_responses,
@@ -304,12 +305,7 @@ def run_manual_review_now(db: Session, task_id: int, request: dict[str, Any]) ->
     profile = _resolve_profile(db, request.get("profileCode") or task.code_quality_profile_code, project)
     provider = _resolve_provider(db, project, profile, task.target_type)
     review_request = _build_review_request(profile, request)
-    result = _run_review(db, task.id, project, profile, provider, review_request)
-    if result["status"] == "SUCCESS":
-        mark_task_success(task, result.get("overallLevel") or "LOW")
-    else:
-        mark_task_failed(task, result.get("errorMessage") or "AI Review failed")
-    return result
+    return _run_review(db, task.id, project, profile, provider, review_request)
 
 
 def retry_review_task(db: Session, task_id: int) -> dict[str, Any]:
@@ -401,6 +397,7 @@ def run_retry_review_job(task_id: int) -> dict[str, Any]:
     except Exception as exception:
         task = db.get(ReviewTask, task_id)
         if task is not None:
+            mark_task_failed(task, str(exception))
             append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", str(exception))
         db.commit()
         return {"status": "FAILED", "errorMessage": str(exception)}
@@ -697,6 +694,9 @@ def run_auto_review_job(
     try:
         project = find_project_by_id(db, project_id)
         if project is None:
+            task = db.get(ReviewTask, task_id)
+            if task is not None:
+                mark_task_failed(task, f"Project not found: {project_id}")
             append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", f"Project not found: {project_id}")
             db.commit()
             return {"status": "FAILED", "errorMessage": f"Project not found: {project_id}"}
@@ -717,6 +717,10 @@ def run_auto_review_job(
         db.commit()
         return result
     except Exception as exception:
+        review_result = find_result_response(db, task_id)
+        task = db.get(ReviewTask, task_id)
+        if task is not None and (review_result or {}).get("status") != "SUCCESS":
+            mark_task_failed(task, str(exception))
         append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", str(exception))
         db.commit()
         return {"status": "FAILED", "errorMessage": str(exception)}
@@ -1186,6 +1190,10 @@ def get_progress_response(db: Session, task_id: int) -> list[dict[str, Any]]:
 
 def get_job_queue_response(db: Session) -> dict[str, Any]:
     return list_scheduler_queue_snapshot(db)
+
+
+def get_failure_notifications_response(db: Session) -> dict[str, Any]:
+    return list_ai_review_failure_notifications(db)
 
 
 def list_fix_previews_response(db: Session, task_id: int) -> list[dict[str, Any]]:
@@ -1672,6 +1680,7 @@ def _run_review(
         result=result,
     )
     result["_resultId"] = saved_result.id
+    _sync_task_status_after_review(db, task_id, result)
     append_progress(
         db,
         task_id,
@@ -1698,6 +1707,18 @@ def _run_review(
         result,
     )
     return result
+
+
+def _sync_task_status_after_review(db: Session, task_id: int, result: dict[str, Any]) -> None:
+    task = db.get(ReviewTask, task_id)
+    if task is None:
+        return
+    status = str(result.get("status") or "").upper()
+    if status == "FAILED":
+        mark_task_failed(task, result.get("errorMessage") or "AI Review failed")
+        return
+    if status == "SUCCESS" and (task.trigger_type == "CODE_QUALITY_MANUAL" or task.status == "FAILED"):
+        mark_task_success(task, result.get("overallLevel") or task.risk_level or "LOW")
 
 
 def _send_auto_review_notification(

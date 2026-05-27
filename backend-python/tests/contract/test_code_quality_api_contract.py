@@ -8,8 +8,9 @@ from httpx import Response
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
-from app.code_quality.models import CodeQualitySchedulerJob
+from app.code_quality.models import CodeQualityReviewResult, CodeQualitySchedulerJob
 from app.project_integration.models import GitLabMergeRequestEvent, Project
+from app.review_record.models import ReviewTask
 from app.rule_template.models import RuleTemplate
 
 
@@ -1575,6 +1576,192 @@ def test_deepseek_missing_api_key_saves_failed_with_validation_phase(
     assert "REQUEST_VALIDATED" in phases
     assert progress[phases.index("REQUEST_VALIDATED")]["level"] == "ERROR"
     assert "RESULT_SAVED" in phases
+    detail = client.get(f"/api/review-tasks/{data['taskId']}").json()["data"]
+    assert detail["status"] == "FAILED"
+
+
+def test_failure_notifications_return_recent_ai_review_failures_only(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    seed_project(db_session, "DEEPSEEK")
+    now = datetime.now()
+    db_session.add_all(
+        [
+            ReviewTask(
+                id=101,
+                project_id=1,
+                trigger_type="GITLAB_MR_WEBHOOK",
+                external_source_id="!101",
+                external_url=None,
+                source_branch="feature/recent-b",
+                target_branch="main",
+                commit_sha=None,
+                before_sha=None,
+                after_sha=None,
+                author_name=None,
+                author_username=None,
+                template_code="backend-default",
+                target_type="BACKEND",
+                target_types_json=json.dumps(["BACKEND"]),
+                code_quality_profile_code="backend-default-ai-review",
+                status="FAILED",
+                risk_level="LOW",
+                error_message="recent b",
+                started_at=now,
+                finished_at=now,
+                created_at=now,
+                updated_at=now,
+            ),
+            ReviewTask(
+                id=102,
+                project_id=1,
+                trigger_type="GITLAB_PUSH_WEBHOOK",
+                external_source_id=None,
+                external_url=None,
+                source_branch="feature/recent-a",
+                target_branch=None,
+                commit_sha=None,
+                before_sha=None,
+                after_sha=None,
+                author_name=None,
+                author_username=None,
+                template_code="backend-default",
+                target_type="BACKEND",
+                target_types_json=json.dumps(["BACKEND"]),
+                code_quality_profile_code="backend-default-ai-review",
+                status="FAILED",
+                risk_level="LOW",
+                error_message="recent a",
+                started_at=now,
+                finished_at=now,
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
+    )
+    db_session.add_all(
+        [
+            CodeQualityReviewResult(
+                task_id=101,
+                project_id=1,
+                profile_code="backend-default-ai-review",
+                provider="DEEPSEEK",
+                model="deepseek-test",
+                status="FAILED",
+                overall_level=None,
+                summary=None,
+                finding_count=0,
+                findings_json="[]",
+                raw_output=None,
+                exit_code=None,
+                error_message="recent b failed",
+                started_at=now,
+                finished_at=now,
+                created_at=now,
+                updated_at=now,
+            ),
+            CodeQualityReviewResult(
+                task_id=102,
+                project_id=1,
+                profile_code="backend-default-ai-review",
+                provider="OPENAI",
+                model="gpt-test",
+                status="FAILED",
+                overall_level=None,
+                summary=None,
+                finding_count=0,
+                findings_json="[]",
+                raw_output=None,
+                exit_code=None,
+                error_message="recent a failed",
+                started_at=now,
+                finished_at=now,
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
+    )
+    db_session.add_all(
+        [
+            CodeQualitySchedulerJob(
+                job_type="AI_REVIEW",
+                task_id=101,
+                project_id=1,
+                finding_index=None,
+                status="FAILED",
+                priority=10,
+                label="recent b",
+                file_path=None,
+                error_message="job recent b failed",
+                queued_at=now - timedelta(minutes=4),
+                started_at=now - timedelta(minutes=3),
+                finished_at=now - timedelta(minutes=2),
+                created_at=now - timedelta(minutes=2),
+                updated_at=now - timedelta(minutes=2),
+            ),
+            CodeQualitySchedulerJob(
+                job_type="AI_REVIEW",
+                task_id=102,
+                project_id=1,
+                finding_index=None,
+                status="FAILED",
+                priority=10,
+                label="recent a",
+                file_path=None,
+                error_message=None,
+                queued_at=now - timedelta(minutes=12),
+                started_at=now - timedelta(minutes=11),
+                finished_at=now - timedelta(minutes=10),
+                created_at=now - timedelta(minutes=10),
+                updated_at=now - timedelta(minutes=10),
+            ),
+            CodeQualitySchedulerJob(
+                job_type="AI_REVIEW",
+                task_id=101,
+                project_id=1,
+                finding_index=None,
+                status="FAILED",
+                priority=10,
+                label="old",
+                file_path=None,
+                error_message="old failed",
+                queued_at=now - timedelta(hours=25),
+                started_at=now - timedelta(hours=25),
+                finished_at=now - timedelta(hours=25),
+                created_at=now - timedelta(hours=25),
+                updated_at=now - timedelta(hours=25),
+            ),
+            CodeQualitySchedulerJob(
+                job_type="FIX_PREVIEW",
+                task_id=101,
+                project_id=1,
+                finding_index=0,
+                status="FAILED",
+                priority=50,
+                label="fix failed",
+                file_path="src/OrderService.java",
+                error_message="fix failed",
+                queued_at=now,
+                started_at=now,
+                finished_at=now,
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/code-quality-reviews/failure-notifications")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["failureCount"] == 2
+    assert [item["taskId"] for item in data["items"]] == [101, 102]
+    assert data["items"][0]["provider"] == "DEEPSEEK"
+    assert data["items"][0]["errorMessage"] == "job recent b failed"
+    assert data["items"][1]["provider"] == "OPENAI"
+    assert data["items"][1]["errorMessage"] == "recent a failed"
 
 
 @respx.mock
@@ -1886,6 +2073,61 @@ def test_retry_gitlab_mr_ai_review_uses_saved_changed_files(
     assert retry.json()["data"]["status"] == "SUCCESS"
     result = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-result").json()["data"]
     assert result["findingCount"] == 1
+
+
+@respx.mock
+def test_retry_failure_marks_existing_success_task_failed(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "false")
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {
+                "id": 1001,
+                "name": "demo-service",
+                "web_url": "https://gitlab.example.com/demo/service",
+            },
+            "object_attributes": {
+                "iid": 16,
+                "action": "open",
+                "source_branch": "feature/retry-failure",
+                "target_branch": "main",
+            },
+            "changedFiles": [
+                {
+                    "path": "src/OrderService.java",
+                    "diffText": "+ order.setStatus(null);",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    ).json()["data"]
+    task_id = created["taskId"]
+    assert client.get(f"/api/review-tasks/{task_id}").json()["data"]["status"] == "SUCCESS"
+
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_RETRY_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "retry-failure-secret")
+    enabled = client.put("/api/code-quality-reviews/settings", json={"reviewEnabled": True})
+    assert enabled.status_code == 200
+    respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(500, json={"error": {"message": "upstream unavailable"}})
+    )
+
+    retry = client.post(f"/api/code-quality-reviews/tasks/{task_id}/retry")
+
+    assert retry.status_code == 200
+    assert retry.json()["data"]["status"] == "FAILED"
+    result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
+    assert result["status"] == "FAILED"
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    assert detail["status"] == "FAILED"
+    assert "http_status_error" in detail["errorMessage"]
 
 
 def test_retry_returns_running_without_waiting_for_provider(

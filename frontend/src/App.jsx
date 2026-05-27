@@ -28,6 +28,7 @@ import {
 } from 'antd';
 import {
   ArrowLeftOutlined,
+  BellOutlined,
   ClockCircleOutlined,
   CloseOutlined,
   ClusterOutlined,
@@ -74,6 +75,7 @@ const SETTINGS_ROUTE = '/settings';
 const RELEASES_ROUTE = '/releases';
 const HELP_ROUTE = '/help';
 const JOB_QUEUE_REFRESH_EVENT = 'ai-review-job-queue-refresh';
+const FAILURE_NOTIFICATION_REFRESH_EVENT = 'ai-review-failure-notification-refresh';
 const TARGET_TYPE_OPTIONS = [
   { label: '后端', value: 'BACKEND' },
   { label: 'PC Web / H5', value: 'WEB_PC' },
@@ -148,6 +150,7 @@ function pushPolicyFromGroup(group) {
 
 function requestJobQueueRefresh() {
   window.dispatchEvent(new Event(JOB_QUEUE_REFRESH_EVENT));
+  window.dispatchEvent(new Event(FAILURE_NOTIFICATION_REFRESH_EVENT));
 }
 
 function profileLabel(profile) {
@@ -738,6 +741,57 @@ function JobQueueModal({ open, queue, onClose, onOpenTask, onOpenFixPreview }) {
               )
             };
           })}
+        />
+      )}
+    </Modal>
+  );
+}
+
+function FailureNotificationsModal({ open, notifications, onClose, onOpenTask }) {
+  const items = Array.isArray(notifications?.items) ? notifications.items : [];
+  const columns = [
+    {
+      title: '任务',
+      dataIndex: 'taskId',
+      width: 90,
+      render: value => value ? `#${value}` : '-'
+    },
+    { title: '项目', dataIndex: 'projectName', width: 180, ellipsis: true, render: value => value || '-' },
+    { title: '触发类型', dataIndex: 'triggerType', width: 120, render: value => taskTypeLabel(value) },
+    { title: '分支', width: 220, ellipsis: true, render: (_, row) => taskListBranchText(row) },
+    {
+      title: 'Provider',
+      dataIndex: 'provider',
+      width: 130,
+      render: value => value ? sourceLabel(value) : '-'
+    },
+    { title: 'Profile', dataIndex: 'profileCode', width: 190, ellipsis: true, render: value => value || '-' },
+    { title: '失败时间', dataIndex: 'createdAt', width: 170, render: value => value || '-' },
+    { title: '错误', dataIndex: 'errorMessage', ellipsis: true, render: value => value || '-' },
+    {
+      title: '操作',
+      width: 90,
+      render: (_, row) => <Button type="link" size="small" onClick={() => onOpenTask?.(row.taskId)}>详情</Button>
+    }
+  ];
+  return (
+    <Modal
+      title="AI Review 失败通知"
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width="min(1180px, 96vw)"
+    >
+      {items.length === 0 ? (
+        <Empty description="最近 24 小时暂无 AI Review 执行失败" />
+      ) : (
+        <Table
+          size="small"
+          rowKey="id"
+          columns={columns}
+          dataSource={items}
+          pagination={false}
+          scroll={{ x: 1120 }}
         />
       )}
     </Modal>
@@ -4318,6 +4372,8 @@ function AppFrame() {
   const isHelpRoute = location.pathname.startsWith(HELP_ROUTE);
   const [jobQueue, setJobQueue] = useState({ activeCount: 0, groups: [] });
   const [jobQueueOpen, setJobQueueOpen] = useState(false);
+  const [failureNotifications, setFailureNotifications] = useState({ failureCount: 0, items: [] });
+  const [failureNotificationsOpen, setFailureNotificationsOpen] = useState(false);
 
   const loadJobQueue = async () => {
     try {
@@ -4328,9 +4384,19 @@ function AppFrame() {
     }
   };
 
+  const loadFailureNotifications = async () => {
+    try {
+      const data = await fetchApi('/api/code-quality-reviews/failure-notifications');
+      setFailureNotifications(data || { failureCount: 0, items: [] });
+    } catch {
+      setFailureNotifications({ failureCount: 0, items: [] });
+    }
+  };
+
   const openTaskFromQueue = (taskId) => {
     if (!taskId) return;
     setJobQueueOpen(false);
+    setFailureNotificationsOpen(false);
     navigate(`/tasks/${taskId}`, { state: { from: route } });
   };
 
@@ -4342,24 +4408,28 @@ function AppFrame() {
 
   useEffect(() => {
     loadJobQueue();
+    loadFailureNotifications();
   }, []);
 
   useEffect(() => {
     const refreshIfVisible = () => {
       if (document.visibilityState === 'visible') {
         loadJobQueue();
+        loadFailureNotifications();
       }
     };
     const timer = window.setInterval(refreshIfVisible, 5000);
     window.addEventListener(JOB_QUEUE_REFRESH_EVENT, loadJobQueue);
+    window.addEventListener(FAILURE_NOTIFICATION_REFRESH_EVENT, loadFailureNotifications);
     document.addEventListener('visibilitychange', refreshIfVisible);
-    window.addEventListener('focus', loadJobQueue);
+    window.addEventListener('focus', refreshIfVisible);
     refreshIfVisible();
     return () => {
       window.clearInterval(timer);
       window.removeEventListener(JOB_QUEUE_REFRESH_EVENT, loadJobQueue);
+      window.removeEventListener(FAILURE_NOTIFICATION_REFRESH_EVENT, loadFailureNotifications);
       document.removeEventListener('visibilitychange', refreshIfVisible);
-      window.removeEventListener('focus', loadJobQueue);
+      window.removeEventListener('focus', refreshIfVisible);
     };
   }, []);
 
@@ -4400,6 +4470,19 @@ function AppFrame() {
           </Button>
         </Space>
         <div className="header-actions">
+          <Tooltip title="AI Review 失败通知">
+            <Badge count={failureNotifications?.failureCount || 0} size="small">
+              <Button
+                danger={Boolean(failureNotifications?.failureCount)}
+                icon={<BellOutlined />}
+                type={failureNotifications?.failureCount ? 'primary' : 'default'}
+                onClick={() => {
+                  setFailureNotificationsOpen(true);
+                  loadFailureNotifications();
+                }}
+              />
+            </Badge>
+          </Tooltip>
           <Tooltip title="AI Review 调度队列">
             <Badge count={jobQueue?.activeCount || 0} size="small">
               <Button
@@ -4431,6 +4514,12 @@ function AppFrame() {
         onClose={() => setJobQueueOpen(false)}
         onOpenTask={openTaskFromQueue}
         onOpenFixPreview={openFixPreviewFromQueue}
+      />
+      <FailureNotificationsModal
+        open={failureNotificationsOpen}
+        notifications={failureNotifications}
+        onClose={() => setFailureNotificationsOpen(false)}
+        onOpenTask={openTaskFromQueue}
       />
     </Layout>
   );

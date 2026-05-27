@@ -50,6 +50,7 @@ body {
   margin-left: auto;
   display: flex;
   align-items: center;
+  gap: 10px;
 }
 
 .settings-collapse .ant-collapse-item {

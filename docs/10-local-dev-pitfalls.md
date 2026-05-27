@@ -1075,3 +1075,20 @@ GitLab Merge Request Hook payload 默认不一定携带 `changedFiles` / diff。
 2. 任务通知只查询任务所属项目组的启用机器人。
 3. 任务所属项目组无机器人时记录 `DINGTALK_WEBHOOKS_EMPTY` / `SKIPPED`，不回退到默认项目组或其它项目组。
 4. 历史 `project_group_id IS NULL` 的 webhook 只按默认项目组兼容读取，不能成为所有项目组的兜底。
+
+## 45. AI Review 执行失败不能只写结果表
+
+现象：
+
+AI Review Provider 调用失败、JSON 解析失败或后台重试失败后，任务详情里的代码质量结果已经是 `FAILED`，但任务列表中的 `review_tasks.status` 仍显示 `SUCCESS`。
+
+原因：
+
+规则提醒主链路会先把任务标记为 `SUCCESS`。如果后续自动 AI Review 或重试 AI Review 只更新 `code_quality_review_results.status=FAILED`，没有同步 `review_tasks.status`，列表页按任务表查询时就会误显示成功。
+
+处理方式：
+
+1. AI Review 执行失败时必须同时保存 `code_quality_review_results.status=FAILED` 并调用 `mark_task_failed`。
+2. 自动 MR / Push AI Review、手动 AI Review、重试 AI Review 和后台异常 catch 路径都要覆盖。
+3. AI Review 成功不应额外覆盖规则提醒成功状态；只有手动 AI Review 任务或失败任务重试成功时，才把任务恢复为 `SUCCESS`。
+4. 右上角失败通知只展示最近 24 小时内 `code_quality_scheduler_jobs.job_type='AI_REVIEW'` 且 `status='FAILED'` 的执行记录，修复预览失败不进入该通知。
