@@ -2155,7 +2155,7 @@ function TemplateConfig() {
         ? selectedProfileCode
         : selectableProfileItems[0]?.profileCode || null;
       const nextSelectedProviderCode = settingsData?.defaultProviderCode || selectedProviderCode || providerItems[0]?.providerCode || 'DEEPSEEK';
-      const nextSelectedTemplateCode = selectedTemplateCode || templateItems.find(item => item.templateCode === 'backend-default')?.templateCode || templateItems[0]?.templateCode || null;
+      const nextSelectedTemplateCode = selectedTemplateCode || templateItems.find(item => isBackendRuleTemplate(item))?.templateCode || templateItems[0]?.templateCode || null;
       const projectItems = projectData.items || [];
       const groupItems = groupData.items || [];
       const nextPushPolicyGroupId = selectedPushPolicyGroupId && groupItems.some(group => group.id === selectedPushPolicyGroupId)
@@ -2207,9 +2207,8 @@ function TemplateConfig() {
         const rules = await fetchApi(`/api/rule-templates/${nextSelectedTemplateCode}/notification-rules`);
         setNotificationRules(rules);
         setNotificationRuleDraftCodes(rules.focusRuleCodes || []);
-        const firstSelected = rules.focusRuleCodes?.[0];
         const firstRule = rules.groups?.flatMap(group => group.rules || [])?.[0]?.ruleCode;
-        setSelectedNotificationRuleCode(firstSelected || firstRule || null);
+        setSelectedNotificationRuleCode(firstRule || null);
       } else {
         setNotificationRules(null);
         setNotificationRuleDraftCodes([]);
@@ -2230,9 +2229,8 @@ function TemplateConfig() {
     const rules = await fetchApi(`/api/rule-templates/${templateCode}/notification-rules`);
     setNotificationRules(rules);
     setNotificationRuleDraftCodes(rules.focusRuleCodes || []);
-    const firstSelected = rules.focusRuleCodes?.[0];
     const firstRule = rules.groups?.flatMap(group => group.rules || [])?.[0]?.ruleCode;
-    setSelectedNotificationRuleCode(firstSelected || firstRule || null);
+    setSelectedNotificationRuleCode(firstRule || null);
   };
 
   const loadProjectTargetConfigs = async (projectId, targetType = selectedTargetType, projectList = projects) => {
@@ -3352,68 +3350,6 @@ function TemplateConfig() {
               </Space>
             </div>
             <div className="settings-subsection">
-              <Space direction="vertical" size="middle" className="full-width">
-                <div className="settings-inline-head">
-                  <Space wrap>
-                    <Text strong>端类型路径映射</Text>
-                    <Tag>{targetPathMappingDrafts.filter(item => item.enabled !== false).length} 个启用</Tag>
-                  </Space>
-                  <Button type="primary" loading={targetPathMappingSaving} onClick={saveTargetPathMappings}>
-                    保存路径映射
-                  </Button>
-                </div>
-                <Alert
-                  type="info"
-                  showIcon
-                  message="Webhook 新项目只按这里的全局路径映射识别端类型。同一次变更命中多个端类型时会生成失败任务，提示调整映射。"
-                />
-                <Table
-                  size="small"
-                  rowKey="targetType"
-                  pagination={false}
-                  dataSource={targetPathMappingDrafts}
-                  columns={[
-                    { title: '端类型', dataIndex: 'targetType', width: 160, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
-                    {
-                      title: '路径匹配',
-                      dataIndex: 'pathPatterns',
-                      render: (_, row) => (
-                        <Select
-                          mode="tags"
-                          className="full-width"
-                          value={row.pathPatterns || []}
-                          onChange={value => updateTargetPathMappingDraft(row.targetType, 'pathPatterns', value)}
-                        />
-                      )
-                    },
-                    {
-                      title: '启用',
-                      dataIndex: 'enabled',
-                      width: 180,
-                      render: (_, row) => (
-                        <Space wrap>
-                          <Switch
-                            checked={row.enabled !== false}
-                            checkedChildren="启用"
-                            unCheckedChildren="停用"
-                            onChange={checked => updateTargetPathMappingDraft(row.targetType, 'enabled', checked)}
-                          />
-                          <Button
-                            size="small"
-                            icon={<ReloadOutlined />}
-                            onClick={() => resetTargetPathMappingDraft(row.targetType)}
-                          >
-                            重置
-                          </Button>
-                        </Space>
-                      )
-                    }
-                  ]}
-                  scroll={{ x: 920 }}
-                />
-              </Space>
-            </div>
-            <div className="settings-subsection">
               {targetConfigDraft ? (
                 <>
                 <Space direction="vertical" size="middle" className="full-width">
@@ -3480,6 +3416,68 @@ function TemplateConfig() {
                 <Empty description="请选择项目和端类型" />
               )}
             </div>
+            <div className="settings-subsection">
+              <Space direction="vertical" size="middle" className="full-width">
+                <div className="settings-inline-head">
+                  <Space wrap>
+                    <Text strong>端类型路径映射</Text>
+                    <Tag>{targetPathMappingDrafts.filter(item => item.enabled !== false).length} 个启用</Tag>
+                  </Space>
+                  <Button type="primary" loading={targetPathMappingSaving} onClick={saveTargetPathMappings}>
+                    保存路径映射
+                  </Button>
+                </div>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Webhook 新项目只按这里的全局路径映射识别端类型。同一次变更命中多个端类型时会生成失败任务，提示调整映射。"
+                />
+                <Table
+                  size="small"
+                  rowKey="targetType"
+                  pagination={false}
+                  dataSource={targetPathMappingDrafts}
+                  columns={[
+                    { title: '端类型', dataIndex: 'targetType', width: 160, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
+                    {
+                      title: '路径匹配',
+                      dataIndex: 'pathPatterns',
+                      render: (_, row) => (
+                        <Select
+                          mode="tags"
+                          className="full-width"
+                          value={row.pathPatterns || []}
+                          onChange={value => updateTargetPathMappingDraft(row.targetType, 'pathPatterns', value)}
+                        />
+                      )
+                    },
+                    {
+                      title: '启用',
+                      dataIndex: 'enabled',
+                      width: 180,
+                      render: (_, row) => (
+                        <Space wrap>
+                          <Switch
+                            checked={row.enabled !== false}
+                            checkedChildren="启用"
+                            unCheckedChildren="停用"
+                            onChange={checked => updateTargetPathMappingDraft(row.targetType, 'enabled', checked)}
+                          />
+                          <Button
+                            size="small"
+                            icon={<ReloadOutlined />}
+                            onClick={() => resetTargetPathMappingDraft(row.targetType)}
+                          >
+                            重置
+                          </Button>
+                        </Space>
+                      )
+                    }
+                  ]}
+                  scroll={{ x: 920 }}
+                />
+              </Space>
+            </div>
           </Space>
         </Card>
       )
@@ -3529,7 +3527,8 @@ function TemplateConfig() {
                   <Col xs={24} lg={12}>
                     {notificationRules ? (
                       <Collapse
-                        defaultActiveKey={(notificationRules.groups || []).map(group => group.groupCode)}
+                        key={selectedTemplateCode}
+                        defaultActiveKey={(notificationRules.groups || [])[0]?.groupCode ? [(notificationRules.groups || [])[0].groupCode] : []}
                         items={(notificationRules.groups || []).map(group => ({
                           key: group.groupCode,
                           label: (
