@@ -29,8 +29,7 @@ VALUES
   ('APP_IOS', JSON_ARRAY('ios/**', '**/*.swift', '**/*.m', '**/*.mm', 'Podfile'), TRUE, 10, '系统默认端类型路径映射'),
   ('APP_ANDROID', JSON_ARRAY('android/**', '**/*.kt', '**/*.kts', 'build.gradle', 'settings.gradle', '**/*.gradle'), TRUE, 20, '系统默认端类型路径映射'),
   ('WEB_PC', JSON_ARRAY('frontend/**', 'web/**', 'src/**/*.tsx', 'src/**/*.jsx', 'src/**/*.vue', 'package.json'), TRUE, 30, '系统默认端类型路径映射'),
-  ('APP_CROSS_PLATFORM', JSON_ARRAY('flutter/**', '**/*.dart', 'pubspec.yaml', 'rn/**', 'miniapp/**'), TRUE, 40, '系统默认端类型路径映射'),
-  ('BACKEND', JSON_ARRAY('src/main/java/**', 'src/main/resources/**', 'src/*.java', 'src/**/*.java', 'pom.xml', 'backend-python/**', 'backend/**'), TRUE, 50, '系统默认端类型路径映射')
+  ('BACKEND', JSON_ARRAY('src/main/java/**', 'src/main/resources/**', 'src/*.java', 'src/**/*.java', 'pom.xml', 'backend-python/**', 'backend/**'), TRUE, 40, '系统默认端类型路径映射')
 ON DUPLICATE KEY UPDATE
   path_patterns = VALUES(path_patterns),
   enabled = VALUES(enabled),

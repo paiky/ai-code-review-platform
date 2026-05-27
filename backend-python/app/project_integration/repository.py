@@ -67,9 +67,10 @@ PATH_DETECTION_RULES = [
     ("APP_IOS", ["ios/**", "**/*.swift", "**/*.m", "**/*.mm", "Podfile"]),
     ("APP_ANDROID", ["android/**", "**/*.kt", "**/*.kts", "build.gradle", "settings.gradle", "**/*.gradle"]),
     ("WEB_PC", ["frontend/**", "web/**", "src/**/*.tsx", "src/**/*.jsx", "src/**/*.vue", "package.json"]),
-    ("APP_CROSS_PLATFORM", ["flutter/**", "**/*.dart", "pubspec.yaml", "rn/**", "miniapp/**"]),
     ("BACKEND", ["src/main/java/**", "src/main/resources/**", "src/*.java", "src/**/*.java", "pom.xml", "backend-python/**", "backend/**"]),
 ]
+PATH_MAPPING_TARGET_TYPES = {target_type for target_type, _patterns in PATH_DETECTION_RULES}
+SYSTEM_DETECTED_TARGET_CONFIG_DESCRIPTIONS = {"自动识别创建的端类型配置", "路径映射创建的端类型配置"}
 
 _SCHEMA_LOCK = Lock()
 _SCHEMA_ENSURED_ENGINE_IDS: set[int] = set()
@@ -141,11 +142,12 @@ def _default_path_mapping_rows() -> list[dict[str, Any]]:
 
 
 def _ensure_default_target_type_path_mappings(db: Session) -> None:
-    existing_count = db.scalar(select(func.count()).select_from(TargetTypePathMapping)) or 0
-    if existing_count > 0:
-        return
+    existing = db.scalars(select(TargetTypePathMapping)).all()
+    existing_by_type = {mapping.target_type: mapping for mapping in existing}
     now = datetime.now()
     for row in _default_path_mapping_rows():
+        if row["targetType"] in existing_by_type:
+            continue
         db.add(
             TargetTypePathMapping(
                 target_type=row["targetType"],
@@ -157,6 +159,10 @@ def _ensure_default_target_type_path_mappings(db: Session) -> None:
                 updated_at=now,
             )
         )
+    for mapping in existing:
+        if mapping.target_type not in PATH_MAPPING_TARGET_TYPES and mapping.enabled:
+            mapping.enabled = False
+            mapping.updated_at = now
     db.flush()
 
 
@@ -356,7 +362,7 @@ def update_project_target_detection(
     existing_configs = db.scalars(
         select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project.id)
     ).all()
-    auto_created = existing_configs and all(config.description == "自动识别创建的端类型配置" for config in existing_configs)
+    auto_created = existing_configs and all(config.description in SYSTEM_DETECTED_TARGET_CONFIG_DESCRIPTIONS for config in existing_configs)
     can_rebuild_auto_configs = not existing_configs or auto_created
     if can_rebuild_auto_configs:
         detected_types = detection.get("targetTypes") or ["BACKEND"]
@@ -481,7 +487,9 @@ def update_project_group(db: Session, group_id: int, request: dict) -> dict:
 def list_target_type_path_mappings(db: Session) -> list[dict[str, Any]]:
     ensure_project_config_schema(db)
     mappings = db.scalars(
-        select(TargetTypePathMapping).order_by(TargetTypePathMapping.sort_order.asc(), TargetTypePathMapping.id.asc())
+        select(TargetTypePathMapping)
+        .where(TargetTypePathMapping.target_type.in_(PATH_MAPPING_TARGET_TYPES))
+        .order_by(TargetTypePathMapping.sort_order.asc(), TargetTypePathMapping.id.asc())
     ).all()
     return [target_type_path_mapping_to_dict(mapping) for mapping in mappings]
 
@@ -501,8 +509,8 @@ def update_target_type_path_mappings(db: Session, request: dict[str, Any]) -> li
         if not isinstance(item, dict):
             raise AppError("VALIDATION_ERROR", "items must contain mapping objects", 400)
         target_type = normalize_target_type(item.get("targetType"))
-        if target_type == "GENERAL":
-            raise AppError("VALIDATION_ERROR", "GENERAL does not support path mapping", 400)
+        if target_type not in PATH_MAPPING_TARGET_TYPES:
+            raise AppError("VALIDATION_ERROR", f"{target_type} does not support path mapping", 400)
         if target_type in seen:
             raise AppError("VALIDATION_ERROR", f"Duplicate target type mapping: {target_type}", 400)
         seen.add(target_type)
@@ -526,6 +534,10 @@ def update_target_type_path_mappings(db: Session, request: dict[str, Any]) -> li
             mapping.enabled = bool(item.get("enabled", True))
             mapping.sort_order = int(item.get("sortOrder") if item.get("sortOrder") is not None else mapping.sort_order)
             mapping.description = _blank_to_none(item.get("description"))
+            mapping.updated_at = now
+    for target_type, mapping in existing_by_type.items():
+        if target_type not in PATH_MAPPING_TARGET_TYPES and mapping.enabled:
+            mapping.enabled = False
             mapping.updated_at = now
     db.commit()
     return list_target_type_path_mappings(db)
@@ -614,7 +626,7 @@ def ambiguous_auto_detected_target_types(db: Session, project: Project) -> list[
     configs = db.scalars(
         select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project.id)
     ).all()
-    if configs and not all(config.description == "自动识别创建的端类型配置" for config in configs):
+    if configs and not all(config.description in SYSTEM_DETECTED_TARGET_CONFIG_DESCRIPTIONS for config in configs):
         return []
     return target_types
 
@@ -659,7 +671,7 @@ def upsert_project_target_config(db: Session, project_id: int, target_type: str,
             config.enabled = bool(request["enabled"])
         if "description" in request:
             config.description = _blank_to_none(request.get("description"))
-        elif config.description == "自动识别创建的端类型配置":
+        elif config.description in SYSTEM_DETECTED_TARGET_CONFIG_DESCRIPTIONS:
             config.description = "手动维护的端类型配置"
         config.updated_at = now
     _sync_project_supported_target_types(db, project)
@@ -792,6 +804,7 @@ def detect_project_target_types(db: Session, changed_files: list[dict[str, Any]]
     mappings = db.scalars(
         select(TargetTypePathMapping)
         .where(TargetTypePathMapping.enabled.is_(True))
+        .where(TargetTypePathMapping.target_type.in_(PATH_MAPPING_TARGET_TYPES))
         .order_by(TargetTypePathMapping.sort_order.asc(), TargetTypePathMapping.id.asc())
     ).all()
     for mapping in mappings:
@@ -802,14 +815,13 @@ def detect_project_target_types(db: Session, changed_files: list[dict[str, Any]]
             if not matched_pattern:
                 continue
             _append_unique_target(matched, target_type)
-            evidences.append(
-                {
-                    "targetType": target_type,
-                    "source": "PATH",
-                    "value": path,
-                    "pattern": matched_pattern,
-                    "reason": f"{path} matches {matched_pattern}",
-                }
+            _append_target_detection_evidence(
+                evidences,
+                target_type=target_type,
+                source="PATH_MAPPING",
+                value=path,
+                pattern=matched_pattern,
+                reason=f"{path} matches path mapping {matched_pattern}",
             )
             break
     if not matched:
@@ -828,6 +840,33 @@ def detect_project_target_types(db: Session, changed_files: list[dict[str, Any]]
         "evidences": evidences,
         "updatedAt": datetime.now().isoformat(timespec="seconds"),
     }
+
+
+def _append_target_detection_evidence(
+    evidences: list[dict[str, str]],
+    *,
+    target_type: str,
+    source: str,
+    value: str,
+    pattern: str,
+    reason: str,
+) -> None:
+    if any(
+        item.get("targetType") == target_type
+        and item.get("value") == value
+        and item.get("pattern") == pattern
+        for item in evidences
+    ):
+        return
+    evidences.append(
+        {
+            "targetType": target_type,
+            "source": source,
+            "value": value,
+            "pattern": pattern,
+            "reason": reason,
+        }
+    )
 
 
 def _path_matches(path: str, pattern: str) -> bool:
@@ -920,7 +959,7 @@ def _create_detected_target_configs(db: Session, project: Project, detected_type
                 path_patterns=json.dumps(["**/*"] if single_target else defaults["pathPatterns"], ensure_ascii=False),
                 reminder_card_enabled=bool(defaults["reminderCardEnabled"]),
                 enabled=True,
-                description="自动识别创建的端类型配置",
+                description="路径映射创建的端类型配置",
                 created_at=now,
                 updated_at=now,
             )

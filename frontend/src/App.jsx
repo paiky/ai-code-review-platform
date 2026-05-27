@@ -79,6 +79,7 @@ const TARGET_TYPE_OPTIONS = [
   { label: '跨端应用', value: 'APP_CROSS_PLATFORM' },
   { label: '通用', value: 'GENERAL' }
 ];
+const PROJECT_TARGET_TYPE_OPTIONS = TARGET_TYPE_OPTIONS.filter(item => item.value !== 'APP_CROSS_PLATFORM');
 const TARGET_TYPE_DEFAULT_PATH_PATTERNS = {
   BACKEND: ['src/main/java/**', 'src/main/resources/**', 'src/*.java', 'src/**/*.java', 'pom.xml', 'backend-python/**', 'backend/**'],
   WEB_PC: ['frontend/**', 'web/**', 'src/**/*.tsx', 'src/**/*.jsx', 'src/**/*.vue', 'package.json'],
@@ -87,6 +88,19 @@ const TARGET_TYPE_DEFAULT_PATH_PATTERNS = {
   APP_CROSS_PLATFORM: ['flutter/**', '**/*.dart', 'pubspec.yaml', 'rn/**', 'miniapp/**'],
   GENERAL: ['**/*']
 };
+const TARGET_TYPE_PATH_MAPPING_OPTIONS = TARGET_TYPE_OPTIONS.filter(
+  item => !['GENERAL', 'APP_CROSS_PLATFORM'].includes(item.value)
+);
+const REVIEW_PROFILE_DROPDOWN_ITEMS = [
+  { profileCode: 'backend-default-ai-review', label: '后端' },
+  { profileCode: 'web-pc-default-ai-review', label: '前端' },
+  { profileCode: 'app-android-default-ai-review', label: 'Android' },
+  { profileCode: 'app-ios-default-ai-review', label: 'IOS' }
+];
+const REVIEW_PROFILE_DROPDOWN_LABELS = REVIEW_PROFILE_DROPDOWN_ITEMS.reduce(
+  (labels, item) => ({ ...labels, [item.profileCode]: item.label }),
+  {}
+);
 const DEFAULT_PUSH_REVIEW_POLICY = {
   pushBranchPatterns: ['master'],
   pushMinChangedFiles: 10,
@@ -129,13 +143,17 @@ function requestJobQueueRefresh() {
 
 function profileLabel(profile) {
   const labels = {
-    'backend-default-ai-review': '后端默认 AI Review',
-    'web-pc-default-ai-review': 'PC Web / H5 默认 AI Review',
-    'app-ios-default-ai-review': 'iOS 默认 AI Review',
-    'app-android-default-ai-review': 'Android 默认 AI Review',
+    ...REVIEW_PROFILE_DROPDOWN_LABELS,
     'app-cross-platform-default-ai-review': '跨端应用默认 AI Review'
   };
   return labels[profile?.profileCode] || profile?.profileName || profile?.profileCode || '-';
+}
+
+function selectableReviewProfiles(profiles = []) {
+  const byCode = new Map(profiles.map(profile => [profile.profileCode, profile]));
+  return REVIEW_PROFILE_DROPDOWN_ITEMS
+    .map(item => byCode.get(item.profileCode))
+    .filter(Boolean);
 }
 
 function isBackendRuleTemplate(template) {
@@ -2126,9 +2144,14 @@ function TemplateConfig() {
         fetchApi('/api/target-type-path-mappings')
       ]);
       const profileItems = Array.isArray(profileData) ? profileData : (profileData.items || []);
+      const selectableProfileItems = selectableReviewProfiles(profileItems);
       const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
       const templateItems = Array.isArray(templateData) ? templateData : (templateData.items || []);
-      const nextSelectedProfileCode = selectedProfileCode || profileItems[0]?.profileCode || null;
+      const nextSelectedProfileCode = (
+        selectedProfileCode && selectableProfileItems.some(profile => profile.profileCode === selectedProfileCode)
+      )
+        ? selectedProfileCode
+        : selectableProfileItems[0]?.profileCode || null;
       const nextSelectedProviderCode = settingsData?.defaultProviderCode || selectedProviderCode || providerItems[0]?.providerCode || 'DEEPSEEK';
       const nextSelectedTemplateCode = selectedTemplateCode || templateItems.find(item => item.templateCode === 'backend-default')?.templateCode || templateItems[0]?.templateCode || null;
       const projectItems = projectData.items || [];
@@ -2176,7 +2199,7 @@ function TemplateConfig() {
       setProviderApiKeyDraft('');
       setProfiles(profileItems);
       setSelectedProfileCode(nextSelectedProfileCode);
-      setProfileDraft(profileItems.find(item => item.profileCode === nextSelectedProfileCode) || profileItems[0] || null);
+      setProfileDraft(profileItems.find(item => item.profileCode === nextSelectedProfileCode) || selectableProfileItems[0] || null);
       setPromptPreview(null);
       if (nextSelectedTemplateCode && isBackendRuleTemplate(templateItems.find(item => item.templateCode === nextSelectedTemplateCode))) {
         const rules = await fetchApi(`/api/rule-templates/${nextSelectedTemplateCode}/notification-rules`);
@@ -2316,69 +2339,10 @@ function TemplateConfig() {
       targetType,
       templateCode: defaultTemplateCodeForTargetType(targetType),
       providerCode: null,
-      pathPatterns: [],
+      pathPatterns: defaultPathPatternsForTargetType(targetType),
       reminderCardEnabled: defaultReminderCardEnabledForTargetType(targetType),
       enabled: true
     });
-  };
-
-  const applyDetectedTargetType = (targetType) => {
-    const detectedType = targetType || currentProject?.detectedTargetTypes?.[0];
-    if (!detectedType) return;
-    const defaults = {
-      BACKEND: { reminderCardEnabled: true },
-      WEB_PC: { reminderCardEnabled: false },
-      APP_IOS: { reminderCardEnabled: false },
-      APP_ANDROID: { reminderCardEnabled: false },
-      APP_CROSS_PLATFORM: { reminderCardEnabled: false },
-      GENERAL: { reminderCardEnabled: false }
-    }[detectedType] || { reminderCardEnabled: false };
-    setSelectedTargetType(detectedType);
-    setProjectConfigDraft(current => current ? { ...current, targetType: detectedType } : current);
-    setTargetConfigDraft({
-      ...(projectTargetConfigs.find(item => item.targetType === detectedType) || {}),
-      targetType: detectedType,
-      templateCode: defaultTemplateCodeForTargetType(detectedType),
-      providerCode: null,
-      pathPatterns: buildDetectedPathPatterns(detectedType),
-      reminderCardEnabled: defaults.reminderCardEnabled,
-      enabled: true
-    });
-  };
-
-  const buildDetectedPathPatterns = (targetType = selectedTargetType) => {
-    return buildDetectedPathPatternResult(targetType).patterns;
-  };
-
-  const buildDetectedPathPatternResult = (targetType = selectedTargetType) => {
-    const pathEvidencePatterns = detectionEvidences
-      .filter(item => item.targetType === targetType && item.source === 'PATH' && item.pattern)
-      .map(item => item.pattern);
-    const uniquePatterns = [...new Set(pathEvidencePatterns)];
-    if (uniquePatterns.length > 0) {
-      return { patterns: uniquePatterns, source: 'WEBHOOK_PATH_EVIDENCE' };
-    }
-    if ((detectedTargetTypes || []).includes(targetType)) {
-      return {
-        patterns: detectedTargetTypes.length === 1 ? ['**/*'] : defaultPathPatternsForTargetType(targetType),
-        source: detectedTargetTypes.length === 1 ? 'SINGLE_TARGET_FALLBACK' : 'TARGET_TYPE_DEFAULT'
-      };
-    }
-    return { patterns: defaultPathPatternsForTargetType(targetType), source: 'TARGET_TYPE_DEFAULT' };
-  };
-
-  const refreshTargetPathPatterns = () => {
-    if (!targetConfigDraft) return;
-    const result = buildDetectedPathPatternResult(selectedTargetType);
-    const patterns = result.patterns;
-    updateTargetConfigDraft('pathPatterns', patterns);
-    if (result.source === 'WEBHOOK_PATH_EVIDENCE') {
-      messageApi.success(`已根据 ${targetTypeLabel(selectedTargetType)} 的 webhook 路径证据回填路径匹配`);
-    } else if (result.source === 'SINGLE_TARGET_FALLBACK') {
-      messageApi.info(`当前项目只识别到 ${targetTypeLabel(selectedTargetType)}，已回填 **/*`);
-    } else {
-      messageApi.info(`未找到 ${targetTypeLabel(selectedTargetType)} 的 webhook 路径证据，已使用端类型默认路径`);
-    }
   };
 
   const updateTargetConfigDraft = (field, value) => {
@@ -2653,7 +2617,9 @@ function TemplateConfig() {
         body: JSON.stringify({
           templateCode: defaultTemplateCodeForTargetType(selectedTargetType),
           providerCode: targetConfigDraft.providerCode || null,
-          pathPatterns: targetConfigDraft.pathPatterns || [],
+          pathPatterns: targetConfigDraft.pathPatterns?.length
+            ? targetConfigDraft.pathPatterns
+            : defaultPathPatternsForTargetType(selectedTargetType),
           reminderCardEnabled: targetConfigDraft.reminderCardEnabled,
           enabled: targetConfigDraft.enabled
         })
@@ -2672,10 +2638,9 @@ function TemplateConfig() {
     }
   };
 
-  const targetPathMappingDrafts = TARGET_TYPE_OPTIONS
-    .filter(item => item.value !== 'GENERAL')
+  const buildTargetPathMappingDrafts = (source = targetPathMappings) => TARGET_TYPE_PATH_MAPPING_OPTIONS
     .map((option, index) => {
-      const existing = targetPathMappings.find(item => item.targetType === option.value);
+      const existing = source.find(item => item.targetType === option.value);
       return existing || {
         targetType: option.value,
         pathPatterns: defaultPathPatternsForTargetType(option.value),
@@ -2684,21 +2649,11 @@ function TemplateConfig() {
         description: '系统默认端类型路径映射'
       };
     });
+  const targetPathMappingDrafts = buildTargetPathMappingDrafts();
 
   const updateTargetPathMappingDraft = (targetType, field, value) => {
     setTargetPathMappings(current => {
-      const drafts = TARGET_TYPE_OPTIONS
-        .filter(item => item.value !== 'GENERAL')
-        .map((option, index) => {
-          const existing = current.find(item => item.targetType === option.value);
-          return existing || {
-            targetType: option.value,
-            pathPatterns: defaultPathPatternsForTargetType(option.value),
-            enabled: true,
-            sortOrder: (index + 1) * 10,
-            description: '系统默认端类型路径映射'
-          };
-        });
+      const drafts = buildTargetPathMappingDrafts(current);
       return drafts.map(item => item.targetType === targetType ? { ...item, [field]: value } : item);
     });
   };
@@ -2964,7 +2919,7 @@ function TemplateConfig() {
     }
   };
 
-  const profileOptions = profiles.map(profile => ({
+  const profileOptions = selectableReviewProfiles(profiles).map(profile => ({
     label: profileLabel(profile),
     value: profile.profileCode
   }));
@@ -3001,8 +2956,14 @@ function TemplateConfig() {
   const currentProject = projects.find(project => project.id === selectedProjectId) || null;
   const targetDetection = currentProject?.targetDetection;
   const detectionEvidences = Array.isArray(targetDetection?.evidences) ? targetDetection.evidences : [];
+  const detectionEvidenceRowKey = (row, index) => `${row.targetType}-${row.source}-${row.value}-${row.pattern}-${index}`;
   const detectedTargetTypes = currentProject?.detectedTargetTypes || targetDetection?.targetTypes || [];
-  const detectionDiffersFromConfig = detectedTargetTypes.some(type => !(currentProject?.supportedTargetTypes || []).includes(type));
+  const mappedDetectedTargetTypes = detectedTargetTypes.filter(
+    type => PROJECT_TARGET_TYPE_OPTIONS.some(option => option.value === type)
+  );
+  const detectionDiffersFromConfig = mappedDetectedTargetTypes.some(
+    type => !(currentProject?.supportedTargetTypes || []).includes(type)
+  );
   const renderWebhookDraftList = (webhooks, target) => (
     <Space direction="vertical" size="middle" className="full-width webhook-list">
       {(webhooks || []).length > 0 ? (
@@ -3327,59 +3288,6 @@ function TemplateConfig() {
             </div>
             <div className="settings-subsection">
               <Space direction="vertical" size="middle" className="full-width">
-                <div className="settings-inline-head">
-                  <Space wrap>
-                    <Text strong>端类型路径映射</Text>
-                    <Tag>{targetPathMappingDrafts.filter(item => item.enabled !== false).length} 个启用</Tag>
-                  </Space>
-                  <Button type="primary" loading={targetPathMappingSaving} onClick={saveTargetPathMappings}>
-                    保存路径映射
-                  </Button>
-                </div>
-                <Alert
-                  type="info"
-                  showIcon
-                  message="Webhook 新项目会先按这里的路径映射识别端类型；同一次变更命中多个端类型时会生成失败任务，提示调整映射。"
-                />
-                <Table
-                  size="small"
-                  rowKey="targetType"
-                  pagination={false}
-                  dataSource={targetPathMappingDrafts}
-                  columns={[
-                    { title: '端类型', dataIndex: 'targetType', width: 160, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
-                    {
-                      title: '路径匹配',
-                      dataIndex: 'pathPatterns',
-                      render: (_, row) => (
-                        <Select
-                          mode="tags"
-                          className="full-width"
-                          value={row.pathPatterns || []}
-                          onChange={value => updateTargetPathMappingDraft(row.targetType, 'pathPatterns', value)}
-                        />
-                      )
-                    },
-                    {
-                      title: '启用',
-                      dataIndex: 'enabled',
-                      width: 100,
-                      render: (_, row) => (
-                        <Switch
-                          checked={row.enabled !== false}
-                          checkedChildren="启用"
-                          unCheckedChildren="停用"
-                          onChange={checked => updateTargetPathMappingDraft(row.targetType, 'enabled', checked)}
-                        />
-                      )
-                    }
-                  ]}
-                  scroll={{ x: 920 }}
-                />
-              </Space>
-            </div>
-            <div className="settings-subsection">
-              <Space direction="vertical" size="middle" className="full-width">
                 <Row gutter={[16, 16]}>
                   <Col xs={24} md={8}>
                     <Text strong>项目组筛选</Text>
@@ -3424,7 +3332,7 @@ function TemplateConfig() {
                       <Select
                         className="full-width prompt-field"
                         value={projectConfigDraft?.targetType || undefined}
-                        options={TARGET_TYPE_OPTIONS}
+                        options={PROJECT_TARGET_TYPE_OPTIONS}
                         loading={projectConfigSaving}
                         onChange={value => updateProjectConfigDraft('targetType', value)}
                       />
@@ -3441,56 +3349,117 @@ function TemplateConfig() {
               </Space>
             </div>
             <div className="settings-subsection">
+              <Space direction="vertical" size="middle" className="full-width">
+                <div className="settings-inline-head">
+                  <Space wrap>
+                    <Text strong>端类型路径映射</Text>
+                    <Tag>{targetPathMappingDrafts.filter(item => item.enabled !== false).length} 个启用</Tag>
+                  </Space>
+                  <Button type="primary" loading={targetPathMappingSaving} onClick={saveTargetPathMappings}>
+                    保存路径映射
+                  </Button>
+                </div>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Webhook 新项目只按这里的全局路径映射识别端类型。同一次变更命中多个端类型时会生成失败任务，提示调整映射。"
+                />
+                <Table
+                  size="small"
+                  rowKey="targetType"
+                  pagination={false}
+                  dataSource={targetPathMappingDrafts}
+                  columns={[
+                    { title: '端类型', dataIndex: 'targetType', width: 160, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
+                    {
+                      title: '路径匹配',
+                      dataIndex: 'pathPatterns',
+                      render: (_, row) => (
+                        <Select
+                          mode="tags"
+                          className="full-width"
+                          value={row.pathPatterns || []}
+                          onChange={value => updateTargetPathMappingDraft(row.targetType, 'pathPatterns', value)}
+                        />
+                      )
+                    },
+                    {
+                      title: '启用',
+                      dataIndex: 'enabled',
+                      width: 100,
+                      render: (_, row) => (
+                        <Switch
+                          checked={row.enabled !== false}
+                          checkedChildren="启用"
+                          unCheckedChildren="停用"
+                          onChange={checked => updateTargetPathMappingDraft(row.targetType, 'enabled', checked)}
+                        />
+                      )
+                    }
+                  ]}
+                  scroll={{ x: 920 }}
+                />
+              </Space>
+            </div>
+            <div className="settings-subsection">
               {targetConfigDraft ? (
                 <>
                 <Space direction="vertical" size="middle" className="full-width">
-                  <div className="settings-inline-head">
-                    <Space wrap>
-                      <Text strong>端类型自动识别</Text>
-                      {(detectedTargetTypes.length ? detectedTargetTypes : ['BACKEND']).map(type => (
-                        <Tag key={type} color={type === 'BACKEND' ? 'blue' : 'green'}>{targetTypeLabel(type)}</Tag>
-                      ))}
-                      {targetDetection?.updatedAt && <Tag>{targetDetection.updatedAt}</Tag>}
-                    </Space>
-                    <Space wrap>
-                      {detectedTargetTypes.map(type => (
-                        <Button key={type} size="small" onClick={() => applyDetectedTargetType(type)}>
-                          设为{targetTypeLabel(type)}
-                        </Button>
-                      ))}
-                    </Space>
-                  </div>
-                  {detectionDiffersFromConfig && (
+                <div className="settings-inline-head">
+                  <Space wrap>
+                    <Text strong>端类型</Text>
+                    {selectedTargetType && <Tag>{targetTypeLabel(selectedTargetType)}</Tag>}
+                  </Space>
+                </div>
+                <div className="settings-subsection">
+                  <Space direction="vertical" size="middle" className="full-width">
+                    <div className="settings-inline-head">
+                      <Space wrap>
+                        <Text strong>最近路径匹配结果</Text>
+                        {(detectedTargetTypes.length ? detectedTargetTypes : ['GENERAL']).map(type => (
+                          <Tag key={type} color={type === 'BACKEND' ? 'blue' : 'green'}>{targetTypeLabel(type)}</Tag>
+                        ))}
+                        {targetDetection?.updatedAt && <Tag>{targetDetection.updatedAt}</Tag>}
+                      </Space>
+                    </div>
                     <Alert
-                      type="warning"
+                      type="info"
                       showIcon
-                      message="最近变更命中的端类型尚未出现在项目支持端类型中，可以用右侧按钮生成一套端类型配置。"
+                      message="这里展示最近一次 webhook 按全局端类型路径映射得到的匹配证据。端类型识别只以“端类型路径映射”为准；需要调整规则时请直接维护上方路径映射。"
                     />
-                  )}
-                  {detectionEvidences.length > 0 ? (
-                    <Table
-                      size="small"
-                      rowKey={(row, index) => `${row.targetType}-${row.source}-${row.value}-${index}`}
-                      pagination={false}
-                      columns={[
-                        { title: '端类型', dataIndex: 'targetType', width: 150, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
-                        { title: '来源', dataIndex: 'source', width: 130, render: value => ({ PATH: '路径', PROJECT_NAME: '项目名', FALLBACK: '兜底' }[value] || value) },
-                        { title: '命中值', dataIndex: 'value', ellipsis: true, render: value => value || '-' },
-                        { title: '规则', dataIndex: 'pattern', width: 180, render: value => value || '-' }
-                      ]}
-                      dataSource={detectionEvidences}
-                      scroll={{ x: 860 }}
-                    />
-                  ) : (
-                    <Empty description="暂无自动识别依据，下一次 webhook 后会更新" />
-                  )}
+                    {detectionDiffersFromConfig && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message="最近路径匹配命中的端类型尚未出现在项目支持端类型中，请在“当前项目所属端类型”或“编辑端类型”中人工确认。"
+                      />
+                    )}
+                    {detectionEvidences.length > 0 ? (
+                      <Table
+                        size="small"
+                        rowKey={detectionEvidenceRowKey}
+                        pagination={false}
+                        columns={[
+                          { title: '端类型', dataIndex: 'targetType', width: 150, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
+                          { title: '来源', dataIndex: 'source', width: 130, render: value => ({ PATH_MAPPING: '路径映射', PATH: '路径', FALLBACK: '兜底' }[value] || value) },
+                          { title: '命中值', dataIndex: 'value', ellipsis: true, render: value => value || '-' },
+                          { title: '规则', dataIndex: 'pattern', width: 180, render: value => value || '-' }
+                        ]}
+                        dataSource={detectionEvidences}
+                        scroll={{ x: 860 }}
+                      />
+                    ) : (
+                      <Empty description="暂无路径匹配依据，下一次 webhook 后会更新" />
+                    )}
+                  </Space>
+                </div>
                 <Row gutter={[16, 16]}>
                   <Col xs={24} md={8}>
-                    <Text strong>端类型</Text>
+                    <Text strong>编辑端类型</Text>
                     <Select
                       className="full-width prompt-field"
                       value={selectedTargetType}
-                      options={TARGET_TYPE_OPTIONS}
+                      options={PROJECT_TARGET_TYPE_OPTIONS}
                       onChange={selectTargetTypeForConfig}
                     />
                   </Col>
@@ -3507,26 +3476,6 @@ function TemplateConfig() {
                     <Text type="secondary">
                       规则模板随端类型自动选择：{defaultTemplateCodeForTargetType(selectedTargetType)}。AI Review 模板优先使用项目组配置；默认通用项目组会对具体端类型使用内置模板。
                     </Text>
-                  </Col>
-                  <Col xs={24}>
-                    <div className="settings-inline-head">
-                      <Text strong>路径匹配</Text>
-                      <Button
-                        size="small"
-                        icon={<ReloadOutlined />}
-                        onClick={refreshTargetPathPatterns}
-                        disabled={!targetConfigDraft}
-                      >
-                        按 webhook 识别回填
-                      </Button>
-                    </div>
-                    <Select
-                      mode="tags"
-                      className="full-width prompt-field"
-                      value={targetConfigDraft.pathPatterns || []}
-                      placeholder="例如 frontend/**、ios/**、android/**"
-                      onChange={value => updateTargetConfigDraft('pathPatterns', value)}
-                    />
                   </Col>
                   <Col xs={24} md={8}>
                     <Space direction="vertical">
@@ -3548,7 +3497,7 @@ function TemplateConfig() {
                         unCheckedChildren="停用"
                         onChange={checked => updateTargetConfigDraft('enabled', checked)}
                       />
-                      <Text type="secondary">停用后不参与 webhook 路径匹配和端类型自动选择。</Text>
+                      <Text type="secondary">停用后不参与该项目的审查端类型选择。</Text>
                     </Space>
                   </Col>
                 </Row>
@@ -4022,6 +3971,7 @@ function ReleaseNotesPage() {
         {releaseNotes.map((item, index) => {
           const isActive = activeReleaseId === item.id;
           const isLast = index === releaseNotes.length - 1;
+          const visibleHighlights = (item.highlights || []).slice(0, 3);
           return (
             <article
               key={item.id}
@@ -4061,7 +4011,7 @@ function ReleaseNotesPage() {
                 </div>
                 <Paragraph className="release-summary">{item.summary}</Paragraph>
                 <ul className="release-highlights">
-                  {item.highlights.map(highlight => (
+                  {visibleHighlights.map(highlight => (
                     <li key={highlight}>{highlight}</li>
                   ))}
                 </ul>

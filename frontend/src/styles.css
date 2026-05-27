@@ -659,11 +659,11 @@ body {
 
 .release-card {
   height: 100%;
-  padding: 22px 24px;
+  padding: 18px 20px;
   border: 1px solid #d6e0e3;
-  border-radius: 20px;
+  border-radius: 8px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(248, 250, 252, 0.93));
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
   transition: transform 0.24s ease, box-shadow 0.24s ease, border-color 0.24s ease;
 }
 
@@ -687,7 +687,7 @@ body {
 }
 
 .release-summary {
-  margin-bottom: 16px !important;
+  margin-bottom: 10px !important;
   color: #334155;
 }
 
@@ -702,11 +702,11 @@ body {
   margin: 0;
   padding-left: 18px;
   color: #1f2937;
-  line-height: 1.75;
+  line-height: 1.55;
 }
 
 .release-highlights li + li {
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 .release-entry.is-active .release-marker-core,

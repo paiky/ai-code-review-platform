@@ -299,7 +299,7 @@ def _ambiguous_target_message(target_types: list[str]) -> str:
     return (
         "端类型路径映射命中多个端类型："
         + "、".join(target_types)
-        + "。请在设置页调整全局端类型路径映射后重新触发审阅。"
+        + "。请在设置页确认最近路径匹配结果，并调整全局端类型路径映射或项目端类型配置后重新触发审阅。"
     )
 
 

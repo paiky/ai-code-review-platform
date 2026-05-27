@@ -648,27 +648,28 @@ PRIVATE-TOKEN: {GITLAB_TOKEN}
 | `frontend-default` | 前端项目 |
 | `general-default` | 通用项目 |
 
-多端接入第一阶段已经引入项目组和端类型配置。当前产品默认按“单仓单端”使用：一个 GitLab 项目通常归属一个端类型；底层 `supported_target_types` 和 `project_target_configs` 仍保留多端扩展能力，混合仓库拆分审查属于后续阶段。当前内置端类型：
+多端接入第一阶段已经引入项目组和端类型配置。当前产品默认按“单仓单端”使用：一个 GitLab 项目通常归属一个端类型；底层 `supported_target_types` 和 `project_target_configs` 仍保留多端扩展能力，混合仓库拆分审查属于后续阶段。当前主要可配置端类型：
 
 ```text
-BACKEND / WEB_PC / APP_IOS / APP_ANDROID / APP_CROSS_PLATFORM / GENERAL
+BACKEND / WEB_PC / APP_IOS / APP_ANDROID / GENERAL
 ```
+
+历史跨端类型数据仍保持兼容，但前端下拉框、AI Review Profile 下拉框和全局端类型路径映射不再展示跨端应用。
 
 后端项目默认仍使用 `backend-default` 和 `backend-default-ai-review`，并展示“提醒卡片”。PC / APP 端默认以代码质量 AI Review 为主，后端维护类提醒卡片默认关闭；如确实需要，也可以在项目端类型配置中开启 `reminderCardEnabled`。
 
 项目组用于项目归类、任务列表筛选、默认 AI Review Profile、默认 Provider 和 Push 审核策略控制。可以在前端“设置 -> 项目组 / 端类型配置”中新增项目组、编辑名称 / 编码 / AI Review 模板 / 默认 Provider、停用非默认项目组，并把已有项目绑定到指定项目组；在“设置 -> AI Review 设置 -> Push 审核策略”中按项目组维护允许分支、大小阈值、硬上限和 debounce。第一阶段项目组不代表权限边界；未绑定或 webhook 新进入的项目会自动归入“默认通用项目组”。
 
-首次接入新的 GitLab 项目时，平台会先根据“设置 -> 项目组 / 端类型配置 -> 端类型路径映射”中的全局路径规则匹配 changed files，自动识别端类型并保存识别依据。典型默认规则包括：
+首次接入新的 GitLab 项目时，平台只使用“设置 -> 项目组 / 端类型配置 -> 端类型路径映射”中的全局路径规则匹配 changed files，并保存最近一次路径匹配依据。系统会初始化一组可见、可编辑、可停用的默认路径映射：
 
 ```text
 ios/**、**/*.swift、Podfile -> APP_IOS
 android/**、**/*.kt、build.gradle、settings.gradle -> APP_ANDROID
 frontend/**、web/**、src/**/*.tsx、src/**/*.jsx、package.json -> WEB_PC
-flutter/**、**/*.dart、pubspec.yaml、rn/**、miniapp/** -> APP_CROSS_PLATFORM
 src/main/java/**、src/main/resources/**、src/*.java、pom.xml、backend-python/** -> BACKEND
 ```
 
-如果新项目只命中一个端类型，平台会自动创建该端类型配置，并默认使用 `**/*` 作为项目内路径匹配，适合“单端单仓库”。如果没有命中任何端类型，会设置为 `GENERAL`；`GENERAL` 不再兜底到后端 AI Review 模板，如果项目组也未设置 AI Review 模板，AI Review 会落为 `FAILED` 并提示“项目所属项目组未设置 AI Review 模板”。如果同一次变更命中多个端类型，平台会创建一条失败任务，提示调整全局端类型路径映射。已有项目的人工端类型配置不会被自动覆盖；设置页会展示“端类型自动识别”依据，并支持手动保存“当前项目所属端类型”。
+如果新项目只命中一个端类型，平台会自动创建该端类型配置，并默认使用 `**/*` 作为项目内路径匹配，适合“单端单仓库”。如果没有命中任何端类型，会设置为 `GENERAL`。`GENERAL` 不再兜底到后端 AI Review 模板，如果项目组也未设置 AI Review 模板，AI Review 会落为 `FAILED` 并提示“项目所属项目组未设置 AI Review 模板”。如果同一次变更命中多个端类型，平台会创建一条失败任务，提示确认最近路径匹配结果并调整全局端类型路径映射或项目端类型配置。已有项目的人工端类型配置不会被自动覆盖。设置页会展示项目最新一次 webhook 的“最近路径匹配结果”，用于排查当前全局路径映射为什么命中或没有命中。
 
 模板接口：
 
@@ -743,7 +744,7 @@ Provider 说明：
 - 配置多个钉钉 webhook；开启钉钉推送后会向全部已启用 webhook 群发同一条通知。
 - 配置 OpenAI / Anthropic / DeepSeek / 自定义 Provider 的模型端点 URL、模型名称和 API Key。
 - 设置全局默认 Provider，以及项目级默认 Provider。
-- 按项目组绑定默认 AI Review Profile，按端类型路径映射识别新项目端类型，并在项目端类型配置中维护 Provider 覆盖、项目内路径匹配和提醒卡片展示策略。
+- 按项目组绑定默认 AI Review Profile，通过全局端类型路径映射识别新项目端类型，并在项目端类型配置中维护 Provider 覆盖、提醒卡片展示和端类型启停策略。
 - 查看、编辑、预览、恢复 AI Review Profile 的 Review Instructions。
 - 按项目组配置 Push 审核策略，控制该项目组下的 Push 是否允许自动进入 AI Review。
 

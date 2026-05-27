@@ -379,7 +379,7 @@ def test_new_ios_project_webhook_auto_creates_ios_target_config(client: TestClie
     project = next(item for item in projects if item["gitProjectId"] == "4001")
     assert project["supportedTargetTypes"] == ["APP_IOS"]
     assert project["detectedTargetTypes"] == ["APP_IOS"]
-    assert project["targetDetection"]["evidences"][0]["source"] == "PATH"
+    assert project["targetDetection"]["evidences"][0]["source"] == "PATH_MAPPING"
 
     configs = client.get(f"/api/projects/{project['id']}/target-configs").json()["data"]
     ios_config = next(item for item in configs if item["targetType"] == "APP_IOS")
@@ -499,6 +499,7 @@ def test_target_type_path_mappings_can_be_updated_and_drive_new_project_detectio
     assert mappings_response.status_code == 200
     mappings = mappings_response.json()["data"]
     assert any(item["targetType"] == "WEB_PC" for item in mappings)
+    assert all(item["targetType"] != "APP_CROSS_PLATFORM" for item in mappings)
 
     updated = [
         {
@@ -525,6 +526,63 @@ def test_target_type_path_mappings_can_be_updated_and_drive_new_project_detectio
     detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
     assert detail["targetType"] == "WEB_PC"
     assert detail["codeQualityProfileCode"] == "web-pc-default-ai-review"
+
+    rejected = client.put(
+        "/api/target-type-path-mappings",
+        json={
+            "items": [
+                {
+                    "targetType": "APP_CROSS_PLATFORM",
+                    "pathPatterns": ["flutter/**"],
+                    "enabled": True,
+                }
+            ]
+        },
+    )
+    assert rejected.status_code == 400
+
+
+def test_disabled_path_mappings_fall_back_to_general(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    seed_template(db_session, "general-default", "GENERAL")
+
+    mappings_response = client.get("/api/target-type-path-mappings")
+    assert mappings_response.status_code == 200
+    disabled_mappings = [
+        {
+            **item,
+            "enabled": False,
+        }
+        for item in mappings_response.json()["data"]
+    ]
+    save_response = client.put("/api/target-type-path-mappings", json={"items": disabled_mappings})
+    assert save_response.status_code == 200
+
+    response = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=mr_payload(
+            4007,
+            "platform/auto-web",
+            [{"path": "src/pages/Home.tsx", "diffText": "+ export const Home = () => null"}],
+        ),
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    assert detail["targetType"] == "GENERAL"
+    assert detail["codeQualityProfileCode"] is None
+
+    projects = client.get("/api/projects").json()["data"]["items"]
+    project = next(item for item in projects if item["gitProjectId"] == "4007")
+    assert project["detectedTargetTypes"] == ["GENERAL"]
+    assert any(
+        item["targetType"] == "GENERAL" and item["source"] == "FALLBACK"
+        for item in project["targetDetection"]["evidences"]
+    )
 
 
 def test_unmatched_new_project_uses_general_and_records_ai_review_profile_failure(
