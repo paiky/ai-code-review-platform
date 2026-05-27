@@ -249,6 +249,7 @@ def format_markdown(task_id: int, risk_card: dict, context: dict) -> str:
     result = (
         "### 变更提醒\n\n"
         f"项目：{_project_text(context)}\n\n"
+        f"分支：{_branch_text(context)}\n\n"
         f"{_event_label(context)} 作者：{_author_text(context)}\n\n"
         "#### 配置变更（规则扫描）\n\n"
         f"{_format_maintenance_reminders(task_id, risk_card)}\n\n"
@@ -268,6 +269,7 @@ def format_review_summary_markdown(
     result = (
         "### 变更审查结果\n\n"
         f"项目：{_project_text(context)}\n\n"
+        f"分支：{_branch_text(context)}\n\n"
         f"AI 模型：{_provider_label((code_quality_result or {}).get('provider'))}\n\n"
         f"{_event_label(context)} 作者：{_author_text(context)}\n\n"
     )
@@ -490,6 +492,8 @@ def _event_label(context: dict) -> str:
 def _branch_text(context: dict) -> str:
     source = context.get("sourceBranch")
     target = context.get("targetBranch")
+    if _event_label(context) == "Push":
+        return str(source or "-")
     if source or target:
         return f"{source or '-'} -> {target or '-'}"
     return "-"

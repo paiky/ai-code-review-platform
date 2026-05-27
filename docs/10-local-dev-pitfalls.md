@@ -977,8 +977,8 @@ code_quality_scheduler_jobs.created_at >= now - 1 day
 处理方式：
 
 1. `QUEUED` / `RUNNING` 活跃任务不加时间窗口，避免当前仍在执行的任务被隐藏。
-2. `SUCCESS` / `FAILED` / `SKIPPED` 最近任务按 `updated_at >= now - 2 days` 或 `created_at >= now - 2 days` 展示；48 小时窗口能覆盖 UTC / 北京时间展示差异导致的边界误判。
-3. 排查环境差异时优先查看 `code_quality_scheduler_jobs.status`、`created_at`、`updated_at`，而不是只看任务表。
+2. `SUCCESS` / `FAILED` / `SKIPPED` 最近任务按 `updated_at >= now - 24 hours` 展示；活跃任务不加时间窗口。
+3. 排查环境差异时优先查看 `code_quality_scheduler_jobs.status`、`created_at`、`updated_at`，而不是只看任务表。当前调度队列只展示最近 24 小时已完成 / 失败 / 跳过记录，活跃任务不受时间窗口限制。
 
 ## 41. `@Value` 规则不能把 diff 上下文行当成配置变更
 

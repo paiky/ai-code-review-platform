@@ -29,6 +29,17 @@ body {
   font-weight: 650;
   letter-spacing: 0;
   flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1;
+}
+
+.brand:hover,
+.brand:focus-visible {
+  color: #d9f7f5;
 }
 
 .top-nav {

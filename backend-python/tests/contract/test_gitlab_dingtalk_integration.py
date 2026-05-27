@@ -278,6 +278,70 @@ def test_mr_without_changed_files_fetches_gitlab_diffs(
     assert detail["changedFilesSummary"]["source"] == "gitlab_api"
 
 
+def test_closed_mr_event_is_skipped_without_creating_review_task(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    seed_template(db_session)
+
+    response = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            **mr_payload_without_changed_files(),
+            "object_attributes": {
+                **mr_payload_without_changed_files()["object_attributes"],
+                "state": "opened",
+                "action": "close",
+            },
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "SKIPPED"
+    assert response.json()["data"]["taskId"] is None
+    assert client.get("/api/review-tasks").json()["data"]["items"] == []
+
+
+def test_gitlab_web_urls_use_configured_public_base_url(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("GITLAB_BASE_URL", "http://192.168.100.88:19523")
+
+    response = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            **mr_payload_without_changed_files(),
+            "project": {
+                "id": 1001,
+                "name": "demo-service",
+                "web_url": "http://dc8191653c5a/demo/service",
+            },
+            "object_attributes": {
+                **mr_payload_without_changed_files()["object_attributes"],
+                "url": "http://dc8191653c5a/demo/service/-/merge_requests/12",
+            },
+            "changedFiles": [
+                {
+                    "path": "src/main/resources/mapper/OrderMapper.xml",
+                    "diffText": "+ update orders set status = 'DONE' where id = #{id}",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    projects = client.get("/api/projects").json()["data"]["items"]
+    assert detail["externalUrl"] == "http://192.168.100.88:19523/demo/service/-/merge_requests/12"
+    assert projects[0]["repositoryUrl"] == "http://192.168.100.88:19523/demo/service"
+
+
 def test_web_mr_without_payload_changed_files_creates_task_after_gitlab_diff_detection(
     client: TestClient,
     db_session: Session,
@@ -491,6 +555,7 @@ def test_dingtalk_success_is_recorded(
     assert notifications[0]["responseBody"] == '{"errcode":0,"errmsg":"ok"}'
     body = json.loads(route.calls[0].request.content)
     assert "项目：demo-service" in body["markdown"]["text"]
+    assert "分支：feature/gitlab-api -> main" in body["markdown"]["text"]
 
 
 def test_dingtalk_filter_prefers_focus_rule_codes_for_value_config(
@@ -990,6 +1055,7 @@ def test_mr_summary_without_findings_still_sends_and_uses_platform_base_url(
     body = json.loads(route.calls[0].request.content)
     markdown = body["markdown"]["text"]
     assert "项目：demo-service" in markdown
+    assert "分支：feature/gitlab-api -> main" in markdown
     assert "AI 模型：DeepSeek" in markdown
     assert "MR 作者：Alice(@alice)" in markdown
     assert "GITLAB_MR_WEBHOOK" not in markdown

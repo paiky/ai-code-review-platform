@@ -32,6 +32,7 @@ import {
   CloseOutlined,
   ClusterOutlined,
   CopyOutlined,
+  ExportOutlined,
   EyeOutlined,
   FileSearchOutlined,
   LoadingOutlined,
@@ -852,17 +853,23 @@ function TaskList({ onOpen }) {
   }, []);
 
   const columns = [
-    { title: 'ID', dataIndex: 'id', width: 80 },
-    { title: '项目组', dataIndex: 'groupId', width: 130, render: value => groups.find(group => group.id === value)?.groupName || '-' },
-    { title: '项目', dataIndex: 'projectName', ellipsis: true },
-    { title: '端类型', dataIndex: 'targetType', width: 120, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
-    { title: '类型', dataIndex: 'triggerType', width: 90, render: value => <Tag>{taskTypeLabel(value)}</Tag> },
-    { title: '分支', width: 260, render: (_, row) => <Text>{taskListBranchText(row)}</Text> },
-    { title: '状态', dataIndex: 'status', width: 110, render: value => <Tag color={statusColor(value)}>{value || '-'}</Tag> },
-    { title: '重点变更', dataIndex: 'focusIndicators', width: 240, render: value => <FocusIndicatorTags indicators={value} muted /> },
-    { title: '风险点', dataIndex: 'riskItemCount', width: 90, render: value => value ?? 0 },
-    { title: '创建时间', dataIndex: 'createdAt', width: 180 },
-    { title: '操作', width: 90, render: (_, row) => <Button type="link" onClick={() => onOpen(row.id)}>详情</Button> }
+    { title: 'ID', dataIndex: 'id', width: 64 },
+    { title: '项目组', dataIndex: 'groupId', width: 120, ellipsis: true, render: value => groups.find(group => group.id === value)?.groupName || '-' },
+    { title: '项目', dataIndex: 'projectName', width: 170, ellipsis: true },
+    {
+      title: '作者',
+      width: 90,
+      ellipsis: true,
+      render: (_, row) => <Text ellipsis>{row.authorName || row.authorUsername || '-'}</Text>
+    },
+    { title: '端类型', dataIndex: 'targetType', width: 96, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
+    { title: '类型', dataIndex: 'triggerType', width: 76, render: value => <Tag>{taskTypeLabel(value)}</Tag> },
+    { title: '分支', width: 175, ellipsis: true, render: (_, row) => <Text ellipsis>{taskListBranchText(row)}</Text> },
+    { title: '状态', dataIndex: 'status', width: 95, render: value => <Tag color={statusColor(value)}>{value || '-'}</Tag> },
+    { title: '重点变更', dataIndex: 'focusIndicators', width: 220, render: value => <FocusIndicatorTags indicators={value} muted /> },
+    { title: '风险', dataIndex: 'riskItemCount', width: 60, render: value => value ?? 0 },
+    { title: '创建时间', dataIndex: 'createdAt', width: 125, ellipsis: true },
+    { title: '操作', width: 70, render: (_, row) => <Button type="link" onClick={() => onOpen(row.id)}>详情</Button> }
   ];
 
   return (
@@ -917,6 +924,7 @@ function TaskList({ onOpen }) {
           loading={loading}
           columns={columns}
           dataSource={tasks}
+          tableLayout="fixed"
           pagination={{
             current: pagination.pageNo,
             pageSize: pagination.pageSize,
@@ -2097,7 +2105,23 @@ function TaskDetail({ taskId, onBack, onOpen }) {
               <Divider />
               <Descriptions column={{ xs: 1, md: 2, xl: 3 }} size="small">
                 <Descriptions.Item label="任务 ID">{detail.id}</Descriptions.Item>
-                <Descriptions.Item label="GitLab 项目">{detail.gitProjectId}</Descriptions.Item>
+                <Descriptions.Item label="GitLab 项目">
+                  <Space size={4}>
+                    <span>{detail.gitProjectId}</span>
+                    {detail.externalUrl && (
+                      <Button
+                        type="link"
+                        size="small"
+                        icon={<ExportOutlined />}
+                        href={detail.externalUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        跳转 GitLab
+                      </Button>
+                    )}
+                  </Space>
+                </Descriptions.Item>
                 <Descriptions.Item label="触发类型">{detail.triggerType}</Descriptions.Item>
                 <Descriptions.Item label="作者">{detail.authorName || detail.authorUsername || '-'}</Descriptions.Item>
                 <Descriptions.Item label="模板">{detail.templateCode}</Descriptions.Item>
@@ -4349,7 +4373,9 @@ function AppFrame() {
   return (
     <Layout className="app-layout">
       <Header className="app-header">
-        <div className="brand">AI 变更提醒与代码质量审查平台</div>
+        <button className="brand" type="button" onClick={() => navigate(TASK_LIST_ROUTE)}>
+          AI 变更提醒与代码质量审查平台
+        </button>
         <Space className="top-nav">
           <Button
             icon={<UnorderedListOutlined />}

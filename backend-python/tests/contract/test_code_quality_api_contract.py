@@ -962,6 +962,58 @@ def test_auto_review_uses_project_group_profile_before_target_type_profile(
     assert "group-profile-secret" not in json.dumps(progress, ensure_ascii=False)
 
 
+@respx.mock
+def test_project_target_provider_override_wins_over_global_default_for_auto_mr_review(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    seed_project(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("XIAOMIMO_API_KEY", "xiaomimo-secret")
+    settings = client.put("/api/code-quality-reviews/settings", json={"defaultProviderCode": "DEEPSEEK"})
+    assert settings.status_code == 200
+    target_config = client.put(
+        "/api/projects/1/target-configs/BACKEND",
+        json={"providerCode": "XIAOMIMO"},
+    )
+    assert target_config.status_code == 200
+
+    xiaomimo = respx.post("https://api.xiaomimimo.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={"choices": [{"message": {"content": review_card_json("XiaomiMIMO 完成", "MAJOR")}}]},
+        )
+    )
+
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
+            "object_attributes": {"iid": 36, "action": "open", "source_branch": "feature/xiaomi-provider", "target_branch": "main"},
+            "changedFiles": [
+                {
+                    "path": "src/main/java/com/demo/OrderService.java",
+                    "diffText": "@@ -9,4 +9,4 @@ public void create(Order order) {\n+        order.setStatus(null);",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+
+    assert created.status_code == 200
+    task_id = created.json()["data"]["taskId"]
+    result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
+    progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
+    assert result["status"] == "SUCCESS"
+    assert result["provider"] == "XIAOMIMO"
+    assert xiaomimo.called
+    assert "xiaomimo-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
 def test_non_default_project_group_without_profile_records_ai_review_failure(
     client: TestClient,
     db_session: Session,
@@ -1230,7 +1282,7 @@ def test_job_queue_keeps_active_jobs_and_recently_updated_finished_jobs(
 ) -> None:
     now = datetime.now()
     old = now - timedelta(days=3)
-    within_queue_window = now - timedelta(hours=36)
+    within_queue_window = now - timedelta(hours=12)
     db_session.add_all(
         [
             CodeQualitySchedulerJob(

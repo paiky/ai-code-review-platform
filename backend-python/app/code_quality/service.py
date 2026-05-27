@@ -1793,12 +1793,21 @@ def _save_missing_profile_failure(db: Session, task: ReviewTask, project: Projec
 
 
 def _resolve_provider(db: Session, project: Project, profile, target_type: str | None = None):
-    provider_code = profile.provider_code or project.default_code_quality_provider_code
-    if not provider_code and target_type:
+    provider_code = None
+    if target_type:
         from app.project_integration.repository import find_target_config
 
         target_config = find_target_config(db, project.id, target_type)
         provider_code = target_config.provider_code if target_config else None
+    if not provider_code:
+        provider_code = project.default_code_quality_provider_code
+    if not provider_code:
+        from app.project_integration.models import ProjectGroup
+
+        group = db.get(ProjectGroup, project.group_id) if project.group_id else None
+        provider_code = group.default_provider_code if group else None
+    if not provider_code:
+        provider_code = profile.provider_code
     if not provider_code:
         provider_code = get_settings_record(db).default_provider_code
     return get_provider(db, provider_code)

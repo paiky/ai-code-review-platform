@@ -4,12 +4,14 @@ from datetime import datetime, timezone
 from fnmatch import fnmatchcase
 import json
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from sqlalchemy.orm import Session
 
 from app.change_analysis.service import analyze_changes
 from app.code_quality.service import trigger_auto_review
 from app.code_quality.repository import get_settings_record
+from app.core.config import get_settings
 from app.core.errors import AppError
 from app.notification.service import send_review_summary, send_risk_card
 from app.project_integration import gitlab_client
@@ -516,11 +518,13 @@ def _parse_mr_event(payload: dict[str, Any]) -> dict:
     return {
         "gitProjectId": git_project_id,
         "projectName": project_name,
-        "repositoryUrl": project.get("web_url") or (payload.get("repository") or {}).get("homepage"),
+        "repositoryUrl": _normalize_gitlab_web_url(
+            project.get("web_url") or (payload.get("repository") or {}).get("homepage")
+        ),
         "mrId": str(attrs.get("iid") or attrs.get("id")),
         "eventAction": attrs.get("action"),
         "eventTime": _parse_time(attrs.get("updated_at") or attrs.get("created_at") or payload.get("event_time")),
-        "externalUrl": attrs.get("url"),
+        "externalUrl": _normalize_gitlab_web_url(attrs.get("url")),
         "sourceBranch": attrs.get("source_branch"),
         "targetBranch": attrs.get("target_branch"),
         "commitSha": ((attrs.get("last_commit") or {}).get("id") or (attrs.get("last_commit") or {}).get("sha") or payload.get("checkout_sha")),
@@ -545,9 +549,9 @@ def _enrich_mr_detail(event: dict[str, Any]) -> dict[str, Any]:
         or project_detail.get("name")
         or event["projectName"]
     )
-    enriched["repositoryUrl"] = project_detail.get("webUrl") or event["repositoryUrl"]
+    enriched["repositoryUrl"] = _normalize_gitlab_web_url(project_detail.get("webUrl")) or event["repositoryUrl"]
     enriched["mrId"] = mr_detail.get("iid") or event["mrId"]
-    enriched["externalUrl"] = mr_detail.get("webUrl") or event["externalUrl"]
+    enriched["externalUrl"] = _normalize_gitlab_web_url(mr_detail.get("webUrl")) or event["externalUrl"]
     enriched["sourceBranch"] = mr_detail.get("sourceBranch") or event["sourceBranch"]
     enriched["targetBranch"] = mr_detail.get("targetBranch") or event["targetBranch"]
     enriched["commitSha"] = mr_detail.get("commitSha") or event["commitSha"]
@@ -570,13 +574,13 @@ def _parse_push_event(
     return {
         "gitProjectId": git_project_id,
         "projectName": project_name,
-        "repositoryUrl": repository_url,
+        "repositoryUrl": _normalize_gitlab_web_url(repository_url),
         "ref": ref,
         "branchName": branch_name,
         "beforeSha": payload.get("before"),
         "afterSha": after_sha,
         "eventTime": _parse_time(payload.get("event_time") or _nested(payload, "head_commit", "timestamp")),
-        "externalUrl": _build_commit_url(repository_url, after_sha),
+        "externalUrl": _build_commit_url(_normalize_gitlab_web_url(repository_url), after_sha),
         "authorName": payload.get("user_name") or _nested(payload, "user", "name") or _nested(payload, "commits", 0, "author", "name"),
         "authorUsername": payload.get("user_username") or _nested(payload, "user", "username") or payload.get("user_email"),
         "changedFilesSummary": _build_push_changed_files_summary(payload),
@@ -594,15 +598,17 @@ def _push_webhook_branch_gate(db: Session, project_record, branch_name: str | No
 
 
 def _is_opened_mr(event: dict) -> bool:
+    action = event.get("eventAction")
+    if action and str(action).lower() in {"close", "closed", "merge", "merged", "destroy"}:
+        return False
     state = _nested(event["rawPayload"], "object_attributes", "state") or _nested(
         event["rawPayload"], "object_attributes", "state_name"
     )
     if state:
         return str(state).lower() in {"opened", "open"}
-    action = event.get("eventAction")
     if not action:
         return True
-    return str(action).lower() not in {"close", "closed", "merge", "merged", "destroy"}
+    return True
 
 
 def _build_changed_files_summary(payload: dict[str, Any]) -> dict:
@@ -762,3 +768,24 @@ def _build_commit_url(repository_url: str | None, after_sha: str | None) -> str 
     if not repository_url or not after_sha:
         return repository_url
     return repository_url.rstrip("/") + "/-/commit/" + after_sha
+
+
+def _normalize_gitlab_web_url(url: str | None) -> str | None:
+    if not url:
+        return url
+    settings = get_settings()
+    base_url = settings.gitlab_base_url.strip()
+    if not base_url:
+        return url
+    parsed_url = urlparse(str(url))
+    parsed_base = urlparse(base_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        return url
+    if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc:
+        return url
+    return urlunparse(
+        parsed_url._replace(
+            scheme=parsed_base.scheme,
+            netloc=parsed_base.netloc,
+        )
+    )

@@ -1119,7 +1119,7 @@ def mark_scheduler_job_finished(
 
 def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, Any]:
     ensure_scheduler_job_schema(db)
-    cutoff = datetime.now() - timedelta(days=2)
+    cutoff = datetime.now() - timedelta(hours=24)
     fetch_limit = max(int(limit), 1)
     active_count = db.scalar(
         select(func.count())
