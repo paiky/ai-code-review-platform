@@ -13,6 +13,7 @@
 
 常用文档：
 
+- `docs/23-help-gitlab-dingtalk-project-onboarding.md`：接入帮助页文档源，面向首次接入用户，按 GitLab Webhook、钉钉机器人、项目组和模型配置组织。
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
 - `docs/19-python-backend-refactor-plan.md`：Python 后端重构计划，说明是否保持前后端分离、部署变化、影响范围和分阶段迁移路径。
 

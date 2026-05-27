@@ -39,6 +39,7 @@ import {
   ReloadOutlined,
   SearchOutlined,
   SettingOutlined,
+  QuestionCircleOutlined,
   UnorderedListOutlined
 } from '@ant-design/icons';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -70,6 +71,7 @@ const HOME_ROUTE = '/';
 const TASK_LIST_ROUTE = '/tasks';
 const SETTINGS_ROUTE = '/settings';
 const RELEASES_ROUTE = '/releases';
+const HELP_ROUTE = '/help';
 const JOB_QUEUE_REFRESH_EVENT = 'ai-review-job-queue-refresh';
 const TARGET_TYPE_OPTIONS = [
   { label: '后端', value: 'BACKEND' },
@@ -3992,6 +3994,168 @@ function ReleaseNotesPage() {
   );
 }
 
+function HelpCodeBlock({ children }) {
+  return <pre className="help-code-block">{children}</pre>;
+}
+
+function HelpImage({ src, alt }) {
+  return (
+    <figure className="help-image-frame">
+      <img src={src} alt={alt} loading="lazy" />
+      <figcaption>{alt}</figcaption>
+    </figure>
+  );
+}
+
+function HelpPage() {
+  const verificationItems = [
+    '创建测试分支并提交变更。',
+    '创建或更新 Merge Request。',
+    '打开平台“任务”页，确认出现新的审查任务。',
+    '进入任务详情，确认能看到提醒卡片和分析结果。',
+    '打开钉钉群，确认收到包含“变更审查结果”的消息。',
+    '点击钉钉消息中的详情链接，确认能打开对应任务详情页。'
+  ];
+
+  return (
+    <div className="page-shell help-page-shell">
+      <section className="help-hero">
+        <Space orientation="vertical" size={10}>
+          <Tag color="blue">接入帮助</Tag>
+          <Title level={2}>GitLab / 钉钉 / 项目组接入</Title>
+          <Paragraph>
+            按 GitLab Webhook、钉钉机器人、平台项目组、GitLab 项目和模型配置的顺序完成接入，
+            平台即可从 Merge Request 或 Push 事件生成提醒卡片并推送到钉钉群。
+          </Paragraph>
+        </Space>
+      </section>
+
+      <div className="help-section-list">
+        <section className="help-section">
+          <div className="help-section-number">一</div>
+          <div className="help-section-content">
+            <Title level={3}>配置 GitLab Webhook</Title>
+            <Paragraph>进入需要接入的平台项目：</Paragraph>
+            <HelpCodeBlock>GitLab 项目 -&gt; Settings -&gt; Webhooks</HelpCodeBlock>
+            <Paragraph>Webhook URL 固定填写：</Paragraph>
+            <HelpCodeBlock>http://ai-review.ihere.net/api/webhooks/gitlab/merge-request</HelpCodeBlock>
+            <Paragraph>打勾：</Paragraph>
+            <Space wrap>
+              <Tag color="blue">Merge request events</Tag>
+              <Tag color="cyan">Push events</Tag>
+            </Space>
+            <Paragraph className="help-paragraph-gap">Secret Token 保持为空即可。</Paragraph>
+            <HelpImage
+              src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/deadbf05a7ea499198d905a5f4c0cb74.png"
+              alt="GitLab Webhook 配置示例"
+            />
+            <Paragraph>保存后可以点击 GitLab 的测试按钮确认平台是否能收到请求。</Paragraph>
+          </div>
+        </section>
+
+        <section className="help-section">
+          <div className="help-section-number">二</div>
+          <div className="help-section-content">
+            <Title level={3}>配置钉钉机器人</Title>
+            <Paragraph>在用于接收审查结果的钉钉群中创建机器人：</Paragraph>
+            <HelpCodeBlock>群设置 -&gt; 机器人 -&gt; 添加机器人 -&gt; 自定义机器人</HelpCodeBlock>
+            <Paragraph>安全设置选择关键词，并填写：</Paragraph>
+            <HelpCodeBlock>变更审查结果</HelpCodeBlock>
+            <Alert
+              className="help-alert"
+              type="warning"
+              showIcon
+              title="公网 IP 白名单可作为备选，但平台出口 IP 可能随网络、部署或云资源调整而变化，后续维护成本更高。"
+            />
+            <Paragraph>
+              创建完成后，钉钉会生成机器人 Webhook URL。拿到 URL 后，只在平台“设置”页中配置。
+            </Paragraph>
+            <HelpImage
+              src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/image-20260527110201878.png"
+              alt="钉钉机器人关键词配置示例"
+            />
+          </div>
+        </section>
+
+        <section className="help-section">
+          <div className="help-section-number">三</div>
+          <div className="help-section-content">
+            <Title level={3}>配置平台项目组</Title>
+            <Paragraph>进入平台：</Paragraph>
+            <HelpCodeBlock>设置 -&gt; 项目组 / 端类型配置</HelpCodeBlock>
+            <Paragraph>先创建或复用已有项目组。项目组通常按业务线、团队或产品域划分，用于：</Paragraph>
+            <HelpCodeBlock>{`归类多个 GitLab 项目
+筛选任务列表
+配置项目组钉钉机器人
+配置默认 AI Review Profile
+配置默认模型 Provider
+维护 Push 审核策略`}</HelpCodeBlock>
+            <Paragraph>
+              给项目组配置钉钉机器人时，把上一步从钉钉复制的 Webhook URL 填入该项目组的机器人配置，并启用它。
+              平台会优先按项目所属项目组发送通知。
+            </Paragraph>
+            <HelpImage
+              src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-27_11-10-57.png"
+              alt="平台项目组与钉钉机器人配置示例"
+            />
+          </div>
+        </section>
+
+        <section className="help-section">
+          <div className="help-section-number">四</div>
+          <div className="help-section-content">
+            <Title level={3}>配置 GitLab 项目</Title>
+            <Paragraph>
+              首次收到某个 GitLab 项目的 Webhook 后，平台可以自动创建项目记录。自动创建的项目会进入默认项目组，后续可以再人工调整。
+            </Paragraph>
+            <HelpImage
+              src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/cd00250a14cb455e95f79c07f7cd6a03.png"
+              alt="平台 GitLab 项目配置示例"
+            />
+          </div>
+        </section>
+
+        <section className="help-section">
+          <div className="help-section-number">五</div>
+          <div className="help-section-content">
+            <Title level={3}>配置模型 Provider 和默认模型</Title>
+            <Paragraph>
+              如果项目只需要规则提醒和钉钉通知，可以先跳过模型配置。需要启用代码质量 AI Review 时，
+              先在设置页配置全局 Provider，再为项目组选择默认 AI Review Profile 和默认 Provider。
+            </Paragraph>
+            <HelpCodeBlock>{`Provider 已启用
+API Key 已填写
+Endpoint URL 已填写
+Model 名称已填写
+全局默认 Provider 已设置`}</HelpCodeBlock>
+            <Paragraph>
+              项目组默认 Provider 会作为该组项目的默认模型选择。单个项目或端类型如果有特殊需要，仍可以在项目端类型配置中覆盖 Provider 和 Profile。
+            </Paragraph>
+            <HelpImage
+              src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-27_11-27-25.png"
+              alt="模型 Provider 和默认模型配置示例"
+            />
+          </div>
+        </section>
+
+        <section className="help-section">
+          <div className="help-section-number">六</div>
+          <div className="help-section-content">
+            <Title level={3}>首次验证</Title>
+            <Paragraph>配置完成后，用一次真实 Merge Request 做端到端验证。</Paragraph>
+            <Timeline
+              className="help-timeline"
+              items={verificationItems.map(item => ({
+                content: item
+              }))}
+            />
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function HomePage() {
   const location = useLocation();
   const legacyTaskId = new URLSearchParams(location.search).get('taskId');
@@ -4010,6 +4174,7 @@ function AppFrame() {
   const isTaskRoute = location.pathname === HOME_ROUTE || location.pathname.startsWith(TASK_LIST_ROUTE);
   const isSettingsRoute = location.pathname.startsWith(SETTINGS_ROUTE);
   const isReleaseRoute = location.pathname.startsWith(RELEASES_ROUTE);
+  const isHelpRoute = location.pathname.startsWith(HELP_ROUTE);
   const [jobQueue, setJobQueue] = useState({ activeCount: 0, groups: [] });
   const [jobQueueOpen, setJobQueueOpen] = useState(false);
 
@@ -4083,6 +4248,13 @@ function AppFrame() {
           >
             版本更新
           </Button>
+          <Button
+            icon={<QuestionCircleOutlined />}
+            type={isHelpRoute ? 'primary' : 'default'}
+            onClick={() => navigate(HELP_ROUTE, { state: { from: route } })}
+          >
+            接入帮助
+          </Button>
         </Space>
         <div className="header-actions">
           <Tooltip title="AI Review 调度队列">
@@ -4106,6 +4278,7 @@ function AppFrame() {
           <Route path={`${TASK_LIST_ROUTE}/:taskId`} element={<TaskDetailPage />} />
           <Route path={SETTINGS_ROUTE} element={<SettingsPage />} />
           <Route path={RELEASES_ROUTE} element={<ReleaseNotesPage />} />
+          <Route path={HELP_ROUTE} element={<HelpPage />} />
           <Route path="*" element={<Navigate to={HOME_ROUTE} replace />} />
         </Routes>
       </Content>
