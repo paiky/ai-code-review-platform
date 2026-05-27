@@ -439,7 +439,7 @@ AI Review 当前保持稳定的非流式 HTTP Provider 调用。前端通过 `GE
 AI Review 质量问题支持两个辅助查看入口：
 
 - `查看 Diff`：基于任务详情中的 `changedFilesSummary.files[].diffText` 展示当前文件左右对照 diff，并按模型返回的 `startLine/endLine` 高亮定位。
-- `生成修复预览`：AI Review 成功后，如果全局“自动修复预览”开关开启，会后台自动为可匹配 diff 的 `CRITICAL`（紧急）finding 生成 unified diff patch 预览并保存到 `code_quality_fix_previews`；非紧急 finding 默认不自动占用模型资源，仍可在页面单条手动生成 / 失败后重试。Provider 调用统一进入 `code_quality_scheduler_jobs` 调度队列，默认全局最多 10 个并发，AI Review 优先于修复预览；修复预览先显示 `QUEUED`，真正占用 Provider 资源时才显示 `RUNNING`。该能力仅用于查看，不会修改仓库、不提交 GitLab MR。
+- `生成修复预览`：AI Review 成功后，如果全局“自动修复预览”开关开启，会后台自动为所选风险等级且可匹配 diff 的 finding 生成 unified diff patch 预览并保存到 `code_quality_fix_previews`；默认只处理 `CRITICAL`（紧急），也可在设置页额外允许 `MAJOR`（高风险）或 `MINOR`（中风险）。未被自动选中的 finding 仍可在页面单条手动生成 / 失败后重试。Provider 调用统一进入 `code_quality_scheduler_jobs` 调度队列，默认全局最多 10 个并发，AI Review 优先于修复预览；修复预览先显示 `QUEUED`，真正占用 Provider 资源时才显示 `RUNNING`。该能力仅用于查看，不会修改仓库、不提交 GitLab MR。
 - `调度队列`：任务列表页提供队列提示入口，调用 `GET /api/code-quality-reviews/job-queue` 查看当前 AI Review 与 finding 级修复预览的排队、运行和完成明细。活跃任务不受时间窗口限制，已完成 / 失败 / 跳过任务默认展示最近 48 小时内更新或创建的记录。
 
 Push webhook 默认只接收项目组 Push 审核策略中 `pushBranchPatterns` 允许的分支。Push 自动 AI Review 默认关闭，需要在 AI Review Profile 中开启 `triggerOnPush`，并通过项目组 Push 审核层后才会自动触发。
@@ -522,6 +522,7 @@ V24__multi_target_project_configs.sql
 V25__project_group_push_review_policy.sql
 V26__code_quality_auto_fix_preview_switch.sql
 V27__project_group_profile_and_target_type_path_mappings.sql
+V28__nullable_project_default_ai_review_profile.sql
 ```
 
 `backend/src/main/resources/db/migration` 中的 Java Flyway SQL 保留为历史基线和行为对照，不再是当前默认运行路径。

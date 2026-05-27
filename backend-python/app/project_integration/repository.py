@@ -105,6 +105,8 @@ def ensure_project_config_schema(db: Session) -> None:
             ProjectTargetConfig.__table__.create(connection, checkfirst=True)
         project_columns = {column["name"] for column in inspector.get_columns("projects")} if inspector.has_table("projects") else set()
         _add_column_if_missing(db, project_columns, "projects", "group_id", "BIGINT NULL")
+        _add_column_if_missing(db, project_columns, "projects", "default_code_quality_profile_code", "VARCHAR(64) NULL")
+        _ensure_nullable_column(db, inspector, "projects", "default_code_quality_profile_code", "VARCHAR(64)")
         _add_column_if_missing(db, project_columns, "projects", "supported_target_types", "TEXT NULL")
         _add_column_if_missing(db, project_columns, "projects", "detected_target_types", "TEXT NULL")
         _add_column_if_missing(db, project_columns, "projects", "target_detection_json", "TEXT NULL")
@@ -125,6 +127,29 @@ def _add_column_if_missing(db: Session, columns: set[str], table_name: str, colu
         return
     db.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"))
     columns.add(column_name)
+    db.flush()
+
+
+def _ensure_nullable_column(
+    db: Session,
+    inspector,
+    table_name: str,
+    column_name: str,
+    column_type: str,
+) -> None:
+    column = next(
+        (
+            item
+            for item in inspector.get_columns(table_name)
+            if item.get("name") == column_name
+        ),
+        None,
+    )
+    if column is None or column.get("nullable", True):
+        return
+    if db.get_bind().dialect.name != "mysql":
+        return
+    db.execute(text(f"ALTER TABLE {table_name} MODIFY COLUMN {column_name} {column_type} NULL"))
     db.flush()
 
 

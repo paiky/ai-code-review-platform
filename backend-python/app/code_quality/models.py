@@ -49,6 +49,7 @@ class CodeQualityReviewSettings(Base):
     mr_auto_review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     dingtalk_notification_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     auto_fix_preview_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    auto_fix_preview_severities: Mapped[str | None] = mapped_column(Text)
     review_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="DEEPSEEK")
     default_provider_code: Mapped[str] = mapped_column(String(64), nullable=False, default="DEEPSEEK")
     openai_api_key: Mapped[str | None] = mapped_column(String(1024))

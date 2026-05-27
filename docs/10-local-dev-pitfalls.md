@@ -1036,3 +1036,25 @@ WHERE project_group_id IS NULL
 4. 为 `code_quality_scheduler_jobs` 补齐 `status, priority, queued_at`、`task_id, job_type`、`status, updated_at, id`、`status, updated_at, queued_at, id` 索引。
 5. 队列接口的活跃任务查询必须有上限，并用单独 `count` 返回活跃总数；最近完成任务优先按 `updated_at` 窗口查询，避免 `updated_at OR created_at` 破坏索引。
 6. 如果线上已经有卡住的 UPDATE，先用 `SHOW PROCESSLIST` 确认锁等待；必要时 kill 对应后端连接，再部署修复后的后端。
+
+## 43. MR 页面有变更文件不代表 Webhook payload 带 changedFiles
+
+现象：
+
+GitLab MR 页面能看到变更文件，但新前端项目配置 MR Webhook 后，平台返回 500，任务列表没有记录。后端日志可能出现：
+
+```text
+Column 'default_code_quality_profile_code' cannot be null
+```
+
+原因：
+
+GitLab Merge Request Hook payload 默认不一定携带 `changedFiles` / diff。平台第一次看到新项目时，如果 payload 没有文件列表，只能先用空文件集做端类型识别，此时会 fallback 到 `GENERAL`。`GENERAL` 不绑定默认 AI Review Profile；如果线上旧 MySQL schema 仍把 `projects.default_code_quality_profile_code` 设为 `NOT NULL`，自动创建项目会在创建任务前失败。
+
+处理方式：
+
+1. `projects.default_code_quality_profile_code` 必须允许为 `NULL`；无法确定 Profile 时先允许项目和审查任务落库。
+2. 后续 GitLab API 补拉 diff 后，再按真实 changed files 更新端类型识别和任务端类型。
+3. 如果最终仍无法确定 AI Review Profile，规则审查任务保持可见，AI Review 结果记录为 `SKIPPED`，并在任务详情页展示“项目所属项目组未设置 AI Review 模板”等原因。
+4. 排查时不要只看 GitLab MR 页面；要看 Webhook delivery 的 Request body 中是否真的有 `changedFiles` / `changed_files`，以及 Response body 是否有 `taskId`。
+5. 新前端项目也可以先在设置页手动预创建项目端类型配置为 `WEB_PC`，Profile 选择 `web-pc-default-ai-review`，路径规则可先用 `**/*`。

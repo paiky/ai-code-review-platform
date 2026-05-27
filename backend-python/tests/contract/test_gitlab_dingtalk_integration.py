@@ -278,6 +278,94 @@ def test_mr_without_changed_files_fetches_gitlab_diffs(
     assert detail["changedFilesSummary"]["source"] == "gitlab_api"
 
 
+def test_web_mr_without_payload_changed_files_creates_task_after_gitlab_diff_detection(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_template(db_session)
+    seed_frontend_template(db_session)
+    monkeypatch.setenv("GITLAB_API_ENABLED", "true")
+    monkeypatch.setenv("GITLAB_BASE_URL", "https://gitlab.example.test")
+    monkeypatch.setenv("GITLAB_TOKEN", "unit-token")
+
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://gitlab.example.test/api/v4/projects/160").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 160,
+                    "name": "Here PetSafe Admin",
+                    "path_with_namespace": "consumer-web-frontend/consumer-petsafe-admin",
+                    "web_url": "https://gitlab.example.test/consumer-web-frontend/consumer-petsafe-admin",
+                },
+            )
+        )
+        router.get("https://gitlab.example.test/api/v4/projects/160/merge_requests/116").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "iid": 116,
+                    "web_url": "https://gitlab.example.test/consumer-web-frontend/consumer-petsafe-admin/-/merge_requests/116",
+                    "source_branch": "coolpet-main-internal",
+                    "target_branch": "coolpet-main",
+                    "sha": "8a106dc17ef43903c926aa7070e3585273db0590",
+                    "author": {"name": "Lin Pei", "username": "linpei"},
+                },
+            )
+        )
+        router.get(
+            "https://gitlab.example.test/api/v4/projects/160/merge_requests/116/diffs",
+            params={"page": "1", "per_page": "100"},
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {
+                        "old_path": "src/pages/DealerEditor.vue",
+                        "new_path": "src/pages/DealerEditor.vue",
+                        "diff": "+ const minProportionFloor = props.existing ? 10 : 0",
+                    },
+                    {
+                        "old_path": "package.json",
+                        "new_path": "package.json",
+                        "diff": "+ \"@vitejs/plugin-vue\": \"latest\"",
+                    },
+                ],
+            )
+        )
+
+        response = client.post(
+            "/api/webhooks/gitlab/merge-request",
+            json={
+                "object_kind": "merge_request",
+                "project": {
+                    "id": 160,
+                    "name": "Here PetSafe Admin",
+                    "web_url": "https://gitlab.example.test/consumer-web-frontend/consumer-petsafe-admin",
+                },
+                "object_attributes": {
+                    "iid": 116,
+                    "action": "open",
+                    "state": "opened",
+                    "source_branch": "coolpet-main-internal",
+                    "target_branch": "coolpet-main",
+                    "last_commit": {"id": "8a106dc17ef43903c926aa7070e3585273db0590"},
+                },
+                "user": {"name": "Lin Pei", "username": "linpei"},
+            },
+            headers={"X-Gitlab-Event": "Merge Request Hook"},
+        )
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    assert detail["status"] == "SUCCESS"
+    assert detail["targetType"] == "WEB_PC"
+    assert detail["codeQualityProfileCode"] == "web-pc-default-ai-review"
+    assert detail["changedFilesSummary"]["source"] == "gitlab_api"
+
+
 def test_gitlab_diffs_404_falls_back_to_changes(
     client: TestClient,
     db_session: Session,

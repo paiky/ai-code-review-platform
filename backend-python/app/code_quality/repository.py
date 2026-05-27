@@ -29,6 +29,8 @@ from app.notification.repository import (
 
 
 DEFAULT_PROFILE_CODE = "backend-default-ai-review"
+DEFAULT_AUTO_FIX_PREVIEW_SEVERITIES = ["CRITICAL"]
+AUTO_FIX_PREVIEW_SEVERITY_OPTIONS = {"CRITICAL", "MAJOR", "MINOR"}
 DEFAULT_REVIEW_INSTRUCTIONS = """你是资深后端代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
 JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
 
@@ -168,6 +170,9 @@ def ensure_defaults(db: Session) -> None:
                 mr_auto_review_enabled=True,
                 dingtalk_notification_enabled=True,
                 auto_fix_preview_enabled=False,
+                auto_fix_preview_severities=json.dumps(
+                    DEFAULT_AUTO_FIX_PREVIEW_SEVERITIES, ensure_ascii=False
+                ),
                 review_provider=settings.code_quality_review_provider,
                 default_provider_code=_provider_code(settings.code_quality_review_provider),
                 openai_api_key=None,
@@ -313,6 +318,13 @@ def ensure_settings_schema(db: Session) -> None:
         "code_quality_review_settings",
         "auto_fix_preview_enabled",
         "BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_review_settings",
+        "auto_fix_preview_severities",
+        "TEXT NULL",
     )
     _add_column_if_missing(
         db,
@@ -634,6 +646,9 @@ def settings_to_dict(record: CodeQualityReviewSettings) -> dict[str, Any]:
         "mrAutoReviewEnabled": record.mr_auto_review_enabled,
         "dingtalkNotificationEnabled": record.dingtalk_notification_enabled,
         "autoFixPreviewEnabled": record.auto_fix_preview_enabled,
+        "autoFixPreviewSeverities": normalize_auto_fix_preview_severities(
+            record.auto_fix_preview_severities
+        ),
         "dingtalkWebhooks": [webhook_to_dict(item) for item in list_webhooks(session)] if session else [],
         "reviewProvider": record.default_provider_code or _provider_code(record.review_provider),
         "defaultProviderCode": record.default_provider_code or _provider_code(record.review_provider),
@@ -651,6 +666,11 @@ def update_settings_record(db: Session, request: dict[str, Any]) -> dict[str, An
         record.dingtalk_notification_enabled = bool(request["dingtalkNotificationEnabled"])
     if "autoFixPreviewEnabled" in request:
         record.auto_fix_preview_enabled = bool(request["autoFixPreviewEnabled"])
+    if "autoFixPreviewSeverities" in request:
+        record.auto_fix_preview_severities = json.dumps(
+            normalize_auto_fix_preview_severities(request["autoFixPreviewSeverities"]),
+            ensure_ascii=False,
+        )
     if "dingtalkWebhooks" in request:
         payload = request["dingtalkWebhooks"] or []
         if not isinstance(payload, list):
@@ -1538,6 +1558,16 @@ def mask_secret(value: str | None) -> str | None:
     if len(trimmed) <= 8:
         return "****"
     return f"{trimmed[:4]}...{trimmed[-4:]}"
+
+
+def normalize_auto_fix_preview_severities(value: Any) -> list[str]:
+    raw_items = value if isinstance(value, list) else read_json_array(value)
+    result: list[str] = []
+    for item in raw_items:
+        normalized = str(item or "").strip().upper()
+        if normalized in AUTO_FIX_PREVIEW_SEVERITY_OPTIONS and normalized not in result:
+            result.append(normalized)
+    return result or list(DEFAULT_AUTO_FIX_PREVIEW_SEVERITIES)
 
 
 def scrub_sensitive(value: str | None) -> str | None:

@@ -81,6 +81,12 @@ const TARGET_TYPE_OPTIONS = [
   { label: '跨端应用', value: 'APP_CROSS_PLATFORM' },
   { label: '通用', value: 'GENERAL' }
 ];
+const AUTO_FIX_PREVIEW_SEVERITY_OPTIONS = [
+  { label: '紧急 CRITICAL', value: 'CRITICAL' },
+  { label: '高风险 MAJOR', value: 'MAJOR' },
+  { label: '中风险 MINOR', value: 'MINOR' }
+];
+const DEFAULT_AUTO_FIX_PREVIEW_SEVERITIES = ['CRITICAL'];
 const PROJECT_TARGET_TYPE_OPTIONS = TARGET_TYPE_OPTIONS.filter(item => item.value !== 'APP_CROSS_PLATFORM');
 const TARGET_TYPE_DEFAULT_PATH_PATTERNS = {
   BACKEND: ['src/main/java/**', 'src/main/resources/**', 'src/*.java', 'src/**/*.java', 'pom.xml', 'backend-python/**', 'backend/**'],
@@ -223,9 +229,26 @@ function severityLabel(value) {
   }
 }
 
+function normalizeAutoFixPreviewSeverities(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const allowed = AUTO_FIX_PREVIEW_SEVERITY_OPTIONS.map(item => item.value);
+  const result = raw
+    .map(item => String(item || '').trim().toUpperCase())
+    .filter((item, index, items) => allowed.includes(item) && items.indexOf(item) === index);
+  return result.length ? result : [...DEFAULT_AUTO_FIX_PREVIEW_SEVERITIES];
+}
+
+function autoFixPreviewSeveritySummary(value) {
+  const selected = normalizeAutoFixPreviewSeverities(value);
+  return selected
+    .map(item => severityLabel(item))
+    .join(' / ');
+}
+
 function codeQualitySummary(review, findings) {
   if (review?.status === 'RUNNING') return 'AI Review 正在执行，完成后会自动刷新。';
   if (review?.status === 'FAILED') return review?.errorMessage || 'AI Review 执行失败。';
+  if (review?.status === 'SKIPPED') return review?.errorMessage || 'AI Review 已跳过。';
   if (findings.length > 0) {
     const highCount = findings.filter(item => ['CRITICAL', 'HIGH', 'MAJOR'].includes(item.severity)).length;
     const mediumCount = findings.filter(item => ['MEDIUM', 'MINOR'].includes(item.severity)).length;
@@ -1787,7 +1810,8 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
           </div>
           <Alert type={findings.length > 0 ? 'warning' : 'info'} showIcon message={summaryText} />
           {review.status === 'RUNNING' && <Alert type="info" showIcon message="AI Review 正在执行" description="模型 Provider 正在分析代码变更，完成后结果会自动刷新。" />}
-          {review.errorMessage && <Alert type="error" showIcon message="AI Review 执行失败" description={review.errorMessage} />}
+          {review.errorMessage && review.status === 'SKIPPED' && <Alert type="warning" showIcon message="AI Review 未执行" description={review.errorMessage} />}
+          {review.errorMessage && review.status !== 'SKIPPED' && <Alert type="error" showIcon message="AI Review 执行失败" description={review.errorMessage} />}
           <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
             <Descriptions.Item label="Profile">{review.profileCode || '-'}</Descriptions.Item>
             <Descriptions.Item label="开始时间">{review.startedAt || '-'}</Descriptions.Item>
@@ -2189,7 +2213,8 @@ function TemplateConfig() {
       setSettingsDraft({
         reviewEnabled: settingsData?.reviewEnabled ?? false,
         dingtalkNotificationEnabled: settingsData?.dingtalkNotificationEnabled ?? true,
-        autoFixPreviewEnabled: settingsData?.autoFixPreviewEnabled ?? false
+        autoFixPreviewEnabled: settingsData?.autoFixPreviewEnabled ?? false,
+        autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(settingsData?.autoFixPreviewSeverities)
       });
       setTemplates(templateItems);
       setGroups(groupItems);
@@ -2726,14 +2751,16 @@ function TemplateConfig() {
         body: JSON.stringify({
           reviewEnabled: settingsDraft.reviewEnabled,
           dingtalkNotificationEnabled: settingsDraft.dingtalkNotificationEnabled,
-          autoFixPreviewEnabled: settingsDraft.autoFixPreviewEnabled
+          autoFixPreviewEnabled: settingsDraft.autoFixPreviewEnabled,
+          autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(settingsDraft.autoFixPreviewSeverities)
         })
       });
       setAiSettings(settings);
       setSettingsDraft({
         reviewEnabled: settings?.reviewEnabled ?? false,
         dingtalkNotificationEnabled: settings?.dingtalkNotificationEnabled ?? true,
-        autoFixPreviewEnabled: settings?.autoFixPreviewEnabled ?? false
+        autoFixPreviewEnabled: settings?.autoFixPreviewEnabled ?? false,
+        autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(settings?.autoFixPreviewSeverities)
       });
       messageApi.success('全局设置已保存');
     } catch (err) {
@@ -3005,11 +3032,13 @@ function TemplateConfig() {
   const settingsDirty = JSON.stringify({
     reviewEnabled: settingsDraft?.reviewEnabled ?? false,
     dingtalkNotificationEnabled: settingsDraft?.dingtalkNotificationEnabled ?? true,
-    autoFixPreviewEnabled: settingsDraft?.autoFixPreviewEnabled ?? false
+    autoFixPreviewEnabled: settingsDraft?.autoFixPreviewEnabled ?? false,
+    autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(settingsDraft?.autoFixPreviewSeverities)
   }) !== JSON.stringify({
     reviewEnabled: aiSettings?.reviewEnabled ?? false,
     dingtalkNotificationEnabled: aiSettings?.dingtalkNotificationEnabled ?? true,
-    autoFixPreviewEnabled: aiSettings?.autoFixPreviewEnabled ?? false
+    autoFixPreviewEnabled: aiSettings?.autoFixPreviewEnabled ?? false,
+    autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(aiSettings?.autoFixPreviewSeverities)
   });
   const configuredWebhookCount = groups.reduce((total, group) => total + (group.enabledDingtalkWebhookCount || 0), 0);
   const filteredProjects = projectGroupFilter
@@ -3164,7 +3193,11 @@ function TemplateConfig() {
           <Text strong>全局设置</Text>
           <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(settingsDraft?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
           <Tag color={(settingsDraft?.dingtalkNotificationEnabled ?? true) ? 'blue' : 'default'}>钉钉 {(settingsDraft?.dingtalkNotificationEnabled ?? true) ? '开启' : '关闭'}</Tag>
-          <Tag color={(settingsDraft?.autoFixPreviewEnabled ?? false) ? 'purple' : 'default'}>自动修复预览 {(settingsDraft?.autoFixPreviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
+          <Tag color={(settingsDraft?.autoFixPreviewEnabled ?? false) ? 'purple' : 'default'}>
+            自动修复预览 {(settingsDraft?.autoFixPreviewEnabled ?? false)
+              ? autoFixPreviewSeveritySummary(settingsDraft?.autoFixPreviewSeverities)
+              : '关闭'}
+          </Tag>
           <Tag>{configuredWebhookCount} 个项目组机器人</Tag>
         </Space>
       ),
@@ -3216,8 +3249,22 @@ function TemplateConfig() {
                 />
               </div>
               <Text type="secondary" className="settings-description">
-                关闭后，AI Review 完成不会自动为风险点调用模型生成 Patch；仍可在任务详情中手动点击“生成修复预览”。
+                AI Review 成功后，会为所选风险等级的可匹配 finding 自动调用模型生成 Patch；关闭后仍可在任务详情中手动生成。
               </Text>
+              <div
+                className="prompt-field"
+                style={{ opacity: (settingsDraft?.autoFixPreviewEnabled ?? false) ? 1 : 0.55 }}
+              >
+                <Text strong>自动生成风险等级</Text>
+                <Select
+                  mode="multiple"
+                  className="full-width prompt-field"
+                  value={normalizeAutoFixPreviewSeverities(settingsDraft?.autoFixPreviewSeverities)}
+                  options={AUTO_FIX_PREVIEW_SEVERITY_OPTIONS}
+                  loading={settingsSaving}
+                  onChange={value => updateSettingsDraft('autoFixPreviewSeverities', normalizeAutoFixPreviewSeverities(value))}
+                />
+              </div>
             </div>
             <Alert
               type="info"

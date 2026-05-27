@@ -33,6 +33,7 @@ from app.code_quality.repository import (
     mark_scheduler_job_running,
     push_gate_to_dict,
     mark_stale_running_as_failed,
+    normalize_auto_fix_preview_severities,
     reset_default_prompt,
     save_fix_preview,
     save_push_gate_decision,
@@ -1460,8 +1461,12 @@ def _enqueue_auto_fix_previews(
     model: str | None,
     result: dict[str, Any],
 ) -> None:
-    if not get_settings_record(db).auto_fix_preview_enabled:
+    settings = get_settings_record(db)
+    if not settings.auto_fix_preview_enabled:
         return
+    enabled_severities = set(
+        normalize_auto_fix_preview_severities(settings.auto_fix_preview_severities)
+    )
     findings = result.get("findings") or []
     if result.get("status") != "SUCCESS" or not findings:
         return
@@ -1475,7 +1480,7 @@ def _enqueue_auto_fix_previews(
     for index, finding in enumerate(findings):
         if not isinstance(finding, dict):
             continue
-        if not _should_auto_generate_fix_preview(finding):
+        if not _should_auto_generate_fix_preview(finding, enabled_severities):
             continue
         existing = find_fix_preview_response(db, task_id=task_id, finding_index=index)
         if existing and existing.get("status") == "SUCCESS":
@@ -1562,8 +1567,11 @@ def _enqueue_auto_fix_previews(
             )
 
 
-def _should_auto_generate_fix_preview(finding: dict[str, Any]) -> bool:
-    return str(finding.get("severity") or "").strip().upper() == "CRITICAL"
+def _should_auto_generate_fix_preview(
+    finding: dict[str, Any],
+    enabled_severities: set[str],
+) -> bool:
+    return str(finding.get("severity") or "").strip().upper() in enabled_severities
 
 
 def run_auto_fix_preview_job(task_id: int, finding_index: int) -> dict[str, Any]:
@@ -1758,7 +1766,7 @@ def _save_missing_profile_failure(db: Session, task: ReviewTask, project: Projec
         db,
         task.id,
         "PROFILE_NOT_CONFIGURED",
-        "ERROR",
+        "WARN",
         "AI Review 模板未配置",
         message,
     )
@@ -1770,7 +1778,7 @@ def _save_missing_profile_failure(db: Session, task: ReviewTask, project: Projec
         provider="-",
         model=None,
         result={
-            "status": "FAILED",
+            "status": "SKIPPED",
             "overallLevel": None,
             "summary": None,
             "findings": [],
