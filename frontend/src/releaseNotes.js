@@ -1,5 +1,18 @@
 export const releaseNotes = [
   {
+    id: '2026-05-27-xiaomimo-provider-connectivity-help',
+    version: 'v0.13.0',
+    releaseDate: '2026-05-27',
+    title: 'XiaoMIMO 接入、Provider 联通性测试与接入帮助页',
+    summary: '模型 Provider 配置升级，新增 XiaoMIMO 内置 Provider、配置联通性测试，并补齐接入帮助页。',
+    highlights: [
+      '新增 XiaoMIMO / Xiaomi MiMo Provider，默认模型为 mimo-v2.5-pro。',
+      'Provider 配置页新增“测试联通性”按钮，可用当前表单内容验证 endpoint、model 和 API Key。',
+      '新增接入帮助页，按 GitLab、钉钉、项目组、项目和模型配置串起首次接入流程。'
+    ],
+    tags: ['XiaoMIMO', 'Provider 测试', '接入帮助', 'AI Review']
+  },
+  {
     id: '2026-05-25-multi-target-review-ops',
     version: 'v0.12.0',
     releaseDate: '2026-05-25',

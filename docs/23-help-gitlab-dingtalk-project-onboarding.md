@@ -83,4 +83,17 @@ Secret Token 保持为空即可。
 
 如果项目只需要规则提醒和钉钉通知，可以先跳过模型配置。需要启用代码质量 AI Review 时，先在设置页配置全局 Provider，再为项目组选择默认 AI Review Profile 和默认 Provider。
 
+```text
+Provider 已启用
+API Key 已填写
+Endpoint URL 已填写
+Model 名称已填写
+点击“测试联通性”确认模型服务可访问
+全局默认 Provider 已设置
+```
+
+当前内置 Provider 包括 OpenAI、Anthropic、DeepSeek、XiaoMIMO 和自定义 OpenAI-compatible。“测试联通性”会使用当前表单中的端点、模型名称和临时输入的 API Key 发起一次最小请求，不会保存临时 Key。
+
+项目组默认 Provider 会作为该组项目的默认模型选择。单个项目或端类型如果有特殊需要，仍可以在项目端类型配置中覆盖 Provider 和 Profile。
+
 ![image-20260527112725](https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-27_11-27-25.png)
