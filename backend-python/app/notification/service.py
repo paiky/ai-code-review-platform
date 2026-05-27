@@ -144,6 +144,15 @@ def _resolve_skipped_result(
     if has_any_enabled_webhook_for_task(db, task_id):
         return None
 
+    if task_id is not None:
+        return {
+            "target": "DINGTALK_WEBHOOKS_EMPTY",
+            "status": "SKIPPED",
+            "requestDigest": digest or "No enabled DingTalk webhook is configured for the project group",
+            "responseBody": None,
+            "errorMessage": "DingTalk webhook is not configured for the project group",
+        }
+
     if settings.dingtalk_webhook_url.strip():
         return None
 

@@ -1058,3 +1058,20 @@ GitLab Merge Request Hook payload 默认不一定携带 `changedFiles` / diff。
 3. 如果最终仍无法确定 AI Review Profile，规则审查任务保持可见，AI Review 结果记录为 `SKIPPED`，并在任务详情页展示“项目所属项目组未设置 AI Review 模板”等原因。
 4. 排查时不要只看 GitLab MR 页面；要看 Webhook delivery 的 Request body 中是否真的有 `changedFiles` / `changed_files`，以及 Response body 是否有 `taskId`。
 5. 新前端项目也可以先在设置页手动预创建项目端类型配置为 `WEB_PC`，Profile 选择 `web-pc-default-ai-review`，路径规则可先用 `**/*`。
+
+## 44. 默认项目组钉钉机器人不能作为其它项目组兜底
+
+现象：
+
+任务 `351` 属于 `IOS端` 项目组，项目为 `here/here-ios`，端类型为 `APP_IOS`。`IOS端` 项目组没有配置钉钉机器人，但通知记录显示消息发送到了 `默认通用项目组` 下配置的机器人。
+
+原因：
+
+旧实现把默认项目组机器人当成全局兜底：`enabled_webhooks_for_task()` 先查任务所属项目组，如果为空且所属组不是默认组，就继续查默认项目组机器人。这会让其它项目组的任务误触达默认组群。
+
+处理方式：
+
+1. 默认项目组只是普通项目组，只服务归属默认项目组的项目。
+2. 任务通知只查询任务所属项目组的启用机器人。
+3. 任务所属项目组无机器人时记录 `DINGTALK_WEBHOOKS_EMPTY` / `SKIPPED`，不回退到默认项目组或其它项目组。
+4. 历史 `project_group_id IS NULL` 的 webhook 只按默认项目组兼容读取，不能成为所有项目组的兜底。

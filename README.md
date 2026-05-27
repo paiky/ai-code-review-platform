@@ -78,7 +78,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 审查任务、变更分析结果、提醒卡片、通知记录均落库。
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持配置 / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、自动触发、重试、执行过程展示。
-- GitLab MR 自动 AI Review 完成后会向设置页中已启用的全部钉钉 webhook 推送“代码质量 Review”结果。
+- GitLab MR 自动 AI Review 完成后会向任务所属项目组中已启用的钉钉 webhook 推送“代码质量 Review”结果；项目组未配置机器人时记录为 `SKIPPED`，不会回退推送到默认项目组。
 - GitLab Push webhook 会先按项目组 Push 审核策略中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会在规则提醒卡片生成后，根据提醒风险、重点变更类型、文件数、diff 大小、commit 数和 debounce 策略自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
 
 ## 环境要求
@@ -666,7 +666,7 @@ BACKEND / WEB_PC / APP_IOS / APP_ANDROID / GENERAL
 
 后端项目默认仍使用 `backend-default` 和 `backend-default-ai-review`，并展示“提醒卡片”。PC / APP 端默认以代码质量 AI Review 为主，后端维护类提醒卡片默认关闭；如确实需要，也可以在项目端类型配置中开启 `reminderCardEnabled`。
 
-项目组用于项目归类、任务列表筛选、默认 AI Review Profile、默认 Provider 和 Push 审核策略控制。可以在前端“设置 -> 项目组 / 端类型配置”中新增项目组、编辑名称 / 编码 / AI Review 模板 / 默认 Provider、停用非默认项目组，并把已有项目绑定到指定项目组；在“设置 -> AI Review 设置 -> Push 审核策略”中按项目组维护允许分支、大小阈值、硬上限和 debounce。第一阶段项目组不代表权限边界；未绑定或 webhook 新进入的项目会自动归入“默认通用项目组”。
+项目组用于项目归类、任务列表筛选、默认 AI Review Profile、默认 Provider、钉钉机器人和 Push 审核策略控制。可以在前端“设置 -> 项目组 / 端类型配置”中新增项目组、编辑名称 / 编码 / AI Review 模板 / 默认 Provider、停用非默认项目组，并把已有项目绑定到指定项目组；在“设置 -> AI Review 设置 -> Push 审核策略”中按项目组维护允许分支、大小阈值、硬上限和 debounce。第一阶段项目组不代表权限边界；未绑定或 webhook 新进入的项目会自动归入“默认通用项目组”。默认项目组只是普通项目组的一种，不作为其它项目组的钉钉机器人兜底来源。
 
 首次接入新的 GitLab 项目时，平台只使用“设置 -> 项目组 / 端类型配置 -> 端类型路径映射”中的全局路径规则匹配 changed files。系统会初始化一组可见、可编辑、可停用的默认路径映射：
 
@@ -750,7 +750,7 @@ Provider 说明：
 
 - 控制代码质量 AI Review 全局能力；关闭后手动触发、MR 和 Push 自动流程都不会调用模型。
 - 控制是否全局发送钉钉推送；关闭后审查和落库仍正常执行。
-- 配置多个钉钉 webhook；开启钉钉推送后会向全部已启用 webhook 群发同一条通知。
+- 按项目组配置多个钉钉 webhook；开启钉钉推送后，只会向任务所属项目组内已启用 webhook 群发同一条通知。
 - 配置 OpenAI / Anthropic / DeepSeek / XiaoMIMO / 自定义 Provider 的模型端点 URL、模型名称和 API Key，并测试当前配置联通性。
 - 设置全局默认 Provider，以及项目级默认 Provider。
 - 按项目组绑定默认 AI Review Profile，通过全局端类型路径映射识别新项目端类型，并在项目端类型配置中维护 Provider 覆盖、提醒卡片展示和端类型启停策略。

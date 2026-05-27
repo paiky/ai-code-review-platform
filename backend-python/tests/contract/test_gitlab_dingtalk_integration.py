@@ -742,7 +742,7 @@ def test_dingtalk_delivery_uses_project_group_webhooks(
     assert web_notifications[0]["target"].endswith("group=web")
 
 
-def test_dingtalk_delivery_falls_back_to_default_group_webhooks(
+def test_dingtalk_delivery_skips_when_project_group_has_no_webhooks(
     client: TestClient,
     db_session: Session,
 ) -> None:
@@ -763,7 +763,7 @@ def test_dingtalk_delivery_falls_back_to_default_group_webhooks(
     create_project(client, 1001, "empty-service", empty_group["id"])
     assert default["enabledDingtalkWebhookCount"] == 1
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(assert_all_called=False) as router:
         route = router.post("https://dingtalk.example.test/robot/send?group=default").mock(
             return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
         )
@@ -774,9 +774,11 @@ def test_dingtalk_delivery_falls_back_to_default_group_webhooks(
         )
 
     assert response.status_code == 200
-    assert route.called
+    assert route.called is False
     notifications = client.get(f"/api/review-tasks/{response.json()['data']['taskId']}/notifications").json()["data"]
-    assert notifications[0]["target"].endswith("group=default")
+    assert notifications[0]["status"] == "SKIPPED"
+    assert notifications[0]["target"] == "DINGTALK_WEBHOOKS_EMPTY"
+    assert notifications[0]["errorMessage"] == "DingTalk webhook is not configured for the project group"
 
 
 def test_dingtalk_allows_same_enabled_url_in_different_groups(client: TestClient) -> None:

@@ -69,7 +69,7 @@ Secret Token 保持为空即可。
 维护 Push 审核策略
 ```
 
-给项目组配置钉钉机器人时，把上一步从钉钉复制的 Webhook URL 填入该项目组的机器人配置，并启用它。平台会优先按项目所属项目组发送通知。
+给项目组配置钉钉机器人时，把上一步从钉钉复制的 Webhook URL 填入该项目组的机器人配置，并启用它。平台只会按项目所属项目组发送通知；如果该项目组没有启用机器人，本次通知会记录为跳过，不会发送到默认项目组或其它项目组的机器人。
 
 ![image-20260527110201878](https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-27_11-10-57.png)
 

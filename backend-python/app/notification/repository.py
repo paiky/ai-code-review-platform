@@ -236,13 +236,7 @@ def project_group_webhooks_to_dict(db: Session, project_group_id: int) -> list[d
 def enabled_webhooks_for_task(db: Session, task_id: int) -> list[NotificationWebhook]:
     ensure_webhook_schema(db)
     project_group_id = _task_project_group_id(db, task_id)
-    webhooks = list_enabled_webhooks(db, project_group_id)
-    if webhooks:
-        return webhooks
-    default_group = default_project_group_id(db)
-    if project_group_id != default_group:
-        return list_enabled_webhooks(db, default_group)
-    return []
+    return list_enabled_webhooks(db, project_group_id)
 
 
 def has_any_enabled_webhook_for_task(db: Session, task_id: int | None = None) -> bool:
