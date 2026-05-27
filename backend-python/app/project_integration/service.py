@@ -11,7 +11,7 @@ from app.change_analysis.service import analyze_changes
 from app.code_quality.service import trigger_auto_review
 from app.code_quality.repository import get_settings_record
 from app.core.errors import AppError
-from app.notification.service import send_risk_card
+from app.notification.service import send_review_summary, send_risk_card
 from app.project_integration import gitlab_client
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent
 from app.project_integration.repository import (
@@ -458,16 +458,29 @@ def _process_task(
     )
     if not ai_review_scheduled:
         settings = get_settings_record(db)
-        notification = send_risk_card(
-            db,
-            task.id,
-            risk_card,
-            template.get("focusChangeTypes", []),
-            notification_context,
-            settings.dingtalk_notification_enabled,
-            focus_rule_codes=template.get("focusRuleCodes", []),
-            reminder_card_enabled=target_config["reminderCardEnabled"],
-        )
+        if task.trigger_type == "GITLAB_PUSH_WEBHOOK":
+            notification = send_review_summary(
+                db,
+                task.id,
+                risk_card,
+                template.get("focusChangeTypes", []),
+                None,
+                notification_context,
+                settings.dingtalk_notification_enabled,
+                focus_rule_codes=template.get("focusRuleCodes", []),
+                reminder_card_enabled=target_config["reminderCardEnabled"],
+            )
+        else:
+            notification = send_risk_card(
+                db,
+                task.id,
+                risk_card,
+                template.get("focusChangeTypes", []),
+                notification_context,
+                settings.dingtalk_notification_enabled,
+                focus_rule_codes=template.get("focusRuleCodes", []),
+                reminder_card_enabled=target_config["reminderCardEnabled"],
+            )
         save_notification_records(
             db,
             task_id=task.id,

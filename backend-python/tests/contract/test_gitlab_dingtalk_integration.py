@@ -796,10 +796,10 @@ def test_push_without_reminders_skips_dingtalk_delivery(
     task_id = response.json()["data"]["taskId"]
     notifications = client.get(f"/api/review-tasks/{task_id}/notifications").json()["data"]
     assert notifications[0]["status"] == "SKIPPED"
-    assert notifications[0]["target"] == "DINGTALK_RISK_CARD"
+    assert notifications[0]["target"] == "DINGTALK_REVIEW_SUMMARY"
 
 
-def test_push_with_reminders_uses_colored_type_tags(
+def test_push_with_reminders_skips_dingtalk_when_ai_review_not_scheduled(
     client: TestClient,
     db_session: Session,
 ) -> None:
@@ -816,7 +816,7 @@ def test_push_with_reminders_uses_colored_type_tags(
         ],
     )
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(assert_all_called=False) as router:
         route = router.post("https://dingtalk.example.test/robot/send").mock(
             return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
         )
@@ -845,13 +845,10 @@ def test_push_with_reminders_uses_colored_type_tags(
         )
 
     assert response.status_code == 200
-    body = json.loads(route.calls[0].request.content)
-    markdown = body["markdown"]["text"]
-    assert "项目：demo-service" in markdown
-    assert "配置变更（规则扫描）" in markdown
-    assert '* [<font color="#64748b">DB</font>]' in markdown
-    assert f"/tasks/{response.json()['data']['taskId']}#risk-item-" in markdown
-    assert "数据库变更：请确认脚本是否需要准备" not in markdown
+    assert route.called is False
+    notifications = client.get(f"/api/review-tasks/{response.json()['data']['taskId']}/notifications").json()["data"]
+    assert notifications[0]["status"] == "SKIPPED"
+    assert notifications[0]["target"] == "DINGTALK_REVIEW_SUMMARY"
 
 
 def test_mr_summary_without_findings_still_sends_and_uses_platform_base_url(
@@ -905,6 +902,7 @@ def test_mr_summary_without_findings_still_sends_and_uses_platform_base_url(
     body = json.loads(route.calls[0].request.content)
     markdown = body["markdown"]["text"]
     assert "项目：demo-service" in markdown
+    assert "AI 模型：DeepSeek" in markdown
     assert "MR 作者：Alice(@alice)" in markdown
     assert "GITLAB_MR_WEBHOOK" not in markdown
     assert "配置变更（规则扫描）" not in markdown
@@ -963,6 +961,7 @@ def test_mr_summary_without_reminders_links_ai_findings_and_hides_rule_section(
     task_id = response.json()["data"]["taskId"]
     body = json.loads(route.calls[0].request.content)
     markdown = body["markdown"]["text"]
+    assert "AI 模型：DeepSeek" in markdown
     assert "配置变更（规则扫描）" not in markdown
     assert f"[空状态可能导致后续流程异常。](http://example.com/app/tasks/{task_id}#fix-preview-0)" in markdown
 

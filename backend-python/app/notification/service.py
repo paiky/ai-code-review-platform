@@ -268,13 +268,9 @@ def format_review_summary_markdown(
     result = (
         "### 变更审查结果\n\n"
         f"项目：{_project_text(context)}\n\n"
+        f"AI 模型：{_provider_label((code_quality_result or {}).get('provider'))}\n\n"
         f"{_event_label(context)} 作者：{_author_text(context)}\n\n"
     )
-    if _has_risk_items(risk_card):
-        result += (
-            "#### 配置变更（规则扫描）\n\n"
-            f"{_format_maintenance_reminders(task_id, risk_card)}\n\n"
-        )
     result += (
         "#### 代码质量 Review（AI）\n\n"
         f"{_format_code_quality_summary(task_id, code_quality_result)}\n\n"
@@ -418,10 +414,6 @@ def _has_code_quality_notification(result: dict | None) -> bool:
     return bool(result.get("findings"))
 
 
-def _has_code_quality_findings(result: dict | None) -> bool:
-    return bool(result and result.get("status") == "SUCCESS" and result.get("findings"))
-
-
 def _should_skip_review_summary(
     risk_card: dict | None,
     code_quality_result: dict | None,
@@ -432,7 +424,7 @@ def _should_skip_review_summary(
     if event_label == "MR":
         return False
     if event_label == "Push":
-        return not has_reminders and not _has_code_quality_findings(code_quality_result)
+        return code_quality_result is None
     return not has_reminders and not _has_code_quality_notification(code_quality_result)
 
 
@@ -461,6 +453,20 @@ def _author_text(context: dict) -> str:
 
 def _project_text(context: dict) -> str:
     return str(context.get("projectName") or "-")
+
+
+def _provider_label(provider: str | None) -> str:
+    value = str(provider or "").strip().upper()
+    labels = {
+        "DEEPSEEK": "DeepSeek",
+        "OPENAI": "OpenAI",
+        "ANTHROPIC": "Anthropic",
+        "CUSTOM": "Custom",
+        "CODEX_CLI": "Codex CLI",
+        "OPENAI_API": "OpenAI API",
+        "ANTHROPIC_API": "Anthropic",
+    }
+    return labels.get(value, value or "-")
 
 
 def _event_label(context: dict) -> str:
