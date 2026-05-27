@@ -3448,7 +3448,7 @@ function TemplateConfig() {
                   </Col>
                   <Col xs={24}>
                     <Text type="secondary">
-                      规则模板随端类型自动选择：{defaultTemplateCodeForTargetType(selectedTargetType)}。AI Review 模板优先使用项目组配置；默认通用项目组会对具体端类型使用内置模板。
+                      规则模板随端类型自动选择：{defaultTemplateCodeForTargetType(selectedTargetType)}。AI Review 默认使用项目组配置的模板和 Provider；如当前项目端类型配置了 Provider 覆盖，则优先使用端类型覆盖。
                     </Text>
                   </Col>
                   <Col xs={24} md={8}>
