@@ -2658,6 +2658,18 @@ function TemplateConfig() {
     });
   };
 
+  const resetTargetPathMappingDraft = (targetType) => {
+    setTargetPathMappings(current => {
+      const drafts = buildTargetPathMappingDrafts(current);
+      return drafts.map(item => item.targetType === targetType ? {
+        ...item,
+        pathPatterns: defaultPathPatternsForTargetType(targetType),
+        enabled: true
+      } : item);
+    });
+    messageApi.info(`已恢复 ${targetTypeLabel(targetType)} 的默认匹配路径，请点击“保存路径映射”生效`);
+  };
+
   const saveTargetPathMappings = async () => {
     setTargetPathMappingSaving(true);
     try {
@@ -2953,17 +2965,6 @@ function TemplateConfig() {
   const filteredProjects = projectGroupFilter
     ? projects.filter(project => project.groupId === projectGroupFilter)
     : [];
-  const currentProject = projects.find(project => project.id === selectedProjectId) || null;
-  const targetDetection = currentProject?.targetDetection;
-  const detectionEvidences = Array.isArray(targetDetection?.evidences) ? targetDetection.evidences : [];
-  const detectionEvidenceRowKey = (row, index) => `${row.targetType}-${row.source}-${row.value}-${row.pattern}-${index}`;
-  const detectedTargetTypes = currentProject?.detectedTargetTypes || targetDetection?.targetTypes || [];
-  const mappedDetectedTargetTypes = detectedTargetTypes.filter(
-    type => PROJECT_TARGET_TYPE_OPTIONS.some(option => option.value === type)
-  );
-  const detectionDiffersFromConfig = mappedDetectedTargetTypes.some(
-    type => !(currentProject?.supportedTargetTypes || []).includes(type)
-  );
   const renderWebhookDraftList = (webhooks, target) => (
     <Space direction="vertical" size="middle" className="full-width webhook-list">
       {(webhooks || []).length > 0 ? (
@@ -3386,14 +3387,23 @@ function TemplateConfig() {
                     {
                       title: '启用',
                       dataIndex: 'enabled',
-                      width: 100,
+                      width: 180,
                       render: (_, row) => (
-                        <Switch
-                          checked={row.enabled !== false}
-                          checkedChildren="启用"
-                          unCheckedChildren="停用"
-                          onChange={checked => updateTargetPathMappingDraft(row.targetType, 'enabled', checked)}
-                        />
+                        <Space wrap>
+                          <Switch
+                            checked={row.enabled !== false}
+                            checkedChildren="启用"
+                            unCheckedChildren="停用"
+                            onChange={checked => updateTargetPathMappingDraft(row.targetType, 'enabled', checked)}
+                          />
+                          <Button
+                            size="small"
+                            icon={<ReloadOutlined />}
+                            onClick={() => resetTargetPathMappingDraft(row.targetType)}
+                          >
+                            重置
+                          </Button>
+                        </Space>
                       )
                     }
                   ]}
@@ -3409,48 +3419,6 @@ function TemplateConfig() {
                   <Space wrap>
                     <Text strong>端类型</Text>
                     {selectedTargetType && <Tag>{targetTypeLabel(selectedTargetType)}</Tag>}
-                  </Space>
-                </div>
-                <div className="settings-subsection">
-                  <Space direction="vertical" size="middle" className="full-width">
-                    <div className="settings-inline-head">
-                      <Space wrap>
-                        <Text strong>最近路径匹配结果</Text>
-                        {(detectedTargetTypes.length ? detectedTargetTypes : ['GENERAL']).map(type => (
-                          <Tag key={type} color={type === 'BACKEND' ? 'blue' : 'green'}>{targetTypeLabel(type)}</Tag>
-                        ))}
-                        {targetDetection?.updatedAt && <Tag>{targetDetection.updatedAt}</Tag>}
-                      </Space>
-                    </div>
-                    <Alert
-                      type="info"
-                      showIcon
-                      message="这里展示最近一次 webhook 按全局端类型路径映射得到的匹配证据。端类型识别只以“端类型路径映射”为准；需要调整规则时请直接维护上方路径映射。"
-                    />
-                    {detectionDiffersFromConfig && (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        message="最近路径匹配命中的端类型尚未出现在项目支持端类型中，请在“当前项目所属端类型”或“编辑端类型”中人工确认。"
-                      />
-                    )}
-                    {detectionEvidences.length > 0 ? (
-                      <Table
-                        size="small"
-                        rowKey={detectionEvidenceRowKey}
-                        pagination={false}
-                        columns={[
-                          { title: '端类型', dataIndex: 'targetType', width: 150, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
-                          { title: '来源', dataIndex: 'source', width: 130, render: value => ({ PATH_MAPPING: '路径映射', PATH: '路径', FALLBACK: '兜底' }[value] || value) },
-                          { title: '命中值', dataIndex: 'value', ellipsis: true, render: value => value || '-' },
-                          { title: '规则', dataIndex: 'pattern', width: 180, render: value => value || '-' }
-                        ]}
-                        dataSource={detectionEvidences}
-                        scroll={{ x: 860 }}
-                      />
-                    ) : (
-                      <Empty description="暂无路径匹配依据，下一次 webhook 后会更新" />
-                    )}
                   </Space>
                 </div>
                 <Row gutter={[16, 16]}>
