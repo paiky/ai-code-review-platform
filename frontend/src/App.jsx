@@ -2762,21 +2762,17 @@ function TemplateConfig() {
     }
   };
 
-  const updateSettingsDraft = (field, value) => {
-    setSettingsDraft(current => current ? { ...current, [field]: value } : current);
-  };
-
-  const saveAiSettings = async () => {
-    if (!settingsDraft) return;
+  const saveAiSettings = async (nextSettings = settingsDraft, successText = '设置已保存') => {
+    if (!nextSettings) return;
     setSettingsSaving(true);
     try {
       const settings = await fetchApi('/api/code-quality-reviews/settings', {
         method: 'PUT',
         body: JSON.stringify({
-          reviewEnabled: settingsDraft.reviewEnabled,
-          dingtalkNotificationEnabled: settingsDraft.dingtalkNotificationEnabled,
-          autoFixPreviewEnabled: settingsDraft.autoFixPreviewEnabled,
-          autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(settingsDraft.autoFixPreviewSeverities)
+          reviewEnabled: nextSettings.reviewEnabled,
+          dingtalkNotificationEnabled: nextSettings.dingtalkNotificationEnabled,
+          autoFixPreviewEnabled: nextSettings.autoFixPreviewEnabled,
+          autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(nextSettings.autoFixPreviewSeverities)
         })
       });
       setAiSettings(settings);
@@ -2786,12 +2782,19 @@ function TemplateConfig() {
         autoFixPreviewEnabled: settings?.autoFixPreviewEnabled ?? false,
         autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(settings?.autoFixPreviewSeverities)
       });
-      messageApi.success('全局设置已保存');
+      messageApi.success(successText);
     } catch (err) {
       messageApi.error(err.message);
     } finally {
       setSettingsSaving(false);
     }
+  };
+
+  const commitSettingsChange = (field, value, successText) => {
+    if (!settingsDraft || settingsSaving) return;
+    const nextSettings = { ...settingsDraft, [field]: value };
+    setSettingsDraft(nextSettings);
+    saveAiSettings(nextSettings, successText);
   };
 
   const selectTemplate = async (templateCode) => {
@@ -3053,18 +3056,6 @@ function TemplateConfig() {
   const notificationRuleItems = notificationRules?.groups?.flatMap(group => group.rules || []) || [];
   const selectedNotificationRule = notificationRuleItems.find(rule => rule.ruleCode === selectedNotificationRuleCode) || notificationRuleItems[0] || null;
   const notificationRulesDirty = JSON.stringify(notificationRuleDraftCodes) !== JSON.stringify(notificationRules?.focusRuleCodes || []);
-  const settingsDirty = JSON.stringify({
-    reviewEnabled: settingsDraft?.reviewEnabled ?? false,
-    dingtalkNotificationEnabled: settingsDraft?.dingtalkNotificationEnabled ?? true,
-    autoFixPreviewEnabled: settingsDraft?.autoFixPreviewEnabled ?? false,
-    autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(settingsDraft?.autoFixPreviewSeverities)
-  }) !== JSON.stringify({
-    reviewEnabled: aiSettings?.reviewEnabled ?? false,
-    dingtalkNotificationEnabled: aiSettings?.dingtalkNotificationEnabled ?? true,
-    autoFixPreviewEnabled: aiSettings?.autoFixPreviewEnabled ?? false,
-    autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(aiSettings?.autoFixPreviewSeverities)
-  });
-  const configuredWebhookCount = groups.reduce((total, group) => total + (group.enabledDingtalkWebhookCount || 0), 0);
   const filteredProjects = projectGroupFilter
     ? projects.filter(project => project.groupId === projectGroupFilter)
     : [];
@@ -3217,12 +3208,6 @@ function TemplateConfig() {
           <Text strong>全局设置</Text>
           <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(settingsDraft?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
           <Tag color={(settingsDraft?.dingtalkNotificationEnabled ?? true) ? 'blue' : 'default'}>钉钉 {(settingsDraft?.dingtalkNotificationEnabled ?? true) ? '开启' : '关闭'}</Tag>
-          <Tag color={(settingsDraft?.autoFixPreviewEnabled ?? false) ? 'purple' : 'default'}>
-            自动修复预览 {(settingsDraft?.autoFixPreviewEnabled ?? false)
-              ? autoFixPreviewSeveritySummary(settingsDraft?.autoFixPreviewSeverities)
-              : '关闭'}
-          </Tag>
-          <Tag>{configuredWebhookCount} 个项目组机器人</Tag>
         </Space>
       ),
       children: (
@@ -3239,7 +3224,7 @@ function TemplateConfig() {
                   loading={settingsSaving}
                   checkedChildren="开启"
                   unCheckedChildren="关闭"
-                  onChange={checked => updateSettingsDraft('reviewEnabled', checked)}
+                  onChange={checked => commitSettingsChange('reviewEnabled', checked, 'AI Review 全局能力已保存')}
                 />
               </div>
               <Text type="secondary" className="settings-description">
@@ -3254,50 +3239,12 @@ function TemplateConfig() {
                   loading={settingsSaving}
                   checkedChildren="开启"
                   unCheckedChildren="关闭"
-                  onChange={checked => updateSettingsDraft('dingtalkNotificationEnabled', checked)}
+                  onChange={checked => commitSettingsChange('dingtalkNotificationEnabled', checked, '钉钉推送设置已保存')}
                 />
               </div>
               <Text type="secondary" className="settings-description">
                 关闭后，规则审查和 AI Review 仍会正常执行与落库，但不会向钉钉发送消息。
               </Text>
-            </div>
-            <div className="global-setting-field">
-              <div className="settings-inline-head">
-                <Text strong>自动生成修复预览</Text>
-                <Switch
-                  checked={settingsDraft?.autoFixPreviewEnabled ?? false}
-                  loading={settingsSaving}
-                  checkedChildren="开启"
-                  unCheckedChildren="关闭"
-                  onChange={checked => updateSettingsDraft('autoFixPreviewEnabled', checked)}
-                />
-              </div>
-              <Text type="secondary" className="settings-description">
-                AI Review 成功后，会为所选风险等级的可匹配 finding 自动调用模型生成 Patch；关闭后仍可在任务详情中手动生成。
-              </Text>
-              <div
-                className="prompt-field"
-                style={{ opacity: (settingsDraft?.autoFixPreviewEnabled ?? false) ? 1 : 0.55 }}
-              >
-                <Text strong>自动生成风险等级</Text>
-                <Select
-                  mode="multiple"
-                  className="full-width prompt-field"
-                  value={normalizeAutoFixPreviewSeverities(settingsDraft?.autoFixPreviewSeverities)}
-                  options={AUTO_FIX_PREVIEW_SEVERITY_OPTIONS}
-                  loading={settingsSaving}
-                  onChange={value => updateSettingsDraft('autoFixPreviewSeverities', normalizeAutoFixPreviewSeverities(value))}
-                />
-              </div>
-            </div>
-            <Alert
-              type="info"
-              showIcon
-              message="钉钉机器人按项目组配置"
-              description="项目通知会优先推送到所属项目组机器人；该项目组未配置时回退默认项目组机器人。"
-            />
-            <div className="settings-action-row">
-              <Button type="primary" loading={settingsSaving} disabled={!settingsDraft || !settingsDirty} onClick={saveAiSettings}>保存设置</Button>
             </div>
           </Space>
         </Card>
@@ -3401,7 +3348,7 @@ function TemplateConfig() {
                       <Button icon={<PlusOutlined />} onClick={() => addGroupWebhookDraft('editing')}>新增机器人</Button>
                     </div>
                     <Text type="secondary" className="settings-description">
-                      该项目组下项目的规则提醒和 AI Review 结果会优先推送到这些机器人；未配置时回退默认项目组机器人。
+                      该项目组下项目的规则提醒和 AI Review 结果只会推送到这些机器人；未配置时通知会记录为跳过。
                     </Text>
                     {renderWebhookDraftList(editingGroupDraft.dingtalkWebhooks || [], 'editing')}
                   </div>
@@ -3837,6 +3784,11 @@ function TemplateConfig() {
         <Space wrap>
           <Text strong>AI Review 设置</Text>
           {selectedProfileCode && <Tag>{selectedProfileCode}</Tag>}
+          <Tag color={(settingsDraft?.autoFixPreviewEnabled ?? false) ? 'purple' : 'default'}>
+            修复预览 {(settingsDraft?.autoFixPreviewEnabled ?? false)
+              ? autoFixPreviewSeveritySummary(settingsDraft?.autoFixPreviewSeverities)
+              : '关闭'}
+          </Tag>
         </Space>
       ),
       children: (
@@ -3866,6 +3818,47 @@ function TemplateConfig() {
                   />
                 </Col>
               </Row>
+              <div className="settings-subsection">
+                <Space direction="vertical" size="middle" className="full-width">
+                  <Space direction="vertical" size={4}>
+                    <Text strong>自动修复预览</Text>
+                    <Text type="secondary">
+                      AI Review 成功后，为所选风险等级的可匹配 finding 自动调用模型生成 Patch；关闭后仍可在任务详情中手动生成。
+                    </Text>
+                  </Space>
+                  <Row gutter={[16, 16]} align="middle">
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>自动生成修复预览</Text>
+                        <Switch
+                          checked={settingsDraft?.autoFixPreviewEnabled ?? false}
+                          loading={settingsSaving}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => commitSettingsChange('autoFixPreviewEnabled', checked, '自动修复预览设置已保存')}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={16}>
+                      <div style={{ opacity: (settingsDraft?.autoFixPreviewEnabled ?? false) ? 1 : 0.55 }}>
+                        <Text strong>自动生成风险等级</Text>
+                        <Select
+                          mode="multiple"
+                          className="full-width prompt-field"
+                          value={normalizeAutoFixPreviewSeverities(settingsDraft?.autoFixPreviewSeverities)}
+                          options={AUTO_FIX_PREVIEW_SEVERITY_OPTIONS}
+                          loading={settingsSaving}
+                          onChange={value => commitSettingsChange(
+                            'autoFixPreviewSeverities',
+                            normalizeAutoFixPreviewSeverities(value),
+                            '自动生成风险等级已保存'
+                          )}
+                        />
+                      </div>
+                    </Col>
+                  </Row>
+                </Space>
+              </div>
               <div className="settings-subsection">
                 <Space direction="vertical" size="middle" className="full-width">
                   <Row gutter={[16, 16]}>
@@ -4022,7 +4015,7 @@ function TemplateConfig() {
     }
   ];
 
-  const orderedCollapseItems = ['global-settings', 'provider-settings', 'profile-settings', 'project-target-configs', 'notification-rules']
+  const orderedCollapseItems = ['global-settings', 'project-target-configs', 'provider-settings', 'profile-settings', 'notification-rules']
     .map(key => collapseItems.find(item => item.key === key))
     .filter(Boolean);
 
@@ -4235,7 +4228,7 @@ function HelpPage() {
 维护 Push 审核策略`}</HelpCodeBlock>
             <Paragraph>
               给项目组配置钉钉机器人时，把上一步从钉钉复制的 Webhook URL 填入该项目组的机器人配置，并启用它。
-              平台会优先按项目所属项目组发送通知。
+              平台只会按项目所属项目组发送通知；该项目组未配置机器人时，本次通知会记录为跳过。
             </Paragraph>
             <HelpImage
               src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-27_11-10-57.png"
