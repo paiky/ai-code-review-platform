@@ -32,6 +32,7 @@ def _filters(
     keyword: str | None,
     group_id: int | None,
     target_type: str | None,
+    trigger_type: str | None,
 ):
     clauses = []
     if project_id is not None:
@@ -57,6 +58,8 @@ def _filters(
                 ),
             )
         )
+    if trigger_type:
+        clauses.append(ReviewTask.trigger_type == trigger_type)
     if keyword:
         like = f"%{keyword}%"
         clauses.append(
@@ -78,13 +81,14 @@ def list_review_tasks(
     keyword: str | None,
     group_id: int | None,
     target_type: str | None,
+    trigger_type: str | None,
     page_no: int,
     page_size: int,
 ) -> dict:
     ensure_project_config_schema(db)
     page_no = max(page_no, 1)
     page_size = max(page_size, 1)
-    filters = _filters(project_id, status, risk_level, keyword, group_id, target_type)
+    filters = _filters(project_id, status, risk_level, keyword, group_id, target_type, trigger_type)
 
     total_stmt = select(func.count()).select_from(ReviewTask).join(Project, Project.id == ReviewTask.project_id)
     if filters:

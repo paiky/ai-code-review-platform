@@ -203,6 +203,46 @@ def test_review_task_list_counts_ai_review_findings_instead_of_rule_reminders(
     assert item["riskItemCount"] == 7
 
 
+def test_review_tasks_trigger_type_filter(client: TestClient, db_session: Session) -> None:
+    seed_review_task(db_session)
+    created_at = datetime(2026, 5, 18, 11, 0, 0)
+    db_session.add(
+        ReviewTask(
+            id=10002,
+            project_id=1,
+            trigger_type="GITLAB_PUSH_WEBHOOK",
+            external_source_id="abc123",
+            external_url="https://gitlab.example.com/demo/service/-/commit/abc123",
+            source_branch="feature/push-demo",
+            target_branch=None,
+            commit_sha="abc123",
+            before_sha="before123",
+            after_sha="abc123",
+            author_name="Bob",
+            author_username="bob",
+            template_code="backend-default",
+            status="SUCCESS",
+            risk_level="LOW",
+            error_message=None,
+            started_at=created_at,
+            finished_at=created_at,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+    )
+    db_session.commit()
+
+    mr_response = client.get("/api/review-tasks", params={"triggerType": "GITLAB_MR_WEBHOOK"})
+    push_response = client.get("/api/review-tasks", params={"triggerType": "GITLAB_PUSH_WEBHOOK"})
+
+    assert mr_response.status_code == 200
+    assert push_response.status_code == 200
+    assert mr_response.json()["data"]["total"] == 1
+    assert mr_response.json()["data"]["items"][0]["triggerType"] == "GITLAB_MR_WEBHOOK"
+    assert push_response.json()["data"]["total"] == 1
+    assert push_response.json()["data"]["items"][0]["triggerType"] == "GITLAB_PUSH_WEBHOOK"
+
+
 def test_review_tasks_target_type_filter_falls_back_to_project_config_for_legacy_tasks(
     client: TestClient, db_session: Session
 ) -> None:

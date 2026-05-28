@@ -84,6 +84,10 @@ const TARGET_TYPE_OPTIONS = [
   { label: '跨端应用', value: 'APP_CROSS_PLATFORM' },
   { label: '通用', value: 'GENERAL' }
 ];
+const TASK_TRIGGER_TYPE_OPTIONS = [
+  { label: 'MR', value: 'GITLAB_MR_WEBHOOK' },
+  { label: 'Push', value: 'GITLAB_PUSH_WEBHOOK' }
+];
 const AUTO_FIX_PREVIEW_SEVERITY_OPTIONS = [
   { label: '紧急 CRITICAL', value: 'CRITICAL' },
   { label: '高风险 MAJOR', value: 'MAJOR' },
@@ -877,6 +881,7 @@ function TaskList({ onOpen }) {
   const [groupId, setGroupId] = useState(null);
   const [projectId, setProjectId] = useState(null);
   const [targetType, setTargetType] = useState(null);
+  const [triggerType, setTriggerType] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [pagination, setPagination] = useState({ pageNo: 1, pageSize: 20, total: 0 });
   const [error, setError] = useState(null);
@@ -892,6 +897,7 @@ function TaskList({ onOpen }) {
       if (groupId) params.set('groupId', groupId);
       if (projectId) params.set('projectId', projectId);
       if (targetType) params.set('targetType', targetType);
+      if (triggerType) params.set('triggerType', triggerType);
       const data = await fetchApi(`/api/review-tasks?${params.toString()}`);
       setTasks(data.items || []);
       setPagination({ pageNo: data.pageNo, pageSize: data.pageSize, total: data.total });
@@ -951,6 +957,7 @@ function TaskList({ onOpen }) {
           <Select
             allowClear
             showSearch
+            optionFilterProp="label"
             className="task-filter-select"
             placeholder="项目"
             value={projectId}
@@ -966,6 +973,14 @@ function TaskList({ onOpen }) {
             value={targetType}
             options={TARGET_TYPE_OPTIONS}
             onChange={value => setTargetType(value || null)}
+          />
+          <Select
+            allowClear
+            className="task-filter-select"
+            placeholder="类型"
+            value={triggerType}
+            options={TASK_TRIGGER_TYPE_OPTIONS}
+            onChange={value => setTriggerType(value || null)}
           />
           <Input
             allowClear
