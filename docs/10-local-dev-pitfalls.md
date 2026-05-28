@@ -1150,3 +1150,30 @@ Profile 更适合表达“怎么审”，例如 Prompt、Provider、模型和端
 1. AI Review 设置页中保留 Profile 模块用于维护 Prompt / Provider / 模型。
 2. 新增或维护“项目组 AI Review 策略”，按项目组保存 `aiReviewEnabled`、`triggerOnManual`、`triggerOnMr`、`triggerOnPush`、`triggerOnlyWhenRiskMatched`、`autoFixPreviewEnabled`、`autoFixPreviewSeverities` 和 Push 审核阈值。
 3. 后端 MR / Push 自动触发和自动修复预览执行时读取任务所属项目组策略；Profile 上的历史触发字段只作为兼容字段，不再作为主要策略入口。
+
+## 49. GitLab compare API 补拉 Push diff 时不能丢失 commit 数
+
+现象：
+
+Push 任务详情里的 raw payload 明明包含：
+
+```text
+total_commits_count=1
+commits=[...1 条...]
+```
+
+但 Push 审核指标显示：
+
+```text
+Commit 数：0
+```
+
+原因：
+
+Push payload 初始解析会记录 `commitCount`。但当 GitLab webhook payload 不带完整 diff、后端改用 GitLab compare API 补拉 diff 时，新的 `changedFilesSummary` 会覆盖原 summary；旧实现只写入 compare 返回的文件 diff，没有把 payload 里的 `total_commits_count` / `commits.length` 带回 summary 和每个 file。Push Gate 后续只从 changed file 的 `commitCount` 取值，于是变成 0。
+
+处理方式：
+
+1. GitLab compare API 补拉 Push diff 后，继续保留 payload 级 commit 数。
+2. `changedFilesSummary.commitCount` 和每个 `files[].commitCount` 都要写入同一个值。
+3. commit 数优先读取 `total_commits_count`；没有该字段时回退到 `len(commits)`。

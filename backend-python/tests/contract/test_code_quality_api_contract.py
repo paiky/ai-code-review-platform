@@ -2408,6 +2408,43 @@ def test_push_gate_allows_large_push_without_risk_match(
     assert gate["metrics"]["changedFileCount"] == 10
 
 
+def test_push_gate_explains_risk_required_rejection_when_large_change_matches(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    update_default_push_policy(
+        client,
+        aiReviewEnabled=True,
+        triggerOnPush=True,
+        triggerOnlyWhenRiskMatched=True,
+        pushBranchPatterns=["feature/*"],
+        pushMinChangedFiles=1,
+        pushMinDiffBytes=1,
+        pushMinCommitCount=1,
+    )
+
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=push_payload(
+            branch="feature/risk-required",
+            changed_files=[{"path": "src/Readme.java", "diffText": "+ documentation update"}],
+        ),
+        headers={"X-Gitlab-Event": "Push Hook"},
+    ).json()["data"]
+    gate = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-gate").json()["data"]
+
+    assert gate["decision"] == "REJECTED"
+    assert gate["reasonCode"] == "NOT_SIGNIFICANT"
+    assert gate["metrics"]["riskLevel"] == "LOW"
+    assert gate["metrics"]["focusRiskItemCount"] == 0
+    assert any(rule["code"] == "largeChange" and rule["matched"] for rule in gate["matchedRules"])
+    assert "项目组策略要求必须命中高风险或重点提醒" in gate["reasonSummary"]
+    assert "虽然已达到大变更阈值" in gate["reasonSummary"]
+
+
 def test_push_gate_rejects_branch_no_diff_and_too_large(
     client: TestClient,
     db_session: Session,

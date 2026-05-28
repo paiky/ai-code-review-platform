@@ -218,6 +218,7 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
             event["changedFilesSummary"] = _build_gitlab_changed_files_summary(
                 gitlab_client.compare(git_project_id, event["beforeSha"], event["afterSha"]),
                 "gitlab_compare_api",
+                commit_count=_push_payload_commit_count(payload),
             )
             project_record = update_project_target_detection(
                 db,
@@ -623,16 +624,17 @@ def _build_changed_files_summary(payload: dict[str, Any]) -> dict:
 
 
 def _build_push_changed_files_summary(payload: dict[str, Any]) -> dict:
+    commit_count = _push_payload_commit_count(payload)
     changed_files = payload.get("changedFiles") or payload.get("changed_files")
     if isinstance(changed_files, list):
         files = [_normalize_changed_file(file_node) for file_node in changed_files]
         for file in files:
             file["source"] = "payload"
-            file["commitCount"] = len(payload.get("commits") or [])
+            file["commitCount"] = commit_count
         return {
             "count": len(files),
             "source": "payload",
-            "commitCount": len(payload.get("commits") or []),
+            "commitCount": commit_count,
             "ref": payload.get("ref"),
             "beforeSha": payload.get("before"),
             "afterSha": payload.get("after"),
@@ -649,11 +651,11 @@ def _build_push_changed_files_summary(payload: dict[str, Any]) -> dict:
             _add_commit_files(files_by_path, commit.get("removed"), "DELETED")
     for file in files_by_path.values():
         file["source"] = "push_payload"
-        file["commitCount"] = len(commits) if isinstance(commits, list) else 0
+        file["commitCount"] = commit_count
     return {
         "count": len(files_by_path),
         "source": "push_payload",
-        "commitCount": len(commits) if isinstance(commits, list) else 0,
+        "commitCount": commit_count,
         "ref": payload.get("ref"),
         "beforeSha": payload.get("before"),
         "afterSha": payload.get("after"),
@@ -661,11 +663,28 @@ def _build_push_changed_files_summary(payload: dict[str, Any]) -> dict:
     }
 
 
-def _build_gitlab_changed_files_summary(diff_files: list[dict[str, Any]], source: str) -> dict:
+def _build_gitlab_changed_files_summary(
+    diff_files: list[dict[str, Any]],
+    source: str,
+    commit_count: int | None = None,
+) -> dict:
     files = [_normalize_gitlab_diff_file(diff_file) for diff_file in diff_files]
     for file in files:
         file["source"] = source
-    return {"count": len(files), "source": source, "files": files}
+        if commit_count is not None:
+            file["commitCount"] = commit_count
+    return {"count": len(files), "source": source, "commitCount": commit_count, "files": files}
+
+
+def _push_payload_commit_count(payload: dict[str, Any]) -> int:
+    raw_total = payload.get("total_commits_count")
+    if raw_total is not None:
+        try:
+            return max(int(raw_total), 0)
+        except (TypeError, ValueError):
+            pass
+    commits = payload.get("commits")
+    return len(commits) if isinstance(commits, list) else 0
 
 
 def _normalize_gitlab_diff_file(diff_file: dict[str, Any]) -> dict:

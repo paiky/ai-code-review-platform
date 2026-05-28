@@ -888,6 +888,7 @@ def test_push_without_payload_diff_uses_compare_api(
                 "after": "after-sha",
                 "user_name": "Alice",
                 "user_username": "alice",
+                "total_commits_count": 1,
                 "commits": [{"modified": ["src/main/resources/mapper/OrderMapper.xml"]}],
             },
             headers={"X-Gitlab-Event": "Push Hook"},
@@ -899,6 +900,8 @@ def test_push_without_payload_diff_uses_compare_api(
     assert result["changeAnalysis"]["changeTypes"] == ["DB", "DB_DATA_WRITE"]
     detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
     assert detail["changedFilesSummary"]["source"] == "gitlab_compare_api"
+    assert detail["changedFilesSummary"]["commitCount"] == 1
+    assert detail["changedFilesSummary"]["files"][0]["commitCount"] == 1
 
 
 def test_push_without_reminders_skips_dingtalk_delivery(
