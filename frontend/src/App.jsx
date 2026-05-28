@@ -113,6 +113,13 @@ const REVIEW_PROFILE_DROPDOWN_LABELS = REVIEW_PROFILE_DROPDOWN_ITEMS.reduce(
   {}
 );
 const DEFAULT_PUSH_REVIEW_POLICY = {
+  aiReviewEnabled: true,
+  triggerOnManual: true,
+  triggerOnMr: true,
+  triggerOnPush: false,
+  triggerOnlyWhenRiskMatched: false,
+  autoFixPreviewEnabled: false,
+  autoFixPreviewSeverities: ['CRITICAL'],
   pushBranchPatterns: ['master'],
   pushMinChangedFiles: 10,
   pushMinDiffBytes: 30000,
@@ -144,7 +151,8 @@ function pushPolicyFromGroup(group) {
   return {
     ...DEFAULT_PUSH_REVIEW_POLICY,
     ...(group || {}),
-    pushBranchPatterns: Array.isArray(group?.pushBranchPatterns) ? group.pushBranchPatterns : [...DEFAULT_PUSH_REVIEW_POLICY.pushBranchPatterns]
+    pushBranchPatterns: Array.isArray(group?.pushBranchPatterns) ? group.pushBranchPatterns : [...DEFAULT_PUSH_REVIEW_POLICY.pushBranchPatterns],
+    autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(group?.autoFixPreviewSeverities)
   };
 }
 
@@ -765,9 +773,8 @@ function FailureNotificationsModal({ open, notifications, onClose, onOpenTask })
       width: 130,
       render: value => value ? sourceLabel(value) : '-'
     },
-    { title: 'Profile', dataIndex: 'profileCode', width: 190, ellipsis: true, render: value => value || '-' },
+    { title: '失败原因', dataIndex: 'errorMessage', width: 260, ellipsis: true, render: value => value || '-' },
     { title: '失败时间', dataIndex: 'createdAt', width: 170, render: value => value || '-' },
-    { title: '错误', dataIndex: 'errorMessage', ellipsis: true, render: value => value || '-' },
     {
       title: '操作',
       width: 90,
@@ -3015,12 +3022,7 @@ function TemplateConfig() {
       const updated = await fetchApi(`/api/code-quality-review-profiles/${profileDraft.profileCode}`, {
         method: 'PUT',
         body: JSON.stringify({
-          enabled: profileDraft.enabled !== false,
           providerCode: profileDraft.providerCode || null,
-          triggerOnManual: profileDraft.triggerOnManual !== false,
-          triggerOnMr: profileDraft.triggerOnMr !== false,
-          triggerOnPush: profileDraft.triggerOnPush === true,
-          triggerOnlyWhenRiskMatched: profileDraft.triggerOnlyWhenRiskMatched === true,
           reviewInstructions: profileDraft.reviewInstructions,
           model: profileDraft.model
         })
@@ -3043,6 +3045,13 @@ function TemplateConfig() {
       const updated = await fetchApi(`/api/project-groups/${selectedPushPolicyGroupId}`, {
         method: 'PUT',
         body: JSON.stringify({
+          aiReviewEnabled: pushPolicyDraft.aiReviewEnabled !== false,
+          triggerOnManual: pushPolicyDraft.triggerOnManual !== false,
+          triggerOnMr: pushPolicyDraft.triggerOnMr !== false,
+          triggerOnPush: pushPolicyDraft.triggerOnPush === true,
+          triggerOnlyWhenRiskMatched: pushPolicyDraft.triggerOnlyWhenRiskMatched === true,
+          autoFixPreviewEnabled: pushPolicyDraft.autoFixPreviewEnabled === true,
+          autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(pushPolicyDraft.autoFixPreviewSeverities),
           pushBranchPatterns: pushPolicyDraft.pushBranchPatterns || [],
           pushMinChangedFiles: pushPolicyDraft.pushMinChangedFiles ?? null,
           pushMinDiffBytes: pushPolicyDraft.pushMinDiffBytes ?? null,
@@ -3054,7 +3063,7 @@ function TemplateConfig() {
       });
       setGroups(current => current.map(item => item.id === updated.id ? updated : item));
       setPushPolicyDraft(pushPolicyFromGroup(updated));
-      messageApi.success('Push 审核策略已保存');
+      messageApi.success('项目组 AI Review 策略已保存');
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -3854,12 +3863,6 @@ function TemplateConfig() {
       label: (
         <Space wrap>
           <Text strong>AI Review 设置</Text>
-          {selectedProfileCode && <Tag>{selectedProfileCode}</Tag>}
-          <Tag color={(settingsDraft?.autoFixPreviewEnabled ?? false) ? 'purple' : 'default'}>
-            修复预览 {(settingsDraft?.autoFixPreviewEnabled ?? false)
-              ? autoFixPreviewSeveritySummary(settingsDraft?.autoFixPreviewSeverities)
-              : '关闭'}
-          </Tag>
         </Space>
       ),
       children: (
@@ -3941,116 +3944,10 @@ function TemplateConfig() {
               <div className="settings-subsection">
                 <Space direction="vertical" size="middle" className="full-width">
                   <Space direction="vertical" size={4}>
-                    <Text strong>自动修复预览</Text>
+                    <Text strong>项目组 AI Review 策略</Text>
                     <Text type="secondary">
-                      AI Review 成功后，为所选风险等级的可匹配 finding 自动调用模型生成 Patch；关闭后仍可在任务详情中手动生成。
+                      按项目组控制是否自动触发 AI Review、是否生成修复预览，以及 Push 触发策略。
                     </Text>
-                  </Space>
-                  <Row gutter={[16, 16]} align="middle">
-                    <Col xs={24} md={8}>
-                      <Space direction="vertical">
-                        <Text strong>自动生成修复预览</Text>
-                        <Switch
-                          checked={settingsDraft?.autoFixPreviewEnabled ?? false}
-                          loading={settingsSaving}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => commitSettingsChange('autoFixPreviewEnabled', checked, '自动修复预览设置已保存')}
-                        />
-                      </Space>
-                    </Col>
-                    <Col xs={24} md={16}>
-                      <div style={{ opacity: (settingsDraft?.autoFixPreviewEnabled ?? false) ? 1 : 0.55 }}>
-                        <Text strong>自动生成风险等级</Text>
-                        <Select
-                          mode="multiple"
-                          className="full-width prompt-field"
-                          value={normalizeAutoFixPreviewSeverities(settingsDraft?.autoFixPreviewSeverities)}
-                          options={AUTO_FIX_PREVIEW_SEVERITY_OPTIONS}
-                          loading={settingsSaving}
-                          onChange={value => commitSettingsChange(
-                            'autoFixPreviewSeverities',
-                            normalizeAutoFixPreviewSeverities(value),
-                            '自动生成风险等级已保存'
-                          )}
-                        />
-                      </div>
-                    </Col>
-                  </Row>
-                </Space>
-              </div>
-              <div className="settings-subsection">
-                <Space direction="vertical" size="middle" className="full-width">
-                  <Space direction="vertical" size={4}>
-                    <Text strong>Profile 触发开关</Text>
-                    <Text type="secondary">
-                      Push 自动触发需要同时开启全局 AI Review、当前 Profile 的 Push 自动触发、Provider 配置和项目组 Push 审核策略。
-                    </Text>
-                  </Space>
-                  <Row gutter={[16, 16]} align="middle">
-                    <Col xs={24} md={8}>
-                      <Space direction="vertical">
-                        <Text strong>启用 Profile</Text>
-                        <Switch
-                          checked={profileDraft.enabled !== false}
-                          checkedChildren="启用"
-                          unCheckedChildren="停用"
-                          onChange={checked => updateProfileDraft('enabled', checked)}
-                        />
-                      </Space>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Space direction="vertical">
-                        <Text strong>手动触发</Text>
-                        <Switch
-                          checked={profileDraft.triggerOnManual !== false}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => updateProfileDraft('triggerOnManual', checked)}
-                        />
-                      </Space>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Space direction="vertical">
-                        <Text strong>MR 自动触发</Text>
-                        <Switch
-                          checked={profileDraft.triggerOnMr !== false}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => updateProfileDraft('triggerOnMr', checked)}
-                        />
-                      </Space>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Space direction="vertical">
-                        <Text strong>Push 自动触发</Text>
-                        <Switch
-                          checked={profileDraft.triggerOnPush === true}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => updateProfileDraft('triggerOnPush', checked)}
-                        />
-                      </Space>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Space direction="vertical">
-                        <Text strong>Push 仅风险命中触发</Text>
-                        <Switch
-                          checked={profileDraft.triggerOnlyWhenRiskMatched === true}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => updateProfileDraft('triggerOnlyWhenRiskMatched', checked)}
-                        />
-                      </Space>
-                    </Col>
-                  </Row>
-                </Space>
-              </div>
-              <div className="settings-subsection">
-                <Space direction="vertical" size="middle" className="full-width">
-                  <Space direction="vertical" size={4}>
-                    <Text strong>Push 审核策略</Text>
-                    <Text type="secondary">按项目组判断 GitLab Push 事件是否允许自动进入 AI Review；未放行的 Push 仍会保留规则提醒和审查记录。</Text>
                   </Space>
                   <Row gutter={[16, 16]}>
                     <Col xs={24} md={10}>
@@ -4063,6 +3960,92 @@ function TemplateConfig() {
                         placeholder="请选择项目组"
                       />
                     </Col>
+                  </Row>
+                  <Row gutter={[16, 16]} align="middle">
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>启用项目组 AI Review</Text>
+                        <Switch
+                          checked={pushPolicyDraft?.aiReviewEnabled !== false}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => updatePushPolicyDraft('aiReviewEnabled', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>手动触发</Text>
+                        <Switch
+                          checked={pushPolicyDraft?.triggerOnManual !== false}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => updatePushPolicyDraft('triggerOnManual', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>MR 自动触发</Text>
+                        <Switch
+                          checked={pushPolicyDraft?.triggerOnMr !== false}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => updatePushPolicyDraft('triggerOnMr', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>Push 自动触发</Text>
+                        <Switch
+                          checked={pushPolicyDraft?.triggerOnPush === true}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => updatePushPolicyDraft('triggerOnPush', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>Push 仅风险命中触发</Text>
+                        <Switch
+                          checked={pushPolicyDraft?.triggerOnlyWhenRiskMatched === true}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => updatePushPolicyDraft('triggerOnlyWhenRiskMatched', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>自动生成修复预览</Text>
+                        <Switch
+                          checked={pushPolicyDraft?.autoFixPreviewEnabled === true}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => updatePushPolicyDraft('autoFixPreviewEnabled', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={16}>
+                      <div style={{ opacity: (pushPolicyDraft?.autoFixPreviewEnabled === true) ? 1 : 0.55 }}>
+                        <Text strong>自动生成风险等级</Text>
+                        <Select
+                          mode="multiple"
+                          className="full-width prompt-field"
+                          value={normalizeAutoFixPreviewSeverities(pushPolicyDraft?.autoFixPreviewSeverities)}
+                          options={AUTO_FIX_PREVIEW_SEVERITY_OPTIONS}
+                          onChange={value => updatePushPolicyDraft('autoFixPreviewSeverities', normalizeAutoFixPreviewSeverities(value))}
+                        />
+                      </div>
+                    </Col>
+                  </Row>
+                  <Space direction="vertical" size={4}>
+                    <Text strong>Push 审核策略</Text>
+                    <Text type="secondary">按项目组判断 GitLab Push 事件是否允许自动进入 AI Review；未放行的 Push 仍会保留规则提醒和审查记录。</Text>
+                  </Space>
+                  <Row gutter={[16, 16]}>
                     <Col xs={24}>
                       <Text strong>允许分支</Text>
                       <Select
@@ -4137,7 +4120,7 @@ function TemplateConfig() {
                       onClick={savePushReviewPolicy}
                       disabled={!pushPolicyDraft || !selectedPushPolicyGroupId}
                     >
-                      保存 Push 审核策略
+                      保存项目组 AI Review 策略
                     </Button>
                   </div>
                 </Space>
@@ -4553,17 +4536,15 @@ function AppFrame() {
         </Space>
         <div className="header-actions">
           <Tooltip title="AI Review 失败通知">
-            <Badge count={failureNotifications?.failureCount || 0} size="small">
-              <Button
-                danger={Boolean(failureNotifications?.failureCount)}
-                icon={<BellOutlined />}
-                type={failureNotifications?.failureCount ? 'primary' : 'default'}
-                onClick={() => {
-                  setFailureNotificationsOpen(true);
-                  loadFailureNotifications();
-                }}
-              />
-            </Badge>
+            <Button
+              danger={Boolean(failureNotifications?.failureCount)}
+              icon={<BellOutlined />}
+              type={failureNotifications?.failureCount ? 'primary' : 'default'}
+              onClick={() => {
+                setFailureNotificationsOpen(true);
+                loadFailureNotifications();
+              }}
+            />
           </Tooltip>
           <Tooltip title="AI Review 调度队列">
             <Badge count={jobQueue?.activeCount || 0} size="small">

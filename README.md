@@ -526,6 +526,7 @@ V26__code_quality_auto_fix_preview_switch.sql
 V27__project_group_profile_and_target_type_path_mappings.sql
 V28__nullable_project_default_ai_review_profile.sql
 V29__provider_timeout_seconds.sql
+V30__project_group_ai_review_policy.sql
 ```
 
 `backend/src/main/resources/db/migration` 中的 Java Flyway SQL 保留为历史基线和行为对照，不再是当前默认运行路径。

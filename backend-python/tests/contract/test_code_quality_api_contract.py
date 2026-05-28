@@ -906,8 +906,8 @@ def test_ai_review_auto_generates_fix_previews_after_success(
     monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
     monkeypatch.setenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "true")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "auto-fix-secret")
-    enabled = client.put("/api/code-quality-reviews/settings", json={"autoFixPreviewEnabled": True})
-    assert enabled.status_code == 200
+    enabled = update_default_push_policy(client, autoFixPreviewEnabled=True)
+    assert enabled["autoFixPreviewEnabled"] is True
     calls = []
 
     def provider_response(request: httpx.Request) -> Response:
@@ -1104,8 +1104,8 @@ def test_ai_review_does_not_auto_generate_fix_previews_for_non_critical_findings
     monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
     monkeypatch.setenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "true")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "auto-fix-non-critical-secret")
-    enabled = client.put("/api/code-quality-reviews/settings", json={"autoFixPreviewEnabled": True})
-    assert enabled.status_code == 200
+    enabled = update_default_push_policy(client, autoFixPreviewEnabled=True)
+    assert enabled["autoFixPreviewEnabled"] is True
     calls = []
 
     def provider_response(request: httpx.Request) -> Response:
@@ -1154,14 +1154,12 @@ def test_ai_review_auto_generates_fix_previews_for_configured_major_findings(
     monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
     monkeypatch.setenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "true")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "auto-fix-major-secret")
-    enabled = client.put(
-        "/api/code-quality-reviews/settings",
-        json={
-            "autoFixPreviewEnabled": True,
-            "autoFixPreviewSeverities": ["CRITICAL", "MAJOR"],
-        },
+    enabled = update_default_push_policy(
+        client,
+        autoFixPreviewEnabled=True,
+        autoFixPreviewSeverities=["CRITICAL", "MAJOR"],
     )
-    assert enabled.status_code == 200
+    assert enabled["autoFixPreviewSeverities"] == ["CRITICAL", "MAJOR"]
     calls = []
 
     def provider_response(request: httpx.Request) -> Response:
@@ -2254,15 +2252,13 @@ def test_manual_review_returns_running_without_waiting_for_provider(
 
 
 def enable_push_profile(client: TestClient) -> None:
-    response = client.put(
-        "/api/code-quality-review-profiles/backend-default-ai-review",
-        json={
-            "triggerOnPush": True,
-            "triggerOnlyWhenRiskMatched": False,
-        },
+    update_default_push_policy(
+        client,
+        aiReviewEnabled=True,
+        triggerOnPush=True,
+        triggerOnlyWhenRiskMatched=False,
+        pushBranchPatterns=["feature/*", "bugfix/*", "hotfix/*"],
     )
-    assert response.status_code == 200
-    update_default_push_policy(client, pushBranchPatterns=["feature/*", "bugfix/*", "hotfix/*"])
 
 
 def update_default_push_policy(client: TestClient, **overrides) -> dict:
@@ -2277,6 +2273,13 @@ def update_default_push_policy(client: TestClient, **overrides) -> dict:
         "pushMaxChangedFiles": default_group["pushMaxChangedFiles"],
         "pushMaxDiffBytes": default_group["pushMaxDiffBytes"],
         "pushDebounceSeconds": default_group["pushDebounceSeconds"],
+        "aiReviewEnabled": default_group["aiReviewEnabled"],
+        "triggerOnManual": default_group["triggerOnManual"],
+        "triggerOnMr": default_group["triggerOnMr"],
+        "triggerOnPush": default_group["triggerOnPush"],
+        "triggerOnlyWhenRiskMatched": default_group["triggerOnlyWhenRiskMatched"],
+        "autoFixPreviewEnabled": default_group["autoFixPreviewEnabled"],
+        "autoFixPreviewSeverities": default_group["autoFixPreviewSeverities"],
         **overrides,
     }
     response = client.put(f"/api/project-groups/{default_group['id']}", json=payload)

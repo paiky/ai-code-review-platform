@@ -50,7 +50,7 @@ from app.core.errors import AppError
 from app.core.json_utils import read_json, read_json_array
 from app.code_quality.models import CodeQualityModelProvider
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
-from app.project_integration.repository import find_project_by_id, get_project_group_push_policy, resolve_project_target_config
+from app.project_integration.repository import find_project_by_id, get_project_group_ai_review_policy, resolve_project_target_config
 from app.notification.service import send_review_summary
 from app.review_record.models import ReviewTask
 from app.review_record.repository import (
@@ -213,10 +213,11 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
         request.get("targetTypes"),
     )
     profile = _resolve_profile(db, request.get("profileCode") or target_config["profileCode"], project)
-    if not profile.enabled or not profile.trigger_on_manual:
+    ai_policy = get_project_group_ai_review_policy(db, project)
+    if not profile.enabled or not ai_policy.get("aiReviewEnabled") or not ai_policy.get("triggerOnManual"):
         raise AppError(
             "BAD_REQUEST",
-            f"Code quality review profile does not allow manual trigger: {profile.profile_code}",
+            f"Project group AI Review policy does not allow manual trigger: {profile.profile_code}",
             400,
         )
     provider = _resolve_provider(db, project, profile, target_config["targetType"])
@@ -470,7 +471,8 @@ def trigger_auto_review(
     profile = _resolve_auto_profile_or_save_failure(db, task, project)
     if profile is None:
         return False
-    if not profile.enabled:
+    ai_policy = get_project_group_ai_review_policy(db, project)
+    if not profile.enabled or not ai_policy.get("aiReviewEnabled") or not ai_policy.get("triggerOnMr"):
         return False
     provider = _resolve_provider(db, project, profile, task.target_type)
     request = _build_review_request(
@@ -568,7 +570,8 @@ def _trigger_push_auto_review(
     profile = _resolve_auto_profile_or_save_failure(db, task, project)
     if profile is None:
         return False
-    if not profile.enabled or not profile.trigger_on_push:
+    ai_policy = get_project_group_ai_review_policy(db, project)
+    if not profile.enabled or not ai_policy.get("aiReviewEnabled") or not ai_policy.get("triggerOnPush"):
         _save_push_gate_rejection(
             db,
             task=task,
@@ -578,16 +581,15 @@ def _trigger_push_auto_review(
             focus_rule_codes=focus_rule_codes,
             profile_code=profile.profile_code,
             reason_code="PROFILE_DISABLED",
-            reason_summary="当前 AI Review Profile 未开启 Push 自动触发。",
+            reason_summary="当前项目组 AI Review 策略未开启 Push 自动触发。",
         )
         return False
     provider = _resolve_provider(db, project, profile, task.target_type)
-    push_policy = get_project_group_push_policy(db, project)
     gate = _evaluate_push_gate(
         db,
         task=task,
         profile=profile,
-        push_policy=push_policy,
+        push_policy=ai_policy,
         provider_code=provider.provider_code,
         changed_files=changed_files,
         diff_text=diff_text,
@@ -918,7 +920,7 @@ def _evaluate_push_gate(
             "detail": f"files>={push_policy.get('pushMinChangedFiles')}, diffBytes>={push_policy.get('pushMinDiffBytes')}, commits>={push_policy.get('pushMinCommitCount')}",
         }
     )
-    if profile.trigger_only_when_risk_matched and not risk_matched:
+    if push_policy.get("triggerOnlyWhenRiskMatched") and not risk_matched:
         return _push_gate_payload(
             task,
             profile.profile_code,
@@ -1470,11 +1472,11 @@ def _enqueue_auto_fix_previews(
     model: str | None,
     result: dict[str, Any],
 ) -> None:
-    settings = get_settings_record(db)
-    if not settings.auto_fix_preview_enabled:
+    ai_policy = get_project_group_ai_review_policy(db, project)
+    if not ai_policy.get("autoFixPreviewEnabled"):
         return
     enabled_severities = set(
-        normalize_auto_fix_preview_severities(settings.auto_fix_preview_severities)
+        normalize_auto_fix_preview_severities(ai_policy.get("autoFixPreviewSeverities"))
     )
     findings = result.get("findings") or []
     if result.get("status") != "SUCCESS" or not findings:

@@ -1127,10 +1127,26 @@ XiaoMIMO 虽然有独立 `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS`，但默认仍�
 
 原因：
 
-后端判断依据是 `code_quality_review_profiles.trigger_on_push` 和 `enabled`。内置 Profile 默认 `trigger_on_push=false`，如果设置页只展示 Provider、模型和 Prompt，而没有提交 `triggerOnPush`，用户即使配置了项目组默认 Profile、Provider 和 Push 审核策略，后端仍会按 `PROFILE_DISABLED` 拦截。
+早期后端判断依据是 `code_quality_review_profiles.trigger_on_push` 和 `enabled`。内置 Profile 默认 `trigger_on_push=false`，如果设置页只展示 Provider、模型和 Prompt，而没有提交 `triggerOnPush`，用户即使配置了项目组默认 Profile、Provider 和 Push 审核策略，后端仍会按 `PROFILE_DISABLED` 拦截。后续已把自动触发策略收敛到项目组 AI Review 策略，遇到同类提示时应优先检查项目组策略。
 
 处理方式：
 
-1. 设置页的 AI Review Profile 配置必须展示并保存 `enabled`、`triggerOnManual`、`triggerOnMr`、`triggerOnPush` 和 `triggerOnlyWhenRiskMatched`。
-2. 保存 Profile 后，重新触发一次 Push 审阅生成新任务；已经落库的旧 Gate 记录不会自动改写。
-3. 如果 `triggerOnPush=true` 后仍未进入 AI Review，再继续检查全局 `reviewEnabled`、Provider API Key、项目组 `pushBranchPatterns`、diff 可用性、硬上限和大变更阈值。
+1. 设置页的“项目组 AI Review 策略”必须展示并保存 `aiReviewEnabled`、`triggerOnManual`、`triggerOnMr`、`triggerOnPush` 和 `triggerOnlyWhenRiskMatched`。
+2. 保存项目组策略后，重新触发一次 Push 审阅生成新任务；已经落库的旧 Gate 记录不会自动改写。
+3. 如果项目组 `triggerOnPush=true` 后仍未进入 AI Review，再继续检查全局 `reviewEnabled`、Provider API Key、项目组 `pushBranchPatterns`、diff 可用性、硬上限和大变更阈值。
+
+## 48. 自动触发和修复预览策略应跟项目组走，不要绑定到 Profile
+
+现象：
+
+多个项目组复用同一个 AI Review Profile 时，一个项目组希望开启 Push 自动审查或自动修复预览，另一个项目组希望关闭。如果把 `triggerOnPush`、`triggerOnlyWhenRiskMatched`、`autoFixPreviewEnabled` 这类策略放在 Profile 上，会迫使团队复制多个几乎相同的 Profile。
+
+原因：
+
+Profile 更适合表达“怎么审”，例如 Prompt、Provider、模型和端类型关注点；项目组策略更适合表达“什么时候审、触发多激进、是否自动生成修复预览”。这些是团队 / 业务线级别的成本和噪音控制，不应污染可复用的审查模板。
+
+处理方式：
+
+1. AI Review 设置页中保留 Profile 模块用于维护 Prompt / Provider / 模型。
+2. 新增或维护“项目组 AI Review 策略”，按项目组保存 `aiReviewEnabled`、`triggerOnManual`、`triggerOnMr`、`triggerOnPush`、`triggerOnlyWhenRiskMatched`、`autoFixPreviewEnabled`、`autoFixPreviewSeverities` 和 Push 审核阈值。
+3. 后端 MR / Push 自动触发和自动修复预览执行时读取任务所属项目组策略；Profile 上的历史触发字段只作为兼容字段，不再作为主要策略入口。
