@@ -1092,3 +1092,45 @@ AI Review Provider 调用失败、JSON 解析失败或后台重试失败后，�
 2. 自动 MR / Push AI Review、手动 AI Review、重试 AI Review 和后台异常 catch 路径都要覆盖。
 3. AI Review 成功不应额外覆盖规则提醒成功状态；只有手动 AI Review 任务或失败任务重试成功时，才把任务恢复为 `SUCCESS`。
 4. 右上角失败通知只展示最近 24 小时内 `code_quality_scheduler_jobs.job_type='AI_REVIEW'` 且 `status='FAILED'` 的执行记录，修复预览失败不进入该通知。
+
+## 46. OpenAI-compatible Provider 不要共用过短的 OpenAI 超时
+
+现象：
+
+新接入的 XiaoMIMO / Xiaomi MiMo 模型执行代码质量 Review 时失败：
+
+```text
+read_timeout: Provider response timed out after 120 seconds
+```
+
+原因：
+
+XiaoMIMO 虽然有独立 `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS`，但默认仍是 `120` 秒；DeepSeek 更隐蔽，之前没有独立超时变量，实际复用了 `OPENAI_CODE_REVIEW_TIMEOUT_SECONDS`，所以默认也是 `120` 秒。较大的 diff 或慢模型很容易超过这个限制。
+
+处理方式：
+
+1. 真实 Review Provider 默认超时统一调大到 `1000` 秒。
+2. DeepSeek 使用独立 `DEEPSEEK_CODE_REVIEW_TIMEOUT_SECONDS`，不再隐式复用 OpenAI 超时。
+3. XiaoMIMO 使用 `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS`，默认同样为 `1000` 秒。
+4. 设置页“模型 Provider 配置”支持为单个 Provider 保存 `timeoutSeconds`；为空时使用环境变量默认值，填值时优先生效。
+5. Provider 联通性测试仍可以传 `timeoutSeconds` 做短超时探测；不要把联通性测试的短超时当成真实 Review 的执行上限。
+
+## 47. Push Gate 提示 Profile 未开启时要同时检查前端是否保存了触发开关
+
+现象：
+
+任务详情页的 Push 审核区显示：
+
+```text
+当前 AI Review Profile 未开启 Push 自动触发。
+```
+
+原因：
+
+后端判断依据是 `code_quality_review_profiles.trigger_on_push` 和 `enabled`。内置 Profile 默认 `trigger_on_push=false`，如果设置页只展示 Provider、模型和 Prompt，而没有提交 `triggerOnPush`，用户即使配置了项目组默认 Profile、Provider 和 Push 审核策略，后端仍会按 `PROFILE_DISABLED` 拦截。
+
+处理方式：
+
+1. 设置页的 AI Review Profile 配置必须展示并保存 `enabled`、`triggerOnManual`、`triggerOnMr`、`triggerOnPush` 和 `triggerOnlyWhenRiskMatched`。
+2. 保存 Profile 后，重新触发一次 Push 审阅生成新任务；已经落库的旧 Gate 记录不会自动改写。
+3. 如果 `triggerOnPush=true` 后仍未进入 AI Review，再继续检查全局 `reviewEnabled`、Provider API Key、项目组 `pushBranchPatterns`、diff 可用性、硬上限和大变更阈值。

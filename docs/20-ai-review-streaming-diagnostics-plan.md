@@ -94,7 +94,7 @@ FINISHED
 失败时，前端应显示可解释原因：
 
 ```text
-Provider request timed out after 120 seconds at HTTP_REQUEST_START.
+Provider request timed out after 1000 seconds at HTTP_REQUEST_START.
 可能原因：endpoint 不通、模型无响应、网络超时或 API 网关阻塞。
 ```
 
@@ -170,7 +170,7 @@ event: done
 data: {"taskId":47,"status":"SUCCESS","resultAvailable":true}
 
 event: failed
-data: {"taskId":47,"status":"FAILED","errorMessage":"Provider request timed out after 120 seconds at HTTP_REQUEST_START"}
+data: {"taskId":47,"status":"FAILED","errorMessage":"Provider request timed out after 1000 seconds at HTTP_REQUEST_START"}
 ```
 
 ### 5.2 兼容要求

@@ -199,13 +199,14 @@ def test_provider_update_masks_api_key(
 
     response = client.put(
         "/api/code-quality-review-providers/OPENAI",
-        json={"apiKey": "sk-test-secret-123456", "modelName": "gpt-test"},
+        json={"apiKey": "sk-test-secret-123456", "modelName": "gpt-test", "timeoutSeconds": 900},
     )
 
     assert response.status_code == 200
     openai = next(item for item in response.json()["data"] if item["providerCode"] == "OPENAI")
     assert openai["apiKeyConfigured"] is True
     assert openai["apiKeyMasked"] == "sk-t...3456"
+    assert openai["timeoutSeconds"] == 900
     assert "sk-test-secret-123456" not in json.dumps(response.json(), ensure_ascii=False)
 
 
@@ -243,6 +244,7 @@ def test_provider_list_exposes_basic_provider_config(
     assert providers["XIAOMIMO"]["providerType"] == "OPENAI_CHAT_COMPATIBLE"
     assert providers["XIAOMIMO"]["endpointUrl"] == "https://api.xiaomimimo.com/v1"
     assert providers["XIAOMIMO"]["modelName"] == "mimo-v2.5-pro"
+    assert providers["DEEPSEEK"]["timeoutSeconds"] is None
     assert "capabilities" not in providers["OPENAI"]
     assert "streamingConfig" not in providers["OPENAI"]
 
@@ -328,6 +330,8 @@ def test_xiaomimo_provider_uses_openai_compatible_request(
         f"/api/review-tasks/{data['taskId']}/code-quality-progress"
     ).json()["data"]
     phases = [event["phase"] for event in progress]
+    request_start = next(event for event in progress if event["phase"] == "HTTP_REQUEST_START")
+    assert "timeoutSeconds=1000" in request_start["detail"]
     assert "XIAOMIMO_REQUEST" in phases
     assert "XIAOMIMO_RESPONSE" in phases
     assert "XIAOMIMO_PARSE_RESULT" in phases
@@ -780,10 +784,43 @@ def test_deepseek_manual_review_saves_result_and_progress(
     assert result["findings"][0]["source"] == "DEEPSEEK"
     progress = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-progress").json()["data"]
     phases = [event["phase"] for event in progress]
+    request_start = next(event for event in progress if event["phase"] == "HTTP_REQUEST_START")
+    assert "timeoutSeconds=1000" in request_start["detail"]
     assert "DEEPSEEK_REQUEST_DEBUG" in phases
     assert "DEEPSEEK_RESPONSE_RAW" in phases
     assert "DEEPSEEK_PARSE_RESULT" in phases
     assert "deepseek-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
+@respx.mock
+def test_provider_timeout_config_overrides_deepseek_default(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    seed_project(db_session, "DEEPSEEK")
+    update_response = client.put(
+        "/api/code-quality-review-providers/DEEPSEEK",
+        json={"timeoutSeconds": 333},
+    )
+    assert update_response.status_code == 200
+    assert next(
+        item for item in update_response.json()["data"] if item["providerCode"] == "DEEPSEEK"
+    )["timeoutSeconds"] == 333
+    respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json()}}]})
+    )
+
+    response = client.post("/api/code-quality-reviews/manual", json=manual_request())
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    progress = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-progress").json()["data"]
+    request_start = next(event for event in progress if event["phase"] == "HTTP_REQUEST_START")
+    assert "timeoutSeconds=333" in request_start["detail"]
 
 
 @respx.mock
@@ -1869,6 +1906,7 @@ def test_deepseek_timeout_saves_failed_result(
     result = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-result").json()["data"]
     assert result["status"] == "FAILED"
     assert "read_timeout" in result["errorMessage"]
+    assert "1000 seconds" in result["errorMessage"]
     progress = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-progress").json()["data"]
     phases = [event["phase"] for event in progress]
     assert "HTTP_REQUEST_START" in phases

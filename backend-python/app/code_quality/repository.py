@@ -408,6 +408,9 @@ def ensure_provider_schema(db: Session) -> None:
     if not inspector.has_table("code_quality_model_providers"):
         CodeQualityModelProvider.__table__.create(connection, checkfirst=True)
         db.flush()
+        return
+    columns = {column["name"] for column in inspector.get_columns("code_quality_model_providers")}
+    _add_column_if_missing(db, columns, "code_quality_model_providers", "timeout_seconds", "INT NULL")
     db.flush()
 
 
@@ -551,6 +554,7 @@ def _upsert_default_provider(
                 endpoint_url=_blank_to_none(endpoint_url),
                 model_name=_blank_to_none(model_name),
                 api_key=_blank_to_none(api_key),
+                timeout_seconds=None,
                 enabled=enabled,
                 built_in=True,
                 sort_order=sort_order,
@@ -843,6 +847,7 @@ def provider_to_response(
         "providerType": provider.provider_type,
         "endpointUrl": provider.endpoint_url,
         "modelName": provider.model_name,
+        "timeoutSeconds": provider.timeout_seconds,
         "enabled": provider.enabled,
         "builtIn": provider.built_in,
         "defaultProvider": provider.provider_code == default_provider_code,
@@ -863,6 +868,8 @@ def update_provider(db: Session, provider_code: str, request: dict[str, Any]) ->
         values["endpoint_url"] = _blank_to_none(request["endpointUrl"])
     if "modelName" in request:
         values["model_name"] = _blank_to_none(request["modelName"])
+    if "timeoutSeconds" in request:
+        values["timeout_seconds"] = _normalize_provider_timeout(request["timeoutSeconds"])
     if request.get("clearApiKey") is True:
         values["api_key"] = None
     elif "apiKey" in request:
@@ -878,6 +885,18 @@ def update_provider(db: Session, provider_code: str, request: dict[str, Any]) ->
     db.flush()
     db.expire_all()
     return list_provider_responses(db)
+
+
+def _normalize_provider_timeout(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        timeout = int(value)
+    except (TypeError, ValueError):
+        raise AppError("BAD_REQUEST", "timeoutSeconds must be an integer between 1 and 3600", 400)
+    if timeout < 1 or timeout > 3600:
+        raise AppError("BAD_REQUEST", "timeoutSeconds must be between 1 and 3600", 400)
+    return timeout
 
 
 def set_default_provider(db: Session, provider_code: str) -> dict[str, Any]:

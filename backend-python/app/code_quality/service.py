@@ -48,6 +48,7 @@ from app.code_quality.repository import (
 from app.core.database import SessionLocal
 from app.core.errors import AppError
 from app.core.json_utils import read_json, read_json_array
+from app.code_quality.models import CodeQualityModelProvider
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.project_integration.repository import find_project_by_id, get_project_group_push_policy, resolve_project_target_config
 from app.notification.service import send_review_summary
@@ -1610,13 +1611,16 @@ def recover_stale_running_reviews_on_startup() -> None:
     timeout = max(
         settings.openai_code_review_timeout_seconds,
         settings.anthropic_code_review_timeout_seconds,
+        settings.deepseek_code_review_timeout_seconds,
+        settings.xiaomimo_code_review_timeout_seconds,
         120,
     )
     db = SessionLocal()
     try:
         if not _enabled(db):
             return
-        mark_stale_running_as_failed(db, timeout)
+        provider_timeout = db.scalar(select(CodeQualityModelProvider.timeout_seconds).order_by(CodeQualityModelProvider.timeout_seconds.desc()))
+        mark_stale_running_as_failed(db, max(timeout, int(provider_timeout or 0)))
         db.commit()
     finally:
         db.close()

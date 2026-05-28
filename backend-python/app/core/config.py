@@ -34,6 +34,7 @@ class Settings:
     deepseek_api_key: str
     deepseek_base_url: str
     deepseek_code_review_model: str
+    deepseek_code_review_timeout_seconds: int
     xiaomimo_api_key: str
     xiaomimo_base_url: str
     xiaomimo_code_review_model: str
@@ -64,7 +65,7 @@ class Settings:
             ),
             openai_code_review_model=os.getenv("OPENAI_CODE_REVIEW_MODEL", "gpt-5.4"),
             openai_code_review_timeout_seconds=int(
-                os.getenv("OPENAI_CODE_REVIEW_TIMEOUT_SECONDS", "120")
+                os.getenv("OPENAI_CODE_REVIEW_TIMEOUT_SECONDS", "1000")
             ),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             anthropic_messages_url=os.getenv(
@@ -74,16 +75,19 @@ class Settings:
                 "ANTHROPIC_CODE_REVIEW_MODEL", "claude-sonnet-4-5"
             ),
             anthropic_code_review_timeout_seconds=int(
-                os.getenv("ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS", "120")
+                os.getenv("ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS", "1000")
             ),
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
             deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             deepseek_code_review_model=os.getenv("DEEPSEEK_CODE_REVIEW_MODEL", "deepseek-v4-pro"),
+            deepseek_code_review_timeout_seconds=int(
+                os.getenv("DEEPSEEK_CODE_REVIEW_TIMEOUT_SECONDS", "1000")
+            ),
             xiaomimo_api_key=os.getenv("XIAOMIMO_API_KEY", ""),
             xiaomimo_base_url=os.getenv("XIAOMIMO_BASE_URL", "https://api.xiaomimimo.com/v1"),
             xiaomimo_code_review_model=os.getenv("XIAOMIMO_CODE_REVIEW_MODEL", "mimo-v2.5-pro"),
             xiaomimo_code_review_timeout_seconds=int(
-                os.getenv("XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS", "120")
+                os.getenv("XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS", "1000")
             ),
         )
 

@@ -164,7 +164,10 @@ def _run_openai_responses(
         model=model,
         body=body,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        timeout_seconds=settings.openai_code_review_timeout_seconds,
+        timeout_seconds=_provider_timeout_seconds(
+            provider,
+            settings.openai_code_review_timeout_seconds,
+        ),
         output_extractor=_extract_openai_output,
         review_request=review_request,
     )
@@ -202,7 +205,10 @@ def _run_openai_responses_fix(
         model=model,
         body=prompt.openai_responses_fix_request(model, fix_request),
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        timeout_seconds=settings.openai_code_review_timeout_seconds,
+        timeout_seconds=_provider_timeout_seconds(
+            provider,
+            settings.openai_code_review_timeout_seconds,
+        ),
         output_extractor=_extract_openai_output,
         request=fix_request,
     )
@@ -246,7 +252,10 @@ def _run_anthropic_messages(
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         },
-        timeout_seconds=settings.anthropic_code_review_timeout_seconds,
+        timeout_seconds=_provider_timeout_seconds(
+            provider,
+            settings.anthropic_code_review_timeout_seconds,
+        ),
         output_extractor=_extract_anthropic_output,
         review_request=review_request,
     )
@@ -288,7 +297,10 @@ def _run_anthropic_messages_fix(
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         },
-        timeout_seconds=settings.anthropic_code_review_timeout_seconds,
+        timeout_seconds=_provider_timeout_seconds(
+            provider,
+            settings.anthropic_code_review_timeout_seconds,
+        ),
         output_extractor=_extract_anthropic_output,
         request=fix_request,
     )
@@ -330,7 +342,7 @@ def _run_openai_compatible(
         model=model,
         body=body,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        timeout_seconds=_openai_compatible_timeout_seconds(provider.provider_code),
+        timeout_seconds=_openai_compatible_timeout_seconds(provider),
         output_extractor=_extract_openai_compatible_output,
         review_request=review_request,
     )
@@ -370,7 +382,7 @@ def _run_openai_compatible_fix(
         model=model,
         body=prompt.openai_chat_compatible_fix_request(model, fix_request),
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        timeout_seconds=_openai_compatible_timeout_seconds(provider.provider_code),
+        timeout_seconds=_openai_compatible_timeout_seconds(provider),
         output_extractor=_extract_openai_compatible_output,
         request=fix_request,
     )
@@ -385,11 +397,19 @@ def _openai_compatible_env_api_key(provider_code: str) -> str:
     return ""
 
 
-def _openai_compatible_timeout_seconds(provider_code: str) -> int:
+def _openai_compatible_timeout_seconds(provider: CodeQualityModelProvider) -> int:
     settings = get_settings()
+    provider_code = provider.provider_code
+    if provider_code == "DEEPSEEK":
+        return _provider_timeout_seconds(provider, settings.deepseek_code_review_timeout_seconds)
     if provider_code == "XIAOMIMO":
-        return settings.xiaomimo_code_review_timeout_seconds
-    return settings.openai_code_review_timeout_seconds
+        return _provider_timeout_seconds(provider, settings.xiaomimo_code_review_timeout_seconds)
+    return _provider_timeout_seconds(provider, settings.openai_code_review_timeout_seconds)
+
+
+def _provider_timeout_seconds(provider: CodeQualityModelProvider, default_timeout: int) -> int:
+    timeout = provider.timeout_seconds if provider.timeout_seconds is not None else default_timeout
+    return max(int(timeout or 1000), 1)
 
 
 def _provider_connection_request(
@@ -423,7 +443,7 @@ def _provider_connection_request(
             "model": model,
             "timeout_seconds": _connection_timeout_seconds(
                 request,
-                settings.openai_code_review_timeout_seconds,
+                _provider_timeout_seconds(provider, settings.openai_code_review_timeout_seconds),
             ),
             "body": {"model": model, "input": "Reply with the single word pong.", "store": False},
             "headers": {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -454,7 +474,7 @@ def _provider_connection_request(
             "model": model,
             "timeout_seconds": _connection_timeout_seconds(
                 request,
-                settings.anthropic_code_review_timeout_seconds,
+                _provider_timeout_seconds(provider, settings.anthropic_code_review_timeout_seconds),
             ),
             "body": {
                 "model": model,
@@ -490,7 +510,7 @@ def _provider_connection_request(
             "model": model,
             "timeout_seconds": _connection_timeout_seconds(
                 request,
-                _openai_compatible_timeout_seconds(provider.provider_code),
+                _openai_compatible_timeout_seconds(provider),
             ),
             "body": {
                 "model": model,

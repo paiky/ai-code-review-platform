@@ -139,7 +139,12 @@ Environment variables:
 | `OPENAI_API_KEY` | empty | API key for `OPENAI_API` provider |
 | `OPENAI_RESPONSES_URL` | OpenAI Responses API URL | Override for compatible gateways |
 | `OPENAI_CODE_REVIEW_MODEL` | `gpt-5.4` | Model used by API provider |
-| `OPENAI_CODE_REVIEW_TIMEOUT_SECONDS` | `120` | API request timeout |
+| `OPENAI_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | OpenAI API request timeout |
+| `ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | Anthropic API request timeout |
+| `DEEPSEEK_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | DeepSeek API request timeout |
+| `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | XiaoMIMO API request timeout |
+
+单个 Provider 可在设置页“模型 Provider 配置”中覆盖 `timeoutSeconds`；为空时使用对应环境变量默认值。
 
 ## 5. Manual Verification
 

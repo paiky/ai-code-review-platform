@@ -216,6 +216,7 @@ general-default：通用项目，适合暂未细分技术栈的仓库。
 代码质量 AI Review 全局能力是否开启
 项目端类型是否绑定合适的 AI Review Profile
 Provider 是否启用并配置了 API Key、端点 URL 和模型名称
+Provider 的 Review 超时秒数是否满足大 diff 或慢模型场景
 Review Instructions 是否符合当前端类型
 如果接入 Push Hook，Push 审核策略是否允许该分支进入 AI Review
 ```

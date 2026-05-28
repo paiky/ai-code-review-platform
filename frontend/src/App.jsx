@@ -2916,6 +2916,7 @@ function TemplateConfig() {
         providerName: providerDraft.providerName,
         endpointUrl: providerDraft.endpointUrl,
         modelName: providerDraft.modelName,
+        timeoutSeconds: providerDraft.timeoutSeconds || null,
         enabled: providerDraft.enabled
       };
       if (providerApiKeyDraft.trim()) body.apiKey = providerApiKeyDraft.trim();
@@ -3014,7 +3015,12 @@ function TemplateConfig() {
       const updated = await fetchApi(`/api/code-quality-review-profiles/${profileDraft.profileCode}`, {
         method: 'PUT',
         body: JSON.stringify({
+          enabled: profileDraft.enabled !== false,
           providerCode: profileDraft.providerCode || null,
+          triggerOnManual: profileDraft.triggerOnManual !== false,
+          triggerOnMr: profileDraft.triggerOnMr !== false,
+          triggerOnPush: profileDraft.triggerOnPush === true,
+          triggerOnlyWhenRiskMatched: profileDraft.triggerOnlyWhenRiskMatched === true,
           reviewInstructions: profileDraft.reviewInstructions,
           model: profileDraft.model
         })
@@ -3769,6 +3775,17 @@ function TemplateConfig() {
                 onChange={event => updateProviderDraft('modelName', event.target.value)}
               />
             </Col>
+            <Col xs={24} md={8}>
+              <Text strong>Review 超时秒数</Text>
+              <InputNumber
+                className="full-width prompt-field"
+                min={1}
+                max={3600}
+                placeholder="默认 1000，留空使用系统默认"
+                value={providerDraft?.timeoutSeconds ?? null}
+                onChange={value => updateProviderDraft('timeoutSeconds', value || null)}
+              />
+            </Col>
             <Col xs={24} md={10}>
               <Space direction="vertical" className="full-width">
                 <Space wrap>
@@ -3852,26 +3869,75 @@ function TemplateConfig() {
         >
           {profileDraft ? (
             <Space direction="vertical" size="middle" className="full-width">
-              <Row gutter={[16, 16]}>
-                <Col xs={24} md={12}>
-                  <Text strong>Provider 覆盖</Text>
-                  <Select
-                    className="full-width prompt-field"
-                    value={profileDraft.providerCode || ''}
-                    options={profileProviderOptions}
-                    onChange={value => updateProfileDraft('providerCode', value || null)}
-                  />
-                </Col>
-                <Col xs={24} md={12}>
-                  <Text strong>模型覆盖</Text>
-                  <Input
-                    className="prompt-field"
-                    placeholder="留空使用后端默认模型"
-                    value={profileDraft.model || ''}
-                    onChange={event => updateProfileDraft('model', event.target.value)}
-                  />
-                </Col>
-              </Row>
+              <div className="settings-subsection">
+                <Space direction="vertical" size="middle" className="full-width">
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24} lg={10}>
+                      <Text strong>Profile</Text>
+                      <Select
+                        className="full-width prompt-field"
+                        value={selectedProfileCode}
+                        options={profileOptions}
+                        onChange={selectProfile}
+                      />
+                    </Col>
+                    <Col xs={24} lg={7}>
+                      <Text strong>Provider 覆盖</Text>
+                      <Select
+                        className="full-width prompt-field"
+                        value={profileDraft.providerCode || ''}
+                        options={profileProviderOptions}
+                        onChange={value => updateProfileDraft('providerCode', value || null)}
+                      />
+                    </Col>
+                    <Col xs={24} lg={7}>
+                      <Text strong>模型覆盖</Text>
+                      <Input
+                        className="prompt-field"
+                        placeholder="留空使用后端默认模型"
+                        value={profileDraft.model || ''}
+                        onChange={event => updateProfileDraft('model', event.target.value)}
+                      />
+                    </Col>
+                  </Row>
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24}>
+                      <Text strong>Review Instructions</Text>
+                      <Input.TextArea
+                        className="prompt-textarea"
+                        value={profileDraft.reviewInstructions || ''}
+                        onChange={event => updateProfileDraft('reviewInstructions', event.target.value)}
+                        autoSize={{ minRows: 8, maxRows: 16 }}
+                      />
+                    </Col>
+                  </Row>
+                  {promptPreview && (
+                    <Collapse
+                      defaultActiveKey={['preview']}
+                      items={[{
+                        key: 'preview',
+                        label: (
+                          <Space wrap>
+                            <Text strong>Prompt 预览</Text>
+                            <Tag>{promptPreview.provider}</Tag>
+                            {promptPreview.model && <Tag>{promptPreview.model}</Tag>}
+                            <Tag>{promptPreview.promptLength} 字符</Tag>
+                            <Tag>{promptPreview.promptHash?.slice(0, 12)}</Tag>
+                          </Space>
+                        ),
+                        children: <pre className="prompt-preview-block">{promptPreview.prompt}</pre>
+                      }]}
+                    />
+                  )}
+                  <div className="settings-action-row">
+                    <Space wrap>
+                      <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={!profileDraft}>预览 Prompt</Button>
+                      <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={!profileDraft}>恢复当前 Profile 默认 Prompt</Button>
+                      <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={!profileDraft}>保存 Profile</Button>
+                    </Space>
+                  </div>
+                </Space>
+              </div>
               <div className="settings-subsection">
                 <Space direction="vertical" size="middle" className="full-width">
                   <Space direction="vertical" size={4}>
@@ -3915,53 +3981,69 @@ function TemplateConfig() {
               </div>
               <div className="settings-subsection">
                 <Space direction="vertical" size="middle" className="full-width">
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} lg={10}>
-                      <Text strong>Profile</Text>
-                      <Select
-                        className="full-width prompt-field"
-                        value={selectedProfileCode}
-                        options={profileOptions}
-                        onChange={selectProfile}
-                      />
+                  <Space direction="vertical" size={4}>
+                    <Text strong>Profile 触发开关</Text>
+                    <Text type="secondary">
+                      Push 自动触发需要同时开启全局 AI Review、当前 Profile 的 Push 自动触发、Provider 配置和项目组 Push 审核策略。
+                    </Text>
+                  </Space>
+                  <Row gutter={[16, 16]} align="middle">
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>启用 Profile</Text>
+                        <Switch
+                          checked={profileDraft.enabled !== false}
+                          checkedChildren="启用"
+                          unCheckedChildren="停用"
+                          onChange={checked => updateProfileDraft('enabled', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>手动触发</Text>
+                        <Switch
+                          checked={profileDraft.triggerOnManual !== false}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => updateProfileDraft('triggerOnManual', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>MR 自动触发</Text>
+                        <Switch
+                          checked={profileDraft.triggerOnMr !== false}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => updateProfileDraft('triggerOnMr', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>Push 自动触发</Text>
+                        <Switch
+                          checked={profileDraft.triggerOnPush === true}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => updateProfileDraft('triggerOnPush', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Space direction="vertical">
+                        <Text strong>Push 仅风险命中触发</Text>
+                        <Switch
+                          checked={profileDraft.triggerOnlyWhenRiskMatched === true}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => updateProfileDraft('triggerOnlyWhenRiskMatched', checked)}
+                        />
+                      </Space>
                     </Col>
                   </Row>
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24}>
-                      <Text strong>Review Instructions</Text>
-                      <Input.TextArea
-                        className="prompt-textarea"
-                        value={profileDraft.reviewInstructions || ''}
-                        onChange={event => updateProfileDraft('reviewInstructions', event.target.value)}
-                        autoSize={{ minRows: 8, maxRows: 16 }}
-                      />
-                    </Col>
-                  </Row>
-                  {promptPreview && (
-                    <Collapse
-                      defaultActiveKey={['preview']}
-                      items={[{
-                        key: 'preview',
-                        label: (
-                          <Space wrap>
-                            <Text strong>Prompt 预览</Text>
-                            <Tag>{promptPreview.provider}</Tag>
-                            {promptPreview.model && <Tag>{promptPreview.model}</Tag>}
-                            <Tag>{promptPreview.promptLength} 字符</Tag>
-                            <Tag>{promptPreview.promptHash?.slice(0, 12)}</Tag>
-                          </Space>
-                        ),
-                        children: <pre className="prompt-preview-block">{promptPreview.prompt}</pre>
-                      }]}
-                    />
-                  )}
-                  <div className="settings-action-row">
-                    <Space wrap>
-                      <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={!profileDraft}>预览 Prompt</Button>
-                      <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={!profileDraft}>恢复当前 Profile 默认 Prompt</Button>
-                      <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={!profileDraft}>保存 Profile</Button>
-                    </Space>
-                  </div>
                 </Space>
               </div>
               <div className="settings-subsection">

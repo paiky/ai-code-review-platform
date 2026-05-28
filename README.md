@@ -110,18 +110,19 @@ JDK 21+ 和 Maven 3.6+ 仅在需要启动历史 Java 参考后端 `backend/` 时
 | `OPENAI_API_KEY` | 空 | OpenAI API key，首次初始化 Provider 时可作为默认值 |
 | `OPENAI_RESPONSES_URL` | `https://api.openai.com/v1/responses` | OpenAI Responses API 地址 |
 | `OPENAI_CODE_REVIEW_MODEL` | `gpt-5.4` | OpenAI provider 模型 |
-| `OPENAI_CODE_REVIEW_TIMEOUT_SECONDS` | `120` | OpenAI 请求超时时间 |
+| `OPENAI_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | OpenAI 请求超时时间 |
 | `ANTHROPIC_API_KEY` | 空 | Anthropic API key |
 | `ANTHROPIC_MESSAGES_URL` | `https://api.anthropic.com/v1/messages` | Anthropic Messages API 地址 |
 | `ANTHROPIC_CODE_REVIEW_MODEL` | `claude-sonnet-4-5` | Anthropic provider 模型 |
-| `ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS` | `120` | Anthropic 请求超时时间 |
+| `ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | Anthropic 请求超时时间 |
 | `DEEPSEEK_API_KEY` | 空 | DeepSeek API key，首次初始化 Provider 时可作为默认值 |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek OpenAI-compatible base URL |
 | `DEEPSEEK_CODE_REVIEW_MODEL` | `deepseek-v4-pro` | DeepSeek provider 模型 |
+| `DEEPSEEK_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | DeepSeek 请求超时时间 |
 | `XIAOMIMO_API_KEY` | 空 | XiaoMIMO API key，首次初始化 Provider 时可作为默认值 |
 | `XIAOMIMO_BASE_URL` | `https://api.xiaomimimo.com/v1` | XiaoMIMO OpenAI-compatible base URL |
 | `XIAOMIMO_CODE_REVIEW_MODEL` | `mimo-v2.5-pro` | XiaoMIMO provider 模型 |
-| `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS` | `120` | XiaoMIMO 请求超时时间 |
+| `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | XiaoMIMO 请求超时时间 |
 
 PowerShell 示例：
 
@@ -524,6 +525,7 @@ V25__project_group_push_review_policy.sql
 V26__code_quality_auto_fix_preview_switch.sql
 V27__project_group_profile_and_target_type_path_mappings.sql
 V28__nullable_project_default_ai_review_profile.sql
+V29__provider_timeout_seconds.sql
 ```
 
 `backend/src/main/resources/db/migration` 中的 Java Flyway SQL 保留为历史基线和行为对照，不再是当前默认运行路径。
@@ -752,7 +754,7 @@ Provider 说明：
 - 控制代码质量 AI Review 全局能力；关闭后手动触发、MR 和 Push 自动流程都不会调用模型。
 - 控制是否全局发送钉钉推送；关闭后审查和落库仍正常执行。
 - 按项目组配置多个钉钉 webhook；开启钉钉推送后，只会向任务所属项目组内已启用 webhook 群发同一条通知。
-- 配置 OpenAI / Anthropic / DeepSeek / XiaoMIMO / 自定义 Provider 的模型端点 URL、模型名称和 API Key，并测试当前配置联通性。
+- 配置 OpenAI / Anthropic / DeepSeek / XiaoMIMO / 自定义 Provider 的模型端点 URL、模型名称、API Key 和 Review 超时秒数，并测试当前配置联通性。
 - 设置全局默认 Provider，以及项目级默认 Provider。
 - 按项目组绑定默认 AI Review Profile，通过全局端类型路径映射识别新项目端类型，并在项目端类型配置中维护 Provider 覆盖、提醒卡片展示和端类型启停策略。
 - 查看、编辑、预览、恢复 AI Review Profile 的 Review Instructions。
