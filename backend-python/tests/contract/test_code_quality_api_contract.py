@@ -2408,13 +2408,16 @@ def test_push_gate_allows_large_push_without_risk_match(
     assert gate["metrics"]["changedFileCount"] == 10
 
 
-def test_push_gate_explains_risk_required_rejection_when_large_change_matches(
+@respx.mock
+def test_push_gate_ignores_legacy_risk_only_switch_when_large_change_matches(
     client: TestClient,
     db_session: Session,
     monkeypatch,
 ) -> None:
     seed_template(db_session)
     monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "push-risk-only-legacy-secret")
     update_default_push_policy(
         client,
         aiReviewEnabled=True,
@@ -2424,6 +2427,9 @@ def test_push_gate_explains_risk_required_rejection_when_large_change_matches(
         pushMinChangedFiles=1,
         pushMinDiffBytes=1,
         pushMinCommitCount=1,
+    )
+    respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("Large Push 完成")}}]})
     )
 
     created = client.post(
@@ -2436,13 +2442,11 @@ def test_push_gate_explains_risk_required_rejection_when_large_change_matches(
     ).json()["data"]
     gate = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-gate").json()["data"]
 
-    assert gate["decision"] == "REJECTED"
-    assert gate["reasonCode"] == "NOT_SIGNIFICANT"
+    assert gate["decision"] == "ALLOWED"
+    assert gate["reasonCode"] == "LARGE_CHANGE"
     assert gate["metrics"]["riskLevel"] == "LOW"
     assert gate["metrics"]["focusRiskItemCount"] == 0
     assert any(rule["code"] == "largeChange" and rule["matched"] for rule in gate["matchedRules"])
-    assert "项目组策略要求必须命中高风险或重点提醒" in gate["reasonSummary"]
-    assert "虽然已达到大变更阈值" in gate["reasonSummary"]
 
 
 def test_push_gate_rejects_branch_no_diff_and_too_large(

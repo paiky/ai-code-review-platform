@@ -1630,24 +1630,6 @@ function gateReasonLabel(value) {
   return labels[value] || value || '-';
 }
 
-function pushGateDisplaySummary(gate) {
-  if (!gate) return '-';
-  const metrics = gate.metrics || {};
-  const matchedRules = Array.isArray(gate.matchedRules) ? gate.matchedRules : [];
-  const riskMatched = matchedRules.find(rule => rule.code === 'riskMatched')?.matched === true;
-  const largeChange = matchedRules.find(rule => rule.code === 'largeChange')?.matched === true;
-  if (gate.decision === 'REJECTED' && gate.reasonCode === 'NOT_SIGNIFICANT' && !riskMatched) {
-    const riskLevel = metrics.riskLevel || '-';
-    const focusCount = metrics.focusRiskItemCount ?? 0;
-    const base = `项目组策略要求必须命中高风险或重点提醒；本次提醒风险为 ${riskLevel}，重点提醒 ${focusCount} 条，未命中高风险或重点提醒。`;
-    if (largeChange) {
-      return `${base}虽然已达到大变更阈值，但该策略下不会仅因大变更自动进入 AI Review。`;
-    }
-    return `${base}本次 Push 被拦截，未自动进入 AI Review。`;
-  }
-  return gate.reasonSummary || gateReasonLabel(gate.reasonCode);
-}
-
 function CodeQualityGateView({ gate, detail }) {
   const metrics = gate?.metrics || {};
   const matchedRules = Array.isArray(gate?.matchedRules) ? gate.matchedRules : [];
@@ -1680,7 +1662,7 @@ function CodeQualityGateView({ gate, detail }) {
           <Alert
             type={gate.decision === 'ALLOWED' ? 'success' : 'warning'}
             showIcon
-            message={pushGateDisplaySummary(gate)}
+            message={gate.reasonSummary || gateReasonLabel(gate.reasonCode)}
           />
           <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
             <Descriptions.Item label="Profile">{gate.profileCode || '-'}</Descriptions.Item>
@@ -3082,7 +3064,7 @@ function TemplateConfig() {
           triggerOnManual: pushPolicyDraft.triggerOnManual !== false,
           triggerOnMr: pushPolicyDraft.triggerOnMr !== false,
           triggerOnPush: pushPolicyDraft.triggerOnPush === true,
-          triggerOnlyWhenRiskMatched: pushPolicyDraft.triggerOnlyWhenRiskMatched === true,
+          triggerOnlyWhenRiskMatched: false,
           autoFixPreviewEnabled: pushPolicyDraft.autoFixPreviewEnabled === true,
           autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(pushPolicyDraft.autoFixPreviewSeverities),
           pushBranchPatterns: pushPolicyDraft.pushBranchPatterns || [],
@@ -4036,17 +4018,6 @@ function TemplateConfig() {
                           checkedChildren="开启"
                           unCheckedChildren="关闭"
                           onChange={checked => updatePushPolicyDraft('triggerOnPush', checked)}
-                        />
-                      </Space>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Space direction="vertical">
-                        <Text strong>Push 仅紧急、高风险命中触发</Text>
-                        <Switch
-                          checked={pushPolicyDraft?.triggerOnlyWhenRiskMatched === true}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => updatePushPolicyDraft('triggerOnlyWhenRiskMatched', checked)}
                         />
                       </Space>
                     </Col>

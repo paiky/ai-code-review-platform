@@ -455,7 +455,6 @@ Push 审核层默认策略：
 - `pushMaxChangedFiles`：`-1`，表示不限制最大文件数
 - `pushMaxDiffBytes`：`-1`，表示不限制最大 Diff 字节数
 - `pushDebounceSeconds`：`300`
-- `triggerOnlyWhenRiskMatched`：`false`
 
 放行需要先满足分支、debounce、diff 可用性和硬上限要求；最大文件数 / 最大 Diff 字节数配置为 `-1` 时不启用对应硬上限。随后只要命中 `HIGH/CRITICAL` 风险、重点提醒类型，或达到文件数 / diff 大小 / commit 数大变更阈值之一，就会进入 AI Review 队列。未放行的 Push 仍会完成规则提醒、通知记录和落库。
 

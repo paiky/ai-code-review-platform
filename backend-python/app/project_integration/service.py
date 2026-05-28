@@ -744,11 +744,14 @@ def _add_commit_files(files_by_path: dict[str, dict[str, Any]], file_paths: Any,
 
 def _parse_time(raw_value: str | None) -> datetime:
     if not raw_value:
-        return datetime.now(timezone.utc).replace(tzinfo=None)
+        return datetime.now()
     try:
-        return datetime.fromisoformat(raw_value.replace("Z", "+00:00")).replace(tzinfo=None)
+        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed
+        return parsed.astimezone().replace(tzinfo=None)
     except ValueError:
-        return datetime.now(timezone.utc).replace(tzinfo=None)
+        return datetime.now()
 
 
 def _text(payload: dict[str, Any], key: str) -> str | None:

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.notification.models import NotificationWebhook
 from app.notification.repository import default_project_group_id, list_enabled_webhooks, list_webhooks
+from app.project_integration.service import _parse_time
 from app.rule_template.models import RuleTemplate
 
 
@@ -67,6 +68,13 @@ def seed_template(db_session: Session) -> None:
         ]
     )
     db_session.commit()
+
+
+def test_gitlab_event_time_with_timezone_is_converted_to_local_time() -> None:
+    raw_value = "2026-05-28T08:21:03.692Z"
+    expected = datetime.fromisoformat(raw_value.replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+
+    assert _parse_time(raw_value) == expected
 
 
 def seed_frontend_template(db_session: Session) -> None:

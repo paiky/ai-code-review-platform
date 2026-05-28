@@ -1131,7 +1131,7 @@ XiaoMIMO 虽然有独立 `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS`，但默认仍�
 
 处理方式：
 
-1. 设置页的“项目组 AI Review 策略”必须展示并保存 `aiReviewEnabled`、`triggerOnManual`、`triggerOnMr`、`triggerOnPush` 和 `triggerOnlyWhenRiskMatched`。
+1. 设置页的“项目组 AI Review 策略”必须展示并保存 `aiReviewEnabled`、`triggerOnManual`、`triggerOnMr` 和 `triggerOnPush`。
 2. 保存项目组策略后，重新触发一次 Push 审阅生成新任务；已经落库的旧 Gate 记录不会自动改写。
 3. 如果项目组 `triggerOnPush=true` 后仍未进入 AI Review，再继续检查全局 `reviewEnabled`、Provider API Key、项目组 `pushBranchPatterns`、diff 可用性、硬上限和大变更阈值。
 
@@ -1139,7 +1139,7 @@ XiaoMIMO 虽然有独立 `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS`，但默认仍�
 
 现象：
 
-多个项目组复用同一个 AI Review Profile 时，一个项目组希望开启 Push 自动审查或自动修复预览，另一个项目组希望关闭。如果把 `triggerOnPush`、`triggerOnlyWhenRiskMatched`、`autoFixPreviewEnabled` 这类策略放在 Profile 上，会迫使团队复制多个几乎相同的 Profile。
+多个项目组复用同一个 AI Review Profile 时，一个项目组希望开启 Push 自动审查或自动修复预览，另一个项目组希望关闭。如果把 `triggerOnPush`、`autoFixPreviewEnabled` 这类策略放在 Profile 上，会迫使团队复制多个几乎相同的 Profile。
 
 原因：
 
@@ -1148,7 +1148,7 @@ Profile 更适合表达“怎么审”，例如 Prompt、Provider、模型和端
 处理方式：
 
 1. AI Review 设置页中保留 Profile 模块用于维护 Prompt / Provider / 模型。
-2. 新增或维护“项目组 AI Review 策略”，按项目组保存 `aiReviewEnabled`、`triggerOnManual`、`triggerOnMr`、`triggerOnPush`、`triggerOnlyWhenRiskMatched`、`autoFixPreviewEnabled`、`autoFixPreviewSeverities` 和 Push 审核阈值。
+2. 新增或维护“项目组 AI Review 策略”，按项目组保存 `aiReviewEnabled`、`triggerOnManual`、`triggerOnMr`、`triggerOnPush`、`autoFixPreviewEnabled`、`autoFixPreviewSeverities` 和 Push 审核阈值。
 3. 后端 MR / Push 自动触发和自动修复预览执行时读取任务所属项目组策略；Profile 上的历史触发字段只作为兼容字段，不再作为主要策略入口。
 
 ## 49. GitLab compare API 补拉 Push diff 时不能丢失 commit 数
@@ -1177,3 +1177,41 @@ Push payload 初始解析会记录 `commitCount`。但当 GitLab webhook payload
 1. GitLab compare API 补拉 Push diff 后，继续保留 payload 级 commit 数。
 2. `changedFilesSummary.commitCount` 和每个 `files[].commitCount` 都要写入同一个值。
 3. commit 数优先读取 `total_commits_count`；没有该字段时回退到 `len(commits)`。
+
+## 50. GitLab 事件时间不能直接去掉时区
+
+现象：
+
+任务详情页“事件时间”显示为 UTC 时间，例如本地北京时间下午 16 点左右的 Push，页面显示：
+
+```text
+2026-05-28T08:21:03.692
+```
+
+而任务列表“创建时间”显示本地时间，二者相差 8 小时。
+
+原因：
+
+旧的 GitLab 事件时间解析对 `Z` / `+00:00` 这类带时区的时间直接 `replace(tzinfo=None)`，没有先转换到本机本地时区。没有 payload event time 时，fallback 还使用了 `datetime.now(timezone.utc).replace(tzinfo=None)`，同样会把 UTC 时间伪装成本地无时区时间。
+
+处理方式：
+
+1. 解析带时区的 GitLab 时间时，先 `astimezone()` 转成本机本地时区，再去掉 `tzinfo` 存入当前无时区字段。
+2. 没有事件时间或解析失败时，使用 `datetime.now()` 本地时间作为 fallback。
+3. 后续如果要彻底规范时间字段，应单独设计数据库时区策略；当前展示层先保持任务列表和详情页都按本地时间语义展示。
+
+## 51. Push 是否进 AI Review 不应由提醒卡片开关决定
+
+现象：
+
+iOS / Android / PC 端项目通常关闭提醒卡片，只使用代码质量 AI Review。但如果 Push Gate 仍启用“仅风险命中触发”一类策略，就会依赖规则提醒卡片的 `HIGH/CRITICAL` 或重点提醒项判断是否进入 AI Review，导致端侧项目明明达到了大变更阈值，仍因为“未命中重点风险”被拦截。
+
+原因：
+
+提醒卡片本质是规则提醒和通知展示能力，不应该作为代码质量 AI Review 的前置风险判断来源。尤其端侧项目关闭提醒卡片后，规则风险等级不再适合作为 Push 自动审查的门槛。
+
+处理方式：
+
+1. Push Gate 不再读取 `triggerOnlyWhenRiskMatched` 作为拦截条件。
+2. 设置页移除“Push 仅紧急、高风险命中触发”开关；保存项目组策略时兼容字段固定写为 `false`。
+3. Push 自动进入 AI Review 的判断保留分支、debounce、diff 可用性、硬上限和大变更阈值；规则风险命中仍可作为放行原因之一，但不再是可配置的唯一门槛。

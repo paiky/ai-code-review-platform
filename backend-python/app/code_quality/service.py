@@ -920,18 +920,6 @@ def _evaluate_push_gate(
             "detail": f"files>={push_policy.get('pushMinChangedFiles')}, diffBytes>={push_policy.get('pushMinDiffBytes')}, commits>={push_policy.get('pushMinCommitCount')}",
         }
     )
-    if push_policy.get("triggerOnlyWhenRiskMatched") and not risk_matched:
-        return _push_gate_payload(
-            task,
-            profile.profile_code,
-            provider_code,
-            "REJECTED",
-            False,
-            "NOT_SIGNIFICANT",
-            _risk_required_rejection_summary(metrics, large_change),
-            metrics,
-            matched_rules,
-        )
     if risk_matched:
         return _push_gate_payload(
             task,
@@ -967,18 +955,6 @@ def _evaluate_push_gate(
         metrics,
         matched_rules,
     )
-
-
-def _risk_required_rejection_summary(metrics: dict[str, Any], large_change: bool) -> str:
-    risk_level = metrics.get("riskLevel") or "-"
-    focus_count = metrics.get("focusRiskItemCount") or 0
-    base = (
-        "项目组策略要求必须命中高风险或重点提醒；"
-        f"本次提醒风险为 {risk_level}，重点提醒 {focus_count} 条，未命中高风险或重点提醒。"
-    )
-    if large_change:
-        return f"{base}虽然已达到大变更阈值，但该策略下不会仅因大变更自动进入 AI Review。"
-    return f"{base}本次 Push 被拦截，未自动进入 AI Review。"
 
 
 def _push_gate_payload(
