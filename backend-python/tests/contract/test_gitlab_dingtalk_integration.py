@@ -912,6 +912,50 @@ def test_push_without_payload_diff_uses_compare_api(
     assert detail["changedFilesSummary"]["files"][0]["commitCount"] == 1
 
 
+def test_new_branch_push_with_zero_before_sha_uses_payload_files(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("GITLAB_API_ENABLED", "true")
+    monkeypatch.setenv("GITLAB_BASE_URL", "https://gitlab.example.test")
+    monkeypatch.setenv("GITLAB_TOKEN", "unit-token")
+
+    with respx.mock(assert_all_called=False) as router:
+        compare_route = router.get("https://gitlab.example.test/api/v4/projects/1001/repository/compare").mock(
+            return_value=httpx.Response(404, json={"message": "404 Not found"})
+        )
+        response = client.post(
+            "/api/webhooks/gitlab/merge-request",
+            json={
+                "object_kind": "push",
+                "project": {
+                    "id": 1001,
+                    "name": "demo-service",
+                    "web_url": "https://gitlab.example.test/demo/service",
+                },
+                "ref": "refs/heads/aireview",
+                "before": "0000000000000000000000000000000000000000",
+                "after": "after-sha",
+                "user_name": "Alice",
+                "user_username": "alice",
+                "total_commits_count": 1,
+                "commits": [{"modified": ["src/main/resources/mapper/OrderMapper.xml"]}],
+            },
+            headers={"X-Gitlab-Event": "Push Hook"},
+        )
+
+    assert response.status_code == 200
+    assert compare_route.called is False
+    task_id = response.json()["data"]["taskId"]
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    assert detail["changedFilesSummary"]["source"] == "push_payload"
+    assert detail["changedFilesSummary"]["newBranchPush"] is True
+    assert detail["changedFilesSummary"]["commitCount"] == 1
+    assert detail["changedFilesSummary"]["files"][0]["commitCount"] == 1
+
+
 def test_push_without_reminders_skips_dingtalk_delivery(
     client: TestClient,
     db_session: Session,

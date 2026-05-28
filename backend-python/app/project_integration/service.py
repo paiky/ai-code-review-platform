@@ -214,7 +214,7 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
         }
     task = None
     try:
-        if event["changedFilesSummary"].get("source") != "payload":
+        if event["changedFilesSummary"].get("source") != "payload" and not _is_zero_sha(event["beforeSha"]):
             event["changedFilesSummary"] = _build_gitlab_changed_files_summary(
                 gitlab_client.compare(git_project_id, event["beforeSha"], event["afterSha"]),
                 "gitlab_compare_api",
@@ -590,11 +590,13 @@ def _parse_push_event(
 
 
 def _push_webhook_branch_gate(db: Session, project_record, branch_name: str | None) -> dict[str, Any]:
-    patterns = get_project_group_push_policy(db, project_record)["pushBranchPatterns"]
+    push_policy = get_project_group_push_policy(db, project_record)
+    patterns = push_policy["pushBranchPatterns"]
     return {
         "allowed": _branch_matches(branch_name, patterns),
         "profileCode": resolve_project_review_profile_code(db, project_record, None),
         "patterns": patterns,
+        "pushPolicy": push_policy,
     }
 
 
@@ -625,16 +627,20 @@ def _build_changed_files_summary(payload: dict[str, Any]) -> dict:
 
 def _build_push_changed_files_summary(payload: dict[str, Any]) -> dict:
     commit_count = _push_payload_commit_count(payload)
+    new_branch_push = _is_zero_sha(payload.get("before"))
     changed_files = payload.get("changedFiles") or payload.get("changed_files")
     if isinstance(changed_files, list):
         files = [_normalize_changed_file(file_node) for file_node in changed_files]
         for file in files:
             file["source"] = "payload"
             file["commitCount"] = commit_count
+            if new_branch_push:
+                file["newBranchPush"] = True
         return {
             "count": len(files),
             "source": "payload",
             "commitCount": commit_count,
+            "newBranchPush": new_branch_push,
             "ref": payload.get("ref"),
             "beforeSha": payload.get("before"),
             "afterSha": payload.get("after"),
@@ -652,10 +658,13 @@ def _build_push_changed_files_summary(payload: dict[str, Any]) -> dict:
     for file in files_by_path.values():
         file["source"] = "push_payload"
         file["commitCount"] = commit_count
+        if new_branch_push:
+            file["newBranchPush"] = True
     return {
         "count": len(files_by_path),
         "source": "push_payload",
         "commitCount": commit_count,
+        "newBranchPush": new_branch_push,
         "ref": payload.get("ref"),
         "beforeSha": payload.get("before"),
         "afterSha": payload.get("after"),
@@ -685,6 +694,11 @@ def _push_payload_commit_count(payload: dict[str, Any]) -> int:
             pass
     commits = payload.get("commits")
     return len(commits) if isinstance(commits, list) else 0
+
+
+def _is_zero_sha(value: str | None) -> bool:
+    sha = str(value or "").strip()
+    return bool(sha) and set(sha) == {"0"}
 
 
 def _normalize_gitlab_diff_file(diff_file: dict[str, Any]) -> dict:

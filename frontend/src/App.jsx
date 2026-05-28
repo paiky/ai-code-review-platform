@@ -1680,6 +1680,7 @@ function CodeQualityGateView({ gate, detail }) {
           <Descriptions.Item label="提醒风险">{metrics.riskLevel || '-'}</Descriptions.Item>
           <Descriptions.Item label="重点提醒数">{metrics.focusRiskItemCount ?? '-'}</Descriptions.Item>
           <Descriptions.Item label="Diff 来源">{metrics.compareSource || '-'}</Descriptions.Item>
+          <Descriptions.Item label="新远程分支首次 Push">{metrics.newBranchPush ? '是' : '否'}</Descriptions.Item>
           <Descriptions.Item label="命中类型" span={3}>
             <Space wrap>
               {(metrics.matchedChangeTypes || []).length > 0
@@ -4267,15 +4268,6 @@ function HelpImage({ src, alt }) {
 }
 
 function HelpPage() {
-  const verificationItems = [
-    '创建测试分支并提交变更。',
-    '创建或更新 Merge Request。',
-    '打开平台“任务”页，确认出现新的审查任务。',
-    '进入任务详情，确认能看到提醒卡片和分析结果。',
-    '打开钉钉群，确认收到包含“变更审查结果”的消息。',
-    '点击钉钉消息中的详情链接，确认能打开对应任务详情页。'
-  ];
-
   return (
     <div className="page-shell help-page-shell">
       <section className="help-hero">
@@ -4342,13 +4334,6 @@ function HelpPage() {
             <Title level={3}>配置平台项目组</Title>
             <Paragraph>进入平台：</Paragraph>
             <HelpCodeBlock>设置 -&gt; 项目组 / 端类型配置</HelpCodeBlock>
-            <Paragraph>先创建或复用已有项目组。项目组通常按业务线、团队或产品域划分，用于：</Paragraph>
-            <HelpCodeBlock>{`归类多个 GitLab 项目
-筛选任务列表
-配置项目组钉钉机器人
-配置默认 AI Review Profile
-配置默认模型 Provider
-维护 Push 审核策略`}</HelpCodeBlock>
             <Paragraph>
               给项目组配置钉钉机器人时，把上一步从钉钉复制的 Webhook URL 填入该项目组的机器人配置，并启用它。
               平台只会按项目所属项目组发送通知；该项目组未配置机器人时，本次通知会记录为跳过。
@@ -4357,61 +4342,20 @@ function HelpPage() {
               src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-27_11-10-57.png"
               alt="平台项目组与钉钉机器人配置示例"
             />
-          </div>
-        </section>
-
-        <section className="help-section">
-          <div className="help-section-number">四</div>
-          <div className="help-section-content">
-            <Title level={3}>配置 GitLab 项目</Title>
             <Paragraph>
               首次收到某个 GitLab 项目的 Webhook 后，平台可以自动创建项目记录。自动创建的项目会进入默认项目组，后续可以再人工调整。
             </Paragraph>
             <HelpImage
               src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/cd00250a14cb455e95f79c07f7cd6a03.png"
-              alt="平台 GitLab 项目配置示例"
+              alt="平台项目组配置示例"
             />
-          </div>
-        </section>
-
-        <section className="help-section">
-          <div className="help-section-number">五</div>
-          <div className="help-section-content">
-            <Title level={3}>配置模型 Provider 和默认模型</Title>
             <Paragraph>
-              如果项目只需要规则提醒和钉钉通知，可以先跳过模型配置。需要启用代码质量 AI Review 时，
-              先在设置页配置全局 Provider，再为项目组选择默认 AI Review Profile 和默认 Provider。
-            </Paragraph>
-            <HelpCodeBlock>{`Provider 已启用
-API Key 已填写
-Endpoint URL 已填写
-Model 名称已填写
-点击“测试联通性”确认模型服务可访问
-全局默认 Provider 已设置`}</HelpCodeBlock>
-            <Paragraph>
-              当前内置 Provider 包括 OpenAI、Anthropic、DeepSeek、XiaoMIMO 和自定义 OpenAI-compatible。
-              “测试联通性”会使用当前表单中的端点、模型名称和临时输入的 API Key 发起一次最小请求，不会保存临时 Key。
-            </Paragraph>
-            <Paragraph>
-              项目组默认 Provider 会作为该组项目的默认模型选择。单个项目或端类型如果有特殊需要，仍可以在项目端类型配置中覆盖 Provider 和 Profile。
+              端类型路径映射也需要结合项目实际目录判断。请确认映射规则能覆盖该项目日常提交的主要代码路径，
+              否则平台可能无法准确识别端类型、审查模板和 AI Review Profile。
             </Paragraph>
             <HelpImage
-              src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-27_11-27-25.png"
-              alt="模型 Provider 和默认模型配置示例"
-            />
-          </div>
-        </section>
-
-        <section className="help-section">
-          <div className="help-section-number">六</div>
-          <div className="help-section-content">
-            <Title level={3}>首次验证</Title>
-            <Paragraph>配置完成后，用一次真实 Merge Request 做端到端验证。</Paragraph>
-            <Timeline
-              className="help-timeline"
-              items={verificationItems.map(item => ({
-                content: item
-              }))}
+              src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-28_19-50-37.png"
+              alt="端类型路径映射配置示例"
             />
           </div>
         </section>

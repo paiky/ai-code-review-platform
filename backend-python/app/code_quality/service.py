@@ -1030,6 +1030,7 @@ def _push_gate_metrics_and_rules(
         "matchedChangeTypes": matched_change_types,
         "branch": task.source_branch,
         "compareSource": _changed_files_source(changed_files),
+        "newBranchPush": _changed_files_bool_metadata(changed_files, "newBranchPush"),
     }
     matched_rules = [
         {
@@ -1057,10 +1058,18 @@ def _push_commit_count(task: ReviewTask, changed_files: list[dict[str, Any]]) ->
 
 
 def _changed_files_source(changed_files: list[dict[str, Any]]) -> str | None:
+    return _changed_files_metadata(changed_files, "source")
+
+
+def _changed_files_metadata(changed_files: list[dict[str, Any]], field: str) -> str | None:
     for file in changed_files:
-        if isinstance(file, dict) and file.get("source"):
-            return str(file["source"])
+        if isinstance(file, dict) and file.get(field):
+            return str(file[field])
     return None
+
+
+def _changed_files_bool_metadata(changed_files: list[dict[str, Any]], field: str) -> bool:
+    return any(isinstance(file, dict) and bool(file.get(field)) for file in changed_files)
 
 
 def _branch_matches(branch_name: str | None, patterns: list[str]) -> bool:

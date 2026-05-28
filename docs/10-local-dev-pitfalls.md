@@ -1215,3 +1215,31 @@ iOS / Android / PC 端项目通常关闭提醒卡片，只使用代码质量 AI 
 1. Push Gate 不再读取 `triggerOnlyWhenRiskMatched` 作为拦截条件。
 2. 设置页移除“Push 仅紧急、高风险命中触发”开关；保存项目组策略时兼容字段固定写为 `false`。
 3. Push 自动进入 AI Review 的判断保留分支、debounce、diff 可用性、硬上限和大变更阈值；规则风险命中仍可作为放行原因之一，但不再是可配置的唯一门槛。
+
+## 52. 新远程分支 Push 的全 0 before 不能调用 compare API
+
+现象：
+
+GitLab 新建远程分支后触发 Push Hook，平台返回 500：
+
+```text
+Failed to fetch GitLab compare diff: HTTP 404
+```
+
+Webhook payload 中通常可以看到：
+
+```text
+before=0000000000000000000000000000000000000000
+after=<真实提交 SHA>
+```
+
+原因：
+
+GitLab 新分支 Push 的 `before` 全 0 表示分支之前不存在，不是一个真实 commit。把它作为 `repository/compare?from=000...&to=<after>` 的 `from` 参数时，GitLab 14.x 可能返回 404。这个 404 不是优先指向 token 权限问题，而是 compare 起点无效。
+
+处理方式：
+
+1. Push Hook 检测到 `beforeSha` 为全 0 时，不调用 GitLab compare API。
+2. 直接使用 payload 中 `commits[].added / modified / removed` 汇总的文件列表继续创建审查任务，不能让 webhook 500。
+3. Push Gate 指标中标记 `newBranchPush=true`，方便识别这是新远程分支首次 Push。
+4. 后续 Push Gate 仍按 commit 数、文件数、diff 可用性和阈值决定是否进入 AI Review；如果最终只有文件列表没有 diff 文本，会正常提示“无可审查 diff”。
