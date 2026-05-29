@@ -2746,8 +2746,7 @@ def test_push_gate_rejects_small_push_as_not_significant(
     assert result.json()["data"] is None
 
 
-@respx.mock
-def test_push_gate_allows_risk_matched_push_and_runs_ai_review(
+def test_push_gate_rejects_risk_matched_push_when_policy_metrics_do_not_match(
     client: TestClient,
     db_session: Session,
     monkeypatch,
@@ -2757,9 +2756,6 @@ def test_push_gate_allows_risk_matched_push_and_runs_ai_review(
     monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "push-risk-secret")
     enable_push_profile(client)
-    respx.post("https://api.deepseek.com/chat/completions").mock(
-        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("Push AI Review 完成")}}]})
-    )
 
     created = client.post(
         "/api/webhooks/gitlab/merge-request",
@@ -2775,13 +2771,14 @@ def test_push_gate_allows_risk_matched_push_and_runs_ai_review(
         headers={"X-Gitlab-Event": "Push Hook"},
     ).json()["data"]
     gate = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-gate").json()["data"]
-    result = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-result").json()["data"]
+    result = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-result")
 
-    assert gate["decision"] == "ALLOWED"
-    assert gate["reasonCode"] == "RISK_MATCHED"
-    assert gate["aiReviewScheduled"] is True
+    assert gate["decision"] == "REJECTED"
+    assert gate["reasonCode"] == "NOT_SIGNIFICANT"
+    assert gate["aiReviewScheduled"] is False
     assert gate["metrics"]["focusRiskItemCount"] == 1
-    assert result["status"] == "SUCCESS"
+    assert result.status_code == 200
+    assert result.json()["data"] is None
     assert "push-risk-secret" not in json.dumps(gate, ensure_ascii=False)
 
 
@@ -2800,19 +2797,25 @@ def test_push_gate_allows_large_push_without_risk_match(
         return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("Large Push 完成")}}]})
     )
     files = [
-        {"path": f"src/Change{index}.java", "diffText": "+ documentation update"}
+        {"path": f"src/Change{index}.java", "diffText": "+ " + ("documentation update " * 200)}
         for index in range(10)
     ]
+    payload = push_payload(branch="feature/large-push", changed_files=files)
+    payload["total_commits_count"] = 3
 
     created = client.post(
         "/api/webhooks/gitlab/merge-request",
-        json=push_payload(branch="feature/large-push", changed_files=files),
+        json=payload,
         headers={"X-Gitlab-Event": "Push Hook"},
     ).json()["data"]
     gate = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-gate").json()["data"]
 
     assert gate["decision"] == "ALLOWED"
     assert gate["reasonCode"] == "LARGE_CHANGE"
+    assert "文件数 10 >= 10" in gate["reasonSummary"]
+    assert "Diff字节" in gate["reasonSummary"]
+    assert "Commit数 3 >= 3" in gate["reasonSummary"]
+    assert "Push 审核策略已满足" in gate["reasonSummary"]
     assert gate["metrics"]["changedFileCount"] == 10
 
 
@@ -2854,7 +2857,39 @@ def test_push_gate_ignores_legacy_risk_only_switch_when_large_change_matches(
     assert gate["reasonCode"] == "LARGE_CHANGE"
     assert gate["metrics"]["riskLevel"] == "LOW"
     assert gate["metrics"]["focusRiskItemCount"] == 0
-    assert any(rule["code"] == "largeChange" and rule["matched"] for rule in gate["matchedRules"])
+    assert any(
+        rule["code"] == "largeChange" and rule["matched"] and "全部满足才可放行" in rule["detail"]
+        for rule in gate["matchedRules"]
+    )
+
+
+def test_push_gate_rejects_when_only_one_large_change_metric_matches(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    enable_push_profile(client)
+    files = [
+        {"path": f"src/Change{index}.java", "diffText": "+ documentation update"}
+        for index in range(10)
+    ]
+
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=push_payload(branch="feature/large-files-only", changed_files=files),
+        headers={"X-Gitlab-Event": "Push Hook"},
+    ).json()["data"]
+    gate = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-gate").json()["data"]
+
+    assert gate["decision"] == "REJECTED"
+    assert gate["reasonCode"] == "NOT_SIGNIFICANT"
+    assert gate["metrics"]["changedFileCount"] == 10
+    assert any(
+        rule["code"] == "largeChange" and not rule["matched"] and "全部满足才可放行" in rule["detail"]
+        for rule in gate["matchedRules"]
+    )
 
 
 def test_push_gate_rejects_branch_no_diff_and_too_large(

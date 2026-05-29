@@ -1039,7 +1039,7 @@ def _evaluate_push_gate(
     matched_rules.append(
         {
             "code": "debounce",
-            "label": f"{debounce_seconds} 秒内同项目同分支仅触发一次",
+            "label": "Debounce 不限制" if debounce_seconds <= 0 else f"{debounce_seconds} 秒内同项目同分支仅触发一次",
             "matched": not debounced,
         }
     )
@@ -1080,7 +1080,7 @@ def _evaluate_push_gate(
             "code": "hardLimit",
             "label": "未超过 Push AI Review 硬上限",
             "matched": not too_large,
-            "detail": f"files<={push_policy.get('pushMaxChangedFiles')}, diffBytes<={push_policy.get('pushMaxDiffBytes')}",
+            "detail": _push_hard_limit_detail(push_policy),
         }
     )
     if too_large:
@@ -1097,32 +1097,17 @@ def _evaluate_push_gate(
         )
 
     risk_matched = _risk_matched(metrics)
-    large_change = (
-        _reaches_threshold(metrics["changedFileCount"], push_policy.get("pushMinChangedFiles"))
-        or _reaches_threshold(metrics["diffBytes"], push_policy.get("pushMinDiffBytes"))
-        or _reaches_threshold(metrics["commitCount"], push_policy.get("pushMinCommitCount"))
-    )
+    large_change = _matches_push_size_policy(metrics, push_policy)
+    large_change_detail = _push_large_change_detail(metrics, push_policy)
     matched_rules.append({"code": "riskMatched", "label": "命中高风险或重点提醒", "matched": risk_matched})
     matched_rules.append(
         {
             "code": "largeChange",
-            "label": "达到 Push 大变更阈值",
+            "label": "满足 Push 策略指标",
             "matched": large_change,
-            "detail": f"files>={push_policy.get('pushMinChangedFiles')}, diffBytes>={push_policy.get('pushMinDiffBytes')}, commits>={push_policy.get('pushMinCommitCount')}",
+            "detail": large_change_detail,
         }
     )
-    if risk_matched:
-        return _push_gate_payload(
-            task,
-            profile.profile_code,
-            provider_code,
-            "ALLOWED",
-            False,
-            "RISK_MATCHED",
-            "Push 命中重点提醒或高风险变更，允许进入 AI Review。",
-            metrics,
-            matched_rules,
-        )
     if large_change:
         return _push_gate_payload(
             task,
@@ -1131,7 +1116,7 @@ def _evaluate_push_gate(
             "ALLOWED",
             False,
             "LARGE_CHANGE",
-            "Push 达到大变更阈值，允许进入 AI Review。",
+            f"Push 审核策略已满足，允许进入 AI Review：{_push_large_change_summary(metrics, push_policy)}。",
             metrics,
             matched_rules,
         )
@@ -1142,7 +1127,7 @@ def _evaluate_push_gate(
         "REJECTED",
         False,
         "NOT_SIGNIFICANT",
-        "本次 Push 未命中重点风险，也未达到大变更阈值。",
+        f"本次 Push 未满足自动 AI Review 的 Push 审核策略：{large_change_detail}",
         metrics,
         matched_rules,
     )
@@ -1276,7 +1261,68 @@ def _over_limit(value: int, limit: int | None) -> bool:
 
 
 def _reaches_threshold(value: int, threshold: int | None) -> bool:
-    return threshold is not None and value >= threshold
+    return threshold is None or threshold < 0 or value >= threshold
+
+
+def _matches_push_size_policy(metrics: dict[str, Any], push_policy: dict[str, Any]) -> bool:
+    return (
+        _reaches_threshold(int(metrics.get("changedFileCount") or 0), push_policy.get("pushMinChangedFiles"))
+        and _reaches_threshold(int(metrics.get("diffBytes") or 0), push_policy.get("pushMinDiffBytes"))
+        and _reaches_threshold(int(metrics.get("commitCount") or 0), push_policy.get("pushMinCommitCount"))
+        and not _over_limit(int(metrics.get("changedFileCount") or 0), push_policy.get("pushMaxChangedFiles"))
+        and not _over_limit(int(metrics.get("diffBytes") or 0), push_policy.get("pushMaxDiffBytes"))
+    )
+
+
+def _push_large_change_detail(metrics: dict[str, Any], push_policy: dict[str, Any]) -> str:
+    return (
+        f"当前：文件数={metrics.get('changedFileCount', 0)}，"
+        f"Diff字节={metrics.get('diffBytes', 0)}，"
+        f"Commit数={metrics.get('commitCount', 0)}；"
+        f"阈值：文件数>={_threshold_label(push_policy.get('pushMinChangedFiles'))}，"
+        f"Diff字节>={_threshold_label(push_policy.get('pushMinDiffBytes'))}，"
+        f"Commit数>={_threshold_label(push_policy.get('pushMinCommitCount'))}，"
+        f"文件数<={_threshold_label(push_policy.get('pushMaxChangedFiles'))}，"
+        f"Diff字节<={_threshold_label(push_policy.get('pushMaxDiffBytes'))}；"
+        "最小文件数、最小Diff、最小Commit、最大文件数、最大Diff、Debounce全部满足才可放行"
+    )
+
+
+def _push_hard_limit_detail(push_policy: dict[str, Any]) -> str:
+    return (
+        f"文件数<={_threshold_label(push_policy.get('pushMaxChangedFiles'))}，"
+        f"Diff字节<={_threshold_label(push_policy.get('pushMaxDiffBytes'))}"
+    )
+
+
+def _push_large_change_summary(metrics: dict[str, Any], push_policy: dict[str, Any]) -> str:
+    checks = [
+        ("文件数", metrics.get("changedFileCount", 0), push_policy.get("pushMinChangedFiles")),
+        ("Diff字节", metrics.get("diffBytes", 0), push_policy.get("pushMinDiffBytes")),
+        ("Commit数", metrics.get("commitCount", 0), push_policy.get("pushMinCommitCount")),
+    ]
+    matched = [
+        f"{label} {value} >= {threshold}"
+        for label, value, threshold in checks
+        if threshold is not None and threshold >= 0 and _reaches_threshold(int(value or 0), threshold)
+    ]
+    if push_policy.get("pushMaxChangedFiles", -1) is not None and push_policy.get("pushMaxChangedFiles", -1) >= 0:
+        matched.append(f"文件数 {metrics.get('changedFileCount', 0)} <= {push_policy.get('pushMaxChangedFiles')}")
+    else:
+        matched.append("最大文件数不限制")
+    if push_policy.get("pushMaxDiffBytes", -1) is not None and push_policy.get("pushMaxDiffBytes", -1) >= 0:
+        matched.append(f"Diff字节 {metrics.get('diffBytes', 0)} <= {push_policy.get('pushMaxDiffBytes')}")
+    else:
+        matched.append("最大Diff字节不限制")
+    debounce_seconds = int(push_policy.get("pushDebounceSeconds") or 0)
+    matched.append("Debounce不限制" if debounce_seconds <= 0 else "Debounce已满足")
+    return "、".join(matched) if matched else _push_large_change_detail(metrics, push_policy)
+
+
+def _threshold_label(value: int | None) -> str:
+    if value is None or value < 0:
+        return "不限制"
+    return str(value)
 
 
 def _risk_matched(metrics: dict[str, Any]) -> bool:

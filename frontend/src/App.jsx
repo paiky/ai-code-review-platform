@@ -1661,17 +1661,51 @@ function gateDecisionLabel(value) {
 function gateReasonLabel(value) {
   const labels = {
     RISK_MATCHED: '命中重点风险',
-    LARGE_CHANGE: '大变更',
+    LARGE_CHANGE: '达到变更规模条件',
     BRANCH_NOT_MATCHED: '分支不匹配',
     DEBOUNCED: '频率保护',
     DIFF_TOO_LARGE: '超过硬上限',
     NO_DIFF_TEXT: '无可审查 diff',
     PROFILE_DISABLED: 'Profile 未开启',
     GLOBAL_DISABLED: '全局未开启',
-    NOT_SIGNIFICANT: '未达到阈值',
+    NOT_SIGNIFICANT: '未达到变更规模条件',
     NOT_EVALUATED: '未审核'
   };
   return labels[value] || value || '-';
+}
+
+function pushLargeChangeMessage(gate, matchedRules) {
+  const metrics = gate?.metrics || {};
+  const largeChangeRule = matchedRules.find(rule => rule.code === 'largeChange');
+  const detail = largeChangeRule?.detail || '';
+  const threshold = key => {
+    const match = detail.match(new RegExp(`${key}>=(\\d+)`));
+    return match ? Number(match[1]) : null;
+  };
+  const checks = [
+    { label: '文件数', value: metrics.changedFileCount, threshold: threshold('files') },
+    { label: 'Diff 字节数', value: metrics.diffBytes, threshold: threshold('diffBytes') },
+    { label: 'Commit 数', value: metrics.commitCount, threshold: threshold('commits') }
+  ];
+  const matched = checks
+    .filter(item => item.threshold !== null && Number(item.value || 0) >= item.threshold)
+    .map(item => `${item.label} ${item.value ?? 0} >= ${item.threshold}`);
+
+  if (matched.length === 0) {
+    return gate?.reasonSummary || gateReasonLabel(gate?.reasonCode);
+  }
+  const allMatched = checks.every(item => item.threshold !== null && Number(item.value || 0) >= item.threshold);
+  if (!allMatched) {
+    return '命中 Push 策略指标，满足 Review 条件。';
+  }
+  return `Push 审核策略已满足，允许进入 AI Review：${matched.join('、')}。`;
+}
+
+function gateAlertMessage(gate, matchedRules) {
+  if (gate?.reasonCode === 'LARGE_CHANGE' && (!gate.reasonSummary || gate.reasonSummary.includes('大变更阈值'))) {
+    return pushLargeChangeMessage(gate, matchedRules);
+  }
+  return gate?.reasonSummary || gateReasonLabel(gate?.reasonCode);
 }
 
 function CodeQualityGateView({ gate, detail }) {
@@ -1694,6 +1728,7 @@ function CodeQualityGateView({ gate, detail }) {
     },
     { title: '详情', dataIndex: 'detail', ellipsis: true, render: value => value || '-' }
   ];
+  const alertMessage = gateAlertMessage(gate, matchedRules);
   return (
     <Space direction="vertical" size="large" className="full-width">
       <Card>
@@ -1706,7 +1741,7 @@ function CodeQualityGateView({ gate, detail }) {
           <Alert
             type={gate.decision === 'ALLOWED' ? 'success' : 'warning'}
             showIcon
-            message={gate.reasonSummary || gateReasonLabel(gate.reasonCode)}
+            message={alertMessage}
           />
           <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
             <Descriptions.Item label="Profile">{gate.profileCode || '-'}</Descriptions.Item>
@@ -4229,8 +4264,8 @@ function TemplateConfig() {
           className="settings-inner-card"
         >
           {profileDraft ? (
-            <Space direction="vertical" size="middle" className="full-width">
-              <div className="settings-subsection">
+            <div className="full-width" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div className="settings-subsection" style={{ order: 2 }}>
                 <Space direction="vertical" size="middle" className="full-width">
                   <Row gutter={[16, 16]}>
                     <Col xs={24} lg={10}>
@@ -4299,7 +4334,7 @@ function TemplateConfig() {
                   </div>
                 </Space>
               </div>
-              <div className="settings-subsection">
+              <div className="settings-subsection" style={{ order: 1 }}>
                 <Space direction="vertical" size="middle" className="full-width">
                   <Space direction="vertical" size={4}>
                     <Text strong>项目组 AI Review 策略</Text>
@@ -4377,7 +4412,7 @@ function TemplateConfig() {
                     </Col>
                     <Col xs={24} md={16}>
                       <div style={{ opacity: (pushPolicyDraft?.autoFixPreviewEnabled === true) ? 1 : 0.55 }}>
-                        <Text strong>自动生成风险等级</Text>
+                        <Text strong>自动生成修复预览风险等级</Text>
                         <Select
                           mode="multiple"
                           className="full-width prompt-field"
@@ -4390,7 +4425,7 @@ function TemplateConfig() {
                   </Row>
                   <Space direction="vertical" size={4}>
                     <Text strong>Push 审核策略</Text>
-                    <Text type="secondary">按项目组判断 GitLab Push 事件是否允许自动进入 AI Review；未放行的 Push 仍会保留规则提醒和审查记录。</Text>
+                    <Text type="secondary">允许分支匹配后，最小文件数、最小 Diff、最小 Commit、最大文件数、最大 Diff、Debounce 全部满足才会自动进入 AI Review；-1 表示不限制。</Text>
                   </Space>
                   <Row gutter={[16, 16]}>
                     <Col xs={24}>
@@ -4407,7 +4442,7 @@ function TemplateConfig() {
                       <Text strong>最小文件数</Text>
                       <InputNumber
                         className="full-width prompt-field"
-                        min={0}
+                        min={-1}
                         value={pushPolicyDraft?.pushMinChangedFiles}
                         onChange={value => updatePushPolicyDraft('pushMinChangedFiles', value)}
                       />
@@ -4416,7 +4451,7 @@ function TemplateConfig() {
                       <Text strong>最小 Diff 字节</Text>
                       <InputNumber
                         className="full-width prompt-field"
-                        min={0}
+                        min={-1}
                         value={pushPolicyDraft?.pushMinDiffBytes}
                         onChange={value => updatePushPolicyDraft('pushMinDiffBytes', value)}
                       />
@@ -4425,7 +4460,7 @@ function TemplateConfig() {
                       <Text strong>最小 Commit 数</Text>
                       <InputNumber
                         className="full-width prompt-field"
-                        min={0}
+                        min={-1}
                         value={pushPolicyDraft?.pushMinCommitCount}
                         onChange={value => updatePushPolicyDraft('pushMinCommitCount', value)}
                       />
@@ -4438,7 +4473,6 @@ function TemplateConfig() {
                         value={pushPolicyDraft?.pushMaxChangedFiles}
                         onChange={value => updatePushPolicyDraft('pushMaxChangedFiles', value)}
                       />
-                      <Text type="secondary">-1 表示无限制</Text>
                     </Col>
                     <Col xs={24} md={8}>
                       <Text strong>最大 Diff 字节</Text>
@@ -4448,13 +4482,12 @@ function TemplateConfig() {
                         value={pushPolicyDraft?.pushMaxDiffBytes}
                         onChange={value => updatePushPolicyDraft('pushMaxDiffBytes', value)}
                       />
-                      <Text type="secondary">-1 表示无限制</Text>
                     </Col>
                     <Col xs={24} md={8}>
                       <Text strong>Debounce 秒数</Text>
                       <InputNumber
                         className="full-width prompt-field"
-                        min={0}
+                        min={-1}
                         value={pushPolicyDraft?.pushDebounceSeconds}
                         onChange={value => updatePushPolicyDraft('pushDebounceSeconds', value)}
                       />
@@ -4472,7 +4505,7 @@ function TemplateConfig() {
                   </div>
                 </Space>
               </div>
-            </Space>
+            </div>
           ) : (
             <Empty description="暂无 AI Review 设置" />
           )}

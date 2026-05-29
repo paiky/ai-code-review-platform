@@ -79,7 +79,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持配置 / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、项目组多模型并行 Review、自动触发、重试、执行过程展示。
 - GitLab MR 自动 AI Review 完成后会向任务所属项目组中已启用的钉钉 webhook 推送“代码质量 Review”结果；项目组未配置机器人时记录为 `SKIPPED`，不会回退推送到默认项目组。
-- GitLab Push webhook 会先按项目组 Push 审核策略中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会在规则提醒卡片生成后，根据提醒风险、重点变更类型、文件数、diff 大小、commit 数和 debounce 策略自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
+- GitLab Push webhook 会先按项目组 Push 审核策略中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会根据文件数、diff 大小、commit 数、硬上限和 debounce 自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
 
 ## 环境要求
 
@@ -456,7 +456,7 @@ Push 审核层默认策略：
 - `pushMaxDiffBytes`：`-1`，表示不限制最大 Diff 字节数
 - `pushDebounceSeconds`：`300`
 
-放行需要先满足分支、debounce、diff 可用性和硬上限要求；最大文件数 / 最大 Diff 字节数配置为 `-1` 时不启用对应硬上限。随后只要命中 `HIGH/CRITICAL` 风险、重点提醒类型，或达到文件数 / diff 大小 / commit 数大变更阈值之一，就会进入 AI Review 队列。未放行的 Push 仍会完成规则提醒、通知记录和落库。
+允许分支匹配后，放行需要满足 Push 审核策略的六项指标：最小文件数、最小 Diff 字节数、最小 Commit 数、最大文件数、最大 Diff 字节数、Debounce。阈值配置为 `-1` 表示不限制；未放行的 Push 仍会完成规则提醒、通知记录和落库。
 
 已补充非流式 Provider 诊断事件：`PROVIDER_SELECTED`、`REQUEST_VALIDATED`、`HTTP_REQUEST_START`、`HTTP_RESPONSE_HEADERS`、`HTTP_RESPONSE_BODY_PREVIEW`、`OUTPUT_EXTRACTED`、`JSON_PARSE_START`、`JSON_PARSE_FAILED`、`RESULT_SAVED`。这些阶段用于定位 API Key / endpoint / HTTP 状态 / 超时 / 协议响应 / JSON 解析问题；失败会落库为 `FAILED`，不会长期停留在 `RUNNING`。
 
