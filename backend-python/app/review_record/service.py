@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from app.change_analysis.service import analyze_changes
+from app.change_analysis.service import analyze_changes, summarize_changes_without_rule_matching
 from app.code_quality.models import (
     CodeQualityFixPreview,
     CodeQualityPushReviewGateDecision,
@@ -71,11 +71,16 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict:
     )
 
     try:
-        analysis = analyze_changes(changed_files, request.get("diffText"))
+        reminder_card_enabled = target_config["reminderCardEnabled"]
+        analysis = (
+            analyze_changes(changed_files, request.get("diffText"))
+            if reminder_card_enabled
+            else summarize_changes_without_rule_matching(changed_files, request.get("diffText"))
+        )
         rule_codes = template.get("focusRuleCodes") or template.get("enabledRuleCodes", [])
         risk_card = generate_risk_card(
             analysis,
-            rule_codes,
+            rule_codes if reminder_card_enabled else [],
             template.get("recommendedChecks", []),
         )
         result = save_review_result(
@@ -83,7 +88,7 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict:
             task=task,
             analysis=analysis,
             risk_card=risk_card,
-            reminder_card_enabled=target_config["reminderCardEnabled"],
+            reminder_card_enabled=reminder_card_enabled,
         )
         mark_task_success(task, risk_card["riskLevel"])
         notification = dingtalk_skipped_result(db, get_settings_record(db).dingtalk_notification_enabled)
@@ -105,7 +110,7 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict:
             "targetType": target_config["targetType"],
             "targetTypes": target_config["targetTypes"],
             "profileCode": profile_code,
-            "reminderCardEnabled": target_config["reminderCardEnabled"],
+            "reminderCardEnabled": reminder_card_enabled,
             "riskLevel": risk_card["riskLevel"],
         }
     except Exception as exception:

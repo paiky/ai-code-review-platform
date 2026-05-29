@@ -120,9 +120,9 @@ const DEFAULT_PUSH_REVIEW_POLICY = {
   aiReviewEnabled: true,
   triggerOnManual: true,
   triggerOnMr: true,
-  triggerOnPush: false,
+  triggerOnPush: true,
   triggerOnlyWhenRiskMatched: false,
-  autoFixPreviewEnabled: false,
+  autoFixPreviewEnabled: true,
   autoFixPreviewSeverities: ['CRITICAL'],
   pushBranchPatterns: ['master'],
   pushMinChangedFiles: 10,
@@ -178,11 +178,6 @@ function selectableReviewProfiles(profiles = []) {
   return REVIEW_PROFILE_DROPDOWN_ITEMS
     .map(item => byCode.get(item.profileCode))
     .filter(Boolean);
-}
-
-function isBackendRuleTemplate(template) {
-  if (!template) return false;
-  return template.templateCode === 'backend-default' || template.targetType === 'BACKEND';
 }
 
 function currentRoute(location) {
@@ -594,21 +589,6 @@ function buildReminderGroups(riskItems) {
     .sort((a, b) => a.sort - b.sort || a.label.localeCompare(b.label));
 }
 
-function FocusIndicatorTags({ indicators, muted = false }) {
-  const matchedIndicators = orderedFocusIndicators(indicators).filter(item => item.matched);
-  if (matchedIndicators.length === 0) return muted ? <Text type="secondary">-</Text> : null;
-
-  return (
-    <Space wrap size={[4, 4]}>
-      {matchedIndicators.map(item => (
-        <Tag key={item.code} color={focusIndicatorMeta[item.code]?.color || 'default'}>
-          {focusIndicatorMeta[item.code]?.label || item.name}
-        </Tag>
-      ))}
-    </Space>
-  );
-}
-
 function FocusIndicatorPanel({ indicators }) {
   const items = orderedFocusIndicators(indicators);
   return (
@@ -964,8 +944,6 @@ function TaskList({ onOpen }) {
     { title: '类型', dataIndex: 'triggerType', width: 76, render: value => <Tag>{taskTypeLabel(value)}</Tag> },
     { title: '分支', width: 175, ellipsis: true, render: (_, row) => <Text ellipsis>{taskListBranchText(row)}</Text> },
     { title: '状态', dataIndex: 'status', width: 95, render: value => <Tag color={statusColor(value)}>{value || '-'}</Tag> },
-    { title: '重点变更', dataIndex: 'focusIndicators', width: 220, render: value => <FocusIndicatorTags indicators={value} muted /> },
-    { title: '风险', dataIndex: 'riskItemCount', width: 60, render: value => value ?? 0 },
     { title: '创建时间', dataIndex: 'createdAt', width: 125, ellipsis: true },
     { title: '操作', width: 70, render: (_, row) => <Button type="link" onClick={() => onOpen(row.id)}>详情</Button> }
   ];
@@ -2504,7 +2482,6 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 
 
 function TemplateConfig() {
-  const [templates, setTemplates] = useState([]);
   const [groups, setGroups] = useState([]);
   const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, aiReviewModels: [], dingtalkWebhooks: [] });
   const [editingGroupId, setEditingGroupId] = useState(null);
@@ -2524,10 +2501,6 @@ function TemplateConfig() {
   const [targetPathMappings, setTargetPathMappings] = useState([]);
   const [selectedTargetType, setSelectedTargetType] = useState(null);
   const [targetConfigDraft, setTargetConfigDraft] = useState(null);
-  const [selectedTemplateCode, setSelectedTemplateCode] = useState(null);
-  const [notificationRules, setNotificationRules] = useState(null);
-  const [notificationRuleDraftCodes, setNotificationRuleDraftCodes] = useState([]);
-  const [selectedNotificationRuleCode, setSelectedNotificationRuleCode] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [providers, setProviders] = useState([]);
   const [selectedProviderCode, setSelectedProviderCode] = useState('DEEPSEEK');
@@ -2547,10 +2520,8 @@ function TemplateConfig() {
   const [projectGroupDisablingId, setProjectGroupDisablingId] = useState(null);
   const [projectCreating, setProjectCreating] = useState(false);
   const [projectConfigSaving, setProjectConfigSaving] = useState(false);
-  const [targetConfigSaving, setTargetConfigSaving] = useState(false);
   const [targetPathMappingSaving, setTargetPathMappingSaving] = useState(false);
   const [projectConfigReloading, setProjectConfigReloading] = useState(false);
-  const [notificationSaving, setNotificationSaving] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
   const [providerTesting, setProviderTesting] = useState(false);
   const [providerTestResult, setProviderTestResult] = useState(null);
@@ -2564,11 +2535,10 @@ function TemplateConfig() {
     setLoading(true);
     setError(null);
     try {
-      const [settingsData, profileData, providerData, templateData, groupData, projectData, pathMappingData] = await Promise.all([
+      const [settingsData, profileData, providerData, groupData, projectData, pathMappingData] = await Promise.all([
         fetchApi('/api/code-quality-reviews/settings'),
         fetchApi('/api/code-quality-review-profiles'),
         fetchApi('/api/code-quality-review-providers'),
-        fetchApi('/api/rule-templates'),
         fetchApi('/api/project-groups'),
         fetchApi('/api/projects?includeDisabled=true'),
         fetchApi('/api/target-type-path-mappings')
@@ -2576,14 +2546,12 @@ function TemplateConfig() {
       const profileItems = Array.isArray(profileData) ? profileData : (profileData.items || []);
       const selectableProfileItems = selectableReviewProfiles(profileItems);
       const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
-      const templateItems = Array.isArray(templateData) ? templateData : (templateData.items || []);
       const nextSelectedProfileCode = (
         selectedProfileCode && selectableProfileItems.some(profile => profile.profileCode === selectedProfileCode)
       )
         ? selectedProfileCode
         : selectableProfileItems[0]?.profileCode || null;
       const nextSelectedProviderCode = settingsData?.defaultProviderCode || selectedProviderCode || providerItems[0]?.providerCode || 'DEEPSEEK';
-      const nextSelectedTemplateCode = selectedTemplateCode || templateItems.find(item => isBackendRuleTemplate(item))?.templateCode || templateItems[0]?.templateCode || null;
       const projectItems = projectData.items || [];
       const groupItems = groupData.items || [];
       const nextPushPolicyGroupId = selectedPushPolicyGroupId && groupItems.some(group => group.id === selectedPushPolicyGroupId)
@@ -2601,7 +2569,6 @@ function TemplateConfig() {
         autoFixPreviewEnabled: settingsData?.autoFixPreviewEnabled ?? false,
         autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(settingsData?.autoFixPreviewSeverities)
       });
-      setTemplates(templateItems);
       setGroups(groupItems);
       setTargetPathMappings(Array.isArray(pathMappingData) ? pathMappingData : []);
       setSelectedPushPolicyGroupId(nextPushPolicyGroupId);
@@ -2623,7 +2590,6 @@ function TemplateConfig() {
         setSelectedTargetType(null);
         setTargetConfigDraft(null);
       }
-      setSelectedTemplateCode(nextSelectedTemplateCode);
       setProviders(providerItems);
       setSelectedProviderCode(nextSelectedProviderCode);
       setProviderDraft(providerItems.find(item => item.providerCode === nextSelectedProviderCode) || providerItems[0] || null);
@@ -2632,17 +2598,6 @@ function TemplateConfig() {
       setSelectedProfileCode(nextSelectedProfileCode);
       setProfileDraft(profileItems.find(item => item.profileCode === nextSelectedProfileCode) || selectableProfileItems[0] || null);
       setPromptPreview(null);
-      if (nextSelectedTemplateCode && isBackendRuleTemplate(templateItems.find(item => item.templateCode === nextSelectedTemplateCode))) {
-        const rules = await fetchApi(`/api/rule-templates/${nextSelectedTemplateCode}/notification-rules`);
-        setNotificationRules(rules);
-        setNotificationRuleDraftCodes(rules.focusRuleCodes || []);
-        const firstRule = rules.groups?.flatMap(group => group.rules || [])?.[0]?.ruleCode;
-        setSelectedNotificationRuleCode(firstRule || null);
-      } else {
-        setNotificationRules(null);
-        setNotificationRuleDraftCodes([]);
-        setSelectedNotificationRuleCode(null);
-      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2653,14 +2608,6 @@ function TemplateConfig() {
   useEffect(() => {
     load();
   }, []);
-
-  const loadNotificationRules = async (templateCode) => {
-    const rules = await fetchApi(`/api/rule-templates/${templateCode}/notification-rules`);
-    setNotificationRules(rules);
-    setNotificationRuleDraftCodes(rules.focusRuleCodes || []);
-    const firstRule = rules.groups?.flatMap(group => group.rules || [])?.[0]?.ruleCode;
-    setSelectedNotificationRuleCode(firstRule || null);
-  };
 
   const loadProjectTargetConfigs = async (projectId, targetType = selectedTargetType, projectList = projects) => {
     if (!projectId) {
@@ -3054,25 +3001,12 @@ function TemplateConfig() {
         method: 'PUT',
         body: JSON.stringify({
           templateCode: defaultTemplateCodeForTargetType(normalizedTargetType),
-          providerCode: existing?.providerCode || null,
+          providerCode: targetConfigDraft?.providerCode || existing?.providerCode || null,
           pathPatterns: existing?.pathPatterns?.length ? existing.pathPatterns : ['**/*'],
           reminderCardEnabled: existing?.reminderCardEnabled ?? defaultReminderCardEnabledForTargetType(normalizedTargetType),
           enabled: true
         })
       });
-      const disableTargets = projectTargetConfigs
-        .filter(item => item.targetType !== normalizedTargetType && item.enabled !== false)
-        .map(item => fetchApi(`/api/projects/${selectedProjectId}/target-configs/${item.targetType}`, {
-          method: 'PUT',
-          body: JSON.stringify({
-            templateCode: item.templateCode || defaultTemplateCodeForTargetType(item.targetType),
-            providerCode: item.providerCode || null,
-            pathPatterns: item.pathPatterns || [],
-            reminderCardEnabled: item.reminderCardEnabled,
-            enabled: false
-          })
-        }));
-      if (disableTargets.length > 0) await Promise.all(disableTargets);
       setProjects(current => current.map(project => project.id === updatedProject.id ? updatedProject : project));
       setSelectedTargetType(normalizedTargetType);
       setTargetConfigDraft(updated);
@@ -3118,36 +3052,6 @@ function TemplateConfig() {
       messageApi.error(err.message);
     } finally {
       setProjectCreating(false);
-    }
-  };
-
-  const saveProjectTargetConfig = async () => {
-    if (!selectedProjectId || !targetConfigDraft) return;
-    setTargetConfigSaving(true);
-    try {
-      const updated = await fetchApi(`/api/projects/${selectedProjectId}/target-configs/${selectedTargetType}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          templateCode: defaultTemplateCodeForTargetType(selectedTargetType),
-          providerCode: targetConfigDraft.providerCode || null,
-          pathPatterns: targetConfigDraft.pathPatterns?.length
-            ? targetConfigDraft.pathPatterns
-            : defaultPathPatternsForTargetType(selectedTargetType),
-          reminderCardEnabled: targetConfigDraft.reminderCardEnabled,
-          enabled: targetConfigDraft.enabled
-        })
-      });
-      const configs = projectTargetConfigs.some(item => item.targetType === updated.targetType)
-        ? projectTargetConfigs.map(item => item.targetType === updated.targetType ? updated : item)
-        : [...projectTargetConfigs, updated];
-      setProjectTargetConfigs(configs);
-      setTargetConfigDraft(updated);
-      await reloadProjectGroupsAndProjects(selectedProjectId);
-      messageApi.success('项目端类型配置已保存');
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setTargetConfigSaving(false);
     }
   };
 
@@ -3240,50 +3144,6 @@ function TemplateConfig() {
     const nextSettings = { ...settingsDraft, [field]: value };
     setSettingsDraft(nextSettings);
     saveAiSettings(nextSettings, successText);
-  };
-
-  const selectTemplate = async (templateCode) => {
-    setSelectedTemplateCode(templateCode);
-    setNotificationRules(null);
-    setNotificationRuleDraftCodes([]);
-    const template = templates.find(item => item.templateCode === templateCode);
-    if (!isBackendRuleTemplate(template)) {
-      setSelectedNotificationRuleCode(null);
-      return;
-    }
-    try {
-      await loadNotificationRules(templateCode);
-    } catch (err) {
-      messageApi.error(err.message);
-    }
-  };
-
-  const toggleNotificationRule = (ruleCode) => {
-    if (!notificationRules || notificationSaving) return;
-    setSelectedNotificationRuleCode(ruleCode);
-    setNotificationRuleDraftCodes(currentCodes => (
-      currentCodes.includes(ruleCode)
-        ? currentCodes.filter(code => code !== ruleCode)
-        : [...currentCodes, ruleCode]
-    ));
-  };
-
-  const saveNotificationRules = async () => {
-    if (!notificationRules || !selectedTemplateCode || notificationSaving) return;
-    setNotificationSaving(true);
-    try {
-      const updated = await fetchApi(`/api/rule-templates/${selectedTemplateCode}/notification-rules`, {
-        method: 'PUT',
-        body: JSON.stringify({ focusRuleCodes: notificationRuleDraftCodes })
-      });
-      setNotificationRules(updated);
-      setNotificationRuleDraftCodes(updated.focusRuleCodes || []);
-      messageApi.success('启用的卡片提醒类型已保存');
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setNotificationSaving(false);
-    }
   };
 
   const selectProvider = (providerCode) => {
@@ -3504,17 +3364,8 @@ function TemplateConfig() {
     disabled: !provider.apiKeyConfigured
   }));
   const groupProfileOptions = [{ label: '不指定', value: '' }, ...profileOptions];
-  const profileProviderOptions = [{ label: '使用当前模型 Provider', value: '' }, ...providerOptions];
+  const profileProviderOptions = [{ label: '使用项目组模型配置', value: '' }, ...providerOptions];
   const providerApiKeyPlaceholder = '留空表示不更新当前 API Key';
-  const templateOptions = templates.map(template => ({
-    label: `${template.templateName} (${template.templateCode})`,
-    value: template.templateCode
-  }));
-  const selectedTemplate = templates.find(template => template.templateCode === selectedTemplateCode) || null;
-  const selectedTemplateSupportsNotificationRules = isBackendRuleTemplate(selectedTemplate);
-  const notificationRuleItems = notificationRules?.groups?.flatMap(group => group.rules || []) || [];
-  const selectedNotificationRule = notificationRuleItems.find(rule => rule.ruleCode === selectedNotificationRuleCode) || notificationRuleItems[0] || null;
-  const notificationRulesDirty = JSON.stringify(notificationRuleDraftCodes) !== JSON.stringify(notificationRules?.focusRuleCodes || []);
   const filteredProjects = projectGroupFilter
     ? projects.filter(project => project.groupId === projectGroupFilter)
     : [];
@@ -3849,7 +3700,7 @@ function TemplateConfig() {
                 </Row>
                 {selectedProjectId && (
                   <Row gutter={[16, 16]} align="bottom">
-                    <Col xs={24} md={8}>
+                  <Col xs={24} md={6}>
                       <Text strong>当前项目所属项目组</Text>
                       <Select
                         className="full-width prompt-field"
@@ -3858,7 +3709,7 @@ function TemplateConfig() {
                         onChange={value => updateProjectConfigDraft('groupId', value)}
                       />
                     </Col>
-                    <Col xs={24} md={8}>
+                  <Col xs={24} md={6}>
                       <Text strong>当前项目所属端类型</Text>
                       <Select
                         className="full-width prompt-field"
@@ -3868,7 +3719,16 @@ function TemplateConfig() {
                         onChange={value => updateProjectConfigDraft('targetType', value)}
                       />
                     </Col>
-                    <Col xs={24} md={8}>
+                  <Col xs={24} md={6}>
+                    <Text strong>当前项目所用模型</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      value={targetConfigDraft?.providerCode || ''}
+                      options={profileProviderOptions}
+                      onChange={value => updateTargetConfigDraft('providerCode', value || null)}
+                    />
+                  </Col>
+                  <Col xs={24} md={6}>
                       <div className="settings-action-row project-config-save-row">
                         <Button type="primary" loading={projectConfigSaving} onClick={saveSelectedProjectConfig}>
                           保存项目配置
@@ -3878,73 +3738,6 @@ function TemplateConfig() {
                   </Row>
                 )}
               </Space>
-            </div>
-            <div className="settings-subsection">
-              {targetConfigDraft ? (
-                <>
-                <Space direction="vertical" size="middle" className="full-width">
-                <div className="settings-inline-head">
-                  <Space wrap>
-                    <Text strong>端类型</Text>
-                    {selectedTargetType && <Tag>{targetTypeLabel(selectedTargetType)}</Tag>}
-                  </Space>
-                </div>
-                <Row gutter={[16, 16]}>
-                  <Col xs={24} md={8}>
-                    <Text strong>编辑端类型</Text>
-                    <Select
-                      className="full-width prompt-field"
-                      value={selectedTargetType}
-                      options={PROJECT_TARGET_TYPE_OPTIONS}
-                      onChange={selectTargetTypeForConfig}
-                    />
-                  </Col>
-                  <Col xs={24} md={8}>
-                    <Text strong>Provider 覆盖</Text>
-                    <Select
-                      className="full-width prompt-field"
-                      value={targetConfigDraft.providerCode || ''}
-                      options={profileProviderOptions}
-                      onChange={value => updateTargetConfigDraft('providerCode', value || null)}
-                    />
-                  </Col>
-                  <Col xs={24}>
-                    <Text type="secondary">
-                      规则模板随端类型自动选择：{defaultTemplateCodeForTargetType(selectedTargetType)}。AI Review 默认使用项目组配置的模板和 Provider；如当前项目端类型配置了 Provider 覆盖，则优先使用端类型覆盖。
-                    </Text>
-                  </Col>
-                  <Col xs={24} md={8}>
-                    <Space direction="vertical">
-                      <Text strong>提醒卡片</Text>
-                      <Switch
-                        checked={targetConfigDraft.reminderCardEnabled !== false}
-                        checkedChildren="显示"
-                        unCheckedChildren="隐藏"
-                        onChange={checked => updateTargetConfigDraft('reminderCardEnabled', checked)}
-                      />
-                    </Space>
-                  </Col>
-                  <Col xs={24} md={8}>
-                    <Space direction="vertical">
-                      <Text strong>启用该端类型</Text>
-                      <Switch
-                        checked={targetConfigDraft.enabled !== false}
-                        checkedChildren="启用"
-                        unCheckedChildren="停用"
-                        onChange={checked => updateTargetConfigDraft('enabled', checked)}
-                      />
-                      <Text type="secondary">停用后不参与该项目的审查端类型选择。</Text>
-                    </Space>
-                  </Col>
-                </Row>
-                <div className="settings-action-row">
-                  <Button type="primary" loading={targetConfigSaving} onClick={saveProjectTargetConfig}>保存端类型配置</Button>
-                </div>
-                </Space>
-                </>
-              ) : (
-                <Empty description="请选择项目和端类型" />
-              )}
             </div>
             <div className="settings-subsection">
               <Space direction="vertical" size="middle" className="full-width">
@@ -4008,121 +3801,6 @@ function TemplateConfig() {
                 />
               </Space>
             </div>
-          </Space>
-        </Card>
-      )
-    },
-    {
-      key: 'notification-rules',
-      label: (
-        <Space wrap>
-          <Text strong>启用的卡片提醒类型</Text>
-          <Tag>{notificationRuleDraftCodes.length} 个已选</Tag>
-          {notificationRulesDirty && <Tag color="gold">未保存</Tag>}
-        </Space>
-      ),
-      children: (
-        <Card
-          bordered={false}
-          className="settings-inner-card"
-        >
-          <Space direction="vertical" size="middle" className="full-width">
-            <Row gutter={[16, 16]} align="middle">
-              <Col xs={24} md={10}>
-                <Text strong>规则模板</Text>
-                <Select
-                  className="full-width prompt-field"
-                  value={selectedTemplateCode}
-                  options={templateOptions}
-                  loading={notificationSaving}
-                  onChange={selectTemplate}
-                />
-              </Col>
-              <Col xs={24} md={14}>
-                <Space wrap>
-                  {selectedTemplateSupportsNotificationRules ? (
-                    <>
-                      <Text type="secondary">已启用 {notificationRuleDraftCodes.length} 个卡片提醒类型</Text>
-                      {notificationRuleDraftCodes.map(code => <Tag key={code} color="blue">{code}</Tag>)}
-                    </>
-                  ) : (
-                    <Text type="secondary">当前端类型模板暂不配置后端提醒卡片类型。</Text>
-                  )}
-                </Space>
-              </Col>
-            </Row>
-            {selectedTemplateSupportsNotificationRules ? (
-              <>
-                <Row gutter={[16, 16]}>
-                  <Col xs={24} lg={12}>
-                    {notificationRules ? (
-                      <Collapse
-                        key={selectedTemplateCode}
-                        defaultActiveKey={(notificationRules.groups || [])[0]?.groupCode ? [(notificationRules.groups || [])[0].groupCode] : []}
-                        items={(notificationRules.groups || []).map(group => ({
-                          key: group.groupCode,
-                          label: (
-                            <Space wrap>
-                              <Tag color={group.color}>{group.rules?.length || 0}</Tag>
-                              <Text strong>{group.groupName}</Text>
-                            </Space>
-                          ),
-                          children: (
-                            <Space wrap size={[8, 8]}>
-                              {(group.rules || []).map(rule => {
-                                const checked = notificationRuleDraftCodes.includes(rule.ruleCode);
-                                return (
-                                  <Tag.CheckableTag
-                                    key={rule.ruleCode}
-                                    checked={checked}
-                                    className={`notification-rule-tag ${checked ? 'is-selected' : ''}`}
-                                    onClick={() => toggleNotificationRule(rule.ruleCode)}
-                                  >
-                                    {rule.title}
-                                  </Tag.CheckableTag>
-                                );
-                              })}
-                            </Space>
-                          )
-                        }))}
-                      />
-                    ) : (
-                      <Empty description="暂无提醒类型配置" />
-                    )}
-                  </Col>
-                  <Col xs={24} lg={12}>
-                    {selectedNotificationRule ? (
-                      <div className="notification-rule-detail">
-                        <Space direction="vertical" size="middle" className="full-width">
-                          <Space wrap>
-                            <Tag color={riskColor(selectedNotificationRule.riskLevel)}>{severityLabel(selectedNotificationRule.riskLevel)}</Tag>
-                            <Tag>{selectedNotificationRule.changeType}</Tag>
-                            {!selectedNotificationRule.enabledInTemplate && <Tag color="warning">模板未启用</Tag>}
-                          </Space>
-                          <Title level={5}>{selectedNotificationRule.title}</Title>
-                          <Paragraph>{selectedNotificationRule.description}</Paragraph>
-                          <Text type="secondary">{selectedNotificationRule.impact}</Text>
-                          <Divider />
-                          <Text strong>建议检查</Text>
-                          <ul className="notification-rule-checks">
-                            {(selectedNotificationRule.recommendedChecks || []).map(check => <li key={check}>{check}</li>)}
-                          </ul>
-                          <Text strong>示例</Text>
-                          <pre className="notification-rule-example">{selectedNotificationRule.example || '-'}</pre>
-                        </Space>
-                      </div>
-                    ) : (
-                      <Empty description="请选择提醒类型" />
-                    )}
-                  </Col>
-                </Row>
-                <div className="settings-action-row">
-                  <Button type="primary" loading={notificationSaving} disabled={!notificationRules || !notificationRulesDirty} onClick={saveNotificationRules}>保存配置</Button>
-                </div>
-              </>
-            ) : (
-              <Empty description="当前模板暂无卡片提醒类型配置" />
-            )}
           </Space>
         </Card>
       )
@@ -4336,12 +4014,6 @@ function TemplateConfig() {
               </div>
               <div className="settings-subsection" style={{ order: 1 }}>
                 <Space direction="vertical" size="middle" className="full-width">
-                  <Space direction="vertical" size={4}>
-                    <Text strong>项目组 AI Review 策略</Text>
-                    <Text type="secondary">
-                      按项目组控制是否自动触发 AI Review、是否生成修复预览，以及 Push 触发策略。
-                    </Text>
-                  </Space>
                   <Row gutter={[16, 16]}>
                     <Col xs={24} md={10}>
                       <Text strong>项目组</Text>
@@ -4514,7 +4186,7 @@ function TemplateConfig() {
     }
   ];
 
-  const orderedCollapseItems = ['project-target-configs', 'profile-settings', 'provider-settings', 'global-settings', 'notification-rules']
+  const orderedCollapseItems = ['project-target-configs', 'profile-settings', 'provider-settings', 'global-settings']
     .map(key => collapseItems.find(item => item.key === key))
     .filter(Boolean);
 

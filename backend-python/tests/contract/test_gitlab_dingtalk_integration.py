@@ -1238,5 +1238,8 @@ def test_web_project_ai_summary_hides_rule_section_when_reminder_card_disabled(
     markdown = body["markdown"]["text"]
     assert result["targetType"] == "WEB_PC"
     assert result["reminderCardEnabled"] is False
+    assert result["riskItemCount"] == 0
+    assert result["changeAnalysis"]["changeTypes"] == []
+    assert result["changeAnalysis"]["changedFiles"][0]["matchedChangeTypes"] == []
     assert "配置变更（规则扫描）" not in markdown
     assert "Nacos" not in markdown

@@ -483,9 +483,10 @@ OpenAI Responses strict schema 会强约束 `filePath`、`startLine`、`category
 
 1. 前端样式、交互或展示逻辑改动：优先执行 `.\scripts\run-frontend.cmd build`。
 2. Python 后端局部改动：优先执行相关 pytest 文件，例如 `.\backend-python\.venv\Scripts\python.exe -m pytest tests/contract/test_rule_templates_api_contract.py`，或通过脚本能力可达的最小测试集。
-3. 只有改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容、通知发送或跨模块边界时，才执行 `.\scripts\run-backend.cmd test` 全量 Python 测试。
-4. Java 后端 `backend/` 已停止维护，默认不再执行 Maven 编译或测试；只有用户明确要求对照历史 Java 行为时才读取或运行。
-5. 最终结论中说明“为什么选择这组验证”，避免把全量测试当作无脑默认动作。
+3. 通过 `.\scripts\run-backend.cmd test <pytest-path>` 指定文件时，路径要按 `backend-python/` 作为当前目录书写，例如 `tests\contract\test_rule_templates_api_contract.py`；不要写成 `backend-python\tests\...`，否则脚本进入后端目录后 pytest 会找不到文件。
+4. 只有改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容、通知发送或跨模块边界时，才执行 `.\scripts\run-backend.cmd test` 全量 Python 测试。
+5. Java 后端 `backend/` 已停止维护，默认不再执行 Maven 编译或测试；只有用户明确要求对照历史 Java 行为时才读取或运行。
+6. 最终结论中说明“为什么选择这组验证”，避免把全量测试当作无脑默认动作。
 
 ## 21. 搜索不要扫进依赖目录和构建产物
 

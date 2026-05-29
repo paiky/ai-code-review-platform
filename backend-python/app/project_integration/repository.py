@@ -74,9 +74,9 @@ DEFAULT_GROUP_AI_REVIEW_POLICY = {
     "aiReviewEnabled": True,
     "triggerOnManual": True,
     "triggerOnMr": True,
-    "triggerOnPush": False,
+    "triggerOnPush": True,
     "triggerOnlyWhenRiskMatched": False,
-    "autoFixPreviewEnabled": False,
+    "autoFixPreviewEnabled": True,
     "autoFixPreviewSeverities": ["CRITICAL"],
 }
 
@@ -793,7 +793,7 @@ def upsert_project_target_config(db: Session, project_id: int, target_type: str,
             provider_code=_blank_to_none(request.get("providerCode")),
             path_patterns=json.dumps(request.get("pathPatterns") or defaults["pathPatterns"], ensure_ascii=False),
             reminder_card_enabled=bool(request.get("reminderCardEnabled", defaults["reminderCardEnabled"])),
-            enabled=bool(request.get("enabled", True)),
+            enabled=True,
             description=_blank_to_none(request.get("description")) or "手动维护的端类型配置",
             created_at=now,
             updated_at=now,
@@ -810,14 +810,13 @@ def upsert_project_target_config(db: Session, project_id: int, target_type: str,
             config.path_patterns = json.dumps(request.get("pathPatterns") or [], ensure_ascii=False)
         if "reminderCardEnabled" in request:
             config.reminder_card_enabled = bool(request["reminderCardEnabled"])
-        if "enabled" in request:
-            config.enabled = bool(request["enabled"])
+        config.enabled = True
         if "description" in request:
             config.description = _blank_to_none(request.get("description"))
         elif config.description in SYSTEM_DETECTED_TARGET_CONFIG_DESCRIPTIONS:
             config.description = "手动维护的端类型配置"
         config.updated_at = now
-    _sync_project_supported_target_types(db, project)
+    _set_project_supported_target_type(db, project, normalized)
     db.commit()
     return target_config_to_dict(config)
 
@@ -867,14 +866,15 @@ def resolve_project_target_config(
     configs = [
         config for config in db.scalars(
             select(ProjectTargetConfig)
-            .where(ProjectTargetConfig.project_id == project.id, ProjectTargetConfig.enabled.is_(True))
+            .where(ProjectTargetConfig.project_id == project.id)
             .order_by(ProjectTargetConfig.id.asc())
         ).all()
     ]
     requested = [normalize_target_type(value) for value in (requested_target_types or []) if value]
     if requested_target_type:
         requested = [normalize_target_type(requested_target_type), *[value for value in requested if value != normalize_target_type(requested_target_type)]]
-    matched_types = requested or _match_target_types(configs, changed_files or [])
+    fixed_target_types = read_json_array(project.supported_target_types)
+    matched_types = requested or (fixed_target_types if len(fixed_target_types) == 1 else _match_target_types(configs, changed_files or []))
     if not matched_types:
         matched_types = ["BACKEND"]
     primary = matched_types[0]
@@ -886,7 +886,7 @@ def resolve_project_target_config(
         "templateCode": (config.template_code if config else None) or defaults["templateCode"] or project.default_template_code,
         "profileCode": resolve_project_review_profile_code(db, project, primary),
         "providerCode": (config.provider_code if config else None) or project.default_code_quality_provider_code,
-        "reminderCardEnabled": bool(config.reminder_card_enabled) if config else bool(defaults["reminderCardEnabled"]),
+        "reminderCardEnabled": _reminder_card_enabled(primary, config, defaults),
     }
 
 
@@ -899,7 +899,11 @@ def target_config_to_dict(config: ProjectTargetConfig) -> dict:
         "codeQualityProfileCode": config.code_quality_profile_code,
         "providerCode": config.provider_code,
         "pathPatterns": read_json_array(config.path_patterns),
-        "reminderCardEnabled": bool(config.reminder_card_enabled),
+        "reminderCardEnabled": _reminder_card_enabled(
+            config.target_type,
+            config,
+            TARGET_TYPE_DEFAULTS.get(config.target_type, TARGET_TYPE_DEFAULTS["GENERAL"]),
+        ),
         "enabled": bool(config.enabled),
         "description": config.description,
     }
@@ -919,6 +923,12 @@ def _default_target_config_response(project: Project) -> dict:
         "enabled": True,
         "description": "默认后端端类型配置（未保存）",
     }
+
+
+def _reminder_card_enabled(target_type: str, config: ProjectTargetConfig | None, defaults: dict[str, Any]) -> bool:
+    if normalize_target_type(target_type) != "BACKEND":
+        return False
+    return bool(config.reminder_card_enabled) if config else bool(defaults.get("reminderCardEnabled"))
 
 
 def normalize_target_type(value: str | None) -> str:
@@ -1095,6 +1105,12 @@ def _sync_project_supported_target_types(db: Session, project: Project) -> None:
         ).all()
     ]
     project.supported_target_types = json.dumps(types or ["BACKEND"], ensure_ascii=False)
+    project.updated_at = datetime.now()
+    db.flush()
+
+
+def _set_project_supported_target_type(db: Session, project: Project, target_type: str) -> None:
+    project.supported_target_types = json.dumps([normalize_target_type(target_type)], ensure_ascii=False)
     project.updated_at = datetime.now()
     db.flush()
 

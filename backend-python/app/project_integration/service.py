@@ -8,7 +8,7 @@ from urllib.parse import urlparse, urlunparse
 
 from sqlalchemy.orm import Session
 
-from app.change_analysis.service import analyze_changes
+from app.change_analysis.service import analyze_changes, summarize_changes_without_rule_matching
 from app.code_quality.service import trigger_auto_review
 from app.code_quality.repository import get_settings_record
 from app.core.config import get_settings
@@ -485,11 +485,16 @@ def _process_task(
     task.template_code = target_config["templateCode"]
     task.code_quality_profile_code = target_config["profileCode"]
     template = get_enabled_template(db, task.template_code)
+    reminder_card_enabled = target_config["reminderCardEnabled"]
     rule_codes = template.get("focusRuleCodes") or template.get("enabledRuleCodes", [])
-    analysis = analyze_changes(changed_files, diff_text)
+    analysis = (
+        analyze_changes(changed_files, diff_text)
+        if reminder_card_enabled
+        else summarize_changes_without_rule_matching(changed_files, diff_text)
+    )
     risk_card = generate_risk_card(
         analysis,
-        rule_codes,
+        rule_codes if reminder_card_enabled else [],
         template.get("recommendedChecks", []),
     )
     result = save_review_result(
@@ -497,7 +502,7 @@ def _process_task(
         task=task,
         analysis=analysis,
         risk_card=risk_card,
-        reminder_card_enabled=target_config["reminderCardEnabled"],
+        reminder_card_enabled=reminder_card_enabled,
     )
     mark_task_success(task, risk_card["riskLevel"])
     notification_context = {
@@ -520,7 +525,7 @@ def _process_task(
         focus_change_types=template.get("focusChangeTypes", []),
         focus_rule_codes=template.get("focusRuleCodes", []),
         notification_context=notification_context,
-        reminder_card_enabled=target_config["reminderCardEnabled"],
+        reminder_card_enabled=reminder_card_enabled,
     )
     if not ai_review_scheduled:
         settings = get_settings_record(db)
@@ -534,7 +539,7 @@ def _process_task(
                 notification_context,
                 settings.dingtalk_notification_enabled,
                 focus_rule_codes=template.get("focusRuleCodes", []),
-                reminder_card_enabled=target_config["reminderCardEnabled"],
+                reminder_card_enabled=reminder_card_enabled,
             )
         else:
             notification = send_risk_card(
@@ -545,7 +550,7 @@ def _process_task(
                 notification_context,
                 settings.dingtalk_notification_enabled,
                 focus_rule_codes=template.get("focusRuleCodes", []),
-                reminder_card_enabled=target_config["reminderCardEnabled"],
+                reminder_card_enabled=reminder_card_enabled,
             )
         save_notification_records(
             db,

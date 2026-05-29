@@ -109,6 +109,26 @@ def analyze_changes(changed_files: list[dict[str, Any]] | None, diff_text: str |
     }
 
 
+def summarize_changes_without_rule_matching(changed_files: list[dict[str, Any]] | None, diff_text: str | None = None) -> dict:
+    files = _normalize_files(changed_files, diff_text)
+    analyzed_files = [
+        {
+            "path": _effective_path(changed_file),
+            "changeType": _change_type(changed_file),
+            "matchedChangeTypes": [],
+        }
+        for changed_file in files
+    ]
+    return {
+        "summary": f"本次分析 {len(files)} 个变更文件；当前端类型未启用提醒卡片规则扫描。",
+        "changedFileCount": len(files),
+        "changeTypes": [],
+        "changedFiles": analyzed_files,
+        "impactedResources": [],
+        "evidences": [],
+    }
+
+
 def _normalize_files(changed_files: list[dict[str, Any]] | None, diff_text: str | None) -> list[dict[str, Any]]:
     if changed_files:
         return changed_files
