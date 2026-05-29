@@ -670,16 +670,32 @@ function jobDurationText(job) {
 function JobQueueModal({ open, queue, onClose, onOpenTask, onCancelJob }) {
   const groups = Array.isArray(queue?.groups) ? queue.groups : [];
   const canCancelJob = job => ['QUEUED', 'RUNNING'].includes(job?.status);
-  const metaItems = (group, reviewJob) => [
+  const reviewColumns = [
     {
-      label: 'Review 状态',
-      value: <Tag color={schedulerStatusColor(reviewJob.status)}>{schedulerStatusLabel(reviewJob.status)}</Tag>
+      title: '模型',
+      width: 180,
+      render: (_, row) => row.displayName || row.provider || row.label || '-'
     },
-    { label: '排队时间', value: reviewJob.queuedAt || '-' },
-    { label: '耗时', value: jobDurationText(reviewJob) },
-    { label: '触发类型', value: group.triggerType || '-' },
-    { label: '分支', value: taskListBranchText(group), wide: true },
-    { label: '错误', value: reviewJob.errorMessage || '-', wide: true }
+    { title: 'Provider', dataIndex: 'provider', width: 120, render: value => value || '-' },
+    { title: 'Model', dataIndex: 'model', width: 180, ellipsis: true, render: value => value || '-' },
+    { title: 'Review Key', dataIndex: 'reviewKey', width: 150, ellipsis: true, render: value => value || '-' },
+    { title: '状态', dataIndex: 'status', width: 100, render: value => <Tag color={schedulerStatusColor(value)}>{schedulerStatusLabel(value)}</Tag> },
+    { title: '排队时间', dataIndex: 'queuedAt', width: 170, render: value => value || '-' },
+    { title: '开始时间', dataIndex: 'startedAt', width: 170, render: value => value || '-' },
+    { title: '耗时', width: 90, render: (_, row) => jobDurationText(row) },
+    { title: '错误', dataIndex: 'errorMessage', ellipsis: true, render: value => value || '-' },
+    {
+      title: '操作',
+      width: 150,
+      render: (_, row) => (
+        <Space size={4}>
+          <Button type="link" size="small" onClick={() => onOpenTask?.(row.taskId)}>详情</Button>
+          {canCancelJob(row) && (
+            <Button danger type="link" size="small" onClick={() => onCancelJob?.(row)}>中断</Button>
+          )}
+        </Space>
+      )
+    }
   ];
   const fixColumns = [
     { title: '风险点', dataIndex: 'findingIndex', width: 90, render: value => value == null ? '-' : `#${value}` },
@@ -709,7 +725,8 @@ function JobQueueModal({ open, queue, onClose, onOpenTask, onCancelJob }) {
       ) : (
         <Collapse
           items={groups.map(group => {
-            const reviewJob = group.reviewJob;
+            const reviewJobs = Array.isArray(group.reviewJobs) ? group.reviewJobs : (group.reviewJob ? [group.reviewJob] : []);
+            const activeReviewCount = reviewJobs.filter(job => ['QUEUED', 'RUNNING'].includes(job.status)).length;
             const activeFixCount = (group.fixPreviewJobs || []).filter(job => ['QUEUED', 'RUNNING'].includes(job.status)).length;
             return {
               key: group.taskId,
@@ -717,29 +734,35 @@ function JobQueueModal({ open, queue, onClose, onOpenTask, onCancelJob }) {
                 <Space wrap>
                   <Text strong>任务 #{group.taskId}</Text>
                   <Text>{group.projectName || '-'}</Text>
-                  {reviewJob && <Tag color={schedulerStatusColor(reviewJob.status)}>Review {schedulerStatusLabel(reviewJob.status)}</Tag>}
+                  {reviewJobs.length > 0 && (
+                    <Tag color={activeReviewCount > 0 ? 'processing' : 'default'}>
+                      Review {reviewJobs.length} 个{activeReviewCount > 0 ? `，${activeReviewCount} 个进行中` : ''}
+                    </Tag>
+                  )}
                   {activeFixCount > 0 && <Tag color="processing">修复预览 {activeFixCount} 个进行中</Tag>}
                 </Space>
               ),
               children: (
                 <Space direction="vertical" className="full-width">
-                  {reviewJob ? (
-                    <div className="job-queue-review-row">
-                      <div className="job-queue-review-meta">
-                        {metaItems(group, reviewJob).map(item => (
-                          <div key={item.label} className={item.wide ? 'job-queue-meta-item is-wide' : 'job-queue-meta-item'}>
-                            <Text type="secondary" className="job-queue-meta-label">{item.label}：</Text>
-                            <span className="job-queue-meta-value">{item.value}</span>
-                          </div>
-                        ))}
-                      </div>
-                      <Space>
-                        <Button type="link" onClick={() => onOpenTask?.(group.taskId)}>查看任务详情</Button>
-                        {canCancelJob(reviewJob) && (
-                          <Button danger type="link" onClick={() => onCancelJob?.(reviewJob)}>中断 Review</Button>
-                        )}
-                      </Space>
-                    </div>
+                  {reviewJobs.length > 0 ? (
+                    <>
+                      <Descriptions
+                        size="small"
+                        column={2}
+                        items={[
+                          { key: 'triggerType', label: '触发类型', children: group.triggerType || '-' },
+                          { key: 'branch', label: '分支', children: taskListBranchText(group) }
+                        ]}
+                      />
+                      <Table
+                        size="small"
+                        rowKey="id"
+                        columns={reviewColumns}
+                        dataSource={reviewJobs}
+                        pagination={false}
+                        scroll={{ x: 1250 }}
+                      />
+                    </>
                   ) : (
                     <div className="job-queue-review-row">
                       <Alert className="job-queue-review-descriptions" type="info" showIcon message="该任务当前只有修复预览调度记录" />

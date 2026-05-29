@@ -844,6 +844,70 @@ def test_project_group_multi_model_manual_review_saves_result_list(
     assert mimo_route.called
 
 
+def test_project_group_multi_model_manual_review_creates_model_level_queue_jobs(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    from app.code_quality import service
+
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.delenv("CODE_QUALITY_REVIEW_INLINE", raising=False)
+    monkeypatch.delenv("CODE_QUALITY_RETRY_INLINE", raising=False)
+    seed_project(db_session, None)
+    submitted: list[dict] = []
+    monkeypatch.setattr(
+        service._executor,
+        "submit",
+        lambda fn, *args, **kwargs: submitted.append({"fn": fn.__name__, "args": args, "kwargs": kwargs}),
+    )
+
+    default_group = next(
+        item for item in client.get("/api/project-groups").json()["data"]["items"]
+        if item["groupCode"] == "default"
+    )
+    assert client.put("/api/projects/1/group", json={"groupId": default_group["id"]}).status_code == 200
+    update_group = client.put(
+        f"/api/project-groups/{default_group['id']}",
+        json={
+            "groupName": default_group["groupName"],
+            "groupCode": default_group["groupCode"],
+            "defaultCodeQualityProfileCode": "backend-default-ai-review",
+            "aiReviewModels": [
+                {"providerCode": "DEEPSEEK", "modelName": "deepseek-v4-pro", "displayName": "DeepSeek 主审", "sortOrder": 10},
+                {"providerCode": "XIAOMIMO", "modelName": "mimo-v2.5-pro", "displayName": "MiMo 复审", "sortOrder": 20},
+            ],
+        },
+    )
+    assert update_group.status_code == 200
+
+    response = client.post("/api/code-quality-reviews/manual", json=manual_request())
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    assert len(submitted) == 2
+    assert {item["kwargs"]["priority"] for item in submitted} == {service.REVIEW_JOB_PRIORITY}
+    queue = client.get("/api/code-quality-reviews/job-queue").json()["data"]
+    assert queue["activeCount"] == 2
+    group = next(item for item in queue["groups"] if item["taskId"] == task_id)
+    review_jobs = sorted(group["reviewJobs"], key=lambda item: item["sortOrder"])
+    assert [item["provider"] for item in review_jobs] == ["DEEPSEEK", "XIAOMIMO"]
+    assert [item["model"] for item in review_jobs] == ["deepseek-v4-pro", "mimo-v2.5-pro"]
+    assert [item["displayName"] for item in review_jobs] == ["DeepSeek 主审", "MiMo 复审"]
+    assert group["reviewJob"]["id"] in {item["id"] for item in review_jobs}
+
+    cancelled = client.post(f"/api/code-quality-reviews/job-queue/{review_jobs[0]['id']}/cancel")
+
+    assert cancelled.status_code == 200
+    assert cancelled.json()["data"]["reviewKey"] == review_jobs[0]["reviewKey"]
+    results = client.get(f"/api/review-tasks/{task_id}/code-quality-results").json()["data"]
+    statuses = {item["reviewKey"]: item["status"] for item in results}
+    assert statuses[review_jobs[0]["reviewKey"]] == "SKIPPED"
+    assert statuses[review_jobs[1]["reviewKey"]] == "RUNNING"
+    queue_after_cancel = client.get("/api/code-quality-reviews/job-queue").json()["data"]
+    assert queue_after_cancel["activeCount"] == 1
+
+
 @respx.mock
 def test_provider_timeout_config_overrides_deepseek_default(
     client: TestClient,
@@ -1938,6 +2002,42 @@ def test_failure_notifications_return_recent_ai_review_failures_only(
     assert data["items"][1]["errorMessage"] == "recent a failed"
 
 
+def test_review_summary_markdown_includes_failed_reason() -> None:
+    from app.notification.service import format_review_summary_markdown
+
+    markdown = format_review_summary_markdown(
+        123,
+        None,
+        {
+            "status": "FAILED",
+            "provider": "DEEPSEEK",
+            "errorMessage": "API key is required for provider DEEPSEEK",
+        },
+        {"projectName": "demo-service", "triggerType": "GITLAB_MR_WEBHOOK"},
+    )
+
+    assert "代码质量 Review 执行失败" in markdown
+    assert "原因：API key is required for provider DEEPSEEK" in markdown
+
+
+def test_review_summary_markdown_includes_manual_interrupt_reason() -> None:
+    from app.notification.service import format_review_summary_markdown
+
+    markdown = format_review_summary_markdown(
+        124,
+        None,
+        {
+            "status": "SKIPPED",
+            "provider": "XIAOMIMO",
+            "errorMessage": "用户手动中断 AI Review",
+        },
+        {"projectName": "demo-service", "triggerType": "GITLAB_MR_WEBHOOK"},
+    )
+
+    assert "代码质量 Review 已跳过或已中断" in markdown
+    assert "原因：用户手动中断 AI Review" in markdown
+
+
 @respx.mock
 def test_deepseek_http_failure_has_diagnostic_phases_and_masks_key(
     client: TestClient,
@@ -2342,7 +2442,11 @@ def test_retry_returns_running_without_waiting_for_provider(
     monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
     monkeypatch.delenv("CODE_QUALITY_RETRY_INLINE", raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "retry-secret")
-    monkeypatch.setattr(service._executor, "submit", lambda _fn, task_id: submitted.append(task_id))
+    monkeypatch.setattr(
+        service._executor,
+        "submit",
+        lambda _fn, *args, **_kwargs: submitted.append(args[0]),
+    )
     enabled = client.put("/api/code-quality-reviews/settings", json={"reviewEnabled": True})
     assert enabled.status_code == 200
 

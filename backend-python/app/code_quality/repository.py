@@ -1371,6 +1371,15 @@ def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, An
             .where(ReviewTask.id.in_(task_ids))
         ).all()
         tasks_by_id = {task.id: (task, project) for task, project in rows}
+    results_by_key: dict[tuple[int, str | None], CodeQualityReviewResult] = {}
+    if task_ids:
+        result_rows = db.scalars(
+            select(CodeQualityReviewResult).where(CodeQualityReviewResult.task_id.in_(task_ids))
+        ).all()
+        results_by_key = {
+            (result.task_id, result.review_key): result
+            for result in result_rows
+        }
     grouped: dict[int, dict[str, Any]] = {}
     for record in records:
         task, project = tasks_by_id.get(record.task_id, (None, None))
@@ -1389,7 +1398,10 @@ def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, An
                 "fixPreviewJobs": [],
             },
         )
-        job = scheduler_job_to_dict(record)
+        result = results_by_key.get((record.task_id, record.review_key))
+        if result is None and not record.review_key:
+            result = results_by_key.get((record.task_id, DEFAULT_REVIEW_KEY))
+        job = scheduler_job_to_dict(record, result)
         if record.job_type == "AI_REVIEW":
             group["reviewJobs"].append(job)
             group["reviewJob"] = group["reviewJob"] or job
@@ -1442,7 +1454,8 @@ def list_ai_review_failure_notifications(db: Session, limit: int = 100) -> dict[
             ai_review_failure_notification_to_dict(
                 record,
                 tasks_by_id.get(record.task_id, (None, None)),
-                results_by_key.get((record.task_id, record.review_key)),
+                results_by_key.get((record.task_id, record.review_key))
+                or (results_by_key.get((record.task_id, DEFAULT_REVIEW_KEY)) if not record.review_key else None),
             )
             for record in records
         ],
@@ -1479,13 +1492,21 @@ def ai_review_failure_notification_to_dict(
     }
 
 
-def scheduler_job_to_dict(record: CodeQualitySchedulerJob) -> dict[str, Any]:
+def scheduler_job_to_dict(
+    record: CodeQualitySchedulerJob,
+    result: CodeQualityReviewResult | None = None,
+) -> dict[str, Any]:
     return {
         "id": record.id,
         "jobType": record.job_type,
         "taskId": record.task_id,
         "reviewKey": record.review_key,
         "projectId": record.project_id,
+        "profileCode": getattr(result, "profile_code", None),
+        "provider": getattr(result, "provider", None),
+        "model": getattr(result, "model", None),
+        "displayName": getattr(result, "display_name", None),
+        "sortOrder": getattr(result, "sort_order", None),
         "findingIndex": record.finding_index,
         "status": record.status,
         "priority": record.priority,

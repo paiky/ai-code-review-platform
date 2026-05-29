@@ -1316,3 +1316,35 @@ GitLab 新分支 Push 的 `before` 为全 0，payload 里可能只有 `commits[]
 2. 对排队任务，worker 取出后如果发现状态已不是 `QUEUED`，应直接跳过执行。
 3. 对已开始的 Provider 调用，不能强杀线程，但返回后保存结果前必须再次检查记录是否已被标记为 `SKIPPED`，避免覆盖用户手动中断状态。
 4. 前端任务详情和 AI Review 调度队列都应暴露中断按钮，便于处理卡住的 Review 或 finding 级修复预览。
+
+## 57. 多模型 AI Review 队列不能只展示首个 Review job
+
+现象：
+
+项目组配置多个 AI Review 模型后，右上角调度队列角标显示多个活跃任务，但打开队列弹窗只看到一条 Review 记录，用户无法判断或中断具体是哪一个模型的 Review。
+
+原因：
+
+后端队列快照按 `taskId` 分组时虽然保留了 `reviewJobs`，但前端弹窗只读取兼容字段 `reviewJob`，也就是每个任务组里的第一条 AI Review job。队列 job 本身如果不补充 `provider/model/displayName`，前端即使遍历多条 job 也难以清楚标识模型。
+
+处理方式：
+
+1. 队列快照应通过 `(task_id, review_key)` 关联 `code_quality_review_results`，给每个 AI Review job 返回 `provider`、`model`、`displayName` 和 `sortOrder`。
+2. 前端调度队列弹窗应渲染 `reviewJobs` 多行表格，而不是只展示 `reviewJob`。
+3. 中断操作使用具体 scheduler job id；后端再通过该 job 的 `review_key` 只标记对应模型 Review 为 `SKIPPED`，避免影响同一任务下其他模型。
+
+## 58. AI Review 失败或中断后钉钉摘要必须带原因
+
+现象：
+
+AI Review 被手动中断，或 Provider 因 API Key、HTTP 状态、模型输出解析等原因失败后，平台仍会推送“变更审查结果”钉钉消息，但消息正文只显示“代码质量 Review 执行失败，请查看详情”，没有说明失败原因。
+
+原因：
+
+`code_quality_review_results.error_message` 已经保存了失败或中断原因，例如“用户手动中断 AI Review”或 Provider 错误；但钉钉摘要格式化时对所有非 `SUCCESS` 状态使用了固定文案，没有读取 `errorMessage`。
+
+处理方式：
+
+1. 钉钉 Review 摘要遇到 `FAILED`、`SKIPPED`、`RUNNING`、`QUEUED` 等非成功状态时，应输出状态语义。
+2. 优先展示 `errorMessage`，没有时再回退 `summary`。
+3. 原因文本需要压缩空白并截断，避免 Provider 大错误栈撑爆钉钉消息。

@@ -326,7 +326,14 @@ def _format_code_quality_summary(task_id: int, result: dict | None) -> str:
     if not result:
         return "- 未执行代码质量 Review。"
     if result.get("status") != "SUCCESS":
-        return "- 代码质量 Review 执行失败，请查看详情。"
+        status = str(result.get("status") or "").upper()
+        status_label = _review_status_label(status)
+        reason = _review_failure_reason(result)
+        message = f"- 代码质量 Review {status_label}。"
+        if reason:
+            message += f"\n- 原因：{reason}"
+        message += "\n- 请查看详情。"
+        return message
     findings = result.get("findings") or []
     if not findings:
         return "- 未发现需要修复的问题。"
@@ -441,6 +448,25 @@ def _should_skip_review_summary(
 
 def _severity_in(finding: dict, *severities: str) -> bool:
     return str(finding.get("severity") or "").upper() in set(severities)
+
+
+def _review_status_label(status: str) -> str:
+    return {
+        "FAILED": "执行失败",
+        "SKIPPED": "已跳过或已中断",
+        "RUNNING": "仍在执行中",
+        "QUEUED": "仍在排队中",
+    }.get(status, f"状态为 {status or '-'}")
+
+
+def _review_failure_reason(result: dict) -> str:
+    reason = result.get("errorMessage") or result.get("summary")
+    if not reason:
+        return ""
+    value = " ".join(str(reason).split())
+    if len(value) > 300:
+        value = value[:297] + "..."
+    return value
 
 
 def _concise_finding_title(title: str | None) -> str:
