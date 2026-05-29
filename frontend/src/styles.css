@@ -542,7 +542,7 @@ body {
 
 .diff-viewer-modal .ant-modal-body {
   max-height: calc(100vh - 190px);
-  overflow: hidden;
+  overflow: auto;
 }
 
 .diff-viewer-meta {
@@ -554,8 +554,10 @@ body {
 
 .diff-viewer-table {
   width: 100%;
-  max-height: calc(100vh - 300px);
-  overflow: auto;
+  max-height: min(560px, calc(100vh - 300px));
+  overflow-x: auto;
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
   border: 1px solid #d7dee2;
   border-radius: 6px;
   background: #ffffff;
@@ -566,8 +568,9 @@ body {
 
 .diff-viewer-row {
   display: grid;
-  grid-template-columns: 64px minmax(360px, 1fr) 64px minmax(360px, 1fr);
-  min-width: 920px;
+  grid-template-columns: 64px max-content 64px max-content;
+  width: max-content;
+  min-width: 100%;
   border-bottom: 1px solid #edf1f3;
 }
 
@@ -586,6 +589,7 @@ body {
 }
 
 .diff-code-cell {
+  min-width: 720px;
   min-height: 22px;
   margin: 0;
   padding: 2px 10px;

@@ -1348,3 +1348,95 @@ AI Review 被手动中断，或 Provider 因 API Key、HTTP 状态、模型输�
 1. 钉钉 Review 摘要遇到 `FAILED`、`SKIPPED`、`RUNNING`、`QUEUED` 等非成功状态时，应输出状态语义。
 2. 优先展示 `errorMessage`，没有时再回退 `summary`。
 3. 原因文本需要压缩空白并截断，避免 Provider 大错误栈撑爆钉钉消息。
+
+## 59. 多模型修复预览必须删除旧单模型唯一键
+
+现象：
+
+多模型 AI Review 成功后，在某个模型 Tab 下点击“生成修复预览”返回 500，后端日志出现：
+
+```text
+Duplicate entry '463-0' for key 'uk_code_quality_fix_preview_task_finding'
+```
+
+原因：
+
+旧版 `code_quality_fix_previews` 表只按 `(task_id, finding_index)` 建唯一键。多模型后，不同模型同一任务下都可能有 `finding_index=0`，实际唯一性应按 `(task_id, review_key, finding_index)` 判断。如果旧库没有完整执行多模型迁移，仍保留旧唯一键，就会把不同模型的修复预览误判为重复。
+
+处理方式：
+
+1. `code_quality_fix_previews` 必须包含 `review_key` 列。
+2. 删除旧唯一键 `uk_code_quality_fix_preview_task_finding`。
+3. 创建新唯一键 `uk_code_quality_fix_preview_task_review_finding(task_id, review_key, finding_index)`。
+4. Python 运行时 schema 兼容也要自动执行这组索引修正，避免旧库直接 500。
+
+## 60. 中断后的修复预览重新生成必须强制刷新
+
+现象：
+
+修复预览生成过程中点击“中断”后，按钮变成“重新生成修复预览”。再次点击按钮没有报错，但页面也没有重新进入队列。
+
+原因：
+
+中断会把 `code_quality_fix_previews.status` 标记为 `SKIPPED`。修复预览生成接口为了避免重复调用 Provider，在已有记录且没有 `forceRegenerate=true` 时会直接返回缓存记录。旧前端只在 `FAILED` 状态传 `forceRegenerate=true`，对 `SKIPPED` 没有传，所以后端原样返回旧的 `SKIPPED`，用户看起来像“点击没反应”。
+
+处理方式：
+
+1. 前端“重新生成修复预览”遇到 `FAILED` 或 `SKIPPED` 都要传 `forceRegenerate=true`。
+2. 后端保持缓存保护：只有显式强制重生成时才覆盖旧记录并重新排队。
+3. 手动中断属于可重试状态，不应和“缺少 diff / 找不到文件”等不可自动恢复的跳过原因混在交互上。
+
+## 61. 重试单个模型 Review 时要清理该模型旧修复预览
+
+现象：
+
+多模型任务中只重试某个模型后，新 Review 结果刚保存，部分 finding 立刻显示“查看修复预览”，而另一些 finding 显示“修复预览生成中”。看起来像模型 Review 结果自带了部分修复预览，或自动生成风险等级配置没有生效。
+
+原因：
+
+Review 结果本身不会携带修复预览。修复预览来自 `code_quality_fix_previews` 表，并按 `task_id + review_key + finding_index` 关联。重试单个模型会覆盖该模型的 findings，但如果不删除该模型旧的修复预览，旧记录会按相同 `finding_index` 挂到新 finding 上。由于重试后 finding 顺序和风险等级可能变化，就会出现高风险 finding 显示旧的“查看修复预览”，而本次自动生成仍只对配置中的风险等级排队。
+
+处理方式：
+
+1. 重试 AI Review 时，先删除当前 `task_id + review_key` 下旧的修复预览。
+2. 不带 `reviewKey` 的全量重试应删除该任务所有旧修复预览。
+3. 自动生成修复预览仍只按项目组 AI Review 策略的 `autoFixPreviewEnabled` 和 `autoFixPreviewSeverities` 判断，不读取模型输出中的其它修复建议作为预览。
+
+## 62. 多模型重试后的运行计时不要混入旧进度事件
+
+现象：
+
+在某个模型 Tab 下重新触发 AI Review 后，顶部显示：
+
+```text
+AI Review 正在执行 HTTP 请求已发起 已执行 816 秒
+```
+
+但这是刚刚重新 Review，计时应该从 0 附近重新开始。
+
+原因：
+
+多模型页面过滤进度事件时，如果把 `review_key IS NULL` 的历史事件也混入当前模型 Tab，运行中计时会拿到旧事件时间作为起点。另一个隐患是运行中优先使用旧 `startedAt`，没有按最新一轮 `QUEUED / STARTED / REQUEST_BUILT / HTTP_REQUEST_START` 事件重置计时基准。
+
+处理方式：
+
+1. 多模型 Tab 只展示当前 `reviewKey` 的进度事件；只有单模型 / 旧数据没有 `reviewKey` 时才展示空 `reviewKey` 事件。
+2. 运行中计时优先使用当前 Tab 最新一轮运行起点事件，不要从历史第一条事件或旧 `startedAt` 继续累加。
+
+## 63. 修复预览 Diff 对照表不要压缩长代码行
+
+现象：
+
+AI 修复 Patch 预览弹窗中，左右对照 diff 底部有横向滚动条，但左侧原始代码仍被截断，看不到完整长行。
+
+原因：
+
+旧样式把左右代码列设置为 `minmax(360px, 1fr)`，表格整体最小宽度也只有 `920px`。长代码行会被压在当前弹窗宽度内，横向滚动条更多是在滚动固定网格，而不是滚动完整代码内容。
+
+处理方式：
+
+1. diff 行使用 `max-content` 让代码列按内容撑开。
+2. 每个代码列保留合理最小宽度，短行仍保持左右对照可读。
+3. 横向滚动由 `.diff-viewer-table` 统一承载，用户可以滑动查看左右两侧完整长行。
+4. 弹窗 body 和 diff 表格都要允许纵向滚动；当 patch 本身包含更多上下文行时，可以在弹窗内继续下滑查看。
+5. 如果 AI 返回的 unified diff 只有一个很短的 hunk，页面无法凭空展示更多上下文；需要重新生成更大上下文的 patch，或通过问题项旁的“查看 Diff”看原始任务 diff。

@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, inspect, select, text, update
+from sqlalchemy import delete, func, inspect, select, text, update
 from sqlalchemy.orm import Session
 
 from app.code_quality.models import (
@@ -494,6 +494,14 @@ def ensure_fix_preview_schema(db: Session) -> None:
     _add_column_if_missing(db, columns, "code_quality_fix_previews", "model", "VARCHAR(128) NULL")
     _add_column_if_missing(db, columns, "code_quality_fix_previews", "summary", "VARCHAR(1024) NULL")
     _add_column_if_missing(db, columns, "code_quality_fix_previews", "warnings_json", "TEXT NULL")
+    _drop_index_if_exists(db, "code_quality_fix_previews", "uk_code_quality_fix_preview_task_finding")
+    _add_index_if_missing(
+        db,
+        "code_quality_fix_previews",
+        "uk_code_quality_fix_preview_task_review_finding",
+        "task_id, review_key, finding_index",
+        unique=True,
+    )
     db.flush()
 
 
@@ -1092,6 +1100,15 @@ def list_fix_preview_responses(db: Session, task_id: int, review_key: str | None
         stmt = stmt.where(CodeQualityFixPreview.review_key == review_key)
     records = db.scalars(stmt.order_by(CodeQualityFixPreview.review_key.asc(), CodeQualityFixPreview.finding_index.asc())).all()
     return [fix_preview_to_dict(record) for record in records]
+
+
+def delete_fix_previews(db: Session, task_id: int, review_key: str | None = None) -> None:
+    ensure_fix_preview_schema(db)
+    stmt = delete(CodeQualityFixPreview).where(CodeQualityFixPreview.task_id == task_id)
+    if review_key:
+        stmt = stmt.where(CodeQualityFixPreview.review_key == review_key)
+    db.execute(stmt)
+    db.flush()
 
 
 def save_fix_preview(

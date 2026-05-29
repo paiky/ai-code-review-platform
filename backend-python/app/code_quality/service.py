@@ -19,6 +19,7 @@ from app.code_quality.repository import (
     cancel_active_scheduler_jobs_for_task,
     cancel_scheduler_job,
     create_scheduler_job,
+    delete_fix_previews,
     delete_progress,
     find_push_gate_decision,
     find_fix_preview_response,
@@ -419,10 +420,11 @@ def run_manual_review_now(db: Session, task_id: int, request: dict[str, Any]) ->
     return _aggregate_review_results(results)
 
 
-def retry_review_task(db: Session, task_id: int) -> dict[str, Any]:
-    response = enqueue_retry_review(db, task_id)
+def retry_review_task(db: Session, task_id: int, request: dict[str, Any] | None = None) -> dict[str, Any]:
+    review_key = (request or {}).get("reviewKey")
+    response = enqueue_retry_review(db, task_id, review_key=review_key)
     if _inline_enabled():
-        result = run_retry_review_now(db, task_id)
+        result = run_retry_review_now(db, task_id, review_key=review_key)
         db.commit()
         return {
             "taskId": task_id,
@@ -454,7 +456,7 @@ def retry_review_task(db: Session, task_id: int) -> dict[str, Any]:
     return response
 
 
-def enqueue_retry_review(db: Session, task_id: int) -> dict[str, Any]:
+def enqueue_retry_review(db: Session, task_id: int, review_key: str | None = None) -> dict[str, Any]:
     if not _enabled(db):
         raise AppError("BAD_REQUEST", "Code quality review is disabled", 400)
     task = db.get(ReviewTask, task_id)
@@ -467,7 +469,12 @@ def enqueue_retry_review(db: Session, task_id: int) -> dict[str, Any]:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
     profile = _resolve_profile(db, task.code_quality_profile_code, project)
     targets = _resolve_review_targets(db, project, profile, task.target_type)
-    delete_progress(db, task.id)
+    if review_key:
+        targets = [target for target in targets if target["reviewKey"] == review_key]
+        if not targets:
+            raise AppError("BAD_REQUEST", f"Review model not found for task {task_id}: {review_key}", 400)
+    delete_progress(db, task.id, review_key=review_key)
+    delete_fix_previews(db, task.id, review_key=review_key)
     queued_reviews = []
     for target in targets:
         provider = target["provider"]
@@ -587,7 +594,7 @@ def run_retry_review_target_job(
         db.close()
 
 
-def run_retry_review_now(db: Session, task_id: int) -> dict[str, Any]:
+def run_retry_review_now(db: Session, task_id: int, review_key: str | None = None) -> dict[str, Any]:
     task = db.get(ReviewTask, task_id)
     if task is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
@@ -596,6 +603,10 @@ def run_retry_review_now(db: Session, task_id: int) -> dict[str, Any]:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
     profile = _resolve_profile(db, task.code_quality_profile_code, project)
     targets = _resolve_review_targets(db, project, profile, task.target_type)
+    if review_key:
+        targets = [target for target in targets if target["reviewKey"] == review_key]
+        if not targets:
+            raise AppError("BAD_REQUEST", f"Review model not found for task {task_id}: {review_key}", 400)
     results = []
     for target in targets:
         request = _request_from_task_event(db, task, profile)

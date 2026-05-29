@@ -8,7 +8,7 @@ from httpx import Response
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
-from app.code_quality.models import CodeQualityReviewResult, CodeQualitySchedulerJob
+from app.code_quality.models import CodeQualityFixPreview, CodeQualityReviewResult, CodeQualitySchedulerJob
 from app.project_integration.models import GitLabMergeRequestEvent, Project
 from app.review_record.models import ReviewTask
 from app.rule_template.models import RuleTemplate
@@ -1478,6 +1478,16 @@ def test_fix_preview_can_be_interrupted_from_task(
     progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
     assert "JOB_INTERRUPTED" in [event["phase"] for event in progress]
 
+    regenerated = client.post(
+        f"/api/review-tasks/{task_id}/code-quality-fix-preview",
+        json={"findingIndex": 0, "forceRegenerate": True},
+    )
+
+    assert regenerated.status_code == 200
+    assert regenerated.json()["data"]["status"] == "QUEUED"
+    previews_after_regenerate = client.get(f"/api/review-tasks/{task_id}/code-quality-fix-previews").json()["data"]
+    assert previews_after_regenerate[0]["status"] == "QUEUED"
+
 
 def test_scheduler_job_can_be_interrupted_from_queue(
     client: TestClient,
@@ -1601,6 +1611,32 @@ def test_job_queue_schema_adds_scheduler_indexes(
     assert "idx_code_quality_scheduler_jobs_task" in indexes
     assert "idx_code_quality_scheduler_jobs_status_updated" in indexes
     assert "idx_code_quality_scheduler_jobs_status_queue" in indexes
+
+
+def test_fix_preview_schema_removes_legacy_task_finding_unique_index(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    db_session.execute(
+        text(
+            "CREATE UNIQUE INDEX uk_code_quality_fix_preview_task_finding "
+            "ON code_quality_fix_previews (task_id, finding_index)"
+        )
+    )
+    db_session.commit()
+
+    response = client.get("/api/review-tasks/463/code-quality-fix-previews")
+
+    assert response.status_code == 200
+    inspector = inspect(db_session.get_bind())
+    indexes = {index["name"] for index in inspector.get_indexes("code_quality_fix_previews")}
+    unique_constraints = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("code_quality_fix_previews")
+    }
+    names = indexes | unique_constraints
+    assert "uk_code_quality_fix_preview_task_finding" not in names
+    assert "uk_code_quality_fix_preview_task_review_finding" in names
 
 
 def test_job_queue_limits_loaded_active_jobs_but_reports_total_active_count(
@@ -2457,6 +2493,135 @@ def test_retry_returns_running_without_waiting_for_provider(
     assert submitted == [created["taskId"]]
     result = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-result").json()["data"]
     assert result["status"] == "RUNNING"
+
+
+def test_retry_gitlab_ai_review_can_target_single_model(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    from app.code_quality import service
+
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "false")
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {
+                "id": 1001,
+                "name": "demo-service",
+                "web_url": "https://gitlab.example.com/demo/service",
+            },
+            "object_attributes": {
+                "iid": 14,
+                "action": "open",
+                "source_branch": "feature/single-model-retry",
+                "target_branch": "main",
+            },
+            "changedFiles": [
+                {
+                    "path": "src/OrderService.java",
+                    "diffText": "+ order.setStatus(null);",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    ).json()["data"]
+    submitted: list[dict] = []
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.delenv("CODE_QUALITY_RETRY_INLINE", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "retry-secret")
+    monkeypatch.setenv("XIAOMIMO_API_KEY", "mimo-secret")
+    monkeypatch.setattr(
+        service._executor,
+        "submit",
+        lambda fn, *args, **kwargs: submitted.append({"fn": fn.__name__, "args": args, "kwargs": kwargs}),
+    )
+    assert client.put("/api/code-quality-reviews/settings", json={"reviewEnabled": True}).status_code == 200
+    default_group = next(
+        item for item in client.get("/api/project-groups").json()["data"]["items"]
+        if item["groupCode"] == "default"
+    )
+    assert client.put(
+        f"/api/project-groups/{default_group['id']}",
+        json={
+            "groupName": default_group["groupName"],
+            "groupCode": default_group["groupCode"],
+            "defaultCodeQualityProfileCode": "backend-default-ai-review",
+            "aiReviewModels": [
+                {
+                    "reviewKey": "deepseek-main",
+                    "providerCode": "DEEPSEEK",
+                    "modelName": "deepseek-v4-pro",
+                    "displayName": "DeepSeek 主审",
+                    "sortOrder": 10,
+                },
+                {
+                    "reviewKey": "mimo-secondary",
+                    "providerCode": "XIAOMIMO",
+                    "modelName": "mimo-v2.5-pro",
+                    "displayName": "MiMo 复审",
+                    "sortOrder": 20,
+                },
+            ],
+        },
+    ).status_code == 200
+    now = datetime.now()
+    db_session.add_all(
+        [
+            CodeQualityFixPreview(
+                task_id=created["taskId"],
+                review_key="deepseek-main",
+                project_id=1,
+                finding_index=0,
+                file_path="src/OrderService.java",
+                status="SUCCESS",
+                provider="DEEPSEEK",
+                model="deepseek-v4-pro",
+                summary="old deepseek preview",
+                patch_text="old patch",
+                warnings_json="[]",
+                error_message=None,
+                created_at=now,
+                updated_at=now,
+            ),
+            CodeQualityFixPreview(
+                task_id=created["taskId"],
+                review_key="mimo-secondary",
+                project_id=1,
+                finding_index=0,
+                file_path="src/OrderService.java",
+                status="SUCCESS",
+                provider="XIAOMIMO",
+                model="mimo-v2.5-pro",
+                summary="old mimo preview",
+                patch_text="old patch",
+                warnings_json="[]",
+                error_message=None,
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    retry = client.post(
+        f"/api/code-quality-reviews/tasks/{created['taskId']}/retry",
+        json={"reviewKey": "deepseek-main"},
+    )
+
+    assert retry.status_code == 200
+    data = retry.json()["data"]
+    assert [item["reviewKey"] for item in data["reviews"]] == ["deepseek-main"]
+    assert len(submitted) == 1
+    assert submitted[0]["args"][1] == "deepseek-main"
+    results = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-results").json()["data"]
+    assert [item["reviewKey"] for item in results] == ["deepseek-main"]
+    previews = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-fix-previews").json()["data"]
+    assert [item["reviewKey"] for item in previews] == ["mimo-secondary"]
+    progress = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-progress").json()["data"]
+    assert {item["reviewKey"] for item in progress} == {"deepseek-main"}
 
 
 def test_manual_review_returns_running_without_waiting_for_provider(

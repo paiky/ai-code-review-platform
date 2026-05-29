@@ -46,8 +46,8 @@ async def update_settings(request: dict, db: Session = Depends(get_db)) -> dict:
 
 
 @review_router.post("/tasks/{task_id}/retry")
-async def retry(task_id: int, db: Session = Depends(get_db)) -> dict:
-    return ok(service.retry_review_task(db, task_id))
+async def retry(task_id: int, request: dict | None = None, db: Session = Depends(get_db)) -> dict:
+    return ok(service.retry_review_task(db, task_id, request))
 
 
 @review_router.post("/tasks/{task_id}/cancel")

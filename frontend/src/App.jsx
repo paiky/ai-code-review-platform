@@ -1550,7 +1550,8 @@ function CodeQualityProgressView({ progress, running = false, reviewStartedAt, r
   const fallbackStartedAtRef = useRef(Date.now());
   const [elapsedTick, setElapsedTick] = useState(Date.now());
   const latestEvent = reviewEvents.length > 0 ? reviewEvents[reviewEvents.length - 1] : null;
-  const runningStartedAt = startedAt || parseEventTime(reviewEvents[0]?.createdAt) || fallbackStartedAtRef.current;
+  const latestRunStartAt = latestReviewRunStartAt(reviewEvents);
+  const runningStartedAt = (running ? latestRunStartAt : null) || startedAt || parseEventTime(reviewEvents[0]?.createdAt) || fallbackStartedAtRef.current;
   const runningUntil = running ? elapsedTick : (finishedAt || elapsedTick);
   const runningSeconds = Math.max(0, Math.floor((runningUntil - runningStartedAt) / 1000));
 
@@ -1624,6 +1625,18 @@ function CodeQualityProgressView({ progress, running = false, reviewStartedAt, r
       )}
     </Card>
   );
+}
+
+function latestReviewRunStartAt(events) {
+  const runStartPhases = new Set(['QUEUED', 'STARTED', 'REQUEST_BUILT', 'HTTP_REQUEST_START']);
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (runStartPhases.has(event?.phase)) {
+      const parsed = parseEventTime(event?.createdAt);
+      if (parsed) return parsed;
+    }
+  }
+  return null;
 }
 
 function gateDecisionColor(value) {
@@ -1900,7 +1913,7 @@ function CodeQualityReviewView({
         <Card>
           <Empty description="暂无代码质量 Review 结果" />
           <div className="empty-action-row">
-            <Button type="primary" loading={retrying} onClick={onRetry}>重试 AI Review</Button>
+            <Button type="primary" loading={retrying} onClick={() => onRetry?.()}>重试 AI Review</Button>
           </div>
         </Card>
         <CodeQualityProgressView progress={progress} />
@@ -1921,7 +1934,11 @@ function CodeQualityReviewView({
     try {
       const preview = await fetchApi(`/api/review-tasks/${taskId}/code-quality-fix-preview`, {
         method: 'POST',
-        body: JSON.stringify({ findingIndex: index, reviewKey: review?.reviewKey, forceRegenerate: cached?.status === 'FAILED' })
+        body: JSON.stringify({
+          findingIndex: index,
+          reviewKey: review?.reviewKey,
+          forceRegenerate: cached?.status === 'FAILED' || cached?.status === 'SKIPPED'
+        })
       });
       setFixPreviewByIndex(current => ({ ...current, [index]: preview }));
       if (preview?.status === 'SUCCESS') {
@@ -1983,7 +2000,7 @@ function CodeQualityReviewView({
                   中断 AI Review
                 </Button>
               )}
-              <Button loading={retrying} disabled={review.status === 'RUNNING'} onClick={onRetry}>重试 AI Review</Button>
+              <Button loading={retrying} disabled={review.status === 'RUNNING'} onClick={() => onRetry?.(review?.reviewKey)}>重试 AI Review</Button>
             </Space>
           </div>
           <Alert type={findings.length > 0 ? 'warning' : 'info'} showIcon message={summaryText} />
@@ -2146,7 +2163,7 @@ function CodeQualityReviewsPanel({
           <CodeQualityReviewView
             taskId={taskId}
             review={review}
-            progress={(progress || []).filter(item => !item.reviewKey || item.reviewKey === review.reviewKey)}
+            progress={(progress || []).filter(item => review.reviewKey ? item.reviewKey === review.reviewKey : !item.reviewKey)}
             changedFilesSummary={changedFilesSummary}
             initialFixPreviews={(fixPreviews || []).filter(item => item.reviewKey === review.reviewKey)}
             onRetry={onRetry}
@@ -2253,11 +2270,14 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     return () => window.clearInterval(timer);
   }, [taskId, codeQualityResult?.status, codeQualityResults, fixPreviews]);
 
-  const retryCodeQualityReview = async () => {
+  const retryCodeQualityReview = async reviewKey => {
     setRetrying(true);
     setError(null);
     try {
-      const retryResult = await fetchApi(`/api/code-quality-reviews/tasks/${taskId}/retry`, { method: 'POST' });
+      const retryResult = await fetchApi(`/api/code-quality-reviews/tasks/${taskId}/retry`, {
+        method: 'POST',
+        body: reviewKey ? JSON.stringify({ reviewKey }) : undefined
+      });
       const optimisticReviews = (retryResult.reviews || [retryResult]).map(item => ({
         taskId: retryResult.taskId,
         projectId: detail?.projectId,
@@ -2272,18 +2292,35 @@ function TaskDetail({ taskId, onBack, onOpen }) {
         findingCount: item.findingCount ?? retryResult.findingCount,
         findings: []
       }));
-      setCodeQualityResults(optimisticReviews);
-      setCodeQualityResult(optimisticReviews[0] || null);
-      setCodeQualityProgress([{
-        id: 'local-queued',
-        taskId,
-        phase: 'QUEUED',
-        level: 'INFO',
-        message: 'AI Review 已重新进入执行队列',
-        detail: `provider=${retryResult.provider}, profile=${retryResult.profileCode}`,
-        createdAt: new Date().toISOString()
-      }]);
-      setFixPreviews([]);
+      setCodeQualityResults(current => {
+        if (!reviewKey) return optimisticReviews;
+        const byKey = new Map(optimisticReviews.map(item => [item.reviewKey, item]));
+        const merged = current.map(item => byKey.get(item.reviewKey) || item);
+        const knownKeys = new Set(current.map(item => item.reviewKey));
+        return [...merged, ...optimisticReviews.filter(item => !knownKeys.has(item.reviewKey))];
+      });
+      setCodeQualityResult(current => (
+        reviewKey
+          ? optimisticReviews.find(item => item.reviewKey === current?.reviewKey) || current
+          : optimisticReviews[0] || null
+      ));
+      setCodeQualityProgress(current => {
+        const localQueued = {
+          id: `local-queued-${reviewKey || 'all'}`,
+          taskId,
+          reviewKey: reviewKey || retryResult.reviewKey,
+          phase: 'QUEUED',
+          level: 'INFO',
+          message: 'AI Review 已重新进入执行队列',
+          detail: `provider=${retryResult.provider}, profile=${retryResult.profileCode}`,
+          createdAt: new Date().toISOString()
+        };
+        if (!reviewKey) return [localQueued];
+        return [...current.filter(item => item.reviewKey !== reviewKey), localQueued];
+      });
+      setFixPreviews(current => (
+        reviewKey ? current.filter(item => item.reviewKey !== reviewKey) : []
+      ));
       requestJobQueueRefresh();
     } catch (err) {
       setError(err.message);
