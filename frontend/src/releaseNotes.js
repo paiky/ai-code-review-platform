@@ -1,5 +1,18 @@
 export const releaseNotes = [
   {
+    id: '2026-05-29-multi-model-ai-review',
+    version: 'v0.14.0',
+    releaseDate: '2026-05-29',
+    title: '项目组多模型 AI Review',
+    summary: 'AI Review 从单模型升级为项目组多模型配置，支持同一任务并行产出多份审查结果。',
+    highlights: [
+      '项目组管理支持选择多个已配置 Key 的模型 Provider，未配置 Key 的模型会置灰不可选。',
+      'MR、Push 和重试进入 AI Review 时，会按项目组模型配置并行调度多模型审查。',
+      '任务详情页在多模型结果下显示模型子 tab；单模型任务继续保持原有展示。'
+    ],
+    tags: ['多模型 Review', '项目组配置', '并行调度', 'AI Review']
+  },
+  {
     id: '2026-05-27-xiaomimo-provider-connectivity-help',
     version: 'v0.13.0',
     releaseDate: '2026-05-27',
