@@ -16,6 +16,8 @@ from app.code_quality import prompt
 from app.code_quality.providers import run_fix_provider, run_provider, test_provider_connection
 from app.code_quality.repository import (
     append_progress,
+    cancel_active_scheduler_jobs_for_task,
+    cancel_scheduler_job,
     create_scheduler_job,
     delete_progress,
     find_push_gate_decision,
@@ -117,7 +119,9 @@ class _ProviderJobScheduler:
             db = SessionLocal()
             try:
                 if job_id:
-                    mark_scheduler_job_running(db, job_id)
+                    if not mark_scheduler_job_running(db, job_id):
+                        db.commit()
+                        continue
                     db.commit()
                 outcome = fn(*args, **kwargs)
                 if job_id:
@@ -1374,6 +1378,57 @@ def get_job_queue_response(db: Session) -> dict[str, Any]:
     return list_scheduler_queue_snapshot(db)
 
 
+def cancel_job_response(db: Session, job_id: int) -> dict[str, Any]:
+    response = cancel_scheduler_job(db, job_id, "用户手动中断调度任务")
+    append_progress(
+        db,
+        response["taskId"],
+        "JOB_INTERRUPTED",
+        "WARNING",
+        "调度任务已手动中断",
+        f"jobId={job_id}, jobType={response.get('jobType')}, status={response.get('status')}",
+        review_key=response.get("reviewKey"),
+    )
+    db.commit()
+    return response
+
+
+def cancel_task_jobs_response(db: Session, task_id: int, request: dict[str, Any] | None = None) -> dict[str, Any]:
+    if db.get(ReviewTask, task_id) is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+    request = request or {}
+    job_type = str(request.get("jobType") or "").strip().upper() or None
+    if job_type and job_type not in {"AI_REVIEW", "FIX_PREVIEW"}:
+        raise AppError("VALIDATION_ERROR", f"Unsupported jobType: {job_type}", 400)
+    finding_index = request.get("findingIndex")
+    if finding_index is not None:
+        try:
+            finding_index = int(finding_index)
+        except (TypeError, ValueError) as exception:
+            raise AppError("VALIDATION_ERROR", "findingIndex must be an integer", 400) from exception
+    review_key = request.get("reviewKey")
+    reason = "用户手动中断 AI Review" if job_type == "AI_REVIEW" else "用户手动中断修复预览"
+    jobs = cancel_active_scheduler_jobs_for_task(
+        db,
+        task_id,
+        job_type=job_type,
+        review_key=review_key,
+        finding_index=finding_index,
+        reason=reason,
+    )
+    append_progress(
+        db,
+        task_id,
+        "JOB_INTERRUPTED",
+        "WARNING",
+        "调度任务已手动中断",
+        f"jobType={job_type or '-'}, reviewKey={review_key or '-'}, findingIndex={finding_index if finding_index is not None else '-'}, affectedJobs={len(jobs)}",
+        review_key=review_key,
+    )
+    db.commit()
+    return {"taskId": task_id, "status": "SKIPPED", "affectedJobs": len(jobs), "jobs": jobs}
+
+
 def get_failure_notifications_response(db: Session) -> dict[str, Any]:
     return list_ai_review_failure_notifications(db)
 
@@ -1602,6 +1657,14 @@ def _generate_fix_preview(
             "reviewKey": review_result.get("reviewKey"),
         },
     )
+    interrupted = find_fix_preview_response(
+        db,
+        task_id=task_id,
+        finding_index=finding_index,
+        review_key=review_result.get("reviewKey"),
+    )
+    if interrupted and interrupted.get("status") == "SKIPPED":
+        return interrupted
     saved = save_fix_preview(
         db,
         task_id=task_id,
@@ -1878,6 +1941,9 @@ def _run_review(
             "startedAt": datetime.now(),
             "finishedAt": datetime.now(),
         }
+    interrupted = find_result_response_by_key(db, task_id, review_key)
+    if interrupted and interrupted.get("status") == "SKIPPED":
+        return interrupted
     append_progress(
         db,
         task_id,

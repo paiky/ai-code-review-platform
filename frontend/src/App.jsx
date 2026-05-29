@@ -667,8 +667,9 @@ function jobDurationText(job) {
   return formatDuration(Math.max(0, (end - start) / 1000));
 }
 
-function JobQueueModal({ open, queue, onClose, onOpenTask, onOpenFixPreview }) {
+function JobQueueModal({ open, queue, onClose, onOpenTask, onCancelJob }) {
   const groups = Array.isArray(queue?.groups) ? queue.groups : [];
+  const canCancelJob = job => ['QUEUED', 'RUNNING'].includes(job?.status);
   const metaItems = (group, reviewJob) => [
     {
       label: 'Review 状态',
@@ -690,14 +691,12 @@ function JobQueueModal({ open, queue, onClose, onOpenTask, onOpenFixPreview }) {
     { title: '错误', dataIndex: 'errorMessage', ellipsis: true, render: value => value || '-' },
     {
       title: '操作',
-      width: 130,
+      width: 120,
       render: (_, row) => (
         <Space size={4}>
           <Button type="link" size="small" onClick={() => onOpenTask?.(row.taskId)}>详情</Button>
-          {row.findingIndex != null && (
-            <Button type="link" size="small" onClick={() => onOpenFixPreview?.(row.taskId, row.findingIndex)}>
-              风险点
-            </Button>
+          {canCancelJob(row) && (
+            <Button danger type="link" size="small" onClick={() => onCancelJob?.(row)}>中断</Button>
           )}
         </Space>
       )
@@ -734,7 +733,12 @@ function JobQueueModal({ open, queue, onClose, onOpenTask, onOpenFixPreview }) {
                           </div>
                         ))}
                       </div>
-                      <Button type="link" onClick={() => onOpenTask?.(group.taskId)}>查看任务详情</Button>
+                      <Space>
+                        <Button type="link" onClick={() => onOpenTask?.(group.taskId)}>查看任务详情</Button>
+                        {canCancelJob(reviewJob) && (
+                          <Button danger type="link" onClick={() => onCancelJob?.(reviewJob)}>中断 Review</Button>
+                        )}
+                      </Space>
                     </div>
                   ) : (
                     <div className="job-queue-review-row">
@@ -1832,12 +1836,23 @@ function fixPreviewActionClass(status) {
   return 'fix-preview-action-idle';
 }
 
-function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, initialFixPreviews, onRetry, retrying }) {
+function CodeQualityReviewView({
+  taskId,
+  review,
+  progress,
+  changedFilesSummary,
+  initialFixPreviews,
+  onRetry,
+  retrying,
+  onCancelReview,
+  onCancelFixPreview
+}) {
   const location = useLocation();
   const [diffTarget, setDiffTarget] = useState(null);
   const [fixPreviewTarget, setFixPreviewTarget] = useState(null);
   const [fixPreviewByIndex, setFixPreviewByIndex] = useState({});
   const [fixPreviewLoadingIndex, setFixPreviewLoadingIndex] = useState(null);
+  const [cancelingAction, setCancelingAction] = useState(null);
   const [activeFindingKeys, setActiveFindingKeys] = useState([]);
   useEffect(() => {
     const previews = Array.isArray(initialFixPreviews) ? initialFixPreviews : [];
@@ -1894,6 +1909,30 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
       setFixPreviewLoadingIndex(null);
     }
   };
+  const cancelReview = async () => {
+    const key = `review-${review?.reviewKey || 'default'}`;
+    setCancelingAction(key);
+    try {
+      await onCancelReview?.({ jobType: 'AI_REVIEW', reviewKey: review?.reviewKey });
+      message.success('AI Review 已中断');
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setCancelingAction(null);
+    }
+  };
+  const cancelFixPreview = async index => {
+    const key = `fix-${index}`;
+    setCancelingAction(key);
+    try {
+      await onCancelFixPreview?.({ jobType: 'FIX_PREVIEW', reviewKey: review?.reviewKey, findingIndex: index });
+      message.success('修复预览已中断');
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setCancelingAction(null);
+    }
+  };
   return (
     <Space direction="vertical" size="large" className="full-width">
       <Card>
@@ -1906,7 +1945,19 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
               {review.overallLevel && <Tag color={riskColor(review.overallLevel)}>{severityLabel(review.overallLevel)}</Tag>}
               <Tag>{review.findingCount ?? findings.length} 个问题</Tag>
             </Space>
-            <Button loading={retrying} disabled={review.status === 'RUNNING'} onClick={onRetry}>重试 AI Review</Button>
+            <Space>
+              {review.status === 'RUNNING' && (
+                <Button
+                  danger
+                  icon={<CloseOutlined />}
+                  loading={cancelingAction === `review-${review?.reviewKey || 'default'}`}
+                  onClick={cancelReview}
+                >
+                  中断 AI Review
+                </Button>
+              )}
+              <Button loading={retrying} disabled={review.status === 'RUNNING'} onClick={onRetry}>重试 AI Review</Button>
+            </Space>
           </div>
           <Alert type={findings.length > 0 ? 'warning' : 'info'} showIcon message={summaryText} />
           {review.status === 'RUNNING' && <Alert type="info" showIcon message="AI Review 正在执行" description="模型 Provider 正在分析代码变更，完成后结果会自动刷新。" />}
@@ -1970,6 +2021,17 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
                           >
                             {fixPreviewActionText(fixPreviewStatus)}
                           </Button>
+                          {fixPreviewBusy && (
+                            <Button
+                              danger
+                              size="small"
+                              icon={<CloseOutlined />}
+                              loading={cancelingAction === `fix-${index}`}
+                              onClick={() => cancelFixPreview(index)}
+                            >
+                              中断
+                            </Button>
+                          )}
                         </Space>
                       </Descriptions.Item>
                       <Descriptions.Item label="来源">{sourceLabel(finding.source || review.provider)}</Descriptions.Item>
@@ -2020,7 +2082,17 @@ function codeQualityReviewTabLabel(review) {
   return review?.displayName || review?.model || '-';
 }
 
-function CodeQualityReviewsPanel({ taskId, reviews, progress, changedFilesSummary, fixPreviews, onRetry, retrying }) {
+function CodeQualityReviewsPanel({
+  taskId,
+  reviews,
+  progress,
+  changedFilesSummary,
+  fixPreviews,
+  onRetry,
+  retrying,
+  onCancelReview,
+  onCancelFixPreview
+}) {
   const reviewItems = Array.isArray(reviews) ? reviews : [];
   if (reviewItems.length <= 1) {
     const review = reviewItems[0] || null;
@@ -2033,6 +2105,8 @@ function CodeQualityReviewsPanel({ taskId, reviews, progress, changedFilesSummar
         initialFixPreviews={fixPreviews}
         onRetry={onRetry}
         retrying={retrying}
+        onCancelReview={onCancelReview}
+        onCancelFixPreview={onCancelFixPreview}
       />
     );
   }
@@ -2050,6 +2124,8 @@ function CodeQualityReviewsPanel({ taskId, reviews, progress, changedFilesSummar
             initialFixPreviews={(fixPreviews || []).filter(item => item.reviewKey === review.reviewKey)}
             onRetry={onRetry}
             retrying={retrying}
+            onCancelReview={onCancelReview}
+            onCancelFixPreview={onCancelFixPreview}
           />
         )
       }))}
@@ -2189,6 +2265,21 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     }
   };
 
+  const cancelCodeQualityJob = async request => {
+    setError(null);
+    try {
+      await fetchApi(`/api/code-quality-reviews/tasks/${taskId}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify(request || {})
+      });
+      requestJobQueueRefresh();
+      await load({ silent: true });
+    } catch (err) {
+      setError(err.message);
+      throw err;
+    }
+  };
+
   const rerunReviewTask = async () => {
     setRerunning(true);
     setError(null);
@@ -2208,7 +2299,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   };
 
   const tabItems = useMemo(() => [
-    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} fixPreviews={fixPreviews} onRetry={retryCodeQualityReview} retrying={retrying} /> },
+    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} fixPreviews={fixPreviews} onRetry={retryCodeQualityReview} retrying={retrying} onCancelReview={cancelCodeQualityJob} onCancelFixPreview={cancelCodeQualityJob} /> },
     ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
       ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
       : []),
@@ -4577,10 +4668,15 @@ function AppFrame() {
     navigate(`/tasks/${taskId}`, { state: { from: route } });
   };
 
-  const openFixPreviewFromQueue = (taskId, findingIndex) => {
-    if (!taskId || findingIndex == null) return;
-    setJobQueueOpen(false);
-    navigate(`/tasks/${taskId}#fix-preview-${findingIndex}`, { state: { from: route } });
+  const cancelJobFromQueue = async job => {
+    if (!job?.id) return;
+    try {
+      await fetchApi(`/api/code-quality-reviews/job-queue/${job.id}/cancel`, { method: 'POST' });
+      message.success('调度任务已中断');
+      loadJobQueue();
+    } catch (err) {
+      message.error(err.message);
+    }
   };
 
   useEffect(() => {
@@ -4688,7 +4784,7 @@ function AppFrame() {
         queue={jobQueue}
         onClose={() => setJobQueueOpen(false)}
         onOpenTask={openTaskFromQueue}
-        onOpenFixPreview={openFixPreviewFromQueue}
+        onCancelJob={cancelJobFromQueue}
       />
       <FailureNotificationsModal
         open={failureNotificationsOpen}

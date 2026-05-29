@@ -1364,6 +1364,93 @@ def test_fix_preview_queues_without_running_provider_immediately(
     assert queue["groups"][0]["fixPreviewJobs"][0]["status"] == "QUEUED"
 
 
+@respx.mock
+def test_fix_preview_can_be_interrupted_from_task(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    from app.code_quality import service
+
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.delenv("CODE_QUALITY_FIX_PREVIEW_INLINE", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fix-preview-secret")
+    monkeypatch.setattr(service._executor, "submit", lambda *args, **kwargs: None)
+    respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json()}}]})
+    )
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
+            "object_attributes": {"iid": 26, "action": "open", "source_branch": "feature/cancel-fix", "target_branch": "main"},
+            "changedFiles": [
+                {
+                    "path": "src/OrderService.java",
+                    "diffText": "@@ -9,4 +9,4 @@ public void create(Order order) {\n+        order.setStatus(null);",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+    task_id = created.json()["data"]["taskId"]
+    client.post(f"/api/review-tasks/{task_id}/code-quality-fix-preview", json={"findingIndex": 0})
+
+    cancelled = client.post(
+        f"/api/code-quality-reviews/tasks/{task_id}/cancel",
+        json={"jobType": "FIX_PREVIEW", "findingIndex": 0},
+    )
+
+    assert cancelled.status_code == 200
+    assert cancelled.json()["data"]["status"] == "SKIPPED"
+    previews = client.get(f"/api/review-tasks/{task_id}/code-quality-fix-previews").json()["data"]
+    assert previews[0]["status"] == "SKIPPED"
+    queue = client.get("/api/code-quality-reviews/job-queue").json()["data"]
+    assert queue["activeCount"] == 0
+    assert queue["groups"][0]["fixPreviewJobs"][0]["status"] == "SKIPPED"
+    progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
+    assert "JOB_INTERRUPTED" in [event["phase"] for event in progress]
+
+
+def test_scheduler_job_can_be_interrupted_from_queue(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    now = datetime.now()
+    db_session.add(
+        CodeQualitySchedulerJob(
+            id=93001,
+            job_type="AI_REVIEW",
+            task_id=93001,
+            project_id=1,
+            finding_index=None,
+            status="QUEUED",
+            priority=10,
+            label="queued review",
+            file_path=None,
+            error_message=None,
+            queued_at=now,
+            started_at=None,
+            finished_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.commit()
+
+    response = client.post("/api/code-quality-reviews/job-queue/93001/cancel")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "SKIPPED"
+    assert data["errorMessage"] == "用户手动中断调度任务"
+    queue = client.get("/api/code-quality-reviews/job-queue").json()["data"]
+    assert queue["activeCount"] == 0
+
+
 def test_job_queue_keeps_active_jobs_and_recently_updated_finished_jobs(
     client: TestClient,
     db_session: Session,

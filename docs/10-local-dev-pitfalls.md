@@ -1299,3 +1299,20 @@ GitLab 新分支 Push 的 `before` 为全 0，payload 里可能只有 `commits[]
 1. Push Hook 检测到 `newBranchPush=true` 且 changed files 中没有任何 `diffText` 时，直接返回 `SKIPPED`，`taskId=null`。
 2. 该场景不调用 GitLab compare API、不创建 `review_tasks`、不生成提醒卡片、不触发通知或 AI Review。
 3. 如果未来 GitLab payload 明确携带可审查 `diffText`，仍可按正常 Push 审查链路处理。
+
+## 56. AI Review / 修复预览卡在运行中时需要可手动中断
+
+现象：
+
+修复预览或 AI Review 调度任务可能长时间停留在 `RUNNING` / `QUEUED`，页面持续显示“生成中”或“运行中”，例如 Provider 请求超时前、后台线程异常退出前，或用户已经确认本次任务不需要继续等待。
+
+原因：
+
+当前调度器是后端线程池执行 Provider HTTP 调用，Python 线程无法安全强杀正在执行的请求。仅靠启动时 stale recovery 也只能处理服务重启前遗留的 `RUNNING` Review，不能解决当前页面上需要立即释放状态的任务。
+
+处理方式：
+
+1. 提供协作式中断接口：将调度任务、AI Review 结果或修复预览记录标记为 `SKIPPED`，并写入 `JOB_INTERRUPTED` 进度事件。
+2. 对排队任务，worker 取出后如果发现状态已不是 `QUEUED`，应直接跳过执行。
+3. 对已开始的 Provider 调用，不能强杀线程，但返回后保存结果前必须再次检查记录是否已被标记为 `SKIPPED`，避免覆盖用户手动中断状态。
+4. 前端任务详情和 AI Review 调度队列都应暴露中断按钮，便于处理卡住的 Review 或 finding 级修复预览。

@@ -30,6 +30,11 @@ async def get_job_queue(db: Session = Depends(get_db)) -> dict:
     return ok(service.get_job_queue_response(db))
 
 
+@review_router.post("/job-queue/{job_id}/cancel")
+async def cancel_job(job_id: int, db: Session = Depends(get_db)) -> dict:
+    return ok(service.cancel_job_response(db, job_id))
+
+
 @review_router.get("/failure-notifications")
 async def get_failure_notifications(db: Session = Depends(get_db)) -> dict:
     return ok(service.get_failure_notifications_response(db))
@@ -43,6 +48,11 @@ async def update_settings(request: dict, db: Session = Depends(get_db)) -> dict:
 @review_router.post("/tasks/{task_id}/retry")
 async def retry(task_id: int, db: Session = Depends(get_db)) -> dict:
     return ok(service.retry_review_task(db, task_id))
+
+
+@review_router.post("/tasks/{task_id}/cancel")
+async def cancel_task_jobs(task_id: int, request: dict | None = None, db: Session = Depends(get_db)) -> dict:
+    return ok(service.cancel_task_jobs_response(db, task_id, request))
 
 
 @profile_router.get("")

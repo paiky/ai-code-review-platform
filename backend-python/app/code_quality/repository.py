@@ -1197,15 +1197,16 @@ def create_scheduler_job(
     return record
 
 
-def mark_scheduler_job_running(db: Session, job_id: int) -> None:
+def mark_scheduler_job_running(db: Session, job_id: int) -> bool:
     record = db.get(CodeQualitySchedulerJob, job_id)
-    if record is None:
-        return
+    if record is None or record.status != "QUEUED":
+        return False
     now = datetime.now()
     record.status = "RUNNING"
     record.started_at = now
     record.updated_at = now
     db.flush()
+    return True
 
 
 def mark_scheduler_job_finished(
@@ -1217,12 +1218,118 @@ def mark_scheduler_job_finished(
     record = db.get(CodeQualitySchedulerJob, job_id)
     if record is None:
         return
+    if record.status not in {"QUEUED", "RUNNING"}:
+        return
     now = datetime.now()
     record.status = status
     record.error_message = _truncate(error_message, 1024)
     record.finished_at = now
     record.updated_at = now
     db.flush()
+
+
+def cancel_scheduler_job(db: Session, job_id: int, reason: str | None = None) -> dict[str, Any]:
+    ensure_scheduler_job_schema(db)
+    record = db.get(CodeQualitySchedulerJob, job_id)
+    if record is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Scheduler job not found: {job_id}", 404)
+    if record.status in {"QUEUED", "RUNNING"}:
+        _mark_scheduler_job_interrupted(record, reason)
+        if record.job_type == "AI_REVIEW":
+            _mark_review_result_interrupted(db, record.task_id, record.review_key, reason)
+        elif record.job_type == "FIX_PREVIEW" and record.finding_index is not None:
+            _mark_fix_preview_interrupted(db, record.task_id, record.review_key, record.finding_index, reason)
+        db.flush()
+    return scheduler_job_to_dict(record)
+
+
+def cancel_active_scheduler_jobs_for_task(
+    db: Session,
+    task_id: int,
+    *,
+    job_type: str | None = None,
+    review_key: str | None = None,
+    finding_index: int | None = None,
+    reason: str | None = None,
+) -> list[dict[str, Any]]:
+    ensure_scheduler_job_schema(db)
+    stmt = (
+        select(CodeQualitySchedulerJob)
+        .where(CodeQualitySchedulerJob.task_id == task_id)
+        .where(CodeQualitySchedulerJob.status.in_(["QUEUED", "RUNNING"]))
+    )
+    if job_type:
+        stmt = stmt.where(CodeQualitySchedulerJob.job_type == job_type)
+    if review_key:
+        stmt = stmt.where(CodeQualitySchedulerJob.review_key == review_key)
+    if finding_index is not None:
+        stmt = stmt.where(CodeQualitySchedulerJob.finding_index == finding_index)
+    records = db.scalars(stmt.order_by(CodeQualitySchedulerJob.id.asc())).all()
+    for record in records:
+        _mark_scheduler_job_interrupted(record, reason)
+    if job_type == "AI_REVIEW":
+        _mark_review_result_interrupted(db, task_id, review_key, reason)
+    elif job_type == "FIX_PREVIEW" and finding_index is not None:
+        _mark_fix_preview_interrupted(db, task_id, review_key, finding_index, reason)
+    db.flush()
+    return [scheduler_job_to_dict(record) for record in records]
+
+
+def _mark_scheduler_job_interrupted(record: CodeQualitySchedulerJob, reason: str | None = None) -> None:
+    now = datetime.now()
+    record.status = "SKIPPED"
+    record.error_message = _truncate(reason or "用户手动中断", 1024)
+    record.finished_at = now
+    record.updated_at = now
+
+
+def _mark_review_result_interrupted(
+    db: Session,
+    task_id: int,
+    review_key: str | None,
+    reason: str | None = None,
+) -> None:
+    ensure_result_schema(db)
+    stmt = (
+        select(CodeQualityReviewResult)
+        .where(CodeQualityReviewResult.task_id == task_id)
+        .where(CodeQualityReviewResult.status == "RUNNING")
+    )
+    if review_key:
+        stmt = stmt.where(CodeQualityReviewResult.review_key == review_key)
+    records = db.scalars(stmt).all()
+    now = datetime.now()
+    for record in records:
+        record.status = "SKIPPED"
+        record.error_message = _truncate(reason or "用户手动中断 AI Review", 1024)
+        record.finished_at = now
+        record.updated_at = now
+
+
+def _mark_fix_preview_interrupted(
+    db: Session,
+    task_id: int,
+    review_key: str | None,
+    finding_index: int,
+    reason: str | None = None,
+) -> None:
+    ensure_fix_preview_schema(db)
+    stmt = (
+        select(CodeQualityFixPreview)
+        .where(CodeQualityFixPreview.task_id == task_id)
+        .where(CodeQualityFixPreview.finding_index == finding_index)
+        .where(CodeQualityFixPreview.status.in_(["QUEUED", "RUNNING"]))
+    )
+    if review_key:
+        stmt = stmt.where(CodeQualityFixPreview.review_key == review_key)
+    record = db.scalars(stmt.order_by(CodeQualityFixPreview.id.asc())).first()
+    if record is None:
+        return
+    record.status = "SKIPPED"
+    record.error_message = _truncate(reason or "用户手动中断修复预览", 1024)
+    record.summary = "用户手动中断修复预览"
+    record.patch_text = None
+    record.updated_at = datetime.now()
 
 
 def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, Any]:
