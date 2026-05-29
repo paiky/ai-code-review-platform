@@ -502,9 +502,49 @@ def test_new_multi_target_project_creates_failed_task_when_multiple_types_match(
     assert detail["status"] == "FAILED"
     assert set(detail["targetTypes"]) == {"WEB_PC", "BACKEND"}
     assert "端类型路径映射命中多个端类型" in detail["errorMessage"]
+    assert "BACKEND 命中 src/main/java/com/demo/OrderService.java" in detail["errorMessage"]
+    assert "WEB_PC 命中 web/src/App.jsx" in detail["errorMessage"]
     project = next(item for item in client.get("/api/projects").json()["data"]["items"] if item["gitProjectId"] == "4004")
     assert set(project["detectedTargetTypes"]) == {"WEB_PC", "BACKEND"}
     assert set(project["supportedTargetTypes"]) == {"WEB_PC", "BACKEND"}
+
+
+def test_target_type_path_mapping_does_not_prefix_double_star_implicitly(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    seed_template(db_session, "backend-default", "BACKEND")
+    seed_template(db_session, "frontend-default", "FRONTEND")
+    mappings = client.get("/api/target-type-path-mappings").json()["data"]
+    updated = [
+        {
+            **item,
+            "pathPatterns": (
+                ["src/main/java/**"]
+                if item["targetType"] == "BACKEND"
+                else (["app/**/*.java"] if item["targetType"] == "APP_ANDROID" else item["pathPatterns"])
+            ),
+        }
+        for item in mappings
+    ]
+    assert client.put("/api/target-type-path-mappings", json={"items": updated}).status_code == 200
+
+    response = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=mr_payload(
+            4005,
+            "mobile/android-app",
+            [{"path": "app/src/main/java/com/demo/MainActivity.java", "diffText": "+ class MainActivity {}"}],
+        ),
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["status"] == "SUCCESS"
+    detail = client.get(f"/api/review-tasks/{payload['taskId']}").json()["data"]
+    assert detail["targetType"] == "APP_ANDROID"
+    assert detail["targetTypes"] == ["APP_ANDROID"]
 
 
 def test_target_type_path_mappings_can_be_updated_and_drive_new_project_detection(

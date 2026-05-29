@@ -135,7 +135,7 @@ def handle_merge_request_webhook(db: Session, payload: dict[str, Any]) -> dict:
             )
             ambiguous_types = ambiguous_auto_detected_target_types(db, project)
             if ambiguous_types:
-                _mark_existing_task_failed_for_ambiguous_targets(task, ambiguous_types)
+                _mark_existing_task_failed_for_ambiguous_targets(task, project, ambiguous_types)
                 db.commit()
                 return {
                     "taskId": task.id,
@@ -315,12 +315,58 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
         raise
 
 
-def _ambiguous_target_message(target_types: list[str]) -> str:
-    return (
-        "端类型路径映射命中多个端类型："
-        + "、".join(target_types)
-        + "。请在设置页确认最近路径匹配结果，并调整全局端类型路径映射或项目端类型配置后重新触发审阅。"
+def _ambiguous_target_message(project, target_types: list[str]) -> str:
+    conflict_summary = _target_detection_conflict_summary(project, target_types)
+    message = "端类型路径映射命中多个端类型：" + "、".join(target_types) + "。"
+    if conflict_summary:
+        message += f"冲突示例：{conflict_summary}。"
+    return message + "请调整全局端类型路径映射或项目端类型配置后重新触发审阅。"
+
+
+def _target_detection_conflict_summary(project, target_types: list[str]) -> str:
+    try:
+        detection = json.loads(project.target_detection_json or "{}")
+    except (TypeError, ValueError):
+        return ""
+    evidences = detection.get("evidences")
+    if not isinstance(evidences, list):
+        return ""
+    target_set = set(target_types)
+    by_path: dict[str, list[dict[str, str]]] = {}
+    for evidence in evidences:
+        if not isinstance(evidence, dict) or evidence.get("targetType") not in target_set:
+            continue
+        path = str(evidence.get("value") or "").strip()
+        if path:
+            by_path.setdefault(path, []).append(evidence)
+    overlapping = [
+        (path, items)
+        for path, items in by_path.items()
+        if len({item.get("targetType") for item in items}) > 1
+    ]
+    if overlapping:
+        return "；".join(_format_detection_path(path, items) for path, items in overlapping[:2])
+    first_by_type = []
+    seen: set[str] = set()
+    for evidence in evidences:
+        if not isinstance(evidence, dict):
+            continue
+        target_type = evidence.get("targetType")
+        if target_type in target_set and target_type not in seen and evidence.get("value"):
+            first_by_type.append(evidence)
+            seen.add(target_type)
+    return "；".join(
+        f"{item.get('targetType')} 命中 {item.get('value')}({item.get('pattern')})"
+        for item in first_by_type[:3]
     )
+
+
+def _format_detection_path(path: str, evidences: list[dict[str, str]]) -> str:
+    matches = "、".join(
+        f"{item.get('targetType')}({item.get('pattern')})"
+        for item in evidences[:3]
+    )
+    return f"{path} 同时命中 {matches}"
 
 
 def _create_failed_mr_task_for_ambiguous_targets(
@@ -367,7 +413,7 @@ def _create_failed_mr_task_for_ambiguous_targets(
             updated_at=now,
         )
     )
-    mark_task_failed(task, _ambiguous_target_message(target_types))
+    mark_task_failed(task, _ambiguous_target_message(project, target_types))
     return task
 
 
@@ -415,15 +461,15 @@ def _create_failed_push_task_for_ambiguous_targets(
             updated_at=now,
         )
     )
-    mark_task_failed(task, _ambiguous_target_message(target_types))
+    mark_task_failed(task, _ambiguous_target_message(project, target_types))
     return task
 
 
-def _mark_existing_task_failed_for_ambiguous_targets(task, target_types: list[str]) -> None:
+def _mark_existing_task_failed_for_ambiguous_targets(task, project, target_types: list[str]) -> None:
     task.target_type = None
     task.target_types_json = json.dumps(target_types, ensure_ascii=False)
     task.code_quality_profile_code = None
-    mark_task_failed(task, _ambiguous_target_message(target_types))
+    mark_task_failed(task, _ambiguous_target_message(project, target_types))
 
 
 def _process_task(

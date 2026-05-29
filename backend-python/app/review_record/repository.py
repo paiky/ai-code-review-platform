@@ -123,7 +123,12 @@ def list_review_tasks(
     items = []
     for task, project, result in rows:
         list_risk_card = None
-        if result is not None:
+        reminder_card_enabled = (
+            bool(result.reminder_card_enabled)
+            if result is not None and result.reminder_card_enabled is not None
+            else True
+        )
+        if result is not None and reminder_card_enabled:
             list_risk_card = _filter_risk_card_for_template(
                 db,
                 read_json(result.risk_card_json, None),
@@ -150,7 +155,11 @@ def list_review_tasks(
                 "errorMessage": task.error_message,
                 "riskLevel": list_risk_card.get("riskLevel") if isinstance(list_risk_card, dict) else task.risk_level,
                 "riskItemCount": code_quality_counts.get(task.id, 0),
-                "focusIndicators": list_risk_card.get("focusIndicators", []) if isinstance(list_risk_card, dict) else _focus_indicators(result.risk_card_json if result else None),
+                "focusIndicators": (
+                    list_risk_card.get("focusIndicators", [])
+                    if isinstance(list_risk_card, dict)
+                    else []
+                ),
                 "createdAt": format_datetime(task.created_at),
                 "finishedAt": format_datetime(task.finished_at),
             }

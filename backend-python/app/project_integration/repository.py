@@ -1082,7 +1082,7 @@ def _replace_project_group_ai_review_models(
 def _path_matches(path: str, pattern: str) -> bool:
     normalized_path = path.replace("\\", "/")
     normalized_pattern = str(pattern or "").replace("\\", "/")
-    return fnmatchcase(normalized_path, normalized_pattern) or fnmatchcase(normalized_path, f"**/{normalized_pattern}")
+    return fnmatchcase(normalized_path, normalized_pattern)
 
 
 def _sync_project_supported_target_types(db: Session, project: Project) -> None:

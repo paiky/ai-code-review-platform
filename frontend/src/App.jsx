@@ -3960,7 +3960,7 @@ function TemplateConfig() {
                 <Alert
                   type="info"
                   showIcon
-                  message="Webhook 新项目只按这里的全局路径映射识别端类型。同一次变更命中多个端类型时会生成失败任务，提示调整映射。"
+                  message="Webhook 新项目只按这里的全局路径映射识别端类型。路径规则从仓库根目录匹配；如需任意层级匹配，请显式配置 **/ 前缀。"
                 />
                 <Table
                   size="small"

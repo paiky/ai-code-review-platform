@@ -680,6 +680,8 @@ frontend/**、web/**、src/**/*.tsx、src/**/*.jsx、package.json -> WEB_PC
 src/main/java/**、src/main/resources/**、src/*.java、pom.xml、backend-python/** -> BACKEND
 ```
 
+端类型路径规则按仓库根目录原样匹配，不会自动在规则前补 `**/`。例如 `src/main/java/**` 只匹配根目录下的后端源码，不会匹配 Android 项目里的 `app/src/main/java/**`；如确实需要任意层级匹配，请在设置页显式配置 `**/src/main/java/**`。
+
 如果新项目只命中一个端类型，平台会自动创建该端类型配置，并默认使用 `**/*` 作为项目内路径匹配，适合“单端单仓库”。如果没有命中任何端类型，会设置为 `GENERAL`。`GENERAL` 不再兜底到后端 AI Review 模板，如果项目组也未设置 AI Review 模板，AI Review 会落为 `FAILED` 并提示“项目所属项目组未设置 AI Review 模板”。如果同一次变更命中多个端类型，平台会创建一条失败任务，提示调整全局端类型路径映射或项目端类型配置。已有项目的人工端类型配置不会被自动覆盖。
 
 模板接口：

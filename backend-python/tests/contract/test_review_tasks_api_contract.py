@@ -203,6 +203,21 @@ def test_review_task_list_counts_ai_review_findings_instead_of_rule_reminders(
     assert item["riskItemCount"] == 7
 
 
+def test_review_task_list_hides_focus_indicators_when_reminder_card_disabled(
+    client: TestClient, db_session: Session
+) -> None:
+    seed_review_task(db_session)
+    result = db_session.get(ReviewResult, 20001)
+    result.reminder_card_enabled = False
+    db_session.commit()
+
+    list_response = client.get("/api/review-tasks", params={"keyword": "risk-demo"})
+
+    assert list_response.status_code == 200
+    item = list_response.json()["data"]["items"][0]
+    assert item["focusIndicators"] == []
+
+
 def test_review_tasks_trigger_type_filter(client: TestClient, db_session: Session) -> None:
     seed_review_task(db_session)
     created_at = datetime(2026, 5, 18, 11, 0, 0)
