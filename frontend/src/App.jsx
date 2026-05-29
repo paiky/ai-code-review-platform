@@ -1817,6 +1817,21 @@ function FixPreviewModal({ open, preview, onClose }) {
   );
 }
 
+function fixPreviewActionText(status) {
+  if (status === 'SUCCESS') return '查看修复预览';
+  if (status === 'RUNNING') return '修复预览生成中';
+  if (status === 'QUEUED') return '修复预览排队中';
+  if (status === 'FAILED' || status === 'SKIPPED') return '重新生成修复预览';
+  return '生成修复预览';
+}
+
+function fixPreviewActionClass(status) {
+  if (status === 'SUCCESS') return 'fix-preview-action-success';
+  if (status === 'RUNNING' || status === 'QUEUED') return 'fix-preview-action-pending';
+  if (status === 'FAILED' || status === 'SKIPPED') return 'fix-preview-action-failed';
+  return 'fix-preview-action-idle';
+}
+
 function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, initialFixPreviews, onRetry, retrying }) {
   const location = useLocation();
   const [diffTarget, setDiffTarget] = useState(null);
@@ -1912,63 +1927,60 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
           <Collapse
             activeKey={activeFindingKeys}
             onChange={keys => setActiveFindingKeys(Array.isArray(keys) ? keys : [keys])}
-            items={findings.map((finding, index) => ({
-              key: `finding-${index}`,
-              label: (
-                <Space className="risk-item-heading" wrap>
-                  <Tag color={severityColor(finding.severity)}>{severityLabel(finding.severity)}</Tag>
-                  {finding.category && <Tag color="blue">{categoryLabel(finding.category)}</Tag>}
-                  {finding.confidence && <Tag color={confidenceColor(finding.confidence)}>置信度 {confidenceLabel(finding.confidence)}</Tag>}
-                  <Text strong>{cleanAiMarkdown(finding.title) || '未命名问题'}</Text>
-                </Space>
-              ),
-              children: (
-                <Space direction="vertical" className="full-width" id={`fix-preview-${index}`}>
-                  <Descriptions size="small" className="quality-finding-meta" column={{ xs: 1, md: 6 }}>
-                    <Descriptions.Item label="位置" span={4}>
-                      <Space className="code-location-row" wrap>
-                        <Text code className="code-location-text">
-                          {codeLocationText(finding.filePath, finding.startLine, finding.endLine)}
-                        </Text>
-                        <Button
-                          size="small"
-                          icon={<FileSearchOutlined />}
-                          disabled={!finding.filePath}
-                          onClick={() => setDiffTarget({
-                            finding,
-                            changedFile: findChangedFileForFinding(finding, changedFilesSummary)
-                          })}
-                        >
-                          查看 Diff
-                        </Button>
-                        <Button
-                          size="small"
-                          type="primary"
-                          ghost
-                          loading={fixPreviewLoadingIndex === index || fixPreviewByIndex[index]?.status === 'RUNNING'}
-                          disabled={!taskId || review.status === 'RUNNING' || !finding.filePath}
-                          onClick={() => generateFixPreview(index)}
-                        >
-                          {fixPreviewByIndex[index]?.status === 'SUCCESS'
-                            ? '查看修复预览'
-                            : (fixPreviewByIndex[index]?.status === 'RUNNING'
-                                ? '修复预览生成中'
-                                : (fixPreviewByIndex[index]?.status === 'QUEUED'
-                                    ? '修复预览排队中'
-                                : (fixPreviewByIndex[index]?.status === 'FAILED' || fixPreviewByIndex[index]?.status === 'SKIPPED'
-                                    ? '重新生成修复预览'
-                                    : '生成修复预览')))}
-                        </Button>
-                      </Space>
-                    </Descriptions.Item>
-                    <Descriptions.Item label="来源">{sourceLabel(finding.source || review.provider)}</Descriptions.Item>
-                    <Descriptions.Item label="分类">{categoryLabel(finding.category)}</Descriptions.Item>
-                  </Descriptions>
-                  {finding.body && <Paragraph>{cleanAiMarkdown(finding.body)}</Paragraph>}
-                  {finding.suggestion && <Alert type="info" showIcon message="建议" description={finding.suggestion} />}
-                </Space>
-              )
-            }))}
+            items={findings.map((finding, index) => {
+              const fixPreviewStatus = fixPreviewByIndex[index]?.status;
+              const fixPreviewBusy = fixPreviewStatus === 'RUNNING' || fixPreviewStatus === 'QUEUED';
+              const fixPreviewLoading = fixPreviewLoadingIndex === index || fixPreviewStatus === 'RUNNING';
+              return {
+                key: `finding-${index}`,
+                label: (
+                  <Space className="risk-item-heading" wrap>
+                    <Tag color={severityColor(finding.severity)}>{severityLabel(finding.severity)}</Tag>
+                    {finding.category && <Tag color="blue">{categoryLabel(finding.category)}</Tag>}
+                    {finding.confidence && <Tag color={confidenceColor(finding.confidence)}>置信度 {confidenceLabel(finding.confidence)}</Tag>}
+                    <Text strong>{cleanAiMarkdown(finding.title) || '未命名问题'}</Text>
+                  </Space>
+                ),
+                children: (
+                  <Space direction="vertical" className="full-width" id={`fix-preview-${index}`}>
+                    <Descriptions size="small" className="quality-finding-meta" column={{ xs: 1, md: 6 }}>
+                      <Descriptions.Item label="位置" span={4}>
+                        <Space className="code-location-row" wrap>
+                          <Text code className="code-location-text">
+                            {codeLocationText(finding.filePath, finding.startLine, finding.endLine)}
+                          </Text>
+                          <Button
+                            size="small"
+                            icon={<FileSearchOutlined />}
+                            className="finding-action-button finding-diff-action"
+                            disabled={!finding.filePath}
+                            onClick={() => setDiffTarget({
+                              finding,
+                              changedFile: findChangedFileForFinding(finding, changedFilesSummary)
+                            })}
+                          >
+                            查看 Diff
+                          </Button>
+                          <Button
+                            size="small"
+                            className={`finding-action-button fix-preview-action ${fixPreviewActionClass(fixPreviewStatus)}`}
+                            loading={fixPreviewLoading}
+                            disabled={!taskId || review.status === 'RUNNING' || !finding.filePath || fixPreviewBusy}
+                            onClick={() => generateFixPreview(index)}
+                          >
+                            {fixPreviewActionText(fixPreviewStatus)}
+                          </Button>
+                        </Space>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="来源">{sourceLabel(finding.source || review.provider)}</Descriptions.Item>
+                      <Descriptions.Item label="分类">{categoryLabel(finding.category)}</Descriptions.Item>
+                    </Descriptions>
+                    {finding.body && <Paragraph>{cleanAiMarkdown(finding.body)}</Paragraph>}
+                    {finding.suggestion && <Alert type="info" showIcon message="建议" description={finding.suggestion} />}
+                  </Space>
+                )
+              };
+            })}
           />
         )}
       </Card>

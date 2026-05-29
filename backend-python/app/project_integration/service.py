@@ -173,12 +173,14 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
     project_name = project.get("path_with_namespace") or project.get("name") or f"gitlab-project-{git_project_id}"
     repository_url = project.get("web_url") or (payload.get("repository") or {}).get("homepage") or (payload.get("repository") or {}).get("git_http_url")
     event = _parse_push_event(payload, git_project_id, project_name, repository_url)
+    skip_new_branch_without_diff = _should_skip_new_branch_push_without_diff(event["changedFilesSummary"])
+    files_for_project_detection = [] if skip_new_branch_without_diff else event["changedFilesSummary"].get("files", [])
     project_record = upsert_gitlab_project(
         db,
         git_project_id,
         project_name,
         repository_url,
-        event["changedFilesSummary"].get("files", []),
+        files_for_project_detection,
     )
     branch_gate = _push_webhook_branch_gate(db, project_record, event["branchName"])
     if not branch_gate["allowed"]:
@@ -197,6 +199,21 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
             ),
             "profileCode": branch_gate["profileCode"],
             "pushBranchPatterns": branch_gate["patterns"],
+        }
+    if skip_new_branch_without_diff:
+        db.commit()
+        return {
+            "taskId": None,
+            "status": "SKIPPED",
+            "gitProjectId": git_project_id,
+            "projectName": project_name,
+            "mrId": None,
+            "branchName": event["branchName"],
+            "reasonCode": "NEW_BRANCH_PUSH_DIFF_UNAVAILABLE",
+            "message": (
+                "GitLab new branch Push does not include reviewable diff text; "
+                "platform review task creation was skipped."
+            ),
         }
     ambiguous_types = ambiguous_auto_detected_target_types(db, project_record)
     if ambiguous_types:
@@ -694,6 +711,15 @@ def _push_payload_commit_count(payload: dict[str, Any]) -> int:
             pass
     commits = payload.get("commits")
     return len(commits) if isinstance(commits, list) else 0
+
+
+def _should_skip_new_branch_push_without_diff(changed_files_summary: dict[str, Any]) -> bool:
+    if not changed_files_summary.get("newBranchPush"):
+        return False
+    files = changed_files_summary.get("files")
+    if not isinstance(files, list) or not files:
+        return True
+    return not any(str(file.get("diffText") or "").strip() for file in files if isinstance(file, dict))
 
 
 def _is_zero_sha(value: str | None) -> bool:

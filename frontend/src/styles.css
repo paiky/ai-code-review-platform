@@ -470,6 +470,70 @@ body {
   min-width: 0;
 }
 
+.finding-action-button {
+  font-weight: 600;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.finding-diff-action {
+  color: #0958d9;
+  border-color: #91caff;
+  background: #e6f4ff;
+}
+
+.finding-diff-action:not(:disabled):hover {
+  color: #003eb3;
+  border-color: #69b1ff;
+  background: #bae0ff;
+}
+
+.fix-preview-action {
+  min-width: 132px;
+}
+
+.fix-preview-action-idle {
+  color: #531dab;
+  border-color: #d3adf7;
+  background: #f9f0ff;
+}
+
+.fix-preview-action-idle:not(:disabled):hover {
+  color: #391085;
+  border-color: #b37feb;
+  background: #efdbff;
+}
+
+.fix-preview-action-success {
+  color: #237804;
+  border-color: #95de64;
+  background: #f6ffed;
+}
+
+.fix-preview-action-success:not(:disabled):hover {
+  color: #135200;
+  border-color: #73d13d;
+  background: #d9f7be;
+}
+
+.fix-preview-action-pending {
+  color: #0958d9;
+  border-color: #91caff;
+  background: #e6f4ff;
+}
+
+.fix-preview-action-failed {
+  color: #cf1322;
+  border-color: #ffa39e;
+  background: #fff1f0;
+}
+
+.fix-preview-action-failed:not(:disabled):hover {
+  color: #a8071a;
+  border-color: #ff7875;
+  background: #ffccc7;
+}
+
 .diff-viewer-modal .ant-modal-body {
   max-height: calc(100vh - 190px);
   overflow: hidden;

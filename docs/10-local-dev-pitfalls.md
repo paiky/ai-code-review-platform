@@ -1240,9 +1240,9 @@ GitLab 新分支 Push 的 `before` 全 0 表示分支之前不存在，不是一
 处理方式：
 
 1. Push Hook 检测到 `beforeSha` 为全 0 时，不调用 GitLab compare API。
-2. 直接使用 payload 中 `commits[].added / modified / removed` 汇总的文件列表继续创建审查任务，不能让 webhook 500。
-3. Push Gate 指标中标记 `newBranchPush=true`，方便识别这是新远程分支首次 Push。
-4. 后续 Push Gate 仍按 commit 数、文件数、diff 可用性和阈值决定是否进入 AI Review；如果最终只有文件列表没有 diff 文本，会正常提示“无可审查 diff”。
+2. 如果 payload 中有真实 `changedFiles[].diffText`，可以继续按 payload diff 创建审查任务。
+3. 如果只有 `commits[].added / modified / removed` 文件列表、没有任何 diff 文本，直接返回 `SKIPPED`，`taskId=null`，不要创建审查任务污染任务列表。
+4. Push summary 中保留 `newBranchPush=true`，方便识别这是新远程分支首次 Push。
 
 ## 53. 替换项目组多模型配置要先 flush 删除
 
@@ -1283,3 +1283,19 @@ Duplicate entry '438' for key 'uk_task'
 1. 正式迁移脚本需要执行 `DROP INDEX uk_task`，再创建 `uk_code_quality_result_task_review_key(task_id, review_key)`。
 2. Python 运行时 schema 兼容也要检测并删除旧 `uk_task`，避免本地旧库没有完整跑迁移时继续 500。
 3. 已经失败的重新触发任务可以再次重新触发；旧失败任务会保留失败状态。
+
+## 55. 新分支 Push 没有 diff 时不要创建审查任务
+
+现象：
+
+GitLab 新分支 Push 的 `before` 为全 0，payload 里可能只有 `commits[].added / modified / removed` 文件列表，没有真实 `diffText`。平台如果继续按文件列表创建任务，端类型识别容易落到项目默认后端类型，任务列表会出现没有可审查 diff 的无效任务。
+
+原因：
+
+新分支 Push 的全 0 `before` 不是有效 commit，不能调用 compare API 补拉 diff；而 GitLab Push Hook 的 commit 文件列表只能说明涉及哪些路径，不等价于可用于规则分析或 AI Review 的 diff。用这个弱信号继续建任务会污染任务列表，并可能误导端类型。
+
+处理方式：
+
+1. Push Hook 检测到 `newBranchPush=true` 且 changed files 中没有任何 `diffText` 时，直接返回 `SKIPPED`，`taskId=null`。
+2. 该场景不调用 GitLab compare API、不创建 `review_tasks`、不生成提醒卡片、不触发通知或 AI Review。
+3. 如果未来 GitLab payload 明确携带可审查 `diffText`，仍可按正常 Push 审查链路处理。
