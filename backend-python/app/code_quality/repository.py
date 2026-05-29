@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -31,6 +33,8 @@ from app.notification.repository import (
 DEFAULT_PROFILE_CODE = "backend-default-ai-review"
 DEFAULT_AUTO_FIX_PREVIEW_SEVERITIES = ["CRITICAL"]
 AUTO_FIX_PREVIEW_SEVERITY_OPTIONS = {"CRITICAL", "MAJOR", "MINOR"}
+DEFAULT_REVIEW_KEY = "default"
+_PROGRESS_REVIEW_KEY: ContextVar[str | None] = ContextVar("code_quality_progress_review_key", default=None)
 DEFAULT_REVIEW_INSTRUCTIONS = """你是资深后端代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
 JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
 
@@ -284,6 +288,8 @@ def ensure_code_quality_config_schema(db: Session) -> None:
     ensure_settings_schema(db)
     ensure_profile_schema(db)
     ensure_provider_schema(db)
+    ensure_result_schema(db)
+    ensure_progress_schema(db)
     ensure_push_gate_schema(db)
     ensure_fix_preview_schema(db)
     ensure_scheduler_job_schema(db)
@@ -414,6 +420,46 @@ def ensure_provider_schema(db: Session) -> None:
     db.flush()
 
 
+def ensure_result_schema(db: Session) -> None:
+    connection = db.connection()
+    inspector = inspect(connection)
+    if not inspector.has_table("code_quality_review_results"):
+        CodeQualityReviewResult.__table__.create(connection, checkfirst=True)
+        db.flush()
+        return
+    columns = {column["name"] for column in inspector.get_columns("code_quality_review_results")}
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_review_results",
+        "review_key",
+        f"VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_REVIEW_KEY}'",
+    )
+    _add_column_if_missing(db, columns, "code_quality_review_results", "display_name", "VARCHAR(128) NULL")
+    _add_column_if_missing(db, columns, "code_quality_review_results", "sort_order", "INT NOT NULL DEFAULT 0")
+    _drop_index_if_exists(db, "code_quality_review_results", "uk_task")
+    _add_index_if_missing(
+        db,
+        "code_quality_review_results",
+        "uk_code_quality_result_task_review_key",
+        "task_id, review_key",
+        unique=True,
+    )
+    db.flush()
+
+
+def ensure_progress_schema(db: Session) -> None:
+    connection = db.connection()
+    inspector = inspect(connection)
+    if not inspector.has_table("code_quality_review_progress_events"):
+        CodeQualityReviewProgressEvent.__table__.create(connection, checkfirst=True)
+        db.flush()
+        return
+    columns = {column["name"] for column in inspector.get_columns("code_quality_review_progress_events")}
+    _add_column_if_missing(db, columns, "code_quality_review_progress_events", "review_key", "VARCHAR(64) NULL")
+    db.flush()
+
+
 def ensure_push_gate_schema(db: Session) -> None:
     connection = db.connection()
     inspector = inspect(connection)
@@ -437,6 +483,13 @@ def ensure_fix_preview_schema(db: Session) -> None:
         db.flush()
         return
     columns = {column["name"] for column in inspector.get_columns("code_quality_fix_previews")}
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_fix_previews",
+        "review_key",
+        f"VARCHAR(64) NOT NULL DEFAULT '{DEFAULT_REVIEW_KEY}'",
+    )
     _add_column_if_missing(db, columns, "code_quality_fix_previews", "project_id", "BIGINT NULL")
     _add_column_if_missing(db, columns, "code_quality_fix_previews", "model", "VARCHAR(128) NULL")
     _add_column_if_missing(db, columns, "code_quality_fix_previews", "summary", "VARCHAR(1024) NULL")
@@ -476,6 +529,7 @@ def ensure_scheduler_job_schema(db: Session) -> None:
         db.flush()
         return
     columns = {column["name"] for column in inspector.get_columns("code_quality_scheduler_jobs")}
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "review_key", "VARCHAR(64) NULL")
     _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "project_id", "BIGINT NULL")
     _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "finding_index", "INT NULL")
     _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "label", "VARCHAR(255) NULL")
@@ -522,12 +576,34 @@ def _add_column_if_missing(
     db.flush()
 
 
-def _add_index_if_missing(db: Session, table_name: str, index_name: str, columns_sql: str) -> None:
+def _add_index_if_missing(
+    db: Session,
+    table_name: str,
+    index_name: str,
+    columns_sql: str,
+    *,
+    unique: bool = False,
+) -> None:
     inspector = inspect(db.connection())
     existing = {index["name"] for index in inspector.get_indexes(table_name)}
     if index_name in existing:
         return
-    db.execute(text(f"CREATE INDEX {index_name} ON {table_name} ({columns_sql})"))
+    unique_sql = "UNIQUE " if unique else ""
+    db.execute(text(f"CREATE {unique_sql}INDEX {index_name} ON {table_name} ({columns_sql})"))
+    db.flush()
+
+
+def _drop_index_if_exists(db: Session, table_name: str, index_name: str) -> None:
+    inspector = inspect(db.connection())
+    existing_indexes = {index["name"] for index in inspector.get_indexes(table_name)}
+    existing_uniques = {constraint["name"] for constraint in inspector.get_unique_constraints(table_name)}
+    if index_name not in existing_indexes and index_name not in existing_uniques:
+        return
+    dialect_name = db.get_bind().dialect.name
+    if dialect_name == "mysql":
+        db.execute(text(f"ALTER TABLE {table_name} DROP INDEX {index_name}"))
+    else:
+        db.execute(text(f"DROP INDEX {index_name}"))
     db.flush()
 
 
@@ -992,23 +1068,29 @@ def find_fix_preview_response(
     *,
     task_id: int,
     finding_index: int,
+    review_key: str | None = None,
 ) -> dict[str, Any] | None:
     ensure_fix_preview_schema(db)
-    record = db.scalars(
+    stmt = (
         select(CodeQualityFixPreview)
         .where(CodeQualityFixPreview.task_id == task_id)
         .where(CodeQualityFixPreview.finding_index == finding_index)
-    ).first()
+    )
+    if review_key:
+        stmt = stmt.where(CodeQualityFixPreview.review_key == review_key)
+    record = db.scalars(stmt.order_by(CodeQualityFixPreview.id.asc())).first()
     return fix_preview_to_dict(record) if record else None
 
 
-def list_fix_preview_responses(db: Session, task_id: int) -> list[dict[str, Any]]:
+def list_fix_preview_responses(db: Session, task_id: int, review_key: str | None = None) -> list[dict[str, Any]]:
     ensure_fix_preview_schema(db)
-    records = db.scalars(
+    stmt = (
         select(CodeQualityFixPreview)
         .where(CodeQualityFixPreview.task_id == task_id)
-        .order_by(CodeQualityFixPreview.finding_index.asc())
-    ).all()
+    )
+    if review_key:
+        stmt = stmt.where(CodeQualityFixPreview.review_key == review_key)
+    records = db.scalars(stmt.order_by(CodeQualityFixPreview.review_key.asc(), CodeQualityFixPreview.finding_index.asc())).all()
     return [fix_preview_to_dict(record) for record in records]
 
 
@@ -1022,12 +1104,15 @@ def save_fix_preview(
     provider: str,
     model: str | None,
     result: dict[str, Any],
+    review_key: str | None = None,
 ) -> CodeQualityFixPreview:
     ensure_fix_preview_schema(db)
     now = datetime.now()
+    normalized_review_key = review_key or DEFAULT_REVIEW_KEY
     existing = db.scalars(
         select(CodeQualityFixPreview)
         .where(CodeQualityFixPreview.task_id == task_id)
+        .where(CodeQualityFixPreview.review_key == normalized_review_key)
         .where(CodeQualityFixPreview.finding_index == finding_index)
     ).first()
     values = {
@@ -1045,6 +1130,7 @@ def save_fix_preview(
     if existing is None:
         existing = CodeQualityFixPreview(
             task_id=task_id,
+            review_key=normalized_review_key,
             finding_index=finding_index,
             created_at=now,
             **values,
@@ -1060,6 +1146,7 @@ def save_fix_preview(
 def fix_preview_to_dict(record: CodeQualityFixPreview) -> dict[str, Any]:
     return {
         "taskId": record.task_id,
+        "reviewKey": record.review_key,
         "findingIndex": record.finding_index,
         "status": record.status,
         "filePath": record.file_path,
@@ -1080,8 +1167,9 @@ def create_scheduler_job(
     job_type: str,
     task_id: int,
     project_id: int | None,
-    finding_index: int | None = None,
     priority: int,
+    review_key: str | None = None,
+    finding_index: int | None = None,
     label: str | None = None,
     file_path: str | None = None,
 ) -> CodeQualitySchedulerJob:
@@ -1090,6 +1178,7 @@ def create_scheduler_job(
     record = CodeQualitySchedulerJob(
         job_type=job_type,
         task_id=task_id,
+        review_key=review_key,
         project_id=project_id,
         finding_index=finding_index,
         status="QUEUED",
@@ -1189,12 +1278,14 @@ def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, An
                 "targetBranch": getattr(task, "target_branch", None),
                 "externalSourceId": getattr(task, "external_source_id", None),
                 "reviewJob": None,
+                "reviewJobs": [],
                 "fixPreviewJobs": [],
             },
         )
         job = scheduler_job_to_dict(record)
         if record.job_type == "AI_REVIEW":
-            group["reviewJob"] = job
+            group["reviewJobs"].append(job)
+            group["reviewJob"] = group["reviewJob"] or job
         else:
             group["fixPreviewJobs"].append(job)
     groups = list(grouped.values())
@@ -1223,7 +1314,7 @@ def list_ai_review_failure_notifications(db: Session, limit: int = 100) -> dict[
     ).all()
     task_ids = sorted({record.task_id for record in records})
     tasks_by_id: dict[int, tuple[Any, Any]] = {}
-    results_by_task_id: dict[int, CodeQualityReviewResult] = {}
+    results_by_key: dict[tuple[int, str | None], CodeQualityReviewResult] = {}
     if task_ids:
         from app.project_integration.models import Project
         from app.review_record.models import ReviewTask
@@ -1237,14 +1328,14 @@ def list_ai_review_failure_notifications(db: Session, limit: int = 100) -> dict[
         result_rows = db.scalars(
             select(CodeQualityReviewResult).where(CodeQualityReviewResult.task_id.in_(task_ids))
         ).all()
-        results_by_task_id = {result.task_id: result for result in result_rows}
+        results_by_key = {(result.task_id, result.review_key): result for result in result_rows}
     return {
         "failureCount": failure_count,
         "items": [
             ai_review_failure_notification_to_dict(
                 record,
                 tasks_by_id.get(record.task_id, (None, None)),
-                results_by_task_id.get(record.task_id),
+                results_by_key.get((record.task_id, record.review_key)),
             )
             for record in records
         ],
@@ -1260,6 +1351,7 @@ def ai_review_failure_notification_to_dict(
     return {
         "id": record.id,
         "taskId": record.task_id,
+        "reviewKey": record.review_key,
         "projectId": record.project_id or getattr(task, "project_id", None),
         "projectName": getattr(project, "name", None),
         "triggerType": getattr(task, "trigger_type", None),
@@ -1285,6 +1377,7 @@ def scheduler_job_to_dict(record: CodeQualitySchedulerJob) -> dict[str, Any]:
         "id": record.id,
         "jobType": record.job_type,
         "taskId": record.task_id,
+        "reviewKey": record.review_key,
         "projectId": record.project_id,
         "findingIndex": record.finding_index,
         "status": record.status,
@@ -1357,18 +1450,28 @@ def save_result(
     provider: str,
     model: str | None,
     result: dict[str, Any],
+    display_name: str | None = None,
+    sort_order: int = 0,
+    review_key: str | None = None,
 ) -> CodeQualityReviewResult:
+    ensure_result_schema(db)
     now = datetime.now()
+    normalized_review_key = review_key or DEFAULT_REVIEW_KEY
     existing = db.scalars(
-        select(CodeQualityReviewResult).where(CodeQualityReviewResult.task_id == task_id)
+        select(CodeQualityReviewResult)
+        .where(CodeQualityReviewResult.task_id == task_id)
+        .where(CodeQualityReviewResult.review_key == normalized_review_key)
     ).first()
     if existing is None:
         existing = CodeQualityReviewResult(
             task_id=task_id,
+            review_key=normalized_review_key,
             project_id=project_id,
             profile_code=profile_code,
             provider=provider,
             model=model,
+            display_name=display_name,
+            sort_order=sort_order,
             status=result["status"],
             overall_level=result.get("overallLevel"),
             summary=_truncate(result.get("summary"), 1024),
@@ -1388,6 +1491,8 @@ def save_result(
         existing.profile_code = profile_code
         existing.provider = provider
         existing.model = model
+        existing.display_name = display_name
+        existing.sort_order = sort_order
         existing.status = result["status"]
         existing.overall_level = result.get("overallLevel")
         existing.summary = _truncate(result.get("summary"), 1024)
@@ -1404,20 +1509,56 @@ def save_result(
 
 
 def find_result_response(db: Session, task_id: int) -> dict[str, Any] | None:
+    result = _first_result(db, task_id)
+    return result_to_response(result) if result is not None else None
+
+
+def list_result_responses(db: Session, task_id: int) -> list[dict[str, Any]]:
+    ensure_result_schema(db)
+    records = db.scalars(
+        select(CodeQualityReviewResult)
+        .where(CodeQualityReviewResult.task_id == task_id)
+        .order_by(CodeQualityReviewResult.sort_order.asc(), CodeQualityReviewResult.id.asc())
+    ).all()
+    return [result_to_response(result) for result in records]
+
+
+def find_result_response_by_key(db: Session, task_id: int, review_key: str | None) -> dict[str, Any] | None:
+    ensure_result_schema(db)
+    normalized_review_key = review_key or DEFAULT_REVIEW_KEY
     result = db.scalars(
-        select(CodeQualityReviewResult).where(CodeQualityReviewResult.task_id == task_id)
+        select(CodeQualityReviewResult)
+        .where(CodeQualityReviewResult.task_id == task_id)
+        .where(CodeQualityReviewResult.review_key == normalized_review_key)
     ).first()
+    return result_to_response(result) if result is not None else None
+
+
+def _first_result(db: Session, task_id: int) -> CodeQualityReviewResult | None:
+    ensure_result_schema(db)
+    return db.scalars(
+        select(CodeQualityReviewResult)
+        .where(CodeQualityReviewResult.task_id == task_id)
+        .order_by(CodeQualityReviewResult.sort_order.asc(), CodeQualityReviewResult.id.asc())
+    ).first()
+
+
+def result_to_response(result: CodeQualityReviewResult | None) -> dict[str, Any] | None:
     if result is None:
         return None
     findings = json.loads(result.findings_json or "[]")
     if _needs_finding_repair(findings):
         findings = _repair_findings_from_raw_output(findings, result.raw_output, result.provider)
     return {
+        "id": result.id,
         "taskId": result.task_id,
+        "reviewKey": result.review_key,
         "projectId": result.project_id,
         "profileCode": result.profile_code,
         "provider": result.provider,
         "model": result.model,
+        "displayName": result.display_name,
+        "sortOrder": result.sort_order,
         "status": result.status,
         "overallLevel": result.overall_level,
         "summary": result.summary,
@@ -1588,10 +1729,13 @@ def append_progress(
     level: str,
     message: str,
     detail: str | None = None,
+    review_key: str | None = None,
 ) -> None:
+    normalized_review_key = review_key if review_key is not None else _PROGRESS_REVIEW_KEY.get()
     db.add(
         CodeQualityReviewProgressEvent(
             task_id=task_id,
+            review_key=normalized_review_key,
             phase=_truncate(phase, 64) or phase,
             level=_truncate(level, 32) or level,
             message=_truncate(message, 512) or message,
@@ -1602,24 +1746,28 @@ def append_progress(
     db.flush()
 
 
-def delete_progress(db: Session, task_id: int) -> None:
-    for event in db.scalars(
-        select(CodeQualityReviewProgressEvent).where(CodeQualityReviewProgressEvent.task_id == task_id)
-    ).all():
+def delete_progress(db: Session, task_id: int, review_key: str | None = None) -> None:
+    stmt = select(CodeQualityReviewProgressEvent).where(CodeQualityReviewProgressEvent.task_id == task_id)
+    if review_key:
+        stmt = stmt.where(CodeQualityReviewProgressEvent.review_key == review_key)
+    for event in db.scalars(stmt).all():
         db.delete(event)
     db.flush()
 
 
-def list_progress(db: Session, task_id: int) -> list[dict[str, Any]]:
-    records = db.scalars(
+def list_progress(db: Session, task_id: int, review_key: str | None = None) -> list[dict[str, Any]]:
+    stmt = (
         select(CodeQualityReviewProgressEvent)
         .where(CodeQualityReviewProgressEvent.task_id == task_id)
-        .order_by(CodeQualityReviewProgressEvent.id.asc())
-    ).all()
+    )
+    if review_key:
+        stmt = stmt.where(CodeQualityReviewProgressEvent.review_key == review_key)
+    records = db.scalars(stmt.order_by(CodeQualityReviewProgressEvent.id.asc())).all()
     return [
         {
             "id": record.id,
             "taskId": record.task_id,
+            "reviewKey": record.review_key,
             "phase": record.phase,
             "level": record.level,
             "message": record.message,
@@ -1628,6 +1776,15 @@ def list_progress(db: Session, task_id: int) -> list[dict[str, Any]]:
         }
         for record in records
     ]
+
+
+@contextmanager
+def progress_review_key(review_key: str | None):
+    token = _PROGRESS_REVIEW_KEY.set(review_key)
+    try:
+        yield
+    finally:
+        _PROGRESS_REVIEW_KEY.reset(token)
 
 
 def mark_stale_running_as_failed(db: Session, timeout_seconds: int) -> int:

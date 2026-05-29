@@ -793,6 +793,58 @@ def test_deepseek_manual_review_saves_result_and_progress(
 
 
 @respx.mock
+def test_project_group_multi_model_manual_review_saves_result_list(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    monkeypatch.setenv("XIAOMIMO_API_KEY", "mimo-secret")
+    seed_project(db_session, None)
+
+    default_group = next(
+        item for item in client.get("/api/project-groups").json()["data"]["items"]
+        if item["groupCode"] == "default"
+    )
+    bind = client.put("/api/projects/1/group", json={"groupId": default_group["id"]})
+    assert bind.status_code == 200
+    update_group = client.put(
+        f"/api/project-groups/{default_group['id']}",
+        json={
+            "groupName": default_group["groupName"],
+            "groupCode": default_group["groupCode"],
+            "defaultCodeQualityProfileCode": "backend-default-ai-review",
+            "aiReviewModels": [
+                {"providerCode": "DEEPSEEK", "modelName": "deepseek-v4-pro", "displayName": "DeepSeek 主审", "sortOrder": 10},
+                {"providerCode": "XIAOMIMO", "modelName": "mimo-v2.5-pro", "displayName": "MiMo 复审", "sortOrder": 20},
+            ],
+        },
+    )
+    assert update_group.status_code == 200
+    deepseek_route = respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("DeepSeek 完成")}}]})
+    )
+    mimo_route = respx.post("https://api.xiaomimimo.com/v1/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("MiMo 完成")}}]})
+    )
+
+    response = client.post("/api/code-quality-reviews/manual", json=manual_request())
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    results_response = client.get(f"/api/review-tasks/{task_id}/code-quality-results")
+    assert results_response.status_code == 200
+    results = results_response.json()["data"]
+    assert [item["provider"] for item in results] == ["DEEPSEEK", "XIAOMIMO"]
+    assert [item["displayName"] for item in results] == ["DeepSeek 主审", "MiMo 复审"]
+    assert all(item["status"] == "SUCCESS" for item in results)
+    assert deepseek_route.called
+    assert mimo_route.called
+
+
+@respx.mock
 def test_provider_timeout_config_overrides_deepseek_default(
     client: TestClient,
     db_session: Session,

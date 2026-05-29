@@ -60,6 +60,24 @@ class ProjectGroup(Base):
     updated_at: Mapped[object | None] = mapped_column(DateTime)
 
 
+class ProjectGroupAiReviewModel(Base):
+    __tablename__ = "project_group_ai_review_models"
+    __table_args__ = (
+        UniqueConstraint("group_id", "review_key", name="uk_project_group_ai_review_model_key"),
+    )
+
+    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    group_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    review_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str | None] = mapped_column(String(128))
+    display_name: Mapped[str | None] = mapped_column(String(128))
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[object | None] = mapped_column(DateTime)
+    updated_at: Mapped[object | None] = mapped_column(DateTime)
+
+
 class TargetTypePathMapping(Base):
     __tablename__ = "target_type_path_mappings"
     __table_args__ = (

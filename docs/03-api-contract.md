@@ -287,6 +287,41 @@ POST /api/projects
 }
 ```
 
+## 4.3 项目组 AI Review 模型配置
+
+```http
+GET /api/project-groups
+POST /api/project-groups
+PUT /api/project-groups/{groupId}
+```
+
+项目组响应和创建 / 更新请求支持 `aiReviewModels`：
+
+```json
+{
+  "groupName": "后端业务组",
+  "groupCode": "backend",
+  "defaultCodeQualityProfileCode": "backend-default-ai-review",
+  "defaultProviderCode": "DEEPSEEK",
+  "aiReviewModels": [
+    {
+      "reviewKey": "deepseek-main",
+      "providerCode": "DEEPSEEK",
+      "modelName": "deepseek-v4-pro",
+      "displayName": "DeepSeek 主审",
+      "enabled": true,
+      "sortOrder": 10
+    }
+  ]
+}
+```
+
+说明：
+
+- `defaultProviderCode` 继续保留作旧数据和旧调用方兼容；未配置 `aiReviewModels` 时会回退为单模型执行项。
+- `providerCode` 必填；`modelName` 为空时使用 Profile / Provider 默认模型；`displayName` 用于任务详情模型子 tab。
+- 同一项目组内 `reviewKey` 稳定标识模型结果；未传时后端根据 provider / model 自动生成。
+
 ## 5. Rule Template API
 
 ### 5.1 查询规则模板列表
@@ -466,6 +501,7 @@ Content-Type: application/json
 - `ANTHROPIC` 使用 Provider 配置中的 API Key 调用 Anthropic Messages API，并要求 `diffText`。
 - `DEEPSEEK` 与 `CUSTOM` 使用 OpenAI-compatible Chat Completions API，并要求 `diffText`。
 - GitLab MR webhook 风险审查成功后，如果 `reviewEnabled=true` 且项目绑定的 AI Review 配置处于启用状态，系统会异步触发 AI Code Review，并将结果保存到同一个 `taskId` 下。
+- 项目组可配置多个 `aiReviewModels`。自动触发和重试会为每个启用模型分别保存一条结果，并并行进入调度队列；仅配置单个模型时仍表现为单结果。
 - MR 自动 AI Review 启动后会先保存 `RUNNING` 结果，执行完成后更新为 `SUCCESS` 或 `FAILED`，前端可轮询本接口展示进度。
 - 所有 API Provider 自动触发都直接使用 MR diff 文本。
 - MR 自动 AI Review 受 `reviewEnabled` 全局能力开关和项目绑定 AI Review 配置的启用状态影响；设置页不再提供单独的 MR 自动触发开关。
@@ -515,8 +551,40 @@ GET /api/review-tasks/{taskId}/code-quality-result
 
 - `status=RUNNING` 时，`finishedAt`、`exitCode`、`rawOutput` 通常为空。
 - 任务存在但尚未创建 AI Review 结果时，接口返回 `200` 且 `data=null`，避免普通 Push / 被 Gate 拦截的任务在详情页产生 404 噪声。
+- 多模型任务中该兼容接口返回排序第一的结果。新前端应优先调用 `GET /api/review-tasks/{taskId}/code-quality-results` 获取完整结果列表。
 - 历史 `CODEX_CLI` 结果只作为历史 provider 字符串展示；新版本不再执行 Codex CLI，也不再对 Codex Markdown raw output 做运行时兜底解析。
 - 后端启动时会扫描超过超时阈值仍处于 `RUNNING` 的 AI Review，并标记为 `FAILED`，避免后端重启或 Codex 子进程丢失后页面永久卡住。
+
+### 7.2.1 查询代码质量 Review 结果列表
+
+```http
+GET /api/review-tasks/{taskId}/code-quality-results
+```
+
+响应 data：
+
+```json
+[
+  {
+    "id": 501,
+    "taskId": 10001,
+    "reviewKey": "deepseek-deepseek-v4-pro",
+    "displayName": "DeepSeek V4 Pro",
+    "profileCode": "backend-default-ai-review",
+    "provider": "DEEPSEEK",
+    "model": "deepseek-v4-pro",
+    "status": "SUCCESS",
+    "overallLevel": "HIGH",
+    "findingCount": 2,
+    "findings": []
+  }
+]
+```
+
+说明：
+
+- 单模型任务返回长度为 0 或 1 的数组，前端不需要额外展示模型子 tab。
+- `reviewKey` 是同一任务内稳定区分模型结果、进度和修复预览的键。
 
 ### 7.3 查询代码质量 Review 执行过程
 
@@ -551,7 +619,7 @@ GET /api/review-tasks/{taskId}/code-quality-progress
 
 说明：
 
-- 该接口返回持久化的 AI Review 过程事件，前端在 `RUNNING` 时轮询展示。
+- 该接口返回持久化的 AI Review 过程事件，前端在 `RUNNING` 时轮询展示；可追加 `?reviewKey=...` 只查看某个模型的事件。
 - API Provider 会记录请求构建、Provider 调用、响应摘要、解析和保存结果等阶段，敏感字段会脱敏或省略。
 - 重试 AI Review 会清空同一任务旧过程事件，并重新写入本轮过程。
 

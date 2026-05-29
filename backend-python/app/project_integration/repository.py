@@ -1,6 +1,8 @@
 from datetime import datetime
 from fnmatch import fnmatchcase
+import hashlib
 import json
+import re
 from threading import Lock
 from typing import Any
 
@@ -11,7 +13,13 @@ from sqlalchemy.orm import Session
 from app.core.json_utils import page_response
 from app.core.errors import AppError
 from app.core.json_utils import read_json, read_json_array
-from app.project_integration.models import Project, ProjectGroup, ProjectTargetConfig, TargetTypePathMapping
+from app.project_integration.models import (
+    Project,
+    ProjectGroup,
+    ProjectGroupAiReviewModel,
+    ProjectTargetConfig,
+    TargetTypePathMapping,
+)
 
 
 TARGET_TYPE_DEFAULTS = {
@@ -88,6 +96,7 @@ _SCHEMA_ENSURED_ENGINE_IDS: set[int] = set()
 def ensure_project_config_schema(db: Session) -> None:
     engine_id = id(db.get_bind())
     if engine_id in _SCHEMA_ENSURED_ENGINE_IDS:
+        _ensure_project_group_ai_review_model_schema(db)
         return
     with _SCHEMA_LOCK:
         if engine_id in _SCHEMA_ENSURED_ENGINE_IDS:
@@ -101,6 +110,7 @@ def ensure_project_config_schema(db: Session) -> None:
         if not project_groups_created:
             group_columns = {column["name"] for column in inspector.get_columns("project_groups")} if inspector.has_table("project_groups") else set()
             _add_column_if_missing(db, group_columns, "project_groups", "default_code_quality_profile_code", "VARCHAR(64) NULL")
+            _add_column_if_missing(db, group_columns, "project_groups", "default_provider_code", "VARCHAR(64) NULL")
             _add_column_if_missing(db, group_columns, "project_groups", "ai_review_enabled", "BOOLEAN NOT NULL DEFAULT TRUE")
             _add_column_if_missing(db, group_columns, "project_groups", "trigger_on_manual", "BOOLEAN NOT NULL DEFAULT TRUE")
             _add_column_if_missing(db, group_columns, "project_groups", "trigger_on_mr", "BOOLEAN NOT NULL DEFAULT TRUE")
@@ -117,6 +127,7 @@ def ensure_project_config_schema(db: Session) -> None:
             _add_column_if_missing(db, group_columns, "project_groups", "push_debounce_seconds", "INT NULL DEFAULT 300")
         if not inspector.has_table("target_type_path_mappings"):
             TargetTypePathMapping.__table__.create(connection, checkfirst=True)
+        _ensure_project_group_ai_review_model_schema(db, inspector)
         if not inspector.has_table("project_target_configs"):
             ProjectTargetConfig.__table__.create(connection, checkfirst=True)
         project_columns = {column["name"] for column in inspector.get_columns("projects")} if inspector.has_table("projects") else set()
@@ -136,6 +147,13 @@ def ensure_project_config_schema(db: Session) -> None:
         db.flush()
         _ensure_default_target_type_path_mappings(db)
         _SCHEMA_ENSURED_ENGINE_IDS.add(engine_id)
+
+
+def _ensure_project_group_ai_review_model_schema(db: Session, inspector=None) -> None:
+    inspector = inspector or inspect(db.connection())
+    if not inspector.has_table("project_group_ai_review_models"):
+        ProjectGroupAiReviewModel.__table__.create(db.connection(), checkfirst=True)
+        db.flush()
 
 
 def _add_column_if_missing(db: Session, columns: set[str], table_name: str, column_name: str, definition: str) -> None:
@@ -444,12 +462,63 @@ def project_group_to_dict(group: ProjectGroup) -> dict:
         "groupName": group.group_name,
         "defaultCodeQualityProfileCode": group.default_code_quality_profile_code,
         "defaultProviderCode": group.default_provider_code,
+        "aiReviewModels": list_project_group_ai_review_models(session, int(group.id), include_fallback=True)
+        if session is not None
+        else [],
         "dingtalkWebhooks": dingtalk_webhooks,
         "enabledDingtalkWebhookCount": len([item for item in dingtalk_webhooks if item.get("enabled")]),
         "status": group.status,
         "description": group.description,
         **ai_review_policy_to_dict(group),
         **push_policy_to_dict(group),
+    }
+
+
+def list_project_group_ai_review_models(
+    db: Session | None,
+    group_id: int,
+    *,
+    include_fallback: bool = True,
+) -> list[dict[str, Any]]:
+    if db is None:
+        return []
+    _ensure_project_group_ai_review_model_schema(db)
+    group = db.get(ProjectGroup, group_id)
+    records = db.scalars(
+        select(ProjectGroupAiReviewModel)
+        .where(ProjectGroupAiReviewModel.group_id == group_id)
+        .order_by(ProjectGroupAiReviewModel.sort_order.asc(), ProjectGroupAiReviewModel.id.asc())
+    ).all()
+    items = [project_group_ai_review_model_to_dict(record) for record in records]
+    if items or not include_fallback or group is None or not _blank_to_none(group.default_provider_code):
+        return items
+    provider_code = _blank_to_none(group.default_provider_code)
+    review_key = make_ai_review_model_key(provider_code or "default", None, 0)
+    return [
+        {
+            "id": None,
+            "groupId": group_id,
+            "reviewKey": review_key,
+            "providerCode": provider_code,
+            "modelName": None,
+            "displayName": provider_code,
+            "enabled": True,
+            "sortOrder": 10,
+            "fallback": True,
+        }
+    ]
+
+
+def project_group_ai_review_model_to_dict(record: ProjectGroupAiReviewModel) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "groupId": record.group_id,
+        "reviewKey": record.review_key,
+        "providerCode": record.provider_code,
+        "modelName": record.model_name,
+        "displayName": record.display_name,
+        "enabled": bool(record.enabled),
+        "sortOrder": int(record.sort_order or 0),
     }
 
 
@@ -482,6 +551,9 @@ def create_project_group(db: Session, request: dict) -> dict:
 
             db.flush()
             upsert_webhooks(db, request.get("dingtalkWebhooks") or [], int(group.id))
+        if "aiReviewModels" in request:
+            db.flush()
+            _replace_project_group_ai_review_models(db, group, request.get("aiReviewModels") or [])
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -520,6 +592,8 @@ def update_project_group(db: Session, group_id: int, request: dict) -> dict:
         from app.notification.repository import upsert_webhooks
 
         upsert_webhooks(db, request.get("dingtalkWebhooks") or [], int(group.id))
+    if "aiReviewModels" in request:
+        _replace_project_group_ai_review_models(db, group, request.get("aiReviewModels") or [])
     group.updated_at = datetime.now()
     try:
         db.commit()
@@ -936,6 +1010,73 @@ def _append_target_detection_evidence(
             "reason": reason,
         }
     )
+
+
+def make_ai_review_model_key(provider_code: str, model_name: str | None, index: int = 0) -> str:
+    provider_part = _slug(provider_code or "provider")
+    model_part = _slug(model_name or "default")
+    base = f"{provider_part}-{model_part}".strip("-") or "default"
+    if len(base) <= 48:
+        return base
+    digest = hashlib.sha1(f"{provider_code}:{model_name}:{index}".encode("utf-8")).hexdigest()[:10]
+    return f"{base[:37].rstrip('-')}-{digest}"
+
+
+def _slug(value: str | None) -> str:
+    text_value = str(value or "").strip().lower()
+    text_value = re.sub(r"[^a-z0-9]+", "-", text_value).strip("-")
+    return text_value or "default"
+
+
+def _replace_project_group_ai_review_models(
+    db: Session,
+    group: ProjectGroup,
+    raw_items: list[dict[str, Any]],
+) -> None:
+    _ensure_project_group_ai_review_model_schema(db)
+    for record in db.scalars(
+        select(ProjectGroupAiReviewModel).where(ProjectGroupAiReviewModel.group_id == group.id)
+    ).all():
+        db.delete(record)
+    # Flush deletes before inserting replacement rows, otherwise MySQL unique
+    # constraints can see the old and new review_key values at the same time.
+    db.flush()
+    now = datetime.now()
+    seen: set[str] = set()
+    seen_provider_models: set[tuple[str, str | None]] = set()
+    for index, raw_item in enumerate(raw_items or []):
+        if not isinstance(raw_item, dict):
+            raise AppError("VALIDATION_ERROR", "aiReviewModels must contain objects", 400)
+        provider_code = _blank_to_none(raw_item.get("providerCode"))
+        if not provider_code:
+            raise AppError("VALIDATION_ERROR", "aiReviewModels.providerCode is required", 400)
+        model_name = _blank_to_none(raw_item.get("modelName"))
+        provider_model_key = (provider_code, model_name)
+        if provider_model_key in seen_provider_models:
+            continue
+        seen_provider_models.add(provider_model_key)
+        review_key = _blank_to_none(raw_item.get("reviewKey")) or make_ai_review_model_key(
+            provider_code,
+            model_name,
+            index,
+        )
+        if review_key in seen:
+            review_key = make_ai_review_model_key(provider_code, f"{model_name or 'default'}-{index + 1}", index)
+        seen.add(review_key)
+        db.add(
+            ProjectGroupAiReviewModel(
+                group_id=group.id,
+                review_key=review_key,
+                provider_code=provider_code,
+                model_name=model_name,
+                display_name=_blank_to_none(raw_item.get("displayName")),
+                enabled=bool(raw_item.get("enabled", True)),
+                sort_order=int(raw_item.get("sortOrder") if raw_item.get("sortOrder") is not None else (index + 1) * 10),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    db.flush()
 
 
 def _path_matches(path: str, pattern: str) -> bool:

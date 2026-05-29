@@ -304,13 +304,13 @@ function sourceLabel(value) {
     case 'OPENAI':
       return 'OpenAI';
     case 'ANTHROPIC':
-      return 'Anthropic / Claude';
+      return 'Claude';
     case 'DEEPSEEK':
       return 'DeepSeek';
     case 'XIAOMIMO':
-      return 'XiaoMIMO / Xiaomi MiMo';
+      return 'XiaoMIMO';
     case 'CUSTOM':
-      return '自定义模型';
+      return '自定义';
     case 'CODEX_CLI':
       return 'Codex CLI（历史）';
     case 'OPENAI_API':
@@ -1864,7 +1864,7 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
     try {
       const preview = await fetchApi(`/api/review-tasks/${taskId}/code-quality-fix-preview`, {
         method: 'POST',
-        body: JSON.stringify({ findingIndex: index, forceRegenerate: cached?.status === 'FAILED' })
+        body: JSON.stringify({ findingIndex: index, reviewKey: review?.reviewKey, forceRegenerate: cached?.status === 'FAILED' })
       });
       setFixPreviewByIndex(current => ({ ...current, [index]: preview }));
       if (preview?.status === 'SUCCESS') {
@@ -2002,11 +2002,55 @@ function CodeQualityReviewView({ taskId, review, progress, changedFilesSummary, 
   );
 }
 
+function codeQualityReviewTabLabel(review) {
+  const providerLabel = sourceLabel(review?.provider);
+  if (providerLabel && providerLabel !== '-') return providerLabel;
+  return review?.displayName || review?.model || '-';
+}
+
+function CodeQualityReviewsPanel({ taskId, reviews, progress, changedFilesSummary, fixPreviews, onRetry, retrying }) {
+  const reviewItems = Array.isArray(reviews) ? reviews : [];
+  if (reviewItems.length <= 1) {
+    const review = reviewItems[0] || null;
+    return (
+      <CodeQualityReviewView
+        taskId={taskId}
+        review={review}
+        progress={progress}
+        changedFilesSummary={changedFilesSummary}
+        initialFixPreviews={fixPreviews}
+        onRetry={onRetry}
+        retrying={retrying}
+      />
+    );
+  }
+  return (
+    <Tabs
+      items={reviewItems.map((review, index) => ({
+        key: review.reviewKey || String(review.id || index),
+        label: codeQualityReviewTabLabel(review),
+        children: (
+          <CodeQualityReviewView
+            taskId={taskId}
+            review={review}
+            progress={(progress || []).filter(item => !item.reviewKey || item.reviewKey === review.reviewKey)}
+            changedFilesSummary={changedFilesSummary}
+            initialFixPreviews={(fixPreviews || []).filter(item => item.reviewKey === review.reviewKey)}
+            onRetry={onRetry}
+            retrying={retrying}
+          />
+        )
+      }))}
+    />
+  );
+}
+
 function TaskDetail({ taskId, onBack, onOpen }) {
   const location = useLocation();
   const [detail, setDetail] = useState(null);
   const [result, setResult] = useState(null);
   const [codeQualityResult, setCodeQualityResult] = useState(null);
+  const [codeQualityResults, setCodeQualityResults] = useState([]);
   const [codeQualityProgress, setCodeQualityProgress] = useState([]);
   const [codeQualityGate, setCodeQualityGate] = useState(null);
   const [fixPreviews, setFixPreviews] = useState([]);
@@ -2031,10 +2075,19 @@ function TaskDetail({ taskId, onBack, onOpen }) {
         setResult(null);
       }
       try {
-        const qualityResult = await fetchApi(`/api/review-tasks/${taskId}/code-quality-result`);
-        setCodeQualityResult(qualityResult);
+        const qualityResults = await fetchApi(`/api/review-tasks/${taskId}/code-quality-results`);
+        const normalizedResults = Array.isArray(qualityResults) ? qualityResults : [];
+        setCodeQualityResults(normalizedResults);
+        setCodeQualityResult(normalizedResults[0] || null);
       } catch {
-        setCodeQualityResult(null);
+        try {
+          const qualityResult = await fetchApi(`/api/review-tasks/${taskId}/code-quality-result`);
+          setCodeQualityResult(qualityResult);
+          setCodeQualityResults(qualityResult ? [qualityResult] : []);
+        } catch {
+          setCodeQualityResult(null);
+          setCodeQualityResults([]);
+        }
       }
       try {
         const gate = await fetchApi(`/api/review-tasks/${taskId}/code-quality-gate`);
@@ -2079,27 +2132,33 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 
   useEffect(() => {
     const hasRunningFixPreview = fixPreviews.some(item => ['QUEUED', 'RUNNING'].includes(item?.status));
-    if (codeQualityResult?.status !== 'RUNNING' && !hasRunningFixPreview) return undefined;
+    const hasRunningReview = codeQualityResults.some(item => item?.status === 'RUNNING');
+    if (!hasRunningReview && codeQualityResult?.status !== 'RUNNING' && !hasRunningFixPreview) return undefined;
     const timer = window.setInterval(() => load({ silent: true }), 5000);
     return () => window.clearInterval(timer);
-  }, [taskId, codeQualityResult?.status, fixPreviews]);
+  }, [taskId, codeQualityResult?.status, codeQualityResults, fixPreviews]);
 
   const retryCodeQualityReview = async () => {
     setRetrying(true);
     setError(null);
     try {
       const retryResult = await fetchApi(`/api/code-quality-reviews/tasks/${taskId}/retry`, { method: 'POST' });
-      setCodeQualityResult({
+      const optimisticReviews = (retryResult.reviews || [retryResult]).map(item => ({
         taskId: retryResult.taskId,
         projectId: detail?.projectId,
-        profileCode: retryResult.profileCode,
-        provider: retryResult.provider,
-        status: retryResult.status,
-        overallLevel: retryResult.overallLevel,
+        reviewKey: item.reviewKey,
+        profileCode: item.profileCode || retryResult.profileCode,
+        provider: item.provider || retryResult.provider,
+        model: item.model,
+        displayName: item.displayName,
+        status: item.status || retryResult.status,
+        overallLevel: item.overallLevel || retryResult.overallLevel,
         summary: 'AI code review is running',
-        findingCount: retryResult.findingCount,
+        findingCount: item.findingCount ?? retryResult.findingCount,
         findings: []
-      });
+      }));
+      setCodeQualityResults(optimisticReviews);
+      setCodeQualityResult(optimisticReviews[0] || null);
       setCodeQualityProgress([{
         id: 'local-queued',
         taskId,
@@ -2137,7 +2196,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   };
 
   const tabItems = useMemo(() => [
-    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewView taskId={taskId} review={codeQualityResult} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} initialFixPreviews={fixPreviews} onRetry={retryCodeQualityReview} retrying={retrying} /> },
+    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} fixPreviews={fixPreviews} onRetry={retryCodeQualityReview} retrying={retrying} /> },
     ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
       ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
       : []),
@@ -2146,7 +2205,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       : []),
     { key: 'analysis', label: '分析结果', children: <AnalysisView changeAnalysis={result?.changeAnalysis} /> },
     { key: 'event', label: '原始事件摘要', children: <Row gutter={[16, 16]}><Col xs={24} lg={12}><Card title="changedFiles 摘要"><JsonBlock value={detail?.changedFilesSummary} /></Card></Col><Col xs={24} lg={12}><Card title="raw payload"><JsonBlock value={detail?.rawPayload} /></Card></Col></Row> }
-  ], [taskId, detail, result, codeQualityResult, codeQualityProgress, codeQualityGate, fixPreviews, retrying]);
+  ], [taskId, detail, result, codeQualityResults, codeQualityProgress, codeQualityGate, fixPreviews, retrying]);
   const displayedActiveTabKey = tabItems.some(item => item.key === activeTabKey)
     ? activeTabKey
     : tabItems[0]?.key;
@@ -2222,7 +2281,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 function TemplateConfig() {
   const [templates, setTemplates] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, dingtalkWebhooks: [] });
+  const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, aiReviewModels: [], dingtalkWebhooks: [] });
   const [editingGroupId, setEditingGroupId] = useState(null);
   const [editingGroupDraft, setEditingGroupDraft] = useState(null);
   const [projectGroupFilter, setProjectGroupFilter] = useState(null);
@@ -2500,7 +2559,7 @@ function TemplateConfig() {
 
   const startEditGroup = (group) => {
     setEditingGroupId(group.id);
-    setEditingGroupDraft({ ...group });
+    setEditingGroupDraft({ ...group, aiReviewModels: normalizeAiReviewModels(group) });
   };
 
   const updateEditingGroupDraft = (field, value) => {
@@ -2567,6 +2626,88 @@ function TemplateConfig() {
     }
   };
 
+  const normalizeAiReviewModels = (group) => {
+    const rawItems = Array.isArray(group?.aiReviewModels) ? group.aiReviewModels : [];
+    if (rawItems.length > 0) {
+      return rawItems.map((item, index) => ({
+        id: item.id || null,
+        reviewKey: item.reviewKey || null,
+        providerCode: item.providerCode || group?.defaultProviderCode || '',
+        modelName: item.modelName || '',
+        displayName: item.displayName || '',
+        enabled: item.enabled !== false,
+        sortOrder: item.sortOrder ?? (index + 1) * 10
+      }));
+    }
+    if (group?.defaultProviderCode) {
+      return [{
+        id: null,
+        reviewKey: null,
+        providerCode: group.defaultProviderCode,
+        modelName: '',
+        displayName: '',
+        enabled: true,
+        sortOrder: 10
+      }];
+    }
+    return [];
+  };
+
+  const normalizeAiReviewModelPayload = (items = []) => (items || [])
+    .filter(item => item?.providerCode && isProviderKeyConfigured(item.providerCode))
+    .map((item, index) => ({
+      id: item.id || undefined,
+      reviewKey: item.reviewKey || undefined,
+      providerCode: item.providerCode,
+      modelName: item.modelName?.trim() || null,
+      displayName: item.displayName?.trim() || null,
+      enabled: item.enabled !== false,
+      sortOrder: item.sortOrder ?? (index + 1) * 10
+    }));
+
+  const selectedAiReviewProviderCodes = (group) => normalizeAiReviewModels(group)
+    .filter(item => item.enabled !== false && item.providerCode)
+    .map(item => item.providerCode);
+
+  const isProviderKeyConfigured = (providerCode) => {
+    const provider = providers.find(item => item.providerCode === providerCode);
+    return Boolean(provider?.apiKeyConfigured);
+  };
+
+  const aiReviewProviderLabel = (providerCode) => {
+    return sourceLabel(providerCode);
+  };
+
+  const aiReviewProviderDisplay = (group) => {
+    const codes = selectedAiReviewProviderCodes(group);
+    if (codes.length === 0) return group?.defaultProviderCode || '-';
+    return codes.map(aiReviewProviderLabel).join(' / ');
+  };
+
+  const updateGroupAiReviewProviders = (target, providerCodes = []) => {
+    const selectableProviderCodes = providerCodes.filter(isProviderKeyConfigured);
+    const updater = current => current ? {
+      ...current,
+      defaultProviderCode: selectableProviderCodes[0] || null,
+      aiReviewModels: selectableProviderCodes.map((providerCode, index) => {
+        const existing = normalizeAiReviewModels(current).find(item => item.providerCode === providerCode);
+        return {
+          ...(existing || {}),
+          providerCode,
+          modelName: '',
+          displayName: '',
+          enabled: true,
+          sortOrder: (index + 1) * 10
+        };
+      })
+    } : current;
+    if (target === 'editing') {
+      setEditingGroupDraft(updater);
+    } else {
+      setGroupDraft(updater);
+    }
+  };
+
   const removeGroupWebhookDraft = (target, index) => {
     const updater = current => current ? {
       ...current,
@@ -2601,10 +2742,11 @@ function TemplateConfig() {
           description: groupDraft.description?.trim() || null,
           defaultCodeQualityProfileCode: groupDraft.defaultCodeQualityProfileCode || null,
           defaultProviderCode: groupDraft.defaultProviderCode || null,
+          aiReviewModels: normalizeAiReviewModelPayload(groupDraft.aiReviewModels || []),
           dingtalkWebhooks: normalizeWebhookPayload(groupDraft.dingtalkWebhooks || [])
         })
       });
-      setGroupDraft({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, dingtalkWebhooks: [] });
+      setGroupDraft({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, aiReviewModels: [], dingtalkWebhooks: [] });
       await reloadProjectGroupsAndProjects();
       messageApi.success('项目组已创建');
     } catch (err) {
@@ -2637,6 +2779,7 @@ function TemplateConfig() {
           description: editingGroupDraft.description?.trim() || null,
           defaultCodeQualityProfileCode: editingGroupDraft.defaultCodeQualityProfileCode || null,
           defaultProviderCode: editingGroupDraft.defaultProviderCode || null,
+          aiReviewModels: normalizeAiReviewModelPayload(editingGroupDraft.aiReviewModels || []),
           status: editingGroupDraft.status || 'ENABLED',
           dingtalkWebhooks: normalizeWebhookPayload(editingGroupDraft.dingtalkWebhooks || [])
         })
@@ -3128,7 +3271,13 @@ function TemplateConfig() {
     label: provider.providerName || sourceLabel(provider.providerCode),
     value: provider.providerCode
   }));
-  const groupProviderOptions = [{ label: '不指定', value: '' }, ...providerOptions];
+  const groupModelOptions = providers.map(provider => ({
+    label: provider.apiKeyConfigured
+      ? sourceLabel(provider.providerCode)
+      : `${sourceLabel(provider.providerCode)}（未配置 Key）`,
+    value: provider.providerCode,
+    disabled: !provider.apiKeyConfigured
+  }));
   const groupProfileOptions = [{ label: '不指定', value: '' }, ...profileOptions];
   const profileProviderOptions = [{ label: '使用当前模型 Provider', value: '' }, ...providerOptions];
   const providerApiKeyPlaceholder = '留空表示不更新当前 API Key';
@@ -3234,12 +3383,20 @@ function TemplateConfig() {
       })()
     },
     {
-      title: '默认 Provider',
+      title: 'Review 模型',
       dataIndex: 'defaultProviderCode',
-      width: 180,
+      width: 260,
       render: (_, group) => editingGroupId === group.id ? (
-        <Select className="full-width" value={editingGroupDraft?.defaultProviderCode || ''} options={groupProviderOptions} onChange={value => updateEditingGroupDraft('defaultProviderCode', value || null)} />
-      ) : (group.defaultProviderCode || '-')
+        <Select
+          mode="multiple"
+          allowClear
+          className="full-width"
+          placeholder="选择一个或多个模型"
+          value={selectedAiReviewProviderCodes(editingGroupDraft)}
+          options={groupModelOptions}
+          onChange={value => updateGroupAiReviewProviders('editing', value)}
+        />
+      ) : aiReviewProviderDisplay(group)
     },
     {
       title: '钉钉机器人',
@@ -3384,12 +3541,15 @@ function TemplateConfig() {
                     />
                   </Col>
                   <Col xs={24} md={5}>
-                    <Text strong>默认 Provider</Text>
+                    <Text strong>Review 模型</Text>
                     <Select
+                      mode="multiple"
+                      allowClear
                       className="full-width prompt-field"
-                      value={groupDraft.defaultProviderCode || ''}
-                      options={groupProviderOptions}
-                      onChange={value => updateGroupDraft('defaultProviderCode', value || null)}
+                      placeholder="选择一个或多个模型"
+                      value={selectedAiReviewProviderCodes(groupDraft)}
+                      options={groupModelOptions}
+                      onChange={value => updateGroupAiReviewProviders('create', value)}
                     />
                   </Col>
                   <Col xs={24} md={4}>
@@ -3407,14 +3567,6 @@ function TemplateConfig() {
                     </Button>
                   </Col>
                 </Row>
-                <div className="settings-inline-head">
-                  <Space wrap>
-                    <Text strong>新项目组钉钉机器人</Text>
-                    <Text type="secondary">可先留空，后续编辑项目组时再配置</Text>
-                  </Space>
-                  <Button icon={<PlusOutlined />} onClick={() => addGroupWebhookDraft('create')}>新增机器人</Button>
-                </div>
-                {renderWebhookDraftList(groupDraft.dingtalkWebhooks || [], 'create')}
                 <Table
                   size="small"
                   rowKey="id"

@@ -105,16 +105,23 @@ def list_review_tasks(
         return page_response([], page_no, page_size, total)
 
     ordering = case({task_id: index for index, task_id in enumerate(task_ids)}, value=ReviewTask.id)
+    code_quality_counts = {
+        task_id: int(count or 0)
+        for task_id, count in db.execute(
+            select(CodeQualityReviewResult.task_id, func.coalesce(func.sum(CodeQualityReviewResult.finding_count), 0))
+            .where(CodeQualityReviewResult.task_id.in_(task_ids))
+            .group_by(CodeQualityReviewResult.task_id)
+        ).all()
+    }
     rows = db.execute(
-        select(ReviewTask, Project, ReviewResult, CodeQualityReviewResult)
+        select(ReviewTask, Project, ReviewResult)
         .join(Project, Project.id == ReviewTask.project_id)
         .outerjoin(ReviewResult, ReviewResult.task_id == ReviewTask.id)
-        .outerjoin(CodeQualityReviewResult, CodeQualityReviewResult.task_id == ReviewTask.id)
         .where(ReviewTask.id.in_(task_ids))
         .order_by(ordering)
     ).all()
     items = []
-    for task, project, result, code_quality_result in rows:
+    for task, project, result in rows:
         list_risk_card = None
         if result is not None:
             list_risk_card = _filter_risk_card_for_template(
@@ -142,7 +149,7 @@ def list_review_tasks(
                 "status": task.status,
                 "errorMessage": task.error_message,
                 "riskLevel": list_risk_card.get("riskLevel") if isinstance(list_risk_card, dict) else task.risk_level,
-                "riskItemCount": code_quality_result.finding_count if code_quality_result else 0,
+                "riskItemCount": code_quality_counts.get(task.id, 0),
                 "focusIndicators": list_risk_card.get("focusIndicators", []) if isinstance(list_risk_card, dict) else _focus_indicators(result.risk_card_json if result else None),
                 "createdAt": format_datetime(task.created_at),
                 "finishedAt": format_datetime(task.finished_at),

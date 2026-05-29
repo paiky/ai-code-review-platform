@@ -78,13 +78,19 @@ class CodeQualityModelProvider(Base):
 
 class CodeQualityReviewResult(Base):
     __tablename__ = "code_quality_review_results"
+    __table_args__ = (
+        UniqueConstraint("task_id", "review_key", name="uk_code_quality_result_task_review_key"),
+    )
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
-    task_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    review_key: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
     project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     profile_code: Mapped[str] = mapped_column(String(64), nullable=False)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     model: Mapped[str | None] = mapped_column(String(128))
+    display_name: Mapped[str | None] = mapped_column(String(128))
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     overall_level: Mapped[str | None] = mapped_column(String(32))
     summary: Mapped[str | None] = mapped_column(String(1024))
@@ -104,6 +110,7 @@ class CodeQualityReviewProgressEvent(Base):
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
     task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    review_key: Mapped[str | None] = mapped_column(String(64))
     phase: Mapped[str] = mapped_column(String(64), nullable=False)
     level: Mapped[str] = mapped_column(String(32), nullable=False, default="INFO")
     message: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -114,11 +121,12 @@ class CodeQualityReviewProgressEvent(Base):
 class CodeQualityFixPreview(Base):
     __tablename__ = "code_quality_fix_previews"
     __table_args__ = (
-        UniqueConstraint("task_id", "finding_index", name="uk_code_quality_fix_preview_task_finding"),
+        UniqueConstraint("task_id", "review_key", "finding_index", name="uk_code_quality_fix_preview_task_review_finding"),
     )
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
     task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    review_key: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
     project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     finding_index: Mapped[int] = mapped_column(Integer, nullable=False)
     file_path: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -139,6 +147,7 @@ class CodeQualitySchedulerJob(Base):
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
     job_type: Mapped[str] = mapped_column(String(32), nullable=False)
     task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    review_key: Mapped[str | None] = mapped_column(String(64))
     project_id: Mapped[int | None] = mapped_column(BigInteger)
     finding_index: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), nullable=False)

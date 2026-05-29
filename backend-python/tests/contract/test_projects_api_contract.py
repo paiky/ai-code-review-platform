@@ -280,6 +280,22 @@ def test_project_group_update_and_binding_validation(client: TestClient, db_sess
             "description": "管理端项目",
             "defaultCodeQualityProfileCode": "web-pc-default-ai-review",
             "defaultProviderCode": "DEEPSEEK",
+            "aiReviewModels": [
+                {
+                    "providerCode": "DEEPSEEK",
+                    "modelName": "deepseek-v4-pro",
+                    "displayName": "DeepSeek 主审",
+                    "enabled": True,
+                    "sortOrder": 10,
+                },
+                {
+                    "providerCode": "XIAOMIMO",
+                    "modelName": "mimo-v2.5-pro",
+                    "displayName": "MiMo 复审",
+                    "enabled": True,
+                    "sortOrder": 20,
+                },
+            ],
             "pushBranchPatterns": ["release/*"],
             "pushMinChangedFiles": 2,
             "pushMinDiffBytes": 1024,
@@ -295,6 +311,8 @@ def test_project_group_update_and_binding_validation(client: TestClient, db_sess
     assert updated["description"] == "管理端项目"
     assert updated["defaultCodeQualityProfileCode"] == "web-pc-default-ai-review"
     assert updated["defaultProviderCode"] == "DEEPSEEK"
+    assert [item["providerCode"] for item in updated["aiReviewModels"]] == ["DEEPSEEK", "XIAOMIMO"]
+    assert updated["aiReviewModels"][0]["displayName"] == "DeepSeek 主审"
     assert {key: updated[key] for key in DEFAULT_PUSH_POLICY} == {
         "pushBranchPatterns": ["release/*"],
         "pushMinChangedFiles": 2,

@@ -21,11 +21,13 @@ from app.code_quality.repository import (
     find_push_gate_decision,
     find_fix_preview_response,
     find_result_response,
+    find_result_response_by_key,
     get_profile,
     get_provider,
     get_settings_record,
     has_recent_allowed_push_gate,
     list_ai_review_failure_notifications,
+    list_result_responses,
     list_progress,
     list_fix_preview_responses,
     list_provider_responses,
@@ -35,6 +37,7 @@ from app.code_quality.repository import (
     push_gate_to_dict,
     mark_stale_running_as_failed,
     normalize_auto_fix_preview_severities,
+    progress_review_key,
     reset_default_prompt,
     save_fix_preview,
     save_push_gate_decision,
@@ -50,7 +53,13 @@ from app.core.errors import AppError
 from app.core.json_utils import read_json, read_json_array
 from app.code_quality.models import CodeQualityModelProvider
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
-from app.project_integration.repository import find_project_by_id, get_project_group_ai_review_policy, resolve_project_target_config
+from app.project_integration.repository import (
+    find_project_by_id,
+    get_project_group_ai_review_policy,
+    list_project_group_ai_review_models,
+    make_ai_review_model_key,
+    resolve_project_target_config,
+)
 from app.notification.service import send_review_summary
 from app.review_record.models import ReviewTask
 from app.review_record.repository import (
@@ -134,6 +143,33 @@ def _scheduler_outcome_status(outcome: Any) -> str:
     return "SUCCESS"
 
 
+def _running_result_payload() -> dict[str, Any]:
+    return {
+        "status": "RUNNING",
+        "overallLevel": None,
+        "summary": None,
+        "findings": [],
+        "rawOutput": None,
+        "exitCode": None,
+        "errorMessage": None,
+        "startedAt": None,
+        "finishedAt": None,
+    }
+
+
+def _aggregate_review_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    if not results:
+        return {"status": "SKIPPED", "findings": [], "overallLevel": None}
+    if any(result.get("status") == "SUCCESS" for result in results):
+        primary = next(result for result in results if result.get("status") == "SUCCESS")
+        return {
+            **primary,
+            "status": "SUCCESS",
+            "findings": [finding for result in results for finding in (result.get("findings") or [])],
+        }
+    return results[0]
+
+
 def _submit_provider_job(
     db: Session,
     fn: Callable[..., Any],
@@ -145,12 +181,14 @@ def _submit_provider_job(
     label: str | None = None,
     finding_index: int | None = None,
     file_path: str | None = None,
+    review_key: str | None = None,
 ) -> int:
     job = create_scheduler_job(
         db,
         job_type=job_type,
         task_id=task_id,
         project_id=project_id,
+        review_key=review_key,
         finding_index=finding_index,
         priority=priority,
         label=label,
@@ -177,18 +215,27 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any]
             "provider": response["provider"],
             "overallLevel": result.get("overallLevel"),
             "findingCount": len(result.get("findings") or []),
+            "reviews": list_result_responses(db, task_id),
         }
-    _submit_provider_job(
-        db,
-        run_manual_review_job,
-        task_id,
-        dict(request),
-        job_type="AI_REVIEW",
-        task_id=task_id,
-        project_id=request.get("projectId"),
-        priority=REVIEW_JOB_PRIORITY,
-        label="手动 AI Review",
-    )
+    for review in response.get("reviews") or [response]:
+        _submit_provider_job(
+            db,
+            run_manual_review_target_job,
+            task_id,
+            dict(request),
+            review.get("reviewKey"),
+            review.get("provider"),
+            review.get("model"),
+            review.get("displayName"),
+            int(review.get("sortOrder") or 0),
+            job_type="AI_REVIEW",
+            task_id=task_id,
+            project_id=request.get("projectId"),
+            priority=REVIEW_JOB_PRIORITY,
+            label=f"手动 AI Review - {review.get('displayName') or review.get('provider')}",
+            review_key=review.get("reviewKey"),
+        )
+    db.commit()
     return response
 
 
@@ -220,7 +267,7 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
             f"Project group AI Review policy does not allow manual trigger: {profile.profile_code}",
             400,
         )
-    provider = _resolve_provider(db, project, profile, target_config["targetType"])
+    targets = _resolve_review_targets(db, project, profile, target_config["targetType"])
     task = create_review_task(
         db,
         project_id=project.id,
@@ -246,37 +293,48 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
         "QUEUED",
         "INFO",
         "手动 AI Review 已创建",
-        f"provider={provider.provider_code}, profile={profile.profile_code}",
+        f"models={len(targets)}, profile={profile.profile_code}",
     )
-    review_request = _build_review_request(profile, request)
-    save_result(
-        db,
-        task_id=task.id,
-        project_id=project.id,
-        profile_code=profile.profile_code,
-        provider=provider.provider_code,
-        model=review_request.get("model") or provider.model_name,
-        result={
-            "status": "RUNNING",
-            "overallLevel": None,
-            "summary": None,
-            "findings": [],
-            "rawOutput": None,
-            "exitCode": None,
-            "errorMessage": None,
-            "startedAt": None,
-            "finishedAt": None,
-        },
-    )
+    queued_reviews = []
+    for target in targets:
+        review_request = _build_review_request(profile, {**request, "model": target["model"]})
+        review_request["reviewKey"] = target["reviewKey"]
+        save_result(
+            db,
+            task_id=task.id,
+            review_key=target["reviewKey"],
+            project_id=project.id,
+            profile_code=profile.profile_code,
+            provider=target["provider"].provider_code,
+            model=review_request.get("model") or target["provider"].model_name,
+            display_name=target["displayName"],
+            sort_order=target["sortOrder"],
+            result=_running_result_payload(),
+        )
+        queued_reviews.append(
+            {
+                "reviewKey": target["reviewKey"],
+                "profileCode": profile.profile_code,
+                "provider": target["provider"].provider_code,
+                "model": review_request.get("model") or target["provider"].model_name,
+                "displayName": target["displayName"],
+                "sortOrder": target["sortOrder"],
+                "status": "RUNNING",
+                "findingCount": 0,
+            }
+        )
     db.commit()
+    first_review = queued_reviews[0]
     return {
         "taskId": task.id,
         "projectId": project.id,
         "status": "RUNNING",
-        "profileCode": profile.profile_code,
-        "provider": provider.provider_code,
+        "profileCode": first_review["profileCode"],
+        "provider": first_review["provider"],
+        "reviewKey": first_review["reviewKey"],
         "overallLevel": None,
         "findingCount": 0,
+        "reviews": queued_reviews,
     }
 
 
@@ -297,6 +355,49 @@ def run_manual_review_job(task_id: int, request: dict[str, Any]) -> dict[str, An
         db.close()
 
 
+def run_manual_review_target_job(
+    task_id: int,
+    request: dict[str, Any],
+    review_key: str | None,
+    provider_code: str | None,
+    model: str | None,
+    display_name: str | None,
+    sort_order: int,
+) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        task = db.get(ReviewTask, task_id)
+        if task is None:
+            raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+        project = find_project_by_id(db, task.project_id)
+        if project is None:
+            raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
+        profile = _resolve_profile(db, request.get("profileCode") or task.code_quality_profile_code, project)
+        provider = get_provider(db, provider_code)
+        review_request = _build_review_request(profile, {**request, "model": model})
+        review_request["reviewKey"] = review_key
+        result = _run_review(
+            db,
+            task.id,
+            project,
+            profile,
+            provider,
+            review_request,
+            {"reviewKey": review_key, "displayName": display_name, "sortOrder": sort_order},
+        )
+        db.commit()
+        return result
+    except Exception as exception:
+        task = db.get(ReviewTask, task_id)
+        if task is not None:
+            _sync_task_status_after_review(db, task_id, {"status": "FAILED", "errorMessage": str(exception)})
+            append_progress(db, task_id, "FAILED", "ERROR", "手动 AI Review 后台执行失败", str(exception), review_key=review_key)
+        db.commit()
+        return {"status": "FAILED", "errorMessage": str(exception)}
+    finally:
+        db.close()
+
+
 def run_manual_review_now(db: Session, task_id: int, request: dict[str, Any]) -> dict[str, Any]:
     task = db.get(ReviewTask, task_id)
     if task is None:
@@ -305,9 +406,13 @@ def run_manual_review_now(db: Session, task_id: int, request: dict[str, Any]) ->
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
     profile = _resolve_profile(db, request.get("profileCode") or task.code_quality_profile_code, project)
-    provider = _resolve_provider(db, project, profile, task.target_type)
-    review_request = _build_review_request(profile, request)
-    return _run_review(db, task.id, project, profile, provider, review_request)
+    targets = _resolve_review_targets(db, project, profile, task.target_type)
+    results = []
+    for target in targets:
+        review_request = _build_review_request(profile, {**request, "model": target["model"]})
+        review_request["reviewKey"] = target["reviewKey"]
+        results.append(_run_review(db, task.id, project, profile, target["provider"], review_request, target))
+    return _aggregate_review_results(results)
 
 
 def retry_review_task(db: Session, task_id: int) -> dict[str, Any]:
@@ -322,17 +427,26 @@ def retry_review_task(db: Session, task_id: int) -> dict[str, Any]:
             "provider": response["provider"],
             "overallLevel": result.get("overallLevel"),
             "findingCount": len(result.get("findings") or []),
+            "reviews": list_result_responses(db, task_id),
         }
-    _submit_provider_job(
-        db,
-        run_retry_review_job,
-        task_id,
-        job_type="AI_REVIEW",
-        task_id=task_id,
-        project_id=response.get("projectId"),
-        priority=REVIEW_JOB_PRIORITY,
-        label="重试 AI Review",
-    )
+    for review in response.get("reviews") or [response]:
+        _submit_provider_job(
+            db,
+            run_retry_review_target_job,
+            task_id,
+            review.get("reviewKey"),
+            review.get("provider"),
+            review.get("model"),
+            review.get("displayName"),
+            int(review.get("sortOrder") or 0),
+            job_type="AI_REVIEW",
+            task_id=task_id,
+            project_id=response.get("projectId"),
+            priority=REVIEW_JOB_PRIORITY,
+            label=f"重试 AI Review - {review.get('displayName') or review.get('provider')}",
+            review_key=review.get("reviewKey"),
+        )
+    db.commit()
     return response
 
 
@@ -348,45 +462,59 @@ def enqueue_retry_review(db: Session, task_id: int) -> dict[str, Any]:
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
     profile = _resolve_profile(db, task.code_quality_profile_code, project)
-    provider = _resolve_provider(db, project, profile, task.target_type)
-    request = _request_from_task_event(db, task, profile)
+    targets = _resolve_review_targets(db, project, profile, task.target_type)
     delete_progress(db, task.id)
-    append_progress(
-        db,
-        task.id,
-        "QUEUED",
-        "INFO",
-        "AI Review 已进入执行队列",
-        f"provider={provider.provider_code}, profile={profile.profile_code}",
-    )
-    save_result(
-        db,
-        task_id=task.id,
-        project_id=project.id,
-        profile_code=profile.profile_code,
-        provider=provider.provider_code,
-        model=request.get("model") or provider.model_name,
-        result={
-            "status": "RUNNING",
-            "overallLevel": None,
-            "summary": None,
-            "findings": [],
-            "rawOutput": None,
-            "exitCode": None,
-            "errorMessage": None,
-            "startedAt": None,
-            "finishedAt": None,
-        },
-    )
+    queued_reviews = []
+    for target in targets:
+        provider = target["provider"]
+        request = _request_from_task_event(db, task, profile)
+        request["model"] = target["model"]
+        request["reviewKey"] = target["reviewKey"]
+        append_progress(
+            db,
+            task.id,
+            "QUEUED",
+            "INFO",
+            "AI Review 已进入执行队列",
+            f"provider={provider.provider_code}, profile={profile.profile_code}",
+            review_key=target["reviewKey"],
+        )
+        save_result(
+            db,
+            task_id=task.id,
+            review_key=target["reviewKey"],
+            project_id=project.id,
+            profile_code=profile.profile_code,
+            provider=provider.provider_code,
+            model=request.get("model") or provider.model_name,
+            display_name=target["displayName"],
+            sort_order=target["sortOrder"],
+            result=_running_result_payload(),
+        )
+        queued_reviews.append(
+            {
+                "reviewKey": target["reviewKey"],
+                "profileCode": profile.profile_code,
+                "provider": provider.provider_code,
+                "model": request.get("model") or provider.model_name,
+                "displayName": target["displayName"],
+                "sortOrder": target["sortOrder"],
+                "status": "RUNNING",
+                "findingCount": 0,
+            }
+        )
     db.commit()
+    first_review = queued_reviews[0]
     return {
         "taskId": task.id,
         "projectId": project.id,
         "status": "RUNNING",
-        "profileCode": profile.profile_code,
-        "provider": provider.provider_code,
+        "profileCode": first_review["profileCode"],
+        "provider": first_review["provider"],
+        "reviewKey": first_review["reviewKey"],
         "overallLevel": None,
         "findingCount": 0,
+        "reviews": queued_reviews,
     }
 
 
@@ -407,6 +535,54 @@ def run_retry_review_job(task_id: int) -> dict[str, Any]:
         db.close()
 
 
+def run_retry_review_target_job(
+    task_id: int,
+    review_key: str | None,
+    provider_code: str | None,
+    model: str | None,
+    display_name: str | None,
+    sort_order: int,
+) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        task = db.get(ReviewTask, task_id)
+        if task is None:
+            raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+        project = find_project_by_id(db, task.project_id)
+        if project is None:
+            raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
+        profile = _resolve_profile(db, task.code_quality_profile_code, project)
+        provider = get_provider(db, provider_code)
+        request = _request_from_task_event(db, task, profile)
+        request["model"] = model
+        request["reviewKey"] = review_key
+        result = _run_review(
+            db,
+            task.id,
+            project,
+            profile,
+            provider,
+            request,
+            {
+                "reviewKey": review_key,
+                "displayName": display_name,
+                "sortOrder": sort_order,
+            },
+        )
+        db.commit()
+        return result
+    except Exception as exception:
+        task = db.get(ReviewTask, task_id)
+        review_result = find_result_response_by_key(db, task_id, review_key)
+        if task is not None and (review_result or {}).get("status") != "SUCCESS":
+            _sync_task_status_after_review(db, task_id, {"status": "FAILED", "errorMessage": str(exception)})
+            append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", str(exception), review_key=review_key)
+        db.commit()
+        return {"status": "FAILED", "errorMessage": str(exception)}
+    finally:
+        db.close()
+
+
 def run_retry_review_now(db: Session, task_id: int) -> dict[str, Any]:
     task = db.get(ReviewTask, task_id)
     if task is None:
@@ -415,9 +591,14 @@ def run_retry_review_now(db: Session, task_id: int) -> dict[str, Any]:
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
     profile = _resolve_profile(db, task.code_quality_profile_code, project)
-    provider = _resolve_provider(db, project, profile, task.target_type)
-    request = _request_from_task_event(db, task, profile)
-    return _run_review(db, task.id, project, profile, provider, request)
+    targets = _resolve_review_targets(db, project, profile, task.target_type)
+    results = []
+    for target in targets:
+        request = _request_from_task_event(db, task, profile)
+        request["model"] = target["model"]
+        request["reviewKey"] = target["reviewKey"]
+        results.append(_run_review(db, task.id, project, profile, target["provider"], request, target))
+    return _aggregate_review_results(results)
 
 
 def trigger_auto_review(
@@ -466,7 +647,7 @@ def trigger_auto_review(
         )
     if task.trigger_type != "GITLAB_MR_WEBHOOK":
         return False
-    if find_result_response(db, task_id) is not None:
+    if list_result_responses(db, task_id):
         return False
     profile = _resolve_auto_profile_or_save_failure(db, task, project)
     if profile is None:
@@ -474,60 +655,55 @@ def trigger_auto_review(
     ai_policy = get_project_group_ai_review_policy(db, project)
     if not profile.enabled or not ai_policy.get("aiReviewEnabled") or not ai_policy.get("triggerOnMr"):
         return False
-    provider = _resolve_provider(db, project, profile, task.target_type)
-    request = _build_review_request(
-        profile,
-        {
-            "mode": "DIFF_TEXT",
-            "baseRef": task.target_branch,
-            "commitSha": task.commit_sha,
-            "title": f"{task.trigger_type} {task.external_source_id or ''}".strip(),
-            "diffText": diff_text or _diff_text(changed_files),
-            "changedFiles": [file.get("path") for file in changed_files if file.get("path")],
-        },
-    )
+    targets = _resolve_review_targets(db, project, profile, task.target_type)
+    base_request = {
+        "mode": "DIFF_TEXT",
+        "baseRef": task.target_branch,
+        "commitSha": task.commit_sha,
+        "title": f"{task.trigger_type} {task.external_source_id or ''}".strip(),
+        "diffText": diff_text or _diff_text(changed_files),
+        "changedFiles": [file.get("path") for file in changed_files if file.get("path")],
+    }
     delete_progress(db, task.id)
-    append_progress(
-        db,
-        task.id,
-        "QUEUED",
-        "INFO",
-        "AI Review 已进入执行队列",
-        f"provider={provider.provider_code}, profile={profile.profile_code}",
-    )
-    save_result(
-        db,
-        task_id=task.id,
-        project_id=project.id,
-        profile_code=profile.profile_code,
-        provider=provider.provider_code,
-        model=request.get("model") or provider.model_name,
-        result={
-            "status": "RUNNING",
-            "overallLevel": None,
-            "summary": None,
-            "findings": [],
-            "rawOutput": None,
-            "exitCode": None,
-            "errorMessage": None,
-            "startedAt": None,
-            "finishedAt": None,
-        },
-    )
-    if _inline_enabled():
-        result = _run_review(db, task.id, project, profile, provider, request)
-        _send_auto_review_notification(
+    for target in targets:
+        provider = target["provider"]
+        request = _build_review_request(profile, {**base_request, "model": target["model"]})
+        request["reviewKey"] = target["reviewKey"]
+        append_progress(
             db,
             task.id,
-            result,
-            rule_result_id,
-            risk_card,
-            focus_change_types,
-            focus_rule_codes,
-            notification_context,
-            reminder_card_enabled,
+            "QUEUED",
+            "INFO",
+            "AI Review 已进入执行队列",
+            f"provider={provider.provider_code}, profile={profile.profile_code}",
+            review_key=target["reviewKey"],
         )
-    else:
+        save_result(
+            db,
+            task_id=task.id,
+            review_key=target["reviewKey"],
+            project_id=project.id,
+            profile_code=profile.profile_code,
+            provider=provider.provider_code,
+            model=request.get("model") or provider.model_name,
+            display_name=target["displayName"],
+            sort_order=target["sortOrder"],
+            result=_running_result_payload(),
+        )
+        if _inline_enabled():
+            result = _run_review(db, task.id, project, profile, provider, request, target)
+            _send_auto_review_notification(
+                db,
+                task.id,
+                result,
+                rule_result_id,
+                risk_card,
+                focus_change_types,
+                focus_rule_codes,
+                notification_context,
+                reminder_card_enabled,
+            )
+            continue
         _submit_provider_job(
             db,
             run_auto_review_job,
@@ -542,11 +718,13 @@ def trigger_auto_review(
             focus_rule_codes or [],
             notification_context or {},
             reminder_card_enabled,
+            target,
             job_type="AI_REVIEW",
             task_id=task.id,
             project_id=project.id,
             priority=REVIEW_JOB_PRIORITY,
-            label="MR AI Review",
+            label=f"MR AI Review - {target['displayName']}",
+            review_key=target["reviewKey"],
         )
     return True
 
@@ -565,7 +743,7 @@ def _trigger_push_auto_review(
     notification_context: dict,
     reminder_card_enabled: bool,
 ) -> bool:
-    if find_result_response(db, task.id) is not None:
+    if list_result_responses(db, task.id):
         return False
     profile = _resolve_auto_profile_or_save_failure(db, task, project)
     if profile is None:
@@ -584,13 +762,14 @@ def _trigger_push_auto_review(
             reason_summary="当前项目组 AI Review 策略未开启 Push 自动触发。",
         )
         return False
-    provider = _resolve_provider(db, project, profile, task.target_type)
+    targets = _resolve_review_targets(db, project, profile, task.target_type)
+    primary_provider = targets[0]["provider"]
     gate = _evaluate_push_gate(
         db,
         task=task,
         profile=profile,
         push_policy=ai_policy,
-        provider_code=provider.provider_code,
+        provider_code=primary_provider.provider_code,
         changed_files=changed_files,
         diff_text=diff_text,
         risk_card=risk_card,
@@ -602,61 +781,56 @@ def _trigger_push_auto_review(
         return False
 
     request_diff_text = diff_text or _diff_text(changed_files)
-    request = _build_review_request(
-        profile,
-        {
-            "mode": "DIFF_TEXT",
-            "baseRef": task.source_branch,
-            "commitSha": task.commit_sha,
-            "title": f"{task.trigger_type} {task.external_source_id or ''}".strip(),
-            "diffText": request_diff_text,
-            "changedFiles": [file.get("path") for file in changed_files if file.get("path")],
-        },
-    )
+    base_request = {
+        "mode": "DIFF_TEXT",
+        "baseRef": task.source_branch,
+        "commitSha": task.commit_sha,
+        "title": f"{task.trigger_type} {task.external_source_id or ''}".strip(),
+        "diffText": request_diff_text,
+        "changedFiles": [file.get("path") for file in changed_files if file.get("path")],
+    }
     delete_progress(db, task.id)
-    append_progress(
-        db,
-        task.id,
-        "QUEUED",
-        "INFO",
-        "Push AI Review 已通过自动审核并进入队列",
-        f"reasonCode={gate['reason_code']}, provider={provider.provider_code}, profile={profile.profile_code}",
-    )
-    save_result(
-        db,
-        task_id=task.id,
-        project_id=project.id,
-        profile_code=profile.profile_code,
-        provider=provider.provider_code,
-        model=request.get("model") or provider.model_name,
-        result={
-            "status": "RUNNING",
-            "overallLevel": None,
-            "summary": None,
-            "findings": [],
-            "rawOutput": None,
-            "exitCode": None,
-            "errorMessage": None,
-            "startedAt": None,
-            "finishedAt": None,
-        },
-    )
     gate["ai_review_scheduled"] = True
     save_push_gate_decision(db, **gate)
-    if _inline_enabled():
-        result = _run_review(db, task.id, project, profile, provider, request)
-        _send_auto_review_notification(
+    for target in targets:
+        provider = target["provider"]
+        request = _build_review_request(profile, {**base_request, "model": target["model"]})
+        request["reviewKey"] = target["reviewKey"]
+        append_progress(
             db,
             task.id,
-            result,
-            rule_result_id,
-            risk_card,
-            focus_change_types,
-            focus_rule_codes,
-            notification_context,
-            reminder_card_enabled,
+            "QUEUED",
+            "INFO",
+            "Push AI Review 已通过自动审核并进入队列",
+            f"reasonCode={gate['reason_code']}, provider={provider.provider_code}, profile={profile.profile_code}",
+            review_key=target["reviewKey"],
         )
-    else:
+        save_result(
+            db,
+            task_id=task.id,
+            review_key=target["reviewKey"],
+            project_id=project.id,
+            profile_code=profile.profile_code,
+            provider=provider.provider_code,
+            model=request.get("model") or provider.model_name,
+            display_name=target["displayName"],
+            sort_order=target["sortOrder"],
+            result=_running_result_payload(),
+        )
+        if _inline_enabled():
+            result = _run_review(db, task.id, project, profile, provider, request, target)
+            _send_auto_review_notification(
+                db,
+                task.id,
+                result,
+                rule_result_id,
+                risk_card,
+                focus_change_types,
+                focus_rule_codes,
+                notification_context,
+                reminder_card_enabled,
+            )
+            continue
         _submit_provider_job(
             db,
             run_auto_review_job,
@@ -671,11 +845,13 @@ def _trigger_push_auto_review(
             focus_rule_codes,
             notification_context,
             reminder_card_enabled,
+            target,
             job_type="AI_REVIEW",
             task_id=task.id,
             project_id=project.id,
             priority=REVIEW_JOB_PRIORITY,
-            label="Push AI Review",
+            label=f"Push AI Review - {target['displayName']}",
+            review_key=target["reviewKey"],
         )
     return True
 
@@ -692,6 +868,7 @@ def run_auto_review_job(
     focus_rule_codes: list[str],
     notification_context: dict,
     reminder_card_enabled: bool = True,
+    target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     db = SessionLocal()
     try:
@@ -700,12 +877,12 @@ def run_auto_review_job(
             task = db.get(ReviewTask, task_id)
             if task is not None:
                 mark_task_failed(task, f"Project not found: {project_id}")
-            append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", f"Project not found: {project_id}")
+            append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", f"Project not found: {project_id}", review_key=request.get("reviewKey"))
             db.commit()
             return {"status": "FAILED", "errorMessage": f"Project not found: {project_id}"}
         profile = get_profile(db, profile_code)
         provider = get_provider(db, provider_code)
-        result = _run_review(db, task_id, project, profile, provider, request)
+        result = _run_review(db, task_id, project, profile, provider, request, target)
         _send_auto_review_notification(
             db,
             task_id,
@@ -720,11 +897,10 @@ def run_auto_review_job(
         db.commit()
         return result
     except Exception as exception:
-        review_result = find_result_response(db, task_id)
         task = db.get(ReviewTask, task_id)
-        if task is not None and (review_result or {}).get("status") != "SUCCESS":
-            mark_task_failed(task, str(exception))
-        append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", str(exception))
+        if task is not None:
+            _sync_task_status_after_review(db, task_id, {"status": "FAILED", "errorMessage": str(exception)})
+        append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", str(exception), review_key=request.get("reviewKey"))
         db.commit()
         return {"status": "FAILED", "errorMessage": str(exception)}
     finally:
@@ -1182,10 +1358,16 @@ def get_result_response(db: Session, task_id: int) -> dict[str, Any] | None:
     return result
 
 
-def get_progress_response(db: Session, task_id: int) -> list[dict[str, Any]]:
+def list_results_response(db: Session, task_id: int) -> list[dict[str, Any]]:
     if db.get(ReviewTask, task_id) is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
-    return list_progress(db, task_id)
+    return list_result_responses(db, task_id)
+
+
+def get_progress_response(db: Session, task_id: int, review_key: str | None = None) -> list[dict[str, Any]]:
+    if db.get(ReviewTask, task_id) is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+    return list_progress(db, task_id, review_key)
 
 
 def get_job_queue_response(db: Session) -> dict[str, Any]:
@@ -1196,10 +1378,10 @@ def get_failure_notifications_response(db: Session) -> dict[str, Any]:
     return list_ai_review_failure_notifications(db)
 
 
-def list_fix_previews_response(db: Session, task_id: int) -> list[dict[str, Any]]:
+def list_fix_previews_response(db: Session, task_id: int, review_key: str | None = None) -> list[dict[str, Any]]:
     if db.get(ReviewTask, task_id) is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
-    return list_fix_preview_responses(db, task_id)
+    return list_fix_preview_responses(db, task_id, review_key)
 
 
 def generate_fix_preview_response(db: Session, task_id: int, request: dict[str, Any]) -> dict[str, Any]:
@@ -1213,17 +1395,18 @@ def generate_fix_preview_response(db: Session, task_id: int, request: dict[str, 
     if finding_index < 0:
         raise AppError("VALIDATION_ERROR", "findingIndex must be non-negative", 400)
 
-    existing = find_fix_preview_response(db, task_id=task_id, finding_index=finding_index)
+    review_key = request.get("reviewKey")
+    existing = find_fix_preview_response(db, task_id=task_id, finding_index=finding_index, review_key=review_key)
     if existing is not None and not request.get("forceRegenerate"):
         return existing
     if not _enabled(db):
         raise AppError("BAD_REQUEST", "Code quality review is disabled", 400)
 
     if _fix_preview_inline_enabled():
-        response = _generate_fix_preview(db, task_id, finding_index, bool(request.get("forceRegenerate")))
+        response = _generate_fix_preview(db, task_id, finding_index, bool(request.get("forceRegenerate")), review_key)
         db.commit()
         return response
-    return _queue_fix_preview(db, task_id, finding_index, bool(request.get("forceRegenerate")))
+    return _queue_fix_preview(db, task_id, finding_index, bool(request.get("forceRegenerate")), review_key)
 
 
 def _queue_fix_preview(
@@ -1231,6 +1414,7 @@ def _queue_fix_preview(
     task_id: int,
     finding_index: int,
     force_regenerate: bool,
+    review_key: str | None,
 ) -> dict[str, Any]:
     task = db.get(ReviewTask, task_id)
     if task is None:
@@ -1238,7 +1422,7 @@ def _queue_fix_preview(
     project = find_project_by_id(db, task.project_id)
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
-    review_result = find_result_response(db, task_id)
+    review_result = find_result_response_by_key(db, task_id, review_key) if review_key else find_result_response(db, task_id)
     if review_result is None:
         raise AppError("BAD_REQUEST", f"AI Review result not found: {task_id}", 400)
     findings = review_result.get("findings") or []
@@ -1254,6 +1438,7 @@ def _queue_fix_preview(
             task,
             project,
             finding_index,
+            review_result.get("reviewKey"),
             finding.get("filePath") or "",
             review_result.get("provider") or "-",
             review_result.get("model"),
@@ -1269,6 +1454,7 @@ def _queue_fix_preview(
             task,
             project,
             finding_index,
+            review_result.get("reviewKey"),
             file_path,
             review_result.get("provider") or "-",
             review_result.get("model"),
@@ -1282,6 +1468,7 @@ def _queue_fix_preview(
         task,
         project,
         finding_index,
+        review_result.get("reviewKey"),
         file_path,
         review_result.get("provider") or "-",
         review_result.get("model"),
@@ -1295,12 +1482,14 @@ def _queue_fix_preview(
         "INFO",
         "AI 修复预览已进入队列",
         f"findingIndex={finding_index}, filePath={file_path}",
+        review_key=review_result.get("reviewKey"),
     )
     _submit_provider_job(
         db,
         run_auto_fix_preview_job,
         task_id,
         finding_index,
+        review_result.get("reviewKey"),
         job_type="FIX_PREVIEW",
         task_id=task_id,
         project_id=project.id,
@@ -1308,6 +1497,7 @@ def _queue_fix_preview(
         priority=FIX_PREVIEW_JOB_PRIORITY,
         label="AI 修复预览",
         file_path=file_path,
+        review_key=review_result.get("reviewKey"),
     )
     return response
 
@@ -1317,6 +1507,7 @@ def _generate_fix_preview(
     task_id: int,
     finding_index: int,
     force_regenerate: bool,
+    review_key: str | None,
 ) -> dict[str, Any]:
     task = db.get(ReviewTask, task_id)
     if task is None:
@@ -1324,7 +1515,7 @@ def _generate_fix_preview(
     project = find_project_by_id(db, task.project_id)
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
-    review_result = find_result_response(db, task_id)
+    review_result = find_result_response_by_key(db, task_id, review_key) if review_key else find_result_response(db, task_id)
     if review_result is None:
         raise AppError("BAD_REQUEST", f"AI Review result not found: {task_id}", 400)
     findings = review_result.get("findings") or []
@@ -1340,6 +1531,7 @@ def _generate_fix_preview(
             task,
             project,
             finding_index,
+            review_result.get("reviewKey"),
             finding.get("filePath") or "",
             review_result.get("provider") or "-",
             review_result.get("model"),
@@ -1353,6 +1545,7 @@ def _generate_fix_preview(
             task,
             project,
             finding_index,
+            review_result.get("reviewKey"),
             file_node.get("path") or file_node.get("newPath") or finding.get("filePath") or "",
             review_result.get("provider") or "-",
             review_result.get("model"),
@@ -1378,6 +1571,7 @@ def _generate_fix_preview(
         task,
         project,
         finding_index,
+        review_result.get("reviewKey"),
         file_path,
         provider.provider_code,
         model,
@@ -1391,6 +1585,7 @@ def _generate_fix_preview(
         "INFO",
         "AI 修复预览请求已构建",
         f"findingIndex={finding_index}, filePath={file_path}, provider={provider.provider_code}",
+        review_key=review_result.get("reviewKey"),
     )
     db.commit()
     result = run_fix_provider(
@@ -1404,11 +1599,13 @@ def _generate_fix_preview(
             "finding": finding,
             "diffText": diff_text,
             "changedFiles": [file_path],
+            "reviewKey": review_result.get("reviewKey"),
         },
     )
     saved = save_fix_preview(
         db,
         task_id=task_id,
+        review_key=review_result.get("reviewKey"),
         project_id=project.id,
         finding_index=finding_index,
         file_path=file_path,
@@ -1423,6 +1620,7 @@ def _generate_fix_preview(
         "INFO" if result["status"] == "SUCCESS" else "ERROR",
         "AI 修复预览已保存" if result["status"] == "SUCCESS" else "AI 修复预览生成失败",
         f"status={result['status']}, findingIndex={finding_index}",
+        review_key=review_result.get("reviewKey"),
     )
     from app.code_quality.repository import fix_preview_to_dict
 
@@ -1434,6 +1632,7 @@ def _save_fix_preview_status(
     task: ReviewTask,
     project: Project,
     finding_index: int,
+    review_key: str | None,
     file_path: str,
     provider: str,
     model: str | None,
@@ -1443,6 +1642,7 @@ def _save_fix_preview_status(
     saved = save_fix_preview(
         db,
         task_id=task.id,
+        review_key=review_key,
         project_id=project.id,
         finding_index=finding_index,
         file_path=file_path or "-",
@@ -1469,6 +1669,7 @@ def _enqueue_auto_fix_previews(
     model: str | None,
     result: dict[str, Any],
 ) -> None:
+    review_key = result.get("reviewKey") or "default"
     ai_policy = get_project_group_ai_review_policy(db, project)
     if not ai_policy.get("autoFixPreviewEnabled"):
         return
@@ -1490,7 +1691,7 @@ def _enqueue_auto_fix_previews(
             continue
         if not _should_auto_generate_fix_preview(finding, enabled_severities):
             continue
-        existing = find_fix_preview_response(db, task_id=task_id, finding_index=index)
+        existing = find_fix_preview_response(db, task_id=task_id, finding_index=index, review_key=review_key)
         if existing and existing.get("status") == "SUCCESS":
             continue
         file_node = _find_changed_file_for_finding(changed_files, finding)
@@ -1500,6 +1701,7 @@ def _enqueue_auto_fix_previews(
                 task,
                 project,
                 index,
+                review_key,
                 finding.get("filePath") or "",
                 provider.provider_code,
                 model,
@@ -1514,6 +1716,7 @@ def _enqueue_auto_fix_previews(
                 task,
                 project,
                 index,
+                review_key,
                 file_path,
                 provider.provider_code,
                 model,
@@ -1526,6 +1729,7 @@ def _enqueue_auto_fix_previews(
             task,
             project,
             index,
+            review_key,
             file_path,
             provider.provider_code,
             model,
@@ -1542,11 +1746,12 @@ def _enqueue_auto_fix_previews(
         "INFO",
         "AI 修复预览已进入后台队列",
         f"findingIndexes={queued_indexes}",
+        review_key=review_key,
     )
     db.commit()
     if _fix_preview_inline_enabled():
         for index in queued_indexes:
-            _generate_fix_preview(db, task_id, index, True)
+            _generate_fix_preview(db, task_id, index, True, review_key)
         db.commit()
     else:
         for index in queued_indexes:
@@ -1565,6 +1770,7 @@ def _enqueue_auto_fix_previews(
                 run_auto_fix_preview_job,
                 task_id,
                 index,
+                review_key,
                 job_type="FIX_PREVIEW",
                 task_id=task_id,
                 project_id=project.id,
@@ -1572,6 +1778,7 @@ def _enqueue_auto_fix_previews(
                 priority=FIX_PREVIEW_JOB_PRIORITY,
                 label="AI 修复预览",
                 file_path=file_path,
+                review_key=review_key,
             )
 
 
@@ -1582,10 +1789,10 @@ def _should_auto_generate_fix_preview(
     return str(finding.get("severity") or "").strip().upper() in enabled_severities
 
 
-def run_auto_fix_preview_job(task_id: int, finding_index: int) -> dict[str, Any]:
+def run_auto_fix_preview_job(task_id: int, finding_index: int, review_key: str | None = None) -> dict[str, Any]:
     db = SessionLocal()
     try:
-        result = _generate_fix_preview(db, task_id, finding_index, True)
+        result = _generate_fix_preview(db, task_id, finding_index, True, review_key)
         db.commit()
         return result
     except Exception as exception:
@@ -1596,6 +1803,7 @@ def run_auto_fix_preview_job(task_id: int, finding_index: int) -> dict[str, Any]
             "ERROR",
             "AI 修复预览后台任务失败",
             f"findingIndex={finding_index}, error={exception}",
+            review_key=review_key,
         )
         db.commit()
         return {"status": "FAILED", "errorMessage": str(exception)}
@@ -1632,7 +1840,9 @@ def _run_review(
     profile,
     provider,
     request: dict[str, Any],
+    target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    review_key = request.get("reviewKey") or (target or {}).get("reviewKey")
     append_progress(
         db,
         task_id,
@@ -1640,10 +1850,12 @@ def _run_review(
         "INFO",
         "AI Review 请求已构建",
         f"profileCode={profile.profile_code}, provider={provider.provider_code}, model={request.get('model') or provider.model_name}, mode={request.get('mode')}",
+        review_key=review_key,
     )
     db.commit()
     try:
-        result = run_provider(db, task_id, provider, request)
+        with progress_review_key(review_key):
+            result = run_provider(db, task_id, provider, request)
     except Exception as exception:
         append_progress(
             db,
@@ -1652,6 +1864,7 @@ def _run_review(
             "ERROR",
             "代码质量 Review Provider 调用失败",
             str(exception),
+            review_key=review_key,
         )
         result = {
             "status": "FAILED",
@@ -1672,14 +1885,19 @@ def _run_review(
         "INFO",
         "Provider 执行完成，开始保存结果",
         f"status={result['status']}, findingCount={len(result.get('findings') or [])}",
+        review_key=review_key,
     )
+    result["reviewKey"] = review_key
     saved_result = save_result(
         db,
         task_id=task_id,
+        review_key=review_key,
         project_id=project.id,
         profile_code=profile.profile_code,
         provider=provider.provider_code,
         model=request.get("model") or provider.model_name,
+        display_name=(target or {}).get("displayName"),
+        sort_order=int((target or {}).get("sortOrder") or 0),
         result=result,
     )
     result["_resultId"] = saved_result.id
@@ -1691,6 +1909,7 @@ def _run_review(
         "INFO" if result["status"] == "SUCCESS" else "ERROR",
         "AI Review 结果已保存",
         f"status={result['status']}, resultId={saved_result.id}",
+        review_key=review_key,
     )
     append_progress(
         db,
@@ -1699,6 +1918,7 @@ def _run_review(
         "INFO" if result["status"] == "SUCCESS" else "ERROR",
         "AI Review 已完成" if result["status"] == "SUCCESS" else "AI Review 执行失败",
         f"status={result['status']}, overallLevel={result.get('overallLevel') or '-'}",
+        review_key=review_key,
     )
     db.commit()
     _enqueue_auto_fix_previews(
@@ -1718,7 +1938,9 @@ def _sync_task_status_after_review(db: Session, task_id: int, result: dict[str, 
         return
     status = str(result.get("status") or "").upper()
     if status == "FAILED":
-        mark_task_failed(task, result.get("errorMessage") or "AI Review failed")
+        results = list_result_responses(db, task_id)
+        if not any(item.get("status") in {"SUCCESS", "RUNNING"} for item in results):
+            mark_task_failed(task, result.get("errorMessage") or "AI Review failed")
         return
     if status == "SUCCESS" and (task.trigger_type == "CODE_QUALITY_MANUAL" or task.status == "FAILED"):
         mark_task_success(task, result.get("overallLevel") or task.risk_level or "LOW")
@@ -1835,6 +2057,73 @@ def _resolve_provider(db: Session, project: Project, profile, target_type: str |
     if not provider_code:
         provider_code = get_settings_record(db).default_provider_code
     return get_provider(db, provider_code)
+
+
+def _resolve_review_targets(db: Session, project: Project, profile, target_type: str | None = None) -> list[dict[str, Any]]:
+    provider_override = None
+    if target_type:
+        from app.project_integration.repository import find_target_config
+
+        target_config = find_target_config(db, project.id, target_type)
+        provider_override = target_config.provider_code if target_config else None
+    if not provider_override:
+        provider_override = project.default_code_quality_provider_code
+    if provider_override:
+        provider = get_provider(db, provider_override)
+        model = profile.model or provider.model_name
+        return [_review_target(provider, make_ai_review_model_key(provider.provider_code, model), model, None, 10)]
+
+    from app.project_integration.models import ProjectGroup
+
+    group = db.get(ProjectGroup, project.group_id) if project.group_id else None
+    group_models = [
+        item for item in list_project_group_ai_review_models(db, int(group.id), include_fallback=False)
+        if item.get("enabled") is not False
+    ] if group is not None else []
+    if group_models:
+        targets: list[dict[str, Any]] = []
+        for index, item in enumerate(group_models):
+            provider = get_provider(db, item["providerCode"])
+            model = item.get("modelName") or profile.model or provider.model_name
+            targets.append(
+                _review_target(
+                    provider,
+                    item.get("reviewKey") or make_ai_review_model_key(provider.provider_code, model, index),
+                    model,
+                    item.get("displayName"),
+                    int(item.get("sortOrder") or (index + 1) * 10),
+                )
+            )
+        return targets
+
+    provider = _resolve_provider(db, project, profile, target_type)
+    model = profile.model or provider.model_name
+    return [_review_target(provider, make_ai_review_model_key(provider.provider_code, model), model, None, 10)]
+
+
+def _review_target(provider: CodeQualityModelProvider, review_key: str, model: str | None, display_name: str | None, sort_order: int) -> dict[str, Any]:
+    return {
+        "provider": provider,
+        "reviewKey": review_key,
+        "model": model,
+        "displayName": _review_display_name(provider.provider_code, display_name or provider.provider_name),
+        "sortOrder": sort_order,
+    }
+
+
+def _review_display_name(provider_code: str | None, display_name: str | None) -> str:
+    short_names = {
+        "OPENAI": "OpenAI",
+        "ANTHROPIC": "Claude",
+        "DEEPSEEK": "DeepSeek",
+        "XIAOMIMO": "XiaoMIMO",
+        "CUSTOM": "自定义",
+    }
+    provider_key = str(provider_code or "").strip().upper()
+    raw_name = str(display_name or "").strip()
+    if not raw_name or "Xiaomi MiMo" in raw_name or raw_name == provider_code:
+        return short_names.get(provider_key, provider_code or "-")
+    return raw_name
 
 
 def _build_review_request(profile, request: dict[str, Any]) -> dict[str, Any]:

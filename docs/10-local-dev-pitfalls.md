@@ -1243,3 +1243,43 @@ GitLab 新分支 Push 的 `before` 全 0 表示分支之前不存在，不是一
 2. 直接使用 payload 中 `commits[].added / modified / removed` 汇总的文件列表继续创建审查任务，不能让 webhook 500。
 3. Push Gate 指标中标记 `newBranchPush=true`，方便识别这是新远程分支首次 Push。
 4. 后续 Push Gate 仍按 commit 数、文件数、diff 可用性和阈值决定是否进入 AI Review；如果最终只有文件列表没有 diff 文本，会正常提示“无可审查 diff”。
+
+## 53. 替换项目组多模型配置要先 flush 删除
+
+现象：
+
+编辑项目组只保存单个模型时，后端返回 500，日志里出现：
+
+```text
+Duplicate entry '27-deepseek-default' for key 'uk_project_group_ai_review_model_key'
+```
+
+原因：
+
+`project_group_ai_review_models` 使用 `(group_id, review_key)` 唯一键。更新项目组模型配置时如果在同一次 flush 里先 `delete` 旧行再 `add` 新行，SQLAlchemy 的 unit of work 不保证一定先发 DELETE 再发 INSERT；MySQL 可能先看到新 INSERT，于是和旧行的唯一键冲突。
+
+处理方式：
+
+1. 替换子表配置时，删除旧行后立即 `db.flush()`，确保数据库先释放唯一键。
+2. 再插入新的模型执行项。
+3. 对同一次请求中的重复 `providerCode + modelName` 做去重，避免前端重复提交导致同一 `reviewKey` 冲突。
+
+## 54. 多模型 Review 迁移必须删除旧 `uk_task`
+
+现象：
+
+对历史 MR / Push 任务执行“重新触发审阅”后，新任务进入多模型 AI Review，第一条模型结果可以插入，第二条模型结果报：
+
+```text
+Duplicate entry '438' for key 'uk_task'
+```
+
+原因：
+
+多模型结果已经改为 `(task_id, review_key)` 唯一，但旧库的 `code_quality_review_results` 可能仍保留历史唯一键 `uk_task(task_id)`。只要这个旧唯一键还在，同一个任务就仍然只能保存一条 AI Review 结果。
+
+处理方式：
+
+1. 正式迁移脚本需要执行 `DROP INDEX uk_task`，再创建 `uk_code_quality_result_task_review_key(task_id, review_key)`。
+2. Python 运行时 schema 兼容也要检测并删除旧 `uk_task`，避免本地旧库没有完整跑迁移时继续 500。
+3. 已经失败的重新触发任务可以再次重新触发；旧失败任务会保留失败状态。

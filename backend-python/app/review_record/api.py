@@ -7,6 +7,7 @@ from app.code_quality.service import (
     get_push_gate_response,
     get_result_response,
     list_fix_previews_response,
+    list_results_response,
 )
 from app.core.database import get_db
 from app.core.response import ok
@@ -63,9 +64,18 @@ async def get_code_quality_result(task_id: int, db: Session = Depends(get_db)) -
     return ok(get_result_response(db, task_id))
 
 
+@router.get("/{task_id}/code-quality-results")
+async def list_code_quality_results(task_id: int, db: Session = Depends(get_db)) -> dict:
+    return ok(list_results_response(db, task_id))
+
+
 @router.get("/{task_id}/code-quality-progress")
-async def get_code_quality_progress(task_id: int, db: Session = Depends(get_db)) -> dict:
-    return ok(get_progress_response(db, task_id))
+async def get_code_quality_progress(
+    task_id: int,
+    review_key: str | None = Query(default=None, alias="reviewKey"),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(get_progress_response(db, task_id, review_key))
 
 
 @router.get("/{task_id}/code-quality-gate")
@@ -79,8 +89,12 @@ async def generate_code_quality_fix_preview(task_id: int, request: dict, db: Ses
 
 
 @router.get("/{task_id}/code-quality-fix-previews")
-async def list_code_quality_fix_previews(task_id: int, db: Session = Depends(get_db)) -> dict:
-    return ok(list_fix_previews_response(db, task_id))
+async def list_code_quality_fix_previews(
+    task_id: int,
+    review_key: str | None = Query(default=None, alias="reviewKey"),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(list_fix_previews_response(db, task_id, review_key))
 
 
 @router.get("/{task_id}")
