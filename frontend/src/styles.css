@@ -291,6 +291,12 @@ body {
   margin-top: 0;
 }
 
+.bounded-modal-scroll {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 .job-queue-review-row {
   display: flex;
   align-items: flex-start;

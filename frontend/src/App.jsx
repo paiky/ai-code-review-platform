@@ -720,68 +720,70 @@ function JobQueueModal({ open, queue, onClose, onOpenTask, onCancelJob }) {
   ];
   return (
     <Modal title="AI Review 调度队列" open={open} onCancel={onClose} footer={null} width="min(1100px, 96vw)">
-      {groups.length === 0 ? (
-        <Empty description="暂无调度任务" />
-      ) : (
-        <Collapse
-          items={groups.map(group => {
-            const reviewJobs = Array.isArray(group.reviewJobs) ? group.reviewJobs : (group.reviewJob ? [group.reviewJob] : []);
-            const activeReviewCount = reviewJobs.filter(job => ['QUEUED', 'RUNNING'].includes(job.status)).length;
-            const activeFixCount = (group.fixPreviewJobs || []).filter(job => ['QUEUED', 'RUNNING'].includes(job.status)).length;
-            return {
-              key: group.taskId,
-              label: (
-                <Space wrap>
-                  <Text strong>任务 #{group.taskId}</Text>
-                  <Text>{group.projectName || '-'}</Text>
-                  {reviewJobs.length > 0 && (
-                    <Tag color={activeReviewCount > 0 ? 'processing' : 'default'}>
-                      Review {reviewJobs.length} 个{activeReviewCount > 0 ? `，${activeReviewCount} 个进行中` : ''}
-                    </Tag>
-                  )}
-                  {activeFixCount > 0 && <Tag color="processing">修复预览 {activeFixCount} 个进行中</Tag>}
-                </Space>
-              ),
-              children: (
-                <Space direction="vertical" className="full-width">
-                  {reviewJobs.length > 0 ? (
-                    <>
-                      <Descriptions
-                        size="small"
-                        column={2}
-                        items={[
-                          { key: 'triggerType', label: '触发类型', children: group.triggerType || '-' },
-                          { key: 'branch', label: '分支', children: taskListBranchText(group) }
-                        ]}
-                      />
-                      <Table
-                        size="small"
-                        rowKey="id"
-                        columns={reviewColumns}
-                        dataSource={reviewJobs}
-                        pagination={false}
-                        scroll={{ x: 1250 }}
-                      />
-                    </>
-                  ) : (
-                    <div className="job-queue-review-row">
-                      <Alert className="job-queue-review-descriptions" type="info" showIcon message="该任务当前只有修复预览调度记录" />
-                      <Button type="link" onClick={() => onOpenTask?.(group.taskId)}>查看任务详情</Button>
-                    </div>
-                  )}
-                  <Table
-                    size="small"
-                    rowKey="id"
-                    columns={fixColumns}
-                    dataSource={group.fixPreviewJobs || []}
-                    pagination={false}
-                  />
-                </Space>
-              )
-            };
-          })}
-        />
-      )}
+      <div className="bounded-modal-scroll">
+        {groups.length === 0 ? (
+          <Empty description="暂无调度任务" />
+        ) : (
+          <Collapse
+            items={groups.map(group => {
+              const reviewJobs = Array.isArray(group.reviewJobs) ? group.reviewJobs : (group.reviewJob ? [group.reviewJob] : []);
+              const activeReviewCount = reviewJobs.filter(job => ['QUEUED', 'RUNNING'].includes(job.status)).length;
+              const activeFixCount = (group.fixPreviewJobs || []).filter(job => ['QUEUED', 'RUNNING'].includes(job.status)).length;
+              return {
+                key: group.taskId,
+                label: (
+                  <Space wrap>
+                    <Text strong>任务 #{group.taskId}</Text>
+                    <Text>{group.projectName || '-'}</Text>
+                    {reviewJobs.length > 0 && (
+                      <Tag color={activeReviewCount > 0 ? 'processing' : 'default'}>
+                        Review {reviewJobs.length} 个{activeReviewCount > 0 ? `，${activeReviewCount} 个进行中` : ''}
+                      </Tag>
+                    )}
+                    {activeFixCount > 0 && <Tag color="processing">修复预览 {activeFixCount} 个进行中</Tag>}
+                  </Space>
+                ),
+                children: (
+                  <Space direction="vertical" className="full-width">
+                    {reviewJobs.length > 0 ? (
+                      <>
+                        <Descriptions
+                          size="small"
+                          column={2}
+                          items={[
+                            { key: 'triggerType', label: '触发类型', children: group.triggerType || '-' },
+                            { key: 'branch', label: '分支', children: taskListBranchText(group) }
+                          ]}
+                        />
+                        <Table
+                          size="small"
+                          rowKey="id"
+                          columns={reviewColumns}
+                          dataSource={reviewJobs}
+                          pagination={false}
+                          scroll={{ x: 1250 }}
+                        />
+                      </>
+                    ) : (
+                      <div className="job-queue-review-row">
+                        <Alert className="job-queue-review-descriptions" type="info" showIcon message="该任务当前只有修复预览调度记录" />
+                        <Button type="link" onClick={() => onOpenTask?.(group.taskId)}>查看任务详情</Button>
+                      </div>
+                    )}
+                    <Table
+                      size="small"
+                      rowKey="id"
+                      columns={fixColumns}
+                      dataSource={group.fixPreviewJobs || []}
+                      pagination={false}
+                    />
+                  </Space>
+                )
+              };
+            })}
+          />
+        )}
+      </div>
     </Modal>
   );
 }
@@ -820,18 +822,20 @@ function FailureNotificationsModal({ open, notifications, onClose, onOpenTask })
       footer={null}
       width="min(1180px, 96vw)"
     >
-      {items.length === 0 ? (
-        <Empty description="最近 24 小时暂无 AI Review 执行失败" />
-      ) : (
-        <Table
-          size="small"
-          rowKey="id"
-          columns={columns}
-          dataSource={items}
-          pagination={false}
-          scroll={{ x: 1120 }}
-        />
-      )}
+      <div className="bounded-modal-scroll">
+        {items.length === 0 ? (
+          <Empty description="最近 24 小时暂无 AI Review 执行失败" />
+        ) : (
+          <Table
+            size="small"
+            rowKey="id"
+            columns={columns}
+            dataSource={items}
+            pagination={false}
+            scroll={{ x: 1120 }}
+          />
+        )}
+      </div>
     </Modal>
   );
 }
