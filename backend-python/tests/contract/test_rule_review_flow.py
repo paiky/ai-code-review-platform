@@ -411,6 +411,38 @@ def test_rerun_gitlab_push_task_replays_raw_payload(client: TestClient, db_sessi
     assert detail["sourceBranch"] == "master"
 
 
+def test_rerun_gitlab_task_in_place_reuses_existing_task(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    seed_backend_template(db_session)
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=mock_mr_payload(),
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    ).json()["data"]
+    task_id = created["taskId"]
+    original_result = db_session.query(ReviewResult).filter_by(task_id=task_id).one()
+    original_result.risk_card_json = json.dumps(
+        {"riskLevel": "LOW", "riskItems": [], "summary": "stale"},
+        ensure_ascii=False,
+    )
+    db_session.commit()
+
+    rerun = client.post(f"/api/review-tasks/{task_id}/rerun-in-place")
+
+    assert rerun.status_code == 200
+    data = rerun.json()["data"]
+    assert data["sourceTaskId"] == task_id
+    assert data["taskId"] == task_id
+    assert data["mode"] == "IN_PLACE"
+    assert db_session.query(ReviewResult).filter_by(task_id=task_id).count() == 1
+    result = client.get(f"/api/review-tasks/{task_id}/result").json()["data"]
+    assert result["riskCard"]["summary"] != "stale"
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    assert detail["status"] == "SUCCESS"
+
+
 def test_rerun_respects_global_dingtalk_notification_switch(
     client: TestClient,
     db_session: Session,

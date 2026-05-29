@@ -2348,6 +2348,23 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     setRerunning(true);
     setError(null);
     try {
+      const rerunResult = await fetchApi(`/api/review-tasks/${taskId}/rerun-in-place`, { method: 'POST' });
+      requestJobQueueRefresh();
+      await load();
+      if (rerunResult?.status === 'SUCCESS' || rerunResult?.status === 'RUNNING') {
+        message.success('已在当前任务重新执行审阅');
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRerunning(false);
+    }
+  };
+
+  const cloneAndRerunReviewTask = async () => {
+    setRerunning(true);
+    setError(null);
+    try {
       const rerunResult = await fetchApi(`/api/review-tasks/${taskId}/rerun`, { method: 'POST' });
       requestJobQueueRefresh();
       if (rerunResult?.taskId) {
@@ -2388,7 +2405,13 @@ function TaskDetail({ taskId, onBack, onOpen }) {
           disabled={!detail || !['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(detail.triggerType)}
           onClick={rerunReviewTask}
         >
-          重新触发审阅
+          重新执行审阅
+        </Button>
+        <Button
+          disabled={!detail || rerunning || !['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(detail.triggerType)}
+          onClick={cloneAndRerunReviewTask}
+        >
+          复制为新任务重跑
         </Button>
       </Space>
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}

@@ -510,6 +510,15 @@ def _process_task(
     return {"analysis": analysis, "riskCard": risk_card, "resultId": result.id}
 
 
+def process_existing_review_task(
+    db: Session,
+    task,
+    changed_files: list[dict[str, Any]],
+    diff_text: str | None = None,
+) -> dict:
+    return _process_task(db, task, changed_files, diff_text)
+
+
 def task_project(db: Session, project_id: int):
     from app.project_integration.repository import find_project_by_id
 

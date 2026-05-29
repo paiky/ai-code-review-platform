@@ -17,7 +17,7 @@ from app.review_record.repository import (
     list_notifications,
     list_review_tasks,
 )
-from app.review_record.service import create_manual_review, rerun_review_task
+from app.review_record.service import create_manual_review, rerun_review_task, rerun_review_task_in_place
 
 
 router = APIRouter(prefix="/api/review-tasks", tags=["review-tasks"])
@@ -31,6 +31,11 @@ async def manual_review(request: dict, db: Session = Depends(get_db)) -> dict:
 @router.post("/{task_id}/rerun")
 async def rerun(task_id: int, db: Session = Depends(get_db)) -> dict:
     return ok(rerun_review_task(db, task_id))
+
+
+@router.post("/{task_id}/rerun-in-place")
+async def rerun_in_place(task_id: int, db: Session = Depends(get_db)) -> dict:
+    return ok(rerun_review_task_in_place(db, task_id))
 
 
 @router.get("")
