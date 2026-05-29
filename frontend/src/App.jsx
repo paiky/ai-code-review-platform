@@ -4160,7 +4160,7 @@ function TemplateConfig() {
       key: 'profile-settings',
       label: (
         <Space wrap>
-          <Text strong>AI Review 设置</Text>
+          <Text strong>AI Review 配置</Text>
         </Space>
       ),
       children: (
@@ -4421,7 +4421,7 @@ function TemplateConfig() {
     }
   ];
 
-  const orderedCollapseItems = ['global-settings', 'project-target-configs', 'provider-settings', 'profile-settings', 'notification-rules']
+  const orderedCollapseItems = ['project-target-configs', 'profile-settings', 'provider-settings', 'global-settings', 'notification-rules']
     .map(key => collapseItems.find(item => item.key === key))
     .filter(Boolean);
 
