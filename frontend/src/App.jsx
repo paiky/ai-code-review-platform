@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Card,
+  Cascader,
   Col,
   Collapse,
   Descriptions,
@@ -562,10 +563,10 @@ function reminderGroupKey(category) {
 }
 
 const reminderGroupMeta = {
-  DB: { label: 'DB配置', titleColor: '#526a7a', sort: 1 },
-  MQ: { label: 'MQ配置', titleColor: '#d48806', sort: 2 },
-  CACHE: { label: 'Redis配置', titleColor: '#cf1322', sort: 3 },
-  CONFIG: { label: 'Nacos配置', titleColor: '#1677ff', sort: 4 },
+  DB: { label: 'DB', titleColor: '#526a7a', sort: 1 },
+  MQ: { label: 'MQ', titleColor: '#d48806', sort: 2 },
+  CACHE: { label: 'Redis', titleColor: '#cf1322', sort: 3 },
+  CONFIG: { label: 'Nacos', titleColor: '#1677ff', sort: 4 },
   OTHER: { label: '其他提醒', titleColor: '#595959', sort: 99 }
 };
 
@@ -837,6 +838,59 @@ function artifactLanguageLabel(language) {
   }[language] || String(language || 'TEXT').toUpperCase();
 }
 
+function artifactCodeClassName(artifact) {
+  const language = artifact?.language;
+  return [
+    'maintenance-artifact-code',
+    ['java', 'sql', 'yaml'].includes(language) ? 'maintenance-artifact-code-dark' : '',
+    language === 'java' ? 'maintenance-artifact-code-java' : '',
+    language === 'sql' ? 'maintenance-artifact-code-sql' : '',
+    language === 'yaml' ? 'maintenance-artifact-code-yaml' : ''
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function renderArtifactCode(artifact) {
+  const content = String(artifact?.content || '');
+  const tokenPattern = artifact?.language === 'java'
+    ? /(\/\/.*|"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|@\w+|\b(?:public|private|protected|return|new|class|interface|void|static|final|true|false|null)\b|\b(?:Queue|Binding|TopicExchange|DirectExchange|FanoutExchange|HeadersExchange|CustomExchange|BindingBuilder)\b)/g
+    : artifact?.language === 'sql'
+      ? /(--.*|\/\*[\s\S]*?\*\/|"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|\b(?:CREATE|ALTER|DROP|TABLE|PRIMARY|KEY|NOT|NULL|DEFAULT|COMMENT|INDEX|UNIQUE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|FROM|SELECT|WHERE|JOIN|LEFT|RIGHT|INNER|OUTER|ON|AND|OR|INT|BIGINT|VARCHAR|CHAR|TEXT|DATETIME|TIMESTAMP|DECIMAL|BOOLEAN|TINYINT|AUTO_INCREMENT)\b)/gi
+      : artifact?.language === 'yaml'
+        ? /(#.*|"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|\b(?:true|false|null)\b|^[ \t-]*[A-Za-z0-9_.-]+(?=\s*:))/gim
+        : null;
+  if (!tokenPattern) return content;
+  const lines = content.split('\n');
+  return lines.flatMap((line, lineIndex) => {
+    const parts = [];
+    let lastIndex = 0;
+    for (const match of line.matchAll(tokenPattern)) {
+      if (match.index > lastIndex) parts.push(line.slice(lastIndex, match.index));
+      const token = match[0];
+      const className = token.startsWith('//')
+        || token.startsWith('--')
+        || token.startsWith('/*')
+        || token.startsWith('#')
+        ? 'code-token-comment'
+        : token.startsWith('"') || token.startsWith("'")
+          ? 'code-token-string'
+          : token.startsWith('@')
+            ? 'code-token-annotation'
+            : artifact?.language === 'yaml' && /^[ \t-]*[A-Za-z0-9_.-]+$/.test(token)
+              ? 'code-token-type'
+            : artifact?.language === 'java' && /^[A-Z]/.test(token)
+              ? 'code-token-type'
+              : 'code-token-keyword';
+      parts.push(<span key={`${lineIndex}-${match.index}`} className={className}>{token}</span>);
+      lastIndex = match.index + token.length;
+    }
+    if (lastIndex < line.length) parts.push(line.slice(lastIndex));
+    if (lineIndex < lines.length - 1) parts.push('\n');
+    return parts;
+  });
+}
+
 async function copyTextToClipboard(text) {
   if (!text) return;
   try {
@@ -852,7 +906,6 @@ function MaintenanceArtifacts({ artifacts }) {
   if (items.length === 0) return null;
   return (
     <Space direction="vertical" size="small" className="full-width">
-      <Text strong>可维护内容</Text>
       {items.map((artifact, index) => (
         <div key={`${artifact.artifactType}-${artifact.sourceFilePath}-${index}`} className="maintenance-artifact">
           <div className="maintenance-artifact-head">
@@ -872,7 +925,7 @@ function MaintenanceArtifacts({ artifacts }) {
               </Tooltip>
             )}
           </div>
-          <pre className="maintenance-artifact-code">{artifact.content}</pre>
+          <pre className={artifactCodeClassName(artifact)}>{renderArtifactCode(artifact)}</pre>
           <Space wrap size={[4, 4]}>
             {artifact.sourceFilePath && <Tag className="path-tag">{artifact.sourceFilePath}</Tag>}
             {artifact.sourceChangeType && <Tag>{changeTypeLabel(artifact.sourceChangeType)}</Tag>}
@@ -930,6 +983,18 @@ function TaskList({ onOpen }) {
     load({ pageNo: 1 });
   }, []);
 
+  const projectScopeValue = groupId ? (projectId ? [groupId, projectId] : [groupId]) : undefined;
+  const projectScopeOptions = useMemo(() => groups.map(group => {
+    const childProjects = projects
+      .filter(project => project.groupId === group.id)
+      .map(project => ({ label: project.name, value: project.id }));
+    return {
+      label: group.groupName,
+      value: group.id,
+      ...(childProjects.length ? { children: childProjects } : {})
+    };
+  }), [groups, projects]);
+
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 64 },
     { title: '项目组', dataIndex: 'groupId', width: 120, ellipsis: true, render: value => groups.find(group => group.id === value)?.groupName || '-' },
@@ -944,6 +1009,7 @@ function TaskList({ onOpen }) {
     { title: '类型', dataIndex: 'triggerType', width: 76, render: value => <Tag>{taskTypeLabel(value)}</Tag> },
     { title: '分支', width: 175, ellipsis: true, render: (_, row) => <Text ellipsis>{taskListBranchText(row)}</Text> },
     { title: '状态', dataIndex: 'status', width: 95, render: value => <Tag color={statusColor(value)}>{value || '-'}</Tag> },
+    { title: '风险点', dataIndex: 'riskItemCount', width: 72, render: value => value ?? 0 },
     { title: '创建时间', dataIndex: 'createdAt', width: 125, ellipsis: true },
     { title: '操作', width: 70, render: (_, row) => <Button type="link" onClick={() => onOpen(row.id)}>详情</Button> }
   ];
@@ -952,28 +1018,18 @@ function TaskList({ onOpen }) {
     <div className="page-shell">
       <div className="page-heading">
         <Space>
-          <Select
+          <Cascader
             allowClear
-            className="task-filter-select"
-            placeholder="项目组"
-            value={groupId}
-            options={groups.map(group => ({ label: group.groupName, value: group.id }))}
+            changeOnSelect
+            showSearch={{ filter: (inputValue, path) => path.some(option => String(option.label).toLowerCase().includes(inputValue.toLowerCase())) }}
+            className="task-project-scope-cascader"
+            placeholder="项目组 / 项目"
+            value={projectScopeValue}
+            options={projectScopeOptions}
             onChange={value => {
-              setGroupId(value || null);
-              setProjectId(null);
+              setGroupId(value?.[0] || null);
+              setProjectId(value?.[1] || null);
             }}
-          />
-          <Select
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            className="task-filter-select"
-            placeholder="项目"
-            value={projectId}
-            options={projects
-              .filter(project => !groupId || project.groupId === groupId)
-              .map(project => ({ label: project.name, value: project.id }))}
-            onChange={value => setProjectId(value || null)}
           />
           <Select
             allowClear
@@ -1023,10 +1079,8 @@ function TaskList({ onOpen }) {
   );
 }
 
-function RiskCardView({ riskCard, changedFilesSummary }) {
+function RiskCardView({ riskCard }) {
   const location = useLocation();
-  const [diffTarget, setDiffTarget] = useState(null);
-  const [activeReminderGroupKeys, setActiveReminderGroupKeys] = useState([]);
   const [activeReminderItemKeys, setActiveReminderItemKeys] = useState([]);
 
   const riskItems = useMemo(
@@ -1034,142 +1088,61 @@ function RiskCardView({ riskCard, changedFilesSummary }) {
     [riskCard]
   );
   const reminderGroups = useMemo(() => buildReminderGroups(riskItems), [riskItems]);
-  const firstReminderGroupKey = reminderGroups[0]?.key;
-  const firstReminderItemKey = reminderGroups[0]?.items?.[0]?.riskId;
-  const roles = riskCard?.suggestedReviewRoles || [];
+  const reminderItems = useMemo(
+    () => reminderGroups.flatMap(group => group.items.map(item => ({ ...item, reminderGroup: group }))),
+    [reminderGroups]
+  );
+  const firstReminderItemKey = reminderItems[0]?.riskId;
 
   useEffect(() => {
     if (!riskCard) return;
-    setActiveReminderGroupKeys(firstReminderGroupKey ? [firstReminderGroupKey] : []);
     setActiveReminderItemKeys(firstReminderItemKey ? [firstReminderItemKey] : []);
-  }, [riskCard, firstReminderGroupKey, firstReminderItemKey]);
+  }, [riskCard, firstReminderItemKey]);
 
   useEffect(() => {
     if (!riskCard) return;
     const match = /^#risk-item-(.+)$/.exec(location.hash || '');
     if (!match) return;
     const riskId = decodeURIComponent(match[1]);
-    const group = reminderGroups.find(item => item.items.some(riskItem => riskItem.riskId === riskId));
-    if (!group) return;
-    setActiveReminderGroupKeys(current => current.includes(group.key) ? current : [...current, group.key]);
+    if (!reminderItems.some(item => item.riskId === riskId)) return;
     setActiveReminderItemKeys(current => current.includes(riskId) ? current : [...current, riskId]);
     window.setTimeout(() => {
       document.getElementById(`risk-item-${riskId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 180);
-  }, [location.hash, riskCard, reminderGroups]);
+  }, [location.hash, riskCard, reminderItems]);
 
   if (!riskCard) return <Empty description="暂无提醒卡片" />;
 
-  const evidenceColumns = [
-    { title: '文件', dataIndex: 'filePath', ellipsis: true },
-    { title: '规则', dataIndex: 'matcher', width: 180, ellipsis: true },
-    {
-      title: '片段',
-      dataIndex: 'snippet',
-      ellipsis: true,
-      render: value => value ? <Text code className="evidence-snippet">{value}</Text> : '-'
-    },
-    {
-      title: 'Diff',
-      width: 92,
-      render: (_, evidence) => (
-        <Tooltip title="查看 Diff">
-          <Button
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => setDiffTarget({
-              finding: { filePath: evidence.filePath, startLine: evidence.lineStart, endLine: evidence.lineEnd },
-              changedFile: findChangedFileForEvidence(evidence, changedFilesSummary)
-            })}
-          />
-        </Tooltip>
-      )
-    }
-  ];
-
   return (
     <Space direction="vertical" size="large" className="full-width">
-      <Card>
-        <Space direction="vertical" size="small">
-          <Paragraph>{riskCardSummaryText(riskCard, riskItems)}</Paragraph>
-          <Space wrap>{roles.map(role => <Tag key={role}>{role}</Tag>)}</Space>
-        </Space>
-      </Card>
-      <FocusIndicatorPanel indicators={riskCard.focusIndicators} />
       <Card title="提醒项">
-        {reminderGroups.length === 0 ? (
+        {reminderItems.length === 0 ? (
           <Empty description="暂无提醒项" />
         ) : <Collapse
-          key={riskCard.cardId || firstReminderGroupKey || 'reminder-groups'}
-          activeKey={activeReminderGroupKeys}
-          onChange={keys => setActiveReminderGroupKeys(Array.isArray(keys) ? keys : [keys].filter(Boolean))}
-          items={reminderGroups.map(group => ({
-            key: group.key,
+          className="reminder-item-list"
+          key={riskCard.cardId || firstReminderItemKey || 'reminder-items'}
+          activeKey={activeReminderItemKeys}
+          onChange={keys => setActiveReminderItemKeys(Array.isArray(keys) ? keys : [keys].filter(Boolean))}
+          items={reminderItems.map(item => ({
+            key: item.riskId,
             label: (
               <Space className="risk-item-heading" wrap>
-                <Tag>{group.items.length} 条</Tag>
-                <Text strong style={{ color: group.titleColor }}>{group.label}</Text>
-                {group.categories.map(category => (
-                  <Tag key={category} color={fineChangeTypes.has(category) ? 'blue' : 'default'}>
-                    {changeTypeLabel(category)}
-                  </Tag>
-                ))}
+                <Text strong style={{ color: item.reminderGroup?.titleColor || '#595959' }}>
+                  {item.reminderGroup?.label || changeTypeLabel(item.category)}
+                </Text>
               </Space>
             ),
             children: (
-              <Collapse
-                className="reminder-item-list"
-                ghost
-                activeKey={activeReminderItemKeys}
-                onChange={keys => setActiveReminderItemKeys(Array.isArray(keys) ? keys : [keys].filter(Boolean))}
-                items={group.items.map(item => ({
-                  key: item.riskId,
-                  label: (
-                    <Space className="risk-item-heading" wrap>
-                      <Tag color={fineChangeTypes.has(item.category) ? 'blue' : 'default'}>{changeTypeLabel(item.category)}</Tag>
-                      <Text strong>{item.title}</Text>
-                    </Space>
-                  ),
-                  children: (
-                    <Space id={`risk-item-${item.riskId}`} direction="vertical" className="full-width">
-                      <Descriptions size="small" column={{ xs: 1, md: 2 }}>
-                        <Descriptions.Item label="规则">{item.ruleCode || '-'}</Descriptions.Item>
-                        <Descriptions.Item label="类型">{changeTypeLabel(item.category)}</Descriptions.Item>
-                      </Descriptions>
-                      <Paragraph>{item.description}</Paragraph>
-                      {item.reason && <Alert type="info" showIcon message="命中原因" description={item.reason} />}
-                      {item.impact && <Text type="secondary">{item.impact}</Text>}
-                      {(item.relatedSignals || []).length > 0 && (
-                        <Space direction="vertical" size="small">
-                          <Text strong>关联信号</Text>
-                          <Space wrap>{item.relatedSignals.map(signal => <Tag key={signal}>{signal}</Tag>)}</Space>
-                        </Space>
-                      )}
-                      <MaintenanceArtifacts artifacts={item.maintenanceArtifacts} />
-                      <Divider />
-                      <Text strong>命中证据</Text>
-                      <Table
-                        rowKey={(row, index) => `${row.filePath}-${row.matcher}-${index}`}
-                        size="small"
-                        columns={evidenceColumns}
-                        dataSource={item.evidences || []}
-                        pagination={false}
-                        locale={{ emptyText: '暂无命中证据' }}
-                      />
-                    </Space>
-                  )
-                }))}
-              />
+              <div id={`risk-item-${item.riskId}`} className="reminder-item-content">
+                <MaintenanceArtifacts artifacts={item.maintenanceArtifacts} />
+                {(!Array.isArray(item.maintenanceArtifacts) || item.maintenanceArtifacts.filter(artifact => artifact?.content).length === 0) && (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可维护内容" />
+                )}
+              </div>
             )
           }))}
         />}
       </Card>
-      <DiffViewerModal
-        open={!!diffTarget}
-        finding={diffTarget?.finding}
-        changedFile={diffTarget?.changedFile}
-        onClose={() => setDiffTarget(null)}
-      />
     </Space>
   );
 }
@@ -4084,7 +4057,12 @@ function TemplateConfig() {
                     </Col>
                     <Col xs={24} md={16}>
                       <div style={{ opacity: (pushPolicyDraft?.autoFixPreviewEnabled === true) ? 1 : 0.55 }}>
-                        <Text strong>自动生成修复预览风险等级</Text>
+                        <Space direction="vertical" size={4} className="full-width">
+                          <Text strong>自动生成修复预览</Text>
+                          <Text type="secondary">
+                            在 Review 之后，根据风险点建议，自动对如下等级风险点生成可查看的代码预览，免去手动生成的长时间等待。按需配置风险等级，避免过度消耗 token。
+                          </Text>
+                        </Space>
                         <Select
                           mode="multiple"
                           className="full-width prompt-field"
@@ -4397,8 +4375,9 @@ function HelpPage() {
               alt="平台项目组配置示例"
             />
             <Paragraph>
-              端类型路径映射也需要结合项目实际目录判断。请确认映射规则能覆盖该项目日常提交的主要代码路径，
-              否则平台可能无法准确识别端类型、审查模板和 AI Review Profile。
+              首次收到某个 GitLab 项目的 Webhook 后，项目打入通用组，同时自动匹配路径到具体端类型，走端类型对应的 AI Review 模板。
+              注意，结合各端项目实际目录判断，确认映射规则能覆盖项目日常提交的主要代码路径，避免多端路径存在冲突，否则平台可能无法准确识别端类型和 AI Review 审查模板。
+              当然，可以通过手动指定项目组，后续优先以项目组的策略为准。
             </Paragraph>
             <HelpImage
               src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-28_19-50-37.png"

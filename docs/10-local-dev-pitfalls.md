@@ -1458,3 +1458,42 @@ AI 修复 Patch 预览弹窗中，左右对照 diff 底部有横向滚动条，�
 2. 原地重跑前清理当前任务的旧规则结果、通知记录、AI Review 结果、进度事件、修复预览、调度队列和 Push Gate 记录，避免新旧结果混在一起。
 3. 前端主按钮文案改为“重新执行审阅”，默认调用原地重跑接口。
 4. 保留“复制为新任务重跑”作为独立次要按钮，继续调用旧 `/rerun` 接口，满足需要保留历史审计或对比新旧结果的场景。
+
+## 65. Agent 执行 `.cmd` 验证脚本时要禁用失败后的 `pause`
+
+现象：
+
+Agent 执行前端构建或后端测试脚本后，命令长时间不返回，或者工具层只提示没有拿到退出状态，无法判断构建 / 测试是否成功。例如：
+
+```text
+The shell command returned no exit status
+```
+
+原因：
+
+仓库的 Windows `.cmd` 入口会在子脚本返回非 0 退出码时执行：
+
+```bat
+if not defined NO_PAUSE pause
+```
+
+这对人工双击脚本有帮助，但在 Agent / 非交互终端里会等待“按任意键继续”，看起来像测试脚本卡住。前端和后端的 `dev` 命令本身也是长驻服务，正常不会退出；验证构建 / 测试时不能误跑默认 `dev`。
+
+处理方式：
+
+1. Agent 执行一次性验证命令时，优先设置 `NO_PAUSE=1`，避免失败后等待输入：
+
+```powershell
+$env:NO_PAUSE="1"; .\scripts\run-frontend.cmd build
+$env:NO_PAUSE="1"; .\scripts\run-backend.cmd test tests\contract\test_rule_templates_api_contract.py
+```
+
+2. 如果需要绕过 `.cmd` 的 pause 包装，可直接执行 `.ps1`：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-frontend.ps1 build
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-backend.ps1 test tests\contract\test_rule_templates_api_contract.py
+```
+
+3. 手动启动开发服务时仍可使用默认入口，例如 `.\scripts\run-frontend.cmd` 或 `.\scripts\run-backend.cmd dev`；这类命令正常会一直运行，不应作为“一次性验证是否通过”的命令。
+4. 如果连 `echo` 这类最小命令都拿不到退出状态，优先怀疑 Cursor / Agent 命令执行桥接异常，而不是项目构建失败。

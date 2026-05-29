@@ -274,16 +274,15 @@ def test_mq_artifact_summarizes_binding_config_without_placeholder_code() -> Non
     card = generate_risk_card(analysis, ["MQ_CONFIG_CHANGE_CHECK"])
 
     artifact = card["riskItems"][0]["maintenanceArtifacts"][0]
-    assert artifact["title"] == "MQ 配置变更信息"
-    assert artifact["language"] == "text"
+    assert artifact["title"] == "MQ 配置 Java 代码"
+    assert artifact["language"] == "java"
     assert "String topic" not in artifact["content"]
     assert "<queue>" not in artifact["content"]
     assert "// MQ" not in artifact["content"]
-    assert "- Exchange: MqClientConstant.REPORT_POSITION_EXCHANGE" in artifact["content"]
-    assert "- Queue: MqClientConstant.REPORT_POSITION_QUEUE, MqClientConstant.REPORT_PROCESS_QUEUE" in artifact["content"]
-    assert "- RouteKey: MqClientConstant.REPORT_POSITION_ROUTING_KEY, MqClientConstant.REPORT_PROCESS_ROUTING_KEY" in artifact["content"]
-    assert "- Binding: reportPositionBinding, reportProcessBinding" in artifact["content"]
-    assert "关键新增行：" in artifact["content"]
+    assert "public TopicExchange reportPositionExchange() {" in artifact["content"]
+    assert "return new Queue(MqClientConstant.REPORT_POSITION_QUEUE, true, false, false);" in artifact["content"]
+    assert "public Binding reportPositionBinding() {" in artifact["content"]
+    assert ".with(MqClientConstant.REPORT_PROCESS_ROUTING_KEY);" in artifact["content"]
 
 
 def test_redis_artifact_summarizes_keys_and_relevant_code_only() -> None:
@@ -310,12 +309,10 @@ def test_redis_artifact_summarizes_keys_and_relevant_code_only() -> None:
     card = generate_risk_card(analysis, ["CACHE_WRITE_DELETE_CHANGE_CHECK"])
 
     artifact = card["riskItems"][0]["maintenanceArtifacts"][0]
-    assert artifact["title"] == "Redis 配置变更信息"
-    assert artifact["language"] == "text"
-    assert "REDIS_POI_ARRIVE_TIME" in artifact["content"]
-    assert "RedisConstant.AUTO_REPORT_QUALITY_USER_SET" in artifact["content"]
-    assert "删除/失效" in artifact["content"]
-    assert "Set 添加" in artifact["content"]
+    assert artifact["title"] == "Redis Java 代码"
+    assert artifact["language"] == "java"
+    assert "REDIS_POI_ARRIVE_TIME" not in artifact["content"]
+    assert "String setKey = RedisConstant.AUTO_REPORT_QUALITY_USER_SET;" not in artifact["content"]
     assert "redisService.del(setKey);" in artifact["content"]
     assert "redisService.sadd(setKey, String.valueOf(userId));" in artifact["content"]
     assert "import com.demo.RedisConstant" not in artifact["content"]
@@ -350,6 +347,6 @@ def test_config_artifacts_split_yaml_and_java_value_sources() -> None:
     java_value_artifact = next(artifact for artifact in artifacts if artifact["sourceFilePath"].endswith(".java"))
     assert "risk-review:" in yaml_artifact["content"]
     assert "  enabled: true" in yaml_artifact["content"]
-    assert java_value_artifact["language"] == "properties"
+    assert java_value_artifact["language"] == "yaml"
     assert java_value_artifact["content"] == "order.confirm.enabled: false"
     assert "targetUser" not in java_value_artifact["content"]

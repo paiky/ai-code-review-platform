@@ -219,18 +219,19 @@ def _cache_artifacts(category: str, evidences: list[dict[str, Any]]) -> list[dic
     keys = _redis_keys(lines)
     operations = _redis_operations(lines)
     source_lines = _redis_source_lines(lines)
-    if not keys and not operations and not source_lines:
+    if not source_lines:
         return []
+    content = "\n".join(source_lines)
     return [
         _artifact(
             "REDIS_COMMAND",
-            "Redis 配置变更信息",
-            "text",
-            _redis_summary_content(keys, operations, source_lines),
+            "Redis Java 代码",
+            "java" if source_lines else "text",
+            content,
             "EXACT" if keys or operations else "INFERRED",
             _first_file(evidences),
             category,
-            "该清单仅用于提示本次新增或修改了 Redis key、写入、删除或过期逻辑；请结合业务场景确认 key 兼容、清理范围和 TTL。",
+            "请结合业务场景确认 Redis key 兼容、清理范围和 TTL。",
         )
     ]
 
@@ -312,26 +313,26 @@ def _redis_related(line: str) -> bool:
 
 def _redis_source_line_relevant(line: str) -> bool:
     lowered = line.lower()
-    if re.search(r"\b[A-Z0-9_]*(?:REDIS|CACHE)[A-Z0-9_]*\b\s*=", line):
+    if re.search(r"\b(?:public|private|protected)\s+static\s+final\b", line):
+        return False
+    if re.search(r"\b(?:string|var|final\s+\w+)\s+(?:setKey|cacheKey|redisKey|key)\s*=", line, re.I):
+        return False
+    write_patterns = [
+        r"\b(?:redisService|redisTemplate|StringRedisTemplate)\.\w*(?:set|put|add|save|write|del|delete|remove|expire|evict|unlink)\w*\s*\(",
+        r"\.opsFor\w+\s*\(\s*\)\.\w*(?:set|put|add|remove|delete|increment|decrement)\w*\s*\(",
+        r"\.sadd\s*\(",
+        r"\.set\s*\(",
+        r"\.put\s*\(",
+        r"\.del\s*\(",
+        r"\.delete\s*\(",
+        r"\.remove\s*\(",
+        r"\.expire\s*\(",
+        r"\.evict\s*\(",
+        r"\.unlink\s*\(",
+    ]
+    if any(re.search(pattern, line, re.I) for pattern in write_patterns):
         return True
-    return any(
-        value in lowered
-        for value in [
-            "redisservice.",
-            "redistemplate.",
-            "opsfor",
-            ".sadd(",
-            ".set(",
-            ".put(",
-            ".del(",
-            ".delete(",
-            ".expire(",
-            ".evict(",
-            "setkey =",
-            "cachekey =",
-            "rediskey =",
-        ]
-    )
+    return False
 
 
 def _clean_redis_value(value: str) -> str:
@@ -408,6 +409,51 @@ def _mq_source_lines(lines: list[str]) -> list[str]:
     return list(dict.fromkeys(result))[:20]
 
 
+def _mq_java_code_content(lines: list[str]) -> str | None:
+    blocks: list[list[str]] = []
+    pending_annotations: list[str] = []
+    mq_method_pattern = re.compile(
+        r"\b(?:public|private|protected)?\s*"
+        r"(?:Queue|Binding|TopicExchange|DirectExchange|FanoutExchange|HeadersExchange|CustomExchange)\s+"
+        r"[a-zA-Z_][a-zA-Z0-9_]*\s*\("
+    )
+    index = 0
+    while index < len(lines):
+        line = _strip_diff_marker(lines[index]).rstrip()
+        stripped = line.strip()
+        if not stripped:
+            pending_annotations = []
+            index += 1
+            continue
+        if stripped.startswith("@"):
+            pending_annotations.append(line)
+            index += 1
+            continue
+        if not mq_method_pattern.search(stripped):
+            pending_annotations = []
+            index += 1
+            continue
+
+        block = [*pending_annotations, line]
+        pending_annotations = []
+        brace_balance = line.count("{") - line.count("}")
+        seen_open_brace = "{" in line
+        index += 1
+        while index < len(lines):
+            next_line = _strip_diff_marker(lines[index]).rstrip()
+            block.append(next_line)
+            brace_balance += next_line.count("{") - next_line.count("}")
+            seen_open_brace = seen_open_brace or "{" in next_line
+            index += 1
+            if seen_open_brace and brace_balance <= 0:
+                break
+        blocks.append(block)
+
+    if not blocks:
+        return None
+    return "\n\n".join("\n".join(block).strip() for block in blocks if block)
+
+
 def _mq_summary_content(
     exchanges: list[str],
     queues: list[str],
@@ -442,26 +488,36 @@ def _clean_code_line(line: str) -> str:
     return re.sub(r"\s+", " ", str(line or "").strip())
 
 
+def _strip_diff_marker(line: str) -> str:
+    text = str(line or "")
+    if text.startswith("+") and not text.startswith("++"):
+        return text[1:]
+    return text
+
+
 def _mq_artifacts(category: str, evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
     lines = _added_lines(evidences)
     if not lines:
         return []
+    java_content = _mq_java_code_content(_added_lines_preserve_indent(evidences))
     exchange_values = _mq_values(lines, "exchange")
     queue_values = _mq_values(lines, "queue")
     route_key_values = _mq_values(lines, "routeKey")
     bindings = _mq_binding_methods(lines)
     source_lines = _mq_source_lines(lines)
     content = _mq_summary_content(exchange_values, queue_values, route_key_values, bindings, source_lines)
+    if java_content:
+        content = java_content
     return [
         _artifact(
             "MQ_CONFIG_CODE",
-            "MQ 配置变更信息",
-            "text",
+            "MQ 配置 Java 代码" if java_content else "MQ 配置变更信息",
+            "java" if java_content else "text",
             content,
-            "EXACT" if exchange_values or queue_values or route_key_values or bindings else "INFERRED",
+            "EXACT" if java_content or exchange_values or queue_values or route_key_values or bindings else "INFERRED",
             _first_file(evidences),
             category,
-            "该清单仅用于提示本次新增或修改了 MQ queue、exchange、routeKey / binding；请到各环境中间件控制台或配置中心确认同步。",
+            "请确认这些 queue、exchange、routeKey / binding 已在各环境中间件控制台或配置中心同步。",
         )
     ]
 
@@ -479,7 +535,7 @@ def _config_artifacts(evidences: list[dict[str, Any]]) -> list[dict[str, Any]]:
             _artifact(
                 "NACOS_CONFIG",
                 _config_artifact_title(file_path),
-                _config_language(file_path),
+                "yaml",
                 "\n".join(content_lines),
                 "EXACT",
                 file_path,

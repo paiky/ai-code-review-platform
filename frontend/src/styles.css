@@ -108,6 +108,10 @@ body {
   min-width: 150px;
 }
 
+.task-project-scope-cascader {
+  min-width: 220px;
+}
+
 .ant-pagination {
   align-items: center;
 }
@@ -465,6 +469,60 @@ body {
   white-space: pre;
 }
 
+.maintenance-artifact-code-dark {
+  max-height: 420px;
+  border-color: #1f2937;
+  background: #0f172a;
+  color: #d6deeb;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.maintenance-artifact-code-dark::before {
+  display: block;
+  margin: -10px -12px 10px;
+  padding: 6px 12px;
+  color: #94a3b8;
+  background: #111827;
+  border-bottom: 1px solid #1f2937;
+  font-family: Arial, sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.maintenance-artifact-code-java::before {
+  content: "java";
+}
+
+.maintenance-artifact-code-sql::before {
+  content: "sql";
+}
+
+.maintenance-artifact-code-yaml::before {
+  content: "yaml";
+}
+
+.code-token-keyword {
+  color: #c792ea;
+}
+
+.code-token-type {
+  color: #82aaff;
+}
+
+.code-token-string {
+  color: #ecc48d;
+}
+
+.code-token-comment {
+  color: #637777;
+  font-style: italic;
+}
+
+.code-token-annotation {
+  color: #ffcb6b;
+}
+
 .maintenance-artifact-notes {
   display: block;
   line-height: 1.55;
@@ -694,6 +752,18 @@ body {
 
 .focus-indicator .path-tag {
   max-width: 100%;
+}
+
+.reminder-item-content {
+  width: 100%;
+}
+
+.reminder-item-list .ant-collapse-header {
+  padding-left: 24px !important;
+}
+
+.reminder-item-content .maintenance-artifact:first-child {
+  margin-top: 0;
 }
 
 .ant-card {
