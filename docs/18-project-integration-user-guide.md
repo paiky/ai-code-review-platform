@@ -148,7 +148,7 @@ GitLab 项目 ID
 
 ### 2. 配置项目组
 
-项目组用于把多个 GitLab 项目按业务线、团队或产品域归类，方便任务列表筛选和设置页管理。它不是权限体系，也不会在第一阶段自动继承模板、钉钉 webhook 或 Provider 配置。
+项目组用于把多个 GitLab 项目按业务线、团队或产品域归类，方便任务列表筛选和设置页管理。它不是权限体系；钉钉机器人、默认 AI Review Profile 和 Push 策略按项目组配置。
 
 在前端“设置 -> 项目组 / 端类型配置”中可以：
 
@@ -195,7 +195,7 @@ src/main/java/**、src/main/resources/**、pom.xml、backend-python/** -> 后端
 规则模板决定平台重点识别和提醒哪些变更类型。内置模板包括：
 
 ```text
-backend-default：后端项目，重点关注接口、DB、缓存、MQ、配置。
+backend-default：后端项目，重点关注 DB 写入/结构、缓存写入删除、MQ 配置、应用配置（默认模板已收敛，不再单独提醒 API 兼容性）。
 frontend-default：前端项目，适合前端仓库接入。
 general-default：通用项目，适合暂未细分技术栈的仓库。
 ```

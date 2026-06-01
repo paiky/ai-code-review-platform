@@ -1,4 +1,6 @@
-﻿# MVP API 契约
+﻿# API 契约
+
+> 状态说明：本文是平台 HTTP API 的权威契约，默认以 `backend-python/` FastAPI 实现为准。领域对象与表结构见 `02-domain-model.md`；提醒卡片 JSON 见 `04-risk-card-schema.md`。未列出的字段以 contract 测试和实际响应为准。
 
 ## 1. 通用约定
 
@@ -47,16 +49,18 @@
 
 ## 2. GitLab Webhook API
 
-### 2.1 接收 Merge Request webhook
+### 2.1 接收 GitLab webhook
 
 ```http
 POST /api/webhooks/gitlab/merge-request
 ```
 
+同一 URL 同时接收 `Merge Request Hook` 与 `Push Hook`，通过请求头 `X-Gitlab-Event` 分发。
+
 请求头：
 
 ```text
-X-Gitlab-Event: Merge Request Hook
+X-Gitlab-Event: Merge Request Hook | Push Hook
 X-Gitlab-Token: optional-secret-token
 ```
 
@@ -106,8 +110,9 @@ X-Gitlab-Token: optional-secret-token
 
 说明：
 
-- MVP 可在该接口内同步执行完整审查，也可创建任务后由 `ReviewJobExecutor` 执行。
-- 若 webhook action 为 close、merge 等非审查触发动作，可返回 `SKIPPED`。
+- 当前 Python 后端在 webhook 接收后同步执行规则提醒主链路，并异步调度 AI Review。
+- MR `action` 为 close、merge 等非审查触发动作时可返回 `SKIPPED`。
+- Push Hook 会先按项目组 Push 策略与分支规则过滤；不匹配时直接 `SKIPPED`，不会创建任务。
 
 ## 3. Review Task API
 
@@ -122,12 +127,20 @@ GET /api/review-tasks
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | projectId | Long | 否 | 项目 ID |
+| groupId | Long | 否 | 项目组 ID |
+| targetType | String | 否 | 端类型，例如 BACKEND / WEB_PC |
+| triggerType | String | 否 | GITLAB_MR_WEBHOOK / GITLAB_PUSH_WEBHOOK / MANUAL |
 | status | String | 否 | PENDING / RUNNING / SUCCESS / FAILED |
 | reviewStatus | String[] | 否 | 可重复传入；NOT_TRIGGERED / REVIEWING / NO_RISK / MINOR / MAJOR / CRITICAL / SKIPPED / REVIEW_FAILED / TASK_FAILED |
 | riskLevel | String | 否 | NONE / LOW / MEDIUM / HIGH / CRITICAL |
 | keyword | String | 否 | 项目名、分支、MR 关键字 |
 | pageNo | Integer | 否 | 默认 1 |
 | pageSize | Integer | 否 | 默认 20 |
+
+列表项补充字段：
+
+- `groupId`、`targetType`、`targetTypes`、`codeQualityProfileCode`、`reviewStatus`、`focusIndicators`。
+- `riskItemCount` 表示该任务下 AI Review finding 总数（跨模型求和）；无 AI Review 时为 `0`。规则提醒项数量请查看 `/result` 返回的 `riskCard.riskItems`。
 
 响应 data：
 
@@ -138,7 +151,11 @@ GET /api/review-tasks
       "id": 10001,
       "projectId": 1,
       "projectName": "demo-service",
+      "groupId": 1,
       "triggerType": "GITLAB_MR_WEBHOOK",
+      "targetType": "BACKEND",
+      "targetTypes": ["BACKEND"],
+      "codeQualityProfileCode": "backend-default-ai-review",
       "externalSourceId": "12",
       "externalUrl": "https://gitlab.example.com/group/demo-service/-/merge_requests/12",
       "sourceBranch": "feature/risk-demo",
@@ -148,7 +165,8 @@ GET /api/review-tasks
       "status": "SUCCESS",
       "reviewStatus": "CRITICAL",
       "riskLevel": "HIGH",
-      "riskItemCount": 3,
+      "riskItemCount": 2,
+      "focusIndicators": [],
       "createdAt": "2026-04-19T12:00:00+08:00",
       "finishedAt": "2026-04-19T12:00:08+08:00"
     }
@@ -172,7 +190,10 @@ GET /api/review-tasks/{taskId}
   "id": 10001,
   "projectId": 1,
   "projectName": "demo-service",
+  "groupId": 1,
+  "gitProjectId": "1001",
   "triggerType": "GITLAB_MR_WEBHOOK",
+  "mrId": "12",
   "externalSourceId": "12",
   "externalUrl": "https://gitlab.example.com/group/demo-service/-/merge_requests/12",
   "sourceBranch": "feature/risk-demo",
@@ -181,12 +202,19 @@ GET /api/review-tasks/{taskId}
   "authorName": "Alice",
   "authorUsername": "alice",
   "templateCode": "backend-default",
+  "targetType": "BACKEND",
+  "targetTypes": ["BACKEND"],
+  "codeQualityProfileCode": "backend-default-ai-review",
   "status": "SUCCESS",
+  "reviewStatus": "CRITICAL",
   "riskLevel": "HIGH",
+  "eventAction": "open",
+  "eventTime": "2026-04-19T12:00:00+08:00",
+  "changedFilesSummary": [],
+  "rawPayload": {},
   "errorMessage": null,
   "createdAt": "2026-04-19T12:00:00+08:00",
-  "startedAt": "2026-04-19T12:00:01+08:00",
-  "finishedAt": "2026-04-19T12:00:08+08:00"
+  "updatedAt": "2026-04-19T12:00:08+08:00"
 }
 ```
 
@@ -201,6 +229,8 @@ GET /api/review-tasks/{taskId}/result
 ```json
 {
   "taskId": 10001,
+  "targetType": "BACKEND",
+  "reminderCardEnabled": true,
   "riskLevel": "HIGH",
   "riskItemCount": 3,
   "summary": "本次 MR 修改了订单接口、订单表 SQL 和 Redis 缓存逻辑。",
@@ -231,6 +261,22 @@ POST /api/review-tasks/{taskId}/rerun
   "triggerType": "GITLAB_MR_WEBHOOK"
 }
 ```
+
+### 3.5 手动发起规则提醒审查
+
+```http
+POST /api/review-tasks/manual
+```
+
+用于本地调试、无 webhook 权限或粘贴 diff 的场景。请求体支持项目、模板、分支、changed files 与 diff 文本；成功时返回新任务 ID 与执行状态。
+
+### 3.6 原地重跑规则提醒
+
+```http
+POST /api/review-tasks/{taskId}/rerun-in-place
+```
+
+基于已有任务重新执行规则提醒主链路，不创建新任务 ID。`/rerun` 则会创建新任务，便于对比前后规则结果。
 
 ## 4. Project API
 
@@ -289,7 +335,19 @@ POST /api/projects
 }
 ```
 
-## 4.3 项目组 AI Review 模型配置
+## 4.3 项目端类型配置
+
+```http
+GET /api/projects/{projectId}/target-configs
+PUT /api/projects/{projectId}/target-configs/{targetType}
+PUT /api/projects/{projectId}/group
+GET /api/target-type-path-mappings
+PUT /api/target-type-path-mappings
+```
+
+`target-configs` 用于按端类型绑定规则模板、AI Review profile、provider、路径匹配和是否启用提醒卡片。项目默认 AI Review profile 也通过端类型配置维护，不再单独提供 `PUT /api/projects/{projectId}/code-quality-profile`。
+
+## 4.4 项目组 AI Review 模型配置
 
 ```http
 GET /api/project-groups
@@ -344,23 +402,9 @@ GET /api/rule-templates
       "targetType": "BACKEND",
       "version": 1,
       "enabledRuleCodes": [
-        "API_COMPATIBILITY_CHECK",
-        "DB_SCHEMA_CHANGE_CHECK",
-        "DB_SQL_CHANGE_CHECK",
-        "ORM_MAPPING_CHANGE_CHECK",
-        "ENTITY_MODEL_CHANGE_CHECK",
-        "DATA_MIGRATION_CHECK",
-        "DB_SCHEMA_SYNC_SUSPECT_CHECK",
-        "CACHE_KEY_CHANGE_CHECK",
-        "CACHE_TTL_CHANGE_CHECK",
-        "CACHE_INVALIDATION_CHANGE_CHECK",
-        "CACHE_READ_WRITE_CHANGE_CHECK",
-        "CACHE_SERIALIZATION_CHANGE_CHECK",
-        "MQ_PRODUCER_CHANGE_CHECK",
-        "MQ_CONSUMER_CHANGE_CHECK",
-        "MQ_MESSAGE_SCHEMA_CHANGE_CHECK",
-        "MQ_TOPIC_CONFIG_CHANGE_CHECK",
-        "MQ_RETRY_DLQ_CHANGE_CHECK",
+        "DB_DATA_WRITE_CHANGE_CHECK",
+        "CACHE_WRITE_DELETE_CHANGE_CHECK",
+        "MQ_CONFIG_CHANGE_CHECK",
         "CONFIG_RELEASE_CHECK"
       ],
       "status": "ENABLED"
@@ -387,31 +431,25 @@ GET /api/rule-templates/{templateCode}
   "targetType": "BACKEND",
   "version": 1,
   "enabledRuleCodes": [
-    "API_COMPATIBILITY_CHECK",
-    "DB_SCHEMA_CHANGE_CHECK",
-    "DB_SQL_CHANGE_CHECK",
-    "ORM_MAPPING_CHANGE_CHECK",
-    "ENTITY_MODEL_CHANGE_CHECK",
-    "DATA_MIGRATION_CHECK",
-    "DB_SCHEMA_SYNC_SUSPECT_CHECK",
-    "CACHE_KEY_CHANGE_CHECK",
-    "CACHE_TTL_CHANGE_CHECK",
-    "CACHE_INVALIDATION_CHANGE_CHECK",
-    "CACHE_READ_WRITE_CHANGE_CHECK",
-    "CACHE_SERIALIZATION_CHANGE_CHECK",
-    "MQ_PRODUCER_CHANGE_CHECK",
-    "MQ_CONSUMER_CHANGE_CHECK",
-    "MQ_MESSAGE_SCHEMA_CHANGE_CHECK",
-    "MQ_TOPIC_CONFIG_CHANGE_CHECK",
-    "MQ_RETRY_DLQ_CHANGE_CHECK",
+    "DB_DATA_WRITE_CHANGE_CHECK",
+    "CACHE_WRITE_DELETE_CHANGE_CHECK",
+    "MQ_CONFIG_CHANGE_CHECK",
     "CONFIG_RELEASE_CHECK"
   ],
   "config": {
-    "focusChangeTypes": ["API", "DB", "DB_SCHEMA", "DB_SQL", "ORM_MAPPING", "ENTITY_MODEL", "DATA_MIGRATION", "CACHE", "CACHE_KEY", "CACHE_TTL", "CACHE_INVALIDATION", "CACHE_READ_WRITE", "CACHE_SERIALIZATION", "MQ", "MQ_PRODUCER", "MQ_CONSUMER", "MQ_MESSAGE_SCHEMA", "MQ_TOPIC_CONFIG", "MQ_RETRY_DLQ", "CONFIG"],
+    "focusChangeTypes": ["DB_DATA_WRITE", "CACHE_WRITE_DELETE", "MQ_CONFIG", "CONFIG"],
+    "focusRuleCodes": [
+      "DB_DATA_WRITE_CHANGE_CHECK",
+      "CACHE_WRITE_DELETE_CHANGE_CHECK",
+      "MQ_CONFIG_CHANGE_CHECK",
+      "CONFIG_RELEASE_CHECK"
+    ],
     "defaultRiskLevel": "LOW"
   }
 }
 ```
+
+说明：模板启用规则以数据库 seed / migration 为准；历史细粒度 ruleCode 仍可能在分析结果中出现，但默认模板已收敛为上述四类提醒规则。
 
 ## 6. Notification API
 
@@ -757,8 +795,9 @@ GET /api/code-quality-review-profiles/{profileCode}
 PUT /api/code-quality-review-profiles/{profileCode}
 GET /api/code-quality-review-profiles/{profileCode}/rendered-prompt
 POST /api/code-quality-review-profiles/{profileCode}/reset-default-prompt
-PUT /api/projects/{projectId}/code-quality-profile
 ```
+
+项目绑定 profile 通过 `PUT /api/projects/{projectId}/target-configs/{targetType}` 维护，见 §4.3。
 
 `GET /api/code-quality-review-profiles/{profileCode}/rendered-prompt` 响应 data：
 
@@ -778,13 +817,21 @@ PUT /api/projects/{projectId}/code-quality-profile
 - `rendered-prompt` 用于前端预览实际传给 provider 的最终 instructions。
 - `reset-default-prompt` 会把指定 profile 的 `reviewInstructions` 恢复为平台内置默认值，其他 profile 配置保持不变。
 
-`PUT /api/projects/{projectId}/code-quality-profile` 请求：
+### 7.7 Finding 修复预览与调度队列
 
-```json
-{
-  "profileCode": "backend-default-ai-review"
-}
+```http
+POST /api/review-tasks/{taskId}/code-quality-fix-preview
+GET /api/review-tasks/{taskId}/code-quality-fix-previews
+GET /api/code-quality-reviews/job-queue
+POST /api/code-quality-reviews/job-queue/{jobId}/cancel
+POST /api/code-quality-reviews/tasks/{taskId}/cancel
+GET /api/code-quality-reviews/failure-notifications
 ```
+
+说明：
+
+- fix-preview 按 `findingIndex` 与可选 `reviewKey` 生成 patch 预览。
+- 调度队列用于观察 AI Review / fix-preview 异步任务；取消接口仅影响排队或未完成任务。
 
 ## 8. DTO / VO 边界
 

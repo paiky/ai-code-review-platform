@@ -1,12 +1,14 @@
 # AI Review 误判反馈闭环方案
 
+> 状态说明：本文是**尚未实现**的产品方案。当前代码库还没有 finding feedback / review memory 表与 API；如需落地请先读 `docs/16-ai-review-feedback-loop-implementation-guide.md`。
+
 日期：2026-05-10
 
 > 2026-05-11 补充：后续实施请优先阅读 `docs/16-ai-review-feedback-loop-implementation-guide.md`。本文保留完整产品方案，`docs/16` 记录当前代码基线和 Phase 1 落地切入点。
 
 ## 1. 背景
 
-代码质量 AI Review 当前已经支持本地 CLI、OpenAI API、Anthropic API 三类 provider，并支持 profile、prompt、执行过程和前端结果展示。
+代码质量 AI Review 当前已使用 HTTP Provider，支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO 和 Custom OpenAI-compatible，并支持 profile、prompt、执行过程和前端结果展示。历史 `CODEX_CLI` 已停用。
 
 但 AI Review 的结论天然存在不确定性：
 
@@ -423,8 +425,7 @@ Prompt 中必须声明：
 
 正式规则包括：
 
-- `code_quality_review_profiles.codex_prompt`
-- `code_quality_review_profiles.openai_instructions`
+- `code_quality_review_profiles.review_instructions`
 - `rule_templates`
 - 项目默认 profile
 
@@ -557,12 +558,10 @@ GET /api/code-quality-review-profiles/{profileCode}/rendered-prompt?taskId=10001
 
 调整：
 
-- `CodeQualityAutoReviewService`
-- `CodeQualityManualReviewService`
-- `CodeQualityAsyncReviewExecutor`
-- `CodexCliCommandFactory`
-- `OpenAiCodeQualityRequestFactory`
-- `AnthropicApiCodeQualityReviewProvider`
+- `backend-python/app/code_quality/service.py`
+- `backend-python/app/code_quality/prompt.py`
+- `backend-python/app/code_quality/providers.py`
+- `backend-python/app/code_quality/repository.py`
 
 建议实现方式：
 

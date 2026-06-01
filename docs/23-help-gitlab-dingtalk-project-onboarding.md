@@ -1,5 +1,7 @@
 # GitLab / 钉钉 / 项目组接入
 
+> 状态说明：本文是面向内部环境的接入帮助页文档源。Webhook URL 示例 `http://ai-review.ihere.net` 需替换为你实际部署的平台地址；通用步骤亦见 `docs/18-project-integration-user-guide.md`。
+
 ## 一、配置 GitLab Webhook
 
 进入需要接入的平台项目：

@@ -1,8 +1,8 @@
 # AI Review 流式诊断与模型输出改造方案
 
-日期：2026-05-19
+> **状态：已暂停。** 当前实现为非流式 Provider HTTP 调用 + 前端轮询 `code-quality-progress` / `code-quality-result`；本文仅作历史方案参考，**不要继续按本文推进**。
 
-状态：已暂停。当前实现已恢复为非流式 Provider HTTP 调用 + 前端轮询 `code-quality-progress` / `code-quality-result`；本文件仅作为历史方案参考，不能作为当前落地依据继续推进。
+日期：2026-05-19
 
 ## 0. Agent 执行入口与推进规则
 

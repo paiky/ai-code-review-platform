@@ -1,170 +1,196 @@
 {
   "cardId": "risk-card-demo-001",
-  "summary": "本次变更涉及 API, DB, DB_SQL, CACHE, CACHE_READ_WRITE，生成 3 个风险项，整体风险等级为 HIGH。",
+  "summary": "本次重点风险涉及 DB 写入/结构维护, 缓存写入/删除, MQ 配置, 配置，生成 4 个风险项，整体风险等级为 HIGH。",
   "riskLevel": "HIGH",
   "affectedResources": [
-    {
-      "resourceType": "API",
-      "name": "GET /api/orders/{id}",
-      "operation": "MODIFIED",
-      "filePath": "src/main/java/com/demo/order/OrderController.java",
-      "evidence": {
-        "changeType": "API",
-        "filePath": "src/main/java/com/demo/order/OrderController.java",
-        "lineStart": null,
-        "lineEnd": null,
-        "snippet": "GET /api/orders/{id}",
-        "matcher": "API_HEURISTIC_RULE"
-      }
-    },
     {
       "resourceType": "DB_TABLE",
       "name": "orders",
       "operation": "MODIFIED",
-      "filePath": "src/main/resources/mapper/OrderMapper.xml",
-      "evidence": {
-        "changeType": "DB_SQL",
-        "filePath": "src/main/resources/mapper/OrderMapper.xml",
-        "lineStart": null,
-        "lineEnd": null,
-        "snippet": "Detected SQL read/write logic change | orders",
-        "matcher": "DB_FINE_GRAINED_RULE"
-      }
+      "filePath": "db/migration/V12__alter_orders.sql"
     },
     {
       "resourceType": "CACHE_KEY",
-      "name": "order:detail",
+      "name": "order:detail:",
       "operation": "MODIFIED",
-      "filePath": "src/main/java/com/demo/order/OrderCacheService.java",
-      "evidence": {
-        "changeType": "CACHE_READ_WRITE",
-        "filePath": "src/main/java/com/demo/order/OrderCacheService.java",
-        "lineStart": null,
-        "lineEnd": null,
-        "snippet": "Detected cache read/write path change | order:detail",
-        "matcher": "CACHE_FINE_GRAINED_RULE"
-      }
+      "filePath": "src/main/java/com/demo/order/OrderCacheService.java"
+    },
+    {
+      "resourceType": "MQ_TOPIC",
+      "name": "order.queue",
+      "operation": "MODIFIED",
+      "filePath": "src/main/java/com/demo/order/RabbitMqBindingConfig.java"
+    },
+    {
+      "resourceType": "CONFIG_KEY",
+      "name": "risk-review",
+      "operation": "MODIFIED",
+      "filePath": "config/nacos/order-service.yaml"
+    }
+  ],
+  "focusIndicators": [
+    {
+      "code": "DB_SCHEMA_CHANGE",
+      "name": "DB 表/字段变更",
+      "riskLevel": "HIGH",
+      "matched": true,
+      "reason": "命中变更类型：DB 写入/结构维护。",
+      "evidences": [],
+      "sourceChangeTypes": ["DB_DATA_WRITE"]
+    },
+    {
+      "code": "MQ_CONFIG_CHANGE",
+      "name": "MQ 配置变更",
+      "riskLevel": "HIGH",
+      "matched": true,
+      "reason": "命中变更类型：MQ 配置。",
+      "evidences": [],
+      "sourceChangeTypes": ["MQ_CONFIG"]
+    },
+    {
+      "code": "REDIS_CONFIG_CHANGE",
+      "name": "Redis 配置变更",
+      "riskLevel": "HIGH",
+      "matched": true,
+      "reason": "命中变更类型：缓存写入/删除。",
+      "evidences": [],
+      "sourceChangeTypes": ["CACHE_WRITE_DELETE"]
+    },
+    {
+      "code": "VALUE_CONFIG_CHANGE",
+      "name": "@Value 配置变更",
+      "riskLevel": null,
+      "matched": false,
+      "reason": "未命中 @Value 配置变更信号。",
+      "evidences": [],
+      "sourceChangeTypes": []
     }
   ],
   "riskItems": [
     {
-      "riskId": "API_COMPATIBILITY_CHECK-001",
-      "ruleCode": "API_COMPATIBILITY_CHECK",
-      "category": "API",
+      "riskId": "DB_DATA_WRITE_CHANGE_CHECK-001",
+      "ruleCode": "DB_DATA_WRITE_CHANGE_CHECK",
+      "category": "DB_DATA_WRITE",
       "riskLevel": "HIGH",
-      "title": "接口变更需要确认兼容性",
-      "description": "检测到接口、Controller、DTO 或请求响应对象发生变化，需要确认是否影响调用方兼容性。",
-      "impact": "可能导致前端或下游服务调用失败、字段解析异常或契约不一致。",
-      "affectedResources": [
+      "title": "DB 写入、表结构或映射变更需要确认",
+      "description": "检测到 DDL、数据写入 SQL、Entity 字段或 MyBatis/ORM 映射变更；纯 select 查询不会触发该提醒。",
+      "impact": "可能导致表结构不一致、写入条件错误、字段映射遗漏或历史数据兼容问题。",
+      "affectedResources": [],
+      "evidences": [],
+      "recommendedChecks": ["确认 insert/update/delete 的 where 条件、影响范围和回滚方案。"],
+      "suggestedReviewRoles": ["BACKEND", "DBA", "QA"],
+      "confidence": "HIGH",
+      "reason": "出现 DDL / insert / update / delete / Entity / ORM 映射维护信号。",
+      "relatedSignals": [],
+      "maintenanceArtifacts": [
         {
-          "resourceType": "API",
-          "name": "GET /api/orders/{id}",
-          "operation": "MODIFIED",
-          "filePath": "src/main/java/com/demo/order/OrderController.java"
+          "artifactType": "SQL",
+          "title": "可维护 SQL 片段",
+          "language": "sql",
+          "content": "ALTER TABLE orders ADD COLUMN risk_level varchar(32);",
+          "confidence": "EXACT",
+          "copyable": true,
+          "sourceFilePath": "db/migration/V12__alter_orders.sql",
+          "sourceChangeType": "DB_DATA_WRITE",
+          "notes": "从本次 diff 新增 SQL 行提取，执行前仍需确认锁表影响和回滚脚本。"
         }
-      ],
-      "evidences": [
+      ]
+    },
+    {
+      "riskId": "CACHE_WRITE_DELETE_CHANGE_CHECK-002",
+      "ruleCode": "CACHE_WRITE_DELETE_CHANGE_CHECK",
+      "category": "CACHE_WRITE_DELETE",
+      "riskLevel": "HIGH",
+      "title": "Redis 写入、过期或删除变更需要确认",
+      "description": "检测到缓存 set/put/expire/delete/evict 等写入或失效逻辑变更；纯 get 查询不会触发该提醒。",
+      "impact": "可能导致缓存脏数据、误删、TTL 不符合预期或写入后读写不一致。",
+      "affectedResources": [],
+      "evidences": [],
+      "recommendedChecks": ["确认写入、过期和删除策略符合业务一致性要求。"],
+      "suggestedReviewRoles": ["BACKEND", "SRE", "QA"],
+      "confidence": "HIGH",
+      "reason": "出现 Redis 写入、TTL 或删除信号。",
+      "relatedSignals": [],
+      "maintenanceArtifacts": [
         {
-          "filePath": "src/main/java/com/demo/order/OrderController.java",
-          "lineStart": null,
-          "lineEnd": null,
-          "snippet": "GET /api/orders/{id}",
-          "matcher": "API_HEURISTIC_RULE"
+          "artifactType": "REDIS_COMMAND",
+          "title": "Redis Java 代码",
+          "language": "java",
+          "content": "redisTemplate.opsForValue().set(\"order:detail:\" + id, value);\nredisTemplate.expire(\"order:detail:\" + id, Duration.ofMinutes(5));\nredisTemplate.delete(\"order:list\");",
+          "confidence": "EXACT",
+          "copyable": true,
+          "sourceFilePath": "src/main/java/com/demo/order/OrderCacheService.java",
+          "sourceChangeType": "CACHE_WRITE_DELETE",
+          "notes": "请结合业务场景确认 Redis key 兼容、清理范围和 TTL。"
         }
-      ],
-      "recommendedChecks": [
-        "确认接口路径、方法、请求参数和响应字段是否保持向后兼容。",
-        "确认前端和下游调用方是否已同步适配。",
-        "补充或更新接口契约测试与回归用例。"
-      ],
-      "suggestedReviewRoles": ["BACKEND", "QA", "OWNER"],
+      ]
+    },
+    {
+      "riskId": "MQ_CONFIG_CHANGE_CHECK-003",
+      "ruleCode": "MQ_CONFIG_CHANGE_CHECK",
+      "category": "MQ_CONFIG",
+      "riskLevel": "HIGH",
+      "title": "MQ exchange、routeKey 或 queue 配置变更需要确认",
+      "description": "检测到创建 queue、exchange 或 routeKey 的配置变更；只有发送队列消息不会触发该提醒。",
+      "impact": "可能导致消息投递到错误 exchange/queue、路由失败或环境配置不一致。",
+      "affectedResources": [],
+      "evidences": [],
+      "recommendedChecks": ["确认 exchange、queue、routeKey 在各环境和中间件控制台已同步。"],
+      "suggestedReviewRoles": ["BACKEND", "SRE", "QA"],
+      "confidence": "HIGH",
+      "reason": "出现 MQ queue / exchange / routeKey 声明或绑定维护信号。",
+      "relatedSignals": [],
+      "maintenanceArtifacts": [
+        {
+          "artifactType": "MQ_CONFIG_CODE",
+          "title": "MQ 配置变更信息",
+          "language": "text",
+          "content": "Exchange: order.exchange\nQueue: order.queue\nRouteKey: order.route",
+          "confidence": "EXACT",
+          "copyable": true,
+          "sourceFilePath": "src/main/java/com/demo/order/RabbitMqBindingConfig.java",
+          "sourceChangeType": "MQ_CONFIG",
+          "notes": "请确认这些 queue、exchange、routeKey / binding 已在各环境中间件控制台或配置中心同步。"
+        }
+      ]
+    },
+    {
+      "riskId": "CONFIG_RELEASE_CHECK-004",
+      "ruleCode": "CONFIG_RELEASE_CHECK",
+      "category": "CONFIG",
+      "riskLevel": "MEDIUM",
+      "title": "配置变更需要确认灰度、默认值和回滚策略",
+      "description": "检测到 YAML、properties、Nacos 或开关配置发生变化，需要确认配置生效范围和上线策略。",
+      "impact": "可能导致环境差异、配置缺失、开关误开或发布后无法快速回滚。",
+      "affectedResources": [],
+      "evidences": [],
+      "recommendedChecks": ["确认新增配置是否有安全默认值。"],
+      "suggestedReviewRoles": ["BACKEND", "SRE", "QA"],
       "confidence": null,
       "reason": null,
-      "relatedSignals": []
-    },
-    {
-      "riskId": "DB_SQL_CHANGE_CHECK-002",
-      "ruleCode": "DB_SQL_CHANGE_CHECK",
-      "category": "DB_SQL",
-      "riskLevel": "MEDIUM",
-      "title": "SQL 读写逻辑变更需要确认性能与结果兼容",
-      "description": "检测到 Mapper XML、SQL 文件或代码中的 SQL 读写逻辑发生变化，需要确认查询结果、索引和边界数据。",
-      "impact": "可能引入慢 SQL、结果集变化、分页异常或写入条件不一致。",
-      "affectedResources": [
+      "relatedSignals": [],
+      "maintenanceArtifacts": [
         {
-          "resourceType": "DB_TABLE",
-          "name": "orders",
-          "operation": "MODIFIED",
-          "filePath": "src/main/resources/mapper/OrderMapper.xml"
+          "artifactType": "NACOS_CONFIG",
+          "title": "可复制 Nacos/配置内容",
+          "language": "yaml",
+          "content": "risk-review:\n  enabled: true",
+          "confidence": "EXACT",
+          "copyable": true,
+          "sourceFilePath": "config/nacos/order-service.yaml",
+          "sourceChangeType": "CONFIG",
+          "notes": "复制到 Nacos 前请确认环境、命名空间、默认值和灰度发布策略。"
         }
-      ],
-      "evidences": [
-        {
-          "filePath": "src/main/resources/mapper/OrderMapper.xml",
-          "lineStart": null,
-          "lineEnd": null,
-          "snippet": "Detected SQL read/write logic change | orders",
-          "matcher": "DB_FINE_GRAINED_RULE"
-        }
-      ],
-      "recommendedChecks": [
-        "确认 where、join、order by、limit 和返回字段变化符合预期。",
-        "确认核心 SQL 有索引支撑，并检查大数据量下执行计划。",
-        "覆盖空结果、多结果、边界状态和异常数据场景。"
-      ],
-      "suggestedReviewRoles": ["BACKEND", "DBA", "QA"],
-      "confidence": "MEDIUM",
-      "reason": "出现 SQL select/insert/update/delete 信号，但未直接发现表结构变更。",
-      "relatedSignals": []
-    },
-    {
-      "riskId": "CACHE_READ_WRITE_CHANGE_CHECK-003",
-      "ruleCode": "CACHE_READ_WRITE_CHANGE_CHECK",
-      "category": "CACHE_READ_WRITE",
-      "riskLevel": "MEDIUM",
-      "title": "缓存读写路径变更需要确认一致性与降级",
-      "description": "检测到缓存读取、写入或回源逻辑发生变化，需要确认 cache-aside、降级和异常处理。",
-      "impact": "可能导致缓存穿透、回源异常、读写不一致或缓存不可用时主流程失败。",
-      "affectedResources": [
-        {
-          "resourceType": "CACHE_KEY",
-          "name": "order:detail",
-          "operation": "MODIFIED",
-          "filePath": "src/main/java/com/demo/order/OrderCacheService.java"
-        }
-      ],
-      "evidences": [
-        {
-          "filePath": "src/main/java/com/demo/order/OrderCacheService.java",
-          "lineStart": null,
-          "lineEnd": null,
-          "snippet": "Detected cache read/write path change | order:detail",
-          "matcher": "CACHE_FINE_GRAINED_RULE"
-        }
-      ],
-      "recommendedChecks": [
-        "确认缓存命中、未命中和回源逻辑符合预期。",
-        "确认缓存异常时不会阻断核心业务路径。",
-        "覆盖缓存不可用、空值缓存和并发回源场景。"
-      ],
-      "suggestedReviewRoles": ["BACKEND", "QA"],
-      "confidence": "MEDIUM",
-      "reason": "出现 RedisTemplate / @Cacheable / @CachePut / opsForValue 等缓存读写信号。",
-      "relatedSignals": []
+      ]
     }
   ],
   "recommendedChecks": [
-    "确认接口路径、方法、请求参数和响应字段是否保持向后兼容。",
-    "确认前端和下游调用方是否已同步适配。",
-    "补充或更新接口契约测试与回归用例。",
-    "确认 where、join、order by、limit 和返回字段变化符合预期。",
-    "确认核心 SQL 有索引支撑，并检查大数据量下执行计划。",
-    "覆盖空结果、多结果、边界状态和异常数据场景。",
-    "确认缓存命中、未命中和回源逻辑符合预期。",
-    "确认缓存异常时不会阻断核心业务路径。",
-    "覆盖缓存不可用、空值缓存和并发回源场景。"
+    "确认 insert/update/delete 的 where 条件、影响范围和回滚方案。",
+    "确认写入、过期和删除策略符合业务一致性要求。",
+    "确认 exchange、queue、routeKey 在各环境和中间件控制台已同步。",
+    "确认新增配置是否有安全默认值。"
   ],
-  "suggestedReviewRoles": ["BACKEND", "QA", "OWNER", "DBA"],
-  "generatedAt": "2026-04-19T14:30:00+08:00",
+  "suggestedReviewRoles": ["BACKEND", "DBA", "QA", "SRE"],
+  "generatedAt": "2026-06-01T12:00:00+08:00",
   "generator": "risk-engine-rule-v1"
 }

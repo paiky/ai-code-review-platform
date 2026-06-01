@@ -9,13 +9,13 @@ $payload = Get-Content -Raw -Path .\examples\gitlab-push-webhook.mock.json
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://localhost:8080/api/webhooks/gitlab/merge-request" `
+  -Uri "http://localhost:8090/api/webhooks/gitlab/merge-request" `
   -ContentType "application/json" `
   -Headers @{ "X-Gitlab-Event" = "Push Hook" } `
   -Body $payload
 ```
 
-本目录用于存放本地验证和联调用的示例数据。
+本目录用于存放本地验证和联调用的示例数据。默认 Python 后端端口为 `8090`（见 `scripts/run-backend.cmd`）；若你改了端口，请同步替换下面示例 URL。
 
 ## 文件说明
 
@@ -52,7 +52,7 @@ $payload = Get-Content -Raw -Path .\examples\gitlab-mr-webhook.mock.json
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://localhost:8080/api/webhooks/gitlab/merge-request" `
+  -Uri "http://localhost:8090/api/webhooks/gitlab/merge-request" `
   -ContentType "application/json" `
   -Headers @{ "X-Gitlab-Event" = "Merge Request Hook" } `
   -Body $payload
@@ -65,7 +65,7 @@ $payload = Get-Content -Raw -Path .\examples\manual-review-request.json
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://localhost:8080/api/review-tasks/manual" `
+  -Uri "http://localhost:8090/api/review-tasks/manual" `
   -ContentType "application/json" `
   -Body $payload
 ```
@@ -79,7 +79,7 @@ $payload = Get-Content -Raw -Path .\examples\gitlab-mr-webhook.real-no-changed-f
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://localhost:8080/api/webhooks/gitlab/merge-request" `
+  -Uri "http://localhost:8090/api/webhooks/gitlab/merge-request" `
   -ContentType "application/json" `
   -Headers @{ "X-Gitlab-Event" = "Merge Request Hook" } `
   -Body $payload

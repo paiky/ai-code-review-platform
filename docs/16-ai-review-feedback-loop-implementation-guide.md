@@ -1,5 +1,7 @@
 # AI Review 误判反馈闭环落地指引
 
+> 状态说明：**Phase 1 尚未落地。** 本文描述 finding feedback 的实施切入点；完整产品方案见 `docs/14-ai-review-feedback-loop-plan.md`。当前 AI Review 结果尚无 fingerprint / feedback API。
+
 日期：2026-05-11
 
 ## 1. 目的
@@ -12,8 +14,8 @@
 
 截至本文：
 
-- 代码质量 AI Review 已支持 `CODEX_CLI`、`OPENAI_API`、`ANTHROPIC_API`。
-- `CODEX_CLI` 已切换为 diff-only：只使用平台保存的 `diffText` / `changedFiles`，不再读取被审查项目本地仓库或 `HEAD`。
+- 代码质量 AI Review 已使用 HTTP Provider，支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO 和 Custom OpenAI-compatible。
+- Provider 输入来自平台保存的 `diffText` / `changedFiles`，不再读取被审查项目本地仓库或 `HEAD`。
 - AI Review 结果通过 `code_quality_review_results` 保存，核心字段包括 `findings_json`、`finding_count`、`raw_output`、`status`。
 - 后端 response `CodeQualityReviewResultResponse` 当前直接返回 `findings` JSON，没有 finding fingerprint 和 feedback 信息。
 - `CodeQualityFinding` 当前字段为 severity、category、filePath、startLine、endLine、title、body、suggestion、confidence、source。
@@ -46,12 +48,12 @@
 
 ## 5. 后端改动建议
 
-### 5.1 新增 Flyway migration
+### 5.1 新增 bootstrap migration
 
 新增：
 
 ```text
-backend/src/main/resources/db/migration/V17__code_quality_finding_feedbacks.sql
+backend-python/migrations/bootstrap_sql/V33__code_quality_finding_feedbacks.sql
 ```
 
 建议第一阶段只建 feedback 表：
@@ -84,18 +86,15 @@ CREATE TABLE code_quality_finding_feedbacks (
 - `memory_enabled` 第一阶段建议默认 `0` 或虽接收但暂不生成 memory，避免承诺 Phase 2 行为。
 - `scope_type` / `scope_value` 可以先保留，为后续 review memory 复用。
 
-### 5.2 新增 domain / application / infrastructure
+### 5.2 新增 models / repository / service / api
 
 建议新增：
 
 ```text
-backend/src/main/java/com/leaf/codereview/codequality/domain/CodeQualityFindingFeedback.java
-backend/src/main/java/com/leaf/codereview/codequality/domain/CodeQualityFindingFeedbackAction.java
-backend/src/main/java/com/leaf/codereview/codequality/domain/CodeQualityFindingFeedbackReasonType.java
-backend/src/main/java/com/leaf/codereview/codequality/application/CodeQualityFindingFingerprint.java
-backend/src/main/java/com/leaf/codereview/codequality/application/CodeQualityFindingFeedbackService.java
-backend/src/main/java/com/leaf/codereview/codequality/infrastructure/CodeQualityFindingFeedbackRepository.java
-backend/src/main/java/com/leaf/codereview/codequality/controller/CodeQualityFindingFeedbackController.java
+backend-python/app/code_quality/models.py
+backend-python/app/code_quality/repository.py
+backend-python/app/code_quality/service.py
+backend-python/app/code_quality/api.py
 ```
 
 第一阶段 action 至少支持：
@@ -194,7 +193,7 @@ DELETE /api/review-tasks/{taskId}/code-quality-findings/{fingerprint}/feedback
 
 ## 7. Result Response 调整
 
-调整 `CodeQualityReviewResultRepository.findByTaskId` 或其上层 service：
+调整 `backend-python/app/code_quality/repository.py` 的结果查询或其上层 service：
 
 - 读取 `findings_json`。
 - 为每条 finding 计算 `fingerprint`。

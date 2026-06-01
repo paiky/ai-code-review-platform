@@ -149,7 +149,7 @@ try {
         "dev" {
             $port = $env:SERVER_PORT
             if ([string]::IsNullOrWhiteSpace($port)) {
-                $port = "18080"
+                $port = "8090"
             }
             $resolvedDev = Resolve-DevPort -CommandArgs $remainingArgs -DefaultPort $port
             Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", $resolvedDev.Port, "--reload") + $resolvedDev.RemainingArgs)

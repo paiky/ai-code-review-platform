@@ -1,8 +1,10 @@
-# 风险卡片 JSON Schema
+# 提醒卡片 JSON Schema
+
+> 状态说明：JSON 字段仍沿用 `riskCard` / `riskItems` / `riskLevel` 命名；前端与钉钉展示层统一称“提醒卡片 / 提醒项”。权威结构以 `backend-python/app/risk_engine/service.py` 输出和本文件 JSON Schema 为准。
 
 ## 1. 设计目标
 
-风险卡片是 MVP 的统一输出对象，必须同时服务前端渲染、钉钉推送、数据库存储和后续人工反馈回流。钉钉消息只是 RiskCard 的展示转换结果，权威数据始终以 RiskCard JSON 为准。
+提醒卡片是规则提醒链路的统一输出对象，必须同时服务前端渲染、钉钉推送、数据库存储和后续人工反馈回流。钉钉消息只是 RiskCard 的展示转换结果，权威数据始终以 RiskCard JSON 为准。
 
 当前文档以代码中的 `RiskCard` / `RiskItem` 结构为准，避免文档 schema 和实际落库 JSON 脱节。
 
@@ -49,18 +51,21 @@ DB / CACHE / MQ 细分后，风险卡片必须优先展示细分类型，而不�
 [
   "API",
   "DB",
+  "DB_DATA_WRITE",
   "DB_SCHEMA",
   "DB_SQL",
   "ORM_MAPPING",
   "ENTITY_MODEL",
   "DATA_MIGRATION",
   "CACHE",
+  "CACHE_WRITE_DELETE",
   "CACHE_KEY",
   "CACHE_TTL",
   "CACHE_INVALIDATION",
   "CACHE_READ_WRITE",
   "CACHE_SERIALIZATION",
   "MQ",
+  "MQ_CONFIG",
   "MQ_PRODUCER",
   "MQ_CONSUMER",
   "MQ_MESSAGE_SCHEMA",
@@ -73,13 +78,16 @@ DB / CACHE / MQ 细分后，风险卡片必须优先展示细分类型，而不�
 约定：
 
 - `DB` 是聚合兼容类型，不应作为细粒度风险项的首选展示类型。
+- `DB_DATA_WRITE` 是默认模板收敛后的 DB 提醒类型，覆盖 DDL、写入 SQL、Entity 与 ORM 映射维护信号。
 - `DB_SCHEMA` 表示明确 DDL / migration schema 变更。
 - `DB_SQL` 表示 SQL 读写逻辑变更。
 - `ORM_MAPPING` 表示 MyBatis / ORM 映射变更。
 - `ENTITY_MODEL` 表示实体模型字段或 ORM 注解变更。
 - `DATA_MIGRATION` 表示数据修复、回填或历史数据迁移风险。
-- `CACHE` 是缓存聚合兼容类型，细分风险项优先使用 `CACHE_KEY` / `CACHE_TTL` / `CACHE_INVALIDATION` / `CACHE_READ_WRITE` / `CACHE_SERIALIZATION`。
-- `MQ` 是消息队列聚合兼容类型，细分风险项优先使用 `MQ_PRODUCER` / `MQ_CONSUMER` / `MQ_MESSAGE_SCHEMA` / `MQ_TOPIC_CONFIG` / `MQ_RETRY_DLQ`。
+- `CACHE` 是缓存聚合兼容类型，细分风险项优先使用 `CACHE_WRITE_DELETE` 或 `CACHE_KEY` / `CACHE_TTL` / `CACHE_INVALIDATION` / `CACHE_READ_WRITE` / `CACHE_SERIALIZATION`。
+- `CACHE_WRITE_DELETE` 是默认模板收敛后的缓存提醒类型，覆盖 set/expire/delete/evict 等写入或失效信号。
+- `MQ` 是消息队列聚合兼容类型，细分风险项优先使用 `MQ_CONFIG` 或 `MQ_PRODUCER` / `MQ_CONSUMER` / `MQ_MESSAGE_SCHEMA` / `MQ_TOPIC_CONFIG` / `MQ_RETRY_DLQ`。
+- `MQ_CONFIG` 是默认模板收敛后的 MQ 提醒类型，覆盖 queue / exchange / routeKey 配置维护信号。
 
 ### 3.2 riskItem 扩展字段
 
@@ -325,18 +333,21 @@ DB 细分风险项必须携带以下解释字段：
       "enum": [
         "API",
         "DB",
+        "DB_DATA_WRITE",
         "DB_SCHEMA",
         "DB_SQL",
         "ORM_MAPPING",
         "ENTITY_MODEL",
         "DATA_MIGRATION",
         "CACHE",
+        "CACHE_WRITE_DELETE",
         "CACHE_KEY",
         "CACHE_TTL",
         "CACHE_INVALIDATION",
         "CACHE_READ_WRITE",
         "CACHE_SERIALIZATION",
         "MQ",
+        "MQ_CONFIG",
         "MQ_PRODUCER",
         "MQ_CONSUMER",
         "MQ_MESSAGE_SCHEMA",
@@ -474,11 +485,8 @@ DB 细分风险项必须携带以下解释字段：
 
 ## 6. 钉钉推送转换规则
 
-MVP 推荐将 RiskCard 转换为钉钉 Markdown：
+规则提醒钉钉消息以 Markdown 发送，标题固定为「变更提醒」。正文按 DB / MQ / Redis/缓存 / 配置分组展示简要提醒，并附带平台详情链接（`PLATFORM_BASE_URL/tasks/{taskId}`）；不再额外展示 GitLab 链接。
 
-- 标题：`${projectName} MR !${externalSourceId} 风险审查：${riskLevel}`。
-- 摘要：展示 `summary`。
-- 风险项：按严重级别列出 `title`、`riskLevel`、`category`、`confidence`。
-- DB 细分风险项：展示 `reason` 和关键 `relatedSignals`。
-- 推荐检查：展示 `recommendedChecks`。
-- 链接：展示 MR 链接和平台任务详情链接。
+AI Review 完成后的钉钉消息标题为「代码质量 Review」，正文包含 provider、状态、等级、问题数、摘要、最多 5 条主要 finding 与平台详情链接；多模型任务链接可追加 `?reviewKey={reviewKey}`。
+
+详细通知行为见 `03-api-contract.md` §6。

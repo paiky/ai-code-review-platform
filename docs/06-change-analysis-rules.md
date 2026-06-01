@@ -1,41 +1,39 @@
-# MVP 变更分析规则说明
+# 变更分析规则说明
+
+> 状态说明：本文描述变更分析器的输入输出与识别规则。当前实现以 `backend-python/app/change_analysis/service.py` 为准；默认模板启用的提醒规则已收敛，见 `V23__consolidated_card_reminder_rules.sql` 与 `04-risk-card-schema.md`。
 
 ## 1. 目标
 
-MVP 版变更分析器用于根据 changed files、单文件 diff 文本和全局 diff 文本，识别本次 MR 是否涉及以下变更：
+变更分析器根据 changed files、单文件 diff 文本和全局 diff 文本，识别本次变更是否涉及以下类型。
 
-- API
-- API_ENDPOINT（规划中）
-- API_REQUEST_SCHEMA（规划中）
-- API_RESPONSE_SCHEMA（规划中）
-- API_AUTH（规划中）
-- API_ERROR_CONTRACT（规划中）
-- DB（聚合类型）
-- DB_SCHEMA
-- DB_SQL
-- ORM_MAPPING
-- ENTITY_MODEL
-- DATA_MIGRATION
-- CACHE
-- CACHE_KEY
-- CACHE_TTL
-- CACHE_INVALIDATION
-- CACHE_READ_WRITE
-- CACHE_SERIALIZATION
-- MQ
-- MQ_PRODUCER
-- MQ_CONSUMER
-- MQ_MESSAGE_SCHEMA
-- MQ_TOPIC_CONFIG
-- MQ_RETRY_DLQ
-- CONFIG
-- CONFIG_FEATURE_FLAG（规划中）
-- CONFIG_DATASOURCE（规划中）
-- CONFIG_MIDDLEWARE（规划中）
-- CONFIG_SECURITY（规划中）
-- CONFIG_ENVIRONMENT（规划中）
+### 1.1 当前 Python 分析器实际输出
 
-当前版本只使用启发式规则，不引入 AI、AST、调用图或复杂语义分析。设计重点是输出结构稳定、规则边界清晰、后续可替换为更强分析器。
+`backend-python/app/change_analysis/service.py` 当前会直接输出以下**主类型**（并自动附加聚合类型 `DB` / `CACHE` / `MQ`）：
+
+| 主类型 | 含义 | 典型信号 |
+| --- | --- | --- |
+| `API` | 接口 / Controller / DTO 变更 | Spring MVC 注解、controller/dto 路径 |
+| `DB_DATA_WRITE` | DB 写入、DDL、Entity、ORM 映射维护 | DDL、insert/update/delete、Entity/Mapper 维护；**纯 select 不命中** |
+| `CACHE_WRITE_DELETE` | 缓存写入、TTL、删除、失效 | set/expire/delete/evict 等；**纯 get/@Cacheable 读取不命中** |
+| `CACHE_SERIALIZATION` | 缓存序列化 / 值结构变更 | RedisSerializer、serialize/deserialize |
+| `MQ_CONFIG` | MQ queue / exchange / routeKey 配置维护 | `new Queue`、Exchange、BindingBuilder；**仅 send 消息不命中** |
+| `CONFIG` | YAML / properties / bootstrap / nacos 配置 | 配置文件路径命中 |
+| `CONFIG`（`@Value`） | Java `@Value` 占位符变更 | diff 新增行含 `@Value(` |
+
+默认 `backend-default` 模板只消费 `DB_DATA_WRITE`、`CACHE_WRITE_DELETE`、`MQ_CONFIG`、`CONFIG` 四类提醒，不再单独启用 API 兼容性检查。
+
+### 1.2 细粒度与规划类型（扩展参考）
+
+以下类型仍保留在 schema、历史规则与后续扩展设计中；**当前 Python 分析器不会全部单独输出**，但风险引擎与 `focusIndicators` 聚合仍可能引用其中部分语义：
+
+- API 细分（规划中）：`API_ENDPOINT`、`API_REQUEST_SCHEMA`、`API_RESPONSE_SCHEMA`、`API_AUTH`、`API_ERROR_CONTRACT`
+- DB 细分（历史/扩展）：`DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION`
+- CACHE 细分（历史/扩展）：`CACHE_KEY`、`CACHE_TTL`、`CACHE_INVALIDATION`、`CACHE_READ_WRITE`
+- MQ 细分（历史/扩展）：`MQ_PRODUCER`、`MQ_CONSUMER`、`MQ_MESSAGE_SCHEMA`、`MQ_TOPIC_CONFIG`、`MQ_RETRY_DLQ`
+- CONFIG 细分（规划中）：`CONFIG_FEATURE_FLAG`、`CONFIG_DATASOURCE`、`CONFIG_MIDDLEWARE`、`CONFIG_SECURITY`、`CONFIG_ENVIRONMENT`
+- 聚合兼容类型：`DB`、`CACHE`、`MQ`
+
+设计重点仍是输出结构稳定、规则边界清晰、后续可替换为更强分析器；当前不引入 AI、AST 或调用图。
 
 ## 2. 输入对象
 
@@ -106,24 +104,22 @@ MVP 版变更分析器用于根据 changed files、单文件 diff 文本和全�
 
 ## 4. 规则扩展点
 
-所有规则实现统一接口：`ChangeAnalysisRule`。
+当前 Python 实现在 `backend-python/app/change_analysis/service.py` 中以函数式 matcher 组织：
 
-```java
-public interface ChangeAnalysisRule {
-    String code();
-    Optional<RuleMatch> analyze(ChangedFile changedFile, String globalDiffText);
-}
-```
+- `_api_match`、`_db_match`、`_cache_match`、`_mq_match`、`_config_match`、`_value_config_match`
+- 统一返回 `RuleMatch`，由 `analyze_changes()` 合并为 `ChangeAnalysisResult`
 
-新增规则时只需要：
+新增规则时：
 
-1. 实现 `ChangeAnalysisRule`。
-2. 注册为 Spring Bean。
-3. 返回标准 `RuleMatch`。
+1. 增加 matcher 函数并在 `_analyze_file()` 注册。
+2. 如需新类型，同步更新 `CHANGE_TYPE_ORDER`、`AGGREGATE_TYPES`、风险规则与 schema 文档。
+3. 补单元测试样例（见 `backend-python/tests/` 下 change analysis / rule flow 测试）。
 
-聚合服务 `ChangeAnalysisService` 不关心具体规则细节，只负责执行规则、合并命中结果、生成统一输出。
+历史 Java 版曾使用 `ChangeAnalysisRule` 接口 + Spring Bean 注册；该实现已停止维护。
 
 ## 5. 识别逻辑
+
+> 本节保留细粒度规则的历史设计与扩展参考。当前 Python 分析器的实际输出以 §1.1 为准：DB 统一输出 `DB_DATA_WRITE`，缓存写入/过期/删除统一输出 `CACHE_WRITE_DELETE`，MQ 配置统一输出 `MQ_CONFIG`。除非后续重新落地细分 matcher，否则不要把本节各细分类型理解为当前运行时会直接输出的类型。
 
 ### 5.1 API
 
@@ -445,6 +441,8 @@ public interface ChangeAnalysisRule {
 
 ## 6. 示例输入与输出
 
+> 本节细粒度示例用于展示后续扩展方向。当前运行时可复现的默认模板示例见 `docs/07-risk-card-example.json`。
+
 ### 示例 1：API Controller
 
 输入：
@@ -733,6 +731,6 @@ public interface ChangeAnalysisRule {
 
 - 不能理解 Java AST、XML AST 或 YAML 层级语义。
 - 不能确认 API 字段是否真的不兼容，只能识别“可能涉及接口变更”。
-- 不能从 GitLab MR webhook 自动获取完整 diff，仍需要上游传入 changed files 或后续接入 GitLab API。
-- 同一个文件可能命中多个类型，例如 `application.yml` 中修改 `rocketmq` 配置会同时命中 CONFIG 和 MQ。
-- 当前规则偏召回，风险引擎阶段还需要根据上下文降低误报。
+- GitLab MR / Push 场景下，平台会在 webhook payload 缺少 diff 时通过 GitLab API 补拉 compare / MR diff；本地 mock 仍可直接传 changed files 或 diff 文本。
+- 同一个文件可能命中多个类型，例如 `application.yml` 中修改 `rocketmq` 配置会同时命中 `CONFIG`；Java 代码中的 MQ 声明命中 `MQ_CONFIG`。
+- 当前规则偏召回；默认模板已收敛为四类高价值提醒，细粒度章节（§5）主要服务扩展设计与历史兼容。

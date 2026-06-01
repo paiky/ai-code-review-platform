@@ -5,7 +5,6 @@
 代码目录：
 
 - `backend-python/`：当前主后端，FastAPI 实现，后续功能开发默认在这里落地。
-- `backend/`：历史 Spring Boot 后端，已停止维护；仅在需要对照旧行为时作为参考。
 - `frontend/`：React + Ant Design 前端。
 - `docs/`：设计、API、schema 与实施计划文档。
 - `examples/`：Webhook 与手动审查示例请求。
@@ -15,7 +14,13 @@
 
 - `docs/23-help-gitlab-dingtalk-project-onboarding.md`：接入帮助页文档源，面向首次接入用户，按 GitLab Webhook、钉钉机器人、项目组和模型配置组织。
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
-- `docs/19-python-backend-refactor-plan.md`：Python 后端重构计划，说明是否保持前后端分离、部署变化、影响范围和分阶段迁移路径。
+- `docs/10-local-dev-pitfalls.md`：本地环境与调试避坑（按条目累积，含迁移期记录）。
+- `docs/03-api-contract.md`：HTTP API 契约。
+- `docs/04-risk-card-schema.md`：提醒卡片 JSON schema。
+- `docs/02-domain-model.md` / `docs/06-change-analysis-rules.md`：领域模型与变更分析规则。
+- `docs/24-bug-log.md`：已知 BUG 与修复记录。
+- `docs/19-python-backend-refactor-plan.md`：Python 迁移计划（**已完成**，保留分阶段 prompt 写法参考）。
+- 其它 `docs/1*.md` / `docs/2*.md` 多为计划、历史方案或 PPT 素材；使用前请看文首状态说明。
 
 ## Agent / 新对话入口
 
@@ -26,7 +31,7 @@
 3. `docs/10-local-dev-pitfalls.md`：本地环境与调试避坑。
 4. 与当前任务相关的 `docs/` 设计文档，例如 API、规则、AI Review provider 计划等。
 
-后续开发默认以 `backend-python/` 和 `frontend/` 为主。`backend/` Java 后端已停止维护，不再新增实现、测试或编译验证，除非用户明确要求对照历史行为。
+后续开发以 `backend-python/` 和 `frontend/` 为主。
 
 启动、编译、测试、构建应优先使用 `scripts/` 目录下脚本，不要绕过脚本直接按个人习惯执行底层命令。脚本负责统一本地 env、依赖安装和 Windows 命令兼容。
 
@@ -34,16 +39,14 @@
 
 - `.\scripts\run-backend.cmd`：默认启动或测试 Python FastAPI 后端。
 - `.\scripts\run-backend-python.cmd`：Python 后端直连入口，适合排查脚本行为时使用。
-- `.\scripts\run-backend-java.cmd`：历史 Java 参考后端入口，仅在需要对照 legacy 行为时使用。
 
 验证策略按影响范围选择最小集，不要无意义地默认全量扫描：
 
 - 只改前端样式或交互：优先跑 `.\scripts\run-frontend.cmd build`。
 - 只改 Python 后端局部逻辑：优先跑相关 pytest 文件或测试类。
 - 改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容或跨模块边界时，再跑 `.\scripts\run-backend.cmd test` 全量 Python 测试。
-- Java Maven 测试默认不跑。
 
-搜索代码时排除依赖和构建产物目录，例如 `frontend/node_modules/`、`frontend/dist/`、`backend/target/`、`backend-python/.venv/`、`__pycache__/`、`.pytest_cache/`。仓库根目录提供 `.rgignore`，优先使用 `rg` 遵守该忽略规则。
+搜索代码时排除依赖和构建产物目录，例如 `frontend/node_modules/`、`frontend/dist/`、`backend-python/.venv/`、`__pycache__/`、`.pytest_cache/`。仓库根目录提供 `.rgignore`，优先使用 `rg` 遵守该忽略规则。
 
 ## 当前主链路
 
@@ -66,10 +69,8 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 
 - GitLab `Merge Request Hook` 与 `Push Hook` 共用 `/api/webhooks/gitlab/merge-request` 入口。
 - MR payload 缺少 changed files 时，可调用 GitLab API 拉取 MR diff，并兼容 `/diffs` 与 `/changes`。
-- Push Hook 可优先调用 GitLab compare API 拉取 `beforeSha -> afterSha` diff；失败或空 diff 时回退到 push payload 文件列表。
-- 变更分析覆盖 API、DB、MQ、Redis/缓存、配置等类型。
-- DB 细分识别覆盖 `DB_SCHEMA`、`DB_SQL`、`ORM_MAPPING`、`ENTITY_MODEL`、`DATA_MIGRATION`。
-- MQ / 缓存细分识别覆盖 producer、consumer、消息结构、topic 配置、重试死信、cache key、TTL、失效、读写、序列化等场景。
+- Push Hook 可优先调用 GitLab compare API 拉取 `beforeSha -> afterSha` diff；新分支 Push（`before` 全 0）且无 diff 时会直接 `SKIPPED` 不建任务；其它场景 compare 失败时才回退到 payload 文件列表。
+- 变更分析识别 API、DB、缓存、MQ、配置等信号；默认 `backend-default` 提醒规则已收敛为 DB 写入/结构、缓存写入删除、MQ 配置、应用配置四类（分析层仍保留更多细粒度 changeType 供扩展）。
 - `@Value` 配置占位符变更会进入重点变更提醒。
 - 提醒卡片在前端按 DB / MQ / Redis/缓存 / 配置分组展示，并为重点提醒生成可复制维护内容：SQL 草稿、Redis 命令、MQ 配置伪代码、Nacos 配置块。
 - DB 维护 SQL 会优先使用真实 DDL；没有 SQL 文件时按 Entity / Mapper 和变更类型推断 `CREATE TABLE` 或 `ALTER TABLE`，并标记为 `INFERRED`。
@@ -86,8 +87,6 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - Python 3.12+
 - MySQL 8.0+
 - Node.js 20+
-
-JDK 21+ 和 Maven 3.6+ 仅在需要启动历史 Java 参考后端 `backend/` 时使用。日常开发、测试和部署默认使用 `backend-python/` 与 `frontend/`。
 
 ## CodeGraph（Cursor / Agent 代码图谱）
 
@@ -114,7 +113,6 @@ codegraph query trigger_auto_review
 
 - `.cursor/mcp.json` 可提交到仓库，供团队共享 Cursor MCP 配置。
 - `.codegraph/` 索引库为本地数据，已在 `.gitignore` 中忽略；新克隆后需重新执行 `.\scripts\setup-codegraph.cmd` 或 `codegraph init -i`。
-- `backend/` 是停止维护的 Java 历史后端，已在根 `.gitignore` 中排除，避免 CodeGraph 在同名模块检索时优先返回旧实现。需要查看历史行为时直接按路径读取即可。
 - Codex App 不读取 Cursor 的 `.cursor/mcp.json`。如需在 Codex App 中启用，在用户级 `~/.codex/config.toml` 增加 `[mcp_servers.codegraph]`，配置 `command = "codegraph.cmd"` 与 `args = ["serve", "--mcp"]`，然后重启 Codex App。
 - CodeGraph 当前用于**本仓库开发与 Cursor Agent 辅助**；平台对 GitLab 远端仓库的 AI Review 主链路仍基于 diff，尚未把 CodeGraph 上下文注入服务端 Review prompt。
 
@@ -128,7 +126,7 @@ codegraph query trigger_auto_review
 | `MYSQL_URL` | `jdbc:mysql://localhost:3306/ai_code_review?...` | MySQL JDBC URL |
 | `MYSQL_USERNAME` | `root` | MySQL 用户 |
 | `MYSQL_PASSWORD` | `root` | MySQL 密码 |
-| `SERVER_PORT` | `18080` | 本地 Python 后端端口；Docker 部署会显式设置为容器内端口 |
+| `SERVER_PORT` | `8090` | 本地 Python 后端端口；Docker 部署会显式设置为容器内端口 |
 | `PLATFORM_BASE_URL` | `http://localhost:5173` | 钉钉“查看平台详情”链接前缀 |
 | `GITLAB_API_ENABLED` | `false` | 是否启用 GitLab API 补拉 diff |
 | `GITLAB_BASE_URL` | 空 | GitLab base URL；同时用于把 webhook payload 中的内网 GitLab Web 链接归一化为可访问地址 |
@@ -165,11 +163,11 @@ $env:GITLAB_API_ENABLED="false"
 仓库内置 `deploy/docker-compose.yml`，适合单台远程服务器快速部署：
 
 ```text
-宿主机 :${PUBLIC_HTTP_PORT}，默认 8080
+宿主机 :${PUBLIC_HTTP_PORT}，默认 8090
   -> Nginx frontend 容器 :80
   -> React 静态页面
   -> /api 反向代理到 backend:${BACKEND_PORT}
-Python FastAPI backend 容器，默认 8080，仅在 Docker 网络内访问
+Python FastAPI backend 容器，默认 8090，仅在 Docker 网络内访问
 MySQL 8.4 容器 + mysql-data 持久化卷
 ```
 
@@ -184,8 +182,8 @@ cp .env.example .env
 编辑 `deploy/.env`，至少修改：
 
 ```text
-PUBLIC_HTTP_PORT=8080
-PLATFORM_BASE_URL=http://你的域名或服务器IP:8080
+PUBLIC_HTTP_PORT=8090
+PLATFORM_BASE_URL=http://你的域名或服务器IP:8090
 DATABASE_URL=mysql+pymysql://ai_review:强密码@192.168.100.88:3306/ai_code_review?charset=utf8mb4
 ```
 
@@ -239,8 +237,8 @@ docker compose logs -f frontend
 验证：
 
 ```bash
-curl http://127.0.0.1/actuator/health
-curl http://127.0.0.1/api/health
+curl http://127.0.0.1:8090/actuator/health
+curl http://127.0.0.1:8090/api/health
 ```
 
 说明：
@@ -250,7 +248,7 @@ curl http://127.0.0.1/api/health
 - 钉钉 webhook 不再通过 `.env` 默认配置。部署完成后，请进入前端“设置”页，在“全局设置”中手动添加一个或多个钉钉 webhook。
 - GitLab webhook 接收能力不依赖 `GITLAB_TOKEN`。如果 webhook payload 已携带 changed files，平台可以直接审查；如果 MR payload 没有 diff、Push 需要 compare 补拉，或任务“重新触发审阅”需要重新拉 GitLab diff，则必须配置 `GITLAB_API_ENABLED=true`、`GITLAB_BASE_URL` 和 `GITLAB_TOKEN`。
 
-平台访问和 GitLab webhook 使用同一个对外端口：`PUBLIC_HTTP_PORT`。默认访问 `http://服务器IP:8080`，GitLab webhook 配 `http://服务器IP:8080/api/webhooks/gitlab/merge-request`。如果服务器的 `8080` 已被占用，可以改 `PUBLIC_HTTP_PORT`，例如 `PUBLIC_HTTP_PORT=18080` 后访问 `http://服务器IP:18080`。`BACKEND_PORT` 默认只在 Docker 内部使用，不会额外占用宿主机端口；如需避开容器内的 `8080` 约定，也可以改成 `BACKEND_PORT=18081`，Nginx 反向代理会自动跟随。
+平台访问和 GitLab webhook 使用同一个对外端口：`PUBLIC_HTTP_PORT`。默认访问 `http://服务器IP:8090`，GitLab webhook 配 `http://服务器IP:8090/api/webhooks/gitlab/merge-request`。如需改端口，同步修改 `deploy/.env` 中的 `PUBLIC_HTTP_PORT` 与 `PLATFORM_BASE_URL` 即可。`BACKEND_PORT` 为容器内后端监听端口，仅在 Docker 网络内使用，Nginx 反向代理会自动跟随。
 
 升级：
 
@@ -263,7 +261,7 @@ docker compose up -d --build
 GitLab webhook 地址配置为：
 
 ```text
-http://你的域名或服务器IP:8080/api/webhooks/gitlab/merge-request
+http://你的域名或服务器IP:8090/api/webhooks/gitlab/merge-request
 ```
 
 如果需要 HTTPS，建议在服务器最外层再放一个宿主机 Nginx / Caddy / 云厂商负载均衡做 TLS 终止，再转发到 `PUBLIC_HTTP_PORT`。
@@ -384,8 +382,8 @@ Pop-Location
 Python 健康检查：
 
 ```powershell
-curl http://localhost:18080/api/health
-curl http://localhost:18080/actuator/health
+curl http://localhost:8090/api/health
+curl http://localhost:8090/actuator/health
 ```
 
 如果是空数据库，先执行一次 bootstrap migration：
@@ -394,53 +392,44 @@ curl http://localhost:18080/actuator/health
 .\scripts\run-backend.cmd migrate
 ```
 
-阶段 2 已接入 SQLAlchemy 只读查询 API，优先读取 `DATABASE_URL`，未设置时兼容旧 `MYSQL_URL`、`MYSQL_USERNAME`、`MYSQL_PASSWORD`：
+本地开发优先使用 `DATABASE_URL`；未设置时兼容 `MYSQL_URL`、`MYSQL_USERNAME`、`MYSQL_PASSWORD`：
 
 ```powershell
 $env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?charset=utf8mb4"
 .\scripts\run-backend.cmd dev
 ```
 
-Python 后端本地默认跑在 `18080`，用于避开常见的 `8080` 占用；如需临时改端口：
+Python 后端本地默认跑在 `8090`；如需临时改端口：
 
 ```powershell
-.\scripts\run-backend.cmd dev --port 8080
-.\scripts\run-backend-java.cmd
+.\scripts\run-backend.cmd dev --port 9090
 ```
 
-当前 Python 只读接口：
+### 主要 HTTP API
 
-```text
-GET /api/projects
-GET /api/review-tasks
-GET /api/review-tasks/{taskId}
-GET /api/review-tasks/{taskId}/result
-GET /api/review-tasks/{taskId}/notifications
-GET /api/rule-templates
-GET /api/rule-templates/{templateCode}
-```
-
-阶段 3 已补齐规则审查主链路的 Python 实现，阶段 3B 已接入真实 GitLab diff 补拉与钉钉 HTTP 推送能力：
+规则提醒与任务查询：
 
 ```text
 POST /api/webhooks/gitlab/merge-request
 POST /api/review-tasks/manual
 POST /api/review-tasks/{taskId}/rerun
+POST /api/review-tasks/{taskId}/rerun-in-place
+GET  /api/review-tasks
+GET  /api/review-tasks/{taskId}
+GET  /api/review-tasks/{taskId}/result
+GET  /api/review-tasks/{taskId}/notifications
+GET  /api/projects
+GET  /api/project-groups
+GET  /api/target-type-path-mappings
+GET  /api/projects/{projectId}/target-configs
+PUT  /api/projects/{projectId}/target-configs/{targetType}
+GET  /api/rule-templates
+GET  /api/rule-templates/{templateCode}
 ```
 
-支持的闭环：
+任务列表支持按 `reviewStatus`、`groupId`、`targetType`、`triggerType` 等筛选；列表项 `riskItemCount` 表示 AI Review finding 总数。完整字段见 `docs/03-api-contract.md`。
 
-```text
-mock MR webhook / GitLab MR webhook / GitLab Push webhook / manual review
-  -> 变更分析
-  -> RiskCard
-  -> review_results 落库
-  -> notification_records 写入 SUCCESS / FAILED / SKIPPED
-```
-
-GitLab API 补拉默认关闭，需要配置 `GITLAB_API_ENABLED=true`、`GITLAB_BASE_URL`、`GITLAB_TOKEN`；全局钉钉开关关闭或未配置任何已启用 webhook 时，通知记录为 `SKIPPED`。
-
-阶段 4 已迁移 Python 代码质量 AI Review 的核心 API 与 HTTP Provider：
+代码质量 AI Review：
 
 ```text
 POST /api/code-quality-reviews/manual
@@ -462,9 +451,19 @@ GET /api/review-tasks/{taskId}/code-quality-progress
 GET /api/review-tasks/{taskId}/code-quality-gate
 GET /api/review-tasks/{taskId}/code-quality-fix-previews
 POST /api/review-tasks/{taskId}/code-quality-fix-preview
+GET  /api/review-tasks/{taskId}/code-quality-results
 ```
 
-Python AI Review 默认关闭；可在设置页直接开启或关闭“代码质量 AI Review 全局能力”。`CODE_QUALITY_REVIEW_ENABLED` 只作为兼容初始化值使用，已有数据库以设置页保存的 `reviewEnabled` 为准。启用后支持 OpenAI Responses、Anthropic Messages、DeepSeek / XiaoMIMO / Custom OpenAI-compatible Chat Completions。Provider API Key 只返回 masked 形式，进度事件会做敏感字段脱敏。设置页 Provider 配置支持用当前表单里的端点、模型和临时 API Key 发起一次最小请求测试联通性，不会保存该临时 Key。阶段 4 自动化验证使用 respx mock 外部模型 API，真实模型凭据联调需要单独确认。
+GitLab API 补拉默认关闭，需要配置 `GITLAB_API_ENABLED=true`、`GITLAB_BASE_URL`、`GITLAB_TOKEN`；全局钉钉开关关闭或未配置任何已启用 webhook 时，通知记录为 `SKIPPED`。
+
+规则提醒闭环：
+
+```text
+mock MR webhook / GitLab MR webhook / GitLab Push webhook / manual review
+  -> 变更分析 -> 提醒卡片 -> review_results 落库 -> notification_records
+```
+
+Python AI Review 默认关闭；可在设置页直接开启或关闭“代码质量 AI Review 全局能力”。`CODE_QUALITY_REVIEW_ENABLED` 只作为兼容初始化值使用，已有数据库以设置页保存的 `reviewEnabled` 为准。启用后支持 OpenAI Responses、Anthropic Messages、DeepSeek / XiaoMIMO / Custom OpenAI-compatible Chat Completions。Provider API Key 只返回 masked 形式，进度事件会做敏感字段脱敏。设置页 Provider 配置支持用当前表单里的端点、模型和临时 API Key 发起一次最小请求测试联通性，不会保存该临时 Key。自动化验证使用 respx mock 外部模型 API，真实模型凭据联调需要单独确认。
 
 AI Review 当前保持稳定的非流式 HTTP Provider 调用。前端通过 `GET /api/review-tasks/{taskId}/code-quality-progress`、`GET /api/review-tasks/{taskId}/code-quality-result` 和 `GET /api/review-tasks/{taskId}/code-quality-results` 轮询展示执行过程与结果，不再建立 SSE / WebSocket 连接，也不启用模型 token streaming。项目组配置多个模型时，同一个任务会并行生成多条 Review 结果；任务详情页只在多结果时显示模型子 tab，单模型仍保持原展示。
 
@@ -505,7 +504,7 @@ AI Review 排障建议：
 .\scripts\run-frontend.cmd
 ```
 
-前端脚本默认执行 `npm run dev`，首次运行会自动 `npm install`。脚本会读取 `.local/gitlab.env`，默认把 Vite `/api` 代理到 `http://localhost:18080`；如需临时改到其他后端，可设置 `VITE_API_PROXY_TARGET`。构建时使用 `.\scripts\run-frontend.cmd build`。
+前端脚本默认执行 `npm run dev`，首次运行会自动 `npm install`。脚本会读取 `.local/gitlab.env`，默认把 Vite `/api` 代理到 `http://localhost:8090`；如需临时改到其他后端，可设置 `VITE_API_PROXY_TARGET`。构建时使用 `.\scripts\run-frontend.cmd build`。
 
 访问前端：
 
@@ -516,8 +515,8 @@ http://localhost:5173
 健康检查：
 
 ```powershell
-curl http://localhost:18080/api/health
-curl http://localhost:18080/actuator/health
+curl http://localhost:8090/api/health
+curl http://localhost:8090/actuator/health
 ```
 
 ## 数据库迁移
@@ -561,8 +560,6 @@ V31__multi_model_ai_review.sql
 V32__review_task_review_status.sql
 ```
 
-`backend/src/main/resources/db/migration` 中的 Java Flyway SQL 保留为历史基线和行为对照，不再是当前默认运行路径。
-
 主要表：
 
 - `projects`
@@ -592,7 +589,7 @@ $payload = Get-Content -Raw -Path .\examples\gitlab-mr-webhook.mock.json
 
 $webhookResponse = Invoke-RestMethod `
   -Method Post `
-  -Uri "http://localhost:18080/api/webhooks/gitlab/merge-request" `
+  -Uri "http://localhost:8090/api/webhooks/gitlab/merge-request" `
   -ContentType "application/json" `
   -Headers @{ "X-Gitlab-Event" = "Merge Request Hook" } `
   -Body $payload
@@ -608,7 +605,7 @@ $payload = Get-Content -Raw -Path .\examples\gitlab-push-webhook.mock.json
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://localhost:18080/api/webhooks/gitlab/merge-request" `
+  -Uri "http://localhost:8090/api/webhooks/gitlab/merge-request" `
   -ContentType "application/json" `
   -Headers @{ "X-Gitlab-Event" = "Push Hook" } `
   -Body $payload
@@ -617,17 +614,17 @@ Invoke-RestMethod `
 ### 查询结果
 
 ```powershell
-curl http://localhost:18080/api/review-tasks
-curl http://localhost:18080/api/review-tasks/$taskId
-curl http://localhost:18080/api/review-tasks/$taskId/result
-curl http://localhost:18080/api/review-tasks/$taskId/code-quality-result
-curl http://localhost:18080/api/review-tasks/$taskId/code-quality-progress
+curl http://localhost:8090/api/review-tasks
+curl http://localhost:8090/api/review-tasks/$taskId
+curl http://localhost:8090/api/review-tasks/$taskId/result
+curl http://localhost:8090/api/review-tasks/$taskId/code-quality-result
+curl http://localhost:8090/api/review-tasks/$taskId/code-quality-progress
 ```
 
 重新触发已有 GitLab MR / Push 审查任务，会基于数据库中保存的 raw payload 和 changed files 摘要创建一个新任务：
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri "http://localhost:18080/api/review-tasks/$taskId/rerun"
+Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/review-tasks/$taskId/rerun"
 ```
 
 前端任务详情页包含：
@@ -726,30 +723,30 @@ src/main/java/**、src/main/resources/**、src/*.java、pom.xml、backend-python
 模板接口：
 
 ```powershell
-curl http://localhost:18080/api/rule-templates
-curl http://localhost:18080/api/rule-templates/backend-default
-curl http://localhost:18080/api/project-groups
-curl http://localhost:18080/api/target-type-path-mappings
-curl "http://localhost:18080/api/projects?includeDisabled=true"
-curl http://localhost:18080/api/projects/1/target-configs
+curl http://localhost:8090/api/rule-templates
+curl http://localhost:8090/api/rule-templates/backend-default
+curl http://localhost:8090/api/project-groups
+curl http://localhost:8090/api/target-type-path-mappings
+curl "http://localhost:8090/api/projects?includeDisabled=true"
+curl http://localhost:8090/api/projects/1/target-configs
 ```
 
-项目默认模板绑定：
+项目模板与 AI Review Profile 通过端类型配置维护：
 
 ```powershell
 Invoke-RestMethod `
   -Method Put `
-  -Uri "http://localhost:18080/api/projects/1/default-template" `
+  -Uri "http://localhost:8090/api/projects/1/target-configs/BACKEND" `
   -ContentType "application/json" `
-  -Body '{"templateCode":"frontend-default"}'
+  -Body '{"templateCode":"backend-default","codeQualityProfileCode":"backend-default-ai-review","pathPatterns":["**/*"],"reminderCardEnabled":true,"enabled":true}'
 ```
 
-端类型配置示例：
+端类型配置示例（Web 端）：
 
 ```powershell
 Invoke-RestMethod `
   -Method Put `
-  -Uri "http://localhost:18080/api/projects/1/target-configs/WEB_PC" `
+  -Uri "http://localhost:8090/api/projects/1/target-configs/WEB_PC" `
   -ContentType "application/json" `
   -Body '{"templateCode":"frontend-default","codeQualityProfileCode":"web-pc-default-ai-review","pathPatterns":["frontend/**","web/**"],"reminderCardEnabled":false,"enabled":true}'
 ```
@@ -765,7 +762,7 @@ $payload = Get-Content -Raw -Path .\examples\manual-review-request.json
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://localhost:18080/api/review-tasks/manual" `
+  -Uri "http://localhost:8090/api/review-tasks/manual" `
   -ContentType "application/json" `
   -Body $payload
 ```
@@ -806,7 +803,7 @@ Provider 说明：
 ```powershell
 Invoke-RestMethod `
   -Method Post `
-  -Uri "http://localhost:18080/api/code-quality-reviews/manual" `
+  -Uri "http://localhost:8090/api/code-quality-reviews/manual" `
   -ContentType "application/json" `
   -Body '{
     "projectId": 1,
@@ -822,12 +819,12 @@ Invoke-RestMethod `
 AI Review 设置接口：
 
 ```powershell
-curl http://localhost:18080/api/code-quality-reviews/settings
-curl http://localhost:18080/api/code-quality-review-providers
+curl http://localhost:8090/api/code-quality-reviews/settings
+curl http://localhost:8090/api/code-quality-review-providers
 
 Invoke-RestMethod `
   -Method Put `
-  -Uri "http://localhost:18080/api/code-quality-reviews/settings" `
+  -Uri "http://localhost:8090/api/code-quality-reviews/settings" `
   -ContentType "application/json" `
   -Body '{"reviewEnabled": true, "dingtalkNotificationEnabled": false}'
 ```
@@ -835,15 +832,15 @@ Invoke-RestMethod `
 AI Review 配置接口：
 
 ```powershell
-curl http://localhost:18080/api/code-quality-review-profiles
-curl http://localhost:18080/api/code-quality-review-profiles/backend-default-ai-review
-curl http://localhost:18080/api/code-quality-review-profiles/backend-default-ai-review/rendered-prompt
+curl http://localhost:8090/api/code-quality-review-profiles
+curl http://localhost:8090/api/code-quality-review-profiles/backend-default-ai-review
+curl http://localhost:8090/api/code-quality-review-profiles/backend-default-ai-review/rendered-prompt
 ```
 
 重试某个任务：
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri "http://localhost:18080/api/code-quality-reviews/tasks/{taskId}/retry"
+Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/code-quality-reviews/tasks/{taskId}/retry"
 ```
 
 ## 前端页面

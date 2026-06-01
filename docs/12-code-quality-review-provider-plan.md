@@ -1,25 +1,25 @@
 # Code Quality Review Provider Plan
 
+> 状态说明：本文是早期 Provider 设计文档，编写时以 `CODEX_CLI` / `OPENAI_API` 为主。当前 Python 后端已切换为多 API Provider（OpenAI、Anthropic、DeepSeek、XiaoMIMO、Custom OpenAI-compatible），MR/Push 自动 Review、进度事件、Push Gate、调度队列与 fix preview 均已落地。现行契约与配置见 `README.md`、`docs/03-api-contract.md` 和设置页；**不要再按本文从零实现 Provider**。
+
 ## 1. Goal
 
 Add a code quality review capability without coupling it to the existing change-risk review engine.
 
 The first implementation supports two providers:
 
-| Provider | Use case | Authentication |
+| Provider | Status | Notes |
 | --- | --- | --- |
-| `CODEX_CLI` | Local / intranet MVP, developer workstation, Jenkins agent with Codex installed | Reuses the OS user's existing Codex CLI login |
-| `OPENAI_API` | Server-side integration, CI runner, Linux service, containerized deployment | Uses `OPENAI_API_KEY` |
-
-The same application contract should work on Windows and Linux.
+| API Providers（OpenAI / Anthropic / DeepSeek / XiaoMIMO / Custom） | **当前默认** | diff-only HTTP 调用，配置在设置页 |
+| `CODEX_CLI` | **历史/停用** | 数据库 seed 可能仍见 legacy 字符串；新版本不再执行 CLI |
 
 Current trigger status:
 
 | Trigger | Status | Notes |
 | --- | --- | --- |
-| Manual | Implemented | Creates `CODE_QUALITY_MANUAL` task and stores result |
-| GitLab MR | Implemented | Runs asynchronously after risk review when global config and profile allow it |
-| GitLab Push | Reserved | Profile fields exist, execution not enabled yet |
+| Manual | Implemented | `POST /api/code-quality-reviews/manual` 或 `POST /api/review-tasks/manual` |
+| GitLab MR | Implemented | 规则提醒成功后按 profile / 项目组策略异步触发 |
+| GitLab Push | Implemented | 经 Push 审核 Gate 与分支策略过滤后触发 |
 
 ## 2. Architecture
 
@@ -198,11 +198,13 @@ Content-Type: application/json
 }
 ```
 
-## 6. Next Steps
+## 6. 后续方向（历史记录）
 
-1. Persist `CodeQualityReviewResult` in a dedicated table.
-2. Add a task type or sub-result linked to existing `review_tasks`.
-3. Add a frontend tab for quality findings.
-4. Publish actionable findings back to GitLab MR discussions.
-5. Add queue / concurrency control for long-running CLI reviews.
-6. Enable Push AI review behind branch, diff size, debounce, and risk-match policies.
+以下条目在编写本文时为待办；**当前大多已完成**，仅作演进参考：
+
+1. ~~Persist `CodeQualityReviewResult` in a dedicated table.~~ 已完成。
+2. ~~Add a task type or sub-result linked to existing `review_tasks`.~~ 已完成。
+3. ~~Add a frontend tab for quality findings.~~ 已完成。
+4. Publish actionable findings back to GitLab MR discussions. **仍未实现**。
+5. ~~Add queue / concurrency control for long-running reviews.~~ 已完成调度队列。
+6. ~~Enable Push AI review behind branch, diff size, debounce, and risk-match policies.~~ 已完成 Push Gate。

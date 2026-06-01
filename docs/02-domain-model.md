@@ -1,4 +1,6 @@
-﻿# 领域模型与数据库设计
+# 领域模型与数据库设计
+
+> 状态说明：本文描述平台核心领域对象与 MVP 基线表结构。§3 的 SQL 对应 `V1__init_mvp_schema.sql` 起点；后续字段与表以 `backend-python/migrations/bootstrap_sql/` 和 `backend-python/app/**/models.py` 为准。完整 API 字段见 `03-api-contract.md`，提醒卡片 JSON 见 `04-risk-card-schema.md`。
 
 ## 1. 核心领域对象
 
@@ -9,13 +11,18 @@
 关键字段：
 
 - id：平台内部项目 ID。
+- groupId：所属项目组。
 - name：项目名称。
-- gitProvider：代码托管平台，MVP 固定为 GITLAB。
+- gitProvider：代码托管平台，当前固定为 GITLAB。
 - gitProjectId：GitLab 项目 ID。
 - repositoryUrl：仓库地址。
-- defaultTemplateCode：默认审查模板，例如 `backend-default`。
+- supportedTargetTypes / detectedTargetTypes / targetDetectionJson：项目支持的端类型与自动识别结果。
+- defaultTemplateCode：默认规则提醒模板，例如 `backend-default`。
+- defaultCodeQualityProfileCode / defaultCodeQualityProviderCode：默认 AI Review profile 与 provider。
 - dingTalkWebhookId：默认钉钉通知配置引用。
 - status：ENABLED / DISABLED。
+
+端类型明细配置见 `ProjectTargetConfig`（§6.1）。
 
 ### 1.2 ReviewTask
 
@@ -25,24 +32,25 @@
 
 - id：任务 ID。
 - projectId：所属项目。
-- triggerType：GITLAB_MR_WEBHOOK / MANUAL / JENKINS。
-- externalSourceId：外部来源 ID，例如 GitLab MR iid。
-- externalUrl：MR、构建或手动任务详情链接。
+- triggerType：GITLAB_MR_WEBHOOK / GITLAB_PUSH_WEBHOOK / MANUAL / JENKINS。
+- externalSourceId：外部来源 ID，例如 GitLab MR iid 或 push 事件标识。
+- externalUrl：MR、Push、构建或手动任务详情链接。
 - sourceBranch / targetBranch。
 - commitSha / beforeSha / afterSha。
 - authorName / authorUsername。
-- templateCode。
-- status：PENDING / RUNNING / SUCCESS / FAILED。
+- templateCode：规则提醒模板。
+- targetType / targetTypesJson：本次任务主端类型与涉及端类型列表。
+- codeQualityProfileCode：本次任务使用的 AI Review profile。
+- status：PENDING / RUNNING / SUCCESS / FAILED。表示规则提醒主链路执行状态。
 - reviewStatus：NOT_TRIGGERED / REVIEWING / NO_RISK / MINOR / MAJOR / CRITICAL /
-  SKIPPED / REVIEW_FAILED / TASK_FAILED。该字段用于任务列表展示和筛选；`status` 继续表示
-  底层任务执行状态。
+  SKIPPED / REVIEW_FAILED / TASK_FAILED。用于任务列表展示和筛选；由 AI Review 结果与任务状态聚合得出。
 - riskLevel：NONE / LOW / MEDIUM / HIGH / CRITICAL。
 - errorMessage。
 - startedAt / finishedAt。
 
 ### 1.3 ChangeAnalysisResult
 
-表示变更影响分析结果。MVP 可作为 JSON 存储在审查结果表中。
+表示变更影响分析结果，通常作为 JSON 存储在 `review_results.change_analysis_json`。
 
 关键字段：
 
@@ -59,7 +67,7 @@
 关键字段：
 
 - riskId：风险项 ID。
-- category：API / DB / CACHE / MQ / CONFIG / RELEASE / OBSERVABILITY。
+- category：API / DB / CACHE / MQ / CONFIG / RELEASE / OBSERVABILITY 及细分子类型。
 - severity：LOW / MEDIUM / HIGH / CRITICAL。
 - title：风险标题。
 - description：风险说明。
@@ -72,7 +80,7 @@
 
 ### 1.5 RiskCard
 
-表示一次审查输出的完整风险卡片。
+表示一次审查输出的完整提醒卡片。
 
 关键字段：
 
@@ -93,7 +101,7 @@
 
 ### 1.6 ReviewTemplate
 
-表示审查模板，例如 `backend-default`。
+表示规则提醒模板，例如 `backend-default`。数据库表名为 `rule_templates`。
 
 关键字段：
 
@@ -101,7 +109,7 @@
 - templateCode。
 - templateName。
 - description。
-- targetType：BACKEND / FRONTEND / GENERAL。
+- targetType：BACKEND / WEB_PC / GENERAL 等端类型。
 - enabledRuleCodes。
 - configJson。
 - status。
@@ -124,6 +132,21 @@
 - errorMessage。
 - sentAt。
 
+### 1.8 ReviewResult
+
+表示一次规则提醒链路的结果快照。
+
+关键字段：
+
+- id。
+- taskId / projectId。
+- templateCode。
+- targetType。
+- reminderCardEnabled：该端类型是否启用提醒卡片。
+- riskLevel / riskItemCount。
+- changeAnalysisJson / riskCardJson。
+- summary。
+
 ## 2. 枚举定义
 
 ### 2.1 ChangeType
@@ -133,6 +156,8 @@
 - CACHE
 - MQ
 - CONFIG
+
+细粒度子类型见 `06-change-analysis-rules.md`。
 
 ### 2.2 RiskSeverity
 
@@ -149,22 +174,35 @@
 - SUCCESS
 - FAILED
 
-### 2.4 TriggerType
+### 2.4 ReviewStatus
+
+- NOT_TRIGGERED
+- REVIEWING
+- NO_RISK
+- MINOR
+- MAJOR
+- CRITICAL
+- SKIPPED
+- REVIEW_FAILED
+- TASK_FAILED
+
+### 2.5 TriggerType
 
 - GITLAB_MR_WEBHOOK
-- JENKINS
+- GITLAB_PUSH_WEBHOOK
 - MANUAL
+- JENKINS
 
-### 2.5 NotificationStatus
+### 2.6 NotificationStatus
 
 - PENDING
 - SUCCESS
 - FAILED
 - SKIPPED
 
-## 3. 数据库表结构
+## 3. MVP 基线表结构
 
-以下为 MVP 最小表结构设计。字段类型可在具体实现时按 MySQL 版本和 ORM 规范调整。
+以下为 MVP 最小表结构设计，对应 `V1__init_mvp_schema.sql`。字段类型可在具体实现时按 MySQL 版本和 ORM 规范调整；后续 migration 新增的列不在此逐条展开。
 
 ### 3.1 projects
 
@@ -188,6 +226,8 @@ CREATE TABLE projects (
 );
 ```
 
+后续扩展：`group_id`、`supported_target_types`、`default_code_quality_profile_code` 等，见 `V8`、`V24`。
+
 ### 3.2 review_tasks
 
 审查任务表。
@@ -208,6 +248,7 @@ CREATE TABLE review_tasks (
   author_username VARCHAR(128) NULL,
   template_code VARCHAR(64) NOT NULL,
   status VARCHAR(32) NOT NULL,
+  review_status VARCHAR(32) NOT NULL DEFAULT 'NOT_TRIGGERED',
   risk_level VARCHAR(32) NULL,
   error_message VARCHAR(1024) NULL,
   started_at DATETIME NULL,
@@ -216,13 +257,16 @@ CREATE TABLE review_tasks (
   updated_at DATETIME NOT NULL,
   KEY idx_project_created (project_id, created_at),
   KEY idx_status_created (status, created_at),
+  KEY idx_review_status_created (review_status, created_at),
   KEY idx_external_source (trigger_type, external_source_id)
 );
 ```
 
+后续扩展：`target_type`、`target_types_json`、`code_quality_profile_code`，见 `V24`。
+
 ### 3.3 review_results
 
-审查结果表，保存变更分析结果和风险卡片 JSON。
+审查结果表，保存变更分析结果和提醒卡片 JSON。
 
 ```sql
 CREATE TABLE review_results (
@@ -242,6 +286,8 @@ CREATE TABLE review_results (
   KEY idx_risk_level (risk_level)
 );
 ```
+
+后续扩展：`target_type`、`reminder_card_enabled`，见 `V24`。
 
 ### 3.4 rule_templates
 
@@ -290,7 +336,7 @@ CREATE TABLE notification_records (
 
 ### 3.6 notification_webhooks
 
-钉钉 webhook 配置表。虽然题目要求至少包含推送记录，MVP 建议单独保存 webhook 配置，避免把敏感配置散落在项目表中。
+钉钉 webhook 配置表。
 
 ```sql
 CREATE TABLE notification_webhooks (
@@ -306,24 +352,46 @@ CREATE TABLE notification_webhooks (
 );
 ```
 
+后续扩展：`project_group_id`、`enabled`，见 `V17` 及项目组相关 migration。
+
 ## 4. 领域关系
 
 ```text
+ProjectGroup 1 -> N Project
+Project 1 -> N ProjectTargetConfig
 Project 1 -> N ReviewTask
 ReviewTask 1 -> 1 ReviewResult
 ReviewTask 1 -> N NotificationRecord
-ReviewTemplate 1 -> N ReviewTask
+ReviewTask 1 -> N CodeQualityReviewResult
+ReviewTask 0..1 -> 1 GitLabMergeRequestEvent / GitLabPushEvent
+ReviewTemplate(rule_templates) 1 -> N ReviewTask
 Project N -> 1 ReviewTemplate by default_template_code
 Project N -> 1 NotificationWebhook by dingtalk_webhook_id
 ```
 
-## 5. MVP 示例模板
+## 5. 默认模板方向
 
-`backend-default` 应至少启用以下规则方向：
+`backend-default` 当前聚焦 DB / CACHE / MQ / CONFIG 等后端高价值变更提醒；API 兼容性检查已在 `V15__remove_api_compatibility_from_backend_templates.sql` 中从默认模板移除。具体启用规则以数据库 seed 与 `06-change-analysis-rules.md` 为准。
 
-- API 兼容性检查。
-- DB 结构或 SQL 变更检查。
-- 缓存一致性检查。
-- MQ 幂等与重复消费检查。
-- 配置变更灰度与回滚检查。
-- 监控、告警、回滚检查。
+## 6. 扩展领域对象与表
+
+以下对象不在 MVP 基线 SQL 中展开，开发时以 migration 与 ORM 模型为准。
+
+| 对象 / 表 | 用途 | 主要 migration |
+| --- | --- | --- |
+| ProjectGroup | 项目组、默认 AI Review 策略、Push 审核策略 | V24、V25、V27、V30 |
+| ProjectTargetConfig | 项目按端类型的模板、profile、路径映射 | V24 |
+| TargetTypePathMapping | 全局端类型路径匹配规则 | V27 |
+| GitLabMergeRequestEvent | MR webhook 原始事件 | V2 |
+| GitLabPushEvent | Push webhook 原始事件 | V7 |
+| CodeQualityReviewProfile | AI Review profile | V8 |
+| CodeQualityReviewSettings | 全局 AI Review 开关与默认 provider | V9、V14、V20 |
+| CodeQualityModelProvider | 多模型 provider 配置 | V18、V29 |
+| CodeQualityReviewResult | AI Review 结果（支持多 reviewKey） | V8、V31 |
+| CodeQualityReviewProgressEvent | AI Review 进度事件 | V11 |
+| CodeQualityFixPreview | finding 级修复预览 | V21 |
+| CodeQualitySchedulerJob | AI Review / fix preview 调度队列 | V22 |
+| CodeQualityPushReviewGateDecision | Push 场景 AI Review 门禁决策 | V19 |
+| ProjectGroupAiReviewModel | 项目组多模型 AI Review 配置 | V31 |
+
+对应 ORM：`backend-python/app/project_integration/models.py`、`backend-python/app/code_quality/models.py`。

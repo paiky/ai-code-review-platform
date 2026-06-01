@@ -1,5 +1,7 @@
 # Python 后端执行版重构计划
 
+> **状态：已完成。** Python FastAPI 后端已是默认主后端（`backend-python/`），Java `backend/` 仅作历史参考。本文保留分阶段 prompt 写法与迁移记录；当前启动、验证与能力范围以 `README.md`、`AGENTS.md` 为准。不要再按本文从头实施迁移。
+
 ## 1. 执行结论
 
 当前项目已经形成完整后端主链路：
@@ -667,7 +669,7 @@ backend-python/tests/contract/golden/
    - manual review 响应
    - code quality settings 响应
    - code quality providers 响应
-5. 写 `docs/20-python-refactor-api-compatibility-checklist.md` 或在本文件维护 checklist。
+5. 在本文件维护 API compatibility checklist；未单独创建额外 checklist 文档。
 
 验收：
 
@@ -1205,7 +1207,7 @@ Frontend dev   : localhost:5173
 3. 如需要模型 API Key，请读取环境变量或提示我提供，不要把密钥写入代码、日志、progress event 或文档。
 
 任务范围：
-1. 先阅读 AGENTS.md、README.md、docs/19-python-backend-refactor-plan.md、docs/12-code-quality-review-provider-plan.md、docs/13-ai-review-prompt-runtime-plan.md、docs/10-local-dev-pitfalls.md。
+1. 先阅读 AGENTS.md、README.md、docs/19-python-backend-refactor-plan.md、docs/12-code-quality-review-provider-plan.md、docs/03-api-contract.md、docs/10-local-dev-pitfalls.md。
 2. 实现以下接口：
    - POST /api/code-quality-reviews/manual
    - GET /api/code-quality-reviews/settings

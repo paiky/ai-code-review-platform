@@ -1,8 +1,10 @@
 # AI Review 审查范围隔离方案
 
+> **状态：已归档。** 本文记录历史 Java `CODEX_CLI` Provider 的范围污染事故与当时的备选方案。当前 Python 后端不再执行 Codex CLI，统一使用平台保存的 diff 调用 HTTP Provider。不要按本文 Phase 1-5 继续实施。
+
 日期：2026-05-10
 
-> 2026-05-11 更新：已采用更直接的 diff-only 方案替代本文早期的本地 `HEAD` 范围预检方案。`CODEX_CLI` 现在只作为子进程执行器，审查输入来自平台保存的 `diffText` / `changedFiles`，不再读取被审查项目的本地仓库，也不再通过 `origin/<target>...HEAD` 决定审查范围。本文的 preflight / worktree 内容保留为历史排查记录和备选方案。
+> 2026-05-11 更新：后续曾采用更直接的 diff-only 方案替代本文早期的本地 `HEAD` 范围预检方案。本文的 preflight / worktree 内容仅保留为历史排查记录。
 
 ## 1. 背景
 

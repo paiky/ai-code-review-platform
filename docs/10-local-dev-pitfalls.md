@@ -1,5 +1,7 @@
 # 本地开发避坑记录
 
+> 状态说明：本文按时间累积记录本地开发与调试踩坑，条目编号只增不减。§14 等迁移期条目可能仍提及 Java 对照，默认开发以 `backend-python/` 为准；权威契约见 `docs/03-api-contract.md`，启动验证见 `README.md`。
+
 ## 1. Codex 沙箱内 Git 推送凭据问题
 
 在当前 Windows + Codex 桌面环境里，普通沙箱命令执行 `git push origin main` 可能失败：
@@ -345,7 +347,9 @@ Python 阶段 4 初版 retry 在 FastAPI `async def` 里同步执行数据库查
 3. 前端通过 `/api/review-tasks/{taskId}/code-quality-progress` 和 `/api/review-tasks/{taskId}/code-quality-result` 轮询。
 4. 如果已经触发旧同步 retry 并导致本地服务整体超时，需要重启 Python 后端进程。
 
-## 14. Python AI Review 阶段 4 通过 mock 不等于已对齐 Java 行为
+## 14. Python AI Review 阶段 4 通过 mock 不等于已对齐 Java 行为（迁移期记录）
+
+> **迁移期记录。** Python 已是默认主后端；下列“弱于 Java”现象大多已在后续迭代中补齐。只有用户明确要求对照 legacy Java 行为时，才需要按本节去查 `backend/`。
 
 现象：
 
@@ -357,9 +361,9 @@ Python 后端阶段 4 的 AI Review API、Provider mock 测试都能通过，但
 
 处理方式：
 
-1. 对照 Java `codequality` 包时，不只看 Controller/API，还要同时核对 `CodeQualityAutoReviewService`、`CodeQualityAsyncReviewExecutor`、Provider progress debug、默认 prompt migration 和 `DingTalkNotifier.sendReviewSummary`。
-2. Python AI Review 至少应覆盖：强默认 prompt、请求/响应/输出预览 progress、Provider 失败落成 `FAILED`、MR 自动触发后的合并通知记录。
-3. 规则提醒主链路也不能只看样例测试通过；需要确认风险规则来源、模板加载、聚合类型匹配、focus indicator 和钉钉过滤是否与 Java 保持一致。
+1. 默认以 `backend-python/app/code_quality/` 与 contract 测试为准，不再以 Java 实现为验收标准。
+2. 若需对照历史 Java 行为，再核对 Java `codequality` 包中的 auto review、progress、钉钉合并通知等逻辑。
+3. 规则提醒主链路需确认模板加载、聚合类型、focus indicator 与钉钉过滤；见 `docs/06-change-analysis-rules.md` 与 `docs/04-risk-card-schema.md`。
 
 ## 15. AI Review 已恢复轮询模式，不要再把进度刷新设计成流式链路
 
@@ -407,7 +411,7 @@ Python 后端本身不执行 Java Flyway migration。如果本地 MySQL 还停�
 
 1. Python 后端的 AI Review 配置初始化会在当前 Session connection 上补齐必要表和列，避免旧库直接 500。
 2. 本地真实 MySQL 如果仍异常，先重启 Python 后端，再确认数据库至少有 `code_quality_review_settings`、`code_quality_review_profiles`、`code_quality_model_providers`。
-3. 长期仍建议通过 Java 后端启动一次 Flyway，让正式 schema 迁移记录保持完整；Python 的运行时补齐只作为本地重构期兼容保护。
+3. 正式 schema 以 `backend-python/migrations/bootstrap_sql/` 为准；本地可执行 `scripts/run-backend.cmd` 触发的迁移/bootstrap，**不要**再依赖 Java Flyway 作为日常迁移入口。
 
 ## 17. Python 后端写 MySQL 时不能依赖数据库默认时间戳
 
@@ -717,7 +721,7 @@ Push 审核层原本只负责“是否自动进入 AI Review”，不负责“�
 
 现象：
 
-`scripts/run-backend-python.ps1` 改成本地默认 `18080` 后，后端能启动，但前端页面仍然请求 `8080`，表现为接口 404 / 代理失败 / 页面数据不刷新。或者相反，前端已经代理到 `18080`，但后端仍跑在 `8080`。
+`scripts/run-backend-python.ps1` 改成本地默认 `8090` 后，后端能启动，但前端页面仍然请求旧端口，表现为接口 404 / 代理失败 / 页面数据不刷新。或者相反，前端已经代理到 `8090`，但后端仍跑在其它端口。
 
 原因：
 
@@ -725,9 +729,9 @@ Python 后端本地脚本、`app.core.config` 默认端口、前端 `VITE_API_PR
 
 处理方式：
 
-1. 本地 Python 后端默认端口使用 `18080`，避免常见的 `8080` 占用。
-2. `scripts/run-frontend.ps1` 默认代理到 `http://localhost:18080`。
-3. 如果当前 `18080` 已经有一个 Python 后端监听，重复启动第二个后端仍会端口冲突；先停掉旧进程，或显式传 `--port` 使用其他端口。
+1. 本地 Python 后端默认端口使用 `8090`。
+2. `scripts/run-frontend.ps1` 默认代理到 `http://localhost:8090`。
+3. 如果当前 `8090` 已经有一个 Python 后端监听，重复启动第二个后端仍会端口冲突；先停掉旧进程，或显式传 `--port` 使用其他端口。
 4. Docker / 生产部署仍通过 `SERVER_PORT` / `BACKEND_PORT` 显式设置容器内端口，不依赖本地脚本默认值。
 
 ## 31. Windows WMI / CIM 查询异常会卡住 Python 后端启动
@@ -910,11 +914,11 @@ pymysql.err.OperationalError: (1205, 'Lock wait timeout exceeded; try restarting
 远程服务器 `runtime/.env` 中配置：
 
 ```text
-PUBLIC_HTTP_PORT=18080
+PUBLIC_HTTP_PORT=8090
 PLATFORM_BASE_URL=192.168.100.241:15173
 ```
 
-浏览器仍然需要访问 `192.168.100.241:18080`，而不是 `15173`。任务详情页点击“重新触发审阅”还可能报：
+浏览器仍然需要访问 `192.168.100.241:8090`，而不是 `15173`。任务详情页点击“重新触发审阅”还可能报：
 
 ```text
 GitLab diff is not provided and GitLab API is disabled
@@ -1607,3 +1611,25 @@ CodeGraph 会索引 Git 可见文件。旧 Java 后端仍保留在仓库中，�
 2. 修改忽略规则后执行 `codegraph.cmd index --force`，不能只执行增量 `sync`。
 3. 通过 `codegraph.cmd status` 或 MCP `codegraph_files` 检查语言统计，确认 Java 历史源码不再进入索引。
 4. Java 历史代码仍留在工作区；需要对照旧行为时直接按路径读取。
+
+## 71. Codex 沙箱内 PATH 中的 `python.exe` 可能无法直接启动
+
+现象：
+
+在 Codex Windows 沙箱中直接执行 `python -` 或 `python --version`，可能报错：
+
+```text
+A specified logon session does not exist. It may already have been terminated
+```
+
+原因：
+
+PATH 命中的系统 Python 启动器可能依赖当前沙箱不可用的登录会话。项目自己的
+`backend-python/.venv/Scripts/python.exe` 不受该问题影响。
+
+处理方式：
+
+1. 日常启动和测试优先使用 `.\scripts\run-backend.cmd`。
+2. 排查脚本行为或执行一次性 Python 命令时，优先使用
+   `backend-python\.venv\Scripts\python.exe`。
+3. 不要因为 PATH Python 启动失败改动项目依赖或重建虚拟环境；先确认 `.venv` 解释器是否可用。
