@@ -1588,3 +1588,22 @@ Docker Desktop 未启动或 Linux Engine 不可用时，执行：
 3. 没有触发 AI Review 显示 `NOT_TRIGGERED`，策略拦截或人工中断显示 `SKIPPED`，规则分析
    等基础链路失败显示 `TASK_FAILED`。
 4. 列表筛选使用可重复的 `reviewStatus` 查询参数，支持组合查看多个状态。
+
+## 70. CodeGraph 会被停止维护的 Java 后端同名符号干扰
+
+现象：
+
+CodeGraph 已经索引 Python 主线，但查询任务列表、AI Review 或 GitLab webhook 时仍优先返回
+`backend/` 下的 Java 类，容易误把历史实现当成当前代码。
+
+原因：
+
+CodeGraph 会索引 Git 可见文件。旧 Java 后端仍保留在仓库中，并且与 Python 主线存在大量同名
+模块和领域概念；只排除 `backend/target/` 不会排除 Java 源码。
+
+处理方式：
+
+1. 根 `.gitignore` 排除整个 `backend/`，让 CodeGraph 聚焦 `backend-python/` 和 `frontend/`。
+2. 修改忽略规则后执行 `codegraph.cmd index --force`，不能只执行增量 `sync`。
+3. 通过 `codegraph.cmd status` 或 MCP `codegraph_files` 检查语言统计，确认 Java 历史源码不再进入索引。
+4. Java 历史代码仍留在工作区；需要对照旧行为时直接按路径读取。

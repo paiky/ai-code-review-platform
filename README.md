@@ -114,6 +114,7 @@ codegraph query trigger_auto_review
 
 - `.cursor/mcp.json` 可提交到仓库，供团队共享 Cursor MCP 配置。
 - `.codegraph/` 索引库为本地数据，已在 `.gitignore` 中忽略；新克隆后需重新执行 `.\scripts\setup-codegraph.cmd` 或 `codegraph init -i`。
+- `backend/` 是停止维护的 Java 历史后端，已在根 `.gitignore` 中排除，避免 CodeGraph 在同名模块检索时优先返回旧实现。需要查看历史行为时直接按路径读取即可。
 - Codex App 不读取 Cursor 的 `.cursor/mcp.json`。如需在 Codex App 中启用，在用户级 `~/.codex/config.toml` 增加 `[mcp_servers.codegraph]`，配置 `command = "codegraph.cmd"` 与 `args = ["serve", "--mcp"]`，然后重启 Codex App。
 - CodeGraph 当前用于**本仓库开发与 Cursor Agent 辅助**；平台对 GitLab 远端仓库的 AI Review 主链路仍基于 diff，尚未把 CodeGraph 上下文注入服务端 Review prompt。
 

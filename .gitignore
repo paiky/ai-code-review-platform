@@ -1,4 +1,6 @@
-backend/target/
+# Legacy Java backend is retained only as historical reference. Excluding the
+# directory also keeps CodeGraph focused on the active Python backend.
+backend/
 *.class
 *.log
 .DS_Store
