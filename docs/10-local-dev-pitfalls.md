@@ -1497,3 +1497,35 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-backend.ps
 
 3. 手动启动开发服务时仍可使用默认入口，例如 `.\scripts\run-frontend.cmd` 或 `.\scripts\run-backend.cmd dev`；这类命令正常会一直运行，不应作为“一次性验证是否通过”的命令。
 4. 如果连 `echo` 这类最小命令都拿不到退出状态，优先怀疑 Cursor / Agent 命令执行桥接异常，而不是项目构建失败。
+
+## 66. CodeGraph MCP 配置后 Cursor 或 Codex App 仍看不到工具
+
+现象：
+
+- 已执行 `codegraph install` 或 `.\scripts\setup-codegraph.cmd`，但 Cursor Agent 或 Codex App 仍像没有 CodeGraph 工具一样全库 grep / Read。
+
+常见原因：
+
+1. 修改 `.cursor/mcp.json` 后未重启 Cursor。
+2. 本机 PATH 中没有 `codegraph`；MCP 配置使用 `"command": "codegraph"`，需要全局安装 `@colbymchenry/codegraph` 或把 npm global bin 加入 PATH。
+3. 项目还没有 `.codegraph/codegraph.db` 索引；需要先 `codegraph init -i` 或 `.\scripts\setup-codegraph.cmd`。
+4. Cursor 项目级 `.cursor/mcp.json` 写入了本机绝对 `--path`；可提交配置应使用 `"${workspaceFolder}"`，避免其他开发者克隆后仍指向原机器目录。
+5. Codex App 不读取 Cursor 的 `.cursor/mcp.json`；需要在用户级 `~/.codex/config.toml` 单独增加 CodeGraph MCP 配置并重启 Codex App。
+6. Windows PowerShell 直接运行 `codegraph` 时可能优先命中 `codegraph.ps1` 并被执行策略拦截；脚本和 Codex App 配置可显式使用 `codegraph.cmd`。
+
+处理方式：
+
+```powershell
+npm install -g @colbymchenry/codegraph
+.\scripts\setup-codegraph.cmd
+```
+
+Cursor 使用仓库内 `.cursor/mcp.json`。Codex App 还需要在 `~/.codex/config.toml` 增加：
+
+```toml
+[mcp_servers.codegraph]
+command = "codegraph.cmd"
+args = ["serve", "--mcp"]
+```
+
+然后重启对应客户端，在 Agent 中先调用 `codegraph_status` 验证索引是否可用。

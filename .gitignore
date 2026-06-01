@@ -14,3 +14,4 @@ backend-python/**/__pycache__/
 tools/jdk-21*/
 .jdk/
 .local/
+.codegraph/

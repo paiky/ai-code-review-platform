@@ -8,3 +8,4 @@ backend-python/.venv/
 **/.ruff_cache/
 .local/
 local-gitlab/
+.codegraph/

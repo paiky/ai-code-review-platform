@@ -89,6 +89,34 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 
 JDK 21+ 和 Maven 3.6+ 仅在需要启动历史 Java 参考后端 `backend/` 时使用。日常开发、测试和部署默认使用 `backend-python/` 与 `frontend/`。
 
+## CodeGraph（Cursor / Agent 代码图谱）
+
+本仓库已接入 [CodeGraph](https://github.com/colbymchenry/codegraph)，为 Cursor Agent 提供本地代码知识图谱 MCP 能力。Agent 可通过 `codegraph_search`、`codegraph_context`、`codegraph_callers` 等工具理解调用链、依赖关系和项目结构，减少全库 grep / Read 开销。
+
+首次在本机启用：
+
+```powershell
+.\scripts\setup-codegraph.cmd
+```
+
+脚本会安装全局 `codegraph` CLI、检查仓库内项目级 `.cursor/mcp.json`、构建 `.codegraph/` 本地索引。完成后**重启 Cursor** 使 MCP 生效。
+
+常用维护命令：
+
+```powershell
+codegraph status                 # 查看索引统计
+codegraph sync                   # 增量同步变更
+codegraph context "你的问题"      # CLI 预览上下文
+codegraph query trigger_auto_review
+```
+
+说明：
+
+- `.cursor/mcp.json` 可提交到仓库，供团队共享 Cursor MCP 配置。
+- `.codegraph/` 索引库为本地数据，已在 `.gitignore` 中忽略；新克隆后需重新执行 `.\scripts\setup-codegraph.cmd` 或 `codegraph init -i`。
+- Codex App 不读取 Cursor 的 `.cursor/mcp.json`。如需在 Codex App 中启用，在用户级 `~/.codex/config.toml` 增加 `[mcp_servers.codegraph]`，配置 `command = "codegraph.cmd"` 与 `args = ["serve", "--mcp"]`，然后重启 Codex App。
+- CodeGraph 当前用于**本仓库开发与 Cursor Agent 辅助**；平台对 GitLab 远端仓库的 AI Review 主链路仍基于 diff，尚未把 CodeGraph 上下文注入服务端 Review prompt。
+
 ## 后端配置
 
 后端默认读取环境变量，也支持通过 `.local/gitlab.env` 配合启动脚本加载本地配置。
@@ -839,4 +867,3 @@ Python 后端：
 ```powershell
 .\scripts\run-frontend.cmd build
 ```
-

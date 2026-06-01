@@ -69,7 +69,8 @@ AI 变更提醒与代码质量审查平台
 - 新对话理解项目时，先读 `AGENTS.md`、`README.md`，再按任务需要阅读 `docs/` 下相关设计文档。
 - 在 Windows PowerShell 中阅读中文 Markdown / 文档时，优先使用 `Get-Content -Raw -Encoding UTF8 <path>`，避免默认编码导致中文乱码并影响理解。
 - 后续开发以后端 Python 为主，默认只维护 `backend-python/` 与 `frontend/`。`backend/` Java 后端已停止维护，不再新增实现、测试或编译验证，除非用户明确要求对照历史行为。
-- 搜索代码时必须避开依赖和构建产物目录，例如 `frontend/node_modules/`、`frontend/dist/`、`backend/target/`、`backend-python/.venv/`、`__pycache__/`、`.pytest_cache/`。优先使用 `rg`，不要用会扫进这些目录的全盘搜索。
+- 搜索代码时必须避开依赖和构建产物目录，例如 `frontend/node_modules/`、`frontend/dist/`、`backend/target/`、`backend-python/.venv/`、`__pycache__/`、`.pytest_cache/`、`.codegraph/`。优先使用 `rg`，不要用会扫进这些目录的全盘搜索。
+- 在本仓库开发时，优先通过 CodeGraph MCP（`codegraph_context`、`codegraph_search` 等）理解调用链与模块关系；若索引不可用，先执行 `.\scripts\setup-codegraph.cmd`。Cursor 需要重启以加载项目 MCP；Codex App 还需要单独配置用户级 MCP 并重启。
 - 本地启动、编译、测试、构建优先使用仓库 `scripts/` 目录下脚本，不要直接按个人习惯拼 `mvn` / `npm` 命令。
 - Python 后端默认入口使用 `scripts/run-backend.cmd`；排查脚本行为或直连 Python 后端时再使用 `scripts/run-backend-python.cmd`。
 - Python 测试优先使用 `scripts/run-backend.cmd test`，或按影响范围执行相关 pytest 文件。
