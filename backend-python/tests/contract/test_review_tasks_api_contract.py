@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.project_integration.models import GitLabMergeRequestEvent, Project
 from app.code_quality.models import CodeQualityReviewResult
 from app.review_record.models import NotificationRecord, ReviewResult, ReviewTask
+from app.review_record.repository import refresh_review_status
 
 
 def seed_review_task(db_session: Session) -> None:
@@ -45,6 +46,7 @@ def seed_review_task(db_session: Session) -> None:
             author_username="alice",
             template_code="backend-default",
             status="SUCCESS",
+            review_status="MAJOR",
             risk_level="HIGH",
             error_message=None,
             started_at=created_at,
@@ -153,6 +155,7 @@ def test_review_tasks_read_api_contract(client: TestClient, db_session: Session)
     item = list_data["items"][0]
     assert item["id"] == 10001
     assert item["projectName"] == "demo-service"
+    assert item["reviewStatus"] == "MAJOR"
     assert item["riskLevel"] == "HIGH"
     assert item["riskItemCount"] == 2
     assert item["focusIndicators"] == [{"category": "DB_SCHEMA", "riskLevel": "HIGH"}]
@@ -163,6 +166,7 @@ def test_review_tasks_read_api_contract(client: TestClient, db_session: Session)
     assert detail["gitProjectId"] == "1001"
     assert detail["mrId"] == "12"
     assert detail["eventAction"] == "open"
+    assert detail["reviewStatus"] == "MAJOR"
     assert detail["changedFilesSummary"] == [{"path": "src/main/resources/db/V1.sql"}]
     assert detail["rawPayload"] == {"object_kind": "merge_request"}
 
@@ -201,6 +205,89 @@ def test_review_task_list_counts_ai_review_findings_instead_of_rule_reminders(
     assert list_response.status_code == 200
     item = list_response.json()["data"]["items"][0]
     assert item["riskItemCount"] == 7
+
+
+def test_review_task_list_review_status_aggregation_and_multi_select_filter(
+    client: TestClient, db_session: Session
+) -> None:
+    seed_review_task(db_session)
+    created_at = datetime(2026, 5, 18, 12, 0, 0)
+
+    def add_task(task_id: int, status: str = "SUCCESS") -> None:
+        db_session.add(
+            ReviewTask(
+                id=task_id,
+                project_id=1,
+                trigger_type="GITLAB_MR_WEBHOOK",
+                external_source_id=str(task_id),
+                template_code="backend-default",
+                status=status,
+                review_status="NOT_TRIGGERED",
+                created_at=created_at,
+                updated_at=created_at,
+            )
+        )
+
+    def add_quality_result(
+        task_id: int,
+        review_key: str,
+        status: str,
+        findings: list[dict] | None = None,
+        overall_level: str | None = None,
+    ) -> None:
+        findings = findings or []
+        db_session.add(
+            CodeQualityReviewResult(
+                task_id=task_id,
+                review_key=review_key,
+                project_id=1,
+                profile_code="backend-default-ai-review",
+                provider="DEEPSEEK",
+                status=status,
+                overall_level=overall_level,
+                finding_count=len(findings),
+                findings_json=json.dumps(findings),
+                created_at=created_at,
+                updated_at=created_at,
+            )
+        )
+
+    add_task(10002)
+    add_task(10003)
+    add_quality_result(10003, "running", "RUNNING")
+    add_task(10004)
+    add_quality_result(10004, "clean", "SUCCESS")
+    add_task(10005)
+    add_quality_result(10005, "minor", "SUCCESS", [{"severity": "MINOR"}])
+    add_task(10006)
+    add_quality_result(10006, "critical", "SUCCESS", [{"severity": "CRITICAL"}])
+    add_task(10007)
+    add_quality_result(10007, "failed", "FAILED")
+    add_task(10008)
+    add_quality_result(10008, "skipped", "SKIPPED")
+    add_task(10009, "FAILED")
+    add_task(10010)
+    add_quality_result(10010, "success", "SUCCESS", [{"severity": "MAJOR"}])
+    add_quality_result(10010, "failed", "FAILED")
+    db_session.flush()
+
+    for task_id in range(10002, 10011):
+        refresh_review_status(db_session, task_id)
+    db_session.commit()
+
+    response = client.get("/api/review-tasks", params=[("reviewStatus", "CRITICAL"), ("reviewStatus", "TASK_FAILED")])
+
+    assert response.status_code == 200
+    assert {item["id"] for item in response.json()["data"]["items"]} == {10006, 10009}
+    assert db_session.get(ReviewTask, 10002).review_status == "NOT_TRIGGERED"
+    assert db_session.get(ReviewTask, 10003).review_status == "REVIEWING"
+    assert db_session.get(ReviewTask, 10004).review_status == "NO_RISK"
+    assert db_session.get(ReviewTask, 10005).review_status == "MINOR"
+    assert db_session.get(ReviewTask, 10006).review_status == "CRITICAL"
+    assert db_session.get(ReviewTask, 10007).review_status == "REVIEW_FAILED"
+    assert db_session.get(ReviewTask, 10008).review_status == "SKIPPED"
+    assert db_session.get(ReviewTask, 10009).review_status == "TASK_FAILED"
+    assert db_session.get(ReviewTask, 10010).review_status == "MAJOR"
 
 
 def test_review_task_list_hides_focus_indicators_when_reminder_card_disabled(

@@ -1545,3 +1545,46 @@ args = ["serve", "--mcp"]
 1. AI Review 钉钉摘要的详情链接和 finding 深链追加 `?reviewKey={reviewKey}`。
 2. 前端任务详情页读取 `reviewKey`，在多模型结果中选中对应子 tab。
 3. 规则提醒链接保持任务级跳转，不追加模型参数。
+
+## 68. Docker Engine 未启动时打包脚本不能被 stderr 提前中断
+
+现象：
+
+Docker Desktop 未启动或 Linux Engine 不可用时，执行：
+
+```powershell
+.\scripts\package-docker-deploy.cmd
+```
+
+直接看到 PowerShell `NativeCommandError`，没有进入脚本预期的 Docker Engine 诊断提示。
+
+原因：
+
+脚本设置了 `$ErrorActionPreference = "Stop"`。PowerShell 5 执行 `docker version 2>&1` 或 `docker info 2>&1` 时，Docker CLI 写入 stderr 会先触发终止错误，导致后续 `$LASTEXITCODE` 判断来不及执行。
+
+处理方式：
+
+1. Docker 探测命令单独在 `Continue` 模式下执行，捕获输出和退出码。
+2. 探测失败后恢复原始错误策略，再抛出包含 Docker 原始输出的可操作提示。
+3. 本机实际打包前仍需启动 Docker Desktop，并确认 Linux Engine 已进入 running 状态。
+
+## 69. 任务列表不能直接把底层 `SUCCESS` 当成 AI Review 结论
+
+现象：
+
+规则提醒链路完成后，任务列表大量显示 `SUCCESS`，但 AI Review 可能尚未触发、仍在排队，
+或多个模型仍在执行。用户无法从列表判断审查是否完成以及最高风险等级。
+
+原因：
+
+`review_tasks.status` 表示底层任务执行状态。规则分析会先将它写为 `SUCCESS`，AI Review
+是后续增强链路。多模型执行后，单个 Provider 的失败也不等于整个审查失败。
+
+处理方式：
+
+1. 使用独立的 `review_tasks.review_status` 作为列表审查状态，保留原 `status` 用于排障。
+2. 多模型只要仍有 `RUNNING` 就显示 `REVIEWING`；存在成功结果时按成功 findings 的最高
+   `MINOR / MAJOR / CRITICAL` 展示；只有全部失败时显示 `REVIEW_FAILED`。
+3. 没有触发 AI Review 显示 `NOT_TRIGGERED`，策略拦截或人工中断显示 `SKIPPED`，规则分析
+   等基础链路失败显示 `TASK_FAILED`。
+4. 列表筛选使用可重复的 `reviewStatus` 查询参数，支持组合查看多个状态。

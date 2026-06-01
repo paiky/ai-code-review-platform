@@ -123,6 +123,7 @@ GET /api/review-tasks
 | --- | --- | --- | --- |
 | projectId | Long | 否 | 项目 ID |
 | status | String | 否 | PENDING / RUNNING / SUCCESS / FAILED |
+| reviewStatus | String[] | 否 | 可重复传入；NOT_TRIGGERED / REVIEWING / NO_RISK / MINOR / MAJOR / CRITICAL / SKIPPED / REVIEW_FAILED / TASK_FAILED |
 | riskLevel | String | 否 | NONE / LOW / MEDIUM / HIGH / CRITICAL |
 | keyword | String | 否 | 项目名、分支、MR 关键字 |
 | pageNo | Integer | 否 | 默认 1 |
@@ -145,6 +146,7 @@ GET /api/review-tasks
       "authorName": "Alice",
       "templateCode": "backend-default",
       "status": "SUCCESS",
+      "reviewStatus": "CRITICAL",
       "riskLevel": "HIGH",
       "riskItemCount": 3,
       "createdAt": "2026-04-19T12:00:00+08:00",

@@ -69,6 +69,7 @@ from app.review_record.repository import (
     create_review_task,
     mark_task_failed,
     mark_task_success,
+    refresh_review_status,
     save_notification_records,
 )
 
@@ -793,6 +794,7 @@ def _trigger_push_auto_review(
     )
     if gate["decision"] != "ALLOWED":
         save_push_gate_decision(db, **gate)
+        task.review_status = "SKIPPED"
         return False
 
     request_diff_text = diff_text or _diff_text(changed_files)
@@ -959,6 +961,7 @@ def _save_push_gate_rejection(
     profile_code: str | None = None,
     provider: str | None = None,
 ) -> None:
+    task.review_status = "SKIPPED"
     metrics, matched_rules = _push_gate_metrics_and_rules(
         task=task,
         changed_files=changed_files,
@@ -1933,6 +1936,7 @@ def run_auto_fix_preview_job(task_id: int, finding_index: int, review_key: str |
 
 def recover_stale_running_reviews_on_startup() -> None:
     from app.core.config import get_settings
+    from app.review_record.repository import ensure_review_task_status_schema
 
     settings = get_settings()
     timeout = max(
@@ -1944,6 +1948,8 @@ def recover_stale_running_reviews_on_startup() -> None:
     )
     db = SessionLocal()
     try:
+        ensure_review_task_status_schema(db)
+        db.commit()
         if not _enabled(db):
             return
         provider_timeout = db.scalar(select(CodeQualityModelProvider.timeout_seconds).order_by(CodeQualityModelProvider.timeout_seconds.desc()))
@@ -2064,9 +2070,11 @@ def _sync_task_status_after_review(db: Session, task_id: int, result: dict[str, 
         results = list_result_responses(db, task_id)
         if not any(item.get("status") in {"SUCCESS", "RUNNING"} for item in results):
             mark_task_failed(task, result.get("errorMessage") or "AI Review failed")
+            refresh_review_status(db, task_id)
         return
     if status == "SUCCESS" and (task.trigger_type == "CODE_QUALITY_MANUAL" or task.status == "FAILED"):
         mark_task_success(task, result.get("overallLevel") or task.risk_level or "LOW")
+        refresh_review_status(db, task_id)
 
 
 def _send_auto_review_notification(

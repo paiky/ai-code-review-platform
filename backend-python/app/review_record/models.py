@@ -27,6 +27,7 @@ class ReviewTask(Base):
     target_types_json: Mapped[str | None] = mapped_column(Text)
     code_quality_profile_code: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="NOT_TRIGGERED")
     risk_level: Mapped[str | None] = mapped_column(String(32))
     error_message: Mapped[str | None] = mapped_column(String(1024))
     started_at: Mapped[object | None] = mapped_column(DateTime)

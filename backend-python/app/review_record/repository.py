@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.code_quality.models import CodeQualityReviewResult
@@ -16,6 +16,18 @@ from app.rule_template.repository import normalize_rule_codes
 
 
 RISK_WEIGHT = {"NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+AI_REVIEW_STATUS_VALUES = {
+    "NOT_TRIGGERED",
+    "REVIEWING",
+    "NO_RISK",
+    "MINOR",
+    "MAJOR",
+    "CRITICAL",
+    "SKIPPED",
+    "REVIEW_FAILED",
+    "TASK_FAILED",
+}
+AI_FINDING_WEIGHT = {"MINOR": 1, "MAJOR": 2, "CRITICAL": 3}
 
 
 def _focus_indicators(risk_card_json: str | None) -> list:
@@ -28,6 +40,7 @@ def _focus_indicators(risk_card_json: str | None) -> list:
 def _filters(
     project_id: int | None,
     status: str | None,
+    review_statuses: list[str] | None,
     risk_level: str | None,
     keyword: str | None,
     group_id: int | None,
@@ -39,6 +52,8 @@ def _filters(
         clauses.append(ReviewTask.project_id == project_id)
     if status:
         clauses.append(ReviewTask.status == status)
+    if review_statuses:
+        clauses.append(ReviewTask.review_status.in_(review_statuses))
     if risk_level:
         clauses.append(ReviewTask.risk_level == risk_level)
     if group_id is not None:
@@ -77,6 +92,7 @@ def list_review_tasks(
     db: Session,
     project_id: int | None,
     status: str | None,
+    review_statuses: list[str] | None,
     risk_level: str | None,
     keyword: str | None,
     group_id: int | None,
@@ -85,10 +101,12 @@ def list_review_tasks(
     page_no: int,
     page_size: int,
 ) -> dict:
+    ensure_review_task_status_schema(db)
     ensure_project_config_schema(db)
     page_no = max(page_no, 1)
     page_size = max(page_size, 1)
-    filters = _filters(project_id, status, risk_level, keyword, group_id, target_type, trigger_type)
+    normalized_review_statuses = _normalize_review_statuses(review_statuses)
+    filters = _filters(project_id, status, normalized_review_statuses, risk_level, keyword, group_id, target_type, trigger_type)
 
     total_stmt = select(func.count()).select_from(ReviewTask).join(Project, Project.id == ReviewTask.project_id)
     if filters:
@@ -152,6 +170,7 @@ def list_review_tasks(
                 "targetTypes": read_json(task.target_types_json, []) if task.target_types_json else [],
                 "codeQualityProfileCode": task.code_quality_profile_code,
                 "status": task.status,
+                "reviewStatus": task.review_status,
                 "errorMessage": task.error_message,
                 "riskLevel": list_risk_card.get("riskLevel") if isinstance(list_risk_card, dict) else task.risk_level,
                 "riskItemCount": code_quality_counts.get(task.id, 0),
@@ -168,6 +187,7 @@ def list_review_tasks(
 
 
 def get_review_task_detail(db: Session, task_id: int) -> dict:
+    ensure_review_task_status_schema(db)
     ensure_project_config_schema(db)
     row = db.execute(
         select(ReviewTask, Project, GitLabMergeRequestEvent, GitLabPushEvent)
@@ -208,6 +228,7 @@ def get_review_task_detail(db: Session, task_id: int) -> dict:
         "targetTypes": read_json(task.target_types_json, []) if task.target_types_json else [],
         "codeQualityProfileCode": task.code_quality_profile_code,
         "status": task.status,
+        "reviewStatus": task.review_status,
         "errorMessage": task.error_message,
         "riskLevel": task.risk_level,
         "eventAction": event_action,
@@ -343,6 +364,7 @@ def create_review_task(
     target_types: list[str] | None = None,
     code_quality_profile_code: str | None = None,
 ) -> ReviewTask:
+    ensure_review_task_status_schema(db)
     now = datetime.now()
     task = ReviewTask(
         project_id=project_id,
@@ -361,6 +383,7 @@ def create_review_task(
         target_types_json=json.dumps(target_types or ([target_type] if target_type else []), ensure_ascii=False),
         code_quality_profile_code=code_quality_profile_code,
         status="RUNNING",
+        review_status="NOT_TRIGGERED",
         started_at=now,
         created_at=now,
         updated_at=now,
@@ -373,6 +396,8 @@ def create_review_task(
 def mark_task_success(task: ReviewTask, risk_level: str) -> None:
     now = datetime.now()
     task.status = "SUCCESS"
+    if not task.review_status or task.review_status == "TASK_FAILED":
+        task.review_status = "NOT_TRIGGERED"
     task.risk_level = risk_level
     task.error_message = None
     task.finished_at = now
@@ -382,9 +407,80 @@ def mark_task_success(task: ReviewTask, risk_level: str) -> None:
 def mark_task_failed(task: ReviewTask, error_message: str) -> None:
     now = datetime.now()
     task.status = "FAILED"
+    task.review_status = "TASK_FAILED"
     task.error_message = (error_message or "")[:1024]
     task.finished_at = now
     task.updated_at = now
+
+
+def ensure_review_task_status_schema(db: Session) -> None:
+    connection = db.connection()
+    inspector = inspect(connection)
+    if not inspector.has_table("review_tasks"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("review_tasks")}
+    if "review_status" in columns:
+        return
+    db.execute(text("ALTER TABLE review_tasks ADD COLUMN review_status VARCHAR(32) NOT NULL DEFAULT 'NOT_TRIGGERED'"))
+    existing_indexes = {index["name"] for index in inspect(connection).get_indexes("review_tasks")}
+    if "idx_review_status_created" not in existing_indexes:
+        db.execute(text("CREATE INDEX idx_review_status_created ON review_tasks (review_status, created_at)"))
+    db.flush()
+    if inspect(connection).has_table("code_quality_review_results"):
+        for task_id in db.scalars(select(ReviewTask.id)).all():
+            refresh_review_status(db, task_id, ensure_schema=False)
+    db.flush()
+
+
+def refresh_review_status(db: Session, task_id: int, *, ensure_schema: bool = True) -> str | None:
+    if ensure_schema:
+        ensure_review_task_status_schema(db)
+    task = db.get(ReviewTask, task_id)
+    if task is None:
+        return None
+    results = db.scalars(
+        select(CodeQualityReviewResult).where(CodeQualityReviewResult.task_id == task_id)
+    ).all()
+    task.review_status = _derive_review_status(task, results)
+    task.updated_at = datetime.now()
+    db.flush()
+    return task.review_status
+
+
+def _derive_review_status(task: ReviewTask, results: list[CodeQualityReviewResult]) -> str:
+    if not results:
+        return "TASK_FAILED" if task.status == "FAILED" else "NOT_TRIGGERED"
+    if any(result.status == "RUNNING" for result in results):
+        return "REVIEWING"
+    successful = [result for result in results if result.status == "SUCCESS"]
+    if successful:
+        highest = max((_result_risk_weight(result) for result in successful), default=0)
+        return {1: "MINOR", 2: "MAJOR", 3: "CRITICAL"}.get(highest, "NO_RISK")
+    if any(result.status == "FAILED" for result in results):
+        return "REVIEW_FAILED"
+    if any(result.status == "SKIPPED" for result in results):
+        return "SKIPPED"
+    return "NOT_TRIGGERED"
+
+
+def _result_risk_weight(result: CodeQualityReviewResult) -> int:
+    findings = read_json(result.findings_json, [])
+    weights = [
+        AI_FINDING_WEIGHT.get(str(item.get("severity") or "").strip().upper(), 0)
+        for item in findings
+        if isinstance(item, dict)
+    ] if isinstance(findings, list) else []
+    if weights and max(weights) > 0:
+        return max(weights)
+    return {"MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}.get(str(result.overall_level or "").upper(), 0)
+
+
+def _normalize_review_statuses(values: list[str] | None) -> list[str]:
+    return [
+        status
+        for status in dict.fromkeys(str(value or "").strip().upper() for value in values or [])
+        if status in AI_REVIEW_STATUS_VALUES
+    ]
 
 
 def save_review_result(

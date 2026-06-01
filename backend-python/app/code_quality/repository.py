@@ -1321,6 +1321,10 @@ def _mark_review_result_interrupted(
         record.error_message = _truncate(reason or "用户手动中断 AI Review", 1024)
         record.finished_at = now
         record.updated_at = now
+    if records:
+        from app.review_record.repository import refresh_review_status
+
+        refresh_review_status(db, task_id)
 
 
 def _mark_fix_preview_interrupted(
@@ -1650,6 +1654,9 @@ def save_result(
         existing.finished_at = result.get("finishedAt")
         existing.updated_at = now
     db.flush()
+    from app.review_record.repository import refresh_review_status
+
+    refresh_review_status(db, task_id)
     return existing
 
 
@@ -1946,6 +1953,11 @@ def mark_stale_running_as_failed(db: Session, timeout_seconds: int) -> int:
         )
         record.finished_at = datetime.now()
         record.updated_at = datetime.now()
+    if records:
+        from app.review_record.repository import refresh_review_status
+
+        for task_id in {record.task_id for record in records}:
+            refresh_review_status(db, task_id)
     db.flush()
     return len(records)
 

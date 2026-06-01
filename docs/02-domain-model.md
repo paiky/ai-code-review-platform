@@ -33,6 +33,9 @@
 - authorName / authorUsername。
 - templateCode。
 - status：PENDING / RUNNING / SUCCESS / FAILED。
+- reviewStatus：NOT_TRIGGERED / REVIEWING / NO_RISK / MINOR / MAJOR / CRITICAL /
+  SKIPPED / REVIEW_FAILED / TASK_FAILED。该字段用于任务列表展示和筛选；`status` 继续表示
+  底层任务执行状态。
 - riskLevel：NONE / LOW / MEDIUM / HIGH / CRITICAL。
 - errorMessage。
 - startedAt / finishedAt。

@@ -225,6 +225,8 @@ DATABASE_URL=mysql+pymysql://ai_review:强密码@mysql:3306/ai_code_review?chars
 docker compose up -d --build
 ```
 
+本地执行 `.\scripts\package-docker-deploy.cmd` 前，需要先启动 Docker Desktop 并等待 Linux Engine 可用。脚本会在 Docker CLI 缺失或 Engine 未启动时直接停止，并输出对应处理建议。
+
 查看状态和日志：
 
 ```bash
@@ -554,6 +556,8 @@ V27__project_group_profile_and_target_type_path_mappings.sql
 V28__nullable_project_default_ai_review_profile.sql
 V29__provider_timeout_seconds.sql
 V30__project_group_ai_review_policy.sql
+V31__multi_model_ai_review.sql
+V32__review_task_review_status.sql
 ```
 
 `backend/src/main/resources/db/migration` 中的 Java Flyway SQL 保留为历史基线和行为对照，不再是当前默认运行路径。
@@ -631,6 +635,12 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:18080/api/review-tasks/$ta
 - 提醒卡片：按提醒类型展示可复制维护内容、命中证据和 Diff 查看入口
 - 分析结果
 - 原始事件摘要
+
+任务列表中的“状态”展示代码质量 AI Review 业务状态，不再直接展示底层规则流水线的
+`review_tasks.status`。支持按多个状态筛选：未触发审查、审查中、无风险、中风险、高风险、
+紧急、已跳过、审查失败、任务失败。多模型并行时，只要仍有模型运行就显示“审查中”；
+至少一个模型成功后按成功 findings 的最高等级展示；只有全部模型失败时才显示“审查失败”。
+底层任务执行状态仍保留在任务详情中，便于区分规则分析失败和 AI Review 失败。
 
 ## 真实 GitLab diff 验证
 

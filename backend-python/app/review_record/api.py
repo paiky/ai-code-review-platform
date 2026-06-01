@@ -45,13 +45,14 @@ async def find_review_tasks(
     target_type: str | None = Query(default=None, alias="targetType"),
     trigger_type: str | None = Query(default=None, alias="triggerType"),
     status: str | None = None,
+    review_status: list[str] | None = Query(default=None, alias="reviewStatus"),
     risk_level: str | None = Query(default=None, alias="riskLevel"),
     keyword: str | None = None,
     page_no: int = Query(default=1, alias="pageNo"),
     page_size: int = Query(default=20, alias="pageSize"),
     db: Session = Depends(get_db),
 ) -> dict:
-    return ok(list_review_tasks(db, project_id, status, risk_level, keyword, group_id, target_type, trigger_type, page_no, page_size))
+    return ok(list_review_tasks(db, project_id, status, review_status, risk_level, keyword, group_id, target_type, trigger_type, page_no, page_size))
 
 
 @router.get("/{task_id}/result")

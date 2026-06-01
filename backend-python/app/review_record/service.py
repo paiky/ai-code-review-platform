@@ -190,6 +190,7 @@ def _reset_task_for_in_place_rerun(db: Session, task: ReviewTask) -> None:
     db.execute(delete(ReviewResult).where(ReviewResult.task_id == task.id))
     now = datetime.now()
     task.status = "RUNNING"
+    task.review_status = "NOT_TRIGGERED"
     task.risk_level = None
     task.error_message = None
     task.started_at = now

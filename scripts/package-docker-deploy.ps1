@@ -26,6 +26,26 @@ function Invoke-Docker {
   }
 }
 
+function Invoke-DockerProbe {
+  param(
+    [string[]]$Arguments
+  )
+
+  $PreviousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $Output = & docker @Arguments 2>&1
+    $ExitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $PreviousErrorActionPreference
+  }
+
+  return @{
+    ExitCode = $ExitCode
+    Output = (($Output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine).Trim()
+  }
+}
+
 function Write-Utf8NoBomFile {
   param(
     [string]$Path,
@@ -48,16 +68,14 @@ function Copy-TextFileAsLf {
   Write-Utf8NoBomFile -Path $TargetPath -Content $Content
 }
 
-$DockerVersionOutput = docker version 2>&1
-if ($LASTEXITCODE -ne 0) {
-  $Message = ($DockerVersionOutput | Out-String).Trim()
-  throw "Docker is installed but the Docker Engine is not available. Start or restart Docker Desktop, wait until it is running, then retry. Docker output: $Message"
+$DockerVersionProbe = Invoke-DockerProbe version
+if ($DockerVersionProbe.ExitCode -ne 0) {
+  throw "Docker is installed but the Docker Engine is not available. Start or restart Docker Desktop, wait until it is running, then retry. Docker output: $($DockerVersionProbe.Output)"
 }
 
-$DockerInfoOutput = docker info 2>&1
-if ($LASTEXITCODE -ne 0) {
-  $Message = ($DockerInfoOutput | Out-String).Trim()
-  throw "Docker Engine did not respond correctly. Restart Docker Desktop or switch to Linux containers, then retry. Docker output: $Message"
+$DockerInfoProbe = Invoke-DockerProbe info
+if ($DockerInfoProbe.ExitCode -ne 0) {
+  throw "Docker Engine did not respond correctly. Restart Docker Desktop or switch to Linux containers, then retry. Docker output: $($DockerInfoProbe.Output)"
 }
 
 Write-Host "Building backend image: $BackendImage"

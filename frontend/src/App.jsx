@@ -94,6 +94,17 @@ const AUTO_FIX_PREVIEW_SEVERITY_OPTIONS = [
   { label: '高风险 MAJOR', value: 'MAJOR' },
   { label: '中风险 MINOR', value: 'MINOR' }
 ];
+const TASK_REVIEW_STATUS_OPTIONS = [
+  { label: '未触发审查', value: 'NOT_TRIGGERED' },
+  { label: '审查中', value: 'REVIEWING' },
+  { label: '无风险', value: 'NO_RISK' },
+  { label: '中风险', value: 'MINOR' },
+  { label: '高风险', value: 'MAJOR' },
+  { label: '紧急', value: 'CRITICAL' },
+  { label: '已跳过', value: 'SKIPPED' },
+  { label: '审查失败', value: 'REVIEW_FAILED' },
+  { label: '任务失败', value: 'TASK_FAILED' }
+];
 const DEFAULT_AUTO_FIX_PREVIEW_SEVERITIES = ['CRITICAL'];
 const PROJECT_TARGET_TYPE_OPTIONS = TARGET_TYPE_OPTIONS.filter(item => item.value !== 'APP_CROSS_PLATFORM');
 const TARGET_TYPE_DEFAULT_PATH_PATTERNS = {
@@ -239,6 +250,24 @@ function severityLabel(value) {
     default:
       return value || '-';
   }
+}
+
+function taskReviewStatusLabel(value) {
+  return TASK_REVIEW_STATUS_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function taskReviewStatusColor(value) {
+  return {
+    NOT_TRIGGERED: 'default',
+    REVIEWING: 'processing',
+    NO_RISK: 'green',
+    MINOR: 'gold',
+    MAJOR: 'volcano',
+    CRITICAL: 'red',
+    SKIPPED: 'default',
+    REVIEW_FAILED: 'red',
+    TASK_FAILED: 'red'
+  }[value] || 'default';
 }
 
 function normalizeAutoFixPreviewSeverities(value) {
@@ -946,6 +975,7 @@ function TaskList({ onOpen }) {
   const [projectId, setProjectId] = useState(null);
   const [targetType, setTargetType] = useState(null);
   const [triggerType, setTriggerType] = useState(null);
+  const [reviewStatuses, setReviewStatuses] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [pagination, setPagination] = useState({ pageNo: 1, pageSize: 20, total: 0 });
   const [error, setError] = useState(null);
@@ -962,6 +992,7 @@ function TaskList({ onOpen }) {
       if (projectId) params.set('projectId', projectId);
       if (targetType) params.set('targetType', targetType);
       if (triggerType) params.set('triggerType', triggerType);
+      reviewStatuses.forEach(value => params.append('reviewStatus', value));
       const data = await fetchApi(`/api/review-tasks?${params.toString()}`);
       setTasks(data.items || []);
       setPagination({ pageNo: data.pageNo, pageSize: data.pageSize, total: data.total });
@@ -1008,7 +1039,7 @@ function TaskList({ onOpen }) {
     { title: '端类型', dataIndex: 'targetType', width: 96, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
     { title: '类型', dataIndex: 'triggerType', width: 76, render: value => <Tag>{taskTypeLabel(value)}</Tag> },
     { title: '分支', width: 175, ellipsis: true, render: (_, row) => <Text ellipsis>{taskListBranchText(row)}</Text> },
-    { title: '状态', dataIndex: 'status', width: 95, render: value => <Tag color={statusColor(value)}>{value || '-'}</Tag> },
+    { title: '状态', dataIndex: 'reviewStatus', width: 95, render: value => <Tag color={taskReviewStatusColor(value)}>{taskReviewStatusLabel(value)}</Tag> },
     { title: '风险点', dataIndex: 'riskItemCount', width: 72, render: value => value ?? 0 },
     { title: '创建时间', dataIndex: 'createdAt', width: 125, ellipsis: true },
     { title: '操作', width: 70, render: (_, row) => <Button type="link" onClick={() => onOpen(row.id)}>详情</Button> }
@@ -1046,6 +1077,15 @@ function TaskList({ onOpen }) {
             value={triggerType}
             options={TASK_TRIGGER_TYPE_OPTIONS}
             onChange={value => setTriggerType(value || null)}
+          />
+          <Select
+            allowClear
+            mode="multiple"
+            className="task-filter-select"
+            placeholder="审查状态"
+            value={reviewStatuses}
+            options={TASK_REVIEW_STATUS_OPTIONS}
+            onChange={value => setReviewStatuses(value || [])}
           />
           <Input
             allowClear
@@ -2417,7 +2457,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
                   <Text type="secondary">{branchSummary(detail)}</Text>
                 </div>
                 <Space>
-                  <Tag color={statusColor(detail.status)}>{detail.status}</Tag>
+                  <Tag color={taskReviewStatusColor(detail.reviewStatus)}>{taskReviewStatusLabel(detail.reviewStatus)}</Tag>
                 </Space>
               </div>
               <Divider />
@@ -2445,6 +2485,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
                 <Descriptions.Item label="模板">{detail.templateCode}</Descriptions.Item>
                 <Descriptions.Item label="端类型">{targetTypeLabel(detail.targetType)}</Descriptions.Item>
                 <Descriptions.Item label="Profile">{detail.codeQualityProfileCode || '-'}</Descriptions.Item>
+                <Descriptions.Item label="底层任务状态">{detail.status || '-'}</Descriptions.Item>
                 <Descriptions.Item label="事件时间">{detail.eventTime || '-'}</Descriptions.Item>
               </Descriptions>
               {detail.errorMessage && (
