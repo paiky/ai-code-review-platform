@@ -848,10 +848,10 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:18080/api/code-quality-rev
 
 任务详情页的“重新触发审阅”会从当前任务复制出一条新的审查任务，适合调试规则、钉钉模板和前端展示，不需要再次真实 push 或更新 MR。
 
-详情页支持 `?taskId={taskId}` 直达，例如：
+详情页支持 `/tasks/{taskId}` 直达；历史 `?taskId={taskId}` 链接仍会自动跳转。多模型 AI Review 的钉钉摘要会追加 `?reviewKey={reviewKey}`，打开详情页时直接选中消息对应的模型 Review，例如：
 
 ```text
-http://localhost:5173/?taskId=47
+http://localhost:5173/tasks/47?reviewKey=deepseek-main
 ```
 
 ## 自动化验证

@@ -2074,6 +2074,29 @@ def test_review_summary_markdown_includes_manual_interrupt_reason() -> None:
     assert "原因：用户手动中断 AI Review" in markdown
 
 
+def test_review_summary_markdown_links_to_specific_review_key(monkeypatch) -> None:
+    from app.notification.service import format_review_summary_markdown
+
+    monkeypatch.setenv("PLATFORM_BASE_URL", "http://example.com/app")
+    markdown = format_review_summary_markdown(
+        125,
+        None,
+        {
+            "status": "SUCCESS",
+            "provider": "DEEPSEEK",
+            "reviewKey": "deepseek/main review",
+            "findings": [{"severity": "CRITICAL", "title": "必须修复的问题"}],
+        },
+        {"projectName": "demo-service", "triggerType": "GITLAB_MR_WEBHOOK"},
+    )
+
+    assert "详情：http://example.com/app/tasks/125?reviewKey=deepseek%2Fmain%20review" in markdown
+    assert (
+        "[必须修复的问题。](http://example.com/app/tasks/125?reviewKey=deepseek%2Fmain%20review#fix-preview-0)"
+        in markdown
+    )
+
+
 @respx.mock
 def test_deepseek_http_failure_has_diagnostic_phases_and_masks_key(
     client: TestClient,

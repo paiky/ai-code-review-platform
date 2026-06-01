@@ -274,7 +274,8 @@ def format_review_summary_markdown(
     code_quality_result: dict | None,
     context: dict,
 ) -> str:
-    detail_url = _task_detail_url(task_id)
+    review_key = (code_quality_result or {}).get("reviewKey")
+    detail_url = _task_detail_url(task_id, review_key=review_key)
     result = (
         "### 变更审查结果\n\n"
         f"项目：{_project_text(context)}\n\n"
@@ -346,32 +347,40 @@ def _format_code_quality_summary(task_id: int, result: dict | None) -> str:
         if not _severity_in(item[1], "CRITICAL", "HIGH", "MAJOR", "MEDIUM")
     ]
     sections = []
-    _append_finding_section(sections, task_id, "紧急需要修复", urgent)
-    _append_finding_section(sections, task_id, "可能需要修复", possible)
-    _append_finding_section(sections, task_id, "建议关注", suggestions)
+    review_key = result.get("reviewKey")
+    _append_finding_section(sections, task_id, review_key, "紧急需要修复", urgent)
+    _append_finding_section(sections, task_id, review_key, "可能需要修复", possible)
+    _append_finding_section(sections, task_id, review_key, "建议关注", suggestions)
     return "\n\n".join(sections) if sections else "- 未发现需要修复的问题。"
 
 
 def _append_finding_section(
     sections: list[str],
     task_id: int,
+    review_key: str | None,
     title: str,
     findings: list[tuple[int, dict]],
 ) -> None:
     if not findings:
         return
     items = "\n".join(
-        f"- {_finding_link(task_id, index, _concise_finding_title(finding.get('title')))}"
+        f"- {_finding_link(task_id, review_key, index, _concise_finding_title(finding.get('title')))}"
         for index, finding in findings[:5]
     )
     sections.append(f"**{title}：{len(findings)} 个**\n{items}")
 
 
-def _task_detail_url(task_id: int | None, anchor: str | None = None) -> str:
+def _task_detail_url(
+    task_id: int | None,
+    anchor: str | None = None,
+    review_key: str | None = None,
+) -> str:
     if not task_id:
         return ""
     base_url = get_settings().platform_base_url.rstrip("/")
     url = f"{base_url}/tasks/{task_id}"
+    if review_key:
+        url += f"?reviewKey={quote(str(review_key), safe='')}"
     return f"{url}#{anchor}" if anchor else url
 
 
@@ -382,8 +391,8 @@ def _risk_item_link(task_id: int, item: dict, text: str) -> str:
     return _markdown_link(text, _task_detail_url(task_id, f"risk-item-{quote(str(risk_id), safe='')}"))
 
 
-def _finding_link(task_id: int, index: int, text: str) -> str:
-    return _markdown_link(text, _task_detail_url(task_id, f"fix-preview-{index}"))
+def _finding_link(task_id: int, review_key: str | None, index: int, text: str) -> str:
+    return _markdown_link(text, _task_detail_url(task_id, f"fix-preview-{index}", review_key))
 
 
 def _markdown_link(text: str, url: str) -> str:

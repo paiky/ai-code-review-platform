@@ -1529,3 +1529,19 @@ args = ["serve", "--mcp"]
 ```
 
 然后重启对应客户端，在 Agent 中先调用 `codegraph_status` 验证索引是否可用。
+
+## 67. 多模型钉钉摘要链接必须携带 Review Key
+
+现象：
+
+项目组配置多个 AI Review 模型后，钉钉 Markdown 能展示某个具体 Provider 的 Review 摘要，但点击“详情”或 finding 链接进入任务详情页时，页面默认展示排序第一的模型子 tab，和消息正文不一致。
+
+原因：
+
+旧链接只包含任务 ID。多模型结果都挂在同一个任务下，前端无法判断用户是从哪一个模型的钉钉摘要进入详情页。只传 `providerCode` 也不够精确，因为同一个 Provider 可能配置多个模型执行项。
+
+处理方式：
+
+1. AI Review 钉钉摘要的详情链接和 finding 深链追加 `?reviewKey={reviewKey}`。
+2. 前端任务详情页读取 `reviewKey`，在多模型结果中选中对应子 tab。
+3. 规则提醒链接保持任务级跳转，不追加模型参数。

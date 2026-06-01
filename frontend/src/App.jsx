@@ -2118,12 +2118,16 @@ function CodeQualityReviewsPanel({
   progress,
   changedFilesSummary,
   fixPreviews,
+  selectedReviewKey,
   onRetry,
   retrying,
   onCancelReview,
   onCancelFixPreview
 }) {
   const reviewItems = Array.isArray(reviews) ? reviews : [];
+  const requestedReviewKey = reviewItems.some(review => review.reviewKey === selectedReviewKey)
+    ? selectedReviewKey
+    : undefined;
   if (reviewItems.length <= 1) {
     const review = reviewItems[0] || null;
     return (
@@ -2142,6 +2146,7 @@ function CodeQualityReviewsPanel({
   }
   return (
     <Tabs
+      defaultActiveKey={requestedReviewKey}
       items={reviewItems.map((review, index) => ({
         key: review.reviewKey || String(review.id || index),
         label: codeQualityReviewTabLabel(review),
@@ -2165,6 +2170,7 @@ function CodeQualityReviewsPanel({
 
 function TaskDetail({ taskId, onBack, onOpen }) {
   const location = useLocation();
+  const selectedReviewKey = new URLSearchParams(location.search).get('reviewKey');
   const [detail, setDetail] = useState(null);
   const [result, setResult] = useState(null);
   const [codeQualityResult, setCodeQualityResult] = useState(null);
@@ -2366,7 +2372,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   };
 
   const tabItems = useMemo(() => [
-    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} fixPreviews={fixPreviews} onRetry={retryCodeQualityReview} retrying={retrying} onCancelReview={cancelCodeQualityJob} onCancelFixPreview={cancelCodeQualityJob} /> },
+    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} fixPreviews={fixPreviews} selectedReviewKey={selectedReviewKey} onRetry={retryCodeQualityReview} retrying={retrying} onCancelReview={cancelCodeQualityJob} onCancelFixPreview={cancelCodeQualityJob} /> },
     ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
       ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
       : []),
@@ -2375,7 +2381,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       : []),
     { key: 'analysis', label: '分析结果', children: <AnalysisView changeAnalysis={result?.changeAnalysis} /> },
     { key: 'event', label: '原始事件摘要', children: <Row gutter={[16, 16]}><Col xs={24} lg={12}><Card title="changedFiles 摘要"><JsonBlock value={detail?.changedFilesSummary} /></Card></Col><Col xs={24} lg={12}><Card title="raw payload"><JsonBlock value={detail?.rawPayload} /></Card></Col></Row> }
-  ], [taskId, detail, result, codeQualityResults, codeQualityProgress, codeQualityGate, fixPreviews, retrying]);
+  ], [taskId, detail, result, codeQualityResults, codeQualityProgress, codeQualityGate, fixPreviews, selectedReviewKey, retrying]);
   const displayedActiveTabKey = tabItems.some(item => item.key === activeTabKey)
     ? activeTabKey
     : tabItems[0]?.key;

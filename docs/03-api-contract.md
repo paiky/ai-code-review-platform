@@ -413,9 +413,9 @@ GET /api/rule-templates/{templateCode}
 
 ## 6. Notification API
 
-钉钉推送当前使用 Markdown 消息。规则审查主要依据 RiskCard 中由规则命中的 `riskItems` 生成“提醒”展示，消息标题固定为“变更提醒”，正文包含作者、变更标题、分支、按 DB / MQ / Redis/缓存 / 配置聚合后的简要提醒，以及“查看平台详情”链接。平台详情链接由 `PLATFORM_BASE_URL` 拼接 `?taskId={taskId}` 生成；钉钉消息不再额外展示 GitLab 链接。
+钉钉推送当前使用 Markdown 消息。规则审查主要依据 RiskCard 中由规则命中的 `riskItems` 生成“提醒”展示，消息标题固定为“变更提醒”，正文包含作者、变更标题、分支、按 DB / MQ / Redis/缓存 / 配置聚合后的简要提醒，以及“查看平台详情”链接。平台详情链接由 `PLATFORM_BASE_URL` 拼接 `/tasks/{taskId}` 生成；钉钉消息不再额外展示 GitLab 链接。
 
-GitLab MR 自动 AI Review 完成后，也会向同一个钉钉 webhook 推送“代码质量 Review”消息，包含 provider、状态、等级、问题数、摘要、最多 5 条主要 finding 和平台详情链接。
+GitLab MR 自动 AI Review 完成后，也会向同一个钉钉 webhook 推送“代码质量 Review”消息，包含 provider、状态、等级、问题数、摘要、最多 5 条主要 finding 和平台详情链接。多模型任务中的 AI Review 摘要链接会追加 `?reviewKey={reviewKey}`，任务详情页据此直接选中消息对应的模型 Review 子 tab；finding 深链也保留同一个 `reviewKey`。
 
 当前 RiskCard 字段名仍沿用 `risk*` 兼容历史数据和接口；前端与钉钉展示层先统一使用“提醒”语义。后续若需要彻底改名，应分阶段迁移 JSON schema、数据库字段、API DTO 和前端字段。
 

@@ -1177,7 +1177,12 @@ def test_mr_summary_without_reminders_links_ai_findings_and_hides_rule_section(
     markdown = body["markdown"]["text"]
     assert "AI 模型：DeepSeek" in markdown
     assert "配置变更（规则扫描）" not in markdown
-    assert f"[空状态可能导致后续流程异常。](http://example.com/app/tasks/{task_id}#fix-preview-0)" in markdown
+    assert (
+        f"[空状态可能导致后续流程异常。]"
+        f"(http://example.com/app/tasks/{task_id}?reviewKey=deepseek-deepseek-v4-pro#fix-preview-0)"
+        in markdown
+    )
+    assert f"详情：http://example.com/app/tasks/{task_id}?reviewKey=deepseek-deepseek-v4-pro" in markdown
 
 
 def test_web_project_ai_summary_hides_rule_section_when_reminder_card_disabled(
