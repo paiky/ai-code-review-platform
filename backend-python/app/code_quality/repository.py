@@ -230,6 +230,17 @@ def ensure_defaults(db: Session) -> None:
         True,
         35,
     )
+    _upsert_default_provider(
+        db,
+        "GLM",
+        "智谱 GLM",
+        "OPENAI_CHAT_COMPATIBLE",
+        settings.glm_base_url,
+        settings.glm_code_review_model,
+        settings.glm_api_key,
+        True,
+        37,
+    )
     _upsert_default_provider(db, "CUSTOM", "自定义 OpenAI-compatible", "OPENAI_CHAT_COMPATIBLE", None, None, None, False, 40)
 
     profile = _upsert_built_in_profile(db, DEFAULT_PROFILE_CODE)

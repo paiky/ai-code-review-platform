@@ -334,6 +334,8 @@ function sourceLabel(value) {
       return 'DeepSeek';
     case 'XIAOMIMO':
       return 'XiaoMIMO';
+    case 'GLM':
+      return 'GLM';
     case 'CUSTOM':
       return '自定义';
     case 'CODEX_CLI':
@@ -1279,6 +1281,10 @@ function phaseLabel(phase) {
     XIAOMIMO_RESPONSE: 'XiaoMIMO 已响应',
     XIAOMIMO_PARSED: '解析 XiaoMIMO 输出',
     XIAOMIMO_FAILED: 'XiaoMIMO 执行失败',
+    GLM_REQUEST: '调用 GLM',
+    GLM_RESPONSE: 'GLM 已响应',
+    GLM_PARSED: '解析 GLM 输出',
+    GLM_FAILED: 'GLM 执行失败',
     CUSTOM_REQUEST: '调用自定义 Provider',
     CUSTOM_RESPONSE: '自定义 Provider 已响应',
     CUSTOM_PARSED: '解析自定义 Provider 输出',
@@ -1328,6 +1334,9 @@ const keyProgressPhases = new Set([
   'XIAOMIMO_REQUEST',
   'XIAOMIMO_RESPONSE',
   'XIAOMIMO_PARSED',
+  'GLM_REQUEST',
+  'GLM_RESPONSE',
+  'GLM_PARSED',
   'CUSTOM_REQUEST',
   'CUSTOM_RESPONSE',
   'CUSTOM_PARSED',
@@ -1350,6 +1359,7 @@ const keyProgressPhases = new Set([
   'ANTHROPIC_FAILED',
   'DEEPSEEK_FAILED',
   'XIAOMIMO_FAILED',
+  'GLM_FAILED',
   'CUSTOM_FAILED'
 ]);
 
@@ -1415,6 +1425,12 @@ function progressStepDescription(event) {
       return 'XiaoMIMO API 已返回响应。';
     case 'XIAOMIMO_PARSED':
       return 'XiaoMIMO 输出已解析为结构化质量问题；评审建议见上方“质量问题”。';
+    case 'GLM_REQUEST':
+      return '开始调用 GLM API。';
+    case 'GLM_RESPONSE':
+      return 'GLM API 已返回响应。';
+    case 'GLM_PARSED':
+      return 'GLM 输出已解析为结构化质量问题；评审建议见上方“质量问题”。';
     case 'CUSTOM_REQUEST':
       return '开始调用自定义 OpenAI-compatible Provider。';
     case 'CUSTOM_RESPONSE':
@@ -1449,6 +1465,7 @@ function progressStepDescription(event) {
     case 'ANTHROPIC_FAILED':
     case 'DEEPSEEK_FAILED':
     case 'XIAOMIMO_FAILED':
+    case 'GLM_FAILED':
     case 'CUSTOM_FAILED':
       return '该阶段失败，需要查看错误详情。';
     default:

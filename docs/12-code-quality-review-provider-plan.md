@@ -1,6 +1,6 @@
 # Code Quality Review Provider Plan
 
-> 状态说明：本文是早期 Provider 设计文档，编写时以 `CODEX_CLI` / `OPENAI_API` 为主。当前 Python 后端已切换为多 API Provider（OpenAI、Anthropic、DeepSeek、XiaoMIMO、Custom OpenAI-compatible），MR/Push 自动 Review、进度事件、Push Gate、调度队列与 fix preview 均已落地。现行契约与配置见 `README.md`、`docs/03-api-contract.md` 和设置页；**不要再按本文从零实现 Provider**。
+> 状态说明：本文是早期 Provider 设计文档，编写时以 `CODEX_CLI` / `OPENAI_API` 为主。当前 Python 后端已切换为多 API Provider（OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM、Custom OpenAI-compatible），MR/Push 自动 Review、进度事件、Push Gate、调度队列与 fix preview 均已落地。现行契约与配置见 `README.md`、`docs/03-api-contract.md` 和设置页；**不要再按本文从零实现 Provider**。
 
 ## 1. Goal
 
@@ -10,7 +10,7 @@ The first implementation supports two providers:
 
 | Provider | Status | Notes |
 | --- | --- | --- |
-| API Providers（OpenAI / Anthropic / DeepSeek / XiaoMIMO / Custom） | **当前默认** | diff-only HTTP 调用，配置在设置页 |
+| API Providers（OpenAI / Anthropic / DeepSeek / XiaoMIMO / GLM / Custom） | **当前默认** | diff-only HTTP 调用，配置在设置页 |
 | `CODEX_CLI` | **历史/停用** | 数据库 seed 可能仍见 legacy 字符串；新版本不再执行 CLI |
 
 Current trigger status:
@@ -143,6 +143,7 @@ Environment variables:
 | `ANTHROPIC_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | Anthropic API request timeout |
 | `DEEPSEEK_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | DeepSeek API request timeout |
 | `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | XiaoMIMO API request timeout |
+| `GLM_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | GLM API request timeout |
 
 单个 Provider 可在设置页“模型 Provider 配置”中覆盖 `timeoutSeconds`；为空时使用对应环境变量默认值。
 

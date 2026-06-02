@@ -394,6 +394,8 @@ def _openai_compatible_env_api_key(provider_code: str) -> str:
         return settings.deepseek_api_key
     if provider_code == "XIAOMIMO":
         return settings.xiaomimo_api_key
+    if provider_code == "GLM":
+        return settings.glm_api_key
     return ""
 
 
@@ -404,6 +406,8 @@ def _openai_compatible_timeout_seconds(provider: CodeQualityModelProvider) -> in
         return _provider_timeout_seconds(provider, settings.deepseek_code_review_timeout_seconds)
     if provider_code == "XIAOMIMO":
         return _provider_timeout_seconds(provider, settings.xiaomimo_code_review_timeout_seconds)
+    if provider_code == "GLM":
+        return _provider_timeout_seconds(provider, settings.glm_code_review_timeout_seconds)
     return _provider_timeout_seconds(provider, settings.openai_code_review_timeout_seconds)
 
 

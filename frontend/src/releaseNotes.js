@@ -1,5 +1,18 @@
 export const releaseNotes = [
   {
+    id: '2026-06-02-glm-provider',
+    version: 'v0.15.0',
+    releaseDate: '2026-06-02',
+    title: '智谱 GLM Provider 接入',
+    summary: '模型 Provider 配置新增智谱 GLM，可用于 AI Review、联通性测试和修复预览。',
+    highlights: [
+      '新增内置 GLM Provider，默认使用 OpenAI-compatible 接口和 glm-5.1 模型。',
+      '支持在设置页配置 GLM endpoint、model、API Key 和超时，并执行联通性测试。',
+      'GLM Review 复用现有调度、进度展示、多模型执行和修复预览链路。'
+    ],
+    tags: ['GLM', 'Provider', 'AI Review']
+  },
+  {
     id: '2026-05-29-multi-model-ai-review',
     version: 'v0.14.0',
     releaseDate: '2026-05-29',

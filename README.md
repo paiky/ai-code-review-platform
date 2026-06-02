@@ -77,7 +77,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 提醒项保留原命中证据，并可在详情页直接查看对应文件 diff。
 - 钉钉消息按模板 `focusChangeTypes` 过滤提醒来源，并带上项目名称、简洁提醒和平台详情链接。
 - 审查任务、变更分析结果、提醒卡片、通知记录均落库。
-- 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO 和 OpenAI-compatible 自定义模型 Provider。
+- 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持配置 / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、项目组多模型并行 Review、自动触发、重试、执行过程展示。
 - GitLab MR 自动 AI Review 完成后会向任务所属项目组中已启用的钉钉 webhook 推送“代码质量 Review”结果；项目组未配置机器人时记录为 `SKIPPED`，不会回退推送到默认项目组。
 - GitLab Push webhook 会先按项目组 Push 审核策略中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会根据文件数、diff 大小、commit 数、硬上限和 debounce 自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
@@ -150,6 +150,10 @@ codegraph query trigger_auto_review
 | `XIAOMIMO_BASE_URL` | `https://api.xiaomimimo.com/v1` | XiaoMIMO OpenAI-compatible base URL |
 | `XIAOMIMO_CODE_REVIEW_MODEL` | `mimo-v2.5-pro` | XiaoMIMO provider 模型 |
 | `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | XiaoMIMO 请求超时时间 |
+| `GLM_API_KEY` | 空 | 智谱 GLM API key，首次初始化 Provider 时可作为默认值 |
+| `GLM_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4` | GLM OpenAI-compatible base URL |
+| `GLM_CODE_REVIEW_MODEL` | `glm-5.1` | GLM provider 模型 |
+| `GLM_CODE_REVIEW_TIMEOUT_SECONDS` | `1000` | GLM 请求超时时间 |
 
 PowerShell 示例：
 
@@ -203,6 +207,7 @@ GITLAB_TOKEN=GitLab access token
 CODE_QUALITY_REVIEW_ENABLED=true
 DEEPSEEK_API_KEY=...
 XIAOMIMO_API_KEY=...
+GLM_API_KEY=...
 OPENAI_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
@@ -463,7 +468,7 @@ mock MR webhook / GitLab MR webhook / GitLab Push webhook / manual review
   -> 变更分析 -> 提醒卡片 -> review_results 落库 -> notification_records
 ```
 
-Python AI Review 默认关闭；可在设置页直接开启或关闭“代码质量 AI Review 全局能力”。`CODE_QUALITY_REVIEW_ENABLED` 只作为兼容初始化值使用，已有数据库以设置页保存的 `reviewEnabled` 为准。启用后支持 OpenAI Responses、Anthropic Messages、DeepSeek / XiaoMIMO / Custom OpenAI-compatible Chat Completions。Provider API Key 只返回 masked 形式，进度事件会做敏感字段脱敏。设置页 Provider 配置支持用当前表单里的端点、模型和临时 API Key 发起一次最小请求测试联通性，不会保存该临时 Key。自动化验证使用 respx mock 外部模型 API，真实模型凭据联调需要单独确认。
+Python AI Review 默认关闭；可在设置页直接开启或关闭“代码质量 AI Review 全局能力”。`CODE_QUALITY_REVIEW_ENABLED` 只作为兼容初始化值使用，已有数据库以设置页保存的 `reviewEnabled` 为准。启用后支持 OpenAI Responses、Anthropic Messages、DeepSeek / XiaoMIMO / GLM / Custom OpenAI-compatible Chat Completions。Provider API Key 只返回 masked 形式，进度事件会做敏感字段脱敏。设置页 Provider 配置支持用当前表单里的端点、模型和临时 API Key 发起一次最小请求测试联通性，不会保存该临时 Key。自动化验证使用 respx mock 外部模型 API，真实模型凭据联调需要单独确认。
 
 AI Review 当前保持稳定的非流式 HTTP Provider 调用。前端通过 `GET /api/review-tasks/{taskId}/code-quality-progress`、`GET /api/review-tasks/{taskId}/code-quality-result` 和 `GET /api/review-tasks/{taskId}/code-quality-results` 轮询展示执行过程与结果，不再建立 SSE / WebSocket 连接，也不启用模型 token streaming。项目组配置多个模型时，同一个任务会并行生成多条 Review 结果；任务详情页只在多结果时显示模型子 tab，单模型仍保持原展示。
 
@@ -558,6 +563,7 @@ V29__provider_timeout_seconds.sql
 V30__project_group_ai_review_policy.sql
 V31__multi_model_ai_review.sql
 V32__review_task_review_status.sql
+V33__glm_model_provider.sql
 ```
 
 主要表：
@@ -785,6 +791,7 @@ Provider 说明：
 - `ANTHROPIC`：调用 Anthropic Messages API。
 - `DEEPSEEK`：调用 DeepSeek OpenAI-compatible Chat Completions API，默认 base URL 为 `https://api.deepseek.com`。
 - `XIAOMIMO`：调用 XiaoMIMO / Xiaomi MiMo OpenAI-compatible Chat Completions API，默认 base URL 为 `https://api.xiaomimimo.com/v1`，默认模型为 `mimo-v2.5-pro`。
+- `GLM`：调用智谱 GLM OpenAI-compatible Chat Completions API，默认 base URL 为 `https://open.bigmodel.cn/api/paas/v4`，默认模型为 `glm-5.1`。
 - `CUSTOM`：调用自定义 OpenAI-compatible Chat Completions API，需要配置端点 URL、模型名称和 API Key。
 
 前端“设置”页可以：
@@ -792,7 +799,7 @@ Provider 说明：
 - 控制代码质量 AI Review 全局能力；关闭后手动触发、MR 和 Push 自动流程都不会调用模型。
 - 控制是否全局发送钉钉推送；关闭后审查和落库仍正常执行。
 - 按项目组配置多个钉钉 webhook；开启钉钉推送后，只会向任务所属项目组内已启用 webhook 群发同一条通知。
-- 配置 OpenAI / Anthropic / DeepSeek / XiaoMIMO / 自定义 Provider 的模型端点 URL、模型名称、API Key 和 Review 超时秒数，并测试当前配置联通性。
+- 配置 OpenAI / Anthropic / DeepSeek / XiaoMIMO / GLM / 自定义 Provider 的模型端点 URL、模型名称、API Key 和 Review 超时秒数，并测试当前配置联通性。
 - 设置全局默认 Provider，以及项目组多个 AI Review 模型执行项；旧的项目级 / 端类型 Provider 覆盖仍作为单模型覆盖优先级保留。
 - 按项目组绑定默认 AI Review Profile，通过全局端类型路径映射识别新项目端类型，并在项目端类型配置中维护 Provider 覆盖、提醒卡片展示和端类型启停策略。
 - 查看、编辑、预览、恢复 AI Review Profile 的 Review Instructions。

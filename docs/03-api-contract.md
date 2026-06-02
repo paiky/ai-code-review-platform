@@ -761,6 +761,9 @@ Provider 列表响应 data：
 ]
 ```
 
+内置 `GLM` Provider 使用 `OPENAI_CHAT_COMPATIBLE` 协议，默认 `endpointUrl` 为
+`https://open.bigmodel.cn/api/paas/v4`，默认 `modelName` 为 `glm-5.1`。
+
 `PUT /api/code-quality-review-providers/{providerCode}` 请求：
 
 ```json

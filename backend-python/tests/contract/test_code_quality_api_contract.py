@@ -228,6 +228,24 @@ def test_xiaomimo_provider_update_masks_api_key(
     assert "mimo-secret-123456" not in json.dumps(response.json(), ensure_ascii=False)
 
 
+def test_glm_provider_update_masks_api_key(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+
+    response = client.put(
+        "/api/code-quality-review-providers/GLM",
+        json={"apiKey": "glm-secret-123456", "modelName": "glm-5.1"},
+    )
+
+    assert response.status_code == 200
+    glm = next(item for item in response.json()["data"] if item["providerCode"] == "GLM")
+    assert glm["apiKeyConfigured"] is True
+    assert glm["apiKeyMasked"] == "glm-...3456"
+    assert "glm-secret-123456" not in json.dumps(response.json(), ensure_ascii=False)
+
+
 def test_provider_list_exposes_basic_provider_config(
     client: TestClient,
     monkeypatch,
@@ -238,12 +256,15 @@ def test_provider_list_exposes_basic_provider_config(
 
     assert response.status_code == 200
     providers = {item["providerCode"]: item for item in response.json()["data"]}
-    assert set(providers) == {"OPENAI", "ANTHROPIC", "DEEPSEEK", "XIAOMIMO", "CUSTOM"}
+    assert set(providers) == {"OPENAI", "ANTHROPIC", "DEEPSEEK", "XIAOMIMO", "GLM", "CUSTOM"}
     assert providers["OPENAI"]["providerType"] == "OPENAI_RESPONSES"
     assert providers["DEEPSEEK"]["providerType"] == "OPENAI_CHAT_COMPATIBLE"
     assert providers["XIAOMIMO"]["providerType"] == "OPENAI_CHAT_COMPATIBLE"
     assert providers["XIAOMIMO"]["endpointUrl"] == "https://api.xiaomimimo.com/v1"
     assert providers["XIAOMIMO"]["modelName"] == "mimo-v2.5-pro"
+    assert providers["GLM"]["providerType"] == "OPENAI_CHAT_COMPATIBLE"
+    assert providers["GLM"]["endpointUrl"] == "https://open.bigmodel.cn/api/paas/v4"
+    assert providers["GLM"]["modelName"] == "glm-5.1"
     assert providers["DEEPSEEK"]["timeoutSeconds"] is None
     assert "capabilities" not in providers["OPENAI"]
     assert "streamingConfig" not in providers["OPENAI"]
@@ -338,6 +359,44 @@ def test_xiaomimo_provider_uses_openai_compatible_request(
     assert "xiaomimo-secret" not in json.dumps(progress, ensure_ascii=False)
 
 
+@respx.mock
+def test_glm_provider_uses_openai_compatible_request(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("GLM_API_KEY", "glm-secret")
+    seed_project(db_session, "GLM")
+    route = respx.post("https://open.bigmodel.cn/api/paas/v4/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={"choices": [{"message": {"content": review_card_json("GLM 完成")}}]},
+        )
+    )
+
+    response = client.post("/api/code-quality-reviews/manual", json=manual_request())
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "SUCCESS"
+    assert data["provider"] == "GLM"
+    request_body = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert request_body["model"] == "glm-5.1"
+    result = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-result").json()["data"]
+    assert result["model"] == "glm-5.1"
+    assert result["findings"][0]["source"] == "GLM"
+    progress = client.get(
+        f"/api/review-tasks/{data['taskId']}/code-quality-progress"
+    ).json()["data"]
+    phases = [event["phase"] for event in progress]
+    assert "GLM_REQUEST" in phases
+    assert "GLM_RESPONSE" in phases
+    assert "GLM_PARSE_RESULT" in phases
+    assert "glm-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
 def test_config_endpoints_repair_legacy_code_quality_schema(
     client: TestClient,
     db_session: Session,
@@ -407,6 +466,7 @@ def test_config_endpoints_repair_legacy_code_quality_schema(
         "ANTHROPIC",
         "DEEPSEEK",
         "XIAOMIMO",
+        "GLM",
         "CUSTOM",
     }
     inspector = inspect(db_session.get_bind())

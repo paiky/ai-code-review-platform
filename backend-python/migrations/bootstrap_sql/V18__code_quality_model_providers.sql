@@ -22,6 +22,7 @@ INSERT INTO code_quality_model_providers (
   ('ANTHROPIC', 'Anthropic / Claude', 'ANTHROPIC_MESSAGES', 'https://api.anthropic.com/v1/messages', 'claude-sonnet-4-5', NULL, TRUE, TRUE, 20),
   ('DEEPSEEK', 'DeepSeek', 'OPENAI_CHAT_COMPATIBLE', 'https://api.deepseek.com', 'deepseek-v4-pro', NULL, TRUE, TRUE, 30),
   ('XIAOMIMO', 'XiaoMIMO / Xiaomi MiMo', 'OPENAI_CHAT_COMPATIBLE', 'https://api.xiaomimimo.com/v1', 'mimo-v2.5-pro', NULL, TRUE, TRUE, 35),
+  ('GLM', '智谱 GLM', 'OPENAI_CHAT_COMPATIBLE', 'https://open.bigmodel.cn/api/paas/v4', 'glm-5.1', NULL, TRUE, TRUE, 37),
   ('CUSTOM', '自定义 OpenAI-compatible', 'OPENAI_CHAT_COMPATIBLE', NULL, NULL, NULL, FALSE, TRUE, 40)
 ON DUPLICATE KEY UPDATE
   provider_name = VALUES(provider_name),

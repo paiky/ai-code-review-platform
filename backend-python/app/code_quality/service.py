@@ -2248,6 +2248,7 @@ def _review_display_name(provider_code: str | None, display_name: str | None) ->
         "ANTHROPIC": "Claude",
         "DEEPSEEK": "DeepSeek",
         "XIAOMIMO": "XiaoMIMO",
+        "GLM": "GLM",
         "CUSTOM": "自定义",
     }
     provider_key = str(provider_code or "").strip().upper()

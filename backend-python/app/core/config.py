@@ -39,6 +39,10 @@ class Settings:
     xiaomimo_base_url: str
     xiaomimo_code_review_model: str
     xiaomimo_code_review_timeout_seconds: int
+    glm_api_key: str
+    glm_base_url: str
+    glm_code_review_model: str
+    glm_code_review_timeout_seconds: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -88,6 +92,12 @@ class Settings:
             xiaomimo_code_review_model=os.getenv("XIAOMIMO_CODE_REVIEW_MODEL", "mimo-v2.5-pro"),
             xiaomimo_code_review_timeout_seconds=int(
                 os.getenv("XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS", "1000")
+            ),
+            glm_api_key=os.getenv("GLM_API_KEY", ""),
+            glm_base_url=os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
+            glm_code_review_model=os.getenv("GLM_CODE_REVIEW_MODEL", "glm-5.1"),
+            glm_code_review_timeout_seconds=int(
+                os.getenv("GLM_CODE_REVIEW_TIMEOUT_SECONDS", "1000")
             ),
         )
 
