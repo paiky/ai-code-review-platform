@@ -182,15 +182,18 @@ def _db_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None:
 def _cache_match(changed_file: dict[str, Any], content: str) -> RuleMatch | None:
     if not (_path_matches(changed_file, ["cache", "redis", "caffeine", "ehcache"]) or _contains_any(content, ["RedisTemplate", "StringRedisTemplate", "IRedisService", "redisService", "@Cacheable", "@CacheEvict", "@CachePut", "cacheManager", "opsForValue", "sadd(", "expire(", "delete(", ".del(", "RedisSerializer"])):
         return None
-    if _contains_any(content, ["RedisSerializer", "Jackson2JsonRedisSerializer", "GenericJackson2JsonRedisSerializer", "StringRedisSerializer", "serialize(", "deserialize(", "ObjectMapper"]):
+    changed_content = "\n".join(_changed_lines(changed_file))
+    if not changed_content:
+        return None
+    if _contains_any(changed_content, ["RedisSerializer", "Jackson2JsonRedisSerializer", "GenericJackson2JsonRedisSerializer", "StringRedisSerializer", "serialize(", "deserialize(", "ObjectMapper"]):
         change_type, resource_type, reason = "CACHE_SERIALIZATION", "CACHE_VALUE", "Detected cache serialization or cached value schema change"
-    elif _contains_any(content, ["@CacheEvict", "@CachePut", "delete(", ".del(", "sadd(", "evict(", "invalidate(", "clear(", "unlink(", "expire(", "expireAt(", "ttl", "time-to-live", "timeToLive", "Duration.of", "TimeUnit.", ".set(", ".put(", "setIfAbsent", "setnx"]):
+    elif _contains_any(changed_content, ["@CacheEvict", "@CachePut", "delete(", ".del(", "sadd(", "evict(", "invalidate(", "clear(", "unlink(", "expire(", "expireAt(", "ttl", "time-to-live", "timeToLive", "Duration.of", "TimeUnit.", ".set(", ".put(", "setIfAbsent", "setnx"]):
         change_type, resource_type, reason = "CACHE_WRITE_DELETE", "CACHE_KEY", "Detected cache write, TTL or invalidation change"
-    elif _contains_any(content, ["@Cacheable", "get("]):
+    elif _contains_any(changed_content, ["@Cacheable", "get("]):
         return None
     else:
         return None
-    name = _first_group(content, r"[\"']([a-zA-Z0-9_.:-]+:[a-zA-Z0-9_.:-]+)[\"']") or _first_group(content, r"(?i)(?:cache[_-]?key|key|prefix)\s*(?:=|:)\s*[\"']([a-zA-Z0-9_.:-]+)[\"']") or _effective_path(changed_file)
+    name = _first_group(changed_content, r"[\"']([a-zA-Z0-9_.:-]+:[a-zA-Z0-9_.:-]+)[\"']") or _first_group(changed_content, r"(?i)(?:cache[_-]?key|key|prefix)\s*(?:=|:)\s*[\"']([a-zA-Z0-9_.:-]+)[\"']") or _effective_path(changed_file)
     return RuleMatch(change_type, resource_type, name, reason, "CACHE_WRITE_DELETE_RULE")
 
 

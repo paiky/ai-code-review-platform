@@ -221,7 +221,7 @@ def _cache_artifacts(category: str, evidences: list[dict[str, Any]]) -> list[dic
     source_lines = _redis_source_lines(lines)
     if not source_lines:
         return []
-    content = "\n".join(source_lines)
+    content = _redis_summary_content(keys, operations, source_lines)
     return [
         _artifact(
             "REDIS_COMMAND",

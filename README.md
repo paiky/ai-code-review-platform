@@ -71,6 +71,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - MR payload 缺少 changed files 时，可调用 GitLab API 拉取 MR diff，并兼容 `/diffs` 与 `/changes`。
 - Push Hook 可优先调用 GitLab compare API 拉取 `beforeSha -> afterSha` diff；新分支 Push（`before` 全 0）且无 diff 时会直接 `SKIPPED` 不建任务；其它场景 compare 失败时才回退到 payload 文件列表。
 - 变更分析识别 API、DB、缓存、MQ、配置等信号；默认 `backend-default` 提醒规则已收敛为 DB 写入/结构、缓存写入删除、MQ 配置、应用配置四类（分析层仍保留更多细粒度 changeType 供扩展）。
+- 缓存写入删除提醒只根据 diff 实际新增或删除行判断，未修改上下文中的历史 `set / put / expire / delete / evict` 不会触发提醒。
 - `@Value` 配置占位符变更会进入重点变更提醒。
 - 提醒卡片在前端按 DB / MQ / Redis/缓存 / 配置分组展示，并为重点提醒生成可复制维护内容：SQL 草稿、Redis 命令、MQ 配置伪代码、Nacos 配置块。
 - DB 维护 SQL 会优先使用真实 DDL；没有 SQL 文件时按 Entity / Mapper 和变更类型推断 `CREATE TABLE` 或 `ALTER TABLE`，并标记为 `INFERRED`。

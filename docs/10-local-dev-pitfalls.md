@@ -1633,3 +1633,21 @@ PATH 命中的系统 Python 启动器可能依赖当前沙箱不可用的登录�
 2. 排查脚本行为或执行一次性 Python 命令时，优先使用
    `backend-python\.venv\Scripts\python.exe`。
 3. 不要因为 PATH Python 启动失败改动项目依赖或重建虚拟环境；先确认 `.venv` 解释器是否可用。
+
+## 72. 缓存提醒不能把 unified diff 上下文当成变更行
+
+现象：
+
+任务提醒卡片出现 Redis/缓存写入提醒，但展开后显示“暂无可维护内容”。实际新增代码只有
+`terminalCacheService.getTypeByImei(...)` 等缓存读取，`put()` 位于 unified diff 未修改上下文。
+
+原因：
+
+缓存 matcher 如果使用整个 diff 判断写入信号，会先因缓存客户端名称进入候选，再被上下文中的
+旧 `ehcacheService.put(...)` 误判为本次新增缓存写入。维护内容只从新增行提取，因此提醒项为空。
+
+处理方式：
+
+1. 文件路径和缓存客户端名称只用于筛选候选文件。
+2. `set / put / expire / delete / evict`、TTL 和序列化变化必须只在实际新增或删除行中判断。
+3. 保留删除行分析，避免删除缓存失效逻辑时漏报一致性风险。

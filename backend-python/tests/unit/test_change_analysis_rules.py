@@ -81,6 +81,27 @@ def test_read_only_cache_mq_consumer_and_mq_send_only_do_not_match() -> None:
     assert "MQ" not in analysis["changeTypes"]
 
 
+def test_cache_write_rule_ignores_unchanged_diff_context() -> None:
+    analysis = analyze_changes(
+        [
+            {
+                "path": "src/main/java/com/demo/PositionServiceImpl.java",
+                "diffText": (
+                    "@@ -10,6 +10,7 @@ public void process(Position position) {\n"
+                    "     Position previous = positionRedisService.getPrePosition(position.getImei());\n"
+                    "+    Terminal terminal = terminalCacheService.getTypeByImei(position.getImei());\n"
+                    "     ehcacheService.put(cacheKey, position.getPointDt());\n"
+                    " }\n"
+                ),
+            }
+        ]
+    )
+
+    assert "CACHE_WRITE_DELETE" not in analysis["changeTypes"]
+    assert "CACHE" not in analysis["changeTypes"]
+    assert not any(evidence["matcher"] == "CACHE_WRITE_DELETE_RULE" for evidence in analysis["evidences"])
+
+
 def test_value_config_rule_ignores_unchanged_diff_context() -> None:
     analysis = analyze_changes(
         [
