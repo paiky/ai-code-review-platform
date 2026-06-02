@@ -13,6 +13,7 @@
 常用文档：
 
 - `docs/23-help-gitlab-dingtalk-project-onboarding.md`：接入帮助页文档源，面向首次接入用户，按 GitLab Webhook、钉钉机器人、项目组和模型配置组织。
+- `docs/25-codegraph-search-guide.md`：CodeGraph 与 `rg` 的协作搜索策略、适用边界和实测记录。
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
 - `docs/10-local-dev-pitfalls.md`：本地环境与调试避坑（按条目累积，含迁移期记录）。
 - `docs/03-api-contract.md`：HTTP API 契约。
@@ -92,6 +93,8 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 ## CodeGraph（Cursor / Agent 代码图谱）
 
 本仓库已接入 [CodeGraph](https://github.com/colbymchenry/codegraph)，为 Cursor Agent 提供本地代码知识图谱 MCP 能力。Agent 可通过 `codegraph_search`、`codegraph_context`、`codegraph_callers` 等工具理解调用链、依赖关系和项目结构，减少全库 grep / Read 开销。
+
+CodeGraph 与 `rg` 不是替代关系：业务逻辑和后端调用链排查优先用 CodeGraph 建立候选地图，已知接口路径、字段名、错误文案和前端代码搜索优先用 `rg`，CodeGraph 结果再用局部源码或 `rg` 核验。详细规则见 `docs/25-codegraph-search-guide.md`。
 
 首次在本机启用：
 
