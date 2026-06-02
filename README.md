@@ -78,7 +78,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 提醒卡片在前端按 DB / MQ / Redis/缓存 / 配置分组展示，并为重点提醒生成可复制维护内容：SQL 草稿、Redis 命令、MQ 配置伪代码、Nacos 配置块。
 - DB 维护 SQL 会优先使用真实 DDL；没有 SQL 文件时按 Entity / Mapper 和变更类型推断 `CREATE TABLE` 或 `ALTER TABLE`，并标记为 `INFERRED`。
 - 提醒项保留原命中证据，并可在详情页直接查看对应文件 diff。
-- GitLab MR / Push 任务可按需读取变更文件的完整源码上下文；“查看 Diff”和“AI 修复 Patch 预览”支持 GitLab 风格分段展开、暗黑主题和按文件类型语法高亮。未配置 GitLab API、缺少历史 refs 或手动粘贴 diff 时保持紧凑 diff 展示。
+- GitLab MR / Push 任务可按需读取变更文件的完整源码上下文；“查看 Diff”支持 GitLab 风格分段展开，“AI 修复 Patch 预览”保持紧凑展示；两者都支持明亮 / 暗黑主题切换和按文件类型语法高亮。未配置 GitLab API、缺少历史 refs 或手动粘贴 diff 时保持紧凑 diff 展示。
 - 钉钉消息按模板 `focusChangeTypes` 过滤提醒来源，并带上项目名称、简洁提醒和平台详情链接。
 - 审查任务、变更分析结果、提醒卡片、通知记录均落库。
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM 和 OpenAI-compatible 自定义模型 Provider。
@@ -711,14 +711,15 @@ PRIVATE-TOKEN: {GITLAB_TOKEN}
 # 普通 Diff：修改文件返回 left / right；新增文件仅返回 right；删除文件仅返回 left。
 Invoke-RestMethod "http://localhost:8090/api/review-tasks/{taskId}/diff-context?viewType=DIFF&filePath={urlEncodedFilePath}"
 
-# AI 修复 Patch：只返回 head / after 源码作为 left 基线，右侧由前端结合 patch 构造。
+# AI 修复 Patch 调试接口：返回 head / after 源码作为 left 基线。
 Invoke-RestMethod "http://localhost:8090/api/review-tasks/{taskId}/diff-context?viewType=FIX_PREVIEW&filePath={urlEncodedFilePath}"
 ```
 
-前端任务详情中的“查看 Diff”和“AI 修复 Patch 预览”默认保持紧凑展示。具备源码能力时，
-点击 hunk 右侧“展开上下文”后才拉取源码，并在隐藏区提供“向上展开 20 行”、
-“向下展开 20 行”和“展开全部”。旧 MR 缺少历史 base SHA 时隐藏普通 Diff 展开入口；
-如果仍有 head commit，Patch 预览可继续按当前源码做基线校验。
+前端任务详情中的“查看 Diff”和“AI 修复 Patch 预览”默认保持紧凑展示。“查看 Diff”具备源码能力时，
+点击“展开上下文”后才拉取源码，并在隐藏区提供“向上展开 20 行”、“向下展开 20 行”和
+“展开全部”。AI 修复 Patch 由模型生成，可能与当前源码基线不一致，因此只保留紧凑预览，
+不展示上下文展开入口。两个弹窗默认使用明亮主题，顶部都提供太阳 / 月亮图标，可在明亮和暗黑代码主题之间切换。
+旧 MR 缺少历史 base SHA 时隐藏普通 Diff 展开入口。
 如果 GitLab MR 详情暂未返回 `diff_refs`，平台会回退读取最新 MR diff version 中保存的
 `base_commit_sha / head_commit_sha`；原地重跑 MR 时也会刷新这组 refs 和 changed files 摘要。
 

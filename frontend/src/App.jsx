@@ -42,7 +42,9 @@ import {
   ReloadOutlined,
   SearchOutlined,
   SettingOutlined,
+  MoonOutlined,
   QuestionCircleOutlined,
+  SunOutlined,
   UnorderedListOutlined
 } from '@ant-design/icons';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -2066,6 +2068,7 @@ function ExpandableDiffTable({
   const [contextError, setContextError] = useState(null);
   const [loadingContext, setLoadingContext] = useState(false);
   const [gapExpansions, setGapExpansions] = useState({});
+  const [theme, setTheme] = useState('light');
 
   useEffect(() => {
     setSourceContext(null);
@@ -2123,8 +2126,8 @@ function ExpandableDiffTable({
           description={fallbackMessage}
         />
       )}
-      {canExpand && !sourceContext && (
-        <div className="diff-viewer-toolbar">
+      <div className="diff-viewer-toolbar">
+        {canExpand && !sourceContext && (
           <button
             type="button"
             className="diff-context-load"
@@ -2133,9 +2136,19 @@ function ExpandableDiffTable({
           >
             {loadingContext ? '读取上下文中...' : '展开上下文'}
           </button>
-        </div>
-      )}
-      <div className="diff-viewer-table" role="table" aria-label={ariaLabel}>
+        )}
+        <Tooltip title={theme === 'dark' ? '切换为明亮主题' : '切换为暗黑主题'}>
+          <button
+            type="button"
+            className="diff-theme-toggle"
+            aria-label={theme === 'dark' ? '切换为明亮主题' : '切换为暗黑主题'}
+            onClick={() => setTheme(current => (current === 'dark' ? 'light' : 'dark'))}
+          >
+            {theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
+          </button>
+        </Tooltip>
+      </div>
+      <div className={`diff-viewer-table diff-theme-${theme}`} role="table" aria-label={ariaLabel}>
         {rows.map(row => (
           row.type === 'gap' ? (
             <DiffGapRow key={row.id} row={row} onExpand={expandGap} />
@@ -2203,20 +2216,18 @@ function DiffViewerModal({ open, taskId, finding, changedFile, canExpand, onClos
   );
 }
 
-function PatchPreviewTable({ taskId, filePath, patchText, canExpand }) {
+function PatchPreviewTable({ filePath, patchText }) {
   return (
     <ExpandableDiffTable
-      taskId={taskId}
       filePath={filePath}
       diffText={patchText}
       viewType="FIX_PREVIEW"
-      canExpand={canExpand}
       ariaLabel="Fix preview patch"
     />
   );
 }
 
-function FixPreviewModal({ open, taskId, preview, canExpand, onClose }) {
+function FixPreviewModal({ open, preview, onClose }) {
   return (
     <Modal
       title="AI 修复 Patch 预览"
@@ -2247,10 +2258,8 @@ function FixPreviewModal({ open, taskId, preview, canExpand, onClose }) {
           <>
             {preview.summary && <Alert type="info" showIcon message={preview.summary} />}
             <PatchPreviewTable
-              taskId={taskId}
               filePath={preview.filePath}
               patchText={preview.patchText}
-              canExpand={canExpand}
             />
           </>
         ) : (
@@ -2516,9 +2525,7 @@ function CodeQualityReviewView({
       />
       <FixPreviewModal
         open={Boolean(fixPreviewTarget)}
-        taskId={taskId}
         preview={fixPreviewTarget}
-        canExpand={diffContextCapabilities?.fixPreview}
         onClose={() => setFixPreviewTarget(null)}
       />
     </Space>
