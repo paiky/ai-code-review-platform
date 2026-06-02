@@ -1,5 +1,44 @@
 export const releaseNotes = [
   {
+    id: '2026-06-02-gitlab-diff-context-final',
+    version: 'v0.16.0',
+    releaseDate: '2026-06-02',
+    title: 'GitLab Diff 上下文展开真实联调收口',
+    summary: '完成真实 GitLab Push / MR 兼容路径联调，并补齐新增、删除和重命名文件的历史任务兼容。',
+    highlights: [
+      '真实 Push 修改文件支持分段展开、向上或向下展开 20 行和展开全部。',
+      '新增文件仅读取右侧源码，删除文件仅读取左侧源码，重命名文件分别读取 old / new 路径。',
+      '旧 MR 缺少历史 base SHA 时隐藏普通 Diff 展开入口，仍有 head commit 的 Patch 预览继续保留基线校验能力。'
+    ],
+    tags: ['GitLab', 'Diff 上下文', 'v0.16.0']
+  },
+  {
+    id: '2026-06-02-gitlab-diff-context-frontend',
+    version: 'v0.16.0-stage2',
+    releaseDate: '2026-06-02',
+    title: 'GitLab 风格 Diff 分段展开与暗黑高亮',
+    summary: '查看 Diff 和 AI 修复 Patch 预览共用可展开代码视图，按需读取完整源码并提供暗黑语法高亮。',
+    highlights: [
+      '点击 hunk 后才拉取完整源码，并在隐藏区支持向上展开 20 行、向下展开 20 行和展开全部。',
+      'Patch 预览使用当前源码作为基线合并上下文，无法匹配时回退紧凑 patch 并显示非阻断提示。',
+      'Java、Python、JS/TS、SQL、XML、JSON、YAML、CSS、Shell 和 Markdown 支持 Prism token 级高亮。'
+    ],
+    tags: ['GitLab', 'Diff 上下文', '阶段 2']
+  },
+  {
+    id: '2026-06-02-gitlab-diff-context-backend',
+    version: 'v0.16.0-stage1',
+    releaseDate: '2026-06-02',
+    title: 'GitLab Diff 完整上下文能力第一阶段',
+    summary: '后端新增按任务读取 GitLab 变更文件源码的受控接口，为 Diff 和修复预览分段展开做准备。',
+    highlights: [
+      'MR API 补拉时保存历史 base / head refs，Push 继续复用 before / after refs。',
+      '新增 diff-context 接口，只允许读取当前任务已记录的变更文件。',
+      '未配置 GitLab API、缺少历史 refs 或文件超限时保持现有紧凑 Diff 展示。'
+    ],
+    tags: ['GitLab', 'Diff 上下文', '阶段 1']
+  },
+  {
     id: '2026-06-02-glm-provider',
     version: 'v0.15.0',
     releaseDate: '2026-06-02',

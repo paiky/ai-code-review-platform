@@ -13,6 +13,10 @@ class GitLabDiffsEndpointNotFoundError(Exception):
     pass
 
 
+MAX_RAW_FILE_BYTES = 1024 * 1024
+MAX_RAW_FILE_LINES = 20_000
+
+
 def list_merge_request_diffs(project_id: str, merge_request_iid: str) -> list[dict[str, Any]]:
     _validate_ready()
     if not project_id:
@@ -76,9 +80,34 @@ def get_merge_request_detail(project_id: str, merge_request_iid: str) -> dict[st
         or diff_refs.get("head_sha")
         or response.get("merge_commit_sha")
         or response.get("squash_commit_sha"),
+        "baseSha": diff_refs.get("base_sha"),
+        "headSha": diff_refs.get("head_sha") or response.get("sha"),
+        "startSha": diff_refs.get("start_sha"),
         "authorName": author.get("name"),
         "authorUsername": author.get("username"),
     }
+
+
+def get_raw_file(project_id: str, file_path: str, ref: str) -> list[str]:
+    _validate_ready()
+    if not project_id:
+        raise AppError("BAD_REQUEST", "GitLab project id is required to fetch repository file", 400)
+    if not file_path:
+        raise AppError("BAD_REQUEST", "GitLab repository file path is required", 400)
+    if not ref:
+        raise AppError("BAD_REQUEST", "GitLab repository file ref is required", 400)
+    content = _get_raw(
+        f"/api/v4/projects/{_quote(project_id)}/repository/files/{_quote(file_path)}/raw",
+        params={"ref": ref},
+        error_prefix="Failed to fetch GitLab repository file",
+    )
+    if len(content) > MAX_RAW_FILE_BYTES:
+        raise AppError("BAD_REQUEST", f"GitLab repository file exceeds {MAX_RAW_FILE_BYTES} bytes", 400)
+    text = content.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if len(lines) > MAX_RAW_FILE_LINES:
+        raise AppError("BAD_REQUEST", f"GitLab repository file exceeds {MAX_RAW_FILE_LINES} lines", 400)
+    return lines
 
 
 def _list_merge_request_diffs_from_diffs(project_id: str, merge_request_iid: str) -> list[dict[str, Any]]:
@@ -134,6 +163,26 @@ def _get(
     if response.is_error:
         raise AppError("INTERNAL_ERROR", f"{error_prefix}: HTTP {response.status_code}", 500)
     return response.json()
+
+
+def _get_raw(
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    error_prefix: str,
+) -> bytes:
+    settings = get_settings()
+    url = _base_url(settings.gitlab_base_url) + path
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.get(url, params=params, headers={"PRIVATE-TOKEN": settings.gitlab_token})
+    except httpx.HTTPError as exception:
+        raise AppError("INTERNAL_ERROR", f"{error_prefix}: {exception}", 500) from exception
+    if response.status_code == 404:
+        raise AppError("RESOURCE_NOT_FOUND", f"{error_prefix}: HTTP 404", 404)
+    if response.is_error:
+        raise AppError("INTERNAL_ERROR", f"{error_prefix}: HTTP {response.status_code}", 500)
+    return response.content
 
 
 def _validate_ready() -> None:

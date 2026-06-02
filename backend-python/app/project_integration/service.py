@@ -91,8 +91,8 @@ def handle_merge_request_webhook(db: Session, payload: dict[str, Any]) -> dict:
         source_branch=event["sourceBranch"],
         target_branch=event["targetBranch"],
         commit_sha=event["commitSha"],
-        before_sha=None,
-        after_sha=None,
+        before_sha=event["baseSha"],
+        after_sha=event["headSha"],
         author_name=event["authorName"],
         author_username=event["authorUsername"],
         template_code=target_config["templateCode"],
@@ -385,8 +385,8 @@ def _create_failed_mr_task_for_ambiguous_targets(
         source_branch=event["sourceBranch"],
         target_branch=event["targetBranch"],
         commit_sha=event["commitSha"],
-        before_sha=None,
-        after_sha=None,
+        before_sha=event["baseSha"],
+        after_sha=event["headSha"],
         author_name=event["authorName"],
         author_username=event["authorUsername"],
         template_code="general-default",
@@ -591,6 +591,13 @@ def _validate_mr_payload(payload: dict[str, Any]) -> None:
 def _parse_mr_event(payload: dict[str, Any]) -> dict:
     project = payload.get("project") or {}
     attrs = payload.get("object_attributes") or {}
+    diff_refs = attrs.get("diff_refs") or {}
+    commit_sha = (
+        (attrs.get("last_commit") or {}).get("id")
+        or (attrs.get("last_commit") or {}).get("sha")
+        or payload.get("checkout_sha")
+        or diff_refs.get("head_sha")
+    )
     git_project_id = str(project.get("id") or attrs.get("target_project_id"))
     project_name = project.get("name") or project.get("path_with_namespace") or f"gitlab-project-{git_project_id}"
     return {
@@ -605,7 +612,10 @@ def _parse_mr_event(payload: dict[str, Any]) -> dict:
         "externalUrl": _normalize_gitlab_web_url(attrs.get("url")),
         "sourceBranch": attrs.get("source_branch"),
         "targetBranch": attrs.get("target_branch"),
-        "commitSha": ((attrs.get("last_commit") or {}).get("id") or (attrs.get("last_commit") or {}).get("sha") or payload.get("checkout_sha")),
+        "commitSha": commit_sha,
+        "baseSha": diff_refs.get("base_sha"),
+        "headSha": diff_refs.get("head_sha") or commit_sha,
+        "startSha": diff_refs.get("start_sha"),
         "authorName": _nested(payload, "user", "name") or payload.get("user_username") or _nested(attrs, "author", "name"),
         "authorUsername": _nested(payload, "user", "username") or payload.get("user_username") or _nested(attrs, "author", "username"),
         "changedFilesSummary": _build_changed_files_summary(payload),
@@ -633,6 +643,9 @@ def _enrich_mr_detail(event: dict[str, Any]) -> dict[str, Any]:
     enriched["sourceBranch"] = mr_detail.get("sourceBranch") or event["sourceBranch"]
     enriched["targetBranch"] = mr_detail.get("targetBranch") or event["targetBranch"]
     enriched["commitSha"] = mr_detail.get("commitSha") or event["commitSha"]
+    enriched["baseSha"] = mr_detail.get("baseSha") or event["baseSha"]
+    enriched["headSha"] = mr_detail.get("headSha") or event["headSha"] or enriched["commitSha"]
+    enriched["startSha"] = mr_detail.get("startSha") or event["startSha"]
     enriched["authorName"] = mr_detail.get("authorName") or event["authorName"]
     enriched["authorUsername"] = mr_detail.get("authorUsername") or event["authorUsername"]
     return enriched
@@ -789,7 +802,7 @@ def _is_zero_sha(value: str | None) -> bool:
 
 def _normalize_gitlab_diff_file(diff_file: dict[str, Any]) -> dict:
     path = diff_file.get("newPath") or diff_file.get("oldPath") or diff_file.get("path")
-    return {
+    result = {
         "path": path,
         "oldPath": diff_file.get("oldPath"),
         "newPath": diff_file.get("newPath"),
@@ -798,6 +811,10 @@ def _normalize_gitlab_diff_file(diff_file: dict[str, Any]) -> dict:
         "collapsed": bool(diff_file.get("collapsed")),
         "tooLarge": bool(diff_file.get("tooLarge")),
     }
+    for key in ("newFile", "deletedFile", "renamedFile"):
+        if diff_file.get(key):
+            result[key] = True
+    return result
 
 
 def _normalize_changed_file(file_node: Any) -> dict:

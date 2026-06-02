@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.notification.models import NotificationWebhook
 from app.notification.repository import default_project_group_id, list_enabled_webhooks, list_webhooks
 from app.project_integration.models import Project
-from app.project_integration.service import _parse_time
+from app.project_integration.service import _build_gitlab_changed_files_summary, _parse_time
 from app.review_record.models import ReviewTask
 from app.rule_template.models import RuleTemplate
 
@@ -254,6 +254,11 @@ def test_mr_without_changed_files_fetches_gitlab_diffs(
                     "source_branch": "feature/gitlab-api",
                     "target_branch": "main",
                     "sha": "abcdef",
+                    "diff_refs": {
+                        "base_sha": "base-abcdef",
+                        "head_sha": "abcdef",
+                        "start_sha": "start-abcdef",
+                    },
                     "author": {"name": "Alice", "username": "alice"},
                 },
             )
@@ -286,6 +291,8 @@ def test_mr_without_changed_files_fetches_gitlab_diffs(
     assert result["changeAnalysis"]["changeTypes"] == ["DB", "DB_DATA_WRITE"]
     detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
     assert detail["changedFilesSummary"]["source"] == "gitlab_api"
+    assert detail["beforeSha"] == "base-abcdef"
+    assert detail["afterSha"] == "abcdef"
 
 
 def test_closed_mr_event_is_skipped_without_creating_review_task(
@@ -912,6 +919,26 @@ def test_push_without_payload_diff_uses_compare_api(
     assert detail["changedFilesSummary"]["source"] == "gitlab_compare_api"
     assert detail["changedFilesSummary"]["commitCount"] == 1
     assert detail["changedFilesSummary"]["files"][0]["commitCount"] == 1
+
+
+def test_gitlab_diff_summary_preserves_file_side_flags() -> None:
+    summary = _build_gitlab_changed_files_summary(
+        [
+            {"path": "src/New.java", "newPath": "src/New.java", "newFile": True},
+            {"path": "src/Old.java", "oldPath": "src/Old.java", "deletedFile": True},
+            {
+                "path": "src/NewName.java",
+                "oldPath": "src/OldName.java",
+                "newPath": "src/NewName.java",
+                "renamedFile": True,
+            },
+        ],
+        "gitlab_compare_api",
+    )
+
+    assert summary["files"][0]["newFile"] is True
+    assert summary["files"][1]["deletedFile"] is True
+    assert summary["files"][2]["renamedFile"] is True
 
 
 def test_new_branch_push_with_zero_before_sha_without_diff_skips_task_creation(

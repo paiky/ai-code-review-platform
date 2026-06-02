@@ -14,6 +14,7 @@
 
 - `docs/23-help-gitlab-dingtalk-project-onboarding.md`：接入帮助页文档源，面向首次接入用户，按 GitLab Webhook、钉钉机器人、项目组和模型配置组织。
 - `docs/25-codegraph-search-guide.md`：CodeGraph 与 `rg` 的协作搜索策略、适用边界和实测记录。
+- `docs/26-gitlab-diff-context-expansion-plan.md`：GitLab 风格 Diff 上下文展开与暗黑语法高亮分阶段实施计划。
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
 - `docs/10-local-dev-pitfalls.md`：本地环境与调试避坑（按条目累积，含迁移期记录）。
 - `docs/03-api-contract.md`：HTTP API 契约。
@@ -77,6 +78,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 提醒卡片在前端按 DB / MQ / Redis/缓存 / 配置分组展示，并为重点提醒生成可复制维护内容：SQL 草稿、Redis 命令、MQ 配置伪代码、Nacos 配置块。
 - DB 维护 SQL 会优先使用真实 DDL；没有 SQL 文件时按 Entity / Mapper 和变更类型推断 `CREATE TABLE` 或 `ALTER TABLE`，并标记为 `INFERRED`。
 - 提醒项保留原命中证据，并可在详情页直接查看对应文件 diff。
+- GitLab MR / Push 任务可按需读取变更文件的完整源码上下文；“查看 Diff”和“AI 修复 Patch 预览”支持 GitLab 风格分段展开、暗黑主题和按文件类型语法高亮。未配置 GitLab API、缺少历史 refs 或手动粘贴 diff 时保持紧凑 diff 展示。
 - 钉钉消息按模板 `focusChangeTypes` 过滤提醒来源，并带上项目名称、简洁提醒和平台详情链接。
 - 审查任务、变更分析结果、提醒卡片、通知记录均落库。
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM 和 OpenAI-compatible 自定义模型 Provider。
@@ -427,6 +429,7 @@ GET  /api/review-tasks
 GET  /api/review-tasks/{taskId}
 GET  /api/review-tasks/{taskId}/result
 GET  /api/review-tasks/{taskId}/notifications
+GET  /api/review-tasks/{taskId}/diff-context
 GET  /api/projects
 GET  /api/project-groups
 GET  /api/target-type-path-mappings
@@ -694,6 +697,28 @@ Push compare 调用：
 GET {GITLAB_BASE_URL}/api/v4/projects/{projectId}/repository/compare?from={beforeSha}&to={afterSha}
 PRIVATE-TOKEN: {GITLAB_TOKEN}
 ```
+
+按需读取 Diff 展开上下文：
+
+```text
+GET {GITLAB_BASE_URL}/api/v4/projects/{projectId}/repository/files/{filePath}/raw?ref={commitSha}
+PRIVATE-TOKEN: {GITLAB_TOKEN}
+```
+
+平台只在用户点击展开入口后代理读取当前任务中的变更文件。可用本地接口验证：
+
+```powershell
+# 普通 Diff：修改文件返回 left / right；新增文件仅返回 right；删除文件仅返回 left。
+Invoke-RestMethod "http://localhost:8090/api/review-tasks/{taskId}/diff-context?viewType=DIFF&filePath={urlEncodedFilePath}"
+
+# AI 修复 Patch：只返回 head / after 源码作为 left 基线，右侧由前端结合 patch 构造。
+Invoke-RestMethod "http://localhost:8090/api/review-tasks/{taskId}/diff-context?viewType=FIX_PREVIEW&filePath={urlEncodedFilePath}"
+```
+
+前端任务详情中的“查看 Diff”和“AI 修复 Patch 预览”默认保持紧凑展示。具备源码能力时，
+点击 hunk 右侧“展开上下文”后才拉取源码，并在隐藏区提供“向上展开 20 行”、
+“向下展开 20 行”和“展开全部”。旧 MR 缺少历史 base SHA 时隐藏普通 Diff 展开入口；
+如果仍有 head commit，Patch 预览可继续按当前源码做基线校验。
 
 ## 审查模板
 

@@ -623,12 +623,12 @@ body {
 .diff-viewer-table {
   width: 100%;
   max-height: min(560px, calc(100vh - 300px));
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable both-edges;
-  border: 1px solid #d7dee2;
+  border: 1px solid #30363d;
   border-radius: 6px;
-  background: #ffffff;
+  background: #0d1117;
   font-family: "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.5;
@@ -636,10 +636,9 @@ body {
 
 .diff-viewer-row {
   display: grid;
-  grid-template-columns: 64px max-content 64px max-content;
-  width: max-content;
-  min-width: 100%;
-  border-bottom: 1px solid #edf1f3;
+  grid-template-columns: 64px minmax(0, 1fr) 64px minmax(0, 1fr);
+  width: 100%;
+  border-bottom: 1px solid #21262d;
 }
 
 .diff-viewer-row:last-child {
@@ -649,52 +648,171 @@ body {
 .diff-line-number {
   min-height: 22px;
   padding: 2px 8px;
-  color: #66737c;
+  color: #7d8590;
   text-align: right;
   user-select: none;
-  background: #f4f7f8;
-  border-right: 1px solid #dfe6ea;
+  background: #161b22;
+  border-right: 1px solid #30363d;
 }
 
 .diff-code-cell {
-  min-width: 720px;
+  min-width: 0;
   min-height: 22px;
   margin: 0;
   padding: 2px 10px;
-  overflow: visible;
-  white-space: pre;
-  color: #20292f;
-  background: #ffffff;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: #c9d1d9;
+  background: #0d1117;
 }
 
 .diff-code-old {
-  border-right: 1px solid #dfe6ea;
+  border-right: 1px solid #30363d;
 }
 
 .diff-row-hunk .diff-line-number,
 .diff-row-hunk .diff-code-cell {
-  color: #46606c;
-  background: #e9f2f6;
+  color: #8b949e;
+  background: #161b22;
   font-weight: 600;
 }
 
+.diff-row-hunk .diff-code-new {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .diff-row-add .diff-code-new {
-  background: #e9f8ef;
+  background: #12261e;
 }
 
 .diff-row-delete .diff-code-old {
-  background: #fdeceb;
+  background: #2d1619;
 }
 
 .diff-row-meta .diff-code-cell,
 .diff-row-raw .diff-code-cell {
-  color: #58656d;
-  background: #fbfcfc;
+  color: #8b949e;
+  background: #161b22;
 }
 
 .diff-row-highlight .diff-line-number,
 .diff-row-highlight .diff-code-cell {
-  background: #fff3bf;
+  background: #403619;
+}
+
+.diff-context-load,
+.diff-context-actions button {
+  border: 1px solid #388bfd;
+  border-radius: 4px;
+  color: #58a6ff;
+  background: #0d2440;
+  cursor: pointer;
+  font-family: Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.diff-context-load {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+}
+
+.diff-context-load:disabled {
+  color: #7d8590;
+  border-color: #30363d;
+  background: #21262d;
+  cursor: wait;
+}
+
+.diff-row-gap {
+  display: block;
+}
+
+.diff-context-gap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 32px;
+  padding: 4px 12px;
+  color: #8b949e;
+  background: #10243e;
+}
+
+.diff-context-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.diff-context-actions button {
+  padding: 2px 8px;
+}
+
+.diff-context-load:not(:disabled):hover,
+.diff-context-actions button:hover {
+  color: #79c0ff;
+  border-color: #58a6ff;
+  background: #16385f;
+}
+
+.diff-code-cell .token.comment,
+.diff-code-cell .token.prolog,
+.diff-code-cell .token.doctype,
+.diff-code-cell .token.cdata {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.diff-code-cell .token.punctuation {
+  color: #c9d1d9;
+}
+
+.diff-code-cell .token.property,
+.diff-code-cell .token.tag,
+.diff-code-cell .token.boolean,
+.diff-code-cell .token.number,
+.diff-code-cell .token.constant,
+.diff-code-cell .token.symbol,
+.diff-code-cell .token.deleted {
+  color: #79c0ff;
+}
+
+.diff-code-cell .token.selector,
+.diff-code-cell .token.attr-name,
+.diff-code-cell .token.string,
+.diff-code-cell .token.char,
+.diff-code-cell .token.builtin,
+.diff-code-cell .token.inserted {
+  color: #a5d6ff;
+}
+
+.diff-code-cell .token.operator,
+.diff-code-cell .token.entity,
+.diff-code-cell .token.url,
+.diff-code-cell .language-css .token.string,
+.diff-code-cell .style .token.string {
+  color: #ff7b72;
+}
+
+.diff-code-cell .token.atrule,
+.diff-code-cell .token.attr-value,
+.diff-code-cell .token.keyword {
+  color: #ff7b72;
+}
+
+.diff-code-cell .token.function,
+.diff-code-cell .token.class-name {
+  color: #d2a8ff;
+}
+
+.diff-code-cell .token.regex,
+.diff-code-cell .token.important,
+.diff-code-cell .token.variable {
+  color: #ffa657;
 }
 
 .focus-indicator-grid {

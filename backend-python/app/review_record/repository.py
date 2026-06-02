@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import and_, case, func, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.code_quality.models import CodeQualityReviewResult
 from app.core.errors import AppError
 from app.core.json_utils import format_datetime, page_response, read_json
@@ -221,6 +222,8 @@ def get_review_task_detail(db: Session, task_id: int) -> dict:
         "sourceBranch": task.source_branch,
         "targetBranch": task.target_branch,
         "commitSha": task.commit_sha,
+        "beforeSha": task.before_sha,
+        "afterSha": task.after_sha,
         "authorName": task.author_name,
         "authorUsername": task.author_username,
         "templateCode": task.template_code,
@@ -234,9 +237,25 @@ def get_review_task_detail(db: Session, task_id: int) -> dict:
         "eventAction": event_action,
         "eventTime": format_datetime(event_time),
         "changedFilesSummary": read_json(changed_files_summary, None),
+        "diffContextCapabilities": _diff_context_capabilities(task),
         "rawPayload": read_json(raw_payload, None),
         "createdAt": format_datetime(task.created_at),
         "updatedAt": format_datetime(task.updated_at),
+    }
+
+
+def _diff_context_capabilities(task: ReviewTask) -> dict[str, bool]:
+    settings = get_settings()
+    api_ready = bool(
+        settings.gitlab_api_enabled
+        and settings.gitlab_base_url.strip()
+        and settings.gitlab_token.strip()
+    )
+    is_gitlab_task = task.trigger_type in {"GITLAB_MR_WEBHOOK", "GITLAB_PUSH_WEBHOOK"}
+    head_ref = task.after_sha or task.commit_sha
+    return {
+        "diff": bool(api_ready and is_gitlab_task and task.before_sha and head_ref),
+        "fixPreview": bool(api_ready and is_gitlab_task and head_ref),
     }
 
 

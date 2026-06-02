@@ -17,7 +17,7 @@ from app.review_record.repository import (
     list_notifications,
     list_review_tasks,
 )
-from app.review_record.service import create_manual_review, rerun_review_task, rerun_review_task_in_place
+from app.review_record.service import create_manual_review, get_diff_context, rerun_review_task, rerun_review_task_in_place
 
 
 router = APIRouter(prefix="/api/review-tasks", tags=["review-tasks"])
@@ -87,6 +87,16 @@ async def get_code_quality_progress(
 @router.get("/{task_id}/code-quality-gate")
 async def get_code_quality_gate(task_id: int, db: Session = Depends(get_db)) -> dict:
     return ok(get_push_gate_response(db, task_id))
+
+
+@router.get("/{task_id}/diff-context")
+async def get_task_diff_context(
+    task_id: int,
+    file_path: str = Query(alias="filePath"),
+    view_type: str = Query(default="DIFF", alias="viewType"),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(get_diff_context(db, task_id, file_path, view_type))
 
 
 @router.post("/{task_id}/code-quality-fix-preview")

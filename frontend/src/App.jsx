@@ -46,6 +46,17 @@ import {
   UnorderedListOutlined
 } from '@ant-design/icons';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-bash';
+import 'prismjs/components/prism-java';
+import 'prismjs/components/prism-json';
+import 'prismjs/components/prism-jsx';
+import 'prismjs/components/prism-markdown';
+import 'prismjs/components/prism-python';
+import 'prismjs/components/prism-sql';
+import 'prismjs/components/prism-tsx';
+import 'prismjs/components/prism-typescript';
+import 'prismjs/components/prism-yaml';
 import { fetchApi, riskColor, statusColor } from './api.js';
 import { releaseNotes } from './releaseNotes.js';
 
@@ -424,13 +435,16 @@ function parseUnifiedDiff(diffText) {
   let newLine = 0;
 
   lines.forEach((line, index) => {
-    const hunkMatch = line.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/);
+    if (index === lines.length - 1 && line === '') return;
+    const hunkMatch = line.match(/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/);
     if (hunkMatch) {
       current = {
         id: `hunk-${hunks.length}`,
         header: line,
         oldStart: Number(hunkMatch[1]),
-        newStart: Number(hunkMatch[2]),
+        oldCount: Number(hunkMatch[2] ?? 1),
+        newStart: Number(hunkMatch[3]),
+        newCount: Number(hunkMatch[4] ?? 1),
         lines: []
       };
       oldLine = current.oldStart;
@@ -448,6 +462,8 @@ function parseUnifiedDiff(diffText) {
         header: 'Diff',
         oldStart: null,
         newStart: null,
+        oldCount: null,
+        newCount: null,
         lines: []
       };
       hunks.push(current);
@@ -496,7 +512,8 @@ function buildSideBySideRows(parsedDiff, targetStartLine, targetEndLine) {
       newLine: '',
       oldText: hunk.header,
       newText: hunk.header,
-      highlight: false
+      highlight: false,
+      hunk
     });
     hunk.lines.forEach((line, index) => {
       const highlight = hasTarget && line.newLine != null && line.newLine >= start && line.newLine <= end;
@@ -513,6 +530,231 @@ function buildSideBySideRows(parsedDiff, targetStartLine, targetEndLine) {
   });
 
   return rows;
+}
+
+function diffLanguageForPath(filePath) {
+  const extension = String(filePath || '').split('.').pop()?.toLowerCase();
+  return {
+    java: 'java',
+    py: 'python',
+    js: 'javascript',
+    jsx: 'jsx',
+    ts: 'typescript',
+    tsx: 'tsx',
+    sql: 'sql',
+    xml: 'xml',
+    json: 'json',
+    yml: 'yaml',
+    yaml: 'yaml',
+    css: 'css',
+    scss: 'css',
+    sh: 'shell',
+    bash: 'shell',
+    md: 'markdown'
+  }[extension] || 'text';
+}
+
+function prismGrammarForLanguage(language) {
+  const grammarName = {
+    shell: 'bash',
+    xml: 'markup'
+  }[language] || language;
+  return Prism.languages[grammarName] || null;
+}
+
+function prismTokenClassName(token) {
+  const aliases = Array.isArray(token.alias) ? token.alias : token.alias ? [token.alias] : [];
+  return ['token', token.type, ...aliases].join(' ');
+}
+
+function renderPrismTokens(tokens, keyPrefix = 'token') {
+  return tokens.map((token, index) => {
+    if (typeof token === 'string') return token;
+    const content = Array.isArray(token.content)
+      ? renderPrismTokens(token.content, `${keyPrefix}-${index}`)
+      : token.content;
+    return (
+      <span key={`${keyPrefix}-${index}`} className={prismTokenClassName(token)}>
+        {content}
+      </span>
+    );
+  });
+}
+
+function SyntaxHighlightedCode({ text, language }) {
+  const content = String(text || '');
+  const grammar = prismGrammarForLanguage(language);
+  return grammar ? renderPrismTokens(Prism.tokenize(content, grammar)) : content;
+}
+
+function hunkLineCounts(hunk) {
+  return hunk.lines.reduce((counts, line) => {
+    if (line.type === 'context' || line.type === 'delete') counts.oldCount += 1;
+    if (line.type === 'context' || line.type === 'add') counts.newCount += 1;
+    return counts;
+  }, { oldCount: 0, newCount: 0 });
+}
+
+function validateParsedHunks(parsedDiff) {
+  for (const hunk of parsedDiff) {
+    if (hunk.oldStart == null || hunk.newStart == null) {
+      return 'Patch 缺少标准 unified diff hunk 行号。';
+    }
+    const counts = hunkLineCounts(hunk);
+    if (counts.oldCount !== hunk.oldCount || counts.newCount !== hunk.newCount) {
+      return `Patch hunk 行数与头部声明不一致：${hunk.header}`;
+    }
+  }
+  return null;
+}
+
+function sourceLineMatches(lines, lineNumber, text) {
+  return !Array.isArray(lines) || lines[lineNumber - 1] === text;
+}
+
+function validateDiffAgainstSources(parsedDiff, leftLines, rightLines) {
+  const hunkError = validateParsedHunks(parsedDiff);
+  if (hunkError) return hunkError;
+  for (const hunk of parsedDiff) {
+    for (const line of hunk.lines) {
+      if (
+        (line.type === 'context' || line.type === 'delete')
+        && !sourceLineMatches(leftLines, line.oldLine, line.text)
+      ) {
+        return `保存的 Diff 与左侧源码不匹配：${hunk.header}`;
+      }
+      if (
+        (line.type === 'context' || line.type === 'add')
+        && !sourceLineMatches(rightLines, line.newLine, line.text)
+      ) {
+        return `保存的 Diff 与右侧源码不匹配：${hunk.header}`;
+      }
+    }
+  }
+  return null;
+}
+
+function applyUnifiedDiffToLines(parsedDiff, baseLines) {
+  const hunkError = validateParsedHunks(parsedDiff);
+  if (hunkError) return { error: hunkError, lines: null };
+  const result = [];
+  let baseIndex = 0;
+  for (const hunk of parsedDiff) {
+    const hunkStartIndex = hunk.oldCount === 0 ? hunk.oldStart : hunk.oldStart - 1;
+    if (hunkStartIndex < baseIndex || hunkStartIndex > baseLines.length) {
+      return { error: `Patch hunk 行号超出当前源码范围：${hunk.header}`, lines: null };
+    }
+    result.push(...baseLines.slice(baseIndex, hunkStartIndex));
+    baseIndex = hunkStartIndex;
+    for (const line of hunk.lines) {
+      if (line.type === 'meta') continue;
+      if (line.type === 'add') {
+        result.push(line.text);
+        continue;
+      }
+      if (baseLines[baseIndex] !== line.text) {
+        return { error: `Patch 上下文与当前源码不匹配：${hunk.header}`, lines: null };
+      }
+      if (line.type === 'context') result.push(line.text);
+      baseIndex += 1;
+    }
+  }
+  result.push(...baseLines.slice(baseIndex));
+  return { error: null, lines: result };
+}
+
+function linesBeforeHunk(start, count, consumed) {
+  return Math.max(0, start - consumed - (count === 0 ? 0 : 1));
+}
+
+function consumedAfterHunk(start, count) {
+  return start + (count === 0 ? 0 : count - 1);
+}
+
+function contextRow(gap, offset, leftLines, rightLines) {
+  const oldLine = gap.oldStart + offset;
+  const newLine = gap.newStart + offset;
+  return {
+    id: `${gap.id}-context-${offset}`,
+    type: 'context',
+    oldLine,
+    newLine,
+    oldText: leftLines[oldLine - 1] ?? '',
+    newText: rightLines[newLine - 1] ?? '',
+    highlight: false
+  };
+}
+
+function appendGapRows(rows, gap, gapExpansions, leftLines, rightLines) {
+  if (gap.count <= 0) return;
+  const expansion = gapExpansions[gap.id] || {};
+  const topCount = Math.min(gap.count, expansion.top || 0);
+  const bottomCount = Math.min(gap.count - topCount, expansion.bottom || 0);
+  for (let offset = 0; offset < topCount; offset += 1) {
+    rows.push(contextRow(gap, offset, leftLines, rightLines));
+  }
+  const hiddenCount = gap.count - topCount - bottomCount;
+  if (hiddenCount > 0) {
+    rows.push({
+      id: `${gap.id}-collapsed`,
+      type: 'gap',
+      gap,
+      hiddenCount
+    });
+  }
+  for (let offset = gap.count - bottomCount; offset < gap.count; offset += 1) {
+    rows.push(contextRow(gap, offset, leftLines, rightLines));
+  }
+}
+
+function buildExpandedRows(parsedDiff, sourceContext, viewType, gapExpansions, targetStartLine, targetEndLine) {
+  const leftLines = Array.isArray(sourceContext?.left?.lines) ? sourceContext.left.lines : [];
+  let rightLines = Array.isArray(sourceContext?.right?.lines) ? sourceContext.right.lines : [];
+  if (viewType === 'FIX_PREVIEW') {
+    const applied = applyUnifiedDiffToLines(parsedDiff, leftLines);
+    if (applied.error) return { error: applied.error, rows: null };
+    rightLines = applied.lines;
+  } else {
+    const sourceError = validateDiffAgainstSources(
+      parsedDiff,
+      sourceContext?.left ? leftLines : null,
+      sourceContext?.right ? rightLines : null
+    );
+    if (sourceError) return { error: sourceError, rows: null };
+  }
+
+  const rows = [];
+  let oldConsumed = 0;
+  let newConsumed = 0;
+  for (const [hunkIndex, hunk] of parsedDiff.entries()) {
+    const counts = hunkLineCounts(hunk);
+    const oldGapCount = linesBeforeHunk(hunk.oldStart, counts.oldCount, oldConsumed);
+    const newGapCount = linesBeforeHunk(hunk.newStart, counts.newCount, newConsumed);
+    if (oldGapCount !== newGapCount) {
+      return { error: `完整源码与 Diff 的隐藏上下文范围不一致：${hunk.header}`, rows: null };
+    }
+    appendGapRows(rows, {
+      id: `gap-${hunkIndex}`,
+      oldStart: oldConsumed + 1,
+      newStart: newConsumed + 1,
+      count: oldGapCount
+    }, gapExpansions, leftLines, rightLines);
+    rows.push(...buildSideBySideRows([hunk], targetStartLine, targetEndLine));
+    oldConsumed = consumedAfterHunk(hunk.oldStart, counts.oldCount);
+    newConsumed = consumedAfterHunk(hunk.newStart, counts.newCount);
+  }
+  const oldTailCount = leftLines.length - oldConsumed;
+  const newTailCount = rightLines.length - newConsumed;
+  if (oldTailCount !== newTailCount) {
+    return { error: '完整源码与 Diff 的隐藏上下文范围不一致。', rows: null };
+  }
+  appendGapRows(rows, {
+    id: 'gap-tail',
+    oldStart: oldConsumed + 1,
+    newStart: newConsumed + 1,
+    count: oldTailCount
+  }, gapExpansions, leftLines, rightLines);
+  return { error: null, rows };
 }
 
 const focusIndicatorMeta = {
@@ -1790,12 +2032,145 @@ function CodeQualityGateView({ gate, detail }) {
   );
 }
 
-function DiffViewerModal({ open, finding, changedFile, onClose }) {
+function DiffCodeCell({ className, language, rowType, text, children }) {
+  const shouldHighlight = !['hunk', 'meta'].includes(rowType);
+  return (
+    <pre className={className}>
+      {shouldHighlight ? <SyntaxHighlightedCode text={text} language={language} /> : text}
+      {children}
+    </pre>
+  );
+}
+
+function DiffGapRow({ row, onExpand }) {
+  return (
+    <div className="diff-viewer-row diff-row-gap">
+      <div className="diff-context-gap">
+        <span>隐藏 {row.hiddenCount} 行上下文</span>
+        <div className="diff-context-actions">
+          <button type="button" onClick={() => onExpand(row.gap, 'up')}>向上展开 20 行</button>
+          <button type="button" onClick={() => onExpand(row.gap, 'down')}>向下展开 20 行</button>
+          <button type="button" onClick={() => onExpand(row.gap, 'all')}>展开全部</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExpandableDiffTable({
+  taskId,
+  filePath,
+  diffText,
+  viewType = 'DIFF',
+  canExpand = false,
+  targetStartLine,
+  targetEndLine,
+  ariaLabel
+}) {
+  const parsedDiff = useMemo(() => parseUnifiedDiff(diffText), [diffText]);
+  const compactRows = useMemo(
+    () => buildSideBySideRows(parsedDiff, targetStartLine, targetEndLine),
+    [parsedDiff, targetStartLine, targetEndLine]
+  );
+  const [sourceContext, setSourceContext] = useState(null);
+  const [contextError, setContextError] = useState(null);
+  const [loadingContext, setLoadingContext] = useState(false);
+  const [gapExpansions, setGapExpansions] = useState({});
+
+  useEffect(() => {
+    setSourceContext(null);
+    setContextError(null);
+    setLoadingContext(false);
+    setGapExpansions({});
+  }, [taskId, filePath, diffText, viewType]);
+
+  const expandedResult = useMemo(() => (
+    sourceContext
+      ? buildExpandedRows(parsedDiff, sourceContext, viewType, gapExpansions, targetStartLine, targetEndLine)
+      : null
+  ), [parsedDiff, sourceContext, viewType, gapExpansions, targetStartLine, targetEndLine]);
+  const rows = expandedResult?.rows || compactRows;
+  const language = sourceContext?.language || diffLanguageForPath(filePath);
+  const fallbackMessage = contextError || expandedResult?.error;
+
+  const loadContext = async () => {
+    if (!canExpand || !taskId || !filePath || loadingContext || sourceContext) return;
+    setLoadingContext(true);
+    setContextError(null);
+    try {
+      const context = await fetchApi(
+        `/api/review-tasks/${taskId}/diff-context?filePath=${encodeURIComponent(filePath)}&viewType=${viewType}`
+      );
+      setSourceContext(context);
+    } catch (err) {
+      setContextError(err.message);
+    } finally {
+      setLoadingContext(false);
+    }
+  };
+
+  const expandGap = (gap, direction) => {
+    setGapExpansions(current => {
+      const previous = current[gap.id] || {};
+      const top = previous.top || 0;
+      const bottom = previous.bottom || 0;
+      const hidden = Math.max(0, gap.count - top - bottom);
+      if (direction === 'all') return { ...current, [gap.id]: { top: gap.count, bottom: 0 } };
+      if (direction === 'up') {
+        return { ...current, [gap.id]: { top, bottom: bottom + Math.min(20, hidden) } };
+      }
+      return { ...current, [gap.id]: { top: top + Math.min(20, hidden), bottom } };
+    });
+  };
+
+  return (
+    <Space direction="vertical" size="small" className="full-width">
+      {fallbackMessage && (
+        <Alert
+          type="warning"
+          showIcon
+          message="完整上下文暂不可用，已保留紧凑 Diff"
+          description={fallbackMessage}
+        />
+      )}
+      <div className="diff-viewer-table" role="table" aria-label={ariaLabel}>
+        {rows.map(row => (
+          row.type === 'gap' ? (
+            <DiffGapRow key={row.id} row={row} onExpand={expandGap} />
+          ) : (
+            <div
+              key={row.id}
+              className={[
+                'diff-viewer-row',
+                `diff-row-${row.type}`,
+                row.highlight ? 'diff-row-highlight' : ''
+              ].filter(Boolean).join(' ')}
+            >
+              <div className="diff-line-number">{row.oldLine}</div>
+              <DiffCodeCell className="diff-code-cell diff-code-old" language={language} rowType={row.type} text={row.oldText} />
+              <div className="diff-line-number">{row.newLine}</div>
+              <DiffCodeCell className="diff-code-cell diff-code-new" language={language} rowType={row.type} text={row.newText}>
+                {row.type === 'hunk' && canExpand && !sourceContext && (
+                  <button
+                    type="button"
+                    className="diff-context-load"
+                    disabled={loadingContext}
+                    onClick={loadContext}
+                  >
+                    {loadingContext ? '读取上下文中...' : '展开上下文'}
+                  </button>
+                )}
+              </DiffCodeCell>
+            </div>
+          )
+        ))}
+      </div>
+    </Space>
+  );
+}
+
+function DiffViewerModal({ open, taskId, finding, changedFile, canExpand, onClose }) {
   const diffText = changedFile?.diffText;
-  const rows = useMemo(() => {
-    if (!diffText) return [];
-    return buildSideBySideRows(parseUnifiedDiff(diffText), finding?.startLine, finding?.endLine);
-  }, [diffText, finding?.startLine, finding?.endLine]);
   const matchedPath = changedFile?.path || changedFile?.newPath || changedFile?.oldPath || finding?.filePath;
 
   return (
@@ -1822,49 +2197,35 @@ function DiffViewerModal({ open, finding, changedFile, onClose }) {
         ) : !diffText ? (
           <Empty description="当前任务未保存该文件 diff" />
         ) : (
-          <div className="diff-viewer-table" role="table" aria-label="Side by side diff">
-            {rows.map(row => (
-              <div
-                key={row.id}
-                className={[
-                  'diff-viewer-row',
-                  `diff-row-${row.type}`,
-                  row.highlight ? 'diff-row-highlight' : ''
-                ].filter(Boolean).join(' ')}
-              >
-                <div className="diff-line-number">{row.oldLine}</div>
-                <pre className="diff-code-cell diff-code-old">{row.oldText}</pre>
-                <div className="diff-line-number">{row.newLine}</div>
-                <pre className="diff-code-cell diff-code-new">{row.newText}</pre>
-              </div>
-            ))}
-          </div>
+          <ExpandableDiffTable
+            taskId={taskId}
+            filePath={matchedPath}
+            diffText={diffText}
+            canExpand={canExpand}
+            targetStartLine={finding?.startLine}
+            targetEndLine={finding?.endLine}
+            ariaLabel="Side by side diff"
+          />
         )}
       </Space>
     </Modal>
   );
 }
 
-function PatchPreviewTable({ patchText }) {
-  const rows = useMemo(() => buildSideBySideRows(parseUnifiedDiff(patchText), null, null), [patchText]);
+function PatchPreviewTable({ taskId, filePath, patchText, canExpand }) {
   return (
-    <div className="diff-viewer-table" role="table" aria-label="Fix preview patch">
-      {rows.map(row => (
-        <div
-          key={row.id}
-          className={['diff-viewer-row', `diff-row-${row.type}`].join(' ')}
-        >
-          <div className="diff-line-number">{row.oldLine}</div>
-          <pre className="diff-code-cell diff-code-old">{row.oldText}</pre>
-          <div className="diff-line-number">{row.newLine}</div>
-          <pre className="diff-code-cell diff-code-new">{row.newText}</pre>
-        </div>
-      ))}
-    </div>
+    <ExpandableDiffTable
+      taskId={taskId}
+      filePath={filePath}
+      diffText={patchText}
+      viewType="FIX_PREVIEW"
+      canExpand={canExpand}
+      ariaLabel="Fix preview patch"
+    />
   );
 }
 
-function FixPreviewModal({ open, preview, onClose }) {
+function FixPreviewModal({ open, taskId, preview, canExpand, onClose }) {
   return (
     <Modal
       title="AI 修复 Patch 预览"
@@ -1894,7 +2255,12 @@ function FixPreviewModal({ open, preview, onClose }) {
         ) : preview?.patchText ? (
           <>
             {preview.summary && <Alert type="info" showIcon message={preview.summary} />}
-            <PatchPreviewTable patchText={preview.patchText} />
+            <PatchPreviewTable
+              taskId={taskId}
+              filePath={preview.filePath}
+              patchText={preview.patchText}
+              canExpand={canExpand}
+            />
           </>
         ) : (
           <Empty description="暂无修复预览" />
@@ -1924,6 +2290,7 @@ function CodeQualityReviewView({
   review,
   progress,
   changedFilesSummary,
+  diffContextCapabilities,
   initialFixPreviews,
   onRetry,
   retrying,
@@ -2150,13 +2517,17 @@ function CodeQualityReviewView({
       )}
       <DiffViewerModal
         open={Boolean(diffTarget)}
+        taskId={taskId}
         finding={diffTarget?.finding}
         changedFile={activeChangedFile}
+        canExpand={diffContextCapabilities?.diff}
         onClose={() => setDiffTarget(null)}
       />
       <FixPreviewModal
         open={Boolean(fixPreviewTarget)}
+        taskId={taskId}
         preview={fixPreviewTarget}
+        canExpand={diffContextCapabilities?.fixPreview}
         onClose={() => setFixPreviewTarget(null)}
       />
     </Space>
@@ -2174,6 +2545,7 @@ function CodeQualityReviewsPanel({
   reviews,
   progress,
   changedFilesSummary,
+  diffContextCapabilities,
   fixPreviews,
   selectedReviewKey,
   onRetry,
@@ -2193,6 +2565,7 @@ function CodeQualityReviewsPanel({
         review={review}
         progress={progress}
         changedFilesSummary={changedFilesSummary}
+        diffContextCapabilities={diffContextCapabilities}
         initialFixPreviews={fixPreviews}
         onRetry={onRetry}
         retrying={retrying}
@@ -2213,6 +2586,7 @@ function CodeQualityReviewsPanel({
             review={review}
             progress={(progress || []).filter(item => review.reviewKey ? item.reviewKey === review.reviewKey : !item.reviewKey)}
             changedFilesSummary={changedFilesSummary}
+            diffContextCapabilities={diffContextCapabilities}
             initialFixPreviews={(fixPreviews || []).filter(item => item.reviewKey === review.reviewKey)}
             onRetry={onRetry}
             retrying={retrying}
@@ -2429,7 +2803,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   };
 
   const tabItems = useMemo(() => [
-    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} fixPreviews={fixPreviews} selectedReviewKey={selectedReviewKey} onRetry={retryCodeQualityReview} retrying={retrying} onCancelReview={cancelCodeQualityJob} onCancelFixPreview={cancelCodeQualityJob} /> },
+    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} diffContextCapabilities={detail?.diffContextCapabilities} fixPreviews={fixPreviews} selectedReviewKey={selectedReviewKey} onRetry={retryCodeQualityReview} retrying={retrying} onCancelReview={cancelCodeQualityJob} onCancelFixPreview={cancelCodeQualityJob} /> },
     ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
       ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
       : []),

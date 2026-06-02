@@ -18,7 +18,8 @@ from app.core.errors import AppError
 from app.notification.service import dingtalk_skipped_result
 from app.project_integration.repository import find_project_by_id, resolve_project_target_config
 from app.project_integration.service import handle_gitlab_webhook, process_existing_review_task
-from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent
+from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
+from app.project_integration import gitlab_client
 from app.review_record.models import NotificationRecord, ReviewResult, ReviewTask
 from app.review_record.repository import (
     create_review_task,
@@ -160,6 +161,29 @@ def rerun_review_task_in_place(db: Session, task_id: int) -> dict:
         raise
 
 
+def get_diff_context(db: Session, task_id: int, file_path: str, view_type: str = "DIFF") -> dict[str, Any]:
+    task = db.get(ReviewTask, task_id)
+    if task is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+    if task.trigger_type not in {"GITLAB_MR_WEBHOOK", "GITLAB_PUSH_WEBHOOK"}:
+        raise AppError("BAD_REQUEST", "Diff context is only available for GitLab webhook tasks", 400)
+    project = db.get(Project, task.project_id)
+    if project is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
+    normalized_view_type = str(view_type or "DIFF").strip().upper()
+    if normalized_view_type not in {"DIFF", "FIX_PREVIEW"}:
+        raise AppError("VALIDATION_ERROR", f"Unsupported viewType: {view_type}", 400)
+    normalized_path = _normalize_file_path(file_path)
+    if not normalized_path:
+        raise AppError("VALIDATION_ERROR", "filePath is required", 400)
+    changed_file = _find_changed_file(_changed_files_for_task(db, task), normalized_path)
+    if changed_file is None:
+        raise AppError("BAD_REQUEST", f"File path is not part of task changes: {file_path}", 400)
+    if normalized_view_type == "FIX_PREVIEW":
+        return _fix_preview_context(task, project.git_project_id, changed_file, normalized_path)
+    return _diff_context(task, project.git_project_id, changed_file, normalized_path)
+
+
 def _changed_files_for_task(db: Session, task: ReviewTask) -> list[dict[str, Any]]:
     event_record = None
     if task.trigger_type == "GITLAB_MR_WEBHOOK":
@@ -176,6 +200,115 @@ def _changed_files_for_task(db: Session, task: ReviewTask) -> list[dict[str, Any
     if not isinstance(files, list) or not files:
         raise AppError("BAD_REQUEST", "Source task changed files are missing", 400)
     return files
+
+
+def _find_changed_file(changed_files: list[dict[str, Any]], requested_path: str) -> dict[str, Any] | None:
+    for changed_file in changed_files:
+        if not isinstance(changed_file, dict):
+            continue
+        candidates = {
+            _normalize_file_path(changed_file.get("path")),
+            _normalize_file_path(changed_file.get("oldPath")),
+            _normalize_file_path(changed_file.get("newPath")),
+        }
+        if requested_path in candidates:
+            return changed_file
+    return None
+
+
+def _normalize_file_path(value: Any) -> str:
+    normalized = str(value or "").strip().replace("\\", "/").lstrip("/")
+    if normalized.startswith("a/") or normalized.startswith("b/"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _changed_file_is(changed_file: dict[str, Any], flag: str, change_type: str) -> bool:
+    return bool(changed_file.get(flag) or str(changed_file.get("changeType") or "").upper() == change_type)
+
+
+def _diff_context(
+    task: ReviewTask,
+    git_project_id: str,
+    changed_file: dict[str, Any],
+    requested_path: str,
+) -> dict[str, Any]:
+    left = None
+    right = None
+    if not _changed_file_is(changed_file, "newFile", "ADDED"):
+        if not task.before_sha:
+            raise AppError("BAD_REQUEST", "Diff context base ref is unavailable for this task", 400)
+        left_path = _normalize_file_path(changed_file.get("oldPath") or changed_file.get("path") or requested_path)
+        left = _source_side(git_project_id, left_path, task.before_sha)
+    if not _changed_file_is(changed_file, "deletedFile", "DELETED"):
+        head_ref = task.after_sha or task.commit_sha
+        if not head_ref:
+            raise AppError("BAD_REQUEST", "Diff context head ref is unavailable for this task", 400)
+        right_path = _normalize_file_path(changed_file.get("newPath") or changed_file.get("path") or requested_path)
+        right = _source_side(git_project_id, right_path, head_ref)
+    return _context_payload(task, requested_path, "DIFF", left, right)
+
+
+def _fix_preview_context(
+    task: ReviewTask,
+    git_project_id: str,
+    changed_file: dict[str, Any],
+    requested_path: str,
+) -> dict[str, Any]:
+    if _changed_file_is(changed_file, "deletedFile", "DELETED"):
+        raise AppError("BAD_REQUEST", "Fix preview context is unavailable for deleted files", 400)
+    head_ref = task.after_sha or task.commit_sha
+    if not head_ref:
+        raise AppError("BAD_REQUEST", "Fix preview context head ref is unavailable for this task", 400)
+    current_path = _normalize_file_path(changed_file.get("newPath") or changed_file.get("path") or requested_path)
+    return _context_payload(task, requested_path, "FIX_PREVIEW", _source_side(git_project_id, current_path, head_ref), None)
+
+
+def _source_side(git_project_id: str, file_path: str, ref: str) -> dict[str, Any]:
+    return {
+        "path": file_path,
+        "ref": ref,
+        "lines": gitlab_client.get_raw_file(git_project_id, file_path, ref),
+    }
+
+
+def _context_payload(
+    task: ReviewTask,
+    file_path: str,
+    view_type: str,
+    left: dict[str, Any] | None,
+    right: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "taskId": task.id,
+        "filePath": file_path,
+        "viewType": view_type,
+        "language": _language_for_path(file_path),
+        "left": left,
+        "right": right,
+    }
+
+
+def _language_for_path(file_path: str) -> str:
+    suffix = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
+    return {
+        "java": "java",
+        "py": "python",
+        "js": "javascript",
+        "jsx": "jsx",
+        "ts": "typescript",
+        "tsx": "tsx",
+        "sql": "sql",
+        "xml": "xml",
+        "json": "json",
+        "yml": "yaml",
+        "yaml": "yaml",
+        "css": "css",
+        "scss": "css",
+        "sh": "shell",
+        "bash": "shell",
+        "md": "markdown",
+    }.get(suffix, "text")
 
 
 def _reset_task_for_in_place_rerun(db: Session, task: ReviewTask) -> None:

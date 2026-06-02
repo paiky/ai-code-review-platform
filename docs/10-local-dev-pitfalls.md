@@ -1428,23 +1428,24 @@ AI Review 正在执行 HTTP 请求已发起 已执行 816 秒
 1. 多模型 Tab 只展示当前 `reviewKey` 的进度事件；只有单模型 / 旧数据没有 `reviewKey` 时才展示空 `reviewKey` 事件。
 2. 运行中计时优先使用当前 Tab 最新一轮运行起点事件，不要从历史第一条事件或旧 `startedAt` 继续累加。
 
-## 63. 修复预览 Diff 对照表不要压缩长代码行
+## 63. 修复预览 Diff 对照表中的长代码行应在列内换行
 
 现象：
 
-AI 修复 Patch 预览弹窗中，左右对照 diff 底部有横向滚动条，但左侧原始代码仍被截断，看不到完整长行。
+AI 修复 Patch 预览弹窗中，左右对照 diff 遇到较长的日志、方法调用或字符串时，代码行不会换行，
+需要拖动底部横向滚动条才能看完整内容，左右对照也不容易阅读。
 
 原因：
 
-旧样式把左右代码列设置为 `minmax(360px, 1fr)`，表格整体最小宽度也只有 `920px`。长代码行会被压在当前弹窗宽度内，横向滚动条更多是在滚动固定网格，而不是滚动完整代码内容。
+旧样式使用 `max-content` 和 `white-space: pre` 让代码列按内容撑开。虽然可以横向滚动查看完整长行，
+但在弹窗中阅读真实业务代码时不够直观。
 
 处理方式：
 
-1. diff 行使用 `max-content` 让代码列按内容撑开。
-2. 每个代码列保留合理最小宽度，短行仍保持左右对照可读。
-3. 横向滚动由 `.diff-viewer-table` 统一承载，用户可以滑动查看左右两侧完整长行。
-4. 弹窗 body 和 diff 表格都要允许纵向滚动；当 patch 本身包含更多上下文行时，可以在弹窗内继续下滑查看。
-5. 如果 AI 返回的 unified diff 只有一个很短的 hunk，页面无法凭空展示更多上下文；需要重新生成更大上下文的 patch，或通过问题项旁的“查看 Diff”看原始任务 diff。
+1. diff 行使用 `minmax(0, 1fr)` 让左右代码列在弹窗宽度内等分展示。
+2. 代码单元格使用 `white-space: pre-wrap` 保留缩进，并使用 `overflow-wrap: anywhere` 处理超长字符串。
+3. 弹窗 body 和 diff 表格保留纵向滚动；当 patch 本身包含更多上下文行时，可以在弹窗内继续下滑查看。
+4. 如果 AI 返回的 unified diff 只有一个很短的 hunk，页面无法凭空展示更多上下文；需要重新生成更大上下文的 patch，或通过问题项旁的“查看 Diff”看原始任务 diff。
 
 ## 64. 调试重跑不要默认复制新任务
 
@@ -1670,3 +1671,86 @@ CodeGraph 基于静态索引。动态调用、回调、异步任务、框架 hoo
 2. 已知接口路径、字段名、错误文案、日志或前端请求路径时，优先使用 `rg`。
 3. CodeGraph 返回结果必须结合 `rg` 命中和局部源码核验，不作为唯一事实来源。
 4. 完整协作策略和实测记录见 `docs/25-codegraph-search-guide.md`。
+
+## 74. Diff 完整上下文不能只依赖任务中保存的 unified diff
+
+现象：
+
+任务详情中的 unified diff 只能展示 GitLab 返回的有限上下文。即使前端给 `@@ ... @@` 增加点击事件，
+也无法凭空补出 hunk 之外的完整源码。
+
+原因：
+
+GitLab diff 和模型生成的 patch 都只包含局部上下文。真正展开时需要根据任务保存的历史 refs，
+再通过 GitLab Repository Files API 拉取对应版本的完整文件内容。
+
+处理方式：
+
+1. Push 任务使用已有 `before_sha / after_sha`。
+2. MR API 补拉时把 `diff_refs.base_sha / head_sha` 保存到 `review_tasks.before_sha / after_sha`。
+3. 只允许按任务 `changedFilesSummary.files[]` 中已有路径读取源码，避免接口变成任意仓库文件浏览器。
+4. 未配置 GitLab API、Token 缺失、历史 MR 缺 base SHA 或文件超限时保持紧凑 diff，前端隐藏展开入口。
+5. 单文件读取限制为 1 MiB、最多 20000 行，避免大文件拖慢页面。
+
+## 75. Codex 沙箱映射路径可能导致 Vite / Rolldown 误判 HTML 输出路径
+
+现象：
+
+在 Codex 沙箱中执行 `.\scripts\run-frontend.cmd build` 时，Vite 可能报错：
+
+```text
+The "fileName" or "name" properties of emitted chunks and assets must be strings that are neither absolute nor relative paths
+```
+
+错误中的路径指向真实工作区 `D:/projects/.../frontend/index.html`，但脚本日志里的本地 env 路径位于
+`C:/Users/CodexSandboxOffline/.codex/.sandbox/cwd/...`。
+
+原因：
+
+沙箱把工作区映射到临时目录，Vite / Rolldown 同时观察到映射路径和真实路径时，可能把 HTML asset
+误判为绝对输出路径。该报错不一定是前端代码或 Vite 配置回归。
+
+处理方式：
+
+1. 先确认脚本日志中的工作区是否被映射到 `.codex/.sandbox/cwd/...`。
+2. 在用户批准后，于沙箱外使用真实工作区路径重跑同一条 `.\scripts\run-frontend.cmd build`。
+3. 只有沙箱外仍失败时，才继续排查前端源码或 Vite 配置。
+
+## 76. Patch 预览展开上下文前必须校验当前源码基线
+
+现象：
+
+AI 修复 Patch 预览可以拿到 GitLab head / Push after 的完整源码，但模型生成 patch 的行号或上下文
+可能已经与当前源码不一致。直接把两者拼接会展示错误的上下文位置。
+
+原因：
+
+模型 patch 是基于 prompt 中的代码片段生成的 unified diff。任务保存的源码快照、模型输入范围和模型输出
+都可能存在偏差，不能只按 hunk 行号假设 patch 一定可应用。
+
+处理方式：
+
+1. Patch 预览按需读取当前源码后，先逐 hunk 校验行号、声明行数和上下文文本。
+2. 校验通过后再应用 patch，生成右侧完整上下文和折叠区。
+3. 校验失败时显示非阻断提示，保留原有紧凑 patch，不影响用户查看模型输出。
+4. 普通 Diff 同样校验保存的 hunk 与左右源码，避免历史 refs 或变更数据异常时展示错误上下文。
+
+## 77. GitLab changed-files 摘要不能丢失新增、删除和重命名标记
+
+现象：
+
+真实 Push compare 任务中，新增文件调用 `diff-context` 时返回 GitLab raw file 404。GitLab compare
+已经给出 `new_file=true`，但保存后的 `changedFilesSummary.files[]` 只剩 `changeType=ADDED`。
+
+原因：
+
+GitLab client 已把 `new_file / deleted_file / renamed_file` 转成 camelCase 布尔标记，但摘要归一化时
+没有继续保存这些标记。上下文接口只按布尔标记判断左右侧，导致历史新增文件错误读取 base ref，
+历史删除文件错误读取 head ref。
+
+处理方式：
+
+1. 新建 GitLab 摘要时保留值为 `true` 的 `newFile / deletedFile / renamedFile`。
+2. 上下文读取兼容历史任务：布尔标记缺失时回退读取 `changeType=ADDED / DELETED / RENAMED`。
+3. contract 测试同时覆盖新摘要保留标记和历史摘要仅有 `changeType` 两种格式。
+4. 真实联调至少分别调用新增、删除、重命名文件，确认响应为仅右侧、仅左侧、old/new 双侧。

@@ -199,6 +199,8 @@ GET /api/review-tasks/{taskId}
   "sourceBranch": "feature/risk-demo",
   "targetBranch": "main",
   "commitSha": "abcdef123456",
+  "beforeSha": "111111111111",
+  "afterSha": "abcdef123456",
   "authorName": "Alice",
   "authorUsername": "alice",
   "templateCode": "backend-default",
@@ -211,12 +213,58 @@ GET /api/review-tasks/{taskId}
   "eventAction": "open",
   "eventTime": "2026-04-19T12:00:00+08:00",
   "changedFilesSummary": [],
+  "diffContextCapabilities": {
+    "diff": true,
+    "fixPreview": true
+  },
   "rawPayload": {},
   "errorMessage": null,
   "createdAt": "2026-04-19T12:00:00+08:00",
   "updatedAt": "2026-04-19T12:00:08+08:00"
 }
 ```
+
+### 3.2.1 按需查询 Diff 完整上下文
+
+```http
+GET /api/review-tasks/{taskId}/diff-context?filePath=src/main/java/example/Foo.java&viewType=DIFF
+```
+
+查询参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `filePath` | 是 | 必须是当前任务 `changedFilesSummary.files[]` 中已有的变更文件路径 |
+| `viewType` | 否 | `DIFF` 或 `FIX_PREVIEW`，默认 `DIFF` |
+
+响应 data：
+
+```json
+{
+  "taskId": 509,
+  "filePath": "src/main/java/example/Foo.java",
+  "viewType": "DIFF",
+  "language": "java",
+  "left": {
+    "path": "src/main/java/example/Foo.java",
+    "ref": "base-sha",
+    "lines": ["package example;", ""]
+  },
+  "right": {
+    "path": "src/main/java/example/Foo.java",
+    "ref": "head-sha",
+    "lines": ["package example;", ""]
+  }
+}
+```
+
+说明：
+
+- `DIFF` 使用任务保存的历史 base / head refs。新增文件没有 `left`，删除文件没有 `right`。
+- `FIX_PREVIEW` 只返回当前源码作为 `left` 基线，由前端结合模型 patch 构造预览。
+- changed file 优先使用 `newFile / deletedFile / renamedFile` 标记；历史任务缺少标记时兼容读取 `changeType=ADDED / DELETED / RENAMED`。
+- 只允许读取当前任务已记录的 changed file。单文件限制为 1 MiB、最多 20000 行。
+- GitLab API 未启用、Token 缺失、refs 缺失或文件超限时返回明确错误；前端应隐藏不适用的展开入口。
 
 ### 3.3 查询审查结果
 
