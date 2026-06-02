@@ -70,6 +70,16 @@ def get_merge_request_detail(project_id: str, merge_request_iid: str) -> dict[st
     )
     author = response.get("author") or {}
     diff_refs = response.get("diff_refs") or {}
+    if not diff_refs.get("base_sha") or not diff_refs.get("head_sha"):
+        try:
+            latest_version = _get_latest_merge_request_diff_version(project_id, merge_request_iid)
+        except AppError:
+            latest_version = {}
+        diff_refs = {
+            "base_sha": diff_refs.get("base_sha") or latest_version.get("base_commit_sha"),
+            "head_sha": diff_refs.get("head_sha") or latest_version.get("head_commit_sha"),
+            "start_sha": diff_refs.get("start_sha") or latest_version.get("start_commit_sha"),
+        }
     return {
         "iid": _text(response.get("iid")),
         "title": response.get("title"),
@@ -86,6 +96,16 @@ def get_merge_request_detail(project_id: str, merge_request_iid: str) -> dict[st
         "authorName": author.get("name"),
         "authorUsername": author.get("username"),
     }
+
+
+def _get_latest_merge_request_diff_version(project_id: str, merge_request_iid: str) -> dict[str, Any]:
+    response = _get(
+        f"/api/v4/projects/{_quote(project_id)}/merge_requests/{_quote(merge_request_iid)}/versions",
+        error_prefix="Failed to fetch GitLab MR diff versions",
+    )
+    if not isinstance(response, list):
+        raise AppError("INTERNAL_ERROR", "GitLab MR diff versions response must be an array", 500)
+    return response[0] if response else {}
 
 
 def get_raw_file(project_id: str, file_path: str, ref: str) -> list[str]:

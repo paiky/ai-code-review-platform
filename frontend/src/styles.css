@@ -626,19 +626,24 @@ body {
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable both-edges;
-  border: 1px solid #30363d;
+  border: 1px solid #1f2937;
   border-radius: 6px;
-  background: #0d1117;
+  background: #0f172a;
   font-family: "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.diff-viewer-toolbar {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .diff-viewer-row {
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr) 64px minmax(0, 1fr);
   width: 100%;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid #1f2937;
 }
 
 .diff-viewer-row:last-child {
@@ -648,11 +653,11 @@ body {
 .diff-line-number {
   min-height: 22px;
   padding: 2px 8px;
-  color: #7d8590;
+  color: #94a3b8;
   text-align: right;
   user-select: none;
-  background: #161b22;
-  border-right: 1px solid #30363d;
+  background: #111827;
+  border-right: 1px solid #1f2937;
 }
 
 .diff-code-cell {
@@ -662,18 +667,19 @@ body {
   padding: 2px 10px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-  color: #c9d1d9;
-  background: #0d1117;
+  tab-size: 4;
+  color: #d6deeb;
+  background: #0f172a;
 }
 
 .diff-code-old {
-  border-right: 1px solid #30363d;
+  border-right: 1px solid #1f2937;
 }
 
 .diff-row-hunk .diff-line-number,
 .diff-row-hunk .diff-code-cell {
-  color: #8b949e;
-  background: #161b22;
+  color: #94a3b8;
+  background: #111827;
   font-weight: 600;
 }
 
@@ -685,22 +691,22 @@ body {
 }
 
 .diff-row-add .diff-code-new {
-  background: #12261e;
+  background: #163326;
 }
 
 .diff-row-delete .diff-code-old {
-  background: #2d1619;
+  background: #3a1f28;
 }
 
 .diff-row-meta .diff-code-cell,
 .diff-row-raw .diff-code-cell {
-  color: #8b949e;
-  background: #161b22;
+  color: #94a3b8;
+  background: #111827;
 }
 
 .diff-row-highlight .diff-line-number,
 .diff-row-highlight .diff-code-cell {
-  background: #403619;
+  background: #493d1c;
 }
 
 .diff-context-load,
@@ -708,7 +714,7 @@ body {
   border: 1px solid #388bfd;
   border-radius: 4px;
   color: #58a6ff;
-  background: #0d2440;
+  background: #172554;
   cursor: pointer;
   font-family: Arial, sans-serif;
   font-size: 12px;
@@ -721,9 +727,9 @@ body {
 }
 
 .diff-context-load:disabled {
-  color: #7d8590;
-  border-color: #30363d;
-  background: #21262d;
+  color: #94a3b8;
+  border-color: #334155;
+  background: #1e293b;
   cursor: wait;
 }
 
@@ -738,8 +744,8 @@ body {
   gap: 14px;
   min-height: 32px;
   padding: 4px 12px;
-  color: #8b949e;
-  background: #10243e;
+  color: #94a3b8;
+  background: #172554;
 }
 
 .diff-context-actions {
@@ -756,19 +762,19 @@ body {
 .diff-context-actions button:hover {
   color: #79c0ff;
   border-color: #58a6ff;
-  background: #16385f;
+  background: #1e3a8a;
 }
 
 .diff-code-cell .token.comment,
 .diff-code-cell .token.prolog,
 .diff-code-cell .token.doctype,
 .diff-code-cell .token.cdata {
-  color: #8b949e;
+  color: #637777;
   font-style: italic;
 }
 
 .diff-code-cell .token.punctuation {
-  color: #c9d1d9;
+  color: #d6deeb;
 }
 
 .diff-code-cell .token.property,
@@ -778,7 +784,7 @@ body {
 .diff-code-cell .token.constant,
 .diff-code-cell .token.symbol,
 .diff-code-cell .token.deleted {
-  color: #79c0ff;
+  color: #82aaff;
 }
 
 .diff-code-cell .token.selector,
@@ -787,7 +793,7 @@ body {
 .diff-code-cell .token.char,
 .diff-code-cell .token.builtin,
 .diff-code-cell .token.inserted {
-  color: #a5d6ff;
+  color: #ecc48d;
 }
 
 .diff-code-cell .token.operator,
@@ -795,24 +801,24 @@ body {
 .diff-code-cell .token.url,
 .diff-code-cell .language-css .token.string,
 .diff-code-cell .style .token.string {
-  color: #ff7b72;
+  color: #89ddff;
 }
 
 .diff-code-cell .token.atrule,
 .diff-code-cell .token.attr-value,
 .diff-code-cell .token.keyword {
-  color: #ff7b72;
+  color: #c792ea;
 }
 
 .diff-code-cell .token.function,
 .diff-code-cell .token.class-name {
-  color: #d2a8ff;
+  color: #82aaff;
 }
 
 .diff-code-cell .token.regex,
 .diff-code-cell .token.important,
 .diff-code-cell .token.variable {
-  color: #ffa657;
+  color: #ffcb6b;
 }
 
 .focus-indicator-grid {

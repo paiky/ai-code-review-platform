@@ -719,6 +719,8 @@ Invoke-RestMethod "http://localhost:8090/api/review-tasks/{taskId}/diff-context?
 点击 hunk 右侧“展开上下文”后才拉取源码，并在隐藏区提供“向上展开 20 行”、
 “向下展开 20 行”和“展开全部”。旧 MR 缺少历史 base SHA 时隐藏普通 Diff 展开入口；
 如果仍有 head commit，Patch 预览可继续按当前源码做基线校验。
+如果 GitLab MR 详情暂未返回 `diff_refs`，平台会回退读取最新 MR diff version 中保存的
+`base_commit_sha / head_commit_sha`；原地重跑 MR 时也会刷新这组 refs 和 changed files 摘要。
 
 ## 审查模板
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from sqlalchemy import delete
@@ -17,7 +18,11 @@ from app.code_quality.repository import get_settings_record
 from app.core.errors import AppError
 from app.notification.service import dingtalk_skipped_result
 from app.project_integration.repository import find_project_by_id, resolve_project_target_config
-from app.project_integration.service import handle_gitlab_webhook, process_existing_review_task
+from app.project_integration.service import (
+    _build_gitlab_changed_files_summary,
+    handle_gitlab_webhook,
+    process_existing_review_task,
+)
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.project_integration import gitlab_client
 from app.review_record.models import NotificationRecord, ReviewResult, ReviewTask
@@ -142,7 +147,7 @@ def rerun_review_task_in_place(db: Session, task_id: int) -> dict:
         raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
     if task.trigger_type not in {"GITLAB_MR_WEBHOOK", "GITLAB_PUSH_WEBHOOK"}:
         raise AppError("BAD_REQUEST", "Only GitLab webhook tasks can be rerun in place", 400)
-    changed_files = _changed_files_for_task(db, task)
+    changed_files = _refresh_mr_task_for_in_place_rerun(db, task) or _changed_files_for_task(db, task)
     _reset_task_for_in_place_rerun(db, task)
     try:
         result = process_existing_review_task(db, task, changed_files, None)
@@ -159,6 +164,31 @@ def rerun_review_task_in_place(db: Session, task_id: int) -> dict:
         mark_task_failed(task, str(exception))
         db.commit()
         raise
+
+
+def _refresh_mr_task_for_in_place_rerun(db: Session, task: ReviewTask) -> list[dict[str, Any]] | None:
+    if task.trigger_type != "GITLAB_MR_WEBHOOK":
+        return None
+    project = db.get(Project, task.project_id)
+    event_record = db.query(GitLabMergeRequestEvent).filter_by(task_id=task.id).first()
+    if project is None or event_record is None or not project.git_project_id or not task.external_source_id:
+        return None
+    try:
+        detail = gitlab_client.get_merge_request_detail(project.git_project_id, task.external_source_id)
+    except AppError:
+        return None
+    task.commit_sha = detail.get("commitSha") or task.commit_sha
+    task.before_sha = detail.get("baseSha") or task.before_sha
+    task.after_sha = detail.get("headSha") or task.after_sha or task.commit_sha
+    try:
+        summary = _build_gitlab_changed_files_summary(
+            gitlab_client.list_merge_request_diffs(project.git_project_id, task.external_source_id),
+            "gitlab_api",
+        )
+    except AppError:
+        return None
+    event_record.changed_files_summary = json.dumps(summary, ensure_ascii=False)
+    return summary.get("files", [])
 
 
 def get_diff_context(db: Session, task_id: int, file_path: str, view_type: str = "DIFF") -> dict[str, Any]:

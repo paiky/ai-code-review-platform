@@ -395,6 +395,9 @@ def test_web_mr_without_payload_changed_files_creates_task_after_gitlab_diff_det
                 },
             )
         )
+        router.get("https://gitlab.example.test/api/v4/projects/160/merge_requests/116/versions").mock(
+            return_value=httpx.Response(200, json=[])
+        )
         router.get(
             "https://gitlab.example.test/api/v4/projects/160/merge_requests/116/diffs",
             params={"page": "1", "per_page": "100"},
@@ -464,6 +467,9 @@ def test_gitlab_diffs_404_falls_back_to_changes(
         router.get("https://gitlab.example.test/api/v4/projects/1001/merge_requests/12").mock(
             return_value=httpx.Response(200, json={"iid": 12})
         )
+        router.get("https://gitlab.example.test/api/v4/projects/1001/merge_requests/12/versions").mock(
+            return_value=httpx.Response(200, json=[])
+        )
         router.get(
             "https://gitlab.example.test/api/v4/projects/1001/merge_requests/12/diffs",
             params={"page": "1", "per_page": "100"},
@@ -511,6 +517,9 @@ def test_gitlab_api_failure_marks_task_failed(
         )
         router.get("https://gitlab.example.test/api/v4/projects/1001/merge_requests/12").mock(
             return_value=httpx.Response(200, json={"iid": 12})
+        )
+        router.get("https://gitlab.example.test/api/v4/projects/1001/merge_requests/12/versions").mock(
+            return_value=httpx.Response(200, json=[])
         )
         router.get(
             "https://gitlab.example.test/api/v4/projects/1001/merge_requests/12/diffs",

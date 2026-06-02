@@ -505,16 +505,6 @@ function buildSideBySideRows(parsedDiff, targetStartLine, targetEndLine) {
   const rows = [];
 
   parsedDiff.forEach(hunk => {
-    rows.push({
-      id: `${hunk.id}-header`,
-      type: 'hunk',
-      oldLine: '',
-      newLine: '',
-      oldText: hunk.header,
-      newText: hunk.header,
-      highlight: false,
-      hunk
-    });
     hunk.lines.forEach((line, index) => {
       const highlight = hasTarget && line.newLine != null && line.newLine >= start && line.newLine <= end;
       rows.push({
@@ -2133,6 +2123,18 @@ function ExpandableDiffTable({
           description={fallbackMessage}
         />
       )}
+      {canExpand && !sourceContext && (
+        <div className="diff-viewer-toolbar">
+          <button
+            type="button"
+            className="diff-context-load"
+            disabled={loadingContext}
+            onClick={loadContext}
+          >
+            {loadingContext ? '读取上下文中...' : '展开上下文'}
+          </button>
+        </div>
+      )}
       <div className="diff-viewer-table" role="table" aria-label={ariaLabel}>
         {rows.map(row => (
           row.type === 'gap' ? (
@@ -2149,18 +2151,7 @@ function ExpandableDiffTable({
               <div className="diff-line-number">{row.oldLine}</div>
               <DiffCodeCell className="diff-code-cell diff-code-old" language={language} rowType={row.type} text={row.oldText} />
               <div className="diff-line-number">{row.newLine}</div>
-              <DiffCodeCell className="diff-code-cell diff-code-new" language={language} rowType={row.type} text={row.newText}>
-                {row.type === 'hunk' && canExpand && !sourceContext && (
-                  <button
-                    type="button"
-                    className="diff-context-load"
-                    disabled={loadingContext}
-                    onClick={loadContext}
-                  >
-                    {loadingContext ? '读取上下文中...' : '展开上下文'}
-                  </button>
-                )}
-              </DiffCodeCell>
+              <DiffCodeCell className="diff-code-cell diff-code-new" language={language} rowType={row.type} text={row.newText} />
             </div>
           )
         ))}

@@ -443,6 +443,65 @@ def test_rerun_gitlab_task_in_place_reuses_existing_task(
     assert detail["status"] == "SUCCESS"
 
 
+def test_rerun_gitlab_mr_task_in_place_refreshes_diff_version_refs(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_backend_template(db_session)
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=mock_mr_payload(),
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    ).json()["data"]
+    task_id = created["taskId"]
+    monkeypatch.setenv("GITLAB_API_ENABLED", "true")
+    monkeypatch.setenv("GITLAB_BASE_URL", "https://gitlab.example.test")
+    monkeypatch.setenv("GITLAB_TOKEN", "unit-token")
+
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://gitlab.example.test/api/v4/projects/1001/merge_requests/12").mock(
+            return_value=httpx.Response(200, json={"iid": 12, "sha": "head-123"})
+        )
+        router.get("https://gitlab.example.test/api/v4/projects/1001/merge_requests/12/versions").mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 99,
+                        "base_commit_sha": "base-123",
+                        "head_commit_sha": "head-123",
+                        "start_commit_sha": "start-123",
+                    }
+                ],
+            )
+        )
+        router.get(
+            "https://gitlab.example.test/api/v4/projects/1001/merge_requests/12/diffs",
+            params={"page": "1", "per_page": "100"},
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {
+                        "old_path": "src/main/resources/application.yml",
+                        "new_path": "src/main/resources/application.yml",
+                        "diff": "@@ -1 +1 @@\n-feature.enabled=false\n+feature.enabled=true",
+                    }
+                ],
+            )
+        )
+
+        rerun = client.post(f"/api/review-tasks/{task_id}/rerun-in-place")
+
+    assert rerun.status_code == 200
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    assert detail["beforeSha"] == "base-123"
+    assert detail["afterSha"] == "head-123"
+    assert detail["changedFilesSummary"]["source"] == "gitlab_api"
+    assert detail["diffContextCapabilities"] == {"diff": True, "fixPreview": True}
+
+
 def test_rerun_respects_global_dingtalk_notification_switch(
     client: TestClient,
     db_session: Session,

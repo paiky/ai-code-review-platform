@@ -1754,3 +1754,24 @@ GitLab client 已把 `new_file / deleted_file / renamed_file` 转成 camelCase �
 2. 上下文读取兼容历史任务：布尔标记缺失时回退读取 `changeType=ADDED / DELETED / RENAMED`。
 3. contract 测试同时覆盖新摘要保留标记和历史摘要仅有 `changeType` 两种格式。
 4. 真实联调至少分别调用新增、删除、重命名文件，确认响应为仅右侧、仅左侧、old/new 双侧。
+
+## 78. MR 详情缺少 diff_refs 时要回退读取 diff versions
+
+现象：
+
+真实 GitLab MR 任务可以查看紧凑 Diff，Patch 预览也能按 head commit 拉取源码，但普通 Diff 顶部
+没有“展开上下文”。任务详情中 `commitSha` 有值，`beforeSha / afterSha` 仍为空。
+
+原因：
+
+部分 GitLab 实例的 MR 详情接口没有及时返回 `diff_refs`。普通 Diff 展开必须同时知道历史 base 和
+head，不能只拿当前 head 猜测左侧基线。原地重跑如果只重算已保存 diff，也不会自动补齐 refs。
+
+处理方式：
+
+1. MR 详情缺少 `diff_refs.base_sha / head_sha` 时，回退调用
+   `GET /projects/:id/merge_requests/:iid/versions`。
+2. 使用最新 diff version 保存的 `base_commit_sha / head_commit_sha / start_commit_sha`，不要临时读取
+   当前目标分支 SHA 冒充历史快照。
+3. MR 原地重跑时刷新 refs 和 changed-files 摘要，让旧任务也能获得完整上下文能力。
+4. 前端 Diff 双栏代码设置明确的 `tab-size`，避免深层 tab 缩进在窄列中被浏览器默认宽度放大后频繁折行。
