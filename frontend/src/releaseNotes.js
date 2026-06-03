@@ -7,11 +7,11 @@ export const releaseNotes = [
     summary: '查看 Diff 支持完整上下文展开，AI 修复 Patch 保持紧凑代码视图，并新增智谱 GLM Provider 供 AI Review、修复预览和联通性测试使用。',
     highlights: [
       '默认保持紧凑 Diff，按需读取完整源码；隐藏区支持向上展开 20 行、向下展开 20 行和展开全部。',
-      'MR API 补拉保存历史 base / head refs；详情缺少 diff_refs 时回退读取最新 diff version，原地重跑旧 MR 也会刷新 refs。',
+      '查看 Diff 和 Patch 预览默认使用明亮主题，顶部新增太阳 / 月亮按钮，可切换为暗黑代码主题。',
       'Java、Python、JS/TS、SQL、XML、JSON、YAML、CSS、Shell 和 Markdown 支持 Prism token 级高亮。',
+      'MR API 补拉保存历史 base / head refs；详情缺少 diff_refs 时回退读取最新 diff version，原地重跑旧 MR 也会刷新 refs。',
       '新增文件仅读取右侧源码，删除文件仅读取左侧源码，重命名文件分别读取 old / new 路径。',
       'Patch 预览保持紧凑展示，不再提供可能因模型 Patch 与当前源码基线不一致而失败的上下文展开入口。',
-      '查看 Diff 和 Patch 预览默认使用明亮主题，顶部新增太阳 / 月亮按钮，可切换为暗黑代码主题。',
       '新增内置智谱 GLM Provider，支持配置 endpoint、model、API Key 和超时，并复用现有多模型 AI Review、修复预览和联通性测试链路。'
     ],
     tags: ['GitLab', 'Diff 上下文', 'GLM', 'Provider', 'AI Review', 'v0.15.0']
