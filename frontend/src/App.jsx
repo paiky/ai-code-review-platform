@@ -33,6 +33,7 @@ import {
   ClockCircleOutlined,
   CloseOutlined,
   ClusterOutlined,
+  CommentOutlined,
   CopyOutlined,
   ExportOutlined,
   EyeOutlined,
@@ -85,6 +86,7 @@ const fineChangeTypes = new Set([
 
 const HOME_ROUTE = '/';
 const TASK_LIST_ROUTE = '/tasks';
+const FEEDBACK_ROUTE = '/risk-feedback';
 const SETTINGS_ROUTE = '/settings';
 const RELEASES_ROUTE = '/releases';
 const HELP_ROUTE = '/help';
@@ -157,6 +159,33 @@ const DEFAULT_PUSH_REVIEW_POLICY = {
   pushMaxDiffBytes: -1,
   pushDebounceSeconds: 300
 };
+const REVIEW_FEEDBACK_SOURCE_OPTIONS = [
+  { label: '规则提醒', value: 'RULE_REMINDER' },
+  { label: 'AI Finding', value: 'AI_FINDING' }
+];
+const REVIEW_FEEDBACK_TYPE_OPTIONS = [
+  { label: '有用', value: 'USEFUL' },
+  { label: '误判', value: 'FALSE_POSITIVE' },
+  { label: '等级过高', value: 'LEVEL_TOO_HIGH' },
+  { label: '重复提醒', value: 'DUPLICATE' },
+  { label: '已修复', value: 'FIXED' }
+];
+const REVIEW_FEEDBACK_REASON_OPTIONS = [
+  { label: '项目允许', value: 'PROJECT_ALLOWED' },
+  { label: '已有兜底', value: 'HAS_EXTERNAL_GUARD' },
+  { label: '上下文不足', value: 'CONTEXT_MISSING' },
+  { label: '规则不适用', value: 'RULE_NOT_APPLICABLE' },
+  { label: '等级过高', value: 'LEVEL_TOO_HIGH' },
+  { label: '描述不准', value: 'DESCRIPTION_INACCURATE' },
+  { label: '重复提醒', value: 'DUPLICATE' },
+  { label: '其他', value: 'OTHER' }
+];
+const REVIEW_FEEDBACK_STATUS_OPTIONS = [
+  { label: '待分析', value: 'PENDING' },
+  { label: '有效反馈', value: 'VALID' },
+  { label: '信息不足', value: 'INSUFFICIENT' },
+  { label: '已忽略', value: 'IGNORED' }
+];
 
 function targetTypeLabel(value) {
   return TARGET_TYPE_OPTIONS.find(item => item.value === value)?.label || value || '-';
@@ -263,6 +292,43 @@ function severityLabel(value) {
     default:
       return value || '-';
   }
+}
+
+function reviewFeedbackSourceLabel(value) {
+  return REVIEW_FEEDBACK_SOURCE_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function reviewFeedbackTypeLabel(value) {
+  return REVIEW_FEEDBACK_TYPE_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function reviewFeedbackReasonLabel(value) {
+  return REVIEW_FEEDBACK_REASON_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function reviewFeedbackStatusLabel(value) {
+  return REVIEW_FEEDBACK_STATUS_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function reviewFeedbackStatusColor(value) {
+  if (value === 'VALID') return 'green';
+  if (value === 'INSUFFICIENT') return 'orange';
+  if (value === 'IGNORED') return 'default';
+  return 'blue';
+}
+
+function reviewFeedbackTypeColor(value) {
+  if (value === 'USEFUL' || value === 'FIXED') return 'green';
+  if (value === 'FALSE_POSITIVE') return 'red';
+  if (value === 'LEVEL_TOO_HIGH') return 'orange';
+  if (value === 'DUPLICATE') return 'purple';
+  return 'default';
+}
+
+function defaultReasonTypeForFeedback(feedbackType) {
+  if (feedbackType === 'LEVEL_TOO_HIGH') return 'LEVEL_TOO_HIGH';
+  if (feedbackType === 'DUPLICATE') return 'DUPLICATE';
+  return 'OTHER';
 }
 
 function taskReviewStatusLabel(value) {
@@ -1355,7 +1421,139 @@ function TaskList({ onOpen }) {
   );
 }
 
-function RiskCardView({ riskCard }) {
+function ReviewFeedbackControl({
+  taskId,
+  sourceType,
+  itemFingerprint,
+  feedback,
+  payload,
+  compact = false
+}) {
+  const [localFeedback, setLocalFeedback] = useState(feedback || null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [draft, setDraft] = useState({
+    feedbackType: 'USEFUL',
+    reasonType: 'OTHER',
+    reasonText: '',
+    suggestAsProjectRule: false
+  });
+
+  useEffect(() => {
+    setLocalFeedback(feedback || null);
+  }, [feedback?.id, feedback?.feedbackType, feedback?.status]);
+
+  const openModal = feedbackType => {
+    setDraft({
+      feedbackType,
+      reasonType: defaultReasonTypeForFeedback(feedbackType),
+      reasonText: localFeedback?.reasonText || '',
+      suggestAsProjectRule: localFeedback?.suggestAsProjectRule || false
+    });
+    setModalOpen(true);
+  };
+
+  const submit = async () => {
+    if (!taskId || !itemFingerprint) return;
+    setSubmitting(true);
+    try {
+      const nextFeedback = await fetchApi(`/api/review-tasks/${taskId}/feedback`, {
+        method: 'POST',
+        body: JSON.stringify({
+          sourceType,
+          itemFingerprint,
+          ...payload,
+          ...draft
+        })
+      });
+      setLocalFeedback(nextFeedback);
+      setModalOpen(false);
+      message.success('反馈已保存');
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const buttons = [
+    ['USEFUL', '有用'],
+    ['FALSE_POSITIVE', '误判'],
+    ['LEVEL_TOO_HIGH', '等级过高'],
+    ['DUPLICATE', '重复'],
+    ['FIXED', '已修复']
+  ];
+
+  return (
+    <div className={compact ? 'feedback-control feedback-control-compact' : 'feedback-control'}>
+      <Space wrap>
+        {localFeedback && (
+          <>
+            <Tag color={reviewFeedbackTypeColor(localFeedback.feedbackType)}>
+              {reviewFeedbackTypeLabel(localFeedback.feedbackType)}
+            </Tag>
+            <Tag color={reviewFeedbackStatusColor(localFeedback.status)}>
+              {reviewFeedbackStatusLabel(localFeedback.status)}
+            </Tag>
+          </>
+        )}
+        {buttons.map(([value, label]) => (
+          <Button
+            key={value}
+            size="small"
+            disabled={!taskId || !itemFingerprint}
+            onClick={() => openModal(value)}
+          >
+            {label}
+          </Button>
+        ))}
+      </Space>
+      <Modal
+        title="提交反馈"
+        open={modalOpen}
+        onCancel={() => setModalOpen(false)}
+        onOk={submit}
+        confirmLoading={submitting}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Space direction="vertical" size="middle" className="full-width">
+          <Select
+            className="full-width"
+            value={draft.feedbackType}
+            options={REVIEW_FEEDBACK_TYPE_OPTIONS}
+            onChange={value => setDraft(current => ({
+              ...current,
+              feedbackType: value,
+              reasonType: defaultReasonTypeForFeedback(value)
+            }))}
+          />
+          <Select
+            className="full-width"
+            value={draft.reasonType}
+            options={REVIEW_FEEDBACK_REASON_OPTIONS}
+            onChange={value => setDraft(current => ({ ...current, reasonType: value }))}
+          />
+          <Input.TextArea
+            value={draft.reasonText}
+            rows={4}
+            maxLength={4000}
+            placeholder="补充说明"
+            onChange={event => setDraft(current => ({ ...current, reasonText: event.target.value }))}
+          />
+          <Switch
+            checked={draft.suggestAsProjectRule}
+            checkedChildren="沉淀"
+            unCheckedChildren="不沉淀"
+            onChange={checked => setDraft(current => ({ ...current, suggestAsProjectRule: checked }))}
+          />
+        </Space>
+      </Modal>
+    </div>
+  );
+}
+
+function RiskCardView({ taskId, riskCard }) {
   const location = useLocation();
   const [activeReminderItemKeys, setActiveReminderItemKeys] = useState([]);
 
@@ -1414,6 +1612,19 @@ function RiskCardView({ riskCard }) {
                 {(!Array.isArray(item.maintenanceArtifacts) || item.maintenanceArtifacts.filter(artifact => artifact?.content).length === 0) && (
                   <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可维护内容" />
                 )}
+                <ReviewFeedbackControl
+                  taskId={taskId}
+                  sourceType="RULE_REMINDER"
+                  itemFingerprint={item.feedbackKey}
+                  feedback={item.feedback}
+                  payload={{
+                    cardId: riskCard.cardId,
+                    riskId: item.riskId,
+                    riskType: item.category || item.ruleCode,
+                    riskTitle: item.title,
+                    originalRiskLevel: item.riskLevel
+                  }}
+                />
               </div>
             )
           }))}
@@ -2493,6 +2704,20 @@ function CodeQualityReviewView({
                     </Descriptions>
                     {finding.body && <Paragraph>{cleanAiMarkdown(finding.body)}</Paragraph>}
                     {finding.suggestion && <Alert type="info" showIcon message="建议" description={finding.suggestion} />}
+                    <ReviewFeedbackControl
+                      taskId={taskId}
+                      sourceType="AI_FINDING"
+                      itemFingerprint={finding.fingerprint}
+                      feedback={finding.feedback}
+                      compact
+                      payload={{
+                        reviewKey: review?.reviewKey,
+                        findingIndex: index,
+                        riskType: finding.category,
+                        riskTitle: finding.title,
+                        originalRiskLevel: finding.severity
+                      }}
+                    />
                   </Space>
                 )
               };
@@ -2806,7 +3031,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
       : []),
     ...(result?.reminderCardEnabled !== false
-      ? [{ key: 'risk', label: '提醒卡片', children: <RiskCardView riskCard={result?.riskCard} changedFilesSummary={detail?.changedFilesSummary} /> }]
+      ? [{ key: 'risk', label: '提醒卡片', children: <RiskCardView taskId={taskId} riskCard={result?.riskCard} changedFilesSummary={detail?.changedFilesSummary} /> }]
       : []),
     { key: 'analysis', label: '分析结果', children: <AnalysisView changeAnalysis={result?.changeAnalysis} /> },
     { key: 'event', label: '原始事件摘要', children: <Row gutter={[16, 16]}><Col xs={24} lg={12}><Card title="changedFiles 摘要"><JsonBlock value={detail?.changedFilesSummary} /></Card></Col><Col xs={24} lg={12}><Card title="raw payload"><JsonBlock value={detail?.rawPayload} /></Card></Col></Row> }
@@ -4649,6 +4874,185 @@ function TaskDetailPage() {
   );
 }
 
+function RiskFeedbackPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const route = currentRoute(location);
+  const [items, setItems] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [pagination, setPagination] = useState({ pageNo: 1, pageSize: 20, total: 0 });
+  const [filters, setFilters] = useState({
+    projectId: null,
+    sourceType: null,
+    feedbackType: null,
+    status: null,
+    keyword: ''
+  });
+  const [loading, setLoading] = useState(false);
+  const [updatingId, setUpdatingId] = useState(null);
+  const [error, setError] = useState(null);
+
+  const load = async ({ pageNo = pagination.pageNo, pageSize = pagination.pageSize, nextFilters = filters } = {}) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set('pageNo', String(pageNo));
+      params.set('pageSize', String(pageSize));
+      if (nextFilters.projectId) params.set('projectId', String(nextFilters.projectId));
+      if (nextFilters.sourceType) params.set('sourceType', nextFilters.sourceType);
+      if (nextFilters.feedbackType) params.set('feedbackType', nextFilters.feedbackType);
+      if (nextFilters.status) params.set('status', nextFilters.status);
+      if (nextFilters.keyword?.trim()) params.set('keyword', nextFilters.keyword.trim());
+      const data = await fetchApi(`/api/risk-feedback?${params.toString()}`);
+      setItems(data.items || []);
+      setPagination({ pageNo: data.pageNo || pageNo, pageSize: data.pageSize || pageSize, total: data.total || 0 });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadProjects = async () => {
+    try {
+      const data = await fetchApi('/api/projects?includeDisabled=true');
+      setProjects(data.items || []);
+    } catch {
+      setProjects([]);
+    }
+  };
+
+  useEffect(() => {
+    loadProjects();
+    load({ pageNo: 1 });
+  }, []);
+
+  const updateFilter = (field, value) => {
+    setFilters(current => ({ ...current, [field]: value || null }));
+  };
+
+  const updateStatus = async (feedbackId, status) => {
+    setUpdatingId(feedbackId);
+    try {
+      await fetchApi(`/api/risk-feedback/${feedbackId}/status`, {
+        method: 'PUT',
+        body: JSON.stringify({ status })
+      });
+      message.success('反馈状态已更新');
+      await load({ pageNo: pagination.pageNo });
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const columns = [
+    { title: '项目', dataIndex: 'projectName', width: 180, ellipsis: true, render: value => value || '-' },
+    {
+      title: '任务',
+      dataIndex: 'taskId',
+      width: 100,
+      render: value => (
+        <Button type="link" onClick={() => navigate(`/tasks/${value}`, { state: { from: route } })}>
+          #{value}
+        </Button>
+      )
+    },
+    { title: '来源', dataIndex: 'sourceType', width: 110, render: value => <Tag>{reviewFeedbackSourceLabel(value)}</Tag> },
+    { title: '风险类型', dataIndex: 'riskType', width: 130, ellipsis: true, render: value => value ? <Tag color="blue">{categoryLabel(value)}</Tag> : '-' },
+    { title: '风险标题', dataIndex: 'riskTitle', ellipsis: true, render: value => value || '-' },
+    { title: '反馈', dataIndex: 'feedbackType', width: 110, render: value => <Tag color={reviewFeedbackTypeColor(value)}>{reviewFeedbackTypeLabel(value)}</Tag> },
+    { title: '原因', dataIndex: 'reasonType', width: 120, render: value => value ? reviewFeedbackReasonLabel(value) : '-' },
+    { title: '说明', dataIndex: 'reasonText', ellipsis: true, render: value => value || '-' },
+    { title: '状态', dataIndex: 'status', width: 110, render: value => <Tag color={reviewFeedbackStatusColor(value)}>{reviewFeedbackStatusLabel(value)}</Tag> },
+    { title: '创建时间', dataIndex: 'createdAt', width: 180, render: value => value || '-' },
+    {
+      title: '操作',
+      width: 230,
+      fixed: 'right',
+      render: (_, row) => (
+        <Space wrap>
+          <Button size="small" loading={updatingId === row.id} disabled={row.status === 'VALID'} onClick={() => updateStatus(row.id, 'VALID')}>有效</Button>
+          <Button size="small" loading={updatingId === row.id} disabled={row.status === 'INSUFFICIENT'} onClick={() => updateStatus(row.id, 'INSUFFICIENT')}>信息不足</Button>
+          <Button size="small" loading={updatingId === row.id} disabled={row.status === 'IGNORED'} onClick={() => updateStatus(row.id, 'IGNORED')}>忽略</Button>
+        </Space>
+      )
+    }
+  ];
+
+  return (
+    <div className="page-shell">
+      <Card>
+        <Space wrap className="task-filter-bar">
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            className="filter-select"
+            placeholder="项目"
+            value={filters.projectId || undefined}
+            options={projects.map(project => ({ label: project.name, value: project.id }))}
+            onChange={value => updateFilter('projectId', value)}
+          />
+          <Select
+            allowClear
+            className="filter-select"
+            placeholder="来源"
+            value={filters.sourceType || undefined}
+            options={REVIEW_FEEDBACK_SOURCE_OPTIONS}
+            onChange={value => updateFilter('sourceType', value)}
+          />
+          <Select
+            allowClear
+            className="filter-select"
+            placeholder="反馈类型"
+            value={filters.feedbackType || undefined}
+            options={REVIEW_FEEDBACK_TYPE_OPTIONS}
+            onChange={value => updateFilter('feedbackType', value)}
+          />
+          <Select
+            allowClear
+            className="filter-select"
+            placeholder="状态"
+            value={filters.status || undefined}
+            options={REVIEW_FEEDBACK_STATUS_OPTIONS}
+            onChange={value => updateFilter('status', value)}
+          />
+          <Input
+            allowClear
+            prefix={<SearchOutlined />}
+            placeholder="项目、任务或说明"
+            value={filters.keyword || ''}
+            onChange={event => updateFilter('keyword', event.target.value)}
+            onPressEnter={() => load({ pageNo: 1 })}
+          />
+          <Button type="primary" onClick={() => load({ pageNo: 1 })}>搜索</Button>
+        </Space>
+      </Card>
+      {error && <Alert className="section-gap" type="error" showIcon message={error} />}
+      <Card className="section-gap">
+        <Table
+          rowKey="id"
+          loading={loading}
+          columns={columns}
+          dataSource={items}
+          tableLayout="fixed"
+          scroll={{ x: 1500 }}
+          pagination={{
+            current: pagination.pageNo,
+            pageSize: pagination.pageSize,
+            total: pagination.total,
+            showTotal: total => `共 ${total} 条`,
+            onChange: (pageNo, pageSize) => load({ pageNo, pageSize })
+          }}
+        />
+      </Card>
+    </div>
+  );
+}
+
 function SettingsPage() {
   return <TemplateConfig />;
 }
@@ -4842,6 +5246,7 @@ function AppFrame() {
   const navigate = useNavigate();
   const route = currentRoute(location);
   const isTaskRoute = location.pathname === HOME_ROUTE || location.pathname.startsWith(TASK_LIST_ROUTE);
+  const isFeedbackRoute = location.pathname.startsWith(FEEDBACK_ROUTE);
   const isSettingsRoute = location.pathname.startsWith(SETTINGS_ROUTE);
   const isReleaseRoute = location.pathname.startsWith(RELEASES_ROUTE);
   const isHelpRoute = location.pathname.startsWith(HELP_ROUTE);
@@ -4928,6 +5333,13 @@ function AppFrame() {
             任务
           </Button>
           <Button
+            icon={<CommentOutlined />}
+            type={isFeedbackRoute ? 'primary' : 'default'}
+            onClick={() => navigate(FEEDBACK_ROUTE, { state: { from: route } })}
+          >
+            反馈池
+          </Button>
+          <Button
             icon={<SettingOutlined />}
             type={isSettingsRoute ? 'primary' : 'default'}
             onClick={() => navigate(SETTINGS_ROUTE, { state: { from: route } })}
@@ -4980,6 +5392,7 @@ function AppFrame() {
           <Route path={HOME_ROUTE} element={<HomePage />} />
           <Route path={TASK_LIST_ROUTE} element={<TaskListPage />} />
           <Route path={`${TASK_LIST_ROUTE}/:taskId`} element={<TaskDetailPage />} />
+          <Route path={FEEDBACK_ROUTE} element={<RiskFeedbackPage />} />
           <Route path={SETTINGS_ROUTE} element={<SettingsPage />} />
           <Route path={RELEASES_ROUTE} element={<ReleaseNotesPage />} />
           <Route path={HELP_ROUTE} element={<HelpPage />} />

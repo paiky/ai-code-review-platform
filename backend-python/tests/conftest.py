@@ -13,6 +13,7 @@ from app.main import create_app
 from app.code_quality import models as code_quality_models  # noqa: F401
 from app.notification import models as notification_models  # noqa: F401
 from app.project_integration import models as project_models  # noqa: F401
+from app.review_feedback import models as review_feedback_models  # noqa: F401
 from app.review_record import models as review_models  # noqa: F401
 from app.rule_template import models as rule_template_models  # noqa: F401
 

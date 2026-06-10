@@ -996,6 +996,14 @@ body {
   width: 100%;
 }
 
+.feedback-control {
+  margin-top: 12px;
+}
+
+.feedback-control-compact {
+  margin-top: 8px;
+}
+
 .reminder-item-list .ant-collapse-header {
   padding-left: 24px !important;
 }

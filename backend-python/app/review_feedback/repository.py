@@ -1,0 +1,223 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import and_, func, inspect, select
+from sqlalchemy.orm import Session
+
+from app.core.json_utils import format_datetime, page_response, read_json
+from app.project_integration.models import Project
+from app.review_feedback.models import ReviewItemFeedback
+from app.review_record.models import ReviewTask
+
+
+def ensure_feedback_schema(db: Session) -> None:
+    connection = db.connection()
+    inspector = inspect(connection)
+    if inspector.has_table(ReviewItemFeedback.__tablename__):
+        return
+    ReviewItemFeedback.__table__.create(bind=connection)
+    db.flush()
+
+
+def feedback_to_response(
+    record: ReviewItemFeedback,
+    *,
+    task: ReviewTask | None = None,
+    project: Project | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "projectId": record.project_id,
+        "projectName": project.name if project is not None else None,
+        "taskId": record.task_id,
+        "triggerType": task.trigger_type if task is not None else None,
+        "externalSourceId": task.external_source_id if task is not None else None,
+        "externalUrl": task.external_url if task is not None else None,
+        "sourceType": record.source_type,
+        "itemFingerprint": record.item_fingerprint,
+        "feedbackKey": record.item_fingerprint,
+        "cardId": record.card_id,
+        "riskId": record.risk_id,
+        "reviewKey": record.review_key,
+        "findingIndex": record.finding_index,
+        "riskType": record.risk_type,
+        "riskTitle": record.risk_title,
+        "originalRiskLevel": record.original_risk_level,
+        "feedbackType": record.feedback_type,
+        "reasonType": record.reason_type,
+        "reasonText": record.reason_text,
+        "suggestAsProjectRule": bool(record.suggest_as_project_rule),
+        "status": record.status,
+        "adminComment": record.admin_comment,
+        "itemSnapshot": read_json(record.item_snapshot_json, None),
+        "operatorName": record.operator_name,
+        "operatorUsername": record.operator_username,
+        "createdAt": format_datetime(record.created_at),
+        "updatedAt": format_datetime(record.updated_at),
+    }
+
+
+def get_feedback_map_for_task(db: Session, task_id: int) -> dict[tuple[str, str], dict[str, Any]]:
+    ensure_feedback_schema(db)
+    records = db.scalars(
+        select(ReviewItemFeedback)
+        .where(ReviewItemFeedback.task_id == task_id)
+        .order_by(ReviewItemFeedback.id.asc())
+    ).all()
+    return {
+        (record.source_type, record.item_fingerprint): feedback_to_response(record)
+        for record in records
+    }
+
+
+def list_task_feedbacks(db: Session, task_id: int) -> list[dict[str, Any]]:
+    ensure_feedback_schema(db)
+    rows = db.execute(
+        select(ReviewItemFeedback, ReviewTask, Project)
+        .join(ReviewTask, ReviewTask.id == ReviewItemFeedback.task_id)
+        .join(Project, Project.id == ReviewItemFeedback.project_id)
+        .where(ReviewItemFeedback.task_id == task_id)
+        .order_by(ReviewItemFeedback.created_at.desc(), ReviewItemFeedback.id.desc())
+    ).all()
+    return [feedback_to_response(record, task=task, project=project) for record, task, project in rows]
+
+
+def upsert_feedback(
+    db: Session,
+    *,
+    task: ReviewTask,
+    source_type: str,
+    item_fingerprint: str,
+    target: dict[str, Any],
+    feedback_type: str,
+    reason_type: str | None,
+    reason_text: str | None,
+    suggest_as_project_rule: bool,
+    operator_name: str | None,
+    operator_username: str | None,
+    item_snapshot_json: str | None,
+) -> ReviewItemFeedback:
+    ensure_feedback_schema(db)
+    now = datetime.now()
+    record = db.scalars(
+        select(ReviewItemFeedback)
+        .where(ReviewItemFeedback.task_id == task.id)
+        .where(ReviewItemFeedback.source_type == source_type)
+        .where(ReviewItemFeedback.item_fingerprint == item_fingerprint)
+    ).first()
+    if record is None:
+        record = ReviewItemFeedback(
+            project_id=task.project_id,
+            task_id=task.id,
+            source_type=source_type,
+            item_fingerprint=item_fingerprint,
+            status="PENDING",
+            created_at=now,
+        )
+        db.add(record)
+    record.project_id = task.project_id
+    record.card_id = target.get("cardId")
+    record.risk_id = target.get("riskId")
+    record.review_key = target.get("reviewKey")
+    record.finding_index = target.get("findingIndex")
+    record.risk_type = target.get("riskType")
+    record.risk_title = target.get("riskTitle")
+    record.original_risk_level = target.get("originalRiskLevel")
+    record.feedback_type = feedback_type
+    record.reason_type = reason_type
+    record.reason_text = reason_text
+    record.suggest_as_project_rule = suggest_as_project_rule
+    record.item_snapshot_json = item_snapshot_json
+    record.operator_name = operator_name
+    record.operator_username = operator_username
+    record.updated_at = now
+    db.flush()
+    return record
+
+
+def update_feedback_status(
+    db: Session,
+    record: ReviewItemFeedback,
+    *,
+    status: str,
+    admin_comment: str | None,
+) -> ReviewItemFeedback:
+    now = datetime.now()
+    record.status = status
+    record.admin_comment = admin_comment
+    record.updated_at = now
+    db.flush()
+    return record
+
+
+def get_feedback(db: Session, feedback_id: int) -> ReviewItemFeedback | None:
+    ensure_feedback_schema(db)
+    return db.get(ReviewItemFeedback, feedback_id)
+
+
+def list_feedback_pool(
+    db: Session,
+    *,
+    project_id: int | None,
+    source_type: str | None,
+    risk_type: str | None,
+    feedback_type: str | None,
+    status: str | None,
+    keyword: str | None,
+    page_no: int,
+    page_size: int,
+) -> dict[str, Any]:
+    ensure_feedback_schema(db)
+    page_no = max(page_no, 1)
+    page_size = max(page_size, 1)
+    filters = []
+    if project_id is not None:
+        filters.append(ReviewItemFeedback.project_id == project_id)
+    if source_type:
+        filters.append(ReviewItemFeedback.source_type == source_type)
+    if risk_type:
+        filters.append(ReviewItemFeedback.risk_type == risk_type)
+    if feedback_type:
+        filters.append(ReviewItemFeedback.feedback_type == feedback_type)
+    if status:
+        filters.append(ReviewItemFeedback.status == status)
+    if keyword:
+        like = f"%{keyword}%"
+        filters.append(
+            (ReviewItemFeedback.risk_title.like(like))
+            | (Project.name.like(like))
+            | (ReviewTask.external_source_id.like(like))
+            | (ReviewItemFeedback.reason_text.like(like))
+        )
+
+    total_stmt = (
+        select(func.count())
+        .select_from(ReviewItemFeedback)
+        .join(ReviewTask, ReviewTask.id == ReviewItemFeedback.task_id)
+        .join(Project, Project.id == ReviewItemFeedback.project_id)
+    )
+    if filters:
+        total_stmt = total_stmt.where(and_(*filters))
+    total = db.scalar(total_stmt) or 0
+
+    rows_stmt = (
+        select(ReviewItemFeedback, ReviewTask, Project)
+        .join(ReviewTask, ReviewTask.id == ReviewItemFeedback.task_id)
+        .join(Project, Project.id == ReviewItemFeedback.project_id)
+    )
+    if filters:
+        rows_stmt = rows_stmt.where(and_(*filters))
+    rows = db.execute(
+        rows_stmt
+        .order_by(ReviewItemFeedback.created_at.desc(), ReviewItemFeedback.id.desc())
+        .limit(page_size)
+        .offset((page_no - 1) * page_size)
+    ).all()
+    return page_response(
+        [feedback_to_response(record, task=task, project=project) for record, task, project in rows],
+        page_no,
+        page_size,
+        total,
+    )

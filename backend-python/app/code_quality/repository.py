@@ -28,6 +28,7 @@ from app.notification.repository import (
     upsert_webhooks,
     webhook_to_dict,
 )
+from app.review_feedback.service import attach_ai_finding_feedbacks
 
 
 DEFAULT_PROFILE_CODE = "backend-default-ai-review"
@@ -1673,7 +1674,7 @@ def save_result(
 
 def find_result_response(db: Session, task_id: int) -> dict[str, Any] | None:
     result = _first_result(db, task_id)
-    return result_to_response(result) if result is not None else None
+    return result_to_response(db, result) if result is not None else None
 
 
 def list_result_responses(db: Session, task_id: int) -> list[dict[str, Any]]:
@@ -1683,7 +1684,7 @@ def list_result_responses(db: Session, task_id: int) -> list[dict[str, Any]]:
         .where(CodeQualityReviewResult.task_id == task_id)
         .order_by(CodeQualityReviewResult.sort_order.asc(), CodeQualityReviewResult.id.asc())
     ).all()
-    return [result_to_response(result) for result in records]
+    return [result_to_response(db, result) for result in records]
 
 
 def find_result_response_by_key(db: Session, task_id: int, review_key: str | None) -> dict[str, Any] | None:
@@ -1694,7 +1695,7 @@ def find_result_response_by_key(db: Session, task_id: int, review_key: str | Non
         .where(CodeQualityReviewResult.task_id == task_id)
         .where(CodeQualityReviewResult.review_key == normalized_review_key)
     ).first()
-    return result_to_response(result) if result is not None else None
+    return result_to_response(db, result) if result is not None else None
 
 
 def _first_result(db: Session, task_id: int) -> CodeQualityReviewResult | None:
@@ -1706,12 +1707,13 @@ def _first_result(db: Session, task_id: int) -> CodeQualityReviewResult | None:
     ).first()
 
 
-def result_to_response(result: CodeQualityReviewResult | None) -> dict[str, Any] | None:
+def result_to_response(db: Session, result: CodeQualityReviewResult | None) -> dict[str, Any] | None:
     if result is None:
         return None
     findings = json.loads(result.findings_json or "[]")
     if _needs_finding_repair(findings):
         findings = _repair_findings_from_raw_output(findings, result.raw_output, result.provider)
+    findings = attach_ai_finding_feedbacks(db, result, findings) if isinstance(findings, list) else findings
     return {
         "id": result.id,
         "taskId": result.task_id,

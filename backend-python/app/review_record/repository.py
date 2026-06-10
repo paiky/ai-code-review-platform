@@ -10,6 +10,7 @@ from app.core.errors import AppError
 from app.core.json_utils import format_datetime, page_response, read_json
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.project_integration.repository import ensure_project_config_schema
+from app.review_feedback.service import attach_rule_feedbacks
 from app.review_record.models import NotificationRecord, ReviewResult, ReviewTask
 from app.risk_engine.service import generate_risk_card
 from app.rule_template.models import RuleTemplate
@@ -270,6 +271,7 @@ def get_review_task_result(db: Session, task_id: int) -> dict:
         change_analysis,
         result.template_code,
     )
+    risk_card = attach_rule_feedbacks(db, task_id, risk_card)
     return {
         "taskId": result.task_id,
         "targetType": result.target_type,
