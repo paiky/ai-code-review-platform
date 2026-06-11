@@ -26,6 +26,7 @@ def render_instructions(request: dict[str, Any]) -> str:
         "删除方法、修改方法签名或删除字段时，不要仅凭删除动作判定风险；必须结合调用方、引用关系、替代方法或迁移证据，缺少这些证据时输出需要确认。\n"
         "Context Pack / reviewContext 只是辅助证据，用于说明本次可见上下文、不可用上下文和历史上下文不足反馈；"
         "它不能覆盖或削弱明确的安全、数据一致性、事务一致性或线上正确性硬风险。\n"
+        "本地引用证据只表示在当前 task worktree 中检索到的有限引用片段；不能仅凭未命中引用判定无风险，也不能覆盖硬风险。\n"
         "Context Planner 只提示本次可能缺少的证据和 requestedContexts；它不能作为自动忽略、自动降级或覆盖硬风险的依据。\n"
         "你可以参考上下文，但最终只能报告由 changed files 白名单中的 diff 引入的问题。"
     )

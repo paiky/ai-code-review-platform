@@ -308,7 +308,7 @@ def test_review_context_pack_records_local_repo_prepare_summary(
     assert str(tmp_path) not in context["promptText"]
 
 
-def test_review_context_pack_runs_local_reference_search_without_prompt_snippets(
+def test_review_context_pack_injects_local_reference_snippets(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -369,6 +369,7 @@ def test_review_context_pack_runs_local_reference_search_without_prompt_snippets
     )
 
     retrieval = context["localReferenceRetrieval"]
+    local_reference = context["contextPack"]["localReferenceContext"]
     snippet = retrieval["searches"][0]["snippets"][0]
 
     assert retrieval["summary"]["queryCount"] == 1
@@ -378,9 +379,78 @@ def test_review_context_pack_runs_local_reference_search_without_prompt_snippets
     assert snippet["path"] == "src/main/java/demo/OrderController.java"
     assert {"number": 4, "text": "    orderService.cancelOrder(id);"} in snippet["lines"]
     assert context["contextPack"]["localReferenceSearch"] == retrieval["summary"]
+    assert local_reference["status"] == "RETRIEVED"
+    assert local_reference["sourceIncluded"] is True
+    assert local_reference["searches"][0]["snippets"][0]["path"] == "src/main/java/demo/OrderController.java"
     assert context["summary"]["localReferenceSearch"] == retrieval["summary"]
-    assert "orderService.cancelOrder(id)" not in context["promptText"]
+    assert "localReferenceContext" in context["promptText"]
+    assert "orderService.cancelOrder(id)" in context["promptText"]
     assert str(tmp_path) not in context["promptText"]
+
+
+def test_review_context_pack_truncates_local_reference_snippets_to_fit_budget(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "504" / "head"
+    commands: list[list[str]] = []
+
+    def write_source() -> None:
+        source_file = worktree / "src/main/java/demo/OrderController.java"
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        lines = []
+        for index in range(1, 25):
+            filler = "x" * 220
+            if index % 2 == 0:
+                lines.append(f"    orderService.cancelOrder(id); // {filler}")
+            else:
+                lines.append(f"    String filler{index} = \"{filler}\";")
+        source_file.write_text("\n".join(lines), encoding="utf-8")
+
+    def fake_run_git(args: list[str], **_kwargs) -> None:
+        commands.append(args)
+        if "worktree" in args and "add" in args:
+            write_source()
+
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_CONTEXT_SNIPPET_CONTEXT_LINES", "2")
+    monkeypatch.setenv("LOCAL_CONTEXT_MAX_SNIPPETS_PER_QUERY", "6")
+    monkeypatch.setenv("GITLAB_TOKEN", "repo-secret")
+    monkeypatch.setattr(local_repo, "_run_git", fake_run_git)
+
+    context = build_review_context_pack(
+        None,
+        task_id=504,
+        project_id=1,
+        mode="DIFF_TEXT",
+        repository_url="https://gitlab.example.com/demo/service",
+        git_project_id="1001",
+        head_ref="2222222222222222222222222222222222222222",
+        changed_files=[
+            {
+                "path": "src/main/java/demo/OrderService.java",
+                "diffText": (
+                    "diff --git a/src/main/java/demo/OrderService.java "
+                    "b/src/main/java/demo/OrderService.java\n"
+                    "@@ -10,6 +10,3 @@\n"
+                    "-    public Order cancelOrder(Long id) {\n"
+                    "-        return oldCancel(id);\n"
+                    "-    }\n"
+                ),
+            }
+        ],
+        diff_text=None,
+    )
+
+    local_summary = context["contextPack"]["localReferenceSearch"]
+
+    assert len(context["promptText"]) <= CONTEXT_PACK_MAX_TOTAL_CHARS
+    assert local_summary["queryCount"] == 1
+    assert local_summary["matchedFileCount"] == 1
+    assert local_summary["truncated"] is True
+    assert local_summary["includedSnippetCount"] < 6
 
 
 def test_review_context_pack_marks_local_repo_failure_unavailable(

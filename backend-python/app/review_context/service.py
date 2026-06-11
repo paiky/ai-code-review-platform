@@ -114,6 +114,10 @@ def build_review_context_pack(
         local_repository_context=local_repository_context,
         planner_signals=planner_signals,
     )
+    local_reference_pack_context = _local_reference_pack_context(local_reference_context)
+    _apply_local_reference_availability(requested_contexts, local_reference_pack_context)
+    planner_unavailable_contexts = _planner_unavailable_contexts(requested_contexts)
+    context_plan["unavailableContextCount"] = len(planner_unavailable_contexts)
     unavailable_contexts = _unavailable_contexts(
         files,
         source_unavailable_contexts,
@@ -126,7 +130,8 @@ def build_review_context_pack(
         "changedFilesSummary": _changed_files_summary(files, diff_text),
         "sameFileContext": same_file_context,
         "localRepositoryContext": local_repository_context.get("summary") or {},
-        "localReferenceSearch": local_reference_context.get("summary") or _empty_local_reference_summary(),
+        "localReferenceSearch": local_reference_pack_context["summary"],
+        "localReferenceContext": local_reference_pack_context,
         "contextPlan": context_plan,
         "plannerSignals": planner_signals,
         "requestedContexts": requested_contexts,
@@ -140,6 +145,9 @@ def build_review_context_pack(
         "contextPack": context_pack,
     }
     prompt_text, truncated_by_budget = _fit_context_pack_budget(context_pack, review_context)
+    local_reference_summary = context_pack.get("localReferenceSearch") or _empty_local_reference_summary()
+    local_reference_context["summary"] = local_reference_summary
+    local_reference_context["searches"] = (context_pack.get("localReferenceContext") or {}).get("searches") or []
 
     meta = {
         "version": CONTEXT_PACK_VERSION,
@@ -164,10 +172,10 @@ def build_review_context_pack(
         "plannerUnavailableContextCount": context_pack["contextPlan"].get("unavailableContextCount", 0),
         "localRepositoryEnabled": bool(context_pack["localRepositoryContext"].get("enabled")),
         "localRepositoryStatus": context_pack["localRepositoryContext"].get("status"),
-        "localReferenceQueryCount": context_pack["localReferenceSearch"].get("queryCount", 0),
-        "localReferenceMatchedFileCount": context_pack["localReferenceSearch"].get("matchedFileCount", 0),
-        "localReferenceSnippetCount": context_pack["localReferenceSearch"].get("includedSnippetCount", 0),
-        "localReferenceTruncated": bool(context_pack["localReferenceSearch"].get("truncated", False)),
+        "localReferenceQueryCount": local_reference_summary.get("queryCount", 0),
+        "localReferenceMatchedFileCount": local_reference_summary.get("matchedFileCount", 0),
+        "localReferenceSnippetCount": local_reference_summary.get("includedSnippetCount", 0),
+        "localReferenceTruncated": bool(local_reference_summary.get("truncated", False)),
     }
     return {
         "reviewContext": review_context,
@@ -909,8 +917,8 @@ def _planner_context_available(context_type: str, same_file_context: dict[str, A
 
 def _unavailable_reason_for_requested_context(context_type: str) -> str:
     return {
-        "REFERENCE_SEARCH": "Reference snippets are not injected until V2-F-7.",
-        "CALLER_CONTEXT": "Caller snippets are not injected until V2-F-7.",
+        "REFERENCE_SEARCH": "Local reference snippets are unavailable.",
+        "CALLER_CONTEXT": "Caller inspection beyond reference snippets is not performed.",
         "CALLEE_CONTEXT": "Callee inspection is not performed.",
         "SAME_CLASS_METHODS": "Class parsing is not performed.",
         "RELATED_FILE": "Related files are not read.",
@@ -1003,6 +1011,14 @@ def _fit_context_pack_budget(
     prompt_text = _render_context_pack_text(review_context)
     truncated_by_budget = False
     while len(prompt_text) > CONTEXT_PACK_MAX_TOTAL_CHARS:
+        if _remove_empty_local_reference_context(context_pack):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
+        if _remove_last_local_reference_snippet(context_pack):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
         if _remove_last_source_snippet(context_pack):
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
@@ -1016,6 +1032,38 @@ def _fit_context_pack_budget(
             continue
         break
     return prompt_text, truncated_by_budget
+
+
+def _remove_empty_local_reference_context(context_pack: dict[str, Any]) -> bool:
+    local_reference = context_pack.get("localReferenceContext") or {}
+    if not local_reference:
+        return False
+    summary = local_reference.get("summary") or {}
+    if int(summary.get("includedSnippetCount") or 0) > 0:
+        return False
+    context_pack.pop("localReferenceContext", None)
+    if int((context_pack.get("localReferenceSearch") or {}).get("queryCount") or 0) <= 0:
+        context_pack.pop("localReferenceSearch", None)
+    return True
+
+
+def _remove_last_local_reference_snippet(context_pack: dict[str, Any]) -> bool:
+    local_reference = context_pack.get("localReferenceContext") or {}
+    searches = local_reference.get("searches") or []
+    while searches:
+        last_search = searches[-1]
+        snippets = last_search.get("snippets") or []
+        if snippets:
+            snippets.pop()
+            last_search["snippets"] = snippets
+            last_search["includedSnippetCount"] = len(snippets)
+            last_search["truncated"] = True
+            _sync_local_reference_summary(context_pack, truncated=True)
+            return True
+        searches.pop()
+        local_reference["searches"] = searches
+        _sync_local_reference_summary(context_pack, truncated=True)
+    return False
 
 
 def _remove_last_source_snippet(context_pack: dict[str, Any]) -> bool:
@@ -1124,6 +1172,39 @@ def _local_reference_context(
     )
 
 
+def _local_reference_pack_context(retrieval: dict[str, Any]) -> dict[str, Any]:
+    summary = dict(retrieval.get("summary") or _empty_local_reference_summary())
+    searches = retrieval.get("searches") if isinstance(retrieval.get("searches"), list) else []
+    included_snippet_count = sum(int(item.get("includedSnippetCount") or 0) for item in searches if isinstance(item, dict))
+    summary["includedSnippetCount"] = included_snippet_count
+    summary["truncated"] = bool(summary.get("truncated", False) or any(bool(item.get("truncated")) for item in searches if isinstance(item, dict)))
+    context = {
+        "status": retrieval.get("status") or "SKIPPED",
+        "sourceIncluded": included_snippet_count > 0,
+        "summary": summary,
+        "searches": searches,
+    }
+    if included_snippet_count > 0:
+        context["note"] = (
+            "Bounded local worktree reference snippets for METHOD_DELETED / METHOD_SIGNATURE_CHANGED. "
+            "They are auxiliary evidence only."
+        )
+    return context
+
+
+def _apply_local_reference_availability(
+    requested_contexts: list[dict[str, Any]],
+    local_reference_context: dict[str, Any],
+) -> None:
+    if int((local_reference_context.get("summary") or {}).get("includedSnippetCount") or 0) <= 0:
+        return
+    for item in requested_contexts:
+        if item.get("type") != "REFERENCE_SEARCH":
+            continue
+        item["available"] = True
+        item["availableSource"] = "LOCAL_REFERENCE_CONTEXT"
+
+
 def _empty_local_reference_summary() -> dict[str, Any]:
     return {
         "queryCount": 0,
@@ -1140,6 +1221,19 @@ def _local_reference_progress_summary(local_reference: dict[str, Any]) -> dict[s
         "includedSnippetCount": int(local_reference.get("includedSnippetCount") or 0),
         "truncated": bool(local_reference.get("truncated", False)),
     }
+
+
+def _sync_local_reference_summary(context_pack: dict[str, Any], *, truncated: bool) -> None:
+    local_reference = context_pack.get("localReferenceContext") or {}
+    searches = [item for item in (local_reference.get("searches") or []) if isinstance(item, dict)]
+    included_snippet_count = sum(int(item.get("includedSnippetCount") or 0) for item in searches)
+    summary = local_reference.get("summary") or _empty_local_reference_summary()
+    summary["includedSnippetCount"] = included_snippet_count
+    summary["truncated"] = bool(summary.get("truncated", False) or truncated)
+    local_reference["summary"] = summary
+    local_reference["sourceIncluded"] = included_snippet_count > 0
+    context_pack["localReferenceContext"] = local_reference
+    context_pack["localReferenceSearch"] = summary
 
 
 def _diff_stats(diff: str) -> tuple[int, int, int, int]:

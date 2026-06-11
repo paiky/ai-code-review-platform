@@ -185,7 +185,11 @@ def _search_query(worktree: Path, query: dict[str, Any]) -> tuple[dict[str, Any]
                 max_snippets=max_snippets - len(snippets),
             )
         )
-    truncated = len(matches) > max_files or candidate_snippet_count > len(snippets)
+    truncated = (
+        len(matches) > max_files
+        or candidate_snippet_count > len(snippets)
+        or any(bool(snippet.get("truncated")) for snippet in snippets)
+    )
     search = {
         "type": "REFERENCE_SEARCH",
         "query": str(query["query"]),

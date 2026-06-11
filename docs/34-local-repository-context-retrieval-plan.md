@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：V2-F-6 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED` 引用搜索 Retriever MVP 已落地并通过相关后端测试；当前停止等待用户验收。
+- 当前状态：V2-F-7 本地引用证据注入 Context Pack 已落地并通过相关后端测试；当前停止等待用户验收。
 - 编写时间：2026-06-11
 - 前置版本：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`
@@ -810,5 +810,53 @@ $env:NO_PAUSE="1"; .\scripts\run-backend.cmd test tests\unit\test_local_repo_con
 下一阶段建议：
 
 ```text
-当前停止等待用户验收 V2-F-6；如继续增强 V2-F，下一阶段进入 V2-F-7：本地引用证据注入 Context Pack。
+V2-F-7 已完成；如继续增强 V2-F，下一阶段进入 V2-F-8：前端展示高准确模式证据摘要，并屏蔽人工沉淀入口。
+```
+
+## 十九、V2-F-7 落地记录
+
+落地时间：2026-06-11。
+
+已完成：
+
+- `reviewContext / contextPack` 新增 `localReferenceContext`，注入 V2-F-6 检索到的本地引用 bounded snippets。
+- 保留 `localReferenceSearch` 作为轻量检索摘要；`localReferenceContext` 承载 `status / sourceIncluded / summary / searches / snippets`。
+- 本地引用证据只来自当前 task head worktree；不读取 worktree 外文件，不注入完整项目源码。
+- Context Pack 总预算继续受 `CONTEXT_PACK_MAX_TOTAL_CHARS` 控制；超预算时优先裁剪本地引用 snippets，并同步 `includedSnippetCount / truncated / sourceIncluded`。
+- `requestedContexts` 和 `unavailableContexts` 继续保留；当本地引用 snippets 已注入时，`REFERENCE_SEARCH` 标记为可用，`CALLER_CONTEXT` 仍不等同于完整调用方分析。
+- Prompt 新增约束：本地引用证据只表示当前 task worktree 中检索到的有限引用片段，不能仅凭未命中引用判定无风险，也不能覆盖安全、数据一致性、事务一致性或线上正确性硬风险。
+- `CONTEXT_PACK_BUILT` progress 仍只记录 meta / summary，不记录源码片段；`LOCAL_CONTEXT_RETRIEVED` detail 仍只记录 `queryCount / matchedFileCount / includedSnippetCount / truncated`。
+- 本阶段不做 AST / LSP / 向量库 / RAG，不自动降级，不自动忽略 finding，不自动改 Prompt，不删除反馈池、项目策略、上下文不足反馈相关后端代码、表或 API，不修改 legacy Java backend。
+
+新增和调整测试：
+
+- `backend-python/tests/unit/test_review_context_pack.py`
+- `backend-python/tests/unit/test_code_quality_prompt.py`
+- `backend-python/tests/contract/test_code_quality_api_contract.py`
+- `backend-python/tests/unit/test_local_retriever.py`
+
+已验证：
+
+```powershell
+$env:NO_PAUSE="1"; .\scripts\run-backend.cmd test tests\unit\test_local_retriever.py tests\unit\test_review_context_pack.py tests\unit\test_code_quality_prompt.py
+```
+
+结果：20 passed。
+
+```powershell
+$env:NO_PAUSE="1"; .\scripts\run-backend.cmd test tests\contract\test_code_quality_api_contract.py::test_manual_review_builds_context_pack_and_records_progress tests\contract\test_code_quality_api_contract.py::test_manual_review_prepares_local_repo_context_without_leaking_token tests\contract\test_code_quality_api_contract.py::test_manual_review_records_local_reference_search_progress_without_source tests\contract\test_code_quality_api_contract.py::test_retry_gitlab_mr_ai_review_includes_same_file_context_snippets
+```
+
+结果：4 passed。
+
+```powershell
+$env:NO_PAUSE="1"; .\scripts\run-backend.cmd test tests\unit\test_local_repo_context.py tests\unit\test_local_retriever.py tests\unit\test_review_context_pack.py tests\unit\test_code_quality_prompt.py tests\contract\test_code_quality_api_contract.py::test_manual_review_builds_context_pack_and_records_progress tests\contract\test_code_quality_api_contract.py::test_manual_review_prepares_local_repo_context_without_leaking_token tests\contract\test_code_quality_api_contract.py::test_manual_review_records_local_reference_search_progress_without_source tests\contract\test_code_quality_api_contract.py::test_manual_review_injects_project_review_policies_and_records_progress tests\contract\test_code_quality_api_contract.py::test_deepseek_manual_review_saves_result_and_progress tests\contract\test_code_quality_api_contract.py::test_retry_gitlab_mr_ai_review_uses_saved_changed_files tests\contract\test_code_quality_api_contract.py::test_retry_gitlab_mr_ai_review_includes_same_file_context_snippets
+```
+
+结果：31 passed。
+
+下一阶段建议：
+
+```text
+当前停止等待用户验收 V2-F-7；如继续增强 V2-F，下一阶段进入 V2-F-8：前端展示高准确模式证据摘要，并屏蔽人工沉淀入口。
 ```

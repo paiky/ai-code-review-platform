@@ -766,7 +766,11 @@ def test_manual_review_records_local_reference_search_progress_without_source(
 
     assert response.status_code == 200
     request_body = json.loads(route.calls[0].request.content.decode("utf-8"))
-    assert "orderService.cancelOrder(id)" not in json.dumps(request_body, ensure_ascii=False)
+    system_prompt = request_body["messages"][0]["content"]
+    request_text = json.dumps(request_body, ensure_ascii=False)
+    assert "本地引用证据只表示" in system_prompt
+    assert "localReferenceContext" in request_text
+    assert "orderService.cancelOrder(id)" in request_text
     progress = client.get(
         f"/api/review-tasks/{response.json()['data']['taskId']}/code-quality-progress"
     ).json()["data"]
@@ -779,6 +783,8 @@ def test_manual_review_records_local_reference_search_progress_without_source(
     }
     progress_text = json.dumps(progress, ensure_ascii=False)
     assert "orderService.cancelOrder(id)" not in progress_text
+    context_event = next(event for event in progress if event["phase"] == "CONTEXT_PACK_BUILT")
+    assert "orderService.cancelOrder(id)" not in context_event["detail"]
     assert "local-reference-secret" not in progress_text
     assert str(tmp_path) not in progress_text
     assert commands
