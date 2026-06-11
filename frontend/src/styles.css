@@ -108,6 +108,10 @@ body {
   min-width: 150px;
 }
 
+.filter-select {
+  min-width: 150px;
+}
+
 .task-project-scope-cascader {
   min-width: 220px;
 }
@@ -542,6 +546,25 @@ body {
 
 .quality-finding-meta .ant-descriptions-item-content {
   min-width: 0;
+}
+
+.finding-context-panel {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 6px;
+  background: #f8fbff;
+}
+
+.finding-context-summary {
+  display: block;
+  line-height: 1.6;
+}
+
+.finding-context-evidence ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  line-height: 1.6;
 }
 
 .finding-action-button {
@@ -1002,6 +1025,23 @@ body {
 
 .feedback-control-compact {
   margin-top: 8px;
+}
+
+.feedback-page-tabs .ant-tabs-nav {
+  margin-bottom: 16px;
+}
+
+.policy-content-cell {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.policy-modal-body .ant-space-item {
+  width: 100%;
 }
 
 .reminder-item-list .ant-collapse-header {

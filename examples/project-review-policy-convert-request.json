@@ -1,0 +1,8 @@
+{
+  "policyType": "PROJECT_RULE",
+  "riskType": "TRANSACTION",
+  "title": "统一事务边界由框架注入",
+  "content": "本项目部分入口方法事务由框架切面统一注入，AI Review 不能仅凭当前 diff 未出现 @Transactional 就直接判定为事务缺失；仍需结合调用链、数据一致性和明确线上正确性风险判断。",
+  "enabled": true,
+  "createdBy": "local-admin"
+}

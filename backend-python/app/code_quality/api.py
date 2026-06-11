@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.code_quality import service
@@ -73,8 +73,12 @@ async def update_profile(profile_code: str, request: dict, db: Session = Depends
 
 
 @profile_router.get("/{profile_code}/rendered-prompt")
-async def rendered_prompt(profile_code: str, db: Session = Depends(get_db)) -> dict:
-    return ok(service.rendered_prompt(db, profile_code))
+async def rendered_prompt(
+    profile_code: str,
+    project_id: int | None = Query(default=None, alias="projectId"),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(service.rendered_prompt(db, profile_code, project_id=project_id))
 
 
 @profile_router.post("/{profile_code}/reset-default-prompt")

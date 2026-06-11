@@ -70,10 +70,8 @@ AI 变更提醒与代码质量审查平台
 - 在 Windows PowerShell 中阅读中文 Markdown / 文档时，优先使用 `Get-Content -Raw -Encoding UTF8 <path>`，避免默认编码导致中文乱码并影响理解。
 - 后续开发以后端 Python 为主，默认只维护 `backend-python/` 与 `frontend/`。`backend/` Java 后端已停止维护，不再新增实现、测试或编译验证，除非用户明确要求对照历史行为。
 - 搜索代码时必须避开依赖和构建产物目录，例如 `frontend/node_modules/`、`frontend/dist/`、`backend/target/`、`backend-python/.venv/`、`__pycache__/`、`.pytest_cache/`、`.codegraph/`。使用 `rg` 时遵守仓库根目录 `.rgignore`，不要用会扫进这些目录的全盘搜索。
-- 从业务逻辑、异常现象或架构问题出发排查 Python 后端时，优先使用 CodeGraph MCP 的 `codegraph_context` 获取候选模块和关键符号，再用 `rg` 核对真实调用位置、接口路径、配置字段和错误文案。
 - 已知接口路径、字段名、错误信息、日志内容或目标字符串时，优先直接使用 `rg`。前端搜索默认也优先使用 `rg`。
-- 已知关键 Python 函数后，需要理解上下游、影响范围或跨模块调用链时，使用 `codegraph_callers`、`codegraph_callees`、`codegraph_trace`。CodeGraph 结果必须结合局部源码或 `rg` 命中核验，不将静态调用图视为唯一事实来源。
-- CodeGraph MCP 索引不可用时，先执行 `.\scripts\setup-codegraph.cmd`。Cursor 需要重启以加载项目 MCP；Codex App 还需要单独配置用户级 MCP 并重启。详细搜索策略见 `docs/25-codegraph-search-guide.md`。
+- 从业务逻辑、异常现象或架构问题出发排查 Python 后端时，先用 `rg` 定位候选模块、接口路径、配置字段和错误文案，再阅读局部源码核验真实调用链。已知关键函数后，可继续用 `rg "<function_name>" backend-python/app backend-python/tests` 反查调用者和影响范围。
 - 本地启动、编译、测试、构建优先使用仓库 `scripts/` 目录下脚本，不要直接按个人习惯拼 `mvn` / `npm` 命令。
 - Python 后端默认入口使用 `scripts/run-backend.cmd`；排查脚本行为或直连 Python 后端时再使用 `scripts/run-backend-python.cmd`。
 - Python 测试优先使用 `scripts/run-backend.cmd test`，或按影响范围执行相关 pytest 文件。

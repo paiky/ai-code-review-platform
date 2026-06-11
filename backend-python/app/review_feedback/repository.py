@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime
+import json
 from typing import Any
 
-from sqlalchemy import and_, func, inspect, select
+from sqlalchemy import and_, func, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
-from app.core.json_utils import format_datetime, page_response, read_json
+from app.core.json_utils import format_datetime, page_response, read_json, read_json_array
 from app.project_integration.models import Project
 from app.review_feedback.models import ReviewItemFeedback
 from app.review_record.models import ReviewTask
@@ -15,9 +17,12 @@ from app.review_record.models import ReviewTask
 def ensure_feedback_schema(db: Session) -> None:
     connection = db.connection()
     inspector = inspect(connection)
-    if inspector.has_table(ReviewItemFeedback.__tablename__):
+    if not inspector.has_table(ReviewItemFeedback.__tablename__):
+        ReviewItemFeedback.__table__.create(bind=connection)
+        db.flush()
         return
-    ReviewItemFeedback.__table__.create(bind=connection)
+    columns = {column["name"] for column in inspector.get_columns(ReviewItemFeedback.__tablename__)}
+    _add_column_if_missing(db, columns, "missing_context_types_json", "TEXT NULL")
     db.flush()
 
 
@@ -48,6 +53,7 @@ def feedback_to_response(
         "feedbackType": record.feedback_type,
         "reasonType": record.reason_type,
         "reasonText": record.reason_text,
+        "missingContextTypes": read_json_array(record.missing_context_types_json),
         "suggestAsProjectRule": bool(record.suggest_as_project_rule),
         "status": record.status,
         "adminComment": record.admin_comment,
@@ -94,6 +100,7 @@ def upsert_feedback(
     feedback_type: str,
     reason_type: str | None,
     reason_text: str | None,
+    missing_context_types: list[str],
     suggest_as_project_rule: bool,
     operator_name: str | None,
     operator_username: str | None,
@@ -128,6 +135,9 @@ def upsert_feedback(
     record.feedback_type = feedback_type
     record.reason_type = reason_type
     record.reason_text = reason_text
+    record.missing_context_types_json = (
+        json.dumps(missing_context_types, ensure_ascii=False) if missing_context_types else None
+    )
     record.suggest_as_project_rule = suggest_as_project_rule
     record.item_snapshot_json = item_snapshot_json
     record.operator_name = operator_name
@@ -164,6 +174,9 @@ def list_feedback_pool(
     source_type: str | None,
     risk_type: str | None,
     feedback_type: str | None,
+    reason_type: str | None,
+    missing_context_type: str | None,
+    policy_candidate: bool,
     status: str | None,
     keyword: str | None,
     page_no: int,
@@ -181,6 +194,24 @@ def list_feedback_pool(
         filters.append(ReviewItemFeedback.risk_type == risk_type)
     if feedback_type:
         filters.append(ReviewItemFeedback.feedback_type == feedback_type)
+    if reason_type:
+        filters.append(ReviewItemFeedback.reason_type == reason_type)
+    if missing_context_type:
+        filters.append(ReviewItemFeedback.missing_context_types_json.like(f'%"{missing_context_type}"%'))
+    if policy_candidate:
+        filters.append(
+            or_(
+                ReviewItemFeedback.suggest_as_project_rule.is_(True),
+                ReviewItemFeedback.status == "VALID",
+            )
+        )
+        filters.append(ReviewItemFeedback.status.notin_(("INSUFFICIENT", "IGNORED", "CONVERTED")))
+        filters.append(
+            or_(
+                ReviewItemFeedback.reason_type.is_(None),
+                ReviewItemFeedback.reason_type != "CONTEXT_MISSING",
+            )
+        )
     if status:
         filters.append(ReviewItemFeedback.status == status)
     if keyword:
@@ -215,9 +246,65 @@ def list_feedback_pool(
         .limit(page_size)
         .offset((page_no - 1) * page_size)
     ).all()
-    return page_response(
+    response = page_response(
         [feedback_to_response(record, task=task, project=project) for record, task, project in rows],
         page_no,
         page_size,
         total,
     )
+    response["contextMissingStats"] = _context_missing_stats(db, filters)
+    return response
+
+
+def _context_missing_stats(db: Session, filters: list[Any]) -> dict[str, Any]:
+    stats_filters = [*filters, ReviewItemFeedback.reason_type == "CONTEXT_MISSING"]
+    total_stmt = (
+        select(func.count())
+        .select_from(ReviewItemFeedback)
+        .join(ReviewTask, ReviewTask.id == ReviewItemFeedback.task_id)
+        .join(Project, Project.id == ReviewItemFeedback.project_id)
+        .where(and_(*stats_filters))
+    )
+    total = db.scalar(total_stmt) or 0
+
+    risk_rows = db.execute(
+        select(ReviewItemFeedback.risk_type, func.count())
+        .select_from(ReviewItemFeedback)
+        .join(ReviewTask, ReviewTask.id == ReviewItemFeedback.task_id)
+        .join(Project, Project.id == ReviewItemFeedback.project_id)
+        .where(and_(*stats_filters))
+        .group_by(ReviewItemFeedback.risk_type)
+        .order_by(func.count().desc())
+    ).all()
+
+    context_type_counter: Counter[str] = Counter()
+    context_rows = db.execute(
+        select(ReviewItemFeedback.missing_context_types_json)
+        .select_from(ReviewItemFeedback)
+        .join(ReviewTask, ReviewTask.id == ReviewItemFeedback.task_id)
+        .join(Project, Project.id == ReviewItemFeedback.project_id)
+        .where(and_(*stats_filters))
+    ).all()
+    for (raw_types,) in context_rows:
+        for item in read_json_array(raw_types):
+            if item:
+                context_type_counter[str(item)] += 1
+
+    return {
+        "total": int(total),
+        "byRiskType": [
+            {"riskType": risk_type or "UNKNOWN", "count": int(count)}
+            for risk_type, count in risk_rows
+        ],
+        "byMissingContextType": [
+            {"missingContextType": item, "count": count}
+            for item, count in context_type_counter.most_common()
+        ],
+    }
+
+
+def _add_column_if_missing(db: Session, columns: set[str], column_name: str, definition: str) -> None:
+    if column_name in columns:
+        return
+    db.execute(text(f"ALTER TABLE review_item_feedbacks ADD COLUMN {column_name} {definition}"))
+    columns.add(column_name)

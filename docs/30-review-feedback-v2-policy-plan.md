@@ -2,10 +2,23 @@
 
 ## 状态
 
-- 当前状态：方案已制定，尚未编码落地。
+- 当前状态：V2-A / V2-B / V2-C / V2-D 已按 `docs/32` 收口；下一步等待用户验收后再决定是否推进 V2-E。
 - 编写时间：2026-06-09
 - 前置版本：`docs/29-review-feedback-v1-implementation.md`
 - V2 目标：把 V1 中沉淀价值较高的反馈，人工转换为项目级 Review 策略，并在后续 AI Review 时作为项目上下文注入。
+
+## 路线更新
+
+- 更新时间：2026-06-10
+- 更新原因：`docs/31-review-context-aware-v1_5-plan.md` 已完成阶段 1 分析和阶段 2 上下文状态表达；原阶段 3 的 `METHOD_DELETED` 专项不再作为下一阶段主线。
+- 后续执行顺序：以 `docs/32-review-feedback-v2-mainline-roadmap.md` 为准。本文件继续作为 V2 项目策略库、策略管理接口和 Prompt 注入的详细实现参考。
+
+当前结论：
+
+1. 立即恢复 V2 项目策略主线，先做项目策略库、反馈转策略 API、策略 Prompt 注入和前端策略管理。
+2. `docs/31` 阶段 3 不按 `METHOD_DELETED` 专项补齐，后续改为通用 `Context Pack V0`。
+3. `docs/31` 阶段 4 的 `CONTEXT_MISSING` 反馈仍有价值，但降级为轻量统计能力，不阻塞 V2。
+4. `docs/31` 阶段 5 已被吸收到 `docs/32` 的 V2-A 到 V2-D。
 
 ## 启动脚本说明
 
@@ -518,3 +531,29 @@ Agent 不可自主推进：
 ## 每阶段停止规则
 
 每个阶段完成后必须停止，并等待用户完成本地验证。只有用户明确回复“继续下一阶段”后，才进入下一阶段。
+
+## V2-D 落地记录
+
+落地时间：2026-06-11。
+
+已完成：
+
+- README 补充“反馈池与项目策略”说明，覆盖前端路径、生成策略条件、PowerShell 验证步骤、rendered prompt 预览和 progress event 观察方式。
+- `docs/03-api-contract.md` 补充反馈提交、反馈池、反馈转策略、项目策略管理、rendered prompt `projectId` 和 `PROJECT_POLICIES_INJECTED` 契约。
+- `examples/project-review-policy-convert-request.json` 新增最小反馈转策略请求体。
+- `examples/README.md` 补充从反馈生成项目策略和验证策略注入的示例。
+- 前端“生成策略”禁用态增加 tooltip，说明需先标记有效、上下文不足不可沉淀等原因。
+
+已验证：
+
+```powershell
+$env:NO_PAUSE="1"; .\scripts\run-backend.cmd test tests\contract\test_review_feedback_api_contract.py tests\contract\test_project_review_policy_api_contract.py tests\unit\test_project_review_policy_prompt.py tests\contract\test_code_quality_api_contract.py::test_rendered_prompt_can_preview_project_review_policies tests\contract\test_code_quality_api_contract.py::test_manual_review_injects_project_review_policies_and_records_progress
+```
+
+结果：13 passed。
+
+```powershell
+$env:NO_PAUSE="1"; .\scripts\run-frontend.cmd build
+```
+
+结果：build passed；仅保留既有 Vite chunk size warning。

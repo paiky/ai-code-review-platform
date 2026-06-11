@@ -13,7 +13,6 @@
 常用文档：
 
 - `docs/23-help-gitlab-dingtalk-project-onboarding.md`：接入帮助页文档源，面向首次接入用户，按 GitLab Webhook、钉钉机器人、项目组和模型配置组织。
-- `docs/25-codegraph-search-guide.md`：CodeGraph 与 `rg` 的协作搜索策略、适用边界和实测记录。
 - `docs/26-gitlab-diff-context-expansion-plan.md`：GitLab 风格 Diff 上下文展开与暗黑语法高亮分阶段实施计划。
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
 - `docs/10-local-dev-pitfalls.md`：本地环境与调试避坑（按条目累积，含迁移期记录）。
@@ -39,8 +38,9 @@
 
 当前默认后端入口：
 
-- `.\scripts\run-backend.cmd`：默认启动或测试 Python FastAPI 后端。
-- `.\scripts\run-backend-python.cmd`：Python 后端直连入口，适合排查脚本行为时使用。
+- `.\scripts\run-backend.cmd`：默认启动或测试 Python FastAPI 后端；内部会调用 `run-backend.ps1`。
+- `.\scripts\run-backend.ps1`：薄包装，最终原样转发参数到 `run-backend-python.ps1`。
+- `.\scripts\run-backend-python.ps1`：Python 后端实际 runner，负责加载 `.local/gitlab.env`、设置 `PYTHONPATH`、选择 Python、执行 `dev/test/lint/migrate`。
 
 验证策略按影响范围选择最小集，不要无意义地默认全量扫描：
 
@@ -83,6 +83,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 审查任务、变更分析结果、提醒卡片、通知记录均落库。
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持配置 / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、项目组多模型并行 Review、自动触发、重试、执行过程展示。
+- AI Review finding 支持展示上下文状态、置信度、判断依据、缺失上下文和上下文摘要；当模型只能基于 diff 判断时，Prompt 会要求输出“部分 / 不足”上下文状态，避免证据不足时武断判为高风险。
 - GitLab MR 自动 AI Review 完成后会向任务所属项目组中已启用的钉钉 webhook 推送“代码质量 Review”结果；项目组未配置机器人时记录为 `SKIPPED`，不会回退推送到默认项目组。
 - GitLab Push webhook 会先按项目组 Push 审核策略中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会根据文件数、diff 大小、commit 数、硬上限和 debounce 自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
 
@@ -91,36 +92,6 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - Python 3.12+
 - MySQL 8.0+
 - Node.js 20+
-
-## CodeGraph（Cursor / Agent 代码图谱）
-
-本仓库已接入 [CodeGraph](https://github.com/colbymchenry/codegraph)，为 Cursor Agent 提供本地代码知识图谱 MCP 能力。Agent 可通过 `codegraph_search`、`codegraph_context`、`codegraph_callers` 等工具理解调用链、依赖关系和项目结构，减少全库 grep / Read 开销。
-
-CodeGraph 与 `rg` 不是替代关系：业务逻辑和后端调用链排查优先用 CodeGraph 建立候选地图，已知接口路径、字段名、错误文案和前端代码搜索优先用 `rg`，CodeGraph 结果再用局部源码或 `rg` 核验。详细规则见 `docs/25-codegraph-search-guide.md`。
-
-首次在本机启用：
-
-```powershell
-.\scripts\setup-codegraph.cmd
-```
-
-脚本会安装全局 `codegraph` CLI、检查仓库内项目级 `.cursor/mcp.json`、构建 `.codegraph/` 本地索引。完成后**重启 Cursor** 使 MCP 生效。
-
-常用维护命令：
-
-```powershell
-codegraph status                 # 查看索引统计
-codegraph sync                   # 增量同步变更
-codegraph context "你的问题"      # CLI 预览上下文
-codegraph query trigger_auto_review
-```
-
-说明：
-
-- `.cursor/mcp.json` 可提交到仓库，供团队共享 Cursor MCP 配置。
-- `.codegraph/` 索引库为本地数据，已在 `.gitignore` 中忽略；新克隆后需重新执行 `.\scripts\setup-codegraph.cmd` 或 `codegraph init -i`。
-- Codex App 不读取 Cursor 的 `.cursor/mcp.json`。如需在 Codex App 中启用，在用户级 `~/.codex/config.toml` 增加 `[mcp_servers.codegraph]`，配置 `command = "codegraph.cmd"` 与 `args = ["serve", "--mcp"]`，然后重启 Codex App。
-- CodeGraph 当前用于**本仓库开发与 Cursor Agent 辅助**；平台对 GitLab 远端仓库的 AI Review 主链路仍基于 diff，尚未把 CodeGraph 上下文注入服务端 Review prompt。
 
 ## 后端配置
 
@@ -441,6 +412,19 @@ GET  /api/rule-templates/{templateCode}
 
 任务列表支持按 `reviewStatus`、`groupId`、`targetType`、`triggerType` 等筛选；列表项 `riskItemCount` 表示 AI Review finding 总数。完整字段见 `docs/03-api-contract.md`。
 
+反馈池与项目策略：
+
+```text
+POST /api/review-tasks/{taskId}/feedback
+GET  /api/review-tasks/{taskId}/feedback
+GET  /api/risk-feedback
+PUT  /api/risk-feedback/{feedbackId}/status
+POST /api/risk-feedback/{feedbackId}/convert-to-policy
+GET  /api/projects/{projectId}/review-policies
+PUT  /api/project-review-policies/{policyId}
+PUT  /api/project-review-policies/{policyId}/enabled
+```
+
 代码质量 AI Review：
 
 ```text
@@ -571,6 +555,9 @@ V30__project_group_ai_review_policy.sql
 V31__multi_model_ai_review.sql
 V32__review_task_review_status.sql
 V33__glm_model_provider.sql
+V34__review_item_feedbacks.sql
+V35__project_review_policies.sql
+V36__review_feedback_missing_context.sql
 ```
 
 主要表：
@@ -589,6 +576,8 @@ V33__glm_model_provider.sql
 - `code_quality_review_settings`
 - `code_quality_fix_previews`
 - `code_quality_scheduler_jobs`
+- `review_item_feedbacks`
+- `project_review_policies`
 - `code_quality_push_review_gate_decisions`
 - `project_groups`
 - `project_target_configs`
@@ -807,6 +796,64 @@ Invoke-RestMethod `
 
 如果请求中的 `templateCode` 为空，会使用项目绑定的 `default_template_code`。
 
+## 反馈池与项目策略
+
+反馈池支持把人工确认过的反馈沉淀为项目策略。项目策略只影响同一个 `projectId` 的后续 AI Review，并会作为项目上下文注入 Prompt；它不会自动修改当前 Review 结果、不会自动忽略 finding，也不会自动降低风险等级。
+
+前端验证路径：
+
+```text
+任务详情 -> 对风险项或 AI finding 提交反馈
+反馈池 -> 反馈记录 -> 将反馈标记为“有效”或筛选“建议沉淀”
+反馈池 -> 点击“生成策略”
+反馈池 -> 项目策略 -> 查看、编辑、启用或停用策略
+设置 -> AI Review 设置 -> Prompt 预览，选择同项目后确认策略被注入
+任务详情 -> AI Review 执行过程，查看 PROJECT_POLICIES_INJECTED 事件
+```
+
+生成策略按钮只有在反馈 `status=VALID` 或提交反馈时勾选了“建议沉淀”时可点击。`CONTEXT_MISSING`、`INSUFFICIENT`、`IGNORED`、`CONVERTED` 反馈不会生成项目策略；上下文不足反馈会进入反馈池统计和 Context Pack 规划。
+
+当反馈原因选择“上下文不足”时，反馈弹窗会显示“缺失上下文”多选框，可记录同文件上下文、引用搜索、调用方、被调用方、表结构、配置、项目规则、测试结果等缺失类型。反馈池支持按“反馈原因”和“缺失上下文”筛选，并在列表上方展示上下文不足总数、风险类型分布和缺失上下文类型分布。该统计只作为后续 Context Pack 优先级输入，不会自动创建策略，也不会自动影响后续 Review。
+
+命令行验证示例：
+
+```powershell
+# 1. 查看可沉淀候选反馈
+Invoke-RestMethod "http://localhost:8090/api/risk-feedback?policyCandidate=true" |
+  ConvertTo-Json -Depth 20
+
+# 查看上下文不足反馈和统计
+Invoke-RestMethod "http://localhost:8090/api/risk-feedback?reasonType=CONTEXT_MISSING" |
+  ConvertTo-Json -Depth 20
+
+# 按缺失上下文类型筛选
+Invoke-RestMethod "http://localhost:8090/api/risk-feedback?reasonType=CONTEXT_MISSING&missingContextType=CALLER_CONTEXT" |
+  ConvertTo-Json -Depth 20
+
+# 2. 如反馈仍是 PENDING，先标记为有效
+Invoke-RestMethod `
+  -Method Put `
+  -Uri "http://localhost:8090/api/risk-feedback/{feedbackId}/status" `
+  -ContentType "application/json" `
+  -Body '{"status":"VALID","adminComment":"确认可作为项目策略候选。"}'
+
+# 3. 从反馈生成项目策略
+$payload = Get-Content -Raw -Path .\examples\project-review-policy-convert-request.json
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8090/api/risk-feedback/{feedbackId}/convert-to-policy" `
+  -ContentType "application/json" `
+  -Body $payload
+
+# 4. 查询项目策略
+Invoke-RestMethod "http://localhost:8090/api/projects/{projectId}/review-policies" |
+  ConvertTo-Json -Depth 20
+
+# 5. 预览策略注入后的 Prompt
+Invoke-RestMethod "http://localhost:8090/api/code-quality-review-profiles/backend-default-ai-review/rendered-prompt?projectId={projectId}" |
+  ConvertTo-Json -Depth 20
+```
+
 ## 代码质量 AI Review
 
 代码质量 Review 默认关闭。兼容环境变量仍可作为初始化默认值：
@@ -874,6 +921,7 @@ AI Review 配置接口：
 curl http://localhost:8090/api/code-quality-review-profiles
 curl http://localhost:8090/api/code-quality-review-profiles/backend-default-ai-review
 curl http://localhost:8090/api/code-quality-review-profiles/backend-default-ai-review/rendered-prompt
+curl "http://localhost:8090/api/code-quality-review-profiles/backend-default-ai-review/rendered-prompt?projectId=1"
 ```
 
 重试某个任务：
@@ -889,6 +937,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/code-quality-revi
 顶部导航：
 
 - `任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程、AI Review 调度队列入口。
+- `反馈池`：查看风险项 / finding 反馈，筛选建议沉淀反馈，并管理项目策略。
 - 右上角通知图标：查看最近 24 小时内 AI Review 执行失败记录，并可跳转任务详情。
 - `设置`：全局设置、模型 Provider 配置、AI Review 设置、项目组 / 端类型配置、启用的卡片提醒类型；Push 审核策略在 AI Review 设置中按项目组维护。
 - `版本更新`：查看近期功能变化、部署注意和验证提示。

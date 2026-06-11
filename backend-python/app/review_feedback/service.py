@@ -36,7 +36,20 @@ REASON_TYPES = {
     "DUPLICATE",
     "OTHER",
 }
-STATUSES = {"PENDING", "VALID", "INSUFFICIENT", "IGNORED"}
+STATUSES = {"PENDING", "VALID", "INSUFFICIENT", "IGNORED", "CONVERTED"}
+MISSING_CONTEXT_TYPES = {
+    "SAME_FILE_CONTEXT",
+    "SAME_CLASS_METHODS",
+    "REFERENCE_SEARCH",
+    "CALLER_CONTEXT",
+    "CALLEE_CONTEXT",
+    "RELATED_FILE",
+    "DB_SCHEMA_CONTEXT",
+    "CONFIG_CONTEXT",
+    "PROJECT_POLICY_CONTEXT",
+    "TEST_RESULT_CONTEXT",
+    "OTHER",
+}
 
 
 def attach_rule_feedbacks(db: Session, task_id: int, risk_card: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -93,6 +106,11 @@ def create_or_update_feedback(db: Session, task_id: int, request: dict[str, Any]
     feedback_type = _normalize_enum(request.get("feedbackType"), FEEDBACK_TYPES, "feedbackType")
     reason_type = _normalize_optional_enum(request.get("reasonType"), REASON_TYPES, "reasonType")
     reason_text = _clean_text(request.get("reasonText"), 4000)
+    missing_context_types = (
+        _normalize_missing_context_types(request.get("missingContextTypes"))
+        if reason_type == "CONTEXT_MISSING"
+        else []
+    )
     target = _resolve_feedback_target(db, task, source_type, item_fingerprint, request)
     snapshot_json = json.dumps(target.get("snapshot") or {}, ensure_ascii=False)
     record = upsert_feedback(
@@ -104,6 +122,7 @@ def create_or_update_feedback(db: Session, task_id: int, request: dict[str, Any]
         feedback_type=feedback_type,
         reason_type=reason_type,
         reason_text=reason_text,
+        missing_context_types=missing_context_types,
         suggest_as_project_rule=bool(request.get("suggestAsProjectRule")),
         operator_name=_clean_text(request.get("operatorName"), 128),
         operator_username=_clean_text(request.get("operatorUsername"), 128),
@@ -126,6 +145,9 @@ def list_feedback_pool_response(
     source_type: str | None,
     risk_type: str | None,
     feedback_type: str | None,
+    reason_type: str | None,
+    missing_context_type: str | None,
+    policy_candidate: bool,
     status: str | None,
     keyword: str | None,
     page_no: int,
@@ -133,6 +155,12 @@ def list_feedback_pool_response(
 ) -> dict[str, Any]:
     normalized_source_type = _normalize_optional_enum(source_type, SOURCE_TYPES, "sourceType")
     normalized_feedback_type = _normalize_optional_enum(feedback_type, FEEDBACK_TYPES, "feedbackType")
+    normalized_reason_type = _normalize_optional_enum(reason_type, REASON_TYPES, "reasonType")
+    normalized_missing_context_type = _normalize_optional_enum(
+        missing_context_type,
+        MISSING_CONTEXT_TYPES,
+        "missingContextType",
+    )
     normalized_status = _normalize_optional_enum(status, STATUSES, "status")
     return list_feedback_pool(
         db,
@@ -140,6 +168,9 @@ def list_feedback_pool_response(
         source_type=normalized_source_type,
         risk_type=_clean_text(risk_type, 64),
         feedback_type=normalized_feedback_type,
+        reason_type=normalized_reason_type,
+        missing_context_type=normalized_missing_context_type,
+        policy_candidate=policy_candidate,
         status=normalized_status,
         keyword=_clean_text(keyword, 255),
         page_no=page_no,
@@ -320,6 +351,18 @@ def _normalize_optional_enum(value: Any, allowed: set[str], field: str) -> str |
     if value is None or str(value).strip() == "":
         return None
     return _normalize_enum(value, allowed, field)
+
+
+def _normalize_missing_context_types(value: Any) -> list[str]:
+    raw_items = value if isinstance(value, list) else ([value] if value else [])
+    normalized: list[str] = []
+    for item in raw_items:
+        if item is None:
+            continue
+        normalized_item = _normalize_enum(item, MISSING_CONTEXT_TYPES, "missingContextTypes")
+        if normalized_item not in normalized:
+            normalized.append(normalized_item)
+    return normalized[:10]
 
 
 def _clean_text(value: Any, max_length: int) -> str | None:

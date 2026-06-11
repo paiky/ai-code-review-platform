@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.code_quality.models import CodeQualityFixPreview, CodeQualityReviewResult, CodeQualitySchedulerJob
 from app.project_integration.models import GitLabMergeRequestEvent, Project
+from app.project_review_policy.models import ProjectReviewPolicy
+from app.review_feedback.models import ReviewItemFeedback
 from app.review_record.models import ReviewTask
 from app.rule_template.models import RuleTemplate
 
@@ -347,6 +349,9 @@ def test_xiaomimo_provider_uses_openai_compatible_request(
     result = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-result").json()["data"]
     assert result["model"] == "mimo-v2.5-pro"
     assert result["findings"][0]["source"] == "XIAOMIMO"
+    assert result["findings"][0]["contextStatus"] == "PARTIAL"
+    assert result["findings"][0]["evidence"] == []
+    assert result["findings"][0]["missingContext"] == []
     progress = client.get(
         f"/api/review-tasks/{data['taskId']}/code-quality-progress"
     ).json()["data"]
@@ -493,6 +498,152 @@ def test_rendered_prompt_uses_java_stronger_default(
     assert "审查原则" in prompt
     assert "事务与一致性" in prompt
     assert "每个 finding 都必须说明" in prompt
+
+
+def test_rendered_prompt_can_preview_project_review_policies(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    seed_project(db_session, "DEEPSEEK")
+    now = datetime(2026, 6, 10, 11, 0, 0)
+    db_session.add(
+        ProjectReviewPolicy(
+            project_id=1,
+            policy_type="PROJECT_RULE",
+            risk_type="EXCEPTION_HANDLING",
+            title="本项目统一使用 GlobalExceptionHandler",
+            content="Controller 未显式 try-catch 时，需要结合统一异常处理配置判断。",
+            source_feedback_id=9001,
+            enabled=True,
+            version=1,
+            created_by="alice",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/code-quality-review-profiles/backend-default-ai-review/rendered-prompt",
+        params={"projectId": 1},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["projectId"] == 1
+    assert data["projectPolicyCount"] == 1
+    assert data["projectReviewPolicies"][0]["title"] == "本项目统一使用 GlobalExceptionHandler"
+    assert "以下是当前项目已由管理员确认的 Review 策略" in data["prompt"]
+    assert "本项目统一使用 GlobalExceptionHandler" in data["prompt"]
+    assert "不能覆盖明确的安全、数据一致性或线上正确性硬风险" in data["prompt"]
+
+
+@respx.mock
+def test_manual_review_injects_project_review_policies_and_records_progress(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "policy-secret")
+    seed_project(db_session, "DEEPSEEK")
+    now = datetime(2026, 6, 10, 11, 0, 0)
+    db_session.add(
+        ProjectReviewPolicy(
+            project_id=1,
+            policy_type="CONTEXT_FACT",
+            risk_type="SECURITY",
+            title="本项目统一由网关鉴权",
+            content="Controller 未显式鉴权时，不能仅凭局部 diff 判定为高风险，仍需关注绕过网关的安全硬风险。",
+            source_feedback_id=9002,
+            enabled=True,
+            version=1,
+            created_by="alice",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.commit()
+    route = respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("策略注入完成")}}]})
+    )
+
+    response = client.post("/api/code-quality-reviews/manual", json=manual_request())
+
+    assert response.status_code == 200
+    request_body = json.loads(route.calls[0].request.content.decode("utf-8"))
+    system_prompt = request_body["messages"][0]["content"]
+    assert "本项目统一由网关鉴权" in system_prompt
+    assert "不能覆盖明确的安全、数据一致性或线上正确性硬风险" in system_prompt
+    progress = client.get(
+        f"/api/review-tasks/{response.json()['data']['taskId']}/code-quality-progress"
+    ).json()["data"]
+    policy_event = next(event for event in progress if event["phase"] == "PROJECT_POLICIES_INJECTED")
+    detail = json.loads(policy_event["detail"])
+    assert detail["injectedCount"] == 1
+    assert detail["policies"][0]["title"] == "本项目统一由网关鉴权"
+    assert "Controller 未显式鉴权" not in policy_event["detail"]
+    assert "policy-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
+@respx.mock
+def test_manual_review_builds_context_pack_and_records_progress(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "context-pack-secret")
+    seed_project(db_session, "DEEPSEEK")
+    now = datetime(2026, 6, 11, 10, 0, 0)
+    db_session.add(
+        ReviewItemFeedback(
+            project_id=1,
+            task_id=9001,
+            source_type="AI_FINDING",
+            item_fingerprint="context-missing-demo",
+            risk_type="TRANSACTION",
+            feedback_type="FALSE_POSITIVE",
+            reason_type="CONTEXT_MISSING",
+            missing_context_types_json=json.dumps(["CALLER_CONTEXT", "REFERENCE_SEARCH"]),
+            suggest_as_project_rule=False,
+            status="PENDING",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.commit()
+    route = respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("Context Pack 完成")}}]})
+    )
+
+    response = client.post("/api/code-quality-reviews/manual", json=manual_request())
+
+    assert response.status_code == 200
+    request_body = json.loads(route.calls[0].request.content.decode("utf-8"))
+    system_prompt = request_body["messages"][0]["content"]
+    user_input = request_body["messages"][1]["content"]
+    assert "Context Pack / reviewContext 只是辅助证据" in system_prompt
+    assert "不能覆盖或削弱明确的安全、数据一致性、事务一致性或线上正确性硬风险" in system_prompt
+    assert "Review Context Pack" in user_input
+    assert "context-pack-v0" in user_input
+    assert "changedFilesSummary" in user_input
+    assert "contextMissingFeedbackSummary" in user_input
+    assert "REFERENCE_SEARCH" in user_input
+    progress = client.get(
+        f"/api/review-tasks/{response.json()['data']['taskId']}/code-quality-progress"
+    ).json()["data"]
+    context_event = next(event for event in progress if event["phase"] == "CONTEXT_PACK_BUILT")
+    detail = json.loads(context_event["detail"])
+    assert detail["summary"]["changedFileCount"] == 1
+    assert detail["summary"]["contextMissingFeedbackTotal"] == 1
+    assert detail["summary"]["unavailableContextCount"] >= 1
+    assert "order.setStatus(null)" not in context_event["detail"]
+    assert "context-pack-secret" not in json.dumps(progress, ensure_ascii=False)
 
 
 def test_default_push_hard_limits_are_unlimited(
@@ -2467,6 +2618,101 @@ def test_retry_gitlab_mr_ai_review_uses_saved_changed_files(
     assert retry.json()["data"]["status"] == "SUCCESS"
     result = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-result").json()["data"]
     assert result["findingCount"] == 1
+
+
+@respx.mock
+def test_retry_gitlab_mr_ai_review_includes_same_file_context_snippets(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "false")
+    monkeypatch.setenv("GITLAB_API_ENABLED", "true")
+    monkeypatch.setenv("GITLAB_BASE_URL", "https://gitlab.example.test")
+    monkeypatch.setenv("GITLAB_TOKEN", "unit-token")
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "merge_request",
+            "project": {
+                "id": 1001,
+                "name": "demo-service",
+                "web_url": "https://gitlab.example.test/demo/service",
+            },
+            "object_attributes": {
+                "iid": 12,
+                "action": "open",
+                "source_branch": "feature/ai",
+                "target_branch": "main",
+                "last_commit": {"id": "head-sha"},
+            },
+            "changedFiles": [
+                {
+                    "path": "src/OrderService.java",
+                    "diffText": (
+                        "diff --git a/src/OrderService.java b/src/OrderService.java\n"
+                        "@@ -5,5 +5,6 @@\n"
+                        "   void create() {\n"
+                        "     validate();\n"
+                        "     Order order = new Order();\n"
+                        "+    order.setStatus(null);\n"
+                        "     save(order);\n"
+                        "   }\n"
+                    ),
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Merge Request Hook"},
+    ).json()["data"]
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_RETRY_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "retry-context-secret")
+    enabled = client.put("/api/code-quality-reviews/settings", json={"reviewEnabled": True})
+    assert enabled.status_code == 200
+    raw_route = respx.get(
+        "https://gitlab.example.test/api/v4/projects/1001/repository/files/src%2FOrderService.java/raw",
+        params={"ref": "head-sha"},
+    ).mock(
+        return_value=Response(
+            200,
+            text="\n".join(
+                [
+                    "package demo;",
+                    "",
+                    "class OrderService {",
+                    "  void prepare() {}",
+                    "  void create() {",
+                    "    validate();",
+                    "    Order order = new Order();",
+                    "    order.setStatus(null);",
+                    "    save(order);",
+                    "  }",
+                    "}",
+                ]
+            ),
+        )
+    )
+    provider_route = respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json()}}]})
+    )
+
+    retry = client.post(f"/api/code-quality-reviews/tasks/{created['taskId']}/retry")
+
+    assert retry.status_code == 200
+    assert raw_route.called
+    request_body = json.loads(provider_route.calls[0].request.content.decode("utf-8"))
+    user_input = request_body["messages"][1]["content"]
+    assert "sourceSnippets" in user_input
+    assert "GITLAB_RAW_FILE_SNIPPETS" in user_input
+    assert "order.setStatus(null)" in user_input
+    progress = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-progress").json()["data"]
+    context_event = next(event for event in progress if event["phase"] == "CONTEXT_PACK_BUILT")
+    detail = json.loads(context_event["detail"])
+    assert detail["summary"]["sameFileSourceSnippetCount"] == 1
+    assert detail["summary"]["sameFileSourceFileCount"] == 1
+    assert "order.setStatus(null)" not in context_event["detail"]
+    assert "retry-context-secret" not in json.dumps(progress, ensure_ascii=False)
 
 
 @respx.mock

@@ -893,6 +893,10 @@ def _normalize_finding(finding: dict[str, Any], source: str, overall_level: Any)
         "body": finding.get("body") or finding.get("description"),
         "suggestion": finding.get("suggestion") or finding.get("recommendation"),
         "confidence": _normalize_confidence(finding.get("confidence")) or "MEDIUM",
+        "contextStatus": _normalize_context_status(_first_present(finding, "contextStatus", "context_status")) or "PARTIAL",
+        "evidence": _normalize_string_list(_first_present(finding, "evidence", "evidences")),
+        "missingContext": _normalize_string_list(_first_present(finding, "missingContext", "missing_context")),
+        "contextSummary": _first_present(finding, "contextSummary", "context_summary"),
         "source": source,
     }
 
@@ -971,6 +975,29 @@ def _overall_level_from_findings(findings: list[dict[str, Any]]) -> str:
 def _normalize_confidence(value: Any) -> str | None:
     normalized = str(value or "").strip().upper()
     return normalized if normalized in {"LOW", "MEDIUM", "HIGH"} else None
+
+
+def _normalize_context_status(value: Any) -> str | None:
+    normalized = str(value or "").strip().upper()
+    return normalized if normalized in {"SUFFICIENT", "PARTIAL", "INSUFFICIENT"} else None
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else [value]
+    normalized: list[str] = []
+    for item in items:
+        if item is None:
+            continue
+        if isinstance(item, dict):
+            text = item.get("text") or item.get("summary") or item.get("snippet") or item.get("type")
+        else:
+            text = item
+        compact = " ".join(str(text or "").split())
+        if compact:
+            normalized.append(compact[:500])
+    return normalized[:12]
 
 
 def _to_int(value: Any) -> int | None:

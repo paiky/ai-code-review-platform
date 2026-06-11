@@ -18,6 +18,8 @@ from app.project_integration.api import group_router
 from app.project_integration.api import router as project_router
 from app.project_integration.api import target_mapping_router
 from app.project_integration.api import webhook_router
+from app.project_review_policy.api import project_policy_project_router
+from app.project_review_policy.api import project_policy_router
 from app.review_feedback.api import feedback_pool_router
 from app.review_feedback.api import task_feedback_router
 from app.review_record.api import router as review_task_router
@@ -53,6 +55,8 @@ def create_app() -> FastAPI:
     app.include_router(group_router)
     app.include_router(target_mapping_router)
     app.include_router(webhook_router)
+    app.include_router(project_policy_project_router)
+    app.include_router(project_policy_router)
     app.include_router(review_task_router)
     app.include_router(task_feedback_router)
     app.include_router(feedback_pool_router)

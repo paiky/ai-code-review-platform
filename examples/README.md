@@ -37,6 +37,10 @@ Invoke-RestMethod `
   - 用于验证 `@Value("${xxx}")` 配置感知。
   - 预期风险卡片中的 `focusIndicators` 会命中 `VALUE_CONFIG_CHANGE`。
 
+- `project-review-policy-convert-request.json`
+  - 用于验证反馈池 `POST /api/risk-feedback/{feedbackId}/convert-to-policy`。
+  - 使用前需要先在反馈池获得一条 `VALID` 或 `suggestAsProjectRule=true` 的反馈。
+
 - `gitlab.env.example`
   - 用于真实 GitLab 联调的本地环境变量模板。
   - 建议复制到 `.local/gitlab.env` 后再填写真实值。
@@ -70,7 +74,29 @@ Invoke-RestMethod `
   -Body $payload
 ```
 
-### 3. 真实 GitLab diff 联调
+### 3. 从反馈生成项目策略
+
+```powershell
+$payload = Get-Content -Raw -Path .\examples\project-review-policy-convert-request.json
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8090/api/risk-feedback/{feedbackId}/convert-to-policy" `
+  -ContentType "application/json" `
+  -Body $payload
+```
+
+转换成功后可用下面的命令确认项目策略和 Prompt 注入预览：
+
+```powershell
+Invoke-RestMethod "http://localhost:8090/api/projects/{projectId}/review-policies" |
+  ConvertTo-Json -Depth 20
+
+Invoke-RestMethod "http://localhost:8090/api/code-quality-review-profiles/backend-default-ai-review/rendered-prompt?projectId={projectId}" |
+  ConvertTo-Json -Depth 20
+```
+
+### 4. 真实 GitLab diff 联调
 
 可以基于 `gitlab-mr-webhook.real-no-changed-files.json` 替换占位字段后执行：
 

@@ -12,18 +12,26 @@ def render_instructions(request: dict[str, Any]) -> str:
         '"findings": [{"severity": "MINOR|MAJOR|CRITICAL", '
         '"category": "CODE_QUALITY|CORRECTNESS|SECURITY|TRANSACTION|SQL_PERFORMANCE|CACHE_CONSISTENCY|MQ_CONSISTENCY|EXCEPTION_HANDLING|TEST_GAP", '
         '"filePath": string, "startLine": integer, "endLine": integer, '
-        '"title": string, "body": string, "suggestion": string, "confidence": "LOW|MEDIUM|HIGH"}]}。\n'
+        '"title": string, "body": string, "suggestion": string, "confidence": "LOW|MEDIUM|HIGH", '
+        '"contextStatus": "SUFFICIENT|PARTIAL|INSUFFICIENT", '
+        '"evidence": string[], "missingContext": string[], "contextSummary": string}]}。\n'
         "不要使用 type、file_path、line_range、path、line 等替代字段；没有准确行号时使用最接近的 diff 新增或修改行号。\n"
         "只报告本次变更引入的、可执行的代码质量问题，不报告历史存量问题。\n"
         "重点关注正确性、数据一致性、安全、事务边界、SQL 性能、缓存一致性、MQ 一致性、异常处理、可观测性和关键测试缺口。\n"
         "不报告纯代码风格、命名偏好、格式、注释或主观重构建议。\n"
         "不要编造输入中不存在的文件或行号；缺少证据时不要报告，除非潜在影响很高且必须人工确认。\n"
+        "每个 finding 都必须填写上下文字段：contextStatus 表示证据是否充分，evidence 写本次判断依赖的 diff 或上下文依据，missingContext 写仍缺少的上下文类型，contextSummary 用一句中文概括已看到的上下文。\n"
+        "如果只能基于 diff 推断且缺少调用方、引用关系、同文件上下文、配置、表结构或测试结果，应使用 PARTIAL 或 INSUFFICIENT，并将 confidence 设为 LOW 或 MEDIUM。\n"
+        "上下文不足时不要武断输出高风险或紧急；除非属于明确的安全、数据一致性或线上正确性硬风险，否则应把 severity 控制为 MINOR，并在 body 中说明“需要确认”。\n"
+        "删除方法、修改方法签名或删除字段时，不要仅凭删除动作判定风险；必须结合调用方、引用关系、替代方法或迁移证据，缺少这些证据时输出需要确认。\n"
+        "Context Pack / reviewContext 只是辅助证据，用于说明本次可见上下文、不可用上下文和历史上下文不足反馈；"
+        "它不能覆盖或削弱明确的安全、数据一致性、事务一致性或线上正确性硬风险。\n"
         "你可以参考上下文，但最终只能报告由 changed files 白名单中的 diff 引入的问题。"
     )
     instructions = str(request.get("instructions") or "").strip()
-    if instructions:
-        return f"{instructions}\n\n{protocol}"
-    return protocol
+    policy_text = str(request.get("projectReviewPoliciesText") or "").strip()
+    parts = [item for item in (instructions, policy_text, protocol) if item]
+    return "\n\n".join(parts)
 
 
 def render_input(request: dict[str, Any]) -> str:
@@ -33,6 +41,7 @@ def render_input(request: dict[str, Any]) -> str:
         f"Commit sha: {request.get('commitSha') or '-'}\n"
         f"Title: {request.get('title') or '-'}\n"
         f"Changed files: {request.get('changedFiles') or []}\n\n"
+        f"Review Context Pack:\n{request.get('reviewContextText') or '-'}\n\n"
         f"Diff:\n{request.get('diffText') or '-'}"
     )
 
@@ -152,6 +161,10 @@ def json_schema_format() -> dict[str, Any]:
                             "body",
                             "suggestion",
                             "confidence",
+                            "contextStatus",
+                            "evidence",
+                            "missingContext",
+                            "contextSummary",
                         ],
                         "properties": {
                             "severity": {
@@ -169,6 +182,19 @@ def json_schema_format() -> dict[str, Any]:
                                 "type": "string",
                                 "enum": ["LOW", "MEDIUM", "HIGH"],
                             },
+                            "contextStatus": {
+                                "type": "string",
+                                "enum": ["SUFFICIENT", "PARTIAL", "INSUFFICIENT"],
+                            },
+                            "evidence": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "missingContext": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "contextSummary": {"type": "string"},
                         },
                     },
                 },

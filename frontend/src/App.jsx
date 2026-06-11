@@ -184,7 +184,25 @@ const REVIEW_FEEDBACK_STATUS_OPTIONS = [
   { label: '待分析', value: 'PENDING' },
   { label: '有效反馈', value: 'VALID' },
   { label: '信息不足', value: 'INSUFFICIENT' },
-  { label: '已忽略', value: 'IGNORED' }
+  { label: '已忽略', value: 'IGNORED' },
+  { label: '已沉淀', value: 'CONVERTED' }
+];
+const PROJECT_REVIEW_POLICY_TYPE_OPTIONS = [
+  { label: '项目规则', value: 'PROJECT_RULE' },
+  { label: '项目事实', value: 'CONTEXT_FACT' }
+];
+const MISSING_CONTEXT_TYPE_OPTIONS = [
+  { label: '同文件上下文', value: 'SAME_FILE_CONTEXT' },
+  { label: '同类方法', value: 'SAME_CLASS_METHODS' },
+  { label: '引用搜索', value: 'REFERENCE_SEARCH' },
+  { label: '调用方', value: 'CALLER_CONTEXT' },
+  { label: '被调用方', value: 'CALLEE_CONTEXT' },
+  { label: '相关文件', value: 'RELATED_FILE' },
+  { label: '表结构', value: 'DB_SCHEMA_CONTEXT' },
+  { label: '配置', value: 'CONFIG_CONTEXT' },
+  { label: '项目规则', value: 'PROJECT_POLICY_CONTEXT' },
+  { label: '测试结果', value: 'TEST_RESULT_CONTEXT' },
+  { label: '其他', value: 'OTHER' }
 ];
 
 function targetTypeLabel(value) {
@@ -267,6 +285,43 @@ function confidenceLabel(value) {
   }
 }
 
+function contextStatusColor(value) {
+  if (value === 'SUFFICIENT') return 'green';
+  if (value === 'PARTIAL') return 'gold';
+  if (value === 'INSUFFICIENT') return 'red';
+  return 'default';
+}
+
+function contextStatusLabel(value) {
+  switch (value) {
+    case 'SUFFICIENT':
+      return '充分';
+    case 'PARTIAL':
+      return '部分';
+    case 'INSUFFICIENT':
+      return '不足';
+    default:
+      return value || '-';
+  }
+}
+
+function missingContextLabel(value) {
+  return MISSING_CONTEXT_TYPE_OPTIONS.find(item => item.value === value)?.label || value;
+}
+
+function normalizeTextList(value) {
+  const raw = Array.isArray(value) ? value : (value ? [value] : []);
+  return raw
+    .map(item => {
+      if (item && typeof item === 'object') {
+        return item.text || item.summary || item.snippet || item.type || '';
+      }
+      return item;
+    })
+    .map(item => String(item || '').trim())
+    .filter(Boolean);
+}
+
 function severityColor(value) {
   if (value === 'CRITICAL') return 'red';
   if (value === 'MAJOR') return 'volcano';
@@ -314,7 +369,18 @@ function reviewFeedbackStatusColor(value) {
   if (value === 'VALID') return 'green';
   if (value === 'INSUFFICIENT') return 'orange';
   if (value === 'IGNORED') return 'default';
+  if (value === 'CONVERTED') return 'purple';
   return 'blue';
+}
+
+function projectReviewPolicyTypeLabel(value) {
+  return PROJECT_REVIEW_POLICY_TYPE_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function projectReviewPolicyTypeColor(value) {
+  if (value === 'PROJECT_RULE') return 'blue';
+  if (value === 'CONTEXT_FACT') return 'cyan';
+  return 'default';
 }
 
 function reviewFeedbackTypeColor(value) {
@@ -1436,18 +1502,21 @@ function ReviewFeedbackControl({
     feedbackType: 'USEFUL',
     reasonType: 'OTHER',
     reasonText: '',
+    missingContextTypes: [],
     suggestAsProjectRule: false
   });
 
   useEffect(() => {
     setLocalFeedback(feedback || null);
-  }, [feedback?.id, feedback?.feedbackType, feedback?.status]);
+  }, [feedback?.id, feedback?.feedbackType, feedback?.status, feedback?.missingContextTypes]);
 
   const openModal = feedbackType => {
+    const defaultReasonType = defaultReasonTypeForFeedback(feedbackType);
     setDraft({
       feedbackType,
-      reasonType: defaultReasonTypeForFeedback(feedbackType),
+      reasonType: defaultReasonType,
       reasonText: localFeedback?.reasonText || '',
+      missingContextTypes: defaultReasonType === 'CONTEXT_MISSING' ? (localFeedback?.missingContextTypes || []) : [],
       suggestAsProjectRule: localFeedback?.suggestAsProjectRule || false
     });
     setModalOpen(true);
@@ -1463,7 +1532,8 @@ function ReviewFeedbackControl({
           sourceType,
           itemFingerprint,
           ...payload,
-          ...draft
+          ...draft,
+          missingContextTypes: draft.reasonType === 'CONTEXT_MISSING' ? draft.missingContextTypes : []
         })
       });
       setLocalFeedback(nextFeedback);
@@ -1495,6 +1565,9 @@ function ReviewFeedbackControl({
             <Tag color={reviewFeedbackStatusColor(localFeedback.status)}>
               {reviewFeedbackStatusLabel(localFeedback.status)}
             </Tag>
+            {(localFeedback.missingContextTypes || []).map(item => (
+              <Tag key={item} color="orange">{missingContextLabel(item)}</Tag>
+            ))}
           </>
         )}
         {buttons.map(([value, label]) => (
@@ -1525,15 +1598,31 @@ function ReviewFeedbackControl({
             onChange={value => setDraft(current => ({
               ...current,
               feedbackType: value,
-              reasonType: defaultReasonTypeForFeedback(value)
+              reasonType: defaultReasonTypeForFeedback(value),
+              missingContextTypes: []
             }))}
           />
           <Select
             className="full-width"
             value={draft.reasonType}
             options={REVIEW_FEEDBACK_REASON_OPTIONS}
-            onChange={value => setDraft(current => ({ ...current, reasonType: value }))}
+            onChange={value => setDraft(current => ({
+              ...current,
+              reasonType: value,
+              missingContextTypes: value === 'CONTEXT_MISSING' ? current.missingContextTypes : []
+            }))}
           />
+          {draft.reasonType === 'CONTEXT_MISSING' && (
+            <Select
+              mode="multiple"
+              allowClear
+              className="full-width"
+              placeholder="选择缺失的上下文"
+              value={draft.missingContextTypes}
+              options={MISSING_CONTEXT_TYPE_OPTIONS}
+              onChange={value => setDraft(current => ({ ...current, missingContextTypes: value }))}
+            />
+          )}
           <Input.TextArea
             value={draft.reasonText}
             rows={4}
@@ -1985,6 +2074,43 @@ function ProgressEventView({ event, showStepDescription = false }) {
         <Text type="secondary" className="progress-original-message">{event.message}</Text>
       )}
       {detail && <pre className="progress-detail">{detail}</pre>}
+    </div>
+  );
+}
+
+function FindingContext({ finding }) {
+  const evidences = normalizeTextList(finding?.evidence);
+  const missingContext = normalizeTextList(finding?.missingContext);
+  const hasContext = finding?.contextStatus || finding?.contextSummary || evidences.length > 0 || missingContext.length > 0;
+  if (!hasContext) return null;
+
+  return (
+    <div className="finding-context-panel">
+      <Space direction="vertical" size={8} className="full-width">
+        <Space wrap>
+          {finding.contextStatus && (
+            <Tag color={contextStatusColor(finding.contextStatus)}>
+              上下文 {contextStatusLabel(finding.contextStatus)}
+            </Tag>
+          )}
+          {missingContext.map(item => (
+            <Tag key={item} color="orange">{missingContextLabel(item)}</Tag>
+          ))}
+        </Space>
+        {finding.contextSummary && (
+          <Text className="finding-context-summary">{cleanAiMarkdown(finding.contextSummary)}</Text>
+        )}
+        {evidences.length > 0 && (
+          <div className="finding-context-evidence">
+            <Text type="secondary">判断依据</Text>
+            <ul>
+              {evidences.map((item, index) => (
+                <li key={`${item}-${index}`}>{cleanAiMarkdown(item)}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </Space>
     </div>
   );
 }
@@ -2654,6 +2780,7 @@ function CodeQualityReviewView({
                     <Tag color={severityColor(finding.severity)}>{severityLabel(finding.severity)}</Tag>
                     {finding.category && <Tag color="blue">{categoryLabel(finding.category)}</Tag>}
                     {finding.confidence && <Tag color={confidenceColor(finding.confidence)}>置信度 {confidenceLabel(finding.confidence)}</Tag>}
+                    {finding.contextStatus && <Tag color={contextStatusColor(finding.contextStatus)}>上下文 {contextStatusLabel(finding.contextStatus)}</Tag>}
                     <Text strong>{cleanAiMarkdown(finding.title) || '未命名问题'}</Text>
                   </Space>
                 ),
@@ -2704,6 +2831,7 @@ function CodeQualityReviewView({
                     </Descriptions>
                     {finding.body && <Paragraph>{cleanAiMarkdown(finding.body)}</Paragraph>}
                     {finding.suggestion && <Alert type="info" showIcon message="建议" description={finding.suggestion} />}
+                    <FindingContext finding={finding} />
                     <ReviewFeedbackControl
                       taskId={taskId}
                       sourceType="AI_FINDING"
@@ -4874,10 +5002,44 @@ function TaskDetailPage() {
   );
 }
 
+function canConvertFeedbackToPolicy(row) {
+  if (!row) return false;
+  if (row.status === 'CONVERTED' || row.status === 'INSUFFICIENT' || row.status === 'IGNORED') return false;
+  if (row.reasonType === 'CONTEXT_MISSING') return false;
+  return row.status === 'VALID' || Boolean(row.suggestAsProjectRule);
+}
+
+function convertFeedbackToPolicyDisabledReason(row) {
+  if (!row || canConvertFeedbackToPolicy(row)) return '';
+  if (row.status === 'CONVERTED') return '该反馈已沉淀为项目策略。';
+  if (row.status === 'INSUFFICIENT') return '信息不足的反馈不能生成项目策略。';
+  if (row.status === 'IGNORED') return '已忽略的反馈不能生成项目策略。';
+  if (row.reasonType === 'CONTEXT_MISSING') return '上下文不足反馈应进入后续上下文统计，不会沉淀为项目策略。';
+  return '需先标记为有效反馈，或提交反馈时勾选“建议沉淀”。';
+}
+
+function policyDraftFromFeedback(row) {
+  const riskLabel = row?.riskTitle || categoryLabel(row?.riskType);
+  const reasonText = String(row?.reasonText || '').trim();
+  const sourceLines = [
+    reasonText,
+    row?.reasonType ? `反馈原因：${reviewFeedbackReasonLabel(row.reasonType)}` : '',
+    row?.riskTitle ? `来源风险：${row.riskTitle}` : ''
+  ].filter(Boolean);
+  return {
+    policyType: row?.reasonType === 'HAS_EXTERNAL_GUARD' ? 'CONTEXT_FACT' : 'PROJECT_RULE',
+    riskType: row?.riskType || '',
+    title: `关于 ${riskLabel || '该反馈'} 的项目 Review 策略`,
+    content: sourceLines.join('\n') || '该反馈已确认可作为本项目后续 Review 的项目事实或审查规则。',
+    enabled: true
+  };
+}
+
 function RiskFeedbackPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const route = currentRoute(location);
+  const [activeTabKey, setActiveTabKey] = useState('feedbacks');
   const [items, setItems] = useState([]);
   const [projects, setProjects] = useState([]);
   const [pagination, setPagination] = useState({ pageNo: 1, pageSize: 20, total: 0 });
@@ -4885,12 +5047,40 @@ function RiskFeedbackPage() {
     projectId: null,
     sourceType: null,
     feedbackType: null,
+    reasonType: null,
+    missingContextType: null,
+    policyCandidate: false,
     status: null,
     keyword: ''
   });
+  const [contextMissingStats, setContextMissingStats] = useState({ total: 0, byRiskType: [], byMissingContextType: [] });
+  const [policies, setPolicies] = useState([]);
+  const [policyProjectId, setPolicyProjectId] = useState(null);
+  const [policyFilters, setPolicyFilters] = useState({
+    enabled: null,
+    policyType: null,
+    riskType: ''
+  });
   const [loading, setLoading] = useState(false);
+  const [policyLoading, setPolicyLoading] = useState(false);
   const [updatingId, setUpdatingId] = useState(null);
+  const [updatingPolicyId, setUpdatingPolicyId] = useState(null);
   const [error, setError] = useState(null);
+  const [policyError, setPolicyError] = useState(null);
+  const [policyModal, setPolicyModal] = useState({ open: false, mode: 'create', feedback: null, policy: null });
+  const [policyDraft, setPolicyDraft] = useState({
+    policyType: 'PROJECT_RULE',
+    riskType: '',
+    title: '',
+    content: '',
+    enabled: true
+  });
+  const [policySaving, setPolicySaving] = useState(false);
+
+  const projectOptions = useMemo(
+    () => projects.map(project => ({ label: project.name, value: project.id })),
+    [projects]
+  );
 
   const load = async ({ pageNo = pagination.pageNo, pageSize = pagination.pageSize, nextFilters = filters } = {}) => {
     setLoading(true);
@@ -4902,11 +5092,15 @@ function RiskFeedbackPage() {
       if (nextFilters.projectId) params.set('projectId', String(nextFilters.projectId));
       if (nextFilters.sourceType) params.set('sourceType', nextFilters.sourceType);
       if (nextFilters.feedbackType) params.set('feedbackType', nextFilters.feedbackType);
+      if (nextFilters.reasonType) params.set('reasonType', nextFilters.reasonType);
+      if (nextFilters.missingContextType) params.set('missingContextType', nextFilters.missingContextType);
+      if (nextFilters.policyCandidate) params.set('policyCandidate', 'true');
       if (nextFilters.status) params.set('status', nextFilters.status);
       if (nextFilters.keyword?.trim()) params.set('keyword', nextFilters.keyword.trim());
       const data = await fetchApi(`/api/risk-feedback?${params.toString()}`);
       setItems(data.items || []);
       setPagination({ pageNo: data.pageNo || pageNo, pageSize: data.pageSize || pageSize, total: data.total || 0 });
+      setContextMissingStats(data.contextMissingStats || { total: 0, byRiskType: [], byMissingContextType: [] });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -4917,9 +5111,38 @@ function RiskFeedbackPage() {
   const loadProjects = async () => {
     try {
       const data = await fetchApi('/api/projects?includeDisabled=true');
-      setProjects(data.items || []);
+      const nextProjects = data.items || [];
+      setProjects(nextProjects);
+      setPolicyProjectId(current => current || nextProjects[0]?.id || null);
     } catch {
       setProjects([]);
+    }
+  };
+
+  const loadPolicies = async ({
+    projectId = policyProjectId,
+    nextFilters = policyFilters
+  } = {}) => {
+    if (!projectId) {
+      setPolicies([]);
+      return;
+    }
+    setPolicyLoading(true);
+    setPolicyError(null);
+    try {
+      const params = new URLSearchParams();
+      if (nextFilters.enabled !== null && nextFilters.enabled !== undefined) {
+        params.set('enabled', String(nextFilters.enabled));
+      }
+      if (nextFilters.policyType) params.set('policyType', nextFilters.policyType);
+      if (nextFilters.riskType?.trim()) params.set('riskType', nextFilters.riskType.trim());
+      const suffix = params.toString() ? `?${params.toString()}` : '';
+      const data = await fetchApi(`/api/projects/${projectId}/review-policies${suffix}`);
+      setPolicies(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setPolicyError(err.message);
+    } finally {
+      setPolicyLoading(false);
     }
   };
 
@@ -4928,8 +5151,24 @@ function RiskFeedbackPage() {
     load({ pageNo: 1 });
   }, []);
 
+  useEffect(() => {
+    if (activeTabKey === 'policies' && policyProjectId) {
+      loadPolicies({ projectId: policyProjectId });
+    }
+  }, [activeTabKey, policyProjectId]);
+
   const updateFilter = (field, value) => {
-    setFilters(current => ({ ...current, [field]: value || null }));
+    setFilters(current => ({
+      ...current,
+      [field]: field === 'policyCandidate' ? Boolean(value) : (value || null)
+    }));
+  };
+
+  const updatePolicyFilter = (field, value) => {
+    setPolicyFilters(current => ({
+      ...current,
+      [field]: value === undefined ? null : value
+    }));
   };
 
   const updateStatus = async (feedbackId, status) => {
@@ -4945,6 +5184,73 @@ function RiskFeedbackPage() {
       message.error(err.message);
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const openGeneratePolicy = row => {
+    setPolicyDraft(policyDraftFromFeedback(row));
+    setPolicyModal({ open: true, mode: 'create', feedback: row, policy: null });
+  };
+
+  const openEditPolicy = row => {
+    setPolicyDraft({
+      policyType: row.policyType || 'PROJECT_RULE',
+      riskType: row.riskType || '',
+      title: row.title || '',
+      content: row.content || '',
+      enabled: Boolean(row.enabled)
+    });
+    setPolicyModal({ open: true, mode: 'edit', feedback: null, policy: row });
+  };
+
+  const closePolicyModal = () => {
+    setPolicyModal({ open: false, mode: 'create', feedback: null, policy: null });
+  };
+
+  const savePolicy = async () => {
+    setPolicySaving(true);
+    try {
+      const payload = {
+        policyType: policyDraft.policyType,
+        riskType: policyDraft.riskType || null,
+        title: policyDraft.title,
+        content: policyDraft.content,
+        enabled: policyDraft.enabled
+      };
+      const saved = policyModal.mode === 'edit'
+        ? await fetchApi(`/api/project-review-policies/${policyModal.policy.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload)
+        })
+        : await fetchApi(`/api/risk-feedback/${policyModal.feedback.id}/convert-to-policy`, {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      message.success(policyModal.mode === 'edit' ? '项目策略已更新' : '项目策略已生成');
+      closePolicyModal();
+      if (saved?.projectId) setPolicyProjectId(saved.projectId);
+      await load({ pageNo: pagination.pageNo });
+      await loadPolicies({ projectId: saved?.projectId || policyProjectId });
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setPolicySaving(false);
+    }
+  };
+
+  const updatePolicyEnabled = async (row, enabled) => {
+    setUpdatingPolicyId(row.id);
+    try {
+      await fetchApi(`/api/project-review-policies/${row.id}/enabled`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled })
+      });
+      message.success(enabled ? '项目策略已启用' : '项目策略已停用');
+      await loadPolicies({ projectId: row.projectId || policyProjectId });
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setUpdatingPolicyId(null);
     }
   };
 
@@ -4965,25 +5271,103 @@ function RiskFeedbackPage() {
     { title: '风险标题', dataIndex: 'riskTitle', ellipsis: true, render: value => value || '-' },
     { title: '反馈', dataIndex: 'feedbackType', width: 110, render: value => <Tag color={reviewFeedbackTypeColor(value)}>{reviewFeedbackTypeLabel(value)}</Tag> },
     { title: '原因', dataIndex: 'reasonType', width: 120, render: value => value ? reviewFeedbackReasonLabel(value) : '-' },
+    {
+      title: '缺失上下文',
+      dataIndex: 'missingContextTypes',
+      width: 170,
+      render: value => {
+        const items = Array.isArray(value) ? value : [];
+        if (!items.length) return '-';
+        return (
+          <Space size={[0, 4]} wrap>
+            {items.map(item => <Tag key={item} color="orange">{missingContextLabel(item)}</Tag>)}
+          </Space>
+        );
+      }
+    },
+    {
+      title: '沉淀',
+      dataIndex: 'suggestAsProjectRule',
+      width: 90,
+      render: (value, row) => {
+        if (row.status === 'CONVERTED') return <Tag color="purple">已沉淀</Tag>;
+        if (value) return <Tag color="green">建议</Tag>;
+        return '-';
+      }
+    },
     { title: '说明', dataIndex: 'reasonText', ellipsis: true, render: value => value || '-' },
     { title: '状态', dataIndex: 'status', width: 110, render: value => <Tag color={reviewFeedbackStatusColor(value)}>{reviewFeedbackStatusLabel(value)}</Tag> },
     { title: '创建时间', dataIndex: 'createdAt', width: 180, render: value => value || '-' },
     {
       title: '操作',
-      width: 230,
+      width: 320,
+      fixed: 'right',
+      render: (_, row) => {
+        const disabledReason = convertFeedbackToPolicyDisabledReason(row);
+        return (
+          <Space wrap>
+            <Button size="small" loading={updatingId === row.id} disabled={row.status === 'VALID'} onClick={() => updateStatus(row.id, 'VALID')}>有效</Button>
+            <Button size="small" loading={updatingId === row.id} disabled={row.status === 'INSUFFICIENT'} onClick={() => updateStatus(row.id, 'INSUFFICIENT')}>信息不足</Button>
+            <Button size="small" loading={updatingId === row.id} disabled={row.status === 'IGNORED'} onClick={() => updateStatus(row.id, 'IGNORED')}>忽略</Button>
+            <Tooltip title={disabledReason || '生成项目策略'}>
+              <span>
+                <Button
+                  size="small"
+                  type="primary"
+                  disabled={Boolean(disabledReason)}
+                  onClick={() => openGeneratePolicy(row)}
+                >
+                  生成策略
+                </Button>
+              </span>
+            </Tooltip>
+          </Space>
+        );
+      }
+    }
+  ];
+
+  const policyColumns = [
+    { title: '项目', dataIndex: 'projectName', width: 180, ellipsis: true, render: value => value || '-' },
+    {
+      title: '类型',
+      dataIndex: 'policyType',
+      width: 120,
+      render: value => <Tag color={projectReviewPolicyTypeColor(value)}>{projectReviewPolicyTypeLabel(value)}</Tag>
+    },
+    { title: '风险类型', dataIndex: 'riskType', width: 130, ellipsis: true, render: value => value ? <Tag color="blue">{categoryLabel(value)}</Tag> : '-' },
+    { title: '标题', dataIndex: 'title', width: 260, ellipsis: true, render: value => value || '-' },
+    {
+      title: '内容',
+      dataIndex: 'content',
+      ellipsis: true,
+      render: value => <Text className="policy-content-cell" title={value}>{value || '-'}</Text>
+    },
+    { title: '来源反馈', dataIndex: 'sourceFeedbackId', width: 100, render: value => value ? `#${value}` : '-' },
+    { title: '状态', dataIndex: 'enabled', width: 90, render: value => <Tag color={value ? 'green' : 'default'}>{value ? '启用' : '停用'}</Tag> },
+    { title: '版本', dataIndex: 'version', width: 70, render: value => value ?? '-' },
+    { title: '更新时间', dataIndex: 'updatedAt', width: 180, render: value => value || '-' },
+    {
+      title: '操作',
+      width: 150,
       fixed: 'right',
       render: (_, row) => (
         <Space wrap>
-          <Button size="small" loading={updatingId === row.id} disabled={row.status === 'VALID'} onClick={() => updateStatus(row.id, 'VALID')}>有效</Button>
-          <Button size="small" loading={updatingId === row.id} disabled={row.status === 'INSUFFICIENT'} onClick={() => updateStatus(row.id, 'INSUFFICIENT')}>信息不足</Button>
-          <Button size="small" loading={updatingId === row.id} disabled={row.status === 'IGNORED'} onClick={() => updateStatus(row.id, 'IGNORED')}>忽略</Button>
+          <Button size="small" onClick={() => openEditPolicy(row)}>编辑</Button>
+          <Button
+            size="small"
+            loading={updatingPolicyId === row.id}
+            onClick={() => updatePolicyEnabled(row, !row.enabled)}
+          >
+            {row.enabled ? '停用' : '启用'}
+          </Button>
         </Space>
       )
     }
   ];
 
-  return (
-    <div className="page-shell">
+  const feedbackPanel = (
+    <>
       <Card>
         <Space wrap className="task-filter-bar">
           <Select
@@ -4993,7 +5377,7 @@ function RiskFeedbackPage() {
             className="filter-select"
             placeholder="项目"
             value={filters.projectId || undefined}
-            options={projects.map(project => ({ label: project.name, value: project.id }))}
+            options={projectOptions}
             onChange={value => updateFilter('projectId', value)}
           />
           <Select
@@ -5015,10 +5399,32 @@ function RiskFeedbackPage() {
           <Select
             allowClear
             className="filter-select"
+            placeholder="反馈原因"
+            value={filters.reasonType || undefined}
+            options={REVIEW_FEEDBACK_REASON_OPTIONS}
+            onChange={value => updateFilter('reasonType', value)}
+          />
+          <Select
+            allowClear
+            className="filter-select"
+            placeholder="缺失上下文"
+            value={filters.missingContextType || undefined}
+            options={MISSING_CONTEXT_TYPE_OPTIONS}
+            onChange={value => updateFilter('missingContextType', value)}
+          />
+          <Select
+            allowClear
+            className="filter-select"
             placeholder="状态"
             value={filters.status || undefined}
             options={REVIEW_FEEDBACK_STATUS_OPTIONS}
             onChange={value => updateFilter('status', value)}
+          />
+          <Switch
+            checked={filters.policyCandidate}
+            checkedChildren="建议沉淀"
+            unCheckedChildren="全部"
+            onChange={checked => updateFilter('policyCandidate', checked)}
           />
           <Input
             allowClear
@@ -5031,6 +5437,32 @@ function RiskFeedbackPage() {
           <Button type="primary" onClick={() => load({ pageNo: 1 })}>搜索</Button>
         </Space>
       </Card>
+      <Alert
+        className="section-gap"
+        type="info"
+        showIcon
+        message={`上下文不足反馈：${contextMissingStats.total || 0} 条`}
+        description={(
+          <Space direction="vertical" size={4}>
+            <Space wrap>
+              {(contextMissingStats.byRiskType || []).slice(0, 6).map(item => (
+                <Tag key={item.riskType} color="blue">
+                  {categoryLabel(item.riskType)} {item.count}
+                </Tag>
+              ))}
+              {!(contextMissingStats.byRiskType || []).length && <Text type="secondary">暂无风险类型分布</Text>}
+            </Space>
+            <Space wrap>
+              {(contextMissingStats.byMissingContextType || []).slice(0, 8).map(item => (
+                <Tag key={item.missingContextType} color="orange">
+                  {missingContextLabel(item.missingContextType)} {item.count}
+                </Tag>
+              ))}
+              {!(contextMissingStats.byMissingContextType || []).length && <Text type="secondary">暂无缺失上下文类型分布</Text>}
+            </Space>
+          </Space>
+        )}
+      />
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
       <Card className="section-gap">
         <Table
@@ -5039,7 +5471,7 @@ function RiskFeedbackPage() {
           columns={columns}
           dataSource={items}
           tableLayout="fixed"
-          scroll={{ x: 1500 }}
+          scroll={{ x: 1870 }}
           pagination={{
             current: pagination.pageNo,
             pageSize: pagination.pageSize,
@@ -5049,6 +5481,143 @@ function RiskFeedbackPage() {
           }}
         />
       </Card>
+    </>
+  );
+
+  const policyPanel = (
+    <>
+      <Card>
+        <Space wrap className="task-filter-bar">
+          <Select
+            showSearch
+            optionFilterProp="label"
+            className="filter-select"
+            placeholder="项目"
+            value={policyProjectId || undefined}
+            options={projectOptions}
+            onChange={value => setPolicyProjectId(value || null)}
+          />
+          <Select
+            allowClear
+            className="filter-select"
+            placeholder="状态"
+            value={policyFilters.enabled === null ? undefined : policyFilters.enabled}
+            options={[
+              { label: '启用', value: true },
+              { label: '停用', value: false }
+            ]}
+            onChange={value => updatePolicyFilter('enabled', value ?? null)}
+          />
+          <Select
+            allowClear
+            className="filter-select"
+            placeholder="策略类型"
+            value={policyFilters.policyType || undefined}
+            options={PROJECT_REVIEW_POLICY_TYPE_OPTIONS}
+            onChange={value => updatePolicyFilter('policyType', value || null)}
+          />
+          <Input
+            allowClear
+            className="filter-select"
+            placeholder="风险类型"
+            value={policyFilters.riskType || ''}
+            onChange={event => updatePolicyFilter('riskType', event.target.value)}
+            onPressEnter={() => loadPolicies({ projectId: policyProjectId })}
+          />
+          <Button type="primary" onClick={() => loadPolicies({ projectId: policyProjectId })}>搜索</Button>
+          <Button onClick={() => loadPolicies({ projectId: policyProjectId })} icon={<ReloadOutlined />}>刷新</Button>
+        </Space>
+      </Card>
+      {policyError && <Alert className="section-gap" type="error" showIcon message={policyError} />}
+      <Card className="section-gap">
+        <Table
+          rowKey="id"
+          loading={policyLoading}
+          columns={policyColumns}
+          dataSource={policies}
+          tableLayout="fixed"
+          scroll={{ x: 1480 }}
+          pagination={false}
+          locale={{ emptyText: policyProjectId ? <Empty description="暂无项目策略" /> : <Empty description="请先选择项目" /> }}
+        />
+      </Card>
+    </>
+  );
+
+  return (
+    <div className="page-shell">
+      <Tabs
+        className="feedback-page-tabs"
+        activeKey={activeTabKey}
+        onChange={setActiveTabKey}
+        items={[
+          { key: 'feedbacks', label: '反馈记录', children: feedbackPanel },
+          { key: 'policies', label: '项目策略', children: policyPanel }
+        ]}
+      />
+      <Modal
+        title={policyModal.mode === 'edit' ? '编辑项目策略' : '生成项目策略'}
+        open={policyModal.open}
+        onCancel={closePolicyModal}
+        onOk={savePolicy}
+        confirmLoading={policySaving}
+        okText={policyModal.mode === 'edit' ? '保存' : '生成'}
+        cancelText="取消"
+        width={720}
+      >
+        <Space direction="vertical" size="middle" className="full-width policy-modal-body">
+          {policyModal.feedback && (
+            <Descriptions size="small" column={1} bordered>
+              <Descriptions.Item label="来源反馈">
+                #{policyModal.feedback.id} {policyModal.feedback.riskTitle || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="反馈原因">
+                {policyModal.feedback.reasonType ? reviewFeedbackReasonLabel(policyModal.feedback.reasonType) : '-'}
+              </Descriptions.Item>
+            </Descriptions>
+          )}
+          <Space direction="vertical" size={6} className="full-width">
+            <Text type="secondary">策略类型</Text>
+            <Select
+              className="full-width"
+              value={policyDraft.policyType}
+              options={PROJECT_REVIEW_POLICY_TYPE_OPTIONS}
+              onChange={value => setPolicyDraft(current => ({ ...current, policyType: value }))}
+            />
+          </Space>
+          <Space direction="vertical" size={6} className="full-width">
+            <Text type="secondary">风险类型</Text>
+            <Input
+              value={policyDraft.riskType}
+              placeholder="例如 TRANSACTION"
+              onChange={event => setPolicyDraft(current => ({ ...current, riskType: event.target.value }))}
+            />
+          </Space>
+          <Space direction="vertical" size={6} className="full-width">
+            <Text type="secondary">标题</Text>
+            <Input
+              value={policyDraft.title}
+              maxLength={255}
+              onChange={event => setPolicyDraft(current => ({ ...current, title: event.target.value }))}
+            />
+          </Space>
+          <Space direction="vertical" size={6} className="full-width">
+            <Text type="secondary">内容</Text>
+            <Input.TextArea
+              rows={6}
+              maxLength={8000}
+              value={policyDraft.content}
+              onChange={event => setPolicyDraft(current => ({ ...current, content: event.target.value }))}
+            />
+          </Space>
+          <Switch
+            checked={policyDraft.enabled}
+            checkedChildren="启用"
+            unCheckedChildren="停用"
+            onChange={checked => setPolicyDraft(current => ({ ...current, enabled: checked }))}
+          />
+        </Space>
+      </Modal>
     </div>
   );
 }

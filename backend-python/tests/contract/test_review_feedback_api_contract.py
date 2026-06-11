@@ -193,3 +193,60 @@ def test_ai_finding_feedback_pool_and_status_flow(client: TestClient, db_session
     updated = status_response.json()["data"]
     assert updated["status"] == "VALID"
     assert updated["adminComment"] == "可作为后续项目规则候选。"
+
+
+def test_feedback_pool_policy_candidate_filter_excludes_context_missing(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    seed_feedback_task(db_session)
+
+    risk_item = client.get("/api/review-tasks/10001/result").json()["data"]["riskCard"]["riskItems"][0]
+    candidate = client.post(
+        "/api/review-tasks/10001/feedback",
+        json={
+            "sourceType": "RULE_REMINDER",
+            "itemFingerprint": risk_item["feedbackKey"],
+            "feedbackType": "FALSE_POSITIVE",
+            "reasonType": "PROJECT_ALLOWED",
+            "reasonText": "项目约定允许。",
+            "suggestAsProjectRule": True,
+        },
+    ).json()["data"]
+
+    finding = client.get("/api/review-tasks/10001/code-quality-results").json()["data"][0]["findings"][0]
+    context_missing = client.post(
+        "/api/review-tasks/10001/feedback",
+        json={
+            "sourceType": "AI_FINDING",
+            "itemFingerprint": finding["fingerprint"],
+            "feedbackType": "FALSE_POSITIVE",
+            "reasonType": "CONTEXT_MISSING",
+            "reasonText": "缺少调用方上下文。",
+            "missingContextTypes": ["CALLER_CONTEXT", "REFERENCE_SEARCH"],
+            "suggestAsProjectRule": True,
+        },
+    ).json()["data"]
+    assert context_missing["missingContextTypes"] == ["CALLER_CONTEXT", "REFERENCE_SEARCH"]
+
+    response = client.get("/api/risk-feedback", params={"policyCandidate": "true"})
+
+    assert response.status_code == 200
+    pool = response.json()["data"]
+    assert pool["total"] == 1
+    assert pool["items"][0]["id"] == candidate["id"]
+    assert all(item["id"] != context_missing["id"] for item in pool["items"])
+
+    context_response = client.get(
+        "/api/risk-feedback",
+        params={"reasonType": "CONTEXT_MISSING", "missingContextType": "CALLER_CONTEXT"},
+    )
+    assert context_response.status_code == 200
+    context_pool = context_response.json()["data"]
+    assert context_pool["total"] == 1
+    assert context_pool["items"][0]["id"] == context_missing["id"]
+    assert context_pool["contextMissingStats"]["total"] == 1
+    assert context_pool["contextMissingStats"]["byRiskType"] == [{"riskType": "TRANSACTION", "count": 1}]
+    assert {"missingContextType": "CALLER_CONTEXT", "count": 1} in context_pool["contextMissingStats"][
+        "byMissingContextType"
+    ]

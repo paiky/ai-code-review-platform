@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from fnmatch import fnmatchcase
 import hashlib
+import json
 import os
 from itertools import count
 from queue import PriorityQueue
@@ -63,6 +64,8 @@ from app.project_integration.repository import (
     make_ai_review_model_key,
     resolve_project_target_config,
 )
+from app.project_review_policy.service import build_project_review_policy_prompt_context
+from app.review_context.service import build_review_context_pack
 from app.notification.service import send_review_summary
 from app.review_record.models import ReviewTask
 from app.review_record.repository import (
@@ -679,6 +682,7 @@ def trigger_auto_review(
         "title": f"{task.trigger_type} {task.external_source_id or ''}".strip(),
         "diffText": diff_text or _diff_text(changed_files),
         "changedFiles": [file.get("path") for file in changed_files if file.get("path")],
+        "changedFileDetails": changed_files,
     }
     delete_progress(db, task.id)
     for target in targets:
@@ -805,6 +809,7 @@ def _trigger_push_auto_review(
         "title": f"{task.trigger_type} {task.external_source_id or ''}".strip(),
         "diffText": request_diff_text,
         "changedFiles": [file.get("path") for file in changed_files if file.get("path")],
+        "changedFileDetails": changed_files,
     }
     delete_progress(db, task.id)
     gate["ai_review_scheduled"] = True
@@ -1360,7 +1365,7 @@ def reset_default_prompt_response(db: Session, profile_code: str) -> dict[str, A
     return response
 
 
-def rendered_prompt(db: Session, profile_code: str) -> dict[str, Any]:
+def rendered_prompt(db: Session, profile_code: str, project_id: int | None = None) -> dict[str, Any]:
     profile = get_profile(db, profile_code)
     provider_code = profile.provider_code or get_settings_record(db).default_provider_code
     provider = get_provider(db, provider_code)
@@ -1377,11 +1382,18 @@ def rendered_prompt(db: Session, profile_code: str) -> dict[str, Any]:
             "changedFiles": ["src/main/java/com/demo/OrderService.java"],
         },
     )
+    project = find_project_by_id(db, project_id) if project_id is not None else None
+    if project_id is not None and project is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
+    policy_context = _attach_project_review_policies(db, project, request) if project is not None else None
     rendered = prompt.render_instructions(request)
     return {
         "profileCode": profile.profile_code,
+        "projectId": project_id,
         "provider": provider.provider_code,
         "model": request.get("model") or provider.model_name,
+        "projectPolicyCount": (policy_context or {}).get("meta", {}).get("injectedCount", 0),
+        "projectReviewPolicies": (policy_context or {}).get("summaries", []),
         "prompt": rendered,
         "promptHash": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
         "promptLength": len(rendered),
@@ -1969,6 +1981,8 @@ def _run_review(
     target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     review_key = request.get("reviewKey") or (target or {}).get("reviewKey")
+    policy_context = _attach_project_review_policies(db, project, request)
+    review_context = _attach_review_context_pack(db, task_id, project, request)
     append_progress(
         db,
         task_id,
@@ -1976,6 +1990,24 @@ def _run_review(
         "INFO",
         "AI Review 请求已构建",
         f"profileCode={profile.profile_code}, provider={provider.provider_code}, model={request.get('model') or provider.model_name}, mode={request.get('mode')}",
+        review_key=review_key,
+    )
+    append_progress(
+        db,
+        task_id,
+        "CONTEXT_PACK_BUILT",
+        "INFO",
+        "AI Review Context Pack 已构建",
+        _review_context_progress_detail(review_context),
+        review_key=review_key,
+    )
+    append_progress(
+        db,
+        task_id,
+        "PROJECT_POLICIES_INJECTED",
+        "INFO",
+        "项目 Review 策略已注入 Prompt",
+        _project_policy_progress_detail(policy_context),
         review_key=review_key,
     )
     db.commit()
@@ -2260,6 +2292,8 @@ def _review_display_name(provider_code: str | None, display_name: str | None) ->
 
 def _build_review_request(profile, request: dict[str, Any]) -> dict[str, Any]:
     instructions = _join_instructions(profile.review_instructions, request.get("instructions"))
+    changed_files = request.get("changedFiles") or []
+    changed_file_details = request.get("changedFileDetails") or changed_files
     return {
         "repositoryPath": request.get("repositoryPath"),
         "mode": request.get("mode") or "DIFF_TEXT",
@@ -2269,8 +2303,100 @@ def _build_review_request(profile, request: dict[str, Any]) -> dict[str, Any]:
         "model": request.get("model") or profile.model,
         "instructions": instructions,
         "diffText": request.get("diffText"),
-        "changedFiles": request.get("changedFiles") or [],
+        "changedFiles": _changed_file_paths(changed_files),
+        "changedFileDetails": changed_file_details,
+        "projectReviewPolicies": request.get("projectReviewPolicies") or [],
+        "projectReviewPoliciesText": request.get("projectReviewPoliciesText"),
+        "reviewContext": request.get("reviewContext"),
+        "contextPack": request.get("contextPack"),
+        "reviewContextText": request.get("reviewContextText"),
+        "reviewContextMeta": request.get("reviewContextMeta"),
+        "reviewContextSummary": request.get("reviewContextSummary"),
     }
+
+
+def _attach_project_review_policies(
+    db: Session,
+    project: Project | None,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    if project is None:
+        context = {
+            "items": [],
+            "summaries": [],
+            "promptText": "",
+            "meta": {"projectId": None, "totalAvailable": 0, "injectedCount": 0, "promptLength": 0},
+        }
+    else:
+        context = build_project_review_policy_prompt_context(db, int(project.id))
+    request["projectReviewPolicies"] = context["items"]
+    request["projectReviewPoliciesText"] = context["promptText"]
+    request["projectReviewPolicyMeta"] = context["meta"]
+    request["projectReviewPolicySummaries"] = context["summaries"]
+    return context
+
+
+def _attach_review_context_pack(
+    db: Session,
+    task_id: int,
+    project: Project | None,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    task = db.get(ReviewTask, task_id)
+    head_ref = None
+    if task is not None:
+        head_ref = task.after_sha or task.commit_sha
+    context = build_review_context_pack(
+        db,
+        project_id=int(project.id) if project is not None else None,
+        changed_files=request.get("changedFileDetails") or request.get("changedFiles") or [],
+        diff_text=request.get("diffText"),
+        mode=request.get("mode"),
+        git_project_id=project.git_project_id if project is not None else None,
+        head_ref=head_ref or request.get("commitSha"),
+    )
+    request["reviewContext"] = context["reviewContext"]
+    request["contextPack"] = context["contextPack"]
+    request["reviewContextText"] = context["promptText"]
+    request["reviewContextMeta"] = context["meta"]
+    request["reviewContextSummary"] = context["summary"]
+    return context
+
+
+def _project_policy_progress_detail(context: dict[str, Any]) -> str:
+    meta = context.get("meta") or {}
+    summaries = []
+    for item in context.get("summaries") or []:
+        summaries.append(
+            {
+                "id": item.get("id"),
+                "policyType": item.get("policyType"),
+                "riskType": item.get("riskType"),
+                "title": str(item.get("title") or "")[:120],
+                "sourceFeedbackId": item.get("sourceFeedbackId"),
+            }
+        )
+    return json.dumps(
+        {
+            "projectId": meta.get("projectId"),
+            "totalAvailable": meta.get("totalAvailable", 0),
+            "injectedCount": meta.get("injectedCount", 0),
+            "promptLength": meta.get("promptLength", 0),
+            "truncated": bool(meta.get("truncated", False)),
+            "policies": summaries,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _review_context_progress_detail(context: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "meta": context.get("meta") or {},
+            "summary": context.get("summary") or {},
+        },
+        ensure_ascii=False,
+    )
 
 
 def _request_from_task_event(db: Session, task: ReviewTask, profile) -> dict[str, Any]:
@@ -2284,8 +2410,22 @@ def _request_from_task_event(db: Session, task: ReviewTask, profile) -> dict[str
             "title": f"{task.trigger_type} {task.external_source_id or ''}".strip(),
             "diffText": _diff_text(files),
             "changedFiles": [file.get("path") for file in files if isinstance(file, dict) and file.get("path")],
+            "changedFileDetails": files,
         },
     )
+
+
+def _changed_file_paths(changed_files: list[Any]) -> list[str]:
+    paths: list[str] = []
+    for item in changed_files:
+        if isinstance(item, dict):
+            path = item.get("path") or item.get("newPath") or item.get("oldPath")
+        else:
+            path = item
+        normalized = _normalize_path(path)
+        if normalized:
+            paths.append(normalized)
+    return paths
 
 
 def _changed_files_from_task_event(db: Session, task: ReviewTask) -> list[dict[str, Any]]:

@@ -28,6 +28,7 @@ class ReviewItemFeedback(Base):
     feedback_type: Mapped[str] = mapped_column(String(64), nullable=False)
     reason_type: Mapped[str | None] = mapped_column(String(64))
     reason_text: Mapped[str | None] = mapped_column(Text)
+    missing_context_types_json: Mapped[str | None] = mapped_column(Text)
     suggest_as_project_rule: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="PENDING")
     admin_comment: Mapped[str | None] = mapped_column(Text)

@@ -592,6 +592,7 @@ Content-Type: application/json
 - 项目组可配置多个 `aiReviewModels`。自动触发和重试会为每个启用模型分别保存一条结果，并并行进入调度队列；仅配置单个模型时仍表现为单结果。
 - MR 自动 AI Review 启动后会先保存 `RUNNING` 结果，执行完成后更新为 `SUCCESS` 或 `FAILED`，前端可轮询本接口展示进度。
 - 所有 API Provider 自动触发都直接使用 MR diff 文本。
+- Provider 请求会附带后端构造的 `reviewContext / contextPack`。V0 包含 changed files 摘要、同文件上下文可用性说明、预算内同文件上下文片段、同项目上下文不足反馈统计摘要和 `unavailableContexts`。同文件上下文片段只读取当前 changed files 的 GitLab raw file，并只注入变更 hunk 附近窗口；不包含完整文件源码，不做全项目扫描、引用搜索、向量库 / RAG、自动降级或自动忽略 finding。
 - MR 自动 AI Review 受 `reviewEnabled` 全局能力开关和项目绑定 AI Review 配置的启用状态影响；设置页不再提供单独的 MR 自动触发开关。
 
 ### 7.2 查询代码质量 Review 结果
@@ -709,6 +710,8 @@ GET /api/review-tasks/{taskId}/code-quality-progress
 
 - 该接口返回持久化的 AI Review 过程事件，前端在 `RUNNING` 时轮询展示；可追加 `?reviewKey=...` 只查看某个模型的事件。
 - API Provider 会记录请求构建、Provider 调用、响应摘要、解析和保存结果等阶段，敏感字段会脱敏或省略。
+- 注入项目策略时会记录 `PROJECT_POLICIES_INJECTED`，detail 仅包含策略摘要和数量，不包含策略正文。
+- 构造 Context Pack 时会记录 `CONTEXT_PACK_BUILT`，detail 仅包含 meta、changed file 数量、同文件上下文可用性、同文件 source snippet 数量、上下文不足反馈数量和不可用上下文数量，不记录 diff 正文或源码片段。
 - 重试 AI Review 会清空同一任务旧过程事件，并重新写入本轮过程。
 
 ### 7.4 查询 Push 审核结论
@@ -850,13 +853,26 @@ POST /api/code-quality-review-profiles/{profileCode}/reset-default-prompt
 
 项目绑定 profile 通过 `PUT /api/projects/{projectId}/target-configs/{targetType}` 维护，见 §4.3。
 
-`GET /api/code-quality-review-profiles/{profileCode}/rendered-prompt` 响应 data：
+`GET /api/code-quality-review-profiles/{profileCode}/rendered-prompt` 可追加 `projectId` query，用于预览指定项目会注入的项目策略。
+
+`GET /api/code-quality-review-profiles/{profileCode}/rendered-prompt?projectId=1` 响应 data：
 
 ```json
 {
   "profileCode": "backend-default-ai-review",
   "provider": "DEEPSEEK",
   "model": "gpt-5.4",
+  "projectId": 1,
+  "projectPolicyCount": 1,
+  "projectReviewPolicies": [
+    {
+      "id": 11,
+      "policyType": "PROJECT_RULE",
+      "riskType": "AUTHORIZATION",
+      "title": "网关统一鉴权",
+      "sourceFeedbackId": 101
+    }
+  ],
   "prompt": "你是代码质量审核助手...",
   "promptHash": "e3b0c44298fc1c149afbf4c8996fb924...",
   "promptLength": 1200
@@ -866,6 +882,7 @@ POST /api/code-quality-review-profiles/{profileCode}/reset-default-prompt
 说明：
 
 - `rendered-prompt` 用于前端预览实际传给 provider 的最终 instructions。
+- 有 `projectId` 时只预览该项目 `enabled=true` 且类型为 `PROJECT_RULE / CONTEXT_FACT` 的策略注入结果；`projectReviewPolicies` 只返回摘要，不返回策略正文。
 - `reset-default-prompt` 会把指定 profile 的 `reviewInstructions` 恢复为平台内置默认值，其他 profile 配置保持不变。
 
 ### 7.7 Finding 修复预览与调度队列
@@ -884,9 +901,172 @@ GET /api/code-quality-reviews/failure-notifications
 - fix-preview 按 `findingIndex` 与可选 `reviewKey` 生成 patch 预览。
 - 调度队列用于观察 AI Review / fix-preview 异步任务；取消接口仅影响排队或未完成任务。
 
-## 8. DTO / VO 边界
+## 8. Review Feedback 与项目策略 API
 
-### 8.1 WebhookTriggerCommand
+### 8.1 提交和查询任务反馈
+
+```http
+POST /api/review-tasks/{taskId}/feedback
+GET  /api/review-tasks/{taskId}/feedback
+```
+
+提交反馈请求：
+
+```json
+{
+  "sourceType": "AI_FINDING",
+  "itemFingerprint": "code-quality:1:TRANSACTION:src/main/java/demo/OrderService.java:42",
+  "feedbackType": "FALSE_POSITIVE",
+  "reasonType": "PROJECT_ALLOWED",
+  "reasonText": "本项目该入口事务由统一切面注入。",
+  "missingContextTypes": [],
+  "suggestAsProjectRule": true,
+  "operatorName": "Alice"
+}
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `sourceType` | `RULE_REMINDER` 或 `AI_FINDING` |
+| `itemFingerprint` | 风险项 / finding 的稳定反馈键 |
+| `feedbackType` | `USEFUL`、`FALSE_POSITIVE`、`LEVEL_TOO_HIGH`、`DUPLICATE`、`FIXED` |
+| `reasonType` | `PROJECT_ALLOWED`、`HAS_EXTERNAL_GUARD`、`CONTEXT_MISSING`、`RULE_NOT_APPLICABLE`、`LEVEL_TOO_HIGH`、`DESCRIPTION_INACCURATE`、`DUPLICATE`、`OTHER` |
+| `missingContextTypes` | 当 `reasonType=CONTEXT_MISSING` 时可选，记录缺失上下文类型 |
+| `suggestAsProjectRule` | 用户建议沉淀为项目策略；仍需管理员在反馈池确认生成 |
+
+`missingContextTypes` 当前可选值：
+
+```text
+SAME_FILE_CONTEXT / SAME_CLASS_METHODS / REFERENCE_SEARCH / CALLER_CONTEXT /
+CALLEE_CONTEXT / RELATED_FILE / DB_SCHEMA_CONTEXT / CONFIG_CONTEXT /
+PROJECT_POLICY_CONTEXT / TEST_RESULT_CONTEXT / OTHER
+```
+
+### 8.2 反馈池
+
+```http
+GET /api/risk-feedback
+PUT /api/risk-feedback/{feedbackId}/status
+POST /api/risk-feedback/{feedbackId}/convert-to-policy
+```
+
+`GET /api/risk-feedback` 查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `projectId` | Long | 按项目过滤 |
+| `sourceType` | String | `RULE_REMINDER / AI_FINDING` |
+| `riskType` | String | 按风险类型过滤 |
+| `feedbackType` | String | 按反馈类型过滤 |
+| `reasonType` | String | 按反馈原因过滤，例如 `CONTEXT_MISSING` |
+| `missingContextType` | String | 按缺失上下文类型过滤 |
+| `policyCandidate` | Boolean | `true` 时只返回可沉淀候选 |
+| `status` | String | `PENDING / VALID / INSUFFICIENT / IGNORED / CONVERTED` |
+| `keyword` | String | 按项目、任务来源和反馈说明模糊搜索 |
+| `pageNo` / `pageSize` | Number | 分页 |
+
+`policyCandidate=true` 的候选规则：
+
+- `status=VALID` 或 `suggestAsProjectRule=true`。
+- 排除 `INSUFFICIENT / IGNORED / CONVERTED`。
+- 排除 `reasonType=CONTEXT_MISSING`，上下文不足反馈进入反馈池统计和 Context Pack backlog。
+
+反馈池响应 data 在分页字段外额外返回上下文不足统计：
+
+```json
+{
+  "items": [],
+  "pageNo": 1,
+  "pageSize": 20,
+  "total": 0,
+  "contextMissingStats": {
+    "total": 3,
+    "byRiskType": [
+      { "riskType": "TRANSACTION", "count": 2 },
+      { "riskType": "AUTHORIZATION", "count": 1 }
+    ],
+    "byMissingContextType": [
+      { "missingContextType": "CALLER_CONTEXT", "count": 2 },
+      { "missingContextType": "REFERENCE_SEARCH", "count": 1 }
+    ]
+  }
+}
+```
+
+`contextMissingStats` 会跟随当前筛选条件变化，用于前端展示上下文不足数量、风险类型分布和缺失上下文类型分布；它只做统计，不自动创建策略、不影响 AI Review Prompt。
+
+更新状态请求：
+
+```json
+{
+  "status": "VALID",
+  "adminComment": "确认可作为项目策略候选。"
+}
+```
+
+从反馈生成项目策略请求：
+
+```json
+{
+  "policyType": "PROJECT_RULE",
+  "riskType": "TRANSACTION",
+  "title": "统一事务边界由框架注入",
+  "content": "本项目部分入口方法事务由框架切面注入，Review 时需结合项目策略判断。",
+  "enabled": true,
+  "createdBy": "alice"
+}
+```
+
+生成策略限制：
+
+- 仅 `VALID` 或 `suggestAsProjectRule=true` 的反馈可转换。
+- `CONTEXT_MISSING`、`INSUFFICIENT`、`IGNORED`、`CONVERTED` 不可转换。
+- 首版只允许 `PROJECT_RULE / CONTEXT_FACT`，不开放自动忽略或自动降级策略。
+- 转换成功后反馈状态变为 `CONVERTED`。
+
+### 8.3 项目策略管理
+
+```http
+GET /api/projects/{projectId}/review-policies
+PUT /api/project-review-policies/{policyId}
+PUT /api/project-review-policies/{policyId}/enabled
+```
+
+`GET /api/projects/{projectId}/review-policies` 查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `enabled` | Boolean | 按启用状态过滤 |
+| `policyType` | String | `PROJECT_RULE / CONTEXT_FACT` |
+| `riskType` | String | 按风险类型过滤 |
+
+项目策略响应：
+
+```json
+{
+  "id": 11,
+  "projectId": 1,
+  "projectName": "demo-service",
+  "policyType": "PROJECT_RULE",
+  "riskType": "TRANSACTION",
+  "title": "统一事务边界由框架注入",
+  "content": "本项目部分入口方法事务由框架切面注入，Review 时需结合项目策略判断。",
+  "sourceFeedbackId": 101,
+  "enabled": true,
+  "version": 1,
+  "createdBy": "alice",
+  "createdAt": "2026-06-10T10:00:00",
+  "updatedAt": "2026-06-10T10:00:00"
+}
+```
+
+后续 AI Review 会读取同 `projectId`、`enabled=true`、`policyType in PROJECT_RULE / CONTEXT_FACT` 的策略注入 Prompt。执行过程会记录 `PROJECT_POLICIES_INJECTED` progress event，只包含策略数量、id、标题、类型、风险类型和来源反馈 id，不记录策略正文。
+
+## 9. DTO / VO 边界
+
+### 9.1 WebhookTriggerCommand
 
 用于从 webhook payload 转成内部任务创建命令。
 
@@ -905,7 +1085,7 @@ GET /api/code-quality-reviews/failure-notifications
 }
 ```
 
-### 8.2 ChangeAnalysisResultDTO
+### 9.2 ChangeAnalysisResultDTO
 
 ```json
 {
@@ -918,6 +1098,6 @@ GET /api/code-quality-reviews/failure-notifications
 }
 ```
 
-### 8.3 RiskCardVO
+### 9.3 RiskCardVO
 
 前端直接消费完整 RiskCard JSON；后端不应再拼接不可解析的展示文本作为主要输出。
