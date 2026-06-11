@@ -14,7 +14,8 @@ from app.core.json_utils import read_json_array
 from app.project_integration import gitlab_client
 from app.review_feedback.models import ReviewItemFeedback
 from app.review_feedback.repository import ensure_feedback_schema
-from app.review_context.local_repo import prepare_local_repository_context
+from app.review_context.local_repo import prepare_local_repository_context, task_head_worktree_path
+from app.review_context.local_retriever import retrieve_local_reference_context
 
 
 CONTEXT_PACK_VERSION = "context-pack-v0"
@@ -108,17 +109,24 @@ def build_review_context_pack(
         git_project_id=git_project_id,
         head_ref=head_ref,
     )
+    local_reference_context = _local_reference_context(
+        task_id=task_id,
+        local_repository_context=local_repository_context,
+        planner_signals=planner_signals,
+    )
     unavailable_contexts = _unavailable_contexts(
         files,
         source_unavailable_contexts,
         planner_unavailable_contexts,
         local_repository_context.get("unavailableContexts") or [],
+        local_reference_context.get("unavailableContexts") or [],
     )
     context_pack = {
         "version": CONTEXT_PACK_VERSION,
         "changedFilesSummary": _changed_files_summary(files, diff_text),
         "sameFileContext": same_file_context,
         "localRepositoryContext": local_repository_context.get("summary") or {},
+        "localReferenceSearch": local_reference_context.get("summary") or _empty_local_reference_summary(),
         "contextPlan": context_plan,
         "plannerSignals": planner_signals,
         "requestedContexts": requested_contexts,
@@ -156,10 +164,15 @@ def build_review_context_pack(
         "plannerUnavailableContextCount": context_pack["contextPlan"].get("unavailableContextCount", 0),
         "localRepositoryEnabled": bool(context_pack["localRepositoryContext"].get("enabled")),
         "localRepositoryStatus": context_pack["localRepositoryContext"].get("status"),
+        "localReferenceQueryCount": context_pack["localReferenceSearch"].get("queryCount", 0),
+        "localReferenceMatchedFileCount": context_pack["localReferenceSearch"].get("matchedFileCount", 0),
+        "localReferenceSnippetCount": context_pack["localReferenceSearch"].get("includedSnippetCount", 0),
+        "localReferenceTruncated": bool(context_pack["localReferenceSearch"].get("truncated", False)),
     }
     return {
         "reviewContext": review_context,
         "contextPack": context_pack,
+        "localReferenceRetrieval": local_reference_context,
         "promptText": prompt_text,
         "summary": _progress_summary(context_pack, meta),
         "meta": meta,
@@ -896,17 +909,17 @@ def _planner_context_available(context_type: str, same_file_context: dict[str, A
 
 def _unavailable_reason_for_requested_context(context_type: str) -> str:
     return {
-        "REFERENCE_SEARCH": "Reference search is not performed in V2-F-5.",
-        "CALLER_CONTEXT": "Caller inspection is not performed in V2-F-5.",
-        "CALLEE_CONTEXT": "Callee inspection is not performed in V2-F-5.",
-        "SAME_CLASS_METHODS": "Class structure parsing is not performed in V2-F-5.",
-        "RELATED_FILE": "Related files are not read in V2-F-5.",
-        "DB_SCHEMA_CONTEXT": "DB schema is not retrieved in V2-F-5.",
-        "CONFIG_CONTEXT": "Runtime config is not retrieved in V2-F-5.",
-        "MQ_CONFIG_CONTEXT": "MQ config is not retrieved in V2-F-5.",
-        "CACHE_USAGE_CONTEXT": "Cache usages are not searched in V2-F-5.",
-        "TEST_RESULT_CONTEXT": "Tests are not executed in V2-F-5.",
-    }.get(context_type, "Unavailable in V2-F-5.")
+        "REFERENCE_SEARCH": "Reference snippets are not injected until V2-F-7.",
+        "CALLER_CONTEXT": "Caller snippets are not injected until V2-F-7.",
+        "CALLEE_CONTEXT": "Callee inspection is not performed.",
+        "SAME_CLASS_METHODS": "Class parsing is not performed.",
+        "RELATED_FILE": "Related files are not read.",
+        "DB_SCHEMA_CONTEXT": "DB schema is not retrieved.",
+        "CONFIG_CONTEXT": "Runtime config is not retrieved.",
+        "MQ_CONFIG_CONTEXT": "MQ config is not retrieved.",
+        "CACHE_USAGE_CONTEXT": "Cache usages are not searched.",
+        "TEST_RESULT_CONTEXT": "Tests are not executed.",
+    }.get(context_type, "Unavailable in V2-F-6.")
 
 
 def _higher_priority(current: str, candidate: str) -> str:
@@ -922,6 +935,7 @@ def _unavailable_contexts(
     source_unavailable_contexts: list[dict[str, Any]],
     planner_unavailable_contexts: list[dict[str, Any]],
     local_repo_unavailable_contexts: list[dict[str, Any]],
+    local_reference_unavailable_contexts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     contexts = [
         {
@@ -969,6 +983,7 @@ def _unavailable_contexts(
     seen = set()
     for item in [
         *local_repo_unavailable_contexts,
+        *local_reference_unavailable_contexts,
         *planner_unavailable_contexts,
         *source_unavailable_contexts,
         *contexts,
@@ -1040,6 +1055,7 @@ def _progress_summary(context_pack: dict[str, Any], meta: dict[str, Any]) -> dic
     changed = context_pack["changedFilesSummary"]
     same_file = context_pack["sameFileContext"]
     local_repository = context_pack.get("localRepositoryContext") or {}
+    local_reference = context_pack.get("localReferenceSearch") or {}
     feedback = context_pack["contextMissingFeedbackSummary"]
     context_plan = context_pack["contextPlan"]
     return {
@@ -1054,6 +1070,7 @@ def _progress_summary(context_pack: dict[str, Any], meta: dict[str, Any]) -> dic
         "sameFileSourceSnippetCount": same_file.get("sourceSnippetCount", 0),
         "sameFileSourceFileCount": same_file.get("includedSourceFileCount", 0),
         "localRepository": _local_repository_progress_summary(local_repository),
+        "localReferenceSearch": _local_reference_progress_summary(local_reference),
         "contextMissingFeedbackTotal": feedback["total"],
         "topMissingContextTypes": feedback["byMissingContextType"][:3],
         "plannerSignalCount": context_plan.get("plannerSignalCount", 0),
@@ -1079,6 +1096,49 @@ def _local_repository_progress_summary(local_repository: dict[str, Any]) -> dict
         "failurePhase": local_repository.get("failurePhase"),
         "durationMs": local_repository.get("durationMs"),
         "sourceIncluded": bool(local_repository.get("sourceIncluded", False)),
+    }
+
+
+def _local_reference_context(
+    *,
+    task_id: int | None,
+    local_repository_context: dict[str, Any],
+    planner_signals: list[dict[str, Any]],
+) -> dict[str, Any]:
+    summary = local_repository_context.get("summary") or {}
+    if str(summary.get("status") or "").upper() != "PREPARED":
+        return {
+            "status": "SKIPPED",
+            "summary": _empty_local_reference_summary(),
+            "searches": [],
+            "unavailableContexts": [],
+            "durationMs": 0,
+        }
+    try:
+        worktree_path = task_head_worktree_path(task_id)
+    except Exception:
+        worktree_path = None
+    return retrieve_local_reference_context(
+        worktree_path=worktree_path,
+        planner_signals=planner_signals,
+    )
+
+
+def _empty_local_reference_summary() -> dict[str, Any]:
+    return {
+        "queryCount": 0,
+        "matchedFileCount": 0,
+        "includedSnippetCount": 0,
+        "truncated": False,
+    }
+
+
+def _local_reference_progress_summary(local_reference: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "queryCount": int(local_reference.get("queryCount") or 0),
+        "matchedFileCount": int(local_reference.get("matchedFileCount") or 0),
+        "includedSnippetCount": int(local_reference.get("includedSnippetCount") or 0),
+        "truncated": bool(local_reference.get("truncated", False)),
     }
 
 

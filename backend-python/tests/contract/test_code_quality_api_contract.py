@@ -700,6 +700,90 @@ def test_manual_review_prepares_local_repo_context_without_leaking_token(
     assert str(tmp_path) not in json.dumps(progress, ensure_ascii=False)
 
 
+@respx.mock
+def test_manual_review_records_local_reference_search_progress_without_source(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees"
+    commands: list[list[str]] = []
+
+    def write_source(task_id: int) -> None:
+        source_file = worktree / str(task_id) / "head" / "src/main/java/demo/OrderController.java"
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_text(
+            "\n".join(
+                [
+                    "package demo;",
+                    "class OrderController {",
+                    "  void cancel(Long id) {",
+                    "    orderService.cancelOrder(id);",
+                    "  }",
+                    "}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def fake_run_git(args: list[str], **_kwargs) -> None:
+        commands.append(args)
+        if "worktree" in args and "add" in args:
+            add_index = args.index("add")
+            write_source(int(Path(args[add_index + 3]).parent.name))
+
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "provider-secret")
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_CONTEXT_SNIPPET_CONTEXT_LINES", "1")
+    monkeypatch.setenv("GITLAB_TOKEN", "local-reference-secret")
+    monkeypatch.setattr(local_repo, "_run_git", fake_run_git)
+    seed_project(db_session, "DEEPSEEK")
+    route = respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("引用检索完成")}}]})
+    )
+    diff_text = (
+        "diff --git a/src/main/java/demo/OrderService.java b/src/main/java/demo/OrderService.java\n"
+        "@@ -10,6 +10,3 @@\n"
+        "-    public Order cancelOrder(Long id) {\n"
+        "-        return oldCancel(id);\n"
+        "-    }\n"
+    )
+
+    response = client.post(
+        "/api/code-quality-reviews/manual",
+        json={
+            **manual_request(),
+            "commitSha": "2222222222222222222222222222222222222222",
+            "diffText": diff_text,
+            "changedFiles": [{"path": "src/main/java/demo/OrderService.java", "diffText": diff_text}],
+        },
+    )
+
+    assert response.status_code == 200
+    request_body = json.loads(route.calls[0].request.content.decode("utf-8"))
+    assert "orderService.cancelOrder(id)" not in json.dumps(request_body, ensure_ascii=False)
+    progress = client.get(
+        f"/api/review-tasks/{response.json()['data']['taskId']}/code-quality-progress"
+    ).json()["data"]
+    local_context_event = next(event for event in progress if event["phase"] == "LOCAL_CONTEXT_RETRIEVED")
+    assert json.loads(local_context_event["detail"]) == {
+        "queryCount": 1,
+        "matchedFileCount": 1,
+        "includedSnippetCount": 1,
+        "truncated": False,
+    }
+    progress_text = json.dumps(progress, ensure_ascii=False)
+    assert "orderService.cancelOrder(id)" not in progress_text
+    assert "local-reference-secret" not in progress_text
+    assert str(tmp_path) not in progress_text
+    assert commands
+
+
 def test_default_push_hard_limits_are_unlimited(
     client: TestClient,
     monkeypatch,

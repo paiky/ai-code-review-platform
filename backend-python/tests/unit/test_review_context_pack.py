@@ -308,6 +308,81 @@ def test_review_context_pack_records_local_repo_prepare_summary(
     assert str(tmp_path) not in context["promptText"]
 
 
+def test_review_context_pack_runs_local_reference_search_without_prompt_snippets(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "503" / "head"
+    commands: list[list[str]] = []
+
+    def write_source() -> None:
+        source_file = worktree / "src/main/java/demo/OrderController.java"
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_text(
+            "\n".join(
+                [
+                    "package demo;",
+                    "class OrderController {",
+                    "  void cancel(Long id) {",
+                    "    orderService.cancelOrder(id);",
+                    "  }",
+                    "}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def fake_run_git(args: list[str], **_kwargs) -> None:
+        commands.append(args)
+        if "worktree" in args and "add" in args:
+            write_source()
+
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_CONTEXT_SNIPPET_CONTEXT_LINES", "1")
+    monkeypatch.setenv("GITLAB_TOKEN", "repo-secret")
+    monkeypatch.setattr(local_repo, "_run_git", fake_run_git)
+
+    context = build_review_context_pack(
+        None,
+        task_id=503,
+        project_id=1,
+        mode="DIFF_TEXT",
+        repository_url="https://gitlab.example.com/demo/service",
+        git_project_id="1001",
+        head_ref="2222222222222222222222222222222222222222",
+        changed_files=[
+            {
+                "path": "src/main/java/demo/OrderService.java",
+                "diffText": (
+                    "diff --git a/src/main/java/demo/OrderService.java "
+                    "b/src/main/java/demo/OrderService.java\n"
+                    "@@ -10,6 +10,3 @@\n"
+                    "-    public Order cancelOrder(Long id) {\n"
+                    "-        return oldCancel(id);\n"
+                    "-    }\n"
+                ),
+            }
+        ],
+        diff_text=None,
+    )
+
+    retrieval = context["localReferenceRetrieval"]
+    snippet = retrieval["searches"][0]["snippets"][0]
+
+    assert retrieval["summary"]["queryCount"] == 1
+    assert retrieval["summary"]["matchedFileCount"] == 1
+    assert retrieval["summary"]["includedSnippetCount"] == 1
+    assert retrieval["summary"]["truncated"] is False
+    assert snippet["path"] == "src/main/java/demo/OrderController.java"
+    assert {"number": 4, "text": "    orderService.cancelOrder(id);"} in snippet["lines"]
+    assert context["contextPack"]["localReferenceSearch"] == retrieval["summary"]
+    assert context["summary"]["localReferenceSearch"] == retrieval["summary"]
+    assert "orderService.cancelOrder(id)" not in context["promptText"]
+    assert str(tmp_path) not in context["promptText"]
+
+
 def test_review_context_pack_marks_local_repo_failure_unavailable(
     monkeypatch,
     tmp_path: Path,

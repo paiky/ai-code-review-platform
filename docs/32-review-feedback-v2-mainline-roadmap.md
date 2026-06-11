@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：V2-A / V2-B / V2-C / V2-D / V2-E 已落地并通过相关测试；V2-F-1 / V2-F-2 / V2-F-3 已落地；V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环已落地。V2-F-3 后短期主线调整为 `docs/34-local-repository-context-retrieval-plan.md` 的本地仓库上下文检索 / 高准确 Review 模式，人工沉淀能力先在产品界面默认屏蔽。
+- 当前状态：V2-A / V2-B / V2-C / V2-D / V2-E 已落地并通过相关测试；V2-F-1 / V2-F-2 / V2-F-3 已落地；V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环与 V2-F-6 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED` 引用搜索 Retriever MVP 已落地。V2-F-3 后短期主线调整为 `docs/34-local-repository-context-retrieval-plan.md` 的本地仓库上下文检索 / 高准确 Review 模式，人工沉淀能力先在产品界面默认屏蔽。
 - 编写时间：2026-06-10
 - 前置版本：
   - `docs/29-review-feedback-v1-implementation.md`
@@ -32,7 +32,8 @@
 已完成：V2-F-2 同文件上下文片段 V0
 已完成：V2-F-3 Context Planner 最小规则
 已完成：V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环
-下一步：V2-F-6 起按 docs/34 推进本地引用搜索与高准确 Review Spike
+已完成：V2-F-6 METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索 Retriever MVP
+下一步：V2-F-7 起按 docs/34 推进本地引用证据注入 Context Pack
 ```
 
 原因：
@@ -873,7 +874,7 @@ $env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\unit\test_review_context
 ```text
 V2-F-4：本地仓库检索主方案与前端人工沉淀熄灯
 V2-F-5：本地仓库 mirror clone / fetch / worktree 最小闭环（已完成）
-V2-F-6：METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索 Retriever MVP
+V2-F-6：METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索 Retriever MVP（已完成）
 V2-F-7：本地引用证据注入 Context Pack
 V2-F-8：前端展示高准确模式证据摘要，并屏蔽人工沉淀入口
 V2-F-9：生产验证与效果复盘

@@ -2002,6 +2002,7 @@ def _run_review(
         review_key=review_key,
     )
     _append_local_repo_progress(db, task_id, review_context, review_key)
+    _append_local_context_progress(db, task_id, review_context, review_key)
     append_progress(
         db,
         task_id,
@@ -2419,6 +2420,38 @@ def _append_local_repo_progress(
         "INFO" if prepared else "WARN",
         "本地仓库工作区已准备" if prepared else "本地仓库工作区不可用",
         json.dumps(local_repository, ensure_ascii=False),
+        review_key=review_key,
+    )
+
+
+def _append_local_context_progress(
+    db: Session,
+    task_id: int,
+    context: dict[str, Any],
+    review_key: str | None,
+) -> None:
+    retrieval = context.get("localReferenceRetrieval") or {}
+    status = str(retrieval.get("status") or "").upper()
+    if status in {"", "SKIPPED"}:
+        return
+    summary = retrieval.get("summary") or {}
+    detail = json.dumps(
+        {
+            "queryCount": int(summary.get("queryCount") or 0),
+            "matchedFileCount": int(summary.get("matchedFileCount") or 0),
+            "includedSnippetCount": int(summary.get("includedSnippetCount") or 0),
+            "truncated": bool(summary.get("truncated", False)),
+        },
+        ensure_ascii=False,
+    )
+    failed = status == "UNAVAILABLE"
+    append_progress(
+        db,
+        task_id,
+        "LOCAL_CONTEXT_RETRIEVE_FAILED" if failed else "LOCAL_CONTEXT_RETRIEVED",
+        "WARN" if failed else "INFO",
+        "本地引用检索不可用" if failed else "本地引用检索已完成",
+        detail,
         review_key=review_key,
     )
 

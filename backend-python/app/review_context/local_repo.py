@@ -113,6 +113,15 @@ def prepare_local_repository_context(
         )
 
 
+def task_head_worktree_path(task_id: int | str | None) -> Path:
+    settings = get_settings()
+    if task_id is None:
+        raise LocalRepoUnavailableError("Task id is unavailable; local repository worktree cannot be resolved.")
+    root = _workspace_root(settings.local_repo_workspace_root)
+    task_key = _safe_segment(str(task_id))
+    return _child_path(root, "worktrees", task_key, "head")
+
+
 def _build_plan(
     settings: Settings,
     *,
