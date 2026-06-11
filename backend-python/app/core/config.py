@@ -21,6 +21,9 @@ class Settings:
     gitlab_base_url: str
     gitlab_token: str
     gitlab_diff_per_page: int
+    local_repo_context_enabled: bool
+    local_repo_workspace_root: str
+    local_repo_max_fetch_seconds: int
     code_quality_review_enabled: bool
     code_quality_review_provider: str
     openai_api_key: str
@@ -60,6 +63,12 @@ class Settings:
             gitlab_base_url=os.getenv("GITLAB_BASE_URL", ""),
             gitlab_token=os.getenv("GITLAB_TOKEN", ""),
             gitlab_diff_per_page=int(os.getenv("GITLAB_DIFF_PER_PAGE", "100")),
+            local_repo_context_enabled=os.getenv("LOCAL_REPO_CONTEXT_ENABLED", "false").lower()
+            == "true",
+            local_repo_workspace_root=os.getenv(
+                "LOCAL_REPO_WORKSPACE_ROOT", ".local/review-workspaces"
+            ),
+            local_repo_max_fetch_seconds=int(os.getenv("LOCAL_REPO_MAX_FETCH_SECONDS", "120")),
             code_quality_review_enabled=os.getenv("CODE_QUALITY_REVIEW_ENABLED", "false").lower()
             == "true",
             code_quality_review_provider=os.getenv("CODE_QUALITY_REVIEW_PROVIDER", "DEEPSEEK"),

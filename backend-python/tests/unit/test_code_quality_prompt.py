@@ -34,6 +34,7 @@ def test_chat_prompt_uses_android_profile_as_review_role() -> None:
     assert '"overallLevel": "LOW|MEDIUM|HIGH|CRITICAL"' in system
     assert '"contextStatus": "SUFFICIENT|PARTIAL|INSUFFICIENT"' in system
     assert "上下文不足时不要武断输出高风险或紧急" in system
+    assert "Context Planner 只提示本次可能缺少的证据" in system
 
 
 def test_chat_prompt_keeps_backend_role_when_profile_is_backend() -> None:

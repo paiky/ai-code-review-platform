@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import json
+from pathlib import Path
 
 import httpx
 import respx
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.code_quality.models import CodeQualityFixPreview, CodeQualityReviewResult, CodeQualitySchedulerJob
 from app.project_integration.models import GitLabMergeRequestEvent, Project
 from app.project_review_policy.models import ProjectReviewPolicy
+from app.review_context import local_repo
 from app.review_feedback.models import ReviewItemFeedback
 from app.review_record.models import ReviewTask
 from app.rule_template.models import RuleTemplate
@@ -632,6 +634,9 @@ def test_manual_review_builds_context_pack_and_records_progress(
     assert "Review Context Pack" in user_input
     assert "context-pack-v0" in user_input
     assert "changedFilesSummary" in user_input
+    assert "contextPlan" in user_input
+    assert "requestedContexts" in user_input
+    assert "plannerSignals" in user_input
     assert "contextMissingFeedbackSummary" in user_input
     assert "REFERENCE_SEARCH" in user_input
     progress = client.get(
@@ -641,9 +646,58 @@ def test_manual_review_builds_context_pack_and_records_progress(
     detail = json.loads(context_event["detail"])
     assert detail["summary"]["changedFileCount"] == 1
     assert detail["summary"]["contextMissingFeedbackTotal"] == 1
+    assert detail["summary"]["plannerSignalCount"] == 2
+    assert detail["summary"]["requestedContextTypeCounts"] == [
+        {"type": "CALLER_CONTEXT", "count": 1},
+        {"type": "REFERENCE_SEARCH", "count": 1},
+    ]
     assert detail["summary"]["unavailableContextCount"] >= 1
     assert "order.setStatus(null)" not in context_event["detail"]
     assert "context-pack-secret" not in json.dumps(progress, ensure_ascii=False)
+
+
+@respx.mock
+def test_manual_review_prepares_local_repo_context_without_leaking_token(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "provider-secret")
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(tmp_path / "workspaces"))
+    monkeypatch.setenv("GITLAB_TOKEN", "local-repo-secret")
+    monkeypatch.setattr(local_repo, "_run_git", lambda args, **_kwargs: commands.append(args))
+    seed_project(db_session, "DEEPSEEK")
+    route = respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("本地仓库准备完成")}}]})
+    )
+
+    request = {**manual_request(), "commitSha": "2222222222222222222222222222222222222222"}
+    response = client.post("/api/code-quality-reviews/manual", json=request)
+
+    assert response.status_code == 200
+    request_body = json.loads(route.calls[0].request.content.decode("utf-8"))
+    user_input = request_body["messages"][1]["content"]
+    assert "localRepositoryContext" in user_input
+    assert "PREPARED" in user_input
+    assert "local-repo-secret" not in json.dumps(request_body, ensure_ascii=False)
+    assert str(tmp_path) not in json.dumps(request_body, ensure_ascii=False)
+    progress = client.get(
+        f"/api/review-tasks/{response.json()['data']['taskId']}/code-quality-progress"
+    ).json()["data"]
+    local_event = next(event for event in progress if event["phase"] == "LOCAL_REPO_PREPARED")
+    local_detail = json.loads(local_event["detail"])
+    assert local_detail["status"] == "PREPARED"
+    assert local_detail["mirrorStatus"] == "CLONED"
+    assert local_detail["worktreeStatus"] == "CHECKED_OUT"
+    assert local_detail["sourceIncluded"] is False
+    assert commands
+    assert "local-repo-secret" not in json.dumps(progress, ensure_ascii=False)
+    assert str(tmp_path) not in json.dumps(progress, ensure_ascii=False)
 
 
 def test_default_push_hard_limits_are_unlimited(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 import json
+import re
 from typing import Any
 
 from sqlalchemy import and_, func, select
@@ -13,27 +14,79 @@ from app.core.json_utils import read_json_array
 from app.project_integration import gitlab_client
 from app.review_feedback.models import ReviewItemFeedback
 from app.review_feedback.repository import ensure_feedback_schema
+from app.review_context.local_repo import prepare_local_repository_context
 
 
 CONTEXT_PACK_VERSION = "context-pack-v0"
 CONTEXT_PACK_MAX_TOTAL_CHARS = 6000
 CONTEXT_PACK_MAX_CHANGED_FILES = 30
 CONTEXT_PACK_MAX_FEEDBACK_BUCKETS = 8
-CONTEXT_PACK_MAX_UNAVAILABLE_CONTEXTS = 12
+CONTEXT_PACK_MAX_UNAVAILABLE_CONTEXTS = 8
 CONTEXT_PACK_MAX_PATH_CHARS = 240
 CONTEXT_PACK_MAX_SOURCE_CONTEXT_FILES = 5
 CONTEXT_PACK_MAX_SNIPPETS_PER_FILE = 3
 CONTEXT_PACK_SOURCE_CONTEXT_WINDOW_LINES = 30
 CONTEXT_PACK_MAX_SNIPPET_CHARS = 3500
+CONTEXT_PLANNER_VERSION = "context-planner-v0"
+CONTEXT_PLANNER_MAX_SIGNALS = 20
+CONTEXT_PLANNER_MAX_REQUESTED_CONTEXTS = 16
+CONTEXT_PLANNER_MAX_FILE_PATHS_PER_CONTEXT = 8
+CONTEXT_PLANNER_MAX_FEEDBACK_CONTEXT_TYPES = 5
+
+
+_METHOD_SIGNATURE_PATTERNS = [
+    re.compile(r"^\s*def\s+([A-Za-z_]\w*)\s*\("),
+    re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\("),
+    re.compile(
+        r"^\s*(?:(?:public|private|protected|internal|open|override|suspend|inline|static|final)\s+)*"
+        r"fun\s+([A-Za-z_]\w*)\s*\("
+    ),
+    re.compile(
+        r"^\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native|async)\s+)*"
+        r"(?:[\w$<>\[\],.?]+\s+)+([A-Za-z_$][\w$]*)\s*\([^;{}]*\)\s*(?:\{|throws\b|$)"
+    ),
+    re.compile(
+        r"^\s*(?:(?:public|private|protected|async|static)\s+)*"
+        r"([A-Za-z_$][\w$]*)\s*\([^;{}]*\)\s*(?::\s*[\w<>\[\]|.?]+\s*)?\{?\s*$"
+    ),
+]
+_CONTROL_METHOD_NAMES = {"if", "for", "while", "switch", "catch", "return", "new"}
+_FIELD_PATTERN = re.compile(
+    r"^\s*(?:(?:public|private|protected|static|final|readonly|const|let|var)\s+)*"
+    r"(?:[A-Za-z_$][\w$<>\[\],.?|]*\s+)?([A-Za-z_$][\w$]*)\??\s*(?::|=|;)"
+)
+_SQL_PATTERN = re.compile(
+    r"\b(select|insert|update|delete|merge|create|alter|drop|truncate|replace|where|join)\b",
+    re.IGNORECASE,
+)
+_CACHE_PATTERN = re.compile(
+    r"(redis|redisson|cache|caffeine|ehcache|memcache|setex|setnx|expire|evict|invalidate|put|delete|del)",
+    re.IGNORECASE,
+)
+_MQ_PATTERN = re.compile(
+    r"\b(kafka|rabbitmq|rocketmq|pulsar|queue|topic|exchange|consumer|producer|listener|group-id|binding)\b",
+    re.IGNORECASE,
+)
+_CONFIG_FILE_SUFFIXES = (
+    ".yml",
+    ".yaml",
+    ".properties",
+    ".toml",
+    ".ini",
+    ".conf",
+    ".env",
+)
 
 
 def build_review_context_pack(
     db: Session | None,
     *,
+    task_id: int | None = None,
     project_id: int | None,
     changed_files: list[Any] | None,
     diff_text: str | None,
     mode: str | None,
+    repository_url: str | None = None,
     git_project_id: str | None = None,
     head_ref: str | None = None,
 ) -> dict[str, Any]:
@@ -44,11 +97,31 @@ def build_review_context_pack(
         git_project_id=git_project_id,
         head_ref=head_ref,
     )
-    unavailable_contexts = _unavailable_contexts(files, source_unavailable_contexts)
+    context_plan = _context_plan(files, feedback_summary, same_file_context)
+    planner_signals = context_plan.pop("_plannerSignals", [])
+    requested_contexts = context_plan.pop("_requestedContexts", [])
+    planner_unavailable_contexts = context_plan.pop("_unavailableContexts", [])
+    local_repository_context = prepare_local_repository_context(
+        project_id=project_id,
+        task_id=task_id,
+        repository_url=repository_url,
+        git_project_id=git_project_id,
+        head_ref=head_ref,
+    )
+    unavailable_contexts = _unavailable_contexts(
+        files,
+        source_unavailable_contexts,
+        planner_unavailable_contexts,
+        local_repository_context.get("unavailableContexts") or [],
+    )
     context_pack = {
         "version": CONTEXT_PACK_VERSION,
         "changedFilesSummary": _changed_files_summary(files, diff_text),
         "sameFileContext": same_file_context,
+        "localRepositoryContext": local_repository_context.get("summary") or {},
+        "contextPlan": context_plan,
+        "plannerSignals": planner_signals,
+        "requestedContexts": requested_contexts,
         "contextMissingFeedbackSummary": feedback_summary,
         "unavailableContexts": unavailable_contexts,
         "unavailableContextsTruncated": len(unavailable_contexts) >= CONTEXT_PACK_MAX_UNAVAILABLE_CONTEXTS,
@@ -78,6 +151,11 @@ def build_review_context_pack(
         "contextMissingFeedbackTotal": context_pack["contextMissingFeedbackSummary"]["total"],
         "sameFileSourceSnippetCount": context_pack["sameFileContext"].get("sourceSnippetCount", 0),
         "sameFileSourceFileCount": context_pack["sameFileContext"].get("includedSourceFileCount", 0),
+        "plannerSignalCount": context_pack["contextPlan"].get("plannerSignalCount", 0),
+        "requestedContextCount": context_pack["contextPlan"].get("requestedContextCount", 0),
+        "plannerUnavailableContextCount": context_pack["contextPlan"].get("unavailableContextCount", 0),
+        "localRepositoryEnabled": bool(context_pack["localRepositoryContext"].get("enabled")),
+        "localRepositoryStatus": context_pack["localRepositoryContext"].get("status"),
     }
     return {
         "reviewContext": review_context,
@@ -480,42 +558,403 @@ def _context_missing_feedback_summary(db: Session | None, project_id: int | None
     }
 
 
+def _context_plan(
+    files: list[dict[str, Any]],
+    feedback_summary: dict[str, Any],
+    same_file_context: dict[str, Any],
+) -> dict[str, Any]:
+    raw_signals: list[dict[str, Any]] = []
+    for file in files:
+        raw_signals.extend(_planner_signals_for_file(file))
+    raw_signals.extend(_planner_signals_from_feedback(feedback_summary))
+
+    signals = raw_signals[:CONTEXT_PLANNER_MAX_SIGNALS]
+    requested_contexts = _requested_contexts_from_signals(signals, same_file_context)
+    unavailable_contexts = _planner_unavailable_contexts(requested_contexts)
+    requested_context_type_counts = [
+        {"type": item["type"], "count": int(item.get("signalCount") or 0)}
+        for item in requested_contexts
+    ]
+    return {
+        "version": CONTEXT_PLANNER_VERSION,
+        "plannerSignalCount": len(signals),
+        "plannerSignalTotal": len(raw_signals),
+        "plannerSignalsTruncated": len(raw_signals) > len(signals),
+        "requestedContextCount": len(requested_contexts),
+        "requestedContextTypeCounts": requested_context_type_counts,
+        "unavailableContextCount": len(unavailable_contexts),
+        "budget": {
+            "maxSignals": CONTEXT_PLANNER_MAX_SIGNALS,
+            "maxRequestedContexts": CONTEXT_PLANNER_MAX_REQUESTED_CONTEXTS,
+            "maxFilePathsPerContext": CONTEXT_PLANNER_MAX_FILE_PATHS_PER_CONTEXT,
+        },
+        "note": (
+            "Advisory only; no project scan, reference search, RAG, auto-ignore, or auto-downgrade."
+        ),
+        "_plannerSignals": signals,
+        "_requestedContexts": requested_contexts,
+        "_unavailableContexts": unavailable_contexts,
+    }
+
+
+def _planner_signals_for_file(file: dict[str, Any]) -> list[dict[str, Any]]:
+    diff = str(file.get("diffText") or "")
+    path = str(file.get("path") or "")
+    added_lines, deleted_lines = _changed_line_bodies(diff)
+    changed_lines = [*added_lines, *deleted_lines]
+    signals: list[dict[str, Any]] = []
+
+    deleted_methods = _method_names(deleted_lines)
+    added_methods = _method_names(added_lines)
+    signature_changed = sorted(set(deleted_methods) & set(added_methods))
+    method_deleted = sorted(set(deleted_methods) - set(added_methods))
+    if method_deleted:
+        signals.append(
+            _planner_signal(
+                "METHOD_DELETED",
+                file,
+                ["REFERENCE_SEARCH", "CALLER_CONTEXT", "SAME_CLASS_METHODS", "TEST_RESULT_CONTEXT"],
+                priority="HIGH",
+                details={"methodNames": method_deleted[:5], "methodCount": len(method_deleted)},
+            )
+        )
+    if signature_changed:
+        signals.append(
+            _planner_signal(
+                "METHOD_SIGNATURE_CHANGED",
+                file,
+                ["REFERENCE_SEARCH", "CALLER_CONTEXT", "CALLEE_CONTEXT", "TEST_RESULT_CONTEXT"],
+                priority="HIGH",
+                details={"methodNames": signature_changed[:5], "methodCount": len(signature_changed)},
+            )
+        )
+
+    deleted_fields = _field_names(deleted_lines)
+    added_fields = _field_names(added_lines)
+    field_deleted = sorted(set(deleted_fields) - set(added_fields))
+    if field_deleted:
+        signals.append(
+            _planner_signal(
+                "FIELD_DELETED",
+                file,
+                ["REFERENCE_SEARCH", "CALLER_CONTEXT", "TEST_RESULT_CONTEXT"],
+                priority="MEDIUM",
+                details={"fieldNames": field_deleted[:8], "fieldCount": len(field_deleted)},
+            )
+        )
+    if _is_dto_path(path) and (deleted_fields or added_fields):
+        changed_fields = sorted(set(deleted_fields) | set(added_fields))
+        signals.append(
+            _planner_signal(
+                "DTO_FIELD_CHANGED",
+                file,
+                ["REFERENCE_SEARCH", "CALLER_CONTEXT", "RELATED_FILE", "TEST_RESULT_CONTEXT"],
+                priority="HIGH",
+                details={"fieldNames": changed_fields[:8], "fieldCount": len(changed_fields)},
+            )
+        )
+
+    if _is_db_or_mapper_change(path, changed_lines):
+        signals.append(
+            _planner_signal(
+                "DB_SQL_MAPPER_CHANGED",
+                file,
+                ["DB_SCHEMA_CONTEXT", "RELATED_FILE", "TEST_RESULT_CONTEXT"],
+                priority="HIGH",
+            )
+        )
+    if _has_cache_write_delete_change(path, changed_lines):
+        signals.append(
+            _planner_signal(
+                "CACHE_WRITE_DELETE_CHANGED",
+                file,
+                ["CACHE_USAGE_CONTEXT", "REFERENCE_SEARCH", "TEST_RESULT_CONTEXT"],
+                priority="HIGH",
+            )
+        )
+    if _is_mq_config_change(path, changed_lines):
+        signals.append(
+            _planner_signal(
+                "MQ_CONFIG_CHANGED",
+                file,
+                ["MQ_CONFIG_CONTEXT", "CONFIG_CONTEXT", "TEST_RESULT_CONTEXT"],
+                priority="HIGH",
+            )
+        )
+    if _is_config_file_change(path, changed_lines):
+        signals.append(
+            _planner_signal(
+                "CONFIG_FILE_CHANGED",
+                file,
+                ["CONFIG_CONTEXT", "TEST_RESULT_CONTEXT"],
+                priority="MEDIUM",
+            )
+        )
+    return signals
+
+
+def _planner_signal(
+    signal_type: str,
+    file: dict[str, Any],
+    requested_context_types: list[str],
+    *,
+    priority: str,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    path = _truncate(str(file.get("path") or ""), CONTEXT_PACK_MAX_PATH_CHARS)
+    signal = {
+        "type": signal_type,
+        "priority": priority,
+        "filePath": path,
+        "requestedContextTypes": requested_context_types,
+    }
+    if details:
+        signal["details"] = details
+    return signal
+
+
+def _planner_signals_from_feedback(feedback_summary: dict[str, Any]) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    for item in (feedback_summary.get("byMissingContextType") or [])[:CONTEXT_PLANNER_MAX_FEEDBACK_CONTEXT_TYPES]:
+        context_type = str(item.get("missingContextType") or "").strip().upper()
+        if not context_type:
+            continue
+        signals.append(
+            {
+                "type": "HISTORICAL_CONTEXT_MISSING_FEEDBACK",
+                "priority": "MEDIUM",
+                "requestedContextTypes": [context_type],
+                "details": {"missingContextType": context_type, "feedbackCount": int(item.get("count") or 0)},
+            }
+        )
+    return signals
+
+
+def _requested_contexts_from_signals(
+    signals: list[dict[str, Any]],
+    same_file_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    requested: dict[str, dict[str, Any]] = {}
+    for signal in signals:
+        priority = str(signal.get("priority") or "MEDIUM")
+        file_path = signal.get("filePath")
+        for context_type in signal.get("requestedContextTypes") or []:
+            normalized_type = str(context_type or "").strip().upper()
+            if not normalized_type:
+                continue
+            item = requested.setdefault(
+                normalized_type,
+                {
+                    "type": normalized_type,
+                    "priority": priority,
+                    "filePaths": [],
+                    "signalCount": 0,
+                    "available": _planner_context_available(normalized_type, same_file_context),
+                },
+            )
+            item["priority"] = _higher_priority(item["priority"], priority)
+            item["signalCount"] += 1
+            if file_path and file_path not in item["filePaths"]:
+                item["filePaths"].append(file_path)
+    for item in requested.values():
+        item["filePaths"] = item["filePaths"][:CONTEXT_PLANNER_MAX_FILE_PATHS_PER_CONTEXT]
+    ordered = sorted(
+        requested.values(),
+        key=lambda item: (
+            -_priority_rank(item.get("priority")),
+            -int(item.get("signalCount") or 0),
+            str(item.get("type") or ""),
+        ),
+    )
+    return ordered[:CONTEXT_PLANNER_MAX_REQUESTED_CONTEXTS]
+
+
+def _planner_unavailable_contexts(requested_contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unavailable = []
+    for item in requested_contexts:
+        if item.get("available"):
+            continue
+        context_type = str(item.get("type") or "")
+        unavailable.append(
+            {
+                "type": context_type,
+                "reason": _unavailable_reason_for_requested_context(context_type),
+                "requestedByPlanner": True,
+            }
+        )
+    return unavailable
+
+
+def _changed_line_bodies(diff: str) -> tuple[list[str], list[str]]:
+    added: list[str] = []
+    deleted: list[str] = []
+    for line in diff.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            body = line[1:].strip()
+            if body:
+                added.append(body)
+            continue
+        if line.startswith("-"):
+            body = line[1:].strip()
+            if body:
+                deleted.append(body)
+    return added, deleted
+
+
+def _method_names(lines: list[str]) -> list[str]:
+    names = []
+    for line in lines:
+        if line.startswith(("@", "//", "#", "*")) or "(" not in line:
+            continue
+        for pattern in _METHOD_SIGNATURE_PATTERNS:
+            match = pattern.search(line)
+            if not match:
+                continue
+            name = str(match.group(1) or "").strip()
+            if name and name.lower() not in _CONTROL_METHOD_NAMES:
+                names.append(name)
+            break
+    return names
+
+
+def _field_names(lines: list[str]) -> list[str]:
+    names = []
+    for line in lines:
+        if line.startswith(("@", "//", "#", "*")) or "(" in line:
+            continue
+        match = _FIELD_PATTERN.search(line)
+        if not match:
+            continue
+        name = str(match.group(1) or "").strip()
+        if name and name.lower() not in _CONTROL_METHOD_NAMES:
+            names.append(name)
+    return names
+
+
+def _is_dto_path(path: str) -> bool:
+    lower = _normalize_path(path).lower()
+    name = lower.rsplit("/", 1)[-1]
+    return any(token in lower for token in ("/dto/", "/vo/", "/request/", "/response/", "/payload/")) or any(
+        token in name for token in ("dto", "vo", "request", "response", "payload", "form")
+    )
+
+
+def _is_db_or_mapper_change(path: str, changed_lines: list[str]) -> bool:
+    lower = _normalize_path(path).lower()
+    if lower.endswith(".sql") or "/mapper/" in lower or lower.endswith("mapper.xml"):
+        return True
+    if any(token in lower for token in ("/migration/", "/migrations/", "/db/", "/sql/")):
+        return True
+    if any(token in lower for token in ("entity", "repository", "dao", "mapper")) and _SQL_PATTERN.search(
+        "\n".join(changed_lines)
+    ):
+        return True
+    return bool(_SQL_PATTERN.search("\n".join(changed_lines)) and "mapper" in lower)
+
+
+def _has_cache_write_delete_change(path: str, changed_lines: list[str]) -> bool:
+    lower_path = _normalize_path(path).lower()
+    cacheish_path = any(token in lower_path for token in ("cache", "redis", "redisson", "caffeine", "ehcache"))
+    write_verbs = ("set(", ".set", "put(", ".put", "delete(", ".delete", "del(", ".del", "expire(", "evict", "invalidate")
+    for line in changed_lines:
+        lower = line.lower()
+        if "@cacheput" in lower or "@cacheevict" in lower:
+            return True
+        if (cacheish_path or _CACHE_PATTERN.search(lower)) and any(verb in lower for verb in write_verbs):
+            return True
+    return False
+
+
+def _is_mq_config_change(path: str, changed_lines: list[str]) -> bool:
+    lower_path = _normalize_path(path).lower()
+    path_match = any(token in lower_path for token in ("mq", "kafka", "rabbit", "rocketmq", "pulsar"))
+    line_text = "\n".join(changed_lines)
+    if path_match and (_is_config_file_change(path, changed_lines) or _MQ_PATTERN.search(line_text)):
+        return True
+    return bool(_MQ_PATTERN.search(line_text) and _is_config_file_change(path, changed_lines))
+
+
+def _is_config_file_change(path: str, changed_lines: list[str]) -> bool:
+    lower = _normalize_path(path).lower()
+    name = lower.rsplit("/", 1)[-1]
+    if lower.endswith(_CONFIG_FILE_SUFFIXES):
+        return True
+    if name in {"application.json", "bootstrap.json", "settings.json"}:
+        return True
+    if any(token in lower for token in ("/config/", "/nacos/", "/resources/")) and name.endswith(".json"):
+        return True
+    return any("@value" in line.lower() or "@configurationproperties" in line.lower() for line in changed_lines)
+
+
+def _planner_context_available(context_type: str, same_file_context: dict[str, Any]) -> bool:
+    if context_type == "SAME_FILE_CONTEXT":
+        return str(same_file_context.get("status") or "").upper() in {"AVAILABLE", "PARTIAL"}
+    return False
+
+
+def _unavailable_reason_for_requested_context(context_type: str) -> str:
+    return {
+        "REFERENCE_SEARCH": "Reference search is not performed in V2-F-5.",
+        "CALLER_CONTEXT": "Caller inspection is not performed in V2-F-5.",
+        "CALLEE_CONTEXT": "Callee inspection is not performed in V2-F-5.",
+        "SAME_CLASS_METHODS": "Class structure parsing is not performed in V2-F-5.",
+        "RELATED_FILE": "Related files are not read in V2-F-5.",
+        "DB_SCHEMA_CONTEXT": "DB schema is not retrieved in V2-F-5.",
+        "CONFIG_CONTEXT": "Runtime config is not retrieved in V2-F-5.",
+        "MQ_CONFIG_CONTEXT": "MQ config is not retrieved in V2-F-5.",
+        "CACHE_USAGE_CONTEXT": "Cache usages are not searched in V2-F-5.",
+        "TEST_RESULT_CONTEXT": "Tests are not executed in V2-F-5.",
+    }.get(context_type, "Unavailable in V2-F-5.")
+
+
+def _higher_priority(current: str, candidate: str) -> str:
+    return candidate if _priority_rank(candidate) > _priority_rank(current) else current
+
+
+def _priority_rank(priority: Any) -> int:
+    return {"HIGH": 3, "MEDIUM": 2, "LOW": 1}.get(str(priority or "").upper(), 0)
+
+
 def _unavailable_contexts(
     files: list[dict[str, Any]],
     source_unavailable_contexts: list[dict[str, Any]],
+    planner_unavailable_contexts: list[dict[str, Any]],
+    local_repo_unavailable_contexts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     contexts = [
         {
             "type": "SAME_FILE_FULL_SOURCE",
-            "reason": "V2-F-2 includes bounded snippets only; full file source is never included.",
+            "reason": "Only bounded snippets are included; full source is excluded.",
         },
         {
             "type": "REFERENCE_SEARCH",
-            "reason": "V2-F-1 does not search references, callers, or usages.",
+            "reason": "Reference, caller, and usage search is not performed.",
         },
         {
             "type": "CALLER_CONTEXT",
-            "reason": "V2-F-1 does not inspect callers outside the changed diff.",
+            "reason": "Callers outside the changed diff are not inspected.",
         },
         {
             "type": "CALLEE_CONTEXT",
-            "reason": "V2-F-1 does not inspect callees outside the changed diff.",
+            "reason": "Callees outside the changed diff are not inspected.",
         },
         {
             "type": "RELATED_FILE",
-            "reason": "V2-F-1 does not scan related files or the full project.",
+            "reason": "Related files and full project scan are not performed.",
         },
         {
             "type": "DB_SCHEMA_CONTEXT",
-            "reason": "V2-F-1 does not retrieve database schema beyond the submitted diff.",
+            "reason": "Database schema is not retrieved.",
         },
         {
             "type": "CONFIG_CONTEXT",
-            "reason": "V2-F-1 does not retrieve runtime configuration beyond the submitted diff.",
+            "reason": "Runtime config outside the diff is not retrieved.",
         },
         {
             "type": "TEST_RESULT_CONTEXT",
-            "reason": "V2-F-1 does not execute tests or include test results.",
+            "reason": "Tests are not executed.",
         },
     ]
     if any(not str(file.get("diffText") or "").strip() for file in files):
@@ -523,10 +962,23 @@ def _unavailable_contexts(
             1,
             {
                 "type": "DIFF_TEXT_FOR_SOME_FILES",
-                "reason": "Some changed files have no diff text, so only file path metadata is available.",
+                "reason": "Some changed files have path metadata only.",
             },
         )
-    return [*source_unavailable_contexts, *contexts][:CONTEXT_PACK_MAX_UNAVAILABLE_CONTEXTS]
+    result = []
+    seen = set()
+    for item in [
+        *local_repo_unavailable_contexts,
+        *planner_unavailable_contexts,
+        *source_unavailable_contexts,
+        *contexts,
+    ]:
+        key = (item.get("type"), item.get("filePath"), item.get("reason"))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result[:CONTEXT_PACK_MAX_UNAVAILABLE_CONTEXTS]
 
 
 def _fit_context_pack_budget(
@@ -587,7 +1039,9 @@ def _render_context_pack_text(review_context: dict[str, Any]) -> str:
 def _progress_summary(context_pack: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any]:
     changed = context_pack["changedFilesSummary"]
     same_file = context_pack["sameFileContext"]
+    local_repository = context_pack.get("localRepositoryContext") or {}
     feedback = context_pack["contextMissingFeedbackSummary"]
+    context_plan = context_pack["contextPlan"]
     return {
         "version": meta["version"],
         "projectId": meta.get("projectId"),
@@ -599,11 +1053,32 @@ def _progress_summary(context_pack: dict[str, Any], meta: dict[str, Any]) -> dic
         "filesWithoutDiff": same_file["filesWithoutDiff"],
         "sameFileSourceSnippetCount": same_file.get("sourceSnippetCount", 0),
         "sameFileSourceFileCount": same_file.get("includedSourceFileCount", 0),
+        "localRepository": _local_repository_progress_summary(local_repository),
         "contextMissingFeedbackTotal": feedback["total"],
         "topMissingContextTypes": feedback["byMissingContextType"][:3],
+        "plannerSignalCount": context_plan.get("plannerSignalCount", 0),
+        "plannerSignalTotal": context_plan.get("plannerSignalTotal", 0),
+        "requestedContextCount": context_plan.get("requestedContextCount", 0),
+        "requestedContextTypeCounts": context_plan.get("requestedContextTypeCounts", [])[:8],
+        "plannerUnavailableContextCount": context_plan.get("unavailableContextCount", 0),
         "unavailableContextCount": meta["unavailableContextCount"],
         "promptLength": meta["promptLength"],
         "truncated": meta["truncated"],
+    }
+
+
+def _local_repository_progress_summary(local_repository: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "enabled": bool(local_repository.get("enabled")),
+        "status": local_repository.get("status"),
+        "projectId": local_repository.get("projectId"),
+        "taskId": local_repository.get("taskId"),
+        "headRef": local_repository.get("headRef"),
+        "mirrorStatus": local_repository.get("mirrorStatus"),
+        "worktreeStatus": local_repository.get("worktreeStatus"),
+        "failurePhase": local_repository.get("failurePhase"),
+        "durationMs": local_repository.get("durationMs"),
+        "sourceIncluded": bool(local_repository.get("sourceIncluded", False)),
     }
 
 

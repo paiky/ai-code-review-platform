@@ -2,16 +2,17 @@
 
 ## 状态
 
-- 当前状态：V2-A / V2-B / V2-C / V2-D / V2-E 已落地并通过相关测试；V2-F-1 / V2-F-2 已落地，等待用户验收后再决定是否继续 V2-F 后续增强。
+- 当前状态：V2-A / V2-B / V2-C / V2-D / V2-E 已落地并通过相关测试；V2-F-1 / V2-F-2 / V2-F-3 已落地；V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环已落地。V2-F-3 后短期主线调整为 `docs/34-local-repository-context-retrieval-plan.md` 的本地仓库上下文检索 / 高准确 Review 模式，人工沉淀能力先在产品界面默认屏蔽。
 - 编写时间：2026-06-10
 - 前置版本：
   - `docs/29-review-feedback-v1-implementation.md`
   - `docs/30-review-feedback-v2-policy-plan.md`
   - `docs/31-review-context-aware-v1_5-plan.md`
 - 延伸愿景：`docs/33-review-learning-capability-roadmap.md`
+- 高准确 Review 主方案：`docs/34-local-repository-context-retrieval-plan.md`
 - 目标：在 V1 反馈闭环和 V1.5 上下文状态表达已具备的基础上，重新排序 V2 主线和 31 阶段 3~5，明确哪些现在做、哪些轻量补、哪些暂缓。
 
-说明：本文件不弃用，继续负责 V2 主线执行顺序；`docs/33-review-learning-capability-roadmap.md` 负责长期自我学习蓝图，包括反馈信号分流、自动化等级阶梯、自动归因、自动聚类、候选生成、效果评估和低风险灰度生效。短期按本文件推进 V2-A 到 V2-D，V2.5 以后再按 docs/33 扩展自动学习能力。
+说明：本文件不弃用，继续负责 V2 主线执行顺序和已落地记录；`docs/33-review-learning-capability-roadmap.md` 负责长期自我学习蓝图，包括反馈信号分流、自动化等级阶梯、自动归因、自动聚类、候选生成、效果评估和低风险灰度生效；`docs/34-local-repository-context-retrieval-plan.md` 负责 V2-F-3 之后的本地 clone / fetch / 引用搜索 / Context Pack 高准确 Review 方案。
 
 ## 一、结论
 
@@ -29,7 +30,9 @@
 已完成：V2-E 上下文不足反馈轻量统计
 已完成：V2-F-1 通用 Context Pack V0 后端最小闭环
 已完成：V2-F-2 同文件上下文片段 V0
-之后可选：V2-F-3 Context Planner 最小规则
+已完成：V2-F-3 Context Planner 最小规则
+已完成：V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环
+下一步：V2-F-6 起按 docs/34 推进本地引用搜索与高准确 Review Spike
 ```
 
 原因：
@@ -796,5 +799,98 @@ $env:NO_PAUSE="1"; .\scripts\run-backend.cmd test tests\unit\test_review_context
 下一阶段建议：
 
 ```text
-停止等待用户验收 V2-F-2；如继续，可推进 V2-F-3：Context Planner 最小规则。
+V2-F-3 已完成；当前停止等待用户验收 V2-F-3。
 ```
+
+## 十六、V2-F-3 落地记录
+
+落地时间：2026-06-11。
+
+已完成：
+
+- 在 `reviewContext / contextPack` 中新增 Context Planner 最小输出：`contextPlan`、`plannerSignals`、`requestedContexts`。
+- `contextPlan` 只保留版本、命中数量、requested context 类型统计、预算和 advisory note；详细 signals / requested contexts 只保留单份，避免重复撑大 Prompt。
+- Planner 只基于当前 changed files、diff text、文件路径和同项目 `CONTEXT_MISSING` 反馈统计做轻量识别。
+- 首批识别：
+  - 删除方法：`METHOD_DELETED`
+  - 方法签名变更：`METHOD_SIGNATURE_CHANGED`
+  - 字段删除：`FIELD_DELETED`
+  - DTO / request / response 字段变更：`DTO_FIELD_CHANGED`
+  - DB / SQL / mapper 变更：`DB_SQL_MAPPER_CHANGED`
+  - 缓存写入、过期、驱逐或删除变更：`CACHE_WRITE_DELETE_CHANGED`
+  - MQ topic / queue / exchange / binding / consumer / producer 配置变更：`MQ_CONFIG_CHANGED`
+  - 配置文件或 `@Value / @ConfigurationProperties` 变更：`CONFIG_FILE_CHANGED`
+- 对当前阶段无法获取的上下文，将 planner 请求写入 `requestedContexts`，并把不可用说明合并进 `unavailableContexts`。
+- Planner 输出遵守预算：signals、requested contexts、file paths、unavailable contexts 和最终 Context Pack prompt text 都有上限；超预算时仍优先保留类型统计和结构化信号。
+- `CONTEXT_PACK_BUILT` progress detail 继续只记录 `meta / summary`，新增 planner 命中数量、requested context 类型统计、planner unavailable 数量，不记录 diff 正文或源码片段。
+- Prompt 增加静态说明：Context Planner 只是缺失证据提示，不能作为自动忽略、自动降级或覆盖安全、数据一致性、事务一致性、线上正确性硬风险的依据。
+
+明确未做：
+
+- 不做全项目扫描。
+- 不做引用搜索。
+- 不读取 related files。
+- 不接向量库 / RAG。
+- 不做自动降级。
+- 不自动忽略 finding。
+- 不自动改 Prompt。
+- 不把 `CONTEXT_MISSING` 反馈转项目策略。
+
+新增和调整测试：
+
+- `backend-python/tests/unit/test_review_context_pack.py`
+- `backend-python/tests/unit/test_code_quality_prompt.py`
+- `backend-python/tests/contract/test_code_quality_api_contract.py`
+
+已验证：
+
+```powershell
+$env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\unit\test_review_context_pack.py tests\unit\test_code_quality_prompt.py tests\contract\test_code_quality_api_contract.py::test_manual_review_builds_context_pack_and_records_progress tests\contract\test_code_quality_api_contract.py::test_manual_review_injects_project_review_policies_and_records_progress tests\contract\test_code_quality_api_contract.py::test_deepseek_manual_review_saves_result_and_progress tests\contract\test_code_quality_api_contract.py::test_retry_gitlab_mr_ai_review_uses_saved_changed_files tests\contract\test_code_quality_api_contract.py::test_retry_gitlab_mr_ai_review_includes_same_file_context_snippets
+```
+
+结果：16 passed。
+
+下一阶段建议：
+
+```text
+当前停止等待用户验收 V2-F-3；如继续增强 V2-F，优先按 `docs/34-local-repository-context-retrieval-plan.md` 推进本地仓库上下文检索 / 高准确 Review Spike。
+```
+
+## 十七、V2-F 后续路线调整：转向本地仓库上下文检索
+
+调整时间：2026-06-11。
+
+调整结论：
+
+- V2-F-3 后不优先继续推进 V2.5 自动归因、V3 评估集或更多人工沉淀能力。
+- 短期主线切换为 `docs/34-local-repository-context-retrieval-plan.md` 中定义的高准确 Review 模式。
+- GitLab webhook / API 仍是任务和变更数据源；后端额外通过本地 mirror clone / fetch 和 task worktree 获取可搜索源码。
+- Context Planner 继续负责判断“应该补什么证据”；Local Context Retriever 负责真正做本地引用搜索和源码片段检索；Context Pack 负责预算控制后注入 AI Review。
+- 反馈池、项目策略、上下文不足人工标记等人工沉淀能力先不删除，但生产产品界面默认屏蔽，避免当前验证阶段的产品复杂度干扰高准确 Review 效果判断。
+
+后续阶段以 docs/34 为准：
+
+```text
+V2-F-4：本地仓库检索主方案与前端人工沉淀熄灯
+V2-F-5：本地仓库 mirror clone / fetch / worktree 最小闭环（已完成）
+V2-F-6：METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索 Retriever MVP
+V2-F-7：本地引用证据注入 Context Pack
+V2-F-8：前端展示高准确模式证据摘要，并屏蔽人工沉淀入口
+V2-F-9：生产验证与效果复盘
+```
+
+明确保留但默认不展示：
+
+- Review Feedback API 与反馈表。
+- Project Review Policy API 与项目策略表。
+- 反馈池页面能力。
+- 项目策略管理能力。
+- 上下文不足人工标记能力。
+
+明确不做：
+
+- 不删除 V0 到 V2-F-3 已落地能力。
+- 不把整个项目源码塞进 Prompt。
+- 不做无限制全项目扫描。
+- 不接向量库或复杂 RAG。
+- 不自动降级、不自动忽略 finding、不自动改 Prompt。

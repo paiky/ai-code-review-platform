@@ -2,13 +2,15 @@
 
 ## 状态
 
-- 当前状态：能力愿景与后续推进计划已梳理；`docs/32` 的 V2-A 到 V2-E 已落地，V2-F-1 / V2-F-2 已落地，后续等待用户验收后再推进 V2-F 后续增强或更长期学习能力。
+- 当前状态：能力愿景与后续推进计划已梳理；`docs/32` 的 V2-A 到 V2-E 已落地，V2-F-1 / V2-F-2 / V2-F-3 已落地，V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环已落地。短期主线已调整为 `docs/34-local-repository-context-retrieval-plan.md` 的本地仓库上下文检索 / 高准确 Review 模式；反馈池、项目策略、上下文不足人工标记等人工沉淀能力先作为暗能力保留，生产前端默认屏蔽。
 - 编写时间：2026-06-10
 - 前置版本：
   - `docs/29-review-feedback-v1-implementation.md`
   - `docs/30-review-feedback-v2-policy-plan.md`
   - `docs/31-review-context-aware-v1_5-plan.md`
   - `docs/32-review-feedback-v2-mainline-roadmap.md`
+- 当前高准确 Review 主方案：
+  - `docs/34-local-repository-context-retrieval-plan.md`
 - 目标：明确 Review 反馈学习不是“把所有反馈拼进初始 Prompt”，而是分层沉淀为项目记忆、上下文策略、风险校准、去重治理和效果评估，并逐步具备自动归因、聚类、候选生成、效果验证和灰度生效能力。
 
 ## 一、核心结论
@@ -79,7 +81,7 @@ L6 半自动策略候选推荐
 | Level 4 | 自动评估候选效果 | 用评估集验证误判率、漏报风险和等级变化 | 决策是否采用 | 待 V3 / V4 |
 | Level 5 | 低风险灰度自动生效 | 对低风险、可回滚候选做灰度启用和自动回滚 | 设置边界和审批高风险项 | 远期 |
 
-当前已经具备 V1 反馈闭环、V2 项目策略记忆、V2-E 上下文不足轻量统计，以及 V2-F-1 / V2-F-2 Context Pack V0 后端闭环。真正的“自我”仍会从后续自动归因统计、V3 的评估集、V4 的自动聚类和候选生成开始显现。
+当前已经具备 V1 反馈闭环、V2 项目策略记忆、V2-E 上下文不足轻量统计，以及 V2-F-1 / V2-F-2 / V2-F-3 Context Pack V0 后端闭环和 Context Planner 最小规则。短期优先用本地仓库上下文检索提升单次 Review 证据质量；真正的“自我”仍会从后续自动归因统计、V3 的评估集、V4 的自动聚类和候选生成开始显现。
 
 ## 三、学习信号分流
 
@@ -161,7 +163,9 @@ L6 半自动策略候选推荐
 
 ### L3：上下文自适应
 
-当前状态：V1.5 已完成上下文状态表达；V2-E 已补上下文不足筛选、缺失上下文类型和统计；V2-F-1 已落地 Context Pack V0 后端最小闭环，V2-F-2 已补同文件上下文片段 V0。当前 Context Pack 会注入 changed files 摘要、同文件上下文可用性说明、预算内同文件片段、上下文不足反馈统计摘要和 `unavailableContexts`。
+当前状态：V1.5 已完成上下文状态表达；V2-E 已补上下文不足筛选、缺失上下文类型和统计；V2-F-1 已落地 Context Pack V0 后端最小闭环，V2-F-2 已补同文件上下文片段 V0，V2-F-3 已补 Context Planner 最小规则，V2-F-5 已补本地 mirror clone / fetch / task head worktree 准备闭环。当前 Context Pack 会注入 changed files 摘要、同文件上下文可用性说明、预算内同文件片段、上下文不足反馈统计摘要、`contextPlan / plannerSignals / requestedContexts`、`localRepositoryContext` 和 `unavailableContexts`。
+
+2026-06-11 调整：L3 的短期实现重点从“继续增加人工上下文反馈统计”调整为“本地仓库上下文检索”。也就是先通过本地 mirror clone / fetch、task worktree、`rg` 引用搜索和 bounded snippets 提升单次 Review 准确率，再用反馈池和评估集验证效果。
 
 能力：
 
@@ -189,7 +193,8 @@ L6 半自动策略候选推荐
 
 1. 先统计 `CONTEXT_MISSING`。
 2. 已完成通用 `Context Pack V0` 后端最小闭环和同文件上下文片段 V0。
-3. 最后把删除方法、签名变更、DB 字段、缓存/MQ 读写对作为 Planner 规则逐步接入。
+3. 已完成 Context Planner 最小规则，把删除方法、签名变更、字段 / DTO、DB / SQL / mapper、缓存写入删除、MQ 配置和配置文件变更转成 requested context 提示。
+4. 当前优先按 `docs/34` 实现本地仓库检索：先支持删除方法 / 方法签名变更的引用搜索，再逐步扩展 DTO、DB、缓存、MQ 和配置检索。
 
 亮点：
 
@@ -335,11 +340,15 @@ V2：项目策略记忆
 ### 下一轮增强
 
 ```text
-V2-F / V2.5：Context Pack V0 与反馈自动归因
-  -> 通用 Context Pack V0
-  -> 反馈类型自动归因
-  -> 更完整的上下文不足归因统计
+V2-F / 高准确 Review：本地仓库上下文检索
+  -> 已完成：本地 mirror clone / fetch / worktree
+  -> METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索
+  -> 引用证据注入 Context Pack
+  -> 前端展示高准确模式证据摘要
+  -> 人工沉淀能力前端默认屏蔽
 ```
+
+说明：V2.5 的反馈自动归因和更完整上下文不足统计不取消，但后移到本地检索生产验证之后。
 
 ### 中期能力
 
@@ -355,7 +364,7 @@ V3：Review 质量评估集与效果看板
 ```text
 V3.5：风险等级与重复 finding 校准
 V4：自动聚类与半自动策略候选推荐
-V5：通用 Context Pack / 项目知识检索
+V5：更完整的项目知识检索 / 语义索引 / RAG 候选
 V6：低风险学习结果灰度自动生效与自动回滚
 ```
 
@@ -363,11 +372,12 @@ V6：低风险学习结果灰度自动生效与自动回滚
 
 ```text
 V2：先让学习结果有地方生效，也就是项目策略记忆
+V2-F：先通过本地仓库检索提升单次 Review 证据质量
 V2.5：让系统自动归因和统计反馈信号
-V3：建立评估集，让系统知道改动有没有变好
+V3：建立评估集，让系统知道本地检索、Prompt、策略或 Provider 改动有没有变好
 V3.5：做风险等级和重复 finding 的校准建议
 V4：自动聚类反馈并生成候选策略 / 候选规则
-V5：从反馈分布中学习 Context Planner 该补什么上下文
+V5：从反馈分布中学习 Context Planner 该补什么上下文，并考虑更完整语义索引
 V6：在严格边界下做低风险灰度自动生效和自动回滚
 ```
 
@@ -460,7 +470,7 @@ Prompt 改进应作为候选变更，经过：
 
 后续 Review 学习能力按 docs/33 的分层模型和自动化等级阶梯推进。不要把所有反馈都直接写入初始 Prompt。每条反馈应先判断属于项目策略、上下文不足、风险校准、重复 finding、规则配置、Prompt/Profile 改进还是评估样本。
 
-当前 docs/32 的 V2-A 到 V2-E 已落地，V2-F-1 / V2-F-2 已落地。后续如继续推进，优先按 docs/32 的 V2-F 做后续 Context Pack 增强；更完整的自动归因统计、评估集、风险校准、自动聚类和半自动策略候选仍作为后续阶段。
+当前 docs/32 的 V2-A 到 V2-E 已落地，V2-F-1 / V2-F-2 / V2-F-3 已落地，V2-F-5 已落地。后续短期主线按 docs/34 推进本地仓库上下文检索 / 高准确 Review 模式；反馈池、项目策略、上下文不足人工标记等人工沉淀能力先保留后端和数据结构，但生产前端默认屏蔽入口。更完整的自动归因统计、评估集、风险校准、自动聚类和半自动策略候选仍作为后续阶段。
 
 每次只推进一个阶段。允许自主修改 backend-python、frontend、docs、examples、tests 中与当前阶段直接相关的文件；不要修改 legacy Java backend；不要做自动 Prompt 改写、自动风险降级、自动忽略 finding、模型微调、复杂 RAG、跨项目策略共享或无限制全项目扫描。
 
@@ -568,12 +578,14 @@ Prompt 改进应作为候选变更，经过：
 
 ## 十二、当前下一步
 
-当前不需要先做 V3。
+当前不需要先做 V3，也不优先继续扩展人工沉淀产品入口。
 
-下一步仍建议先等待 `docs/32-review-feedback-v2-mainline-roadmap.md` 中 V2-F-2 的用户验收：
+下一步按 `docs/34-local-repository-context-retrieval-plan.md` 推进本地仓库上下文检索：
 
 ```text
-V2-F-2：同文件上下文片段 V0
+V2-F-4：本地仓库检索主方案与前端人工沉淀熄灯
+V2-F-5：本地仓库 mirror clone / fetch / worktree 最小闭环（已完成）
+V2-F-6：METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索 Retriever MVP
 ```
 
-V2-F-2 验收后，再考虑是否继续 V2-F-3 Context Planner 最小规则，或进入更完整的 V2.5 自动归因统计 / V3 评估集。
+本地检索在生产验证有效后，再决定是否恢复部分人工沉淀入口、继续 V2.5 自动归因统计，或进入 V3 评估集。

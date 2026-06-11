@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+from pathlib import Path
 
 import httpx
 import respx
 from sqlalchemy.orm import Session
 
+from app.review_context import local_repo
 from app.review_context.service import (
     CONTEXT_PACK_MAX_CHANGED_FILES,
     CONTEXT_PACK_MAX_TOTAL_CHARS,
@@ -178,6 +180,171 @@ def test_review_context_pack_includes_context_missing_feedback_summary(
     assert {"riskType": "TRANSACTION", "count": 1} in summary["byRiskType"]
     assert {"missingContextType": "CALLER_CONTEXT", "count": 2} in summary["byMissingContextType"]
     assert context["summary"]["contextMissingFeedbackTotal"] == 2
+
+
+def test_review_context_pack_builds_minimal_context_planner_signals() -> None:
+    context = build_review_context_pack(
+        None,
+        project_id=1,
+        mode="DIFF_TEXT",
+        changed_files=[
+            {
+                "path": "src/main/java/demo/OrderService.java",
+                "diffText": (
+                    "diff --git a/src/main/java/demo/OrderService.java b/src/main/java/demo/OrderService.java\n"
+                    "@@ -10,9 +10,8 @@\n"
+                    "-    public Order cancelOrder(Long id) {\n"
+                    "-        return oldCancel(id);\n"
+                    "-    }\n"
+                    "-    public Order createOrder(OrderRequest request) {\n"
+                    "+    public Order createOrder(CreateOrderRequest request) {\n"
+                    "+        redisTemplate.opsForValue().set(cacheKey, order);\n"
+                    "     }\n"
+                ),
+            },
+            {
+                "path": "src/main/java/demo/dto/OrderRequestDto.java",
+                "diffText": (
+                    "diff --git a/src/main/java/demo/dto/OrderRequestDto.java "
+                    "b/src/main/java/demo/dto/OrderRequestDto.java\n"
+                    "@@ -3,6 +3,6 @@\n"
+                    "-    private String legacyCode;\n"
+                    "+    private String channelCode;\n"
+                ),
+            },
+            {
+                "path": "src/main/resources/mapper/OrderMapper.xml",
+                "diffText": (
+                    "diff --git a/src/main/resources/mapper/OrderMapper.xml "
+                    "b/src/main/resources/mapper/OrderMapper.xml\n"
+                    "@@ -1,3 +1,4 @@\n"
+                    "+  <update id=\"touchOrder\">update t_order set updated_at = now()</update>\n"
+                ),
+            },
+            {
+                "path": "src/main/resources/application.yml",
+                "diffText": (
+                    "diff --git a/src/main/resources/application.yml b/src/main/resources/application.yml\n"
+                    "@@ -1,3 +1,4 @@\n"
+                    "+spring.kafka.consumer.group-id: order-v2\n"
+                    "+feature.order-cache-enabled: true\n"
+                ),
+            },
+        ],
+        diff_text=None,
+    )
+
+    pack = context["contextPack"]
+    plan = pack["contextPlan"]
+    signal_types = {item["type"] for item in pack["plannerSignals"]}
+    requested_types = {item["type"] for item in pack["requestedContexts"]}
+    unavailable_types = {
+        item["type"]
+        for item in pack["unavailableContexts"]
+        if item.get("requestedByPlanner")
+    }
+
+    assert plan["plannerSignalCount"] == len(pack["plannerSignals"])
+    assert plan["requestedContextCount"] == len(pack["requestedContexts"])
+    assert {
+        "METHOD_DELETED",
+        "METHOD_SIGNATURE_CHANGED",
+        "FIELD_DELETED",
+        "DTO_FIELD_CHANGED",
+        "DB_SQL_MAPPER_CHANGED",
+        "CACHE_WRITE_DELETE_CHANGED",
+        "MQ_CONFIG_CHANGED",
+        "CONFIG_FILE_CHANGED",
+    }.issubset(signal_types)
+    assert {
+        "REFERENCE_SEARCH",
+        "CALLER_CONTEXT",
+        "RELATED_FILE",
+        "DB_SCHEMA_CONTEXT",
+        "CACHE_USAGE_CONTEXT",
+        "MQ_CONFIG_CONTEXT",
+        "CONFIG_CONTEXT",
+        "TEST_RESULT_CONTEXT",
+    }.issubset(requested_types)
+    assert {"REFERENCE_SEARCH", "DB_SCHEMA_CONTEXT", "CONFIG_CONTEXT"}.issubset(unavailable_types)
+    assert context["summary"]["plannerSignalCount"] >= 8
+    assert any(item["type"] == "REFERENCE_SEARCH" for item in context["summary"]["requestedContextTypeCounts"])
+    assert "redisTemplate.opsForValue().set" not in context["promptText"]
+    assert len(context["promptText"]) <= CONTEXT_PACK_MAX_TOTAL_CHARS
+
+
+def test_review_context_pack_records_local_repo_prepare_summary(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    commands: list[list[str]] = []
+
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(tmp_path / "workspaces"))
+    monkeypatch.setenv("GITLAB_TOKEN", "repo-secret")
+    monkeypatch.setattr(local_repo, "_run_git", lambda args, **_kwargs: commands.append(args))
+
+    context = build_review_context_pack(
+        None,
+        task_id=501,
+        project_id=1,
+        mode="DIFF_TEXT",
+        repository_url="https://gitlab.example.com/demo/service",
+        git_project_id="1001",
+        head_ref="2222222222222222222222222222222222222222",
+        changed_files=["src/OrderService.java"],
+        diff_text="diff --git a/src/OrderService.java b/src/OrderService.java\n+ public void create() {}",
+    )
+
+    local_summary = context["contextPack"]["localRepositoryContext"]
+
+    assert local_summary["enabled"] is True
+    assert local_summary["status"] == "PREPARED"
+    assert local_summary["mirrorStatus"] == "CLONED"
+    assert local_summary["worktreeStatus"] == "CHECKED_OUT"
+    assert context["summary"]["localRepository"]["status"] == "PREPARED"
+    assert commands
+    assert "repo-secret" not in context["promptText"]
+    assert str(tmp_path) not in context["promptText"]
+
+
+def test_review_context_pack_marks_local_repo_failure_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run_git(args: list[str], *, token: str | None, timeout_seconds: int) -> None:
+        raise local_repo.LocalRepoGitError(
+            "clone",
+            128,
+            "fatal: https://oauth2:repo-secret@gitlab.example.com/demo/service.git PRIVATE-TOKEN: repo-secret",
+            token,
+        )
+
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(tmp_path / "workspaces"))
+    monkeypatch.setenv("GITLAB_TOKEN", "repo-secret")
+    monkeypatch.setattr(local_repo, "_run_git", fake_run_git)
+
+    context = build_review_context_pack(
+        None,
+        task_id=502,
+        project_id=1,
+        mode="DIFF_TEXT",
+        repository_url="https://gitlab.example.com/demo/service",
+        git_project_id="1001",
+        head_ref="head-sha",
+        changed_files=["src/OrderService.java"],
+        diff_text="diff --git a/src/OrderService.java b/src/OrderService.java\n+ public void create() {}",
+    )
+
+    local_unavailable = next(
+        item for item in context["contextPack"]["unavailableContexts"] if item["type"] == "LOCAL_REPOSITORY"
+    )
+
+    assert context["contextPack"]["localRepositoryContext"]["status"] == "UNAVAILABLE"
+    assert context["summary"]["localRepository"]["status"] == "UNAVAILABLE"
+    assert "repo-secret" not in local_unavailable["reason"]
+    assert "repo-secret" not in context["promptText"]
 
 
 def test_review_context_pack_limits_changed_file_budget() -> None:

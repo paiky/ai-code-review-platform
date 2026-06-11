@@ -2001,6 +2001,7 @@ def _run_review(
         _review_context_progress_detail(review_context),
         review_key=review_key,
     )
+    _append_local_repo_progress(db, task_id, review_context, review_key)
     append_progress(
         db,
         task_id,
@@ -2348,10 +2349,12 @@ def _attach_review_context_pack(
         head_ref = task.after_sha or task.commit_sha
     context = build_review_context_pack(
         db,
+        task_id=task_id,
         project_id=int(project.id) if project is not None else None,
         changed_files=request.get("changedFileDetails") or request.get("changedFiles") or [],
         diff_text=request.get("diffText"),
         mode=request.get("mode"),
+        repository_url=project.repository_url if project is not None else None,
         git_project_id=project.git_project_id if project is not None else None,
         head_ref=head_ref or request.get("commitSha"),
     )
@@ -2396,6 +2399,27 @@ def _review_context_progress_detail(context: dict[str, Any]) -> str:
             "summary": context.get("summary") or {},
         },
         ensure_ascii=False,
+    )
+
+
+def _append_local_repo_progress(
+    db: Session,
+    task_id: int,
+    context: dict[str, Any],
+    review_key: str | None,
+) -> None:
+    local_repository = ((context.get("summary") or {}).get("localRepository") or {})
+    if not local_repository.get("enabled"):
+        return
+    prepared = str(local_repository.get("status") or "").upper() == "PREPARED"
+    append_progress(
+        db,
+        task_id,
+        "LOCAL_REPO_PREPARED" if prepared else "LOCAL_REPO_PREPARE_FAILED",
+        "INFO" if prepared else "WARN",
+        "本地仓库工作区已准备" if prepared else "本地仓库工作区不可用",
+        json.dumps(local_repository, ensure_ascii=False),
+        review_key=review_key,
     )
 
 

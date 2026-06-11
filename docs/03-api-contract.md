@@ -592,7 +592,7 @@ Content-Type: application/json
 - 项目组可配置多个 `aiReviewModels`。自动触发和重试会为每个启用模型分别保存一条结果，并并行进入调度队列；仅配置单个模型时仍表现为单结果。
 - MR 自动 AI Review 启动后会先保存 `RUNNING` 结果，执行完成后更新为 `SUCCESS` 或 `FAILED`，前端可轮询本接口展示进度。
 - 所有 API Provider 自动触发都直接使用 MR diff 文本。
-- Provider 请求会附带后端构造的 `reviewContext / contextPack`。V0 包含 changed files 摘要、同文件上下文可用性说明、预算内同文件上下文片段、同项目上下文不足反馈统计摘要和 `unavailableContexts`。同文件上下文片段只读取当前 changed files 的 GitLab raw file，并只注入变更 hunk 附近窗口；不包含完整文件源码，不做全项目扫描、引用搜索、向量库 / RAG、自动降级或自动忽略 finding。
+- Provider 请求会附带后端构造的 `reviewContext / contextPack`。V0 包含 changed files 摘要、同文件上下文可用性说明、预算内同文件上下文片段、同项目上下文不足反馈统计摘要、Context Planner 的 `contextPlan / plannerSignals / requestedContexts` 和 `unavailableContexts`。同文件上下文片段只读取当前 changed files 的 GitLab raw file，并只注入变更 hunk 附近窗口；Context Planner 只基于当前 changed files、diff text、文件路径和已有上下文不足反馈统计输出缺失证据提示，不做全项目扫描、引用搜索、related files 读取、向量库 / RAG、自动降级或自动忽略 finding。
 - MR 自动 AI Review 受 `reviewEnabled` 全局能力开关和项目绑定 AI Review 配置的启用状态影响；设置页不再提供单独的 MR 自动触发开关。
 
 ### 7.2 查询代码质量 Review 结果
@@ -711,7 +711,7 @@ GET /api/review-tasks/{taskId}/code-quality-progress
 - 该接口返回持久化的 AI Review 过程事件，前端在 `RUNNING` 时轮询展示；可追加 `?reviewKey=...` 只查看某个模型的事件。
 - API Provider 会记录请求构建、Provider 调用、响应摘要、解析和保存结果等阶段，敏感字段会脱敏或省略。
 - 注入项目策略时会记录 `PROJECT_POLICIES_INJECTED`，detail 仅包含策略摘要和数量，不包含策略正文。
-- 构造 Context Pack 时会记录 `CONTEXT_PACK_BUILT`，detail 仅包含 meta、changed file 数量、同文件上下文可用性、同文件 source snippet 数量、上下文不足反馈数量和不可用上下文数量，不记录 diff 正文或源码片段。
+- 构造 Context Pack 时会记录 `CONTEXT_PACK_BUILT`，detail 仅包含 meta、changed file 数量、同文件上下文可用性、同文件 source snippet 数量、上下文不足反馈数量、planner 命中数量、requested context 类型统计和不可用上下文数量，不记录 diff 正文或源码片段。
 - 重试 AI Review 会清空同一任务旧过程事件，并重新写入本轮过程。
 
 ### 7.4 查询 Push 审核结论
