@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import base64
+import os
 from pathlib import Path
+import time
+
+import pytest
 
 from app.review_context import local_repo
-from app.review_context.local_repo import prepare_local_repository_context
+from app.review_context.local_repo import (
+    cleanup_local_repository_workspace,
+    prepare_local_repository_context,
+)
 
 
 def test_local_repo_context_is_disabled_by_default() -> None:
@@ -131,3 +138,106 @@ def test_local_repo_context_sanitizes_git_failure_without_raising(
     assert "secret-token" not in reason
     assert basic_token not in reason
     assert "****" in reason
+
+
+def test_local_repo_cleanup_removes_expired_worktrees_and_idle_mirrors(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    expired_worktree = root / "worktrees" / "old-task"
+    current_worktree = root / "worktrees" / "101"
+    fresh_worktree = root / "worktrees" / "fresh-task"
+    expired_mirror = root / "mirrors" / "2.git"
+    current_mirror = root / "mirrors" / "1.git"
+    fresh_mirror = root / "mirrors" / "3.git"
+
+    for path in [
+        expired_worktree,
+        current_worktree,
+        fresh_worktree,
+        expired_mirror,
+        current_mirror,
+        fresh_mirror,
+    ]:
+        _write_marker(path)
+
+    old = time.time() - (3 * 24 * 60 * 60)
+    os.utime(expired_worktree, (old, old))
+    os.utime(expired_mirror, (old, old))
+
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_REPO_WORKTREE_RETENTION_HOURS", "1")
+    monkeypatch.setenv("LOCAL_REPO_MIRROR_RETENTION_DAYS", "1")
+    monkeypatch.setenv("GITLAB_TOKEN", "secret-token")
+
+    summary = cleanup_local_repository_workspace(current_task_id=101, current_project_id=1)
+
+    assert summary["status"] == "COMPLETED"
+    assert summary["deletedWorktreeCount"] == 1
+    assert summary["deletedMirrorCount"] == 1
+    assert summary["bytesDeleted"] > 0
+    assert not expired_worktree.exists()
+    assert current_worktree.exists()
+    assert fresh_worktree.exists()
+    assert not expired_mirror.exists()
+    assert current_mirror.exists()
+    assert fresh_mirror.exists()
+    assert "secret-token" not in str(summary)
+    assert str(root) not in str(summary)
+
+
+def test_local_repo_cleanup_rejects_root_and_outside_delete(tmp_path: Path) -> None:
+    root = tmp_path / "workspaces"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+
+    with pytest.raises(local_repo.LocalRepoUnavailableError):
+        local_repo._safe_rmtree(root, root)
+
+    with pytest.raises(local_repo.LocalRepoUnavailableError):
+        local_repo._safe_rmtree(root, outside)
+
+
+def test_local_repo_cleanup_failure_does_not_block_prepare(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    expired_worktree = root / "worktrees" / "old-task"
+    _write_marker(expired_worktree)
+    old = time.time() - (3 * 24 * 60 * 60)
+    os.utime(expired_worktree, (old, old))
+
+    commands: list[list[str]] = []
+
+    def fake_safe_rmtree(_root: Path, _target: Path) -> None:
+        raise PermissionError("access denied")
+
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_REPO_WORKTREE_RETENTION_HOURS", "1")
+    monkeypatch.setenv("LOCAL_REPO_MIRROR_RETENTION_DAYS", "1")
+    monkeypatch.setattr(local_repo, "_safe_rmtree", fake_safe_rmtree)
+    monkeypatch.setattr(local_repo, "_run_git", lambda args, **_kwargs: commands.append(args))
+
+    context = prepare_local_repository_context(
+        project_id=1,
+        task_id=101,
+        repository_url="https://gitlab.example.com/demo/service",
+        git_project_id="1001",
+        head_ref="2222222222222222222222222222222222222222",
+    )
+
+    cleanup = context["summary"]["cleanup"]
+    assert context["summary"]["status"] == "PREPARED"
+    assert cleanup["status"] == "PARTIAL"
+    assert cleanup["errorCount"] == 1
+    assert cleanup["errors"] == ["worktree cleanup failed: PermissionError"]
+    assert commands
+
+
+def _write_marker(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "marker.txt").write_text("cache", encoding="utf-8")

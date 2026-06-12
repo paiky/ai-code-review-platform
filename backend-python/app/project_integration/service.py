@@ -179,7 +179,7 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
         db,
         git_project_id,
         project_name,
-        repository_url,
+        event["repositoryUrl"],
         files_for_project_detection,
     )
     branch_gate = _push_webhook_branch_gate(db, project_record, event["branchName"])

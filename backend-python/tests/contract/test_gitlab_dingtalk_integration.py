@@ -359,6 +359,47 @@ def test_gitlab_web_urls_use_configured_public_base_url(
     assert projects[0]["repositoryUrl"] == "http://192.168.100.88:19523/demo/service"
 
 
+def test_gitlab_push_repository_url_uses_configured_public_base_url(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("GITLAB_BASE_URL", "http://192.168.100.88:19523")
+
+    response = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json={
+            "object_kind": "push",
+            "project": {
+                "id": 1001,
+                "name": "demo-service",
+                "web_url": "http://dc8191653c5a/demo/service",
+            },
+            "ref": "refs/heads/master",
+            "before": "before-sha",
+            "after": "after-sha",
+            "user_name": "Alice",
+            "user_username": "alice",
+            "total_commits_count": 1,
+            "changedFiles": [
+                {
+                    "path": "src/main/resources/mapper/OrderMapper.xml",
+                    "diffText": "+ update orders set status = 'PUSHED' where id = #{id}",
+                }
+            ],
+        },
+        headers={"X-Gitlab-Event": "Push Hook"},
+    )
+
+    assert response.status_code == 200
+    task_id = response.json()["data"]["taskId"]
+    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
+    projects = client.get("/api/projects").json()["data"]["items"]
+    assert detail["externalUrl"] == "http://192.168.100.88:19523/demo/service/-/commit/after-sha"
+    assert projects[0]["repositoryUrl"] == "http://192.168.100.88:19523/demo/service"
+
+
 def test_web_mr_without_payload_changed_files_creates_task_after_gitlab_diff_detection(
     client: TestClient,
     db_session: Session,

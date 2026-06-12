@@ -24,6 +24,9 @@ class Settings:
     local_repo_context_enabled: bool
     local_repo_workspace_root: str
     local_repo_max_fetch_seconds: int
+    local_repo_cleanup_enabled: bool
+    local_repo_worktree_retention_hours: int
+    local_repo_mirror_retention_days: int
     code_quality_review_enabled: bool
     code_quality_review_provider: str
     openai_api_key: str
@@ -69,6 +72,14 @@ class Settings:
                 "LOCAL_REPO_WORKSPACE_ROOT", ".local/review-workspaces"
             ),
             local_repo_max_fetch_seconds=int(os.getenv("LOCAL_REPO_MAX_FETCH_SECONDS", "120")),
+            local_repo_cleanup_enabled=os.getenv("LOCAL_REPO_CLEANUP_ENABLED", "true").lower()
+            != "false",
+            local_repo_worktree_retention_hours=int(
+                os.getenv("LOCAL_REPO_WORKTREE_RETENTION_HOURS", "24")
+            ),
+            local_repo_mirror_retention_days=int(
+                os.getenv("LOCAL_REPO_MIRROR_RETENTION_DAYS", "30")
+            ),
             code_quality_review_enabled=os.getenv("CODE_QUALITY_REVIEW_ENABLED", "false").lower()
             == "true",
             code_quality_review_provider=os.getenv("CODE_QUALITY_REVIEW_PROVIDER", "DEEPSEEK"),

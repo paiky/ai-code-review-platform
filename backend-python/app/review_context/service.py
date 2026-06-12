@@ -1133,7 +1133,7 @@ def _progress_summary(context_pack: dict[str, Any], meta: dict[str, Any]) -> dic
 
 
 def _local_repository_progress_summary(local_repository: dict[str, Any]) -> dict[str, Any]:
-    return {
+    summary = {
         "enabled": bool(local_repository.get("enabled")),
         "status": local_repository.get("status"),
         "projectId": local_repository.get("projectId"),
@@ -1144,6 +1144,31 @@ def _local_repository_progress_summary(local_repository: dict[str, Any]) -> dict
         "failurePhase": local_repository.get("failurePhase"),
         "durationMs": local_repository.get("durationMs"),
         "sourceIncluded": bool(local_repository.get("sourceIncluded", False)),
+    }
+    cleanup = _local_repository_cleanup_progress_summary(local_repository.get("cleanup"))
+    if cleanup:
+        summary["cleanup"] = cleanup
+    return summary
+
+
+def _local_repository_cleanup_progress_summary(cleanup: Any) -> dict[str, Any] | None:
+    if not isinstance(cleanup, dict):
+        return None
+    return {
+        "enabled": bool(cleanup.get("enabled")),
+        "status": cleanup.get("status"),
+        "worktreeRetentionHours": int(cleanup.get("worktreeRetentionHours") or 0),
+        "mirrorRetentionDays": int(cleanup.get("mirrorRetentionDays") or 0),
+        "scannedWorktreeCount": int(cleanup.get("scannedWorktreeCount") or 0),
+        "deletedWorktreeCount": int(cleanup.get("deletedWorktreeCount") or 0),
+        "skippedWorktreeCount": int(cleanup.get("skippedWorktreeCount") or 0),
+        "scannedMirrorCount": int(cleanup.get("scannedMirrorCount") or 0),
+        "deletedMirrorCount": int(cleanup.get("deletedMirrorCount") or 0),
+        "skippedMirrorCount": int(cleanup.get("skippedMirrorCount") or 0),
+        "bytesDeleted": int(cleanup.get("bytesDeleted") or 0),
+        "durationMs": int(cleanup.get("durationMs") or 0),
+        "errorCount": int(cleanup.get("errorCount") or 0),
+        "errors": [str(item)[:240] for item in (cleanup.get("errors") or [])[:3]],
     }
 
 

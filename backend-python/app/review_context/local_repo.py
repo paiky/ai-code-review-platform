@@ -9,7 +9,7 @@ import re
 import shutil
 import subprocess
 from threading import Lock
-from time import perf_counter
+from time import perf_counter, time
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -18,6 +18,8 @@ from app.core.config import Settings, get_settings
 
 LOCAL_REPO_CONTEXT_TYPE = "LOCAL_REPOSITORY"
 _MAX_REASON_CHARS = 500
+_MAX_CLEANUP_ERROR_CHARS = 240
+_MAX_CLEANUP_ERRORS = 3
 _LOCKS: dict[str, Lock] = {}
 _LOCKS_GUARD = Lock()
 
@@ -64,6 +66,7 @@ def prepare_local_repository_context(
 
     started = perf_counter()
     phase = "VALIDATE"
+    cleanup_summary: dict[str, Any] | None = None
     try:
         plan = _build_plan(
             settings,
@@ -73,17 +76,25 @@ def prepare_local_repository_context(
             git_project_id=git_project_id,
             head_ref=head_ref,
         )
-        lock = _lock_for(str(plan.worktree_path))
-        with lock:
-            mirror_status = _prepare_mirror(plan)
-            phase = "WORKTREE"
-            _prepare_head_worktree(plan, str(head_ref))
+        cleanup_summary = _cleanup_workspace_best_effort(
+            settings,
+            current_task_id=task_id,
+            current_project_id=project_id,
+        )
+        mirror_lock = _lock_for(str(plan.mirror_path))
+        worktree_lock = _lock_for(str(plan.worktree_path))
+        with mirror_lock:
+            with worktree_lock:
+                mirror_status = _prepare_mirror(plan)
+                phase = "WORKTREE"
+                _prepare_head_worktree(plan, str(head_ref))
         return _prepared_result(
             project_id=project_id,
             task_id=task_id,
             head_ref=head_ref,
             mirror_status=mirror_status,
             duration_ms=_duration_ms(started),
+            cleanup_summary=cleanup_summary,
         )
     except LocalRepoUnavailableError as exception:
         return _unavailable_result(
@@ -93,6 +104,7 @@ def prepare_local_repository_context(
             failure_phase=phase,
             reason=str(exception),
             duration_ms=_duration_ms(started),
+            cleanup_summary=cleanup_summary,
         )
     except LocalRepoGitError as exception:
         return _unavailable_result(
@@ -102,6 +114,7 @@ def prepare_local_repository_context(
             failure_phase=exception.operation.upper(),
             reason=exception.public_message,
             duration_ms=_duration_ms(started),
+            cleanup_summary=cleanup_summary,
         )
     except Exception as exception:
         return _unavailable_result(
@@ -111,6 +124,7 @@ def prepare_local_repository_context(
             failure_phase=phase,
             reason=_sanitize_text(str(exception), settings.gitlab_token),
             duration_ms=_duration_ms(started),
+            cleanup_summary=cleanup_summary,
         )
 
 
@@ -121,6 +135,18 @@ def task_head_worktree_path(task_id: int | str | None) -> Path:
     root = _workspace_root(settings.local_repo_workspace_root)
     task_key = _safe_segment(str(task_id))
     return _child_path(root, "worktrees", task_key, "head")
+
+
+def cleanup_local_repository_workspace(
+    *,
+    current_task_id: int | str | None = None,
+    current_project_id: int | str | None = None,
+) -> dict[str, Any]:
+    return _cleanup_workspace_best_effort(
+        get_settings(),
+        current_task_id=current_task_id,
+        current_project_id=current_project_id,
+    )
 
 
 def _build_plan(
@@ -164,12 +190,14 @@ def _prepare_mirror(plan: _LocalRepoPlan) -> str:
             token=plan.token,
             timeout_seconds=plan.timeout_seconds,
         )
+        _touch_path(plan.mirror_path)
         return "FETCHED"
     _run_git(
         ["git", "clone", "--mirror", plan.clone_url, str(plan.mirror_path)],
         token=plan.token,
         timeout_seconds=plan.timeout_seconds,
     )
+    _touch_path(plan.mirror_path)
     return "CLONED"
 
 
@@ -179,7 +207,15 @@ def _prepare_head_worktree(plan: _LocalRepoPlan, head_ref: str) -> None:
     if plan.worktree_path.exists():
         try:
             _run_git(
-                ["git", "--git-dir", str(plan.mirror_path), "worktree", "remove", "--force", str(plan.worktree_path)],
+                [
+                    "git",
+                    "--git-dir",
+                    str(plan.mirror_path),
+                    "worktree",
+                    "remove",
+                    "--force",
+                    str(plan.worktree_path),
+                ],
                 token=plan.token,
                 timeout_seconds=plan.timeout_seconds,
             )
@@ -202,6 +238,216 @@ def _prepare_head_worktree(plan: _LocalRepoPlan, head_ref: str) -> None:
         token=plan.token,
         timeout_seconds=plan.timeout_seconds,
     )
+    _touch_path(plan.worktree_path.parent)
+
+
+def _cleanup_workspace_best_effort(
+    settings: Settings,
+    *,
+    current_task_id: int | str | None,
+    current_project_id: int | str | None,
+) -> dict[str, Any]:
+    started = perf_counter()
+    summary = _cleanup_summary_base(settings)
+    if not settings.local_repo_cleanup_enabled:
+        summary["durationMs"] = _duration_ms(started)
+        return summary
+    try:
+        root = _workspace_root(settings.local_repo_workspace_root)
+        summary["enabled"] = True
+        summary["status"] = "COMPLETED"
+        if summary["worktreeRetentionHours"] > 0:
+            _cleanup_stale_worktrees(
+                root,
+                retention_hours=summary["worktreeRetentionHours"],
+                current_task_id=current_task_id,
+                summary=summary,
+                token=settings.gitlab_token,
+            )
+        if summary["mirrorRetentionDays"] > 0:
+            _cleanup_stale_mirrors(
+                root,
+                retention_days=summary["mirrorRetentionDays"],
+                current_project_id=current_project_id,
+                summary=summary,
+                token=settings.gitlab_token,
+            )
+    except Exception as exception:
+        summary["enabled"] = True
+        _record_cleanup_error(
+            summary,
+            _cleanup_error("workspace", exception),
+            settings.gitlab_token,
+        )
+    summary["durationMs"] = _duration_ms(started)
+    if summary["errorCount"] > 0 and summary["status"] == "COMPLETED":
+        summary["status"] = "PARTIAL"
+    return summary
+
+
+def _cleanup_summary_base(settings: Settings) -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "status": "DISABLED",
+        "worktreeRetentionHours": max(int(settings.local_repo_worktree_retention_hours or 0), 0),
+        "mirrorRetentionDays": max(int(settings.local_repo_mirror_retention_days or 0), 0),
+        "scannedWorktreeCount": 0,
+        "deletedWorktreeCount": 0,
+        "skippedWorktreeCount": 0,
+        "scannedMirrorCount": 0,
+        "deletedMirrorCount": 0,
+        "skippedMirrorCount": 0,
+        "bytesDeleted": 0,
+        "errorCount": 0,
+        "errors": [],
+        "durationMs": 0,
+    }
+
+
+def _cleanup_stale_worktrees(
+    root: Path,
+    *,
+    retention_hours: int,
+    current_task_id: int | str | None,
+    summary: dict[str, Any],
+    token: str | None,
+) -> None:
+    worktrees_root = _child_path(root, "worktrees")
+    if not worktrees_root.exists():
+        return
+    current_task_key = _safe_segment(str(current_task_id)) if current_task_id is not None else None
+    cutoff = time() - (retention_hours * 60 * 60)
+    for candidate in _iter_directories(worktrees_root):
+        summary["scannedWorktreeCount"] += 1
+        if current_task_key and candidate.name == current_task_key:
+            summary["skippedWorktreeCount"] += 1
+            continue
+        try:
+            _assert_deletable_workspace_child(root, candidate)
+            if _last_modified_at(candidate) > cutoff:
+                summary["skippedWorktreeCount"] += 1
+                continue
+            lock = _lock_for(str(candidate.joinpath("head").resolve(strict=False)))
+            if not lock.acquire(blocking=False):
+                summary["skippedWorktreeCount"] += 1
+                continue
+            try:
+                size = _directory_size(candidate)
+                _safe_rmtree(root, candidate)
+                summary["deletedWorktreeCount"] += 1
+                summary["bytesDeleted"] += size
+            finally:
+                lock.release()
+        except Exception as exception:
+            _record_cleanup_error(summary, _cleanup_error("worktree", exception), token)
+
+
+def _cleanup_stale_mirrors(
+    root: Path,
+    *,
+    retention_days: int,
+    current_project_id: int | str | None,
+    summary: dict[str, Any],
+    token: str | None,
+) -> None:
+    mirrors_root = _child_path(root, "mirrors")
+    if not mirrors_root.exists():
+        return
+    current_project_key = (
+        _safe_segment(str(current_project_id)) if current_project_id is not None else None
+    )
+    current_mirror_name = f"{current_project_key}.git" if current_project_key else None
+    cutoff = time() - (retention_days * 24 * 60 * 60)
+    for candidate in _iter_directories(mirrors_root):
+        if not candidate.name.endswith(".git"):
+            continue
+        summary["scannedMirrorCount"] += 1
+        if current_mirror_name and candidate.name == current_mirror_name:
+            summary["skippedMirrorCount"] += 1
+            continue
+        try:
+            _assert_deletable_workspace_child(root, candidate)
+            if _last_modified_at(candidate) > cutoff:
+                summary["skippedMirrorCount"] += 1
+                continue
+            lock = _lock_for(str(candidate.resolve(strict=False)))
+            if not lock.acquire(blocking=False):
+                summary["skippedMirrorCount"] += 1
+                continue
+            try:
+                size = _directory_size(candidate)
+                _safe_rmtree(root, candidate)
+                summary["deletedMirrorCount"] += 1
+                summary["bytesDeleted"] += size
+            finally:
+                lock.release()
+        except Exception as exception:
+            _record_cleanup_error(summary, _cleanup_error("mirror", exception), token)
+
+
+def _iter_directories(parent: Path) -> list[Path]:
+    try:
+        return [item for item in parent.iterdir() if item.is_dir()]
+    except OSError:
+        return []
+
+
+def _assert_deletable_workspace_child(root: Path, target: Path) -> None:
+    _assert_within_root(root, target)
+    resolved_root = root.resolve(strict=False)
+    resolved_target = target.resolve(strict=False)
+    protected = {
+        resolved_root,
+        _child_path(root, "worktrees").resolve(strict=False),
+        _child_path(root, "mirrors").resolve(strict=False),
+    }
+    if resolved_target in protected:
+        raise LocalRepoUnavailableError(
+            "Refusing to remove protected local repository workspace path."
+        )
+
+
+def _last_modified_at(target: Path) -> float:
+    return target.stat().st_mtime
+
+
+def _directory_size(target: Path) -> int:
+    total = 0
+    for root_dir, dir_names, file_names in os.walk(target, followlinks=False):
+        root_path = Path(root_dir)
+        for dir_name in dir_names:
+            directory = root_path / dir_name
+            if directory.is_symlink():
+                try:
+                    total += directory.lstat().st_size
+                except OSError:
+                    continue
+        for file_name in file_names:
+            file_path = root_path / file_name
+            try:
+                total += file_path.lstat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _record_cleanup_error(summary: dict[str, Any], message: str, token: str | None) -> None:
+    summary["status"] = "PARTIAL"
+    summary["errorCount"] += 1
+    if len(summary["errors"]) >= _MAX_CLEANUP_ERRORS:
+        return
+    summary["errors"].append(_truncate(_sanitize_text(message, token), _MAX_CLEANUP_ERROR_CHARS))
+
+
+def _cleanup_error(scope: str, exception: Exception) -> str:
+    return f"{scope} cleanup failed: {exception.__class__.__name__}"
+
+
+def _touch_path(path: Path) -> None:
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
 
 
 def _run_git(args: list[str], *, token: str | None, timeout_seconds: int) -> None:
@@ -351,6 +597,7 @@ def _prepared_result(
     head_ref: str | None,
     mirror_status: str,
     duration_ms: int,
+    cleanup_summary: dict[str, Any] | None,
 ) -> dict[str, Any]:
     summary = {
         "enabled": True,
@@ -363,6 +610,7 @@ def _prepared_result(
         "durationMs": duration_ms,
         "sourceIncluded": False,
     }
+    _attach_cleanup_summary(summary, cleanup_summary)
     return {"summary": summary, "unavailableContexts": []}
 
 
@@ -374,8 +622,12 @@ def _unavailable_result(
     failure_phase: str,
     reason: str,
     duration_ms: int,
+    cleanup_summary: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    public_reason = _truncate(_sanitize_text(reason, get_settings().gitlab_token), _MAX_REASON_CHARS)
+    public_reason = _truncate(
+        _sanitize_text(reason, get_settings().gitlab_token),
+        _MAX_REASON_CHARS,
+    )
     summary = {
         "enabled": True,
         "status": "UNAVAILABLE",
@@ -388,6 +640,7 @@ def _unavailable_result(
         "durationMs": duration_ms,
         "sourceIncluded": False,
     }
+    _attach_cleanup_summary(summary, cleanup_summary)
     return {
         "summary": summary,
         "unavailableContexts": [
@@ -397,6 +650,14 @@ def _unavailable_result(
             }
         ],
     }
+
+
+def _attach_cleanup_summary(
+    summary: dict[str, Any],
+    cleanup_summary: dict[str, Any] | None,
+) -> None:
+    if cleanup_summary is not None:
+        summary["cleanup"] = cleanup_summary
 
 
 def _short_ref(value: str | None) -> str | None:

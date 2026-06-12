@@ -1857,3 +1857,81 @@ git ls-remote http://gitlab.example.com/group/project.git
 ```
 
 能列出 refs 后，再重跑任务确认出现 `LOCAL_REPO_PREPARED` 和 `LOCAL_CONTEXT_RETRIEVED`。
+
+## 82. Push 项目仓库 URL 也必须按 GITLAB_BASE_URL 归一化
+
+现象：
+
+高准确模式已启用，任务 progress 出现：
+
+```text
+LOCAL_REPO_PREPARE_FAILED
+failurePhase=CLONE
+localRepositoryStatus=UNAVAILABLE
+```
+
+`git ls-remote http://<GITLAB_BASE_URL>/<group>/<project>.git` 使用当前 token 可以成功，
+但任务对应项目表里的 `projects.repository_url` 仍是 GitLab webhook payload 中的内部 host，
+例如：
+
+```text
+http://dc8191653c5a/ljdw/ljdw-ios
+```
+
+本机或容器无法解析该 host 时，本地 mirror clone 会失败。
+
+原因：
+
+后端已经有 `_normalize_gitlab_web_url`，会把 webhook payload 中的内部 GitLab Web URL
+替换为 `GITLAB_BASE_URL` 的 scheme / host / port。MR 路径使用了归一化后的
+`event["repositoryUrl"]` 入库，也有 contract 测试覆盖。但 Push 路径曾经在
+`_parse_push_event` 中算出了归一化 URL，随后调用 `upsert_gitlab_project` 时又传回了原始
+`repository_url`，导致 `projects.repository_url` 被内部 host 覆盖。后续 AI Review retry
+会读取项目表里的旧 URL，所以继续 clone 失败。
+
+处理方式：
+
+1. Push webhook 入库项目时必须传 `event["repositoryUrl"]`，不要传原始 payload URL。
+2. Contract 测试需要同时覆盖 MR 和 Push 的 GitLab Web URL 归一化。
+3. 排查 `failurePhase=CLONE` 时，先查 `projects.repository_url` 是否已经是可访问的
+   `GITLAB_BASE_URL` 地址，再排查 token、权限和 commit 是否可 fetch。
+4. 旧任务或旧项目数据不会因为代码修复自动改写；需要下一次同项目 webhook 覆盖，或手动把项目
+   `repository_url` 修成可 clone 的公开 / 内网可达地址。
+
+## 83. Windows 本地 worktree 会被仓库中的非法文件名阻断
+
+现象：
+
+高准确模式已启用，项目 `repository_url` 已经正确归一化到可访问的 `GITLAB_BASE_URL`，
+mirror remote 也是正确地址，且目标 commit 已存在于 mirror 中，但任务 progress 仍显示：
+
+```text
+LOCAL_REPO_PREPARE_FAILED
+failurePhase=WORKTREE
+localRepositoryStatus=UNAVAILABLE
+```
+
+手动复现同一个 worktree checkout 时可能看到：
+
+```text
+error: invalid path 'Assets.xcassets/指令/command_?.imageset/Contents.json'
+fatal: Could not reset index file to revision 'HEAD'.
+```
+
+原因：
+
+Windows 文件系统不允许路径中出现 `?` 等字符。Git mirror 可以正常 clone / fetch，因为对象存储不需要把
+每个仓库文件落到工作区；但 `git worktree add` 需要 checkout 完整文件树，只要仓库历史或当前 commit
+中存在 Windows 非法文件名，checkout 就会失败。本地仓库上下文检索随后降级为 diff-only，因此前端只会看到
+“仓库准备状态 不可用”。
+
+处理方式：
+
+1. 先确认 `projects.repository_url` / mirror remote 是否已是 `GITLAB_BASE_URL` 地址，再区分 URL 问题和
+   worktree checkout 问题。
+2. 在 Windows 本机直接运行后端时，含非法文件名的仓库无法使用完整 worktree 模式；建议把高准确模式后端运行在
+   Linux / WSL / Linux Docker volume 上，或先清理仓库中的非法文件名。
+3. 如果必须支持这类仓库，后续应单独设计 sparse checkout、bare repo `git grep` 或按 changed files 的受限
+   checkout 方案；不要简单扩大异常忽略范围，因为 `rg` Retriever 依赖可搜索的 task worktree。
+4. 当前 progress 摘要出于脱敏和不泄露源码路径考虑，不展示 Git 原始错误；排查时可在受控环境中对同一 mirror
+   执行 `git worktree add --detach --force <worktree> <commit>` 获取 Git 原始错误。

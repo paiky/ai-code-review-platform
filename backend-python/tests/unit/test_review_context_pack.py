@@ -303,9 +303,12 @@ def test_review_context_pack_records_local_repo_prepare_summary(
     assert local_summary["mirrorStatus"] == "CLONED"
     assert local_summary["worktreeStatus"] == "CHECKED_OUT"
     assert context["summary"]["localRepository"]["status"] == "PREPARED"
+    assert context["summary"]["localRepository"]["cleanup"]["status"] == "COMPLETED"
     assert commands
     assert "repo-secret" not in context["promptText"]
     assert str(tmp_path) not in context["promptText"]
+    assert "repo-secret" not in str(context["summary"]["localRepository"]["cleanup"])
+    assert str(tmp_path) not in str(context["summary"]["localRepository"]["cleanup"])
 
 
 def test_review_context_pack_injects_local_reference_snippets(

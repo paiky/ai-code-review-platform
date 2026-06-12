@@ -109,6 +109,12 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 | `GITLAB_BASE_URL` | 空 | GitLab base URL；同时用于把 webhook payload 中的内网 GitLab Web 链接归一化为可访问地址 |
 | `GITLAB_TOKEN` | 空 | GitLab access token |
 | `GITLAB_DIFF_PER_PAGE` | `100` | MR diff 分页大小 |
+| `LOCAL_REPO_CONTEXT_ENABLED` | `false` | 是否启用高准确模式的本地仓库上下文检索 |
+| `LOCAL_REPO_WORKSPACE_ROOT` | `.local/review-workspaces` | 本地 mirror / worktree workspace 根目录 |
+| `LOCAL_REPO_MAX_FETCH_SECONDS` | `120` | clone / fetch / worktree Git 命令超时时间 |
+| `LOCAL_REPO_CLEANUP_ENABLED` | `true` | 启用本地仓库上下文时是否执行 best-effort workspace 清理 |
+| `LOCAL_REPO_WORKTREE_RETENTION_HOURS` | `24` | 过期 task worktree 保留小时数；当前 task 会被跳过 |
+| `LOCAL_REPO_MIRROR_RETENTION_DAYS` | `30` | 长期未使用 mirror 保留天数；当前项目 mirror 会被跳过 |
 | `CODE_QUALITY_REVIEW_ENABLED` | `false` | 代码质量 Review 全局能力的兼容初始化值；推荐在设置页通过 `reviewEnabled` 开关启停 |
 | `CODE_QUALITY_REVIEW_PROVIDER` | `DEEPSEEK` | 默认模型 Provider，可被数据库配置覆盖 |
 | `OPENAI_API_KEY` | 空 | OpenAI API key，首次初始化 Provider 时可作为默认值 |
@@ -184,6 +190,8 @@ GITLAB_TOKEN=GitLab access token
 LOCAL_REPO_CONTEXT_ENABLED=true
 LOCAL_REPO_WORKSPACE_ROOT=/app/.local/review-workspaces
 LOCAL_REPO_WORKSPACE_HOST_DIR=./review-workspaces
+LOCAL_REPO_WORKTREE_RETENTION_HOURS=24
+LOCAL_REPO_MIRROR_RETENTION_DAYS=30
 CODE_QUALITY_REVIEW_ENABLED=true
 DEEPSEEK_API_KEY=...
 XIAOMIMO_API_KEY=...
@@ -192,7 +200,9 @@ OPENAI_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
 
-`LOCAL_REPO_CONTEXT_ENABLED=true` 会启用高准确模式的本地仓库上下文检索。`LOCAL_REPO_WORKSPACE_ROOT` 是 backend 容器内路径，默认挂载到 `/app/.local/review-workspaces`；`LOCAL_REPO_WORKSPACE_HOST_DIR` 是宿主机缓存目录，默认是运行目录下的 `./review-workspaces`，用于持久化 Git mirror 和 task worktree。GitLab token 需要具备 `read_repository` 权限，否则本地 clone / fetch 会失败并在任务详情中显示本地仓库不可用。
+`LOCAL_REPO_CONTEXT_ENABLED=true` 会启用高准确模式的本地仓库上下文检索。`LOCAL_REPO_WORKSPACE_ROOT` 是 backend 容器内路径，默认挂载到 `/app/.local/review-workspaces`；`LOCAL_REPO_WORKSPACE_HOST_DIR` 是宿主机缓存目录，默认是运行目录下的 `./review-workspaces`，用于持久化 Git mirror 和 task worktree。GitLab token 需要具备 `read_repository` 权限，否则本地 clone / fetch 会失败并在任务详情中显示本地仓库不可用。启用本地仓库上下文时，后端默认会 best-effort 清理超过 `LOCAL_REPO_WORKTREE_RETENTION_HOURS` 的 `worktrees/{taskId}`，并按 `LOCAL_REPO_MIRROR_RETENTION_DAYS` 清理长期闲置 mirror；清理失败不会阻断 AI Review。
+
+如果高准确模式显示 `LOCAL_REPO_PREPARE_FAILED` 且 `failurePhase=CLONE`，先确认项目的 `repositoryUrl` 已经使用 `GITLAB_BASE_URL` 中可访问的 scheme / host / port，而不是 GitLab webhook payload 里的容器内 hostname。旧任务或旧项目数据不会自动改写，需要下一次同项目 webhook 覆盖，或在设置页 / 数据库中手动修正项目仓库地址。
 
 默认部署使用外部 MySQL，不会启动 compose 内置的 `mysql` 容器。如果确实要使用内置 MySQL，再在 `.env` 中增加：
 
@@ -305,12 +315,12 @@ LOCAL_REPO_WORKSPACE_ROOT=/app/.local/review-workspaces
 LOCAL_REPO_WORKSPACE_HOST_DIR=./review-workspaces
 LOCAL_REPO_MAX_FETCH_SECONDS=120
 LOCAL_REPO_MAX_SEARCH_SECONDS=30
-# 规划中：用于本地仓库 workspace 自动清理，落地前可先通过运维脚本清理 worktrees。
-# LOCAL_REPO_WORKTREE_RETENTION_HOURS=24
-# LOCAL_REPO_MIRROR_RETENTION_DAYS=30
+LOCAL_REPO_CLEANUP_ENABLED=true
+LOCAL_REPO_WORKTREE_RETENTION_HOURS=24
+LOCAL_REPO_MIRROR_RETENTION_DAYS=30
 ```
 
-运行目录下的 `review-workspaces/` 会被挂载进 backend 容器，用来保留 mirror 缓存和 task worktree；升级镜像不会清空该目录。当前本地仓库检索主链路已支持 mirror / worktree 复用，自动清理策略规划为后续 V2-F-10 落地：优先清理过期 `worktrees/{taskId}`，`mirrors/{projectId}.git` 只按较长闲置周期清理。清理 worktree 不影响后续新 MR，清理 mirror 后同项目下一次审查会重新 clone，正确性不受影响但首次准备耗时会增加。
+运行目录下的 `review-workspaces/` 会被挂载进 backend 容器，用来保留 mirror 缓存和 task worktree；升级镜像不会清空该目录。当前本地仓库检索主链路已支持 mirror / worktree 复用，并会在准备本地仓库上下文时执行 best-effort 清理：优先清理过期 `worktrees/{taskId}`，`mirrors/{projectId}.git` 只按较长闲置周期清理。清理前会校验目标绝对路径位于 `LOCAL_REPO_WORKSPACE_ROOT` 内且不会删除 root 本身；当前 task worktree 和当前项目 mirror 会被跳过。清理 worktree 不影响后续新 MR，清理 mirror 后同项目下一次审查会重新 clone，正确性不受影响但首次准备耗时会增加。
 
 离线升级时，脚本还会自动清理旧版本应用镜像，默认只保留最近 `2` 个版本的：
 

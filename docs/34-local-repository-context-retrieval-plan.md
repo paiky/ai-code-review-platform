@@ -2,14 +2,16 @@
 
 ## 状态
 
-- 当前状态：V2-F-9 生产验证与效果复盘已完成并经用户验收；任务 663 已验证本地 mirror / worktree 模式可用。下一阶段为 V2-F-10 本地 workspace 清理与磁盘保护。
+- 当前状态：V2-F-10 本地 workspace 清理与磁盘保护已落地；任务 663 已验证本地 mirror / worktree 模式可用，任务 669 暴露出“仓库已准备但 DTO / VO 字段变更尚未检索、前端角色流转解释不足”的产品理解问题。当前停止等待用户验证；下一阶段建议先推进 V2-F-11 高准确模式角色流转可观测，再推进 V2-F-12 规则缺口沉淀与优先级看板，之后进入 V2-F-13 DTO / VO 字段引用检索。
 - 编写时间：2026-06-11
 - 前置版本：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`
   - `docs/33-review-learning-capability-roadmap.md`
 - 当前决策：
   - “本地 clone / fetch + 引用搜索 + bounded Context Pack”的高准确 Review 模式已完成首轮生产验证。
-  - 下一步优先补齐 workspace 清理与磁盘保护，避免长期运行时 `worktrees/` 和 `mirrors/` 无界增长。
+  - 已补齐 workspace 清理与磁盘保护，避免长期运行时 `worktrees/` 和 `mirrors/` 无界增长。
+  - 任务 669 证明当前前端摘要还不足以解释 Planner、requested contexts、Retriever、Snippet 和预算裁剪之间的关系，后续需要增加角色流转视图。
+  - 当前 Retriever 只支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED`，DTO / VO 字段变更会进入 Planner 和 requested contexts，但不会触发本地引用搜索；后续应先沉淀规则缺口优先级，再扩展 DTO / VO 字段引用检索。
   - 反馈池、项目策略、上下文不足人工标记等“人工沉淀能力”先保留后端和数据结构，但在生产产品界面默认屏蔽，不作为当前验证主线。
   - 不删除 V0 到 V2-F-3 已落地能力；把它们作为可回退、可复用的治理底座。
 
@@ -151,6 +153,23 @@ GitLab MR / Push webhook
   -> 前端展示 AI Review 结果与检索摘要
 ```
 
+### 角色定位
+
+高准确模式中的几个名词不是同义词，而是流水线里的不同角色：
+
+| 角色 | 任务中的定义 | 当前输入 | 当前输出 | 669 暴露的问题 |
+|---|---|---|---|---|
+| GitLab diff intake | 变更入口，负责保存 MR / Push 的 changed files 和 diff | webhook payload、GitLab API diff | changed files summary、diff text、任务元数据 | 已可用 |
+| Context Pack Builder | 上下文打包器，把 diff、同文件片段、Planner 输出、本地检索摘要和不可用上下文合并进模型输入 | changed files、same-file snippets、planner、local reference | `reviewContext / contextPack` 和 `CONTEXT_PACK_BUILT` progress | 预算裁剪只显示 `truncated=true`，缺少裁剪明细 |
+| Context Planner | 上下文规划器，基于 diff 的轻量规则判断“应该补什么证据” | changed file path、diff 新增 / 删除行、历史上下文不足统计 | `plannerSignals`、`requestedContexts`、planner unavailable contexts | 前端只展示数量，不展示信号类型和支持状态 |
+| Local Repository Manager | 本地仓库准备器，维护 mirror 并为 task checkout worktree | project repository URL、task head ref | `localRepositoryContext`、`LOCAL_REPO_PREPARED / FAILED` progress | 已能解释仓库是否可用 |
+| Local Context Retriever | 本地证据检索器，在 task worktree 内搜索引用并截取 bounded snippets | worktree、planner signals | `localReferenceSearch`、`localReferenceContext`、`LOCAL_CONTEXT_RETRIEVED / FAILED` progress | 只支持方法删除 / 签名变更，DTO / VO 字段变更尚未检索 |
+| Budget Controller | 预算控制器，决定哪些证据可进入 Prompt，哪些被裁剪 | 完整 context pack 候选内容 | 裁剪后的 prompt text、`truncated` 标记 | 缺少“裁剪了什么”的安全摘要 |
+| Provider Executor | 模型执行器，调用具体 AI Review provider | prompt、profile、provider config | raw output、provider progress | 已有 provider 请求 / 响应 / 解析事件 |
+| Result Parser / Saver | 结果解析和落库角色 | provider output | structured findings、review result、FINISHED progress | 已可用 |
+
+这些角色后续应在前端以独立 tab 展示，避免用户把“仓库已准备”“Planner 已命中”“Retriever 已执行”“Snippet 已注入”混成一个状态。
+
 ## 五、本地 clone / fetch 设计
 
 ### 工作目录
@@ -175,6 +194,7 @@ LOCAL_REPO_WORKSPACE_ROOT=/app/.local/review-workspaces
 LOCAL_REPO_WORKSPACE_HOST_DIR=./review-workspaces
 LOCAL_REPO_MAX_FETCH_SECONDS=120
 LOCAL_REPO_MAX_SEARCH_SECONDS=30
+LOCAL_REPO_CLEANUP_ENABLED=true
 LOCAL_REPO_WORKTREE_RETENTION_HOURS=24
 LOCAL_REPO_MIRROR_RETENTION_DAYS=30
 ```
@@ -412,6 +432,80 @@ detail 只记录：
 - 找到了多少引用文件 / snippet。
 - 哪些上下文仍不可用。
 
+### 角色流转 tab 设计
+
+任务详情页后续应在“代码质量 Review”中新增一个 tab，例如：
+
+```text
+AI Review 结果
+高准确模式流转
+执行过程
+修复预览
+```
+
+“高准确模式流转”展示的是角色链路，不展示源码片段：
+
+```text
+变更接入
+  -> Context Pack 构建
+  -> Context Planner 规划
+  -> 本地仓库准备
+  -> Local Retriever 检索
+  -> Budget Controller 裁剪
+  -> Provider 执行
+  -> 结果解析与落库
+```
+
+首版可以基于现有 progress 事件映射：
+
+| 前端角色节点 | 可映射的已有事件 | 可展示内容 | 当前粒度缺口 |
+|---|---|---|---|
+| 变更接入 | 任务详情 / changed files summary | 触发类型、MR / Push、变更文件数、diff 来源 | 无单独 progress 事件 |
+| Context Pack 构建 | `CONTEXT_PACK_BUILT` | changed file 数、diffBytes、promptLength、truncated、unavailableContextCount | 裁剪明细不足 |
+| Context Planner 规划 | `CONTEXT_PACK_BUILT.detail.summary` 中的 planner 统计 | plannerSignalCount、requestedContextTypeCounts、plannerUnavailableContextCount | 缺少 signal type counts、supported / unsupported 分类 |
+| 本地仓库准备 | `LOCAL_REPO_PREPARED / LOCAL_REPO_PREPARE_FAILED` | enabled、status、mirrorStatus、worktreeStatus、durationMs、cleanup 摘要 | 已基本足够 |
+| Local Retriever 检索 | `LOCAL_CONTEXT_RETRIEVED / LOCAL_CONTEXT_RETRIEVE_FAILED` | queryCount、matchedFileCount、includedSnippetCount、truncated | 缺少“哪些 signal 被跳过以及原因” |
+| Budget Controller 裁剪 | `CONTEXT_PACK_BUILT.meta.truncated` | 是否截断、promptLength、maxTotalChars | 缺少被裁剪对象计数 |
+| Provider 执行 | `{PROVIDER}_REQUEST / HTTP_REQUEST_START / {PROVIDER}_RESPONSE` | provider、model、请求 / 响应状态、耗时 | 已有事件偏技术化 |
+| 结果解析与落库 | `OUTPUT_EXTRACTED / JSON_PARSE_START / *_PARSE_RESULT / RESULT_SAVED / FINISHED` | findingCount、overallLevel、保存状态 | 已基本足够 |
+
+V2-F-11 应补齐的后端安全摘要字段：
+
+- `plannerSignalTypeCounts`：Planner 命中的信号类型计数。
+- `retrieverSupportedSignalTypes`：当前 Retriever 支持的 signal 类型。
+- `retrieverUnsupportedSignalTypeCounts`：命中但暂未支持检索的 signal 类型计数。
+- `requestedContextAvailability`：requested context 的 available / unavailable 计数和原因类型。
+- `budgetCutSummary`：裁剪对象计数，例如 local reference snippets、same-file snippets、changed files summary；不记录源码内容。
+- `ruleGapSummary`：本次任务暴露的规则缺口摘要，例如“Planner 命中 DTO_FIELD_CHANGED，但 Retriever 暂未支持”。
+- `ruleGapItems`：本次任务的规则缺口明细，只记录类型、signal、requested context、建议能力和优先级原因，不记录源码。
+
+V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流转。所有新增 progress / summary 字段仍不得记录源码、token、认证头、本地绝对路径或大段 diff。
+
+### 规则缺口定义
+
+规则缺口不是代码风险，而是平台能力缺口。它用于告诉维护者：这次 Review 里哪些上下文“应该补”，但当前系统还不会补。
+
+首版规则缺口类型：
+
+| 类型 | 触发条件 | 示例 | 后续动作 |
+|---|---|---|---|
+| `UNSUPPORTED_PLANNER_SIGNAL` | Planner 命中 signal，但 Local Retriever 不支持该 signal | 任务 669 的 `DTO_FIELD_CHANGED` | 补对应 Retriever |
+| `UNAVAILABLE_REQUESTED_CONTEXT` | Planner 请求了上下文，但系统没有对应获取能力 | `RELATED_FILE`、`CALLER_CONTEXT`、`TEST_RESULT_CONTEXT` | 评估是否补检索器、测试集成或仅保留提示 |
+| `RETRIEVAL_FAILED` | Retriever 支持该 signal，但执行失败或超时 | `rg` 超时、worktree 不可用 | 排查稳定性或降级策略 |
+| `BUDGET_CUT` | 已检索到证据，但 Context Pack 预算裁剪 | snippets 被裁剪 | 调整排序、预算或摘要压缩 |
+
+前端“高准确模式流转”tab 中应有一个“规则缺口”区域：
+
+- 展示本任务缺失的 Planner / Retriever 能力。
+- 展示为什么本次 `引用查询数=0` 或 `snippet=0`。
+- 展示建议补齐方向，例如 `DTO_FIELD_CHANGED -> DTO / VO 字段引用检索`。
+- 明确这些是平台能力 backlog，不是本次代码风险。
+
+沉淀策略：
+
+- V2-F-11 只把规则缺口作为当前任务 progress / Context Pack summary 的安全摘要持久化，依托已有 `code_quality_review_progress_events`。
+- V2-F-12 再做跨任务聚合 API / 看板，从已持久化的规则缺口摘要中统计高频缺口和建议优先级。
+
 ## 十二、分阶段落地计划
 
 ### V2-F-4：本地仓库检索主方案与前端人工沉淀熄灯
@@ -562,9 +656,9 @@ detail 只记录：
 验收：
 
 - 新增配置项：
-  - `LOCAL_REPO_WORKTREE_RETENTION_HOURS`，默认 24 或 72。
+  - `LOCAL_REPO_WORKTREE_RETENTION_HOURS`，默认 24。
   - `LOCAL_REPO_MIRROR_RETENTION_DAYS`，默认 30。
-  - 可选 `LOCAL_REPO_CLEANUP_ENABLED`，默认开启或跟随 `LOCAL_REPO_CONTEXT_ENABLED`。
+  - `LOCAL_REPO_CLEANUP_ENABLED`，默认开启；AI Review 主流程中仅在本地仓库上下文启用时触发。
 - 能安全清理超过 TTL 的 `worktrees/{taskId}`。
 - 能按闲置时间清理长期未使用的 `mirrors/{projectId}.git`。
 - 清理前必须解析绝对路径并确认目标位于 `LOCAL_REPO_WORKSPACE_ROOT` 内。
@@ -573,16 +667,112 @@ detail 只记录：
 - 清理进度只记录数量、大小、耗时和错误摘要，不记录源码、token 或 clone URL 凭据。
 - 清理 mirror 后，后续同项目 MR 会重新 `git clone --mirror`，正确性不受影响，只增加首次准备耗时。
 
+### V2-F-11：高准确模式角色流转可观测
+
+目标：
+
+让用户能看懂高准确模式里每个角色做了什么、哪些做成功了、哪些没有做、为什么没有做。重点解决任务 669 中“仓库已准备但引用查询数为 0 容易误解”的问题。
+
+范围建议：
+
+- `backend-python/app/review_context/service.py`
+- `backend-python/app/code_quality/service.py`
+- `frontend/src/App.jsx`
+- `frontend/src/styles.css`
+- 相关 contract / unit tests
+- docs/34 落地记录
+
+验收：
+
+- 前端代码质量 Review 区域新增“高准确模式流转”tab 或等价视图。
+- 用进度条 / Steps / Timeline 展示角色链路：变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider、结果解析。
+- 展示 Planner signal 类型计数、requested context 类型计数、available / unavailable 分类。
+- 展示当前 Retriever 支持哪些 signal，以及本次哪些 signal 因暂未支持而跳过。
+- 展示预算裁剪摘要：是否截断、最大预算、实际 promptLength、被裁剪对象计数。
+- 展示本任务规则缺口：缺口类型、关联 signal / requested context、建议补齐能力和优先级原因。
+- 继续隐藏源码片段、本地绝对路径、token、认证头和大段 diff。
+- 不扩展新的业务 Retriever，不做 AST / LSP / RAG，不恢复人工沉淀入口。
+
+### V2-F-12：规则缺口沉淀与优先级看板
+
+目标：
+
+把单次任务里的规则缺口沉淀成跨任务 backlog，让维护者能基于真实 Review 数据决定下一步补哪个 Planner / Retriever 能力，而不是只靠个案判断。
+
+范围建议：
+
+- `backend-python/app/review_context/*` 或新增轻量 query service
+- `backend-python/app/code_quality/api.py` 或相关 API router
+- `frontend/src/App.jsx`
+- `frontend/src/styles.css`
+- 相关 contract / unit tests
+- docs/34 落地记录
+
+验收：
+
+- 能按时间范围、项目、项目组、端类型、Provider / Profile 聚合规则缺口。
+- 至少展示：
+  - 缺口类型分布。
+  - Planner signal 类型分布。
+  - unsupported signal 排名。
+  - unavailable requested context 排名。
+  - budget cut 次数和影响对象。
+  - 关联任务数和最近任务。
+- 给出建议补齐方向和优先级解释，例如：
+  - `DTO_FIELD_CHANGED` 高频且 Retriever 不支持 -> 建议补 DTO / VO 字段引用检索。
+  - `DB_SQL_MAPPER_CHANGED` 高频且缺 `DB_SCHEMA_CONTEXT` -> 建议设计 DB / Mapper / Entity 检索。
+- 首版可复用 `code_quality_review_progress_events` 中的 `CONTEXT_PACK_BUILT.detail` 安全摘要进行聚合，不强制新增表；如查询性能不足，再新增汇总表。
+- 不展示源码、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
+- 不自动改 Planner / Retriever 规则，不自动改 Prompt，不自动降级或隐藏 finding。
+
+### V2-F-13：DTO / VO 字段引用检索 Retriever
+
+目标：
+
+补齐任务 669 这类 DTO / VO 字段变更的第一优先级检索能力，让 `DTO_FIELD_CHANGED / FIELD_DELETED` 能在 task worktree 内搜索字段引用，并把有限 snippets 注入 Context Pack。
+
+范围建议：
+
+- `backend-python/app/review_context/local_retriever.py`
+- `backend-python/app/review_context/service.py`
+- `backend-python/app/code_quality/prompt.py` 如需补充说明
+- 相关 unit / contract tests
+- docs/34 落地记录
+
+验收：
+
+- 支持 `DTO_FIELD_CHANGED / FIELD_DELETED` signal。
+- 从 `details.fieldNames` 生成有限查询，例如字段名、getter、setter；查询数受 `LOCAL_CONTEXT_MAX_QUERIES` 控制。
+- 搜索范围只限当前 task head worktree，并继续排除依赖、构建产物和缓存目录。
+- 结果排序优先保留 Controller / Service / Mapper / Repository / DTO / VO / Excel VO / API 相关文件，降低测试、文档、生成代码优先级。
+- snippet reason 区分为 `FIELD_REFERENCE` 或 `DTO_FIELD_REFERENCE`，避免和方法引用混淆。
+- progress 只记录查询数、命中文件数、snippet 数、支持 / 跳过 signal 摘要，不记录源码。
+- Prompt 明确字段引用 snippets 是有限证据，未命中不等同于无风险。
+
+### V2-F-14：DB / Mapper / Entity 关联检索
+
+目标：
+
+在 DTO 字段引用检索验证稳定后，再补 DB / SQL / Mapper / Entity 相关证据检索，优先支持后端项目高频数据一致性风险。
+
+范围建议：
+
+- Mapper XML / SQL 文件和 Java Mapper / Repository / Entity 的关联搜索。
+- SQL 字段、表名、实体字段、Mapper 方法名的有限查询。
+- 不连接运行期数据库，不读取生产 schema；只基于当前 worktree 源码和迁移脚本。
+
+完成后再评估是否继续缓存、MQ、配置检索。
+
 ## 十三、总控 Prompt
 
 ```text
 请阅读 AGENTS.md、README.md、docs/32-review-feedback-v2-mainline-roadmap.md、docs/33-review-learning-capability-roadmap.md、docs/34-local-repository-context-retrieval-plan.md。
 
-当前 V2-F-9 已验收，高准确本地仓库上下文检索模式已经具备 mirror clone / fetch、task worktree、METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索、bounded snippets 注入 Context Pack 和前端证据摘要展示。下一阶段只推进 V2-F-10：本地 workspace 清理与磁盘保护。
+当前 V2-F-10 已完成，高准确本地仓库上下文检索模式已经具备 mirror clone / fetch、task worktree、METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索、bounded snippets 注入 Context Pack、前端证据摘要展示和 workspace 清理。任务 669 暴露出 Planner / Retriever / Snippet / 预算裁剪解释不足，以及 DTO / VO 字段变更尚未触发本地检索的问题。下一阶段只推进 V2-F-11：高准确模式角色流转可观测，并在当前任务中展示规则缺口。
 
 同时，反馈池、项目策略、上下文不足人工标记等人工沉淀能力先保留后端和数据结构，但生产前端默认屏蔽入口；不要删除已实现能力，不要删表，不要破坏现有 API 兼容。
 
-每次只推进一个阶段。当前优先按 docs/34 的 V2-F-10 落地 workspace 清理与磁盘保护。不要修改 legacy Java backend；不要做全项目无限扫描；不要把整个项目源码塞进 Prompt；不要接向量库或复杂 RAG；不要自动降级或自动忽略 finding；不要自动改 Prompt。
+每次只推进一个阶段。当前优先按 docs/34 的 V2-F-11 落地角色流转可观测和前端 tab，不扩展新的业务 Retriever。V2-F-11 验收后，再按用户确认进入 V2-F-12 规则缺口沉淀与优先级看板；V2-F-12 验收后再进入 V2-F-13 DTO / VO 字段引用检索。不要修改 legacy Java backend；不要做全项目无限扫描；不要把整个项目源码塞进 Prompt；不要接向量库或复杂 RAG；不要自动降级或自动忽略 finding；不要自动改 Prompt。
 
 每个阶段完成后必须停止，输出“改了什么、为什么、如何验证”，等待用户验证并明确回复“继续下一阶段”后再推进。
 ```
@@ -727,6 +917,98 @@ detail 只记录：
 完成后运行相关后端测试并停止。
 ```
 
+### V2-F-11 Prompt：高准确模式角色流转可观测
+
+```text
+请只落地 docs/34 的 V2-F-11：高准确模式角色流转可观测。
+
+范围：
+- backend-python/app/review_context/service.py
+- backend-python/app/code_quality/service.py
+- frontend/src/App.jsx
+- frontend/src/styles.css
+- 相关 tests
+- docs/34 V2-F-11 落地记录
+
+要求：
+- 在任务详情的代码质量 Review 区域新增“高准确模式流转”tab 或等价视图。
+- 用 Steps / Timeline 展示角色链路：变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider、结果解析。
+- 后端 progress / Context Pack summary 补安全摘要字段：planner signal 类型计数、Retriever 支持 signal 类型、本次未支持 signal 类型计数、requested context available/unavailable 分类、预算裁剪摘要、规则缺口摘要。
+- 前端解释“仓库已准备但引用查询数为 0”的原因：没有支持的 signal、Retriever 被跳过、或检索失败。
+- 前端展示本任务规则缺口：缺口类型、关联 signal / requested context、建议补齐能力和优先级原因。
+- 不展示源码片段、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
+- 不扩展新的业务 Retriever，不做 DTO / DB / 缓存 / MQ / 配置检索。
+- 不恢复人工沉淀入口，不修改 legacy Java backend。
+
+完成后运行相关后端测试和前端 build，并停止。
+```
+
+### V2-F-12 Prompt：规则缺口沉淀与优先级看板
+
+```text
+请只落地 docs/34 的 V2-F-12：规则缺口沉淀与优先级看板。
+
+范围：
+- backend-python/app/review_context/* 或新增轻量 query service
+- backend-python/app/code_quality/api.py 或相关 API router
+- frontend/src/App.jsx
+- frontend/src/styles.css
+- 相关 tests
+- docs/34 V2-F-12 落地记录
+
+要求：
+- 基于 V2-F-11 已写入 progress / Context Pack summary 的 ruleGapSummary / ruleGapItems 做跨任务聚合。
+- 支持按时间范围、项目、项目组、端类型、Provider / Profile 聚合。
+- 展示缺口类型分布、Planner signal 分布、unsupported signal 排名、unavailable requested context 排名、budget cut 次数、关联任务数和最近任务。
+- 给出建议补齐方向和优先级解释，但不自动改规则。
+- 首版可复用 code_quality_review_progress_events；如查询性能不足，再设计汇总表。
+- 不展示源码、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
+- 不扩展业务 Retriever，不做 DTO / DB / 缓存 / MQ / 配置检索。
+- 不自动改 Prompt，不自动降级、不自动忽略 finding。
+
+完成后运行相关后端测试和前端 build，并停止。
+```
+
+### V2-F-13 Prompt：DTO / VO 字段引用检索 Retriever
+
+```text
+请只落地 docs/34 的 V2-F-13：DTO / VO 字段引用检索 Retriever。
+
+范围：
+- backend-python/app/review_context/local_retriever.py
+- backend-python/app/review_context/service.py
+- backend-python/app/code_quality/prompt.py 如需
+- 相关 tests
+- docs/34 V2-F-13 落地记录
+
+要求：
+- 支持 Context Planner 的 DTO_FIELD_CHANGED / FIELD_DELETED signal。
+- 从 details.fieldNames 生成有限查询，至少包含字段名，可按语言习惯补 getter / setter 查询；所有查询总数受 LOCAL_CONTEXT_MAX_QUERIES 控制。
+- 搜索必须限制在当前 task head worktree 内，并继续避开依赖、构建产物和缓存目录。
+- 输出 bounded snippets，snippet reason 使用 FIELD_REFERENCE / DTO_FIELD_REFERENCE。
+- 结果排序优先 Controller / Service / Mapper / Repository / DTO / VO / Excel VO / API 相关文件，降低测试、文档、生成代码优先级。
+- progress 只记录摘要：查询数、命中文件数、snippet 数、支持 signal 类型、跳过 signal 类型和截断状态；不记录源码。
+- Prompt 说明字段引用 snippets 是有限证据，未命中不等同于无风险。
+- 不做 AST / LSP / RAG，不自动降级、不自动忽略 finding。
+
+完成后运行相关后端测试并停止。
+```
+
+### V2-F-14 Prompt：DB / Mapper / Entity 关联检索设计
+
+```text
+请只设计 docs/34 的 V2-F-14：DB / Mapper / Entity 关联检索。
+
+要求：
+- 先输出设计，不编码。
+- 说明如何从 DB_SQL_MAPPER_CHANGED signal 提取表名、字段名、Mapper 方法名和 Entity 字段名。
+- 说明如何限制搜索范围、排序结果、控制预算和脱敏 progress。
+- 不连接运行期数据库，不读取生产 schema。
+- 不做缓存、MQ、配置检索。
+
+完成后停止，等待用户确认是否进入实现。
+```
+
 ## 十五、Agent 授权边界
 
 Agent 可自主推进：
@@ -735,6 +1017,9 @@ Agent 可自主推进：
 - 新增本地引用搜索 retriever。
 - 新增 bounded Context Pack 结构。
 - 新增 progress 摘要事件。
+- 新增高准确模式角色流转 tab 和安全可解释性摘要。
+- 新增规则缺口摘要和跨任务优先级看板。
+- 扩展 DTO / VO 字段引用检索 Retriever。
 - 新增配置开关。
 - 新增前端高准确模式摘要展示。
 - 默认隐藏人工沉淀相关前端入口。
@@ -989,4 +1274,95 @@ V2-F-8 已落地；下一阶段进入 V2-F-9：生产验证与效果复盘。
 
 ```text
 V2-F-10：本地 workspace 清理与磁盘保护。
+```
+
+## 二十二、V2-F-10 落地记录
+
+落地时间：2026-06-12。
+
+已完成：
+
+- 新增本地仓库 workspace 清理配置：
+  - `LOCAL_REPO_CLEANUP_ENABLED=true`
+  - `LOCAL_REPO_WORKTREE_RETENTION_HOURS=24`
+  - `LOCAL_REPO_MIRROR_RETENTION_DAYS=30`
+- 启用本地仓库上下文时，`prepare_local_repository_context` 会执行 best-effort 清理摘要：
+  - 清理超过 TTL 的 `worktrees/{taskId}` 目录。
+  - 按较长闲置周期清理 `mirrors/{projectId}.git`。
+  - 跳过当前 task worktree 和当前项目 mirror。
+- 清理前复用并加强绝对路径校验：目标必须解析到 `LOCAL_REPO_WORKSPACE_ROOT` 内，且不会删除 workspace root、`worktrees/` 根目录或 `mirrors/` 根目录。
+- 清理和 mirror / worktree 准备使用相同的本地锁 key，遇到正在准备的 worktree 或 mirror 会跳过，不强行删除。
+- 清理失败不会阻断 AI Review；清理摘要只保留启用状态、保留周期、扫描数量、删除数量、跳过数量、删除字节数、耗时和脱敏错误摘要。
+- 清理摘要不记录源码、token、带凭据 URL、认证头或本地绝对路径。
+- 清理摘要进入既有本地仓库 progress summary，不新增业务 Retriever 或新的执行阶段。
+- mirror 成功 clone / fetch 后会刷新 mirror 目录 mtime，后续按闲置时间判断是否可清理。
+
+明确未做：
+
+- 不扩展新的业务 Retriever。
+- 不做 AST / LSP / 向量库 / RAG。
+- 不恢复人工沉淀前端入口。
+- 不删除反馈池、项目策略、上下文不足反馈相关后端代码、表或 API。
+- 不修改 legacy Java backend。
+
+新增和调整测试：
+
+- `backend-python/tests/unit/test_local_repo_context.py`
+- `backend-python/tests/unit/test_review_context_pack.py`
+- `backend-python/tests/conftest.py`
+
+已验证：
+
+```powershell
+$env:NO_PAUSE="1"; .\scripts\run-backend.cmd test tests\unit\test_local_repo_context.py
+```
+
+结果：8 passed。
+
+```powershell
+$env:NO_PAUSE="1"; .\scripts\run-backend.cmd test tests\unit\test_local_repo_context.py tests\unit\test_local_retriever.py tests\unit\test_review_context_pack.py tests\unit\test_code_quality_prompt.py tests\contract\test_code_quality_api_contract.py::test_manual_review_builds_context_pack_and_records_progress tests\contract\test_code_quality_api_contract.py::test_manual_review_prepares_local_repo_context_without_leaking_token tests\contract\test_code_quality_api_contract.py::test_manual_review_records_local_reference_search_progress_without_source tests\contract\test_code_quality_api_contract.py::test_manual_review_injects_project_review_policies_and_records_progress tests\contract\test_code_quality_api_contract.py::test_deepseek_manual_review_saves_result_and_progress tests\contract\test_code_quality_api_contract.py::test_retry_gitlab_mr_ai_review_uses_saved_changed_files tests\contract\test_code_quality_api_contract.py::test_retry_gitlab_mr_ai_review_includes_same_file_context_snippets
+```
+
+结果：35 passed。
+
+停止规则：
+
+```text
+V2-F-10 已完成；当前停止等待用户验证，不继续推进 V3 评估集或更多 Retriever。
+```
+
+## 二十三、V2-F-10 后续规划调整
+
+调整时间：2026-06-12。
+
+背景：
+
+- 任务 669 的本地仓库准备成功，`mirrorStatus=FETCHED`、`worktreeStatus=CHECKED_OUT`。
+- Planner 命中 DTO / VO 字段变更相关 signal，但当前 Local Retriever 只支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED`。
+- 因此任务 669 出现 `Planner Signal 数 > 0` 但 `引用查询数 = 0`，前端摘要不足以解释“哪些角色已执行、哪些被跳过、为什么跳过”。
+
+调整结论：
+
+```text
+V2-F-11：高准确模式角色流转可观测
+  -> 先补前端 tab 和后端安全摘要字段，解释 Planner / Retriever / Snippet / 预算裁剪的角色和执行结果
+  -> 展示当前任务规则缺口，例如 Planner 命中但 Retriever 暂不支持的 signal
+  -> 不扩展业务 Retriever
+
+V2-F-12：规则缺口沉淀与优先级看板
+  -> 聚合跨任务规则缺口，形成补齐 Planner / Retriever 能力的优先级依据
+  -> 不自动改规则，不自动改 Prompt
+
+V2-F-13：DTO / VO 字段引用检索 Retriever
+  -> 再支持 DTO_FIELD_CHANGED / FIELD_DELETED 的字段引用搜索
+  -> 覆盖任务 669 这类真实 DTO / VO 字段变更场景
+
+V2-F-14：DB / Mapper / Entity 关联检索设计
+  -> 等 DTO Retriever 验证后再设计，不直接编码
+```
+
+停止规则：
+
+```text
+下一阶段只推进 V2-F-11。V2-F-11 完成后必须停止，等待用户验证并明确确认继续后，才进入 V2-F-12。
 ```
