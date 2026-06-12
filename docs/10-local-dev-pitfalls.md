@@ -1811,3 +1811,49 @@ GitLab head 源码不一致。普通 Diff 可以按保存的历史 refs 展开�
 3. 明亮主题同时覆盖背景、行号、增删行、命中高亮、折叠区和 Prism token 配色。
 4. 普通 Diff 的“展开上下文”按钮与主题按钮并排；Patch 预览只展示主题按钮。工具栏按钮本身保持白底、
    蓝色描边和浅蓝 hover，不跟随暗黑代码区使用深色背景。
+
+## 81. GitLab API token 可用不代表 Git HTTP clone 接受 PRIVATE-TOKEN header
+
+现象：
+
+高准确模式已开启 `LOCAL_REPO_CONTEXT_ENABLED=true`，任务 progress 出现 `CONTEXT_PACK_BUILT`，
+但本地仓库准备仍失败：
+
+```text
+LOCAL_REPO_PREPARE_FAILED
+failurePhase=CLONE
+localRepositoryStatus=UNAVAILABLE
+```
+
+即使 `GITLAB_TOKEN` 已勾选 `api / read_api / read_repository`，用 Git 命令验证时仍可能看到：
+
+```text
+remote: The project you were looking for could not be found or you don't have permission to view it.
+fatal: repository 'http://.../group/project.git/' not found
+```
+
+原因：
+
+GitLab REST API 可以通过 `PRIVATE-TOKEN` header 访问，但部分 GitLab 实例的 Git HTTP clone / fetch
+不接受 `PRIVATE-TOKEN` header。Git HTTP 需要使用 Basic Auth 语义，例如用户名 `oauth2`、密码为
+access token。只验证 `/api/v4/...` 成功，不能证明 `git clone` 成功。
+
+处理方式：
+
+1. 本地仓库检索的 Git 命令不要把 token 拼进 clone URL，避免命令行、日志和 progress 泄露凭据。
+2. 通过 Git 临时 env config 注入：
+
+```text
+http.extraHeader = Authorization: Basic base64("oauth2:<token>")
+```
+
+3. `GIT_TERMINAL_PROMPT=0` 保持关闭交互式凭据提示，clone / fetch 失败时快速进入
+   `LOCAL_REPO_PREPARE_FAILED`。
+4. 失败原因需要同时脱敏明文 token、Basic Auth base64、`PRIVATE-TOKEN`、`Authorization` 和 URL 中的凭据。
+5. 真实验证优先用同样认证方式执行只读命令：
+
+```powershell
+git ls-remote http://gitlab.example.com/group/project.git
+```
+
+能列出 refs 后，再重跑任务确认出现 `LOCAL_REPO_PREPARED` 和 `LOCAL_CONTEXT_RETRIEVED`。

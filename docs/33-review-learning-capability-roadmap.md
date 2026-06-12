@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：能力愿景与后续推进计划已梳理；`docs/32` 的 V2-A 到 V2-E 已落地，V2-F-1 / V2-F-2 / V2-F-3 已落地，V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环、V2-F-6 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED` 引用搜索 Retriever MVP 与 V2-F-7 本地引用证据注入 Context Pack 已落地。短期主线已调整为 `docs/34-local-repository-context-retrieval-plan.md` 的本地仓库上下文检索 / 高准确 Review 模式；反馈池、项目策略、上下文不足人工标记等人工沉淀能力先作为暗能力保留，生产前端默认屏蔽。
+- 当前状态：能力愿景与后续推进计划已梳理；`docs/32` 的 V2-A 到 V2-E 已落地，V2-F-1 / V2-F-2 / V2-F-3 已落地，V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环、V2-F-6 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED` 引用搜索 Retriever MVP、V2-F-7 本地引用证据注入 Context Pack、V2-F-8 前端高准确模式摘要 / 人工沉淀入口熄灯与 V2-F-9 生产验证已落地 / 已验收。短期主线已调整为 `docs/34-local-repository-context-retrieval-plan.md` 的本地仓库上下文检索 / 高准确 Review 模式；反馈池、项目策略、上下文不足人工标记等人工沉淀能力先作为暗能力保留，生产前端默认屏蔽。下一阶段建议先补 V2-F-10 本地 workspace 清理与磁盘保护。
 - 编写时间：2026-06-10
 - 前置版本：
   - `docs/29-review-feedback-v1-implementation.md`
@@ -163,7 +163,7 @@ L6 半自动策略候选推荐
 
 ### L3：上下文自适应
 
-当前状态：V1.5 已完成上下文状态表达；V2-E 已补上下文不足筛选、缺失上下文类型和统计；V2-F-1 已落地 Context Pack V0 后端最小闭环，V2-F-2 已补同文件上下文片段 V0，V2-F-3 已补 Context Planner 最小规则，V2-F-5 已补本地 mirror clone / fetch / task head worktree 准备闭环，V2-F-6 已补删除方法 / 签名变更的本地引用搜索 Retriever MVP，V2-F-7 已把本地引用证据按预算注入 Context Pack。当前 Context Pack 会注入 changed files 摘要、同文件上下文可用性说明、预算内同文件片段、上下文不足反馈统计摘要、`contextPlan / plannerSignals / requestedContexts`、`localRepositoryContext`、`localReferenceSearch` 摘要、`localReferenceContext` 引用证据和 `unavailableContexts`。
+当前状态：V1.5 已完成上下文状态表达；V2-E 已补上下文不足筛选、缺失上下文类型和统计；V2-F-1 已落地 Context Pack V0 后端最小闭环，V2-F-2 已补同文件上下文片段 V0，V2-F-3 已补 Context Planner 最小规则，V2-F-5 已补本地 mirror clone / fetch / task head worktree 准备闭环，V2-F-6 已补删除方法 / 签名变更的本地引用搜索 Retriever MVP，V2-F-7 已把本地引用证据按预算注入 Context Pack，V2-F-8 已在前端展示高准确模式证据摘要并默认屏蔽人工沉淀入口，V2-F-9 已完成生产验证与效果复盘。当前 Context Pack 会注入 changed files 摘要、同文件上下文可用性说明、预算内同文件片段、上下文不足反馈统计摘要、`contextPlan / plannerSignals / requestedContexts`、`localRepositoryContext`、`localReferenceSearch` 摘要、`localReferenceContext` 引用证据和 `unavailableContexts`。
 
 2026-06-11 调整：L3 的短期实现重点从“继续增加人工上下文反馈统计”调整为“本地仓库上下文检索”。也就是先通过本地 mirror clone / fetch、task worktree、`rg` 引用搜索和 bounded snippets 提升单次 Review 准确率，再用反馈池和评估集验证效果。
 
@@ -344,11 +344,13 @@ V2-F / 高准确 Review：本地仓库上下文检索
   -> 已完成：本地 mirror clone / fetch / worktree
   -> 已完成：METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索
   -> 已完成：引用证据注入 Context Pack
-  -> 前端展示高准确模式证据摘要
-  -> 人工沉淀能力前端默认屏蔽
+  -> 已完成：前端展示高准确模式证据摘要
+  -> 已完成：人工沉淀能力前端默认屏蔽
+  -> 已完成：生产验证与效果复盘
+  -> 本地 workspace 清理与磁盘保护
 ```
 
-说明：V2.5 的反馈自动归因和更完整上下文不足统计不取消，但后移到本地检索生产验证之后。
+说明：V2.5 的反馈自动归因和更完整上下文不足统计不取消，但后移到本地检索生产验证和 workspace 清理硬化之后。
 
 ### 中期能力
 
@@ -470,7 +472,7 @@ Prompt 改进应作为候选变更，经过：
 
 后续 Review 学习能力按 docs/33 的分层模型和自动化等级阶梯推进。不要把所有反馈都直接写入初始 Prompt。每条反馈应先判断属于项目策略、上下文不足、风险校准、重复 finding、规则配置、Prompt/Profile 改进还是评估样本。
 
-当前 docs/32 的 V2-A 到 V2-E 已落地，V2-F-1 / V2-F-2 / V2-F-3 / V2-F-5 / V2-F-6 / V2-F-7 已落地。后续短期主线按 docs/34 推进本地仓库上下文检索 / 高准确 Review 模式；反馈池、项目策略、上下文不足人工标记等人工沉淀能力先保留后端和数据结构，但生产前端默认屏蔽入口。更完整的自动归因统计、评估集、风险校准、自动聚类和半自动策略候选仍作为后续阶段。
+当前 docs/32 的 V2-A 到 V2-E 已落地，V2-F-1 / V2-F-2 / V2-F-3 / V2-F-5 / V2-F-6 / V2-F-7 / V2-F-8 / V2-F-9 已落地或已验收。后续短期主线按 docs/34 进入 V2-F-10：本地 workspace 清理与磁盘保护；反馈池、项目策略、上下文不足人工标记等人工沉淀能力先保留后端和数据结构，但生产前端默认屏蔽入口。更完整的自动归因统计、评估集、风险校准、自动聚类和半自动策略候选仍作为后续阶段。
 
 每次只推进一个阶段。允许自主修改 backend-python、frontend、docs、examples、tests 中与当前阶段直接相关的文件；不要修改 legacy Java backend；不要做自动 Prompt 改写、自动风险降级、自动忽略 finding、模型微调、复杂 RAG、跨项目策略共享或无限制全项目扫描。
 
@@ -578,7 +580,7 @@ Prompt 改进应作为候选变更，经过：
 
 ## 十二、当前下一步
 
-当前不需要先做 V3，也不优先继续扩展人工沉淀产品入口。
+当前不优先恢复人工沉淀产品入口，也不建议马上扩展 DTO / DB / 缓存 / MQ / 配置检索器。V2-F-9 已验收后，先补本地 workspace 清理与磁盘保护，确保高准确模式可长期灰度运行。
 
 下一步按 `docs/34-local-repository-context-retrieval-plan.md` 推进本地仓库上下文检索：
 
@@ -587,7 +589,9 @@ V2-F-4：本地仓库检索主方案与前端人工沉淀熄灯
 V2-F-5：本地仓库 mirror clone / fetch / worktree 最小闭环（已完成）
 V2-F-6：METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索 Retriever MVP（已完成）
 V2-F-7：本地引用证据注入 Context Pack（已完成）
-V2-F-8：前端展示高准确模式证据摘要，并屏蔽人工沉淀入口
+V2-F-8：前端展示高准确模式证据摘要，并屏蔽人工沉淀入口（已完成）
+V2-F-9：生产验证与效果复盘（已验收）
+V2-F-10：本地 workspace 清理与磁盘保护
 ```
 
-本地检索在生产验证有效后，再决定是否恢复部分人工沉淀入口、继续 V2.5 自动归因统计，或进入 V3 评估集。
+V2-F-10 完成后，再根据真实反馈分布决定进入 V3 评估集，或按评估结果扩展 DTO / DB / 缓存 / MQ / 配置检索。

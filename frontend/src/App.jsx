@@ -90,6 +90,9 @@ const FEEDBACK_ROUTE = '/risk-feedback';
 const SETTINGS_ROUTE = '/settings';
 const RELEASES_ROUTE = '/releases';
 const HELP_ROUTE = '/help';
+const REVIEW_LEARNING_UI_ENABLED = String(import.meta.env.VITE_REVIEW_LEARNING_UI_ENABLED || '').toLowerCase() === 'true';
+const PROJECT_REVIEW_POLICY_UI_ENABLED = REVIEW_LEARNING_UI_ENABLED
+  && String(import.meta.env.VITE_PROJECT_REVIEW_POLICY_UI_ENABLED || '').toLowerCase() === 'true';
 const JOB_QUEUE_REFRESH_EVENT = 'ai-review-job-queue-refresh';
 const FAILURE_NOTIFICATION_REFRESH_EVENT = 'ai-review-failure-notification-refresh';
 const TARGET_TYPE_OPTIONS = [
@@ -1510,6 +1513,8 @@ function ReviewFeedbackControl({
     setLocalFeedback(feedback || null);
   }, [feedback?.id, feedback?.feedbackType, feedback?.status, feedback?.missingContextTypes]);
 
+  if (!REVIEW_LEARNING_UI_ENABLED) return null;
+
   const openModal = feedbackType => {
     const defaultReasonType = defaultReasonTypeForFeedback(feedbackType);
     setDraft({
@@ -1533,7 +1538,8 @@ function ReviewFeedbackControl({
           itemFingerprint,
           ...payload,
           ...draft,
-          missingContextTypes: draft.reasonType === 'CONTEXT_MISSING' ? draft.missingContextTypes : []
+          missingContextTypes: draft.reasonType === 'CONTEXT_MISSING' ? draft.missingContextTypes : [],
+          suggestAsProjectRule: PROJECT_REVIEW_POLICY_UI_ENABLED ? draft.suggestAsProjectRule : false
         })
       });
       setLocalFeedback(nextFeedback);
@@ -1630,12 +1636,14 @@ function ReviewFeedbackControl({
             placeholder="补充说明"
             onChange={event => setDraft(current => ({ ...current, reasonText: event.target.value }))}
           />
-          <Switch
-            checked={draft.suggestAsProjectRule}
-            checkedChildren="沉淀"
-            unCheckedChildren="不沉淀"
-            onChange={checked => setDraft(current => ({ ...current, suggestAsProjectRule: checked }))}
-          />
+          {PROJECT_REVIEW_POLICY_UI_ENABLED && (
+            <Switch
+              checked={draft.suggestAsProjectRule}
+              checkedChildren="沉淀"
+              unCheckedChildren="不沉淀"
+              onChange={checked => setDraft(current => ({ ...current, suggestAsProjectRule: checked }))}
+            />
+          )}
         </Space>
       </Modal>
     </div>
@@ -1779,6 +1787,11 @@ function phaseLabel(phase) {
     REQUEST_BUILT: '请求已构建',
     PROVIDER_SELECTED: '已选择 Provider',
     REQUEST_VALIDATED: '请求校验',
+    CONTEXT_PACK_BUILT: '上下文包已构建',
+    LOCAL_REPO_PREPARED: '本地仓库已准备',
+    LOCAL_REPO_PREPARE_FAILED: '本地仓库不可用',
+    LOCAL_CONTEXT_RETRIEVED: '本地引用检索完成',
+    LOCAL_CONTEXT_RETRIEVE_FAILED: '本地引用检索不可用',
     PROVIDER_START: '调用 Provider',
     PROVIDER_FAILED: 'Provider 调用失败',
     CODEX_REPOSITORY: '确认仓库（历史）',
@@ -1849,6 +1862,11 @@ const keyProgressPhases = new Set([
   'REQUEST_BUILT',
   'PROVIDER_SELECTED',
   'REQUEST_VALIDATED',
+  'CONTEXT_PACK_BUILT',
+  'LOCAL_REPO_PREPARED',
+  'LOCAL_REPO_PREPARE_FAILED',
+  'LOCAL_CONTEXT_RETRIEVED',
+  'LOCAL_CONTEXT_RETRIEVE_FAILED',
   'PROVIDER_START',
   'PROVIDER_FAILED',
   'PROMPT_METADATA',
@@ -1921,6 +1939,16 @@ function progressStepDescription(event) {
       return '已选择本轮使用的模型 Provider。';
     case 'REQUEST_VALIDATED':
       return event?.level === 'ERROR' ? 'Provider 请求参数未通过校验。' : 'Provider 请求参数已通过校验。';
+    case 'CONTEXT_PACK_BUILT':
+      return '已构建 Context Pack，并汇总高准确模式可用的本地仓库上下文检索摘要。';
+    case 'LOCAL_REPO_PREPARED':
+      return '本地仓库工作区已准备，可用于高准确模式引用检索。';
+    case 'LOCAL_REPO_PREPARE_FAILED':
+      return '本地仓库工作区不可用，本次 Review 会继续使用已有 diff 和可用上下文。';
+    case 'LOCAL_CONTEXT_RETRIEVED':
+      return '本地仓库上下文检索已完成，摘要见上方高准确模式卡片。';
+    case 'LOCAL_CONTEXT_RETRIEVE_FAILED':
+      return '本地仓库引用检索不可用，本次 Review 不会把检索失败解释为无风险。';
     case 'PROVIDER_START':
       return '开始调用代码质量 Review provider。';
     case 'PROVIDER_FAILED':
@@ -2057,6 +2085,160 @@ function totalProgressDuration(events) {
     .filter(timestamp => timestamp != null);
   if (timestamps.length < 2) return null;
   return Math.max(0, (timestamps[timestamps.length - 1] - timestamps[0]) / 1000);
+}
+
+function parseProgressDetailJson(detail) {
+  if (!detail) return null;
+  if (typeof detail === 'object') return detail;
+  try {
+    return JSON.parse(detail);
+  } catch {
+    return null;
+  }
+}
+
+function latestProgressEvent(events, phases) {
+  const phaseSet = new Set(Array.isArray(phases) ? phases : [phases]);
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (phaseSet.has(events[index]?.phase)) return events[index];
+  }
+  return null;
+}
+
+function countValue(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.floor(parsed);
+}
+
+function countText(value) {
+  return value == null ? '-' : String(countValue(value));
+}
+
+function localRepositoryStatusLabel(status, hasRecord) {
+  if (!hasRecord) return '未产生记录';
+  switch (String(status || '').toUpperCase()) {
+    case 'PREPARED':
+      return '已准备';
+    case 'UNAVAILABLE':
+      return '不可用';
+    case 'DISABLED':
+      return '未启用';
+    default:
+      return status || '未知';
+  }
+}
+
+function localRepositoryStatusColor(status, hasRecord) {
+  if (!hasRecord) return 'default';
+  switch (String(status || '').toUpperCase()) {
+    case 'PREPARED':
+      return 'green';
+    case 'UNAVAILABLE':
+      return 'orange';
+    case 'DISABLED':
+      return 'default';
+    default:
+      return 'blue';
+  }
+}
+
+function buildHighAccuracyContextSummary(progress) {
+  const events = Array.isArray(progress) ? progress : [];
+  const contextEvent = latestProgressEvent(events, 'CONTEXT_PACK_BUILT');
+  const repoEvent = latestProgressEvent(events, ['LOCAL_REPO_PREPARED', 'LOCAL_REPO_PREPARE_FAILED']);
+  const referenceEvent = latestProgressEvent(events, ['LOCAL_CONTEXT_RETRIEVED', 'LOCAL_CONTEXT_RETRIEVE_FAILED']);
+  const contextDetail = parseProgressDetailJson(contextEvent?.detail) || {};
+  const repoDetail = parseProgressDetailJson(repoEvent?.detail) || {};
+  const referenceDetail = parseProgressDetailJson(referenceEvent?.detail) || {};
+  const summary = contextDetail.summary || {};
+  const meta = contextDetail.meta || {};
+  const localRepository = {
+    ...(summary.localRepository || {}),
+    ...repoDetail
+  };
+  const localReferenceSearch = {
+    ...(summary.localReferenceSearch || {}),
+    ...referenceDetail
+  };
+  const hasRecord = Boolean(contextEvent || repoEvent || referenceEvent);
+  const enabledValue = localRepository.enabled !== undefined
+    ? localRepository.enabled
+    : meta.localRepositoryEnabled;
+  const enabled = Boolean(enabledValue);
+  const status = localRepository.status || meta.localRepositoryStatus || (hasRecord ? (enabled ? 'UNKNOWN' : 'DISABLED') : '');
+  return {
+    hasRecord,
+    enabled,
+    status,
+    truncated: Boolean(localReferenceSearch.truncated || meta.localReferenceTruncated || summary.truncated || meta.truncated),
+    plannerSignalCount: hasRecord ? (summary.plannerSignalCount ?? meta.plannerSignalCount) : null,
+    queryCount: hasRecord ? (localReferenceSearch.queryCount ?? meta.localReferenceQueryCount) : null,
+    matchedFileCount: hasRecord ? (localReferenceSearch.matchedFileCount ?? meta.localReferenceMatchedFileCount) : null,
+    includedSnippetCount: hasRecord ? (localReferenceSearch.includedSnippetCount ?? meta.localReferenceSnippetCount) : null,
+    unavailableContextCount: hasRecord ? (summary.unavailableContextCount ?? meta.unavailableContextCount) : null
+  };
+}
+
+function HighAccuracyContextSummary({ progress }) {
+  const summary = buildHighAccuracyContextSummary(progress);
+  const statusLabel = localRepositoryStatusLabel(summary.status, summary.hasRecord);
+  const statusColor = localRepositoryStatusColor(summary.status, summary.hasRecord);
+  const message = summary.hasRecord
+    ? '本次 AI Review 的本地仓库上下文检索摘要'
+    : '暂无本地仓库上下文检索记录';
+  const description = summary.hasRecord
+    ? '高准确模式会把预算内的本地引用证据注入 Context Pack；页面仅展示统计摘要，不展开源码片段。'
+    : '触发代码质量 AI Review 后，这里会展示高准确模式的仓库准备和引用检索计数。';
+
+  return (
+    <Card
+      className="high-accuracy-context-card"
+      title={(
+        <Space wrap>
+          <FileSearchOutlined />
+          <span>高准确模式 · 本地仓库上下文检索</span>
+        </Space>
+      )}
+    >
+      <Space direction="vertical" size="middle" className="full-width">
+        <Alert
+          type="info"
+          showIcon
+          message={message}
+          description={description}
+        />
+        <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }}>
+          <Descriptions.Item label="启用状态">
+            <Tag color={summary.hasRecord && summary.enabled ? 'green' : 'default'}>
+              {summary.hasRecord ? (summary.enabled ? '已启用' : '未启用') : '未产生记录'}
+            </Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="仓库准备状态">
+            <Tag color={statusColor}>{statusLabel}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="Planner Signal 数">
+            <Text strong>{countText(summary.plannerSignalCount)}</Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="引用查询数">
+            <Text strong>{countText(summary.queryCount)}</Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="命中文件数">
+            <Text strong>{countText(summary.matchedFileCount)}</Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="Snippet 数">
+            <Text strong>{countText(summary.includedSnippetCount)}</Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="不可用上下文数">
+            <Text strong>{countText(summary.unavailableContextCount)}</Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="检索预算">
+            {summary.truncated ? <Tag color="orange">已截断</Tag> : <Tag>未截断</Tag>}
+          </Descriptions.Item>
+        </Descriptions>
+      </Space>
+    </Card>
+  );
 }
 
 function ProgressEventView({ event, showStepDescription = false }) {
@@ -2663,6 +2845,7 @@ function CodeQualityReviewView({
             <Button type="primary" loading={retrying} onClick={() => onRetry?.()}>重试 AI Review</Button>
           </div>
         </Card>
+        <HighAccuracyContextSummary progress={progress} />
         <CodeQualityProgressView progress={progress} />
       </Space>
     );
@@ -2762,6 +2945,7 @@ function CodeQualityReviewView({
           </Descriptions>
         </Space>
       </Card>
+      <HighAccuracyContextSummary progress={progress} />
       <Card title="质量问题">
         {findings.length === 0 ? (
           <Empty description="暂无结构化问题" />
@@ -5285,7 +5469,7 @@ function RiskFeedbackPage() {
         );
       }
     },
-    {
+    PROJECT_REVIEW_POLICY_UI_ENABLED && {
       title: '沉淀',
       dataIndex: 'suggestAsProjectRule',
       width: 90,
@@ -5309,23 +5493,25 @@ function RiskFeedbackPage() {
             <Button size="small" loading={updatingId === row.id} disabled={row.status === 'VALID'} onClick={() => updateStatus(row.id, 'VALID')}>有效</Button>
             <Button size="small" loading={updatingId === row.id} disabled={row.status === 'INSUFFICIENT'} onClick={() => updateStatus(row.id, 'INSUFFICIENT')}>信息不足</Button>
             <Button size="small" loading={updatingId === row.id} disabled={row.status === 'IGNORED'} onClick={() => updateStatus(row.id, 'IGNORED')}>忽略</Button>
-            <Tooltip title={disabledReason || '生成项目策略'}>
-              <span>
-                <Button
-                  size="small"
-                  type="primary"
-                  disabled={Boolean(disabledReason)}
-                  onClick={() => openGeneratePolicy(row)}
-                >
-                  生成策略
-                </Button>
-              </span>
-            </Tooltip>
+            {PROJECT_REVIEW_POLICY_UI_ENABLED && (
+              <Tooltip title={disabledReason || '生成项目策略'}>
+                <span>
+                  <Button
+                    size="small"
+                    type="primary"
+                    disabled={Boolean(disabledReason)}
+                    onClick={() => openGeneratePolicy(row)}
+                  >
+                    生成策略
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
           </Space>
         );
       }
     }
-  ];
+  ].filter(Boolean);
 
   const policyColumns = [
     { title: '项目', dataIndex: 'projectName', width: 180, ellipsis: true, render: value => value || '-' },
@@ -5544,16 +5730,21 @@ function RiskFeedbackPage() {
     </>
   );
 
+  const feedbackTabItems = [
+    { key: 'feedbacks', label: '反馈记录', children: feedbackPanel },
+    PROJECT_REVIEW_POLICY_UI_ENABLED && { key: 'policies', label: '项目策略', children: policyPanel }
+  ].filter(Boolean);
+  const displayedFeedbackTabKey = feedbackTabItems.some(item => item.key === activeTabKey)
+    ? activeTabKey
+    : 'feedbacks';
+
   return (
     <div className="page-shell">
       <Tabs
         className="feedback-page-tabs"
-        activeKey={activeTabKey}
+        activeKey={displayedFeedbackTabKey}
         onChange={setActiveTabKey}
-        items={[
-          { key: 'feedbacks', label: '反馈记录', children: feedbackPanel },
-          { key: 'policies', label: '项目策略', children: policyPanel }
-        ]}
+        items={feedbackTabItems}
       />
       <Modal
         title={policyModal.mode === 'edit' ? '编辑项目策略' : '生成项目策略'}
@@ -5901,13 +6092,15 @@ function AppFrame() {
           >
             任务
           </Button>
-          <Button
-            icon={<CommentOutlined />}
-            type={isFeedbackRoute ? 'primary' : 'default'}
-            onClick={() => navigate(FEEDBACK_ROUTE, { state: { from: route } })}
-          >
-            反馈池
-          </Button>
+          {REVIEW_LEARNING_UI_ENABLED && (
+            <Button
+              icon={<CommentOutlined />}
+              type={isFeedbackRoute ? 'primary' : 'default'}
+              onClick={() => navigate(FEEDBACK_ROUTE, { state: { from: route } })}
+            >
+              反馈池
+            </Button>
+          )}
           <Button
             icon={<SettingOutlined />}
             type={isSettingsRoute ? 'primary' : 'default'}
@@ -5961,7 +6154,10 @@ function AppFrame() {
           <Route path={HOME_ROUTE} element={<HomePage />} />
           <Route path={TASK_LIST_ROUTE} element={<TaskListPage />} />
           <Route path={`${TASK_LIST_ROUTE}/:taskId`} element={<TaskDetailPage />} />
-          <Route path={FEEDBACK_ROUTE} element={<RiskFeedbackPage />} />
+          <Route
+            path={FEEDBACK_ROUTE}
+            element={REVIEW_LEARNING_UI_ENABLED ? <RiskFeedbackPage /> : <Navigate to={TASK_LIST_ROUTE} replace />}
+          />
           <Route path={SETTINGS_ROUTE} element={<SettingsPage />} />
           <Route path={RELEASES_ROUTE} element={<ReleaseNotesPage />} />
           <Route path={HELP_ROUTE} element={<HelpPage />} />

@@ -292,6 +292,18 @@ body {
   word-break: break-word;
 }
 
+.high-accuracy-context-card .ant-card-head-title {
+  min-width: 0;
+}
+
+.high-accuracy-context-card .ant-descriptions-item-label {
+  white-space: nowrap;
+}
+
+.high-accuracy-context-card .ant-descriptions-item-content {
+  min-width: 0;
+}
+
 .prompt-field {
   margin-top: 8px;
 }

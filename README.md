@@ -181,6 +181,9 @@ PLATFORM_BASE_URL=http://192.168.100.241:15173
 GITLAB_API_ENABLED=true
 GITLAB_BASE_URL=https://你的 GitLab 地址
 GITLAB_TOKEN=GitLab access token
+LOCAL_REPO_CONTEXT_ENABLED=true
+LOCAL_REPO_WORKSPACE_ROOT=/app/.local/review-workspaces
+LOCAL_REPO_WORKSPACE_HOST_DIR=./review-workspaces
 CODE_QUALITY_REVIEW_ENABLED=true
 DEEPSEEK_API_KEY=...
 XIAOMIMO_API_KEY=...
@@ -188,6 +191,8 @@ GLM_API_KEY=...
 OPENAI_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
+
+`LOCAL_REPO_CONTEXT_ENABLED=true` 会启用高准确模式的本地仓库上下文检索。`LOCAL_REPO_WORKSPACE_ROOT` 是 backend 容器内路径，默认挂载到 `/app/.local/review-workspaces`；`LOCAL_REPO_WORKSPACE_HOST_DIR` 是宿主机缓存目录，默认是运行目录下的 `./review-workspaces`，用于持久化 Git mirror 和 task worktree。GitLab token 需要具备 `read_repository` 权限，否则本地 clone / fetch 会失败并在任务详情中显示本地仓库不可用。
 
 默认部署使用外部 MySQL，不会启动 compose 内置的 `mysql` 容器。如果确实要使用内置 MySQL，再在 `.env` 中增加：
 
@@ -291,6 +296,21 @@ docker compose up -d
 ```
 
 `load-images.sh` 会把运行用的 `docker-compose.yml` 放到 `/opt/ai-code-review-platform/runtime/`，并且只在第一次部署时创建 `/opt/ai-code-review-platform/runtime/.env`。以后升级时重新上传新版本目录，执行新版本目录里的 `./load-images.sh`，脚本只更新 `APP_VERSION`，不会覆盖你已经配置好的 MySQL、GitLab、钉钉或模型密钥。
+
+如果启用本地仓库上下文检索，请在 `/opt/ai-code-review-platform/runtime/.env` 中保留或补充：
+
+```text
+LOCAL_REPO_CONTEXT_ENABLED=true
+LOCAL_REPO_WORKSPACE_ROOT=/app/.local/review-workspaces
+LOCAL_REPO_WORKSPACE_HOST_DIR=./review-workspaces
+LOCAL_REPO_MAX_FETCH_SECONDS=120
+LOCAL_REPO_MAX_SEARCH_SECONDS=30
+# 规划中：用于本地仓库 workspace 自动清理，落地前可先通过运维脚本清理 worktrees。
+# LOCAL_REPO_WORKTREE_RETENTION_HOURS=24
+# LOCAL_REPO_MIRROR_RETENTION_DAYS=30
+```
+
+运行目录下的 `review-workspaces/` 会被挂载进 backend 容器，用来保留 mirror 缓存和 task worktree；升级镜像不会清空该目录。当前本地仓库检索主链路已支持 mirror / worktree 复用，自动清理策略规划为后续 V2-F-10 落地：优先清理过期 `worktrees/{taskId}`，`mirrors/{projectId}.git` 只按较长闲置周期清理。清理 worktree 不影响后续新 MR，清理 mirror 后同项目下一次审查会重新 clone，正确性不受影响但首次准备耗时会增加。
 
 离线升级时，脚本还会自动清理旧版本应用镜像，默认只保留最近 `2` 个版本的：
 
@@ -413,6 +433,8 @@ GET  /api/rule-templates/{templateCode}
 任务列表支持按 `reviewStatus`、`groupId`、`targetType`、`triggerType` 等筛选；列表项 `riskItemCount` 表示 AI Review finding 总数。完整字段见 `docs/03-api-contract.md`。
 
 反馈池与项目策略：
+
+说明：V2-F-8 起，反馈池和项目策略默认作为暗能力保留；生产前端默认不展示反馈池导航、任务详情提交反馈、生成策略和项目策略管理入口。需要在前端构建环境显式设置 `VITE_REVIEW_LEARNING_UI_ENABLED=true`，并按需设置 `VITE_PROJECT_REVIEW_POLICY_UI_ENABLED=true`，才会恢复对应入口；后端 API 和数据表仍保持兼容。
 
 ```text
 POST /api/review-tasks/{taskId}/feedback
@@ -800,7 +822,9 @@ Invoke-RestMethod `
 
 反馈池支持把人工确认过的反馈沉淀为项目策略。项目策略只影响同一个 `projectId` 的后续 AI Review，并会作为项目上下文注入 Prompt；它不会自动修改当前 Review 结果、不会自动忽略 finding，也不会自动降低风险等级。
 
-前端验证路径：
+注意：V2-F-8 后，这组能力默认不在生产前端展示；开启 `VITE_REVIEW_LEARNING_UI_ENABLED=true` 后才展示反馈入口，继续开启 `VITE_PROJECT_REVIEW_POLICY_UI_ENABLED=true` 后才展示“建议沉淀”、生成策略和项目策略管理入口。不开启这些前端开关时，可以继续通过下面的 API 做后台验证。
+
+开启上述前端开关后的验证路径：
 
 ```text
 任务详情 -> 对风险项或 AI finding 提交反馈
@@ -937,7 +961,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/code-quality-revi
 顶部导航：
 
 - `任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程、AI Review 调度队列入口。
-- `反馈池`：查看风险项 / finding 反馈，筛选建议沉淀反馈，并管理项目策略。
+- `反馈池`：默认隐藏；前端构建时启用 `VITE_REVIEW_LEARNING_UI_ENABLED=true` 后可查看风险项 / finding 反馈，继续启用 `VITE_PROJECT_REVIEW_POLICY_UI_ENABLED=true` 后可筛选建议沉淀反馈并管理项目策略。
 - 右上角通知图标：查看最近 24 小时内 AI Review 执行失败记录，并可跳转任务详情。
 - `设置`：全局设置、模型 Provider 配置、AI Review 设置、项目组 / 端类型配置、启用的卡片提醒类型；Push 审核策略在 AI Review 设置中按项目组维护。
 - `版本更新`：查看近期功能变化、部署注意和验证提示。

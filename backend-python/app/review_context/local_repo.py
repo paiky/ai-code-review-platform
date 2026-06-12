@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 import hashlib
 import os
@@ -230,8 +231,18 @@ def _git_env(token: str | None, args: list[str]) -> dict[str, str]:
     if token:
         env["GIT_CONFIG_COUNT"] = "1"
         env["GIT_CONFIG_KEY_0"] = "http.extraHeader"
-        env["GIT_CONFIG_VALUE_0"] = f"PRIVATE-TOKEN: {token}"
+        env["GIT_CONFIG_VALUE_0"] = _git_basic_auth_header(token)
     return env
+
+
+def _git_basic_auth_header(token: str) -> str:
+    encoded = _git_basic_auth_value(token)
+    return f"Authorization: Basic {encoded}"
+
+
+def _git_basic_auth_value(token: str) -> str:
+    credential = f"oauth2:{token}".encode("utf-8")
+    return base64.b64encode(credential).decode("ascii")
 
 
 def _operation_name(args: list[str]) -> str:
@@ -405,6 +416,7 @@ def _sanitize_text(value: str | None, token: str | None = None) -> str:
     text = str(value or "")
     if token:
         text = text.replace(token, "****")
+        text = text.replace(_git_basic_auth_value(token), "****")
     text = re.sub(r"(https?://)([^/\s@]+@)", r"\1****@", text)
     text = re.sub(r"(PRIVATE-TOKEN:\s*)\S+", r"\1****", text, flags=re.IGNORECASE)
     text = re.sub(r"(Authorization:\s*)\S+(?:\s+\S+)?", r"\1****", text, flags=re.IGNORECASE)

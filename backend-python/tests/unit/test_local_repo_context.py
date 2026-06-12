@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from app.review_context import local_repo
@@ -58,6 +59,18 @@ def test_local_repo_context_clones_mirror_and_checks_out_head_worktree(
     assert "unit-token" not in str(commands)
 
 
+def test_local_repo_git_env_uses_basic_auth_header_without_credentialed_url() -> None:
+    env = local_repo._git_env("unit-token", ["git", "clone", "--mirror"])
+    encoded = base64.b64encode(b"oauth2:unit-token").decode("ascii")
+
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GIT_CONFIG_COUNT"] == "1"
+    assert env["GIT_CONFIG_KEY_0"] == "http.extraHeader"
+    assert env["GIT_CONFIG_VALUE_0"] == f"Authorization: Basic {encoded}"
+    assert "unit-token" not in env["GIT_CONFIG_VALUE_0"]
+    assert "PRIVATE-TOKEN" not in env["GIT_CONFIG_VALUE_0"]
+
+
 def test_local_repo_context_fetches_existing_mirror(
     monkeypatch,
     tmp_path: Path,
@@ -87,12 +100,14 @@ def test_local_repo_context_sanitizes_git_failure_without_raising(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    basic_token = base64.b64encode(b"oauth2:secret-token").decode("ascii")
+
     def fake_run_git(args: list[str], *, token: str | None, timeout_seconds: int) -> None:
         raise local_repo.LocalRepoGitError(
             "clone",
             128,
             "fatal: could not read from https://oauth2:secret-token@gitlab.example.com/demo/service.git "
-            "PRIVATE-TOKEN: secret-token",
+            f"PRIVATE-TOKEN: secret-token Authorization: Basic {basic_token} raw={basic_token}",
             token,
         )
 
@@ -114,4 +129,5 @@ def test_local_repo_context_sanitizes_git_failure_without_raising(
     assert context["summary"]["failurePhase"] == "CLONE"
     assert context["unavailableContexts"][0]["type"] == "LOCAL_REPOSITORY"
     assert "secret-token" not in reason
+    assert basic_token not in reason
     assert "****" in reason
