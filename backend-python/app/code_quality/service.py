@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.code_quality import prompt
 from app.code_quality.providers import run_fix_provider, run_provider, test_provider_connection
+from app.code_quality.rule_gap_dashboard import get_rule_gap_dashboard
 from app.code_quality.repository import (
     append_progress,
     cancel_active_scheduler_jobs_for_task,
@@ -1446,6 +1447,25 @@ def get_progress_response(db: Session, task_id: int, review_key: str | None = No
     return list_progress(db, task_id, review_key)
 
 
+def get_rule_gap_dashboard_response(
+    db: Session,
+    *,
+    project_id: int | None = None,
+    gap_type: str | None = None,
+    signal: str | None = None,
+    recent_days: int | None = 30,
+    limit: int = 50,
+) -> dict[str, Any]:
+    return get_rule_gap_dashboard(
+        db,
+        project_id=project_id,
+        gap_type=gap_type,
+        signal=signal,
+        recent_days=recent_days,
+        limit=limit,
+    )
+
+
 def get_job_queue_response(db: Session) -> dict[str, Any]:
     return list_scheduler_queue_snapshot(db)
 
@@ -2394,13 +2414,44 @@ def _project_policy_progress_detail(context: dict[str, Any]) -> str:
 
 
 def _review_context_progress_detail(context: dict[str, Any]) -> str:
-    return json.dumps(
-        {
-            "meta": context.get("meta") or {},
-            "summary": context.get("summary") or {},
-        },
-        ensure_ascii=False,
-    )
+    payload = {
+        "meta": context.get("meta") or {},
+        "summary": _bounded_review_context_summary(context.get("summary") or {}),
+    }
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(text) <= 3800:
+        return text
+    summary = dict(payload["summary"])
+    requested_availability = dict(summary.get("requestedContextAvailability") or {})
+    requested_availability["items"] = (requested_availability.get("items") or [])[:6]
+    summary["requestedContextAvailability"] = requested_availability
+    summary["ruleGapItems"] = (summary.get("ruleGapItems") or [])[:3]
+    payload["summary"] = summary
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(text) <= 3800:
+        return text
+    requested_availability.pop("items", None)
+    summary["requestedContextAvailability"] = requested_availability
+    summary["ruleGapItems"] = (payload["summary"].get("ruleGapItems") or [])[:1]
+    summary["progressSummaryTruncated"] = True
+    payload["summary"] = summary
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _bounded_review_context_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    result = dict(summary)
+    result["plannerSignalTypeCounts"] = (summary.get("plannerSignalTypeCounts") or [])[:8]
+    result["retrieverUnsupportedSignalTypeCounts"] = (summary.get("retrieverUnsupportedSignalTypeCounts") or [])[:8]
+    availability = dict(summary.get("requestedContextAvailability") or {})
+    availability["items"] = (availability.get("items") or [])[:10]
+    availability["unavailableReasonCounts"] = (availability.get("unavailableReasonCounts") or [])[:8]
+    result["requestedContextAvailability"] = availability
+    rule_gap_summary = dict(summary.get("ruleGapSummary") or {})
+    rule_gap_summary["topSignals"] = (rule_gap_summary.get("topSignals") or [])[:5]
+    rule_gap_summary["byGapType"] = (rule_gap_summary.get("byGapType") or [])[:6]
+    result["ruleGapSummary"] = rule_gap_summary
+    result["ruleGapItems"] = (summary.get("ruleGapItems") or [])[:6]
+    return result
 
 
 def _append_local_repo_progress(

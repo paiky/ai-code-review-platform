@@ -1,5 +1,23 @@
 export const releaseNotes = [
   {
+    id: '2026-06-13-high-accuracy-local-context',
+    version: 'v0.16.0',
+    releaseDate: '2026-06-13',
+    title: '高准确模式：本地仓库上下文检索与规则缺口看板',
+    summary: '代码质量 Review 从 diff-only 审查升级为高准确模式：平台先在本地准备仓库上下文、规划需要补充的证据，再把预算内片段注入模型输入，并公开展示流转和规则缺口优先级。',
+    highlights: [
+      '新增 Context Pack 与 Context Planner：先识别方法、字段、DTO、DB、缓存、MQ、配置等变更信号，再决定需要补充哪些上下文证据。',
+      '支持本地 mirror / worktree 准备任务源码，用本地引用检索补充删除方法、方法签名变更等高价值证据。',
+      '模型不会收到完整项目源码；平台只在本地检索，并把排序后、受预算限制的 bounded snippets 注入 Review 输入。',
+      '任务详情新增“高准确模式流转”，按变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider、结果解析展示执行状态。',
+      '当本地仓库已准备但引用查询数为 0 时，页面会解释是没有支持的 signal、Retriever 被跳过，还是检索失败。',
+      '新增“规则缺口”看板，按缺口类型、Signal、Requested Context、建议能力、项目和任务样例聚合跨任务能力缺口，用于判断后续 Retriever 补齐顺序。',
+      '本地 workspace 增加清理与磁盘保护，支持 worktree TTL 清理、长期闲置 mirror 清理和安全路径校验。',
+      '部署启用高准确模式时，需要 GitLab token 具备 read_repository 权限，并配置 workspace 挂载、worktree 保留时间和 mirror 保留周期。'
+    ],
+    tags: ['高准确模式', '本地仓库上下文', 'Context Pack', '规则缺口看板', '部署配置', 'AI Review']
+  },
+  {
     id: '2026-06-02-gitlab-diff-context-final',
     version: 'v0.15.0',
     releaseDate: '2026-06-02',

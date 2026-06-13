@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：V2-A / V2-B / V2-C / V2-D / V2-E 已落地并通过相关测试；V2-F-1 / V2-F-2 / V2-F-3 已落地；V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环、V2-F-6 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED` 引用搜索 Retriever MVP、V2-F-7 本地引用证据注入 Context Pack、V2-F-8 前端高准确模式摘要 / 人工沉淀入口熄灯、V2-F-9 生产验证和 V2-F-10 本地 workspace 清理与磁盘保护已落地。V2-F-3 后短期主线调整为 `docs/34-local-repository-context-retrieval-plan.md` 的本地仓库上下文检索 / 高准确 Review 模式，人工沉淀能力先在产品界面默认屏蔽。下一阶段建议先按 docs/34 推进 V2-F-11 高准确模式角色流转可观测，再推进 V2-F-12 规则缺口沉淀与优先级看板，之后进入 V2-F-13 DTO / VO 字段引用检索。
+- 当前状态：V2-A / V2-B / V2-C / V2-D / V2-E 已落地并通过相关测试；V2-F-1 / V2-F-2 / V2-F-3 已落地；V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环、V2-F-6 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED` 引用搜索 Retriever MVP、V2-F-7 本地引用证据注入 Context Pack、V2-F-8 前端高准确模式摘要 / 人工沉淀入口熄灯、V2-F-9 生产验证、V2-F-10 本地 workspace 清理与磁盘保护、V2-F-11 高准确模式角色流转可观测、V2-F-12 规则缺口沉淀与优先级看板、V2-F-13 版本更新页收口已落地。V2-F-3 后短期主线调整为 `docs/34-local-repository-context-retrieval-plan.md` 的本地仓库上下文检索 / 高准确 Review 模式，人工沉淀能力先在产品界面默认屏蔽。下一阶段进入 V2-F-14 DTO / VO 字段引用检索。
 - 编写时间：2026-06-10
 - 前置版本：
   - `docs/29-review-feedback-v1-implementation.md`
@@ -37,7 +37,10 @@
 已完成：V2-F-8 前端高准确模式摘要与人工沉淀入口熄灯
 已完成：V2-F-9 生产验证与效果复盘
 已完成：V2-F-10 本地 workspace 清理与磁盘保护
-下一步：V2-F-11 高准确模式角色流转可观测；之后进入 V2-F-12 规则缺口沉淀与优先级看板，再进入 V2-F-13 DTO / VO 字段引用检索，并根据评估扩展 DB / 缓存 / MQ / 配置检索
+已完成：V2-F-11 高准确模式角色流转可观测
+已完成：V2-F-12 规则缺口沉淀与优先级看板
+已完成：V2-F-13 版本更新页收口
+下一步：V2-F-14 DTO / VO 字段引用检索，并根据评估扩展 DB / 缓存 / MQ / 配置检索
 ```
 
 原因：
@@ -883,9 +886,10 @@ V2-F-7：本地引用证据注入 Context Pack（已完成）
 V2-F-8：前端展示高准确模式证据摘要，并屏蔽人工沉淀入口（已完成）
 V2-F-9：生产验证与效果复盘（已验收）
 V2-F-10：本地 workspace 清理与磁盘保护（已完成）
-V2-F-11：高准确模式角色流转可观测
-V2-F-12：规则缺口沉淀与优先级看板
-V2-F-13：DTO / VO 字段引用检索 Retriever
+V2-F-11：高准确模式角色流转可观测（已完成）
+V2-F-12：规则缺口沉淀与优先级看板（已完成）
+V2-F-13：版本更新页收口
+V2-F-14：DTO / VO 字段引用检索 Retriever
 ```
 
 明确保留但默认不展示：

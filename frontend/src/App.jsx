@@ -16,9 +16,11 @@ import {
   message,
   Modal,
   Row,
+  Segmented,
   Select,
   Space,
   Spin,
+  Steps,
   Switch,
   Table,
   Tabs,
@@ -86,6 +88,7 @@ const fineChangeTypes = new Set([
 
 const HOME_ROUTE = '/';
 const TASK_LIST_ROUTE = '/tasks';
+const RULE_GAPS_ROUTE = '/rule-gaps';
 const FEEDBACK_ROUTE = '/risk-feedback';
 const SETTINGS_ROUTE = '/settings';
 const RELEASES_ROUTE = '/releases';
@@ -2115,6 +2118,24 @@ function countText(value) {
   return value == null ? '-' : String(countValue(value));
 }
 
+function countListTotal(items) {
+  if (!Array.isArray(items)) return 0;
+  return items.reduce((sum, item) => sum + countValue(item?.count), 0);
+}
+
+function countItemsText(items, valueKey = 'type') {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) return '-';
+  return rows
+    .slice(0, 4)
+    .map(item => `${item?.[valueKey] || '-'} ${countValue(item?.count)}`)
+    .join('、');
+}
+
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 function localRepositoryStatusLabel(status, hasRecord) {
   if (!hasRecord) return '未产生记录';
   switch (String(status || '').toUpperCase()) {
@@ -2141,6 +2162,25 @@ function localRepositoryStatusColor(status, hasRecord) {
     default:
       return 'blue';
   }
+}
+
+function latestPhaseEvent(events, predicate) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (predicate(events[index])) return events[index];
+  }
+  return null;
+}
+
+function phaseStartsWith(event, prefixes) {
+  const phase = String(event?.phase || '');
+  return prefixes.some(prefix => phase.startsWith(prefix));
+}
+
+function roleStepStatus({ hasEvent, failed = false, running = false, skipped = false }) {
+  if (failed) return 'error';
+  if (running) return 'process';
+  if (hasEvent || skipped) return 'finish';
+  return 'wait';
 }
 
 function buildHighAccuracyContextSummary(progress) {
@@ -2173,10 +2213,24 @@ function buildHighAccuracyContextSummary(progress) {
     status,
     truncated: Boolean(localReferenceSearch.truncated || meta.localReferenceTruncated || summary.truncated || meta.truncated),
     plannerSignalCount: hasRecord ? (summary.plannerSignalCount ?? meta.plannerSignalCount) : null,
+    plannerSignalTypeCounts: safeArray(summary.plannerSignalTypeCounts),
+    retrieverSupportedSignalTypes: safeArray(summary.retrieverSupportedSignalTypes),
+    retrieverUnsupportedSignalTypeCounts: safeArray(summary.retrieverUnsupportedSignalTypeCounts),
+    requestedContextAvailability: summary.requestedContextAvailability || {},
+    budgetCutSummary: summary.budgetCutSummary || meta.budgetCutSummary || {},
+    ruleGapSummary: summary.ruleGapSummary || {},
+    ruleGapItems: safeArray(summary.ruleGapItems),
     queryCount: hasRecord ? (localReferenceSearch.queryCount ?? meta.localReferenceQueryCount) : null,
     matchedFileCount: hasRecord ? (localReferenceSearch.matchedFileCount ?? meta.localReferenceMatchedFileCount) : null,
     includedSnippetCount: hasRecord ? (localReferenceSearch.includedSnippetCount ?? meta.localReferenceSnippetCount) : null,
-    unavailableContextCount: hasRecord ? (summary.unavailableContextCount ?? meta.unavailableContextCount) : null
+    unavailableContextCount: hasRecord ? (summary.unavailableContextCount ?? meta.unavailableContextCount) : null,
+    contextEvent,
+    repoEvent,
+    referenceEvent,
+    localRepository,
+    localReferenceSearch,
+    meta,
+    rawSummary: summary
   };
 }
 
@@ -2238,6 +2292,292 @@ function HighAccuracyContextSummary({ progress }) {
         </Descriptions>
       </Space>
     </Card>
+  );
+}
+
+function zeroQueryExplanation(summary) {
+  if (!summary.hasRecord || countValue(summary.queryCount) > 0) return null;
+  const repositoryStatus = String(summary.status || '').toUpperCase();
+  const supportedSignals = new Set(summary.retrieverSupportedSignalTypes || []);
+  const supportedSignalCount = safeArray(summary.plannerSignalTypeCounts)
+    .filter(item => supportedSignals.has(item?.type))
+    .reduce((sum, item) => sum + countValue(item?.count), 0);
+  const unsupportedSignalCount = countListTotal(summary.retrieverUnsupportedSignalTypeCounts);
+  if (summary.referenceEvent?.phase === 'LOCAL_CONTEXT_RETRIEVE_FAILED') {
+    return '引用查询数为 0：Local Retriever 执行失败或检索不可用，本次不会把检索失败解释为无风险。';
+  }
+  if (summary.enabled && repositoryStatus !== 'PREPARED') {
+    return '引用查询数为 0：本地仓库未准备完成，Retriever 被跳过。';
+  }
+  if (supportedSignalCount === 0 && unsupportedSignalCount > 0) {
+    const unsupported = countItemsText(summary.retrieverUnsupportedSignalTypeCounts);
+    const supported = (summary.retrieverSupportedSignalTypes || []).join('、') || '-';
+    return `引用查询数为 0：Planner 命中 ${unsupported}，但当前 Retriever 只支持 ${supported}。`;
+  }
+  if (countValue(summary.plannerSignalCount) === 0) {
+    return '引用查询数为 0：Planner 未命中需要本地引用检索的 signal。';
+  }
+  return '引用查询数为 0：Retriever 被跳过，或没有生成可执行的引用查询。';
+}
+
+function roleDetailLine(items) {
+  return (
+    <Space size={4} wrap>
+      {items.filter(Boolean).map((item, index) => (
+        <Tag key={`${item}-${index}`}>{item}</Tag>
+      ))}
+    </Space>
+  );
+}
+
+function buildHighAccuracyRoleSteps(progress) {
+  const events = Array.isArray(progress) ? progress : [];
+  const summary = buildHighAccuracyContextSummary(events);
+  const requestEvent = latestProgressEvent(events, 'REQUEST_BUILT');
+  const providerFailedEvent = latestProgressEvent(events, [
+    'PROVIDER_FAILED',
+    'OPENAI_FAILED',
+    'ANTHROPIC_FAILED',
+    'DEEPSEEK_FAILED',
+    'XIAOMIMO_FAILED',
+    'GLM_FAILED',
+    'CUSTOM_FAILED',
+  ]);
+  const providerRequestEvent = latestPhaseEvent(events, event => (
+    event?.phase === 'PROVIDER_START'
+    || event?.phase === 'HTTP_REQUEST_START'
+    || phaseStartsWith(event, [
+      'OPENAI_REQUEST',
+      'ANTHROPIC_REQUEST',
+      'DEEPSEEK_REQUEST',
+      'XIAOMIMO_REQUEST',
+      'GLM_REQUEST',
+      'CUSTOM_REQUEST',
+    ])
+  ));
+  const providerResponseEvent = latestPhaseEvent(events, event => (
+    event?.phase === 'HTTP_RESPONSE_HEADERS'
+    || event?.phase === 'HTTP_RESPONSE_BODY_PREVIEW'
+    || phaseStartsWith(event, [
+      'OPENAI_RESPONSE',
+      'ANTHROPIC_RESPONSE',
+      'DEEPSEEK_RESPONSE',
+      'XIAOMIMO_RESPONSE',
+      'GLM_RESPONSE',
+      'CUSTOM_RESPONSE',
+    ])
+  ));
+  const parseFailedEvent = latestProgressEvent(events, ['JSON_PARSE_FAILED', 'FAILED', 'SAVE_FAILED']);
+  const parsedEvent = latestPhaseEvent(events, event => (
+    event?.phase === 'OUTPUT_EXTRACTED'
+    || event?.phase === 'JSON_PARSE_START'
+    || event?.phase === 'RESULT_SAVED'
+    || event?.phase === 'FINISHED'
+    || String(event?.phase || '').endsWith('_PARSED')
+    || String(event?.phase || '').endsWith('_PARSE_RESULT')
+  ));
+  const repoFailed = summary.repoEvent?.phase === 'LOCAL_REPO_PREPARE_FAILED';
+  const retrieverFailed = summary.referenceEvent?.phase === 'LOCAL_CONTEXT_RETRIEVE_FAILED';
+  const retrieverSkipped = summary.hasRecord && !summary.referenceEvent && countValue(summary.queryCount) === 0;
+  const providerRunning = Boolean(providerRequestEvent && !providerResponseEvent && !providerFailedEvent);
+
+  return [
+    {
+      title: '变更接入',
+      status: roleStepStatus({ hasEvent: Boolean(requestEvent || summary.hasRecord) }),
+      description: roleDetailLine([
+        `文件 ${countText(summary.rawSummary?.changedFileCount)}`,
+        `Diff ${countText(summary.rawSummary?.diffBytes)} bytes`,
+      ]),
+    },
+    {
+      title: 'Context Pack',
+      status: roleStepStatus({ hasEvent: Boolean(summary.contextEvent) }),
+      description: roleDetailLine([
+        `Prompt ${countText(summary.rawSummary?.promptLength)} chars`,
+        summary.truncated ? '已截断' : '未截断',
+        `不可用 ${countText(summary.unavailableContextCount)}`,
+      ]),
+    },
+    {
+      title: 'Planner',
+      status: roleStepStatus({ hasEvent: Boolean(summary.contextEvent) }),
+      description: roleDetailLine([
+        `Signal ${countText(summary.plannerSignalCount)}`,
+        `类型 ${countItemsText(summary.plannerSignalTypeCounts)}`,
+      ]),
+    },
+    {
+      title: '本地仓库',
+      status: roleStepStatus({ hasEvent: Boolean(summary.repoEvent || summary.hasRecord), failed: repoFailed }),
+      description: roleDetailLine([
+        localRepositoryStatusLabel(summary.status, summary.hasRecord),
+        summary.localRepository?.mirrorStatus && `mirror ${summary.localRepository.mirrorStatus}`,
+        summary.localRepository?.worktreeStatus && `worktree ${summary.localRepository.worktreeStatus}`,
+      ]),
+    },
+    {
+      title: 'Retriever',
+      status: roleStepStatus({
+        hasEvent: Boolean(summary.referenceEvent),
+        failed: retrieverFailed,
+        skipped: retrieverSkipped,
+      }),
+      description: roleDetailLine([
+        `查询 ${countText(summary.queryCount)}`,
+        `文件 ${countText(summary.matchedFileCount)}`,
+        `Snippet ${countText(summary.includedSnippetCount)}`,
+        retrieverSkipped ? '已跳过' : null,
+      ]),
+    },
+    {
+      title: '预算裁剪',
+      status: roleStepStatus({ hasEvent: Boolean(summary.contextEvent) }),
+      description: roleDetailLine([
+        summary.budgetCutSummary?.truncated ? '发生裁剪' : '未裁剪',
+        `变更文件排除 ${countText(summary.budgetCutSummary?.changedFilesExcluded)}`,
+        `引用 Snippet 裁剪 ${countText(summary.budgetCutSummary?.localReferenceSnippetsRemoved)}`,
+      ]),
+    },
+    {
+      title: 'Provider',
+      status: roleStepStatus({
+        hasEvent: Boolean(providerResponseEvent),
+        failed: Boolean(providerFailedEvent),
+        running: providerRunning,
+      }),
+      description: roleDetailLine([
+        providerResponseEvent ? phaseLabel(providerResponseEvent.phase) : providerRequestEvent ? phaseLabel(providerRequestEvent.phase) : '等待调用',
+      ]),
+    },
+    {
+      title: '结果解析',
+      status: roleStepStatus({
+        hasEvent: Boolean(parsedEvent),
+        failed: Boolean(parseFailedEvent),
+      }),
+      description: roleDetailLine([
+        parsedEvent ? phaseLabel(parsedEvent.phase) : '等待解析',
+      ]),
+    },
+  ];
+}
+
+function HighAccuracyFlowView({ progress }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const summary = buildHighAccuracyContextSummary(progress);
+  const zeroReason = zeroQueryExplanation(summary);
+  const availabilityItems = safeArray(summary.requestedContextAvailability?.items);
+  const ruleGapItems = safeArray(summary.ruleGapItems);
+  const gapColumns = [
+    { title: '缺口类型', dataIndex: 'gapType', width: 190, render: value => <Tag color="orange">{value || '-'}</Tag> },
+    { title: 'Signal', dataIndex: 'signal', width: 220, ellipsis: true },
+    { title: 'Requested Context', dataIndex: 'requestedContext', width: 220, ellipsis: true },
+    { title: '建议能力', dataIndex: 'suggestedCapability', ellipsis: true },
+    { title: '优先级原因', dataIndex: 'priorityReason', ellipsis: true },
+  ];
+  const availabilityColumns = [
+    { title: 'Context', dataIndex: 'type', width: 220, ellipsis: true },
+    {
+      title: '状态',
+      dataIndex: 'available',
+      width: 120,
+      render: value => value ? <Tag color="green">可用</Tag> : <Tag color="orange">不可用</Tag>,
+    },
+    { title: 'Signal 数', dataIndex: 'signalCount', width: 100 },
+    { title: '优先级', dataIndex: 'priority', width: 110 },
+    { title: '原因', dataIndex: 'reasonCode', ellipsis: true, render: value => value || '-' },
+  ];
+
+  return (
+    <Space direction="vertical" size="large" className="full-width">
+      <HighAccuracyContextSummary progress={progress} />
+      <Card title="角色流转">
+        <Steps
+          direction="vertical"
+          size="small"
+          items={buildHighAccuracyRoleSteps(progress)}
+        />
+      </Card>
+      {zeroReason && (
+        <Alert
+          type="warning"
+          showIcon
+          message="引用查询数为 0"
+          description={zeroReason}
+        />
+      )}
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={12}>
+          <Card title="Planner / Retriever 摘要">
+            <Descriptions size="small" column={1}>
+              <Descriptions.Item label="Planner Signal 类型">
+                {countItemsText(summary.plannerSignalTypeCounts)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Retriever 支持 Signal">
+                {(summary.retrieverSupportedSignalTypes || []).join('、') || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="暂不支持 Signal">
+                {countItemsText(summary.retrieverUnsupportedSignalTypeCounts)}
+              </Descriptions.Item>
+              <Descriptions.Item label="Requested Context">
+                可用 {countText(summary.requestedContextAvailability?.available)} / 不可用 {countText(summary.requestedContextAvailability?.unavailable)}
+              </Descriptions.Item>
+            </Descriptions>
+          </Card>
+        </Col>
+        <Col xs={24} xl={12}>
+          <Card title="预算裁剪摘要">
+            <Descriptions size="small" column={1}>
+              <Descriptions.Item label="状态">
+                {summary.budgetCutSummary?.truncated ? <Tag color="orange">已裁剪</Tag> : <Tag>未裁剪</Tag>}
+              </Descriptions.Item>
+              <Descriptions.Item label="变更文件排除">{countText(summary.budgetCutSummary?.changedFilesExcluded)}</Descriptions.Item>
+              <Descriptions.Item label="同文件片段裁剪">{countText(summary.budgetCutSummary?.sameFileSourceSnippetsRemoved)}</Descriptions.Item>
+              <Descriptions.Item label="引用片段裁剪">{countText(summary.budgetCutSummary?.localReferenceSnippetsRemoved)}</Descriptions.Item>
+            </Descriptions>
+          </Card>
+        </Col>
+      </Row>
+      <Card title="Requested Context 可用性">
+        {availabilityItems.length === 0 ? (
+          <Empty description="暂无 requested context 摘要" />
+        ) : (
+          <Table
+            rowKey={(row, index) => `${row.type}-${index}`}
+            size="small"
+            columns={availabilityColumns}
+            dataSource={availabilityItems}
+            pagination={false}
+          />
+        )}
+      </Card>
+      <Card
+        title="本任务规则缺口"
+        extra={(
+          <Button
+            size="small"
+            icon={<FileSearchOutlined />}
+            onClick={() => navigate(RULE_GAPS_ROUTE, { state: { from: currentRoute(location) } })}
+          >
+            查看看板
+          </Button>
+        )}
+      >
+        {ruleGapItems.length === 0 ? (
+          <Empty description="本任务暂无规则缺口摘要" />
+        ) : (
+          <Table
+            rowKey={(row, index) => `${row.gapType}-${row.signal}-${index}`}
+            size="small"
+            columns={gapColumns}
+            dataSource={ruleGapItems}
+            pagination={false}
+          />
+        )}
+      </Card>
+    </Space>
   );
 }
 
@@ -2804,6 +3144,25 @@ function fixPreviewActionClass(status) {
   return 'fix-preview-action-idle';
 }
 
+const codeQualityViewOptions = [
+  { label: 'AI Review 结果', value: 'result' },
+  { label: '高准确模式流转', value: 'accuracy-flow' },
+  { label: '执行过程', value: 'progress' },
+];
+
+function CodeQualityViewSwitcher({ value, onChange }) {
+  return (
+    <div className="quality-subnav">
+      <Segmented
+        size="middle"
+        value={value}
+        options={codeQualityViewOptions}
+        onChange={next => onChange(String(next))}
+      />
+    </div>
+  );
+}
+
 function CodeQualityReviewView({
   taskId,
   review,
@@ -2823,6 +3182,7 @@ function CodeQualityReviewView({
   const [fixPreviewLoadingIndex, setFixPreviewLoadingIndex] = useState(null);
   const [cancelingAction, setCancelingAction] = useState(null);
   const [activeFindingKeys, setActiveFindingKeys] = useState([]);
+  const [qualityView, setQualityView] = useState('result');
   useEffect(() => {
     const previews = Array.isArray(initialFixPreviews) ? initialFixPreviews : [];
     setFixPreviewByIndex(Object.fromEntries(previews.map(item => [item.findingIndex, item])));
@@ -2837,16 +3197,20 @@ function CodeQualityReviewView({
     }, 180);
   }, [location.hash, review?.id]);
   if (!review) {
+    const emptyResultContent = (
+      <Card>
+        <Empty description="暂无代码质量 Review 结果" />
+        <div className="empty-action-row">
+          <Button type="primary" loading={retrying} onClick={() => onRetry?.()}>重试 AI Review</Button>
+        </div>
+      </Card>
+    );
     return (
       <Space direction="vertical" size="large" className="full-width">
-        <Card>
-          <Empty description="暂无代码质量 Review 结果" />
-          <div className="empty-action-row">
-            <Button type="primary" loading={retrying} onClick={() => onRetry?.()}>重试 AI Review</Button>
-          </div>
-        </Card>
-        <HighAccuracyContextSummary progress={progress} />
-        <CodeQualityProgressView progress={progress} />
+        <CodeQualityViewSwitcher value={qualityView} onChange={setQualityView} />
+        {qualityView === 'result' && emptyResultContent}
+        {qualityView === 'accuracy-flow' && <HighAccuracyFlowView progress={progress} />}
+        {qualityView === 'progress' && <CodeQualityProgressView progress={progress} />}
       </Space>
     );
   }
@@ -2907,7 +3271,7 @@ function CodeQualityReviewView({
       setCancelingAction(null);
     }
   };
-  return (
+  const resultContent = (
     <Space direction="vertical" size="large" className="full-width">
       <Card>
         <Space direction="vertical" size="small" className="full-width">
@@ -2945,7 +3309,6 @@ function CodeQualityReviewView({
           </Descriptions>
         </Space>
       </Card>
-      <HighAccuracyContextSummary progress={progress} />
       <Card title="质量问题">
         {findings.length === 0 ? (
           <Empty description="暂无结构化问题" />
@@ -3037,19 +3400,20 @@ function CodeQualityReviewView({
           />
         )}
       </Card>
-      <CodeQualityProgressView
-        progress={progress}
-        running={review.status === 'RUNNING'}
-        reviewStartedAt={review.startedAt}
-        reviewFinishedAt={review.finishedAt}
-      />
-      {review.rawOutput && (
-        <Collapse
-          items={[{
-            key: 'raw-output',
-            label: 'Raw Output',
-            children: <pre className="raw-output-block">{review.rawOutput}</pre>
-          }]}
+    </Space>
+  );
+
+  return (
+    <Space direction="vertical" size="large" className="full-width">
+      <CodeQualityViewSwitcher value={qualityView} onChange={setQualityView} />
+      {qualityView === 'result' && resultContent}
+      {qualityView === 'accuracy-flow' && <HighAccuracyFlowView progress={progress} />}
+      {qualityView === 'progress' && (
+        <CodeQualityProgressView
+          progress={progress}
+          running={review.status === 'RUNNING'}
+          reviewStartedAt={review.startedAt}
+          reviewFinishedAt={review.finishedAt}
         />
       )}
       <DiffViewerModal
@@ -5186,6 +5550,217 @@ function TaskDetailPage() {
   );
 }
 
+const RULE_GAP_TYPE_OPTIONS = [
+  { label: 'Planner Signal 暂不支持', value: 'UNSUPPORTED_PLANNER_SIGNAL' },
+  { label: 'Requested Context 不可用', value: 'UNAVAILABLE_REQUESTED_CONTEXT' },
+  { label: 'Retriever 失败', value: 'RETRIEVAL_FAILED' },
+  { label: '预算裁剪', value: 'BUDGET_CUT' }
+];
+
+function RuleGapDashboardPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const route = currentRoute(location);
+  const [projects, setProjects] = useState([]);
+  const [filters, setFilters] = useState({
+    projectId: null,
+    gapType: null,
+    signal: '',
+    recentDays: 30,
+    limit: 50
+  });
+  const [dashboard, setDashboard] = useState({ items: [], summary: {} });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const loadDashboard = async (nextFilters = filters) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (nextFilters.projectId) params.set('projectId', nextFilters.projectId);
+      if (nextFilters.gapType) params.set('gapType', nextFilters.gapType);
+      if (nextFilters.signal?.trim()) params.set('signal', nextFilters.signal.trim());
+      if (nextFilters.recentDays) params.set('recentDays', nextFilters.recentDays);
+      if (nextFilters.limit) params.set('limit', nextFilters.limit);
+      const data = await fetchApi(`/api/code-quality-reviews/rule-gaps?${params.toString()}`);
+      setDashboard({
+        items: Array.isArray(data?.items) ? data.items : [],
+        summary: data?.summary || {}
+      });
+    } catch (err) {
+      setError(err.message);
+      setDashboard({ items: [], summary: {} });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchApi('/api/projects?includeDisabled=true&pageSize=500')
+      .then(data => setProjects(data.items || []))
+      .catch(() => setProjects([]));
+    loadDashboard();
+  }, []);
+
+  const updateFilter = (field, value) => {
+    setFilters(current => ({ ...current, [field]: value }));
+  };
+
+  const applyFilters = () => {
+    loadDashboard(filters);
+  };
+
+  const resetFilters = () => {
+    const nextFilters = { projectId: null, gapType: null, signal: '', recentDays: 30, limit: 50 };
+    setFilters(nextFilters);
+    loadDashboard(nextFilters);
+  };
+
+  const openTask = (task) => {
+    if (!task?.taskId) return;
+    const reviewQuery = task.reviewKey && task.reviewKey !== 'default'
+      ? `?reviewKey=${encodeURIComponent(task.reviewKey)}`
+      : '';
+    navigate(`/tasks/${task.taskId}${reviewQuery}`, { state: { from: route } });
+  };
+
+  const projectOptions = projects.map(project => ({
+    label: project.name,
+    value: project.id
+  }));
+  const summary = dashboard.summary || {};
+  const columns = [
+    {
+      title: '缺口类型',
+      dataIndex: 'gapType',
+      width: 190,
+      render: value => <Tag color="orange">{value || '-'}</Tag>
+    },
+    { title: 'Signal', dataIndex: 'signal', width: 220, ellipsis: true },
+    { title: 'Requested Context', dataIndex: 'requestedContext', width: 210, ellipsis: true },
+    { title: '建议能力', dataIndex: 'suggestedCapability', ellipsis: true },
+    { title: '出现次数', dataIndex: 'occurrenceCount', width: 100, render: value => <Text strong>{countText(value)}</Text> },
+    {
+      title: '影响范围',
+      width: 150,
+      render: (_, row) => (
+        <Space direction="vertical" size={2}>
+          <Text>项目 {countText(row.projectCount)}</Text>
+          <Text>任务 {countText(row.taskCount)}</Text>
+        </Space>
+      )
+    },
+    { title: '最近出现时间', dataIndex: 'recentOccurredAt', width: 190, render: value => value || '-' },
+    {
+      title: '最近任务样例',
+      dataIndex: 'recentTasks',
+      width: 260,
+      render: value => {
+        const tasks = safeArray(value);
+        if (!tasks.length) return '-';
+        return (
+          <Space direction="vertical" size={2} className="full-width">
+            {tasks.slice(0, 3).map(task => (
+              <Button
+                key={`${task.taskId}-${task.reviewKey}`}
+                type="link"
+                className="rule-gap-task-link"
+                onClick={() => openTask(task)}
+              >
+                #{task.taskId} · {task.projectName || '-'} · {task.reviewKey || 'default'}
+              </Button>
+            ))}
+          </Space>
+        );
+      }
+    },
+  ];
+
+  return (
+    <div className="page-shell">
+      <div className="page-heading">
+        <div className="page-heading-main">
+          <Title level={3}>规则缺口看板</Title>
+          <Text type="secondary">
+            基于 CONTEXT_PACK_BUILT progress 安全摘要聚合，不展示源码、路径、token、diff 或 provider 原始输出。
+          </Text>
+        </div>
+        <Button icon={<ReloadOutlined />} onClick={applyFilters} loading={loading}>刷新</Button>
+      </div>
+      {error && <Alert type="error" showIcon message={error} className="section-gap" />}
+      <Card className="section-gap">
+        <Space wrap>
+          <Select
+            allowClear
+            showSearch
+            className="filter-select"
+            placeholder="项目"
+            optionFilterProp="label"
+            value={filters.projectId}
+            options={projectOptions}
+            onChange={value => updateFilter('projectId', value || null)}
+          />
+          <Select
+            allowClear
+            className="filter-select"
+            placeholder="缺口类型"
+            value={filters.gapType}
+            options={RULE_GAP_TYPE_OPTIONS}
+            onChange={value => updateFilter('gapType', value || null)}
+          />
+          <Input
+            allowClear
+            className="rule-gap-signal-input"
+            placeholder="Signal"
+            value={filters.signal}
+            onChange={event => updateFilter('signal', event.target.value)}
+            onPressEnter={applyFilters}
+          />
+          <InputNumber
+            min={1}
+            max={3650}
+            value={filters.recentDays}
+            addonBefore="最近"
+            addonAfter="天"
+            onChange={value => updateFilter('recentDays', value || 30)}
+          />
+          <InputNumber
+            min={1}
+            max={500}
+            value={filters.limit}
+            addonBefore="Limit"
+            onChange={value => updateFilter('limit', value || 50)}
+          />
+          <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={applyFilters}>筛选</Button>
+          <Button onClick={resetFilters}>重置</Button>
+        </Space>
+      </Card>
+      <Card className="section-gap">
+        <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }}>
+          <Descriptions.Item label="聚合项">{countText(summary.returnedGroups)} / {countText(summary.totalGroups)}</Descriptions.Item>
+          <Descriptions.Item label="出现次数">{countText(summary.totalOccurrences)}</Descriptions.Item>
+          <Descriptions.Item label="扫描事件">{countText(summary.scannedEventCount)}</Descriptions.Item>
+          <Descriptions.Item label="解析失败">{countText(summary.parseFailedEventCount)}</Descriptions.Item>
+          <Descriptions.Item label="跳过事件">{countText(summary.skippedEventCount)}</Descriptions.Item>
+          <Descriptions.Item label="含缺口事件">{countText(summary.eventsWithRuleGapCount)}</Descriptions.Item>
+          <Descriptions.Item label="无缺口事件">{countText(summary.eventsWithoutRuleGapCount)}</Descriptions.Item>
+          <Descriptions.Item label="摘要截断标记">{countText(summary.truncatedProgressSummaryCount)}</Descriptions.Item>
+        </Descriptions>
+      </Card>
+      <Table
+        rowKey={(row, index) => `${row.gapType}-${row.signal}-${row.requestedContext}-${index}`}
+        loading={loading}
+        columns={columns}
+        dataSource={dashboard.items || []}
+        scroll={{ x: 1380 }}
+        pagination={{ pageSize: 20, showSizeChanger: false }}
+        locale={{ emptyText: <Empty description="暂无规则缺口聚合数据" /> }}
+      />
+    </div>
+  );
+}
+
 function canConvertFeedbackToPolicy(row) {
   if (!row) return false;
   if (row.status === 'CONVERTED' || row.status === 'INSUFFICIENT' || row.status === 'IGNORED') return false;
@@ -6006,6 +6581,7 @@ function AppFrame() {
   const navigate = useNavigate();
   const route = currentRoute(location);
   const isTaskRoute = location.pathname === HOME_ROUTE || location.pathname.startsWith(TASK_LIST_ROUTE);
+  const isRuleGapRoute = location.pathname.startsWith(RULE_GAPS_ROUTE);
   const isFeedbackRoute = location.pathname.startsWith(FEEDBACK_ROUTE);
   const isSettingsRoute = location.pathname.startsWith(SETTINGS_ROUTE);
   const isReleaseRoute = location.pathname.startsWith(RELEASES_ROUTE);
@@ -6092,6 +6668,13 @@ function AppFrame() {
           >
             任务
           </Button>
+          <Button
+            icon={<FileSearchOutlined />}
+            type={isRuleGapRoute ? 'primary' : 'default'}
+            onClick={() => navigate(RULE_GAPS_ROUTE, { state: { from: route } })}
+          >
+            规则缺口
+          </Button>
           {REVIEW_LEARNING_UI_ENABLED && (
             <Button
               icon={<CommentOutlined />}
@@ -6154,6 +6737,7 @@ function AppFrame() {
           <Route path={HOME_ROUTE} element={<HomePage />} />
           <Route path={TASK_LIST_ROUTE} element={<TaskListPage />} />
           <Route path={`${TASK_LIST_ROUTE}/:taskId`} element={<TaskDetailPage />} />
+          <Route path={RULE_GAPS_ROUTE} element={<RuleGapDashboardPage />} />
           <Route
             path={FEEDBACK_ROUTE}
             element={REVIEW_LEARNING_UI_ENABLED ? <RiskFeedbackPage /> : <Navigate to={TASK_LIST_ROUTE} replace />}

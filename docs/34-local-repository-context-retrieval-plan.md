@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：V2-F-10 本地 workspace 清理与磁盘保护已落地；任务 663 已验证本地 mirror / worktree 模式可用，任务 669 暴露出“仓库已准备但 DTO / VO 字段变更尚未检索、前端角色流转解释不足”的产品理解问题。当前停止等待用户验证；下一阶段建议先推进 V2-F-11 高准确模式角色流转可观测，再推进 V2-F-12 规则缺口沉淀与优先级看板，之后进入 V2-F-13 DTO / VO 字段引用检索。
+- 当前状态：V2-F-13 版本更新页收口已落地；任务 663 已验证本地 mirror / worktree 模式可用，任务 669 暴露出的“仓库已准备但 DTO / VO 字段变更尚未检索、前端角色流转解释不足”已先通过 V2-F-11 角色流转与 V2-F-12 缺口看板形成可解释和可聚合依据，并已在版本更新页对高准确模式主线做用户可读收口。当前停止等待用户验证；下一阶段进入 V2-F-14 DTO / VO 字段引用检索。
 - 编写时间：2026-06-11
 - 前置版本：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`
@@ -10,8 +10,10 @@
 - 当前决策：
   - “本地 clone / fetch + 引用搜索 + bounded Context Pack”的高准确 Review 模式已完成首轮生产验证。
   - 已补齐 workspace 清理与磁盘保护，避免长期运行时 `worktrees/` 和 `mirrors/` 无界增长。
-  - 任务 669 证明当前前端摘要还不足以解释 Planner、requested contexts、Retriever、Snippet 和预算裁剪之间的关系，后续需要增加角色流转视图。
-  - 当前 Retriever 只支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED`，DTO / VO 字段变更会进入 Planner 和 requested contexts，但不会触发本地引用搜索；后续应先沉淀规则缺口优先级，再扩展 DTO / VO 字段引用检索。
+  - 已通过 V2-F-11 增加高准确模式角色流转视图，解释 Planner、requested contexts、Retriever、Snippet 和预算裁剪之间的关系。
+  - 已通过 V2-F-12 从 `CONTEXT_PACK_BUILT` progress 安全摘要聚合跨任务规则缺口，作为后续补齐 DTO / VO 字段引用检索等 Retriever 能力的优先级依据。
+  - 已通过 V2-F-13 在版本更新页置顶说明高准确模式主线、部署注意和“不把完整项目源码交给模型”的边界。
+  - 当前 Retriever 只支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED`，DTO / VO 字段变更会进入 Planner 和 requested contexts，但不会触发本地引用搜索；后续扩展 DTO / VO 字段引用检索应以规则缺口看板数据作为优先级输入。
   - 反馈池、项目策略、上下文不足人工标记等“人工沉淀能力”先保留后端和数据结构，但在生产产品界面默认屏蔽，不作为当前验证主线。
   - 不删除 V0 到 V2-F-3 已落地能力；把它们作为可回退、可复用的治理底座。
 
@@ -725,7 +727,46 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 - 不展示源码、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
 - 不自动改 Planner / Retriever 规则，不自动改 Prompt，不自动降级或隐藏 finding。
 
-### V2-F-13：DTO / VO 字段引用检索 Retriever
+### V2-F-13：版本更新页收口
+
+目标：
+
+在 V2-F-11 角色流转可观测和 V2-F-12 规则缺口看板落地后，更新前端“版本更新”页面，把 V0 到 V2-F-12 的高准确模式主线整理成一个面向用户的版本说明。
+
+范围建议：
+
+- `frontend/src/releaseNotes.js`
+- 如需样式微调：`frontend/src/styles.css`
+- docs/34 落地记录
+
+版本更新页内容边界：
+
+- 只讲已经成为当前产品主线的高准确模式：
+  - Context Pack。
+  - Context Planner。
+  - 本地仓库 mirror / worktree。
+  - 本地引用检索和 bounded snippets。
+  - workspace 清理与磁盘保护。
+  - 高准确模式流转 tab。
+  - 规则缺口沉淀与优先级看板。
+- 不提已经默认隐藏的人工沉淀能力：
+  - 不提误判标识。
+  - 不提反馈池。
+  - 不提“生成项目策略”。
+  - 不提项目策略管理。
+  - 不提上下文不足人工标记。
+- 不把内部阶段号堆给普通用户；可在标题或 tag 中轻量保留“高准确模式”。
+- 文案应强调“不会把完整项目源码交给模型”，而是本地检索后注入预算内证据。
+- 补充部署注意：启用高准确模式需要 GitLab token 具备 `read_repository`，并配置本地 workspace 挂载 / 清理参数。
+
+验收：
+
+- 版本更新页新增一条置顶 release note。
+- 前端 build 通过。
+- 新增文案不暴露源码、token、内部仓库绝对路径或历史隐藏能力。
+- 文案能让用户理解从 diff-only 到高准确模式的变化。
+
+### V2-F-14：DTO / VO 字段引用检索 Retriever
 
 目标：
 
@@ -749,7 +790,7 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 - progress 只记录查询数、命中文件数、snippet 数、支持 / 跳过 signal 摘要，不记录源码。
 - Prompt 明确字段引用 snippets 是有限证据，未命中不等同于无风险。
 
-### V2-F-14：DB / Mapper / Entity 关联检索
+### V2-F-15：DB / Mapper / Entity 关联检索
 
 目标：
 
@@ -768,11 +809,11 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 ```text
 请阅读 AGENTS.md、README.md、docs/32-review-feedback-v2-mainline-roadmap.md、docs/33-review-learning-capability-roadmap.md、docs/34-local-repository-context-retrieval-plan.md。
 
-当前 V2-F-10 已完成，高准确本地仓库上下文检索模式已经具备 mirror clone / fetch、task worktree、METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索、bounded snippets 注入 Context Pack、前端证据摘要展示和 workspace 清理。任务 669 暴露出 Planner / Retriever / Snippet / 预算裁剪解释不足，以及 DTO / VO 字段变更尚未触发本地检索的问题。下一阶段只推进 V2-F-11：高准确模式角色流转可观测，并在当前任务中展示规则缺口。
+当前 V2-F-12 已完成，高准确本地仓库上下文检索模式已经具备 mirror clone / fetch、task worktree、METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索、bounded snippets 注入 Context Pack、前端证据摘要展示、workspace 清理、高准确模式角色流转可观测和跨任务规则缺口看板。任务 669 暴露出的 Planner / Retriever / Snippet / 预算裁剪解释不足已先通过 V2-F-11 / V2-F-12 形成可解释与可聚合依据；DTO / VO 字段变更尚未触发本地检索的问题留到 V2-F-14。下一阶段只推进 V2-F-13：版本更新页收口。
 
 同时，反馈池、项目策略、上下文不足人工标记等人工沉淀能力先保留后端和数据结构，但生产前端默认屏蔽入口；不要删除已实现能力，不要删表，不要破坏现有 API 兼容。
 
-每次只推进一个阶段。当前优先按 docs/34 的 V2-F-11 落地角色流转可观测和前端 tab，不扩展新的业务 Retriever。V2-F-11 验收后，再按用户确认进入 V2-F-12 规则缺口沉淀与优先级看板；V2-F-12 验收后再进入 V2-F-13 DTO / VO 字段引用检索。不要修改 legacy Java backend；不要做全项目无限扫描；不要把整个项目源码塞进 Prompt；不要接向量库或复杂 RAG；不要自动降级或自动忽略 finding；不要自动改 Prompt。
+每次只推进一个阶段。当前优先按 docs/34 的 V2-F-13 做版本更新页收口，不扩展新的业务 Retriever。V2-F-13 验收后，再按用户确认进入 V2-F-14 DTO / VO 字段引用检索。不要修改 legacy Java backend；不要做全项目无限扫描；不要把整个项目源码塞进 Prompt；不要接向量库或复杂 RAG；不要自动降级或自动忽略 finding；不要自动改 Prompt。
 
 每个阶段完成后必须停止，输出“改了什么、为什么、如何验证”，等待用户验证并明确回复“继续下一阶段”后再推进。
 ```
@@ -969,17 +1010,42 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 完成后运行相关后端测试和前端 build，并停止。
 ```
 
-### V2-F-13 Prompt：DTO / VO 字段引用检索 Retriever
+### V2-F-13 Prompt：版本更新页收口
 
 ```text
-请只落地 docs/34 的 V2-F-13：DTO / VO 字段引用检索 Retriever。
+请只落地 docs/34 的 V2-F-13：版本更新页收口。
+
+前置条件：
+- V2-F-11 高准确模式角色流转可观测已完成并验收。
+- V2-F-12 规则缺口沉淀与优先级看板已完成并验收。
+
+范围：
+- frontend/src/releaseNotes.js
+- frontend/src/styles.css 如需
+- docs/34 V2-F-13 落地记录
+
+要求：
+- 在版本更新页新增一条置顶 release note，面向用户说明高准确模式从 diff-only 升级为本地仓库上下文检索。
+- 文案聚焦当前产品主线：Context Pack、Context Planner、本地 mirror / worktree、本地引用检索、bounded snippets、workspace 清理、高准确模式流转 tab、规则缺口看板。
+- 不提已经默认隐藏的人工沉淀能力：误判标识、反馈池、生成项目策略、项目策略管理、上下文不足人工标记。
+- 不堆内部阶段号，不写源码、token、本地绝对路径或大段内部实现。
+- 明确说明不会把完整项目源码交给模型，而是本地检索后注入预算内证据。
+- 补充部署注意：启用高准确模式需要 GitLab token 具备 read_repository，并配置 workspace 挂载和清理参数。
+
+完成后运行前端 build，并停止。
+```
+
+### V2-F-14 Prompt：DTO / VO 字段引用检索 Retriever
+
+```text
+请只落地 docs/34 的 V2-F-14：DTO / VO 字段引用检索 Retriever。
 
 范围：
 - backend-python/app/review_context/local_retriever.py
 - backend-python/app/review_context/service.py
 - backend-python/app/code_quality/prompt.py 如需
 - 相关 tests
-- docs/34 V2-F-13 落地记录
+- docs/34 V2-F-14 落地记录
 
 要求：
 - 支持 Context Planner 的 DTO_FIELD_CHANGED / FIELD_DELETED signal。
@@ -994,10 +1060,10 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 完成后运行相关后端测试并停止。
 ```
 
-### V2-F-14 Prompt：DB / Mapper / Entity 关联检索设计
+### V2-F-15 Prompt：DB / Mapper / Entity 关联检索设计
 
 ```text
-请只设计 docs/34 的 V2-F-14：DB / Mapper / Entity 关联检索。
+请只设计 docs/34 的 V2-F-15：DB / Mapper / Entity 关联检索。
 
 要求：
 - 先输出设计，不编码。
@@ -1079,7 +1145,7 @@ Agent 不可自主推进：
 - 不删除反馈池、项目策略、上下文不足反馈相关后端代码、表或 API。
 - 不修改 legacy Java backend。
 
-新增和调整测试：
+新增和调整文件 / 测试：
 
 - `backend-python/tests/unit/test_local_repo_context.py`
 - `backend-python/tests/unit/test_review_context_pack.py`
@@ -1344,25 +1410,239 @@ V2-F-10 已完成；当前停止等待用户验证，不继续推进 V3 评估�
 调整结论：
 
 ```text
-V2-F-11：高准确模式角色流转可观测
+V2-F-11：高准确模式角色流转可观测（已完成）
   -> 先补前端 tab 和后端安全摘要字段，解释 Planner / Retriever / Snippet / 预算裁剪的角色和执行结果
   -> 展示当前任务规则缺口，例如 Planner 命中但 Retriever 暂不支持的 signal
   -> 不扩展业务 Retriever
 
-V2-F-12：规则缺口沉淀与优先级看板
+V2-F-12：规则缺口沉淀与优先级看板（已完成）
   -> 聚合跨任务规则缺口，形成补齐 Planner / Retriever 能力的优先级依据
   -> 不自动改规则，不自动改 Prompt
 
-V2-F-13：DTO / VO 字段引用检索 Retriever
+V2-F-13：版本更新页收口
+  -> 在版本更新页集中说明高准确模式主线
+  -> 不提已默认隐藏的误判标识、反馈池、生成项目策略、项目策略管理或上下文不足人工标记
+
+V2-F-14：DTO / VO 字段引用检索 Retriever
   -> 再支持 DTO_FIELD_CHANGED / FIELD_DELETED 的字段引用搜索
   -> 覆盖任务 669 这类真实 DTO / VO 字段变更场景
 
-V2-F-14：DB / Mapper / Entity 关联检索设计
+V2-F-15：DB / Mapper / Entity 关联检索设计
   -> 等 DTO Retriever 验证后再设计，不直接编码
 ```
 
 停止规则：
 
 ```text
-下一阶段只推进 V2-F-11。V2-F-11 完成后必须停止，等待用户验证并明确确认继续后，才进入 V2-F-12。
+V2-F-12 已完成后，下一阶段只推进 V2-F-13。V2-F-13 完成后必须停止，等待用户验证并明确确认继续后，才进入 V2-F-14。
+```
+
+## 二十四、V2-F-11 落地记录
+
+落地时间：2026-06-12。
+
+已完成：
+
+- `CONTEXT_PACK_BUILT` progress summary 新增高准确模式安全摘要字段：
+  - `plannerSignalTypeCounts`
+  - `retrieverSupportedSignalTypes`
+  - `retrieverUnsupportedSignalTypeCounts`
+  - `requestedContextAvailability`
+  - `budgetCutSummary`
+  - `ruleGapSummary`
+  - `ruleGapItems`
+- `ruleGapItems` 只记录缺口类型、signal、requested context、建议能力和优先级原因，不记录源码片段、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
+- progress detail 生成时做 compact JSON 和主动限长，避免依赖数据库层 4000 字符截断导致前端无法解析。
+- 任务详情的代码质量 Review 区域新增“高准确模式流转”子页，按角色展示：
+  - 变更接入
+  - Context Pack
+  - Planner
+  - 本地仓库
+  - Retriever
+  - 预算裁剪
+  - Provider
+  - 结果解析
+- “高准确模式流转”展示 Planner / Retriever 摘要、requested context 可用性、预算裁剪摘要和本任务规则缺口。
+- 当本地仓库已准备但引用查询数为 `0` 时，前端会解释原因：
+  - 没有 Retriever 当前支持的 signal。
+  - Retriever 被跳过。
+  - Retriever 检索失败或不可用。
+- 多模型 Review 下，每个模型 tab 内展示对应 `reviewKey` 的高准确模式流转和执行过程。
+- README 补充任务详情页中高准确模式流转视图说明。
+
+明确未做：
+
+- 不扩展 DTO / DB / 缓存 / MQ / 配置 Retriever。
+- 不新增 DTO / VO 字段引用检索。
+- 不做 AST / LSP / RAG。
+- 不自动降级、不自动忽略 finding、不自动改 Prompt。
+- 不恢复反馈池 / 人工沉淀入口。
+- 不修改 legacy Java backend。
+
+新增和调整测试：
+
+- `backend-python/tests/unit/test_review_context_pack.py`
+- `backend-python/tests/contract/test_code_quality_api_contract.py`
+- `frontend/src/App.jsx`
+- `README.md`
+
+已验证：
+
+```powershell
+$env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\unit\test_review_context_pack.py tests\contract\test_code_quality_api_contract.py::test_manual_review_builds_context_pack_and_records_progress tests\contract\test_code_quality_api_contract.py::test_manual_review_records_local_reference_search_progress_without_source
+```
+
+结果：11 passed。
+
+```powershell
+$env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\unit\test_local_repo_context.py tests\unit\test_local_retriever.py tests\unit\test_review_context_pack.py tests\unit\test_code_quality_prompt.py tests\contract\test_code_quality_api_contract.py::test_manual_review_builds_context_pack_and_records_progress tests\contract\test_code_quality_api_contract.py::test_manual_review_prepares_local_repo_context_without_leaking_token tests\contract\test_code_quality_api_contract.py::test_manual_review_records_local_reference_search_progress_without_source tests\contract\test_code_quality_api_contract.py::test_manual_review_injects_project_review_policies_and_records_progress tests\contract\test_code_quality_api_contract.py::test_deepseek_manual_review_saves_result_and_progress tests\contract\test_code_quality_api_contract.py::test_retry_gitlab_mr_ai_review_uses_saved_changed_files tests\contract\test_code_quality_api_contract.py::test_retry_gitlab_mr_ai_review_includes_same_file_context_snippets
+```
+
+结果：35 passed。
+
+```powershell
+.\scripts\run-frontend.cmd build
+```
+
+结果：build passed；仅保留既有 Vite chunk size warning。
+
+停止规则：
+
+```text
+V2-F-11 已完成；当前停止等待用户验证，不继续推进 V2-F-12。
+```
+
+## 二十五、V2-F-12 落地记录
+
+落地时间：2026-06-13。
+
+已完成：
+
+- 新增只读聚合接口 `GET /api/code-quality-reviews/rule-gaps`，从已有 `code_quality_review_progress_events` 中的 `CONTEXT_PACK_BUILT` detail 读取 `ruleGapItems / ruleGapSummary`。
+- 支持筛选：
+  - `projectId`
+  - `gapType`
+  - `signal`
+  - `recentDays`
+  - `limit`
+- 聚合维度和返回字段包含：
+  - `gapType`
+  - `signal`
+  - `requestedContext`
+  - `suggestedCapability`
+  - 出现次数
+  - 影响项目数 / 任务数 / review 数
+  - 最近出现时间
+  - 影响项目摘要
+  - 最近任务样例，包含 `projectId / projectName / taskId / reviewKey`
+- 聚合逻辑只按白名单字段重组输出，不透传 progress 原始 detail。
+- 历史 progress detail 为空、被截断或 JSON 不可解析时会跳过，并在接口 `summary` 中返回 `skippedEventCount / parseFailedEventCount`，不影响其它聚合结果。
+- 新增前端顶栏“规则缺口”入口，展示跨任务规则缺口聚合列表。
+- 看板支持按项目、缺口类型、Signal、最近天数和 limit 筛选。
+- 看板可查看最近任务样例，并跳转到任务详情；多模型样例会携带 `reviewKey`。
+- 任务详情“高准确模式流转”的“本任务规则缺口”卡片增加“查看看板”入口。
+- README 补充规则缺口看板接口示例和前端入口说明。
+
+安全边界：
+
+- 不新增 DB 表，不新增迁移。
+- 不读取源码，不返回源码片段。
+- 不返回本地绝对路径、token、认证头、大段 diff 或 provider raw output。
+- 不扩展 DTO / DB / 缓存 / MQ / 配置 Retriever。
+- 不做 DTO / VO 字段引用检索。
+- 不做 AST / LSP / RAG。
+- 不自动改规则、不自动改 Prompt。
+- 不自动降级、不自动忽略 finding。
+- 不恢复反馈池 / 人工沉淀入口。
+- 不修改 legacy Java backend。
+
+新增和调整测试：
+
+- `backend-python/app/code_quality/rule_gap_dashboard.py`
+- `backend-python/app/code_quality/api.py`
+- `backend-python/app/code_quality/service.py`
+- `backend-python/tests/contract/test_code_quality_rule_gaps_api_contract.py`
+- `frontend/src/App.jsx`
+- `frontend/src/styles.css`
+- `README.md`
+- `docs/32-review-feedback-v2-mainline-roadmap.md`
+- `docs/33-review-learning-capability-roadmap.md`
+- `docs/34-local-repository-context-retrieval-plan.md`
+
+已验证：
+
+```powershell
+$env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\contract\test_code_quality_rule_gaps_api_contract.py
+```
+
+结果：4 passed。
+
+```powershell
+$env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\contract\test_code_quality_rule_gaps_api_contract.py tests\unit\test_review_context_pack.py tests\contract\test_code_quality_api_contract.py::test_manual_review_builds_context_pack_and_records_progress tests\contract\test_code_quality_api_contract.py::test_manual_review_records_local_reference_search_progress_without_source
+```
+
+结果：15 passed。
+
+```powershell
+.\scripts\run-frontend.cmd build
+```
+
+结果：build passed；仅保留既有 Vite chunk size warning。
+
+停止规则：
+
+```text
+V2-F-12 已完成；当前停止等待用户验证，不继续推进 V2-F-13。
+```
+
+## 二十六、V2-F-13 落地记录
+
+落地时间：2026-06-13。
+
+已完成：
+
+- 前端“版本更新”页面新增置顶 release note：`v0.16.0 高准确模式：本地仓库上下文检索与规则缺口看板`。
+- 文案面向用户说明代码质量 Review 已从 diff-only 审查升级为高准确模式。
+- 版本说明聚焦当前产品主线：
+  - Context Pack。
+  - Context Planner。
+  - 本地 mirror / worktree。
+  - 本地引用检索。
+  - bounded snippets。
+  - workspace 清理与磁盘保护。
+  - 高准确模式流转 tab。
+  - 规则缺口看板。
+- 明确说明不会把完整项目源码交给模型，而是在本地检索后只注入排序后、预算内的证据片段。
+- 补充部署注意：启用高准确模式需要 GitLab token 具备 `read_repository` 权限，并配置 workspace 挂载、worktree 保留时间和 mirror 保留周期。
+- docs/32、docs/33、docs/34 当前状态已同步到 V2-F-13 完成，下一阶段为 V2-F-14 DTO / VO 字段引用检索。
+
+明确未做：
+
+- 不扩展 DTO / VO 字段引用检索 Retriever。
+- 不扩展 DB / 缓存 / MQ / 配置 Retriever。
+- 不做 AST / LSP / RAG。
+- 不自动改规则、不自动改 Prompt。
+- 不自动降级、不自动忽略 finding。
+- 不恢复反馈池 / 人工沉淀入口。
+- 不修改 legacy Java backend。
+
+新增和调整文件：
+
+- `frontend/src/releaseNotes.js`
+- `docs/32-review-feedback-v2-mainline-roadmap.md`
+- `docs/33-review-learning-capability-roadmap.md`
+- `docs/34-local-repository-context-retrieval-plan.md`
+
+已验证：
+
+```powershell
+.\scripts\run-frontend.cmd build
+```
+
+结果：build passed；仅保留既有 Vite chunk size warning。
+
+停止规则：
+
+```text
+V2-F-13 已完成；当前停止等待用户验证，不继续推进 V2-F-14。
 ```

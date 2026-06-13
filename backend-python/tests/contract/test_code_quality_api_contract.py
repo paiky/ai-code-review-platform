@@ -651,6 +651,24 @@ def test_manual_review_builds_context_pack_and_records_progress(
         {"type": "CALLER_CONTEXT", "count": 1},
         {"type": "REFERENCE_SEARCH", "count": 1},
     ]
+    assert detail["summary"]["plannerSignalTypeCounts"] == [
+        {"type": "HISTORICAL_CONTEXT_MISSING_FEEDBACK", "count": 2},
+    ]
+    assert detail["summary"]["retrieverSupportedSignalTypes"] == [
+        "METHOD_DELETED",
+        "METHOD_SIGNATURE_CHANGED",
+    ]
+    assert detail["summary"]["requestedContextAvailability"]["unavailable"] == 2
+    assert detail["summary"]["ruleGapSummary"]["total"] >= 1
+    rule_gap_item = detail["summary"]["ruleGapItems"][0]
+    assert set(rule_gap_item) == {
+        "gapType",
+        "signal",
+        "requestedContext",
+        "suggestedCapability",
+        "priorityReason",
+    }
+    assert "src/OrderService.java" not in json.dumps(detail["summary"]["ruleGapItems"], ensure_ascii=False)
     assert detail["summary"]["unavailableContextCount"] >= 1
     assert "order.setStatus(null)" not in context_event["detail"]
     assert "context-pack-secret" not in json.dumps(progress, ensure_ascii=False)

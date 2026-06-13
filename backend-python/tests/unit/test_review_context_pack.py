@@ -269,6 +269,36 @@ def test_review_context_pack_builds_minimal_context_planner_signals() -> None:
     assert {"REFERENCE_SEARCH", "DB_SCHEMA_CONTEXT", "CONFIG_CONTEXT"}.issubset(unavailable_types)
     assert context["summary"]["plannerSignalCount"] >= 8
     assert any(item["type"] == "REFERENCE_SEARCH" for item in context["summary"]["requestedContextTypeCounts"])
+    signal_counts = {item["type"]: item["count"] for item in context["summary"]["plannerSignalTypeCounts"]}
+    unsupported_counts = {
+        item["type"]: item["count"]
+        for item in context["summary"]["retrieverUnsupportedSignalTypeCounts"]
+    }
+    availability = context["summary"]["requestedContextAvailability"]
+    rule_gap_items = context["summary"]["ruleGapItems"]
+
+    assert signal_counts["DTO_FIELD_CHANGED"] == 1
+    assert signal_counts["METHOD_DELETED"] == 1
+    assert context["summary"]["retrieverSupportedSignalTypes"] == [
+        "METHOD_DELETED",
+        "METHOD_SIGNATURE_CHANGED",
+    ]
+    assert unsupported_counts["DTO_FIELD_CHANGED"] == 1
+    assert unsupported_counts["DB_SQL_MAPPER_CHANGED"] == 1
+    assert availability["unavailable"] >= 1
+    assert any(item["type"] == "REFERENCE_SEARCH" for item in availability["items"])
+    assert any(item["gapType"] == "UNSUPPORTED_PLANNER_SIGNAL" for item in rule_gap_items)
+    assert any(item["signal"] == "DTO_FIELD_CHANGED" for item in rule_gap_items)
+    assert context["summary"]["ruleGapSummary"]["total"] == len(rule_gap_items)
+    for item in rule_gap_items:
+        assert set(item) == {
+            "gapType",
+            "signal",
+            "requestedContext",
+            "suggestedCapability",
+            "priorityReason",
+        }
+        assert "src/main/java" not in json.dumps(item, ensure_ascii=False)
     assert "redisTemplate.opsForValue().set" not in context["promptText"]
     assert len(context["promptText"]) <= CONTEXT_PACK_MAX_TOTAL_CHARS
 
@@ -518,4 +548,9 @@ def test_review_context_pack_limits_changed_file_budget() -> None:
     assert changed_summary["included"] <= CONTEXT_PACK_MAX_CHANGED_FILES
     assert changed_summary["truncated"] is True
     assert context["meta"]["truncated"] is True
+    budget_summary = context["summary"]["budgetCutSummary"]
+    assert budget_summary["truncated"] is True
+    assert budget_summary["changedFilesExcluded"] >= 10
+    assert budget_summary["changedFilesRemovedByPromptBudget"] >= 0
+    assert budget_summary["maxTotalChars"] == CONTEXT_PACK_MAX_TOTAL_CHARS
     assert len(context["promptText"]) <= CONTEXT_PACK_MAX_TOTAL_CHARS

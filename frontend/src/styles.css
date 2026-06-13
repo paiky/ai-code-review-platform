@@ -96,6 +96,15 @@ body {
   margin-bottom: 16px;
 }
 
+.page-heading-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.page-heading-main .ant-typography {
+  margin-bottom: 4px;
+}
+
 .section-gap {
   margin-bottom: 16px;
 }
@@ -114,6 +123,18 @@ body {
 
 .task-project-scope-cascader {
   min-width: 220px;
+}
+
+.rule-gap-signal-input {
+  width: 220px;
+}
+
+.rule-gap-task-link {
+  max-width: 100%;
+  height: auto;
+  padding: 0;
+  text-align: left;
+  white-space: normal;
 }
 
 .ant-pagination {
@@ -265,6 +286,20 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.quality-subnav {
+  display: flex;
+  justify-content: flex-start;
+  padding: 4px 0;
+}
+
+.quality-subnav .ant-segmented {
+  background: #f3f4f6;
+}
+
+.quality-subnav .ant-segmented-item {
+  min-width: 104px;
 }
 
 .progress-message {

@@ -653,6 +653,7 @@ curl http://localhost:8090/api/review-tasks/$taskId
 curl http://localhost:8090/api/review-tasks/$taskId/result
 curl http://localhost:8090/api/review-tasks/$taskId/code-quality-result
 curl http://localhost:8090/api/review-tasks/$taskId/code-quality-progress
+curl "http://localhost:8090/api/code-quality-reviews/rule-gaps?recentDays=30&limit=50"
 ```
 
 重新触发已有 GitLab MR / Push 审查任务，会基于数据库中保存的 raw payload 和 changed files 摘要创建一个新任务：
@@ -663,7 +664,8 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/review-tasks/$tas
 
 前端任务详情页包含：
 
-- 代码质量 Review
+- 代码质量 Review：按模型展示 AI Review 结果，并在 Review 内提供“高准确模式流转”和“执行过程”子页；高准确模式流转会展示变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider 和结果解析状态，以及本任务规则缺口。若本地仓库已准备但引用查询数为 0，会说明是没有支持的 signal、Retriever 被跳过或检索失败。
+- 规则缺口看板：从已有 `CONTEXT_PACK_BUILT` progress 安全摘要聚合跨任务规则缺口，可按项目、缺口类型、Signal 过滤，查看最近任务样例并跳转任务详情；看板不返回源码片段、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
 - 提醒卡片：按提醒类型展示可复制维护内容、命中证据和 Diff 查看入口
 - 分析结果
 - 原始事件摘要
@@ -971,6 +973,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/code-quality-revi
 顶部导航：
 
 - `任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程、AI Review 调度队列入口。
+- `规则缺口`：聚合高准确模式流转中沉淀的 Planner / Retriever 能力缺口，用于判断后续 Retriever 能力补齐顺序。
 - `反馈池`：默认隐藏；前端构建时启用 `VITE_REVIEW_LEARNING_UI_ENABLED=true` 后可查看风险项 / finding 反馈，继续启用 `VITE_PROJECT_REVIEW_POLICY_UI_ENABLED=true` 后可筛选建议沉淀反馈并管理项目策略。
 - 右上角通知图标：查看最近 24 小时内 AI Review 执行失败记录，并可跳转任务详情。
 - `设置`：全局设置、模型 Provider 配置、AI Review 设置、项目组 / 端类型配置、启用的卡片提醒类型；Push 审核策略在 AI Review 设置中按项目组维护。

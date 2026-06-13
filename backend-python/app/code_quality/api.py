@@ -40,6 +40,27 @@ async def get_failure_notifications(db: Session = Depends(get_db)) -> dict:
     return ok(service.get_failure_notifications_response(db))
 
 
+@review_router.get("/rule-gaps")
+async def get_rule_gaps(
+    project_id: int | None = Query(default=None, alias="projectId"),
+    gap_type: str | None = Query(default=None, alias="gapType"),
+    signal: str | None = None,
+    recent_days: int | None = Query(default=30, alias="recentDays", ge=1, le=3650),
+    limit: int = Query(default=50, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(
+        service.get_rule_gap_dashboard_response(
+            db,
+            project_id=project_id,
+            gap_type=gap_type,
+            signal=signal,
+            recent_days=recent_days,
+            limit=limit,
+        )
+    )
+
+
 @review_router.put("/settings")
 async def update_settings(request: dict, db: Session = Depends(get_db)) -> dict:
     return ok(service.update_settings(db, request))

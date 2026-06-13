@@ -15,7 +15,7 @@ from app.project_integration import gitlab_client
 from app.review_feedback.models import ReviewItemFeedback
 from app.review_feedback.repository import ensure_feedback_schema
 from app.review_context.local_repo import prepare_local_repository_context, task_head_worktree_path
-from app.review_context.local_retriever import retrieve_local_reference_context
+from app.review_context.local_retriever import SUPPORTED_REFERENCE_SIGNAL_TYPES, retrieve_local_reference_context
 
 
 CONTEXT_PACK_VERSION = "context-pack-v0"
@@ -33,6 +33,7 @@ CONTEXT_PLANNER_MAX_SIGNALS = 20
 CONTEXT_PLANNER_MAX_REQUESTED_CONTEXTS = 16
 CONTEXT_PLANNER_MAX_FILE_PATHS_PER_CONTEXT = 8
 CONTEXT_PLANNER_MAX_FEEDBACK_CONTEXT_TYPES = 5
+RULE_GAP_MAX_ITEMS = 12
 
 
 _METHOD_SIGNATURE_PATTERNS = [
@@ -144,10 +145,25 @@ def build_review_context_pack(
         "mode": mode or "DIFF_TEXT",
         "contextPack": context_pack,
     }
+    budget_before = _budget_count_snapshot(context_pack)
     prompt_text, truncated_by_budget = _fit_context_pack_budget(context_pack, review_context)
     local_reference_summary = context_pack.get("localReferenceSearch") or _empty_local_reference_summary()
     local_reference_context["summary"] = local_reference_summary
     local_reference_context["searches"] = (context_pack.get("localReferenceContext") or {}).get("searches") or []
+
+    budget_cut_summary = _budget_cut_summary(
+        context_pack,
+        budget_before,
+        prompt_length=len(prompt_text),
+        truncated_by_budget=truncated_by_budget,
+    )
+    observability_summary = _observability_summary(
+        planner_signals=planner_signals,
+        requested_contexts=requested_contexts,
+        local_reference_context=local_reference_context,
+        budget_cut_summary=budget_cut_summary,
+    )
+    context_pack.update(observability_summary)
 
     meta = {
         "version": CONTEXT_PACK_VERSION,
@@ -1123,8 +1139,15 @@ def _progress_summary(context_pack: dict[str, Any], meta: dict[str, Any]) -> dic
         "topMissingContextTypes": feedback["byMissingContextType"][:3],
         "plannerSignalCount": context_plan.get("plannerSignalCount", 0),
         "plannerSignalTotal": context_plan.get("plannerSignalTotal", 0),
+        "plannerSignalTypeCounts": (context_pack.get("plannerSignalTypeCounts") or [])[:12],
         "requestedContextCount": context_plan.get("requestedContextCount", 0),
         "requestedContextTypeCounts": context_plan.get("requestedContextTypeCounts", [])[:8],
+        "retrieverSupportedSignalTypes": context_pack.get("retrieverSupportedSignalTypes") or [],
+        "retrieverUnsupportedSignalTypeCounts": (context_pack.get("retrieverUnsupportedSignalTypeCounts") or [])[:12],
+        "requestedContextAvailability": context_pack.get("requestedContextAvailability") or {},
+        "budgetCutSummary": context_pack.get("budgetCutSummary") or {},
+        "ruleGapSummary": context_pack.get("ruleGapSummary") or {},
+        "ruleGapItems": (context_pack.get("ruleGapItems") or [])[:RULE_GAP_MAX_ITEMS],
         "plannerUnavailableContextCount": context_plan.get("unavailableContextCount", 0),
         "unavailableContextCount": meta["unavailableContextCount"],
         "promptLength": meta["promptLength"],
@@ -1259,6 +1282,334 @@ def _sync_local_reference_summary(context_pack: dict[str, Any], *, truncated: bo
     local_reference["sourceIncluded"] = included_snippet_count > 0
     context_pack["localReferenceContext"] = local_reference
     context_pack["localReferenceSearch"] = summary
+
+
+def _observability_summary(
+    *,
+    planner_signals: list[dict[str, Any]],
+    requested_contexts: list[dict[str, Any]],
+    local_reference_context: dict[str, Any],
+    budget_cut_summary: dict[str, Any],
+) -> dict[str, Any]:
+    planner_signal_type_counts = _count_items(str(item.get("type") or "").upper() for item in planner_signals)
+    retriever_supported_signal_types = sorted(SUPPORTED_REFERENCE_SIGNAL_TYPES)
+    retriever_unsupported_signal_type_counts = _unsupported_signal_type_counts(planner_signals)
+    requested_context_availability = _requested_context_availability(requested_contexts)
+    rule_gap_items = _rule_gap_items(
+        planner_signals=planner_signals,
+        requested_contexts=requested_contexts,
+        local_reference_context=local_reference_context,
+        budget_cut_summary=budget_cut_summary,
+    )
+    return {
+        "plannerSignalTypeCounts": planner_signal_type_counts,
+        "retrieverSupportedSignalTypes": retriever_supported_signal_types,
+        "retrieverUnsupportedSignalTypeCounts": retriever_unsupported_signal_type_counts,
+        "requestedContextAvailability": requested_context_availability,
+        "budgetCutSummary": budget_cut_summary,
+        "ruleGapSummary": _rule_gap_summary(rule_gap_items),
+        "ruleGapItems": rule_gap_items,
+    }
+
+
+def _count_items(values: Any) -> list[dict[str, Any]]:
+    counter = Counter(value for value in values if value)
+    return [{"type": key, "count": int(value)} for key, value in sorted(counter.items())]
+
+
+def _unsupported_signal_type_counts(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _count_items(
+        str(signal.get("type") or "").upper()
+        for signal in signals
+        if str(signal.get("type") or "").upper() not in SUPPORTED_REFERENCE_SIGNAL_TYPES
+    )
+
+
+def _requested_context_availability(requested_contexts: list[dict[str, Any]]) -> dict[str, Any]:
+    items = []
+    reason_counter: Counter[str] = Counter()
+    for item in requested_contexts:
+        context_type = str(item.get("type") or "").upper()
+        available = bool(item.get("available"))
+        reason_code = None if available else _requested_context_reason_code(context_type)
+        if reason_code:
+            reason_counter[reason_code] += 1
+        entry = {
+            "type": context_type,
+            "available": available,
+            "signalCount": int(item.get("signalCount") or 0),
+            "priority": str(item.get("priority") or "MEDIUM").upper(),
+        }
+        if reason_code:
+            entry["reasonCode"] = reason_code
+        items.append(entry)
+    return {
+        "total": len(requested_contexts),
+        "available": sum(1 for item in items if item.get("available")),
+        "unavailable": sum(1 for item in items if not item.get("available")),
+        "items": items[:CONTEXT_PLANNER_MAX_REQUESTED_CONTEXTS],
+        "unavailableReasonCounts": [
+            {"reasonCode": key, "count": int(value)}
+            for key, value in sorted(reason_counter.items())
+        ],
+    }
+
+
+def _requested_context_reason_code(context_type: str) -> str:
+    if context_type == "REFERENCE_SEARCH":
+        return "NO_REFERENCE_SNIPPETS"
+    if context_type == "SAME_FILE_CONTEXT":
+        return "SAME_FILE_CONTEXT_UNAVAILABLE"
+    if context_type == "TEST_RESULT_CONTEXT":
+        return "TESTS_NOT_EXECUTED"
+    return "CAPABILITY_NOT_IMPLEMENTED"
+
+
+def _budget_count_snapshot(context_pack: dict[str, Any]) -> dict[str, Any]:
+    changed = context_pack.get("changedFilesSummary") or {}
+    same_file = context_pack.get("sameFileContext") or {}
+    local_reference = context_pack.get("localReferenceContext") or {}
+    local_searches = [item for item in (local_reference.get("searches") or []) if isinstance(item, dict)]
+    return {
+        "includedChangedFileCount": int(changed.get("included") or 0),
+        "sameFileSourceSnippetCount": int(same_file.get("sourceSnippetCount") or 0),
+        "sameFileSourceFileCount": int(same_file.get("includedSourceFileCount") or 0),
+        "localReferenceSnippetCount": sum(int(item.get("includedSnippetCount") or 0) for item in local_searches),
+        "localReferenceSearchCount": len(local_searches),
+        "hasLocalReferenceContext": bool(local_reference),
+    }
+
+
+def _budget_cut_summary(
+    context_pack: dict[str, Any],
+    before: dict[str, Any],
+    *,
+    prompt_length: int,
+    truncated_by_budget: bool,
+) -> dict[str, Any]:
+    after = _budget_count_snapshot(context_pack)
+    changed = context_pack.get("changedFilesSummary") or {}
+    same_file = context_pack.get("sameFileContext") or {}
+    local_reference = context_pack.get("localReferenceSearch") or {}
+    changed_files_excluded = max(int(changed.get("total") or 0) - int(changed.get("included") or 0), 0)
+    same_file_candidate_excluded = (
+        max(
+            int(same_file.get("candidateSourceFileCount") or 0) - int(same_file.get("includedSourceFileCount") or 0),
+            0,
+        )
+        if int(same_file.get("includedSourceFileCount") or 0) > 0
+        else 0
+    )
+    return {
+        "truncated": bool(
+            truncated_by_budget
+            or changed.get("truncated")
+            or local_reference.get("truncated")
+            or changed_files_excluded > 0
+            or same_file_candidate_excluded > 0
+        ),
+        "maxTotalChars": CONTEXT_PACK_MAX_TOTAL_CHARS,
+        "promptLength": int(prompt_length),
+        "changedFilesExcluded": changed_files_excluded,
+        "changedFilesRemovedByPromptBudget": max(
+            int(before.get("includedChangedFileCount") or 0) - int(after.get("includedChangedFileCount") or 0),
+            0,
+        ),
+        "sameFileCandidateFilesExcluded": same_file_candidate_excluded,
+        "sameFileSourceFilesRemoved": max(
+            int(before.get("sameFileSourceFileCount") or 0) - int(after.get("sameFileSourceFileCount") or 0),
+            0,
+        ),
+        "sameFileSourceSnippetsRemoved": max(
+            int(before.get("sameFileSourceSnippetCount") or 0) - int(after.get("sameFileSourceSnippetCount") or 0),
+            0,
+        ),
+        "localReferenceSearchesRemoved": max(
+            int(before.get("localReferenceSearchCount") or 0) - int(after.get("localReferenceSearchCount") or 0),
+            0,
+        ),
+        "localReferenceSnippetsRemoved": max(
+            int(before.get("localReferenceSnippetCount") or 0) - int(after.get("localReferenceSnippetCount") or 0),
+            0,
+        ),
+        "localReferenceContextRemoved": bool(before.get("hasLocalReferenceContext") and not after.get("hasLocalReferenceContext")),
+    }
+
+
+def _rule_gap_items(
+    *,
+    planner_signals: list[dict[str, Any]],
+    requested_contexts: list[dict[str, Any]],
+    local_reference_context: dict[str, Any],
+    budget_cut_summary: dict[str, Any],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    by_signal: dict[str, dict[str, Any]] = {}
+    for signal in planner_signals:
+        signal_type = str(signal.get("type") or "").upper()
+        if not signal_type or signal_type in SUPPORTED_REFERENCE_SIGNAL_TYPES:
+            continue
+        group = by_signal.setdefault(
+            signal_type,
+            {
+                "count": 0,
+                "priority": "LOW",
+                "requested": set(),
+            },
+        )
+        group["count"] += 1
+        group["priority"] = _higher_priority(str(group.get("priority") or "LOW"), str(signal.get("priority") or "MEDIUM"))
+        for context_type in signal.get("requestedContextTypes") or []:
+            normalized = str(context_type or "").upper()
+            if normalized:
+                group["requested"].add(normalized)
+    for signal_type, group in sorted(by_signal.items()):
+        requested = sorted(group["requested"])
+        items.append(
+            _rule_gap_item(
+                "UNSUPPORTED_PLANNER_SIGNAL",
+                signal_type,
+                ", ".join(requested[:4]) or "-",
+                _suggested_capability(signal_type, requested[:1] or None),
+                f"{group.get('priority')} priority signal occurred {int(group.get('count') or 0)} time(s), but Local Retriever does not support it yet.",
+            )
+        )
+
+    for item in requested_contexts:
+        if item.get("available"):
+            continue
+        context_type = str(item.get("type") or "").upper()
+        items.append(
+            _rule_gap_item(
+                "UNAVAILABLE_REQUESTED_CONTEXT",
+                _signal_for_requested_context(context_type, planner_signals),
+                context_type,
+                _suggested_capability(None, [context_type]),
+                f"{str(item.get('priority') or 'MEDIUM').upper()} priority requested context is unavailable; signalCount={int(item.get('signalCount') or 0)}.",
+            )
+        )
+
+    retrieval_status = str(local_reference_context.get("status") or "").upper()
+    if retrieval_status in {"UNAVAILABLE", "PARTIAL"}:
+        supported_signals = sorted(
+            {
+                str(signal.get("type") or "").upper()
+                for signal in planner_signals
+                if str(signal.get("type") or "").upper() in SUPPORTED_REFERENCE_SIGNAL_TYPES
+            }
+        )
+        items.append(
+            _rule_gap_item(
+                "RETRIEVAL_FAILED",
+                ", ".join(supported_signals) or "REFERENCE_SEARCH",
+                "REFERENCE_SEARCH",
+                "Stabilize local reference retrieval and surface retryable failure reasons.",
+                f"Local Retriever status is {retrieval_status}; retrieved snippets may be incomplete.",
+            )
+        )
+
+    if _has_budget_cut(budget_cut_summary):
+        items.append(
+            _rule_gap_item(
+                "BUDGET_CUT",
+                "BUDGET_CONTROLLER",
+                "-",
+                "Improve evidence ranking, summarization, or Context Pack budget allocation.",
+                "Some candidate context was excluded or removed by Context Pack budget limits.",
+            )
+        )
+    return items[:RULE_GAP_MAX_ITEMS]
+
+
+def _rule_gap_item(
+    gap_type: str,
+    signal: str,
+    requested_context: str,
+    suggested_capability: str,
+    priority_reason: str,
+) -> dict[str, Any]:
+    return {
+        "gapType": gap_type,
+        "signal": _truncate(signal, 120),
+        "requestedContext": _truncate(requested_context, 160),
+        "suggestedCapability": _truncate(suggested_capability, 240),
+        "priorityReason": _truncate(priority_reason, 240),
+    }
+
+
+def _signal_for_requested_context(context_type: str, planner_signals: list[dict[str, Any]]) -> str:
+    candidates = []
+    for signal in planner_signals:
+        if context_type in {str(item or "").upper() for item in (signal.get("requestedContextTypes") or [])}:
+            signal_type = str(signal.get("type") or "").upper()
+            if signal_type:
+                candidates.append(signal_type)
+    if not candidates:
+        return "PLANNER_REQUEST"
+    return ", ".join(sorted(set(candidates))[:4])
+
+
+def _suggested_capability(signal_type: str | None, requested_contexts: list[str] | None) -> str:
+    signal_key = str(signal_type or "").upper()
+    signal_map = {
+        "DTO_FIELD_CHANGED": "Add DTO / VO field reference retrieval.",
+        "FIELD_DELETED": "Add field reference retrieval.",
+        "DB_SQL_MAPPER_CHANGED": "Add DB / Mapper / Entity relationship retrieval.",
+        "CACHE_WRITE_DELETE_CHANGED": "Add cache key and read/write usage retrieval.",
+        "MQ_CONFIG_CHANGED": "Add MQ producer / consumer / topic configuration retrieval.",
+        "CONFIG_FILE_CHANGED": "Add config read-point and environment override retrieval.",
+        "HISTORICAL_CONTEXT_MISSING_FEEDBACK": "Convert recurring context-missing feedback into Planner / Retriever capability backlog.",
+    }
+    if signal_key in signal_map:
+        return signal_map[signal_key]
+    context_set = {str(item or "").upper() for item in (requested_contexts or [])}
+    if "REFERENCE_SEARCH" in context_set or "CALLER_CONTEXT" in context_set:
+        return "Add or expand local reference / caller retrieval."
+    if "TEST_RESULT_CONTEXT" in context_set:
+        return "Add test execution or test result context integration."
+    if "RELATED_FILE" in context_set:
+        return "Add bounded related-file retrieval."
+    if "DB_SCHEMA_CONTEXT" in context_set:
+        return "Add database schema context retrieval."
+    if "CONFIG_CONTEXT" in context_set:
+        return "Add runtime config context retrieval."
+    if "MQ_CONFIG_CONTEXT" in context_set:
+        return "Add MQ config context retrieval."
+    if "CACHE_USAGE_CONTEXT" in context_set:
+        return "Add cache usage context retrieval."
+    return "Evaluate whether this requested context needs a dedicated Retriever capability."
+
+
+def _has_budget_cut(summary: dict[str, Any]) -> bool:
+    if not summary.get("truncated"):
+        return False
+    count_fields = [
+        "changedFilesExcluded",
+        "changedFilesRemovedByPromptBudget",
+        "sameFileCandidateFilesExcluded",
+        "sameFileSourceFilesRemoved",
+        "sameFileSourceSnippetsRemoved",
+        "localReferenceSearchesRemoved",
+        "localReferenceSnippetsRemoved",
+    ]
+    return bool(summary.get("localReferenceContextRemoved") or any(int(summary.get(field) or 0) > 0 for field in count_fields))
+
+
+def _rule_gap_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    gap_type_counter = Counter(str(item.get("gapType") or "") for item in items if item.get("gapType"))
+    signal_counter = Counter(str(item.get("signal") or "") for item in items if item.get("signal"))
+    return {
+        "total": len(items),
+        "byGapType": [
+            {"gapType": key, "count": int(value)}
+            for key, value in sorted(gap_type_counter.items())
+        ],
+        "topSignals": [
+            {"signal": key, "count": int(value)}
+            for key, value in signal_counter.most_common(5)
+        ],
+        "truncated": len(items) >= RULE_GAP_MAX_ITEMS,
+    }
 
 
 def _diff_stats(diff: str) -> tuple[int, int, int, int]:
