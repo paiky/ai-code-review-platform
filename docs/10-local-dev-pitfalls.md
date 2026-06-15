@@ -158,6 +158,7 @@ docker version
 npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync.
 npm error Missing: @emnapi/core@1.10.0 from lock file
 npm error Missing: @emnapi/runtime@1.10.0 from lock file
+npm error Missing: @emnapi/wasi-threads@1.2.2 from lock file
 ```
 
 原因：
@@ -166,7 +167,7 @@ npm error Missing: @emnapi/runtime@1.10.0 from lock file
 
 处理方式：
 
-1. 顶层前端依赖应固定明确版本，不要使用 `latest`。
+1. 顶层前端依赖应固定明确版本，不要使用 `latest` 或可浮动范围版本。
 2. 修改依赖后执行 `npm install --package-lock-only --save-exact ...` 更新 lock。
 3. 打包脚本调用 Docker build / save / pull 后必须检查退出码，失败时立即退出，避免生成半成品离线包。
 4. 如果本机 npm 与 Dockerfile 使用的 `node:20-alpine` 内置 npm 版本不同，本机 `npm install --package-lock-only` 可能仍不能生成 Docker `npm ci` 需要的 peer 依赖锁定。此时用与 Dockerfile 一致的 Node 镜像更新 lock，例如：

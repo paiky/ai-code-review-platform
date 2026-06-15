@@ -84,6 +84,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持配置 / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、项目组多模型并行 Review、自动触发、重试、执行过程展示。
 - AI Review finding 支持展示上下文状态、置信度、判断依据、缺失上下文和上下文摘要；当模型只能基于 diff 判断时，Prompt 会要求输出“部分 / 不足”上下文状态，避免证据不足时武断判为高风险。
+- 高准确模式的本地引用检索已支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED / DTO_FIELD_CHANGED / FIELD_DELETED`；DTO / VO 字段变更会按字段名、getter、setter 做有限引用搜索，并按高误判 signal 优先保留关键证据。若 snippets 因预算被裁剪，Context Pack 会注入 `notInjectedEvidence` 安全摘要，提示模型存在未注入证据，避免把缺失误解成不存在。
 - GitLab MR 自动 AI Review 完成后会向任务所属项目组中已启用的钉钉 webhook 推送“代码质量 Review”结果；项目组未配置机器人时记录为 `SKIPPED`，不会回退推送到默认项目组。
 - GitLab Push webhook 会先按项目组 Push 审核策略中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会根据文件数、diff 大小、commit 数、硬上限和 debounce 自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
 
@@ -664,7 +665,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/review-tasks/$tas
 
 前端任务详情页包含：
 
-- 代码质量 Review：按模型展示 AI Review 结果，并在 Review 内提供“高准确模式流转”和“执行过程”子页；高准确模式流转会展示变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider 和结果解析状态，以及本任务规则缺口。若本地仓库已准备但引用查询数为 0，会说明是没有支持的 signal、Retriever 被跳过或检索失败。
+- 代码质量 Review：按模型展示 AI Review 结果，并在 Review 内提供“高准确模式流转”和“执行过程”子页；高准确模式流转会展示变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider 和结果解析状态，以及本任务规则缺口。若本地仓库已准备但引用查询数为 0，会说明是没有支持的 signal、Retriever 被跳过或检索失败；若预算裁剪导致引用 snippets 未注入，会展示 signal、requested context、查询摘要、命中文件数、裁剪 snippet 数、top 相对路径和裁剪原因，不展示源码。
 - 规则缺口看板：从已有 `CONTEXT_PACK_BUILT` progress 安全摘要聚合跨任务规则缺口，可按项目、缺口类型、Signal 过滤，查看最近任务样例并跳转任务详情；看板不返回源码片段、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
 - 提醒卡片：按提醒类型展示可复制维护内容、命中证据和 Diff 查看入口
 - 分析结果

@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：V2-F-13 版本更新页收口已落地；任务 663 已验证本地 mirror / worktree 模式可用，任务 669 暴露出的“仓库已准备但 DTO / VO 字段变更尚未检索、前端角色流转解释不足”已先通过 V2-F-11 角色流转与 V2-F-12 缺口看板形成可解释和可聚合依据，并已在版本更新页对高准确模式主线做用户可读收口。当前停止等待用户验证；下一阶段进入 V2-F-14 DTO / VO 字段引用检索。
+- 当前状态：V2-F-16 Finding 级二阶段补证据设计已落地；任务 663 已验证本地 mirror / worktree 模式可用，任务 669 曾暴露出的“仓库已准备但 DTO / VO 字段变更尚未检索、前端角色流转解释不足”已先通过 V2-F-11 角色流转与 V2-F-12 缺口看板形成可解释和可聚合依据，并已通过 V2-F-14 支持字段引用检索。当前确认：V2-F-15 已让高误判 signal 的预算裁剪更有优先级、未注入证据进入 Context Pack 和前端摘要，并强化 finding 的 `contextStatus / confidence` 约束；V2-F-16 已设计只围绕少数候选 finding 补证据的后续机制。下一阶段进入 V2-F-17 规则缺口补全推荐算法与通用补齐流程。
 - 编写时间：2026-06-11
 - 前置版本：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`
@@ -11,9 +11,11 @@
   - “本地 clone / fetch + 引用搜索 + bounded Context Pack”的高准确 Review 模式已完成首轮生产验证。
   - 已补齐 workspace 清理与磁盘保护，避免长期运行时 `worktrees/` 和 `mirrors/` 无界增长。
   - 已通过 V2-F-11 增加高准确模式角色流转视图，解释 Planner、requested contexts、Retriever、Snippet 和预算裁剪之间的关系。
-  - 已通过 V2-F-12 从 `CONTEXT_PACK_BUILT` progress 安全摘要聚合跨任务规则缺口，作为后续补齐 DTO / VO 字段引用检索等 Retriever 能力的优先级依据。
+  - 已通过 V2-F-12 从 `CONTEXT_PACK_BUILT` progress 安全摘要聚合跨任务规则缺口，作为后续判断是否补齐 Planner / Retriever / 预算策略 / Prompt 约束的优先级依据。
   - 已通过 V2-F-13 在版本更新页置顶说明高准确模式主线、部署注意和“不把完整项目源码交给模型”的边界。
-  - 当前 Retriever 只支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED`，DTO / VO 字段变更会进入 Planner 和 requested contexts，但不会触发本地引用搜索；后续扩展 DTO / VO 字段引用检索应以规则缺口看板数据作为优先级输入。
+  - 当前 Retriever 支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED / DTO_FIELD_CHANGED / FIELD_DELETED`；DTO / VO 字段变更会按字段名、getter、setter 做有限引用搜索，并把预算内 snippets 或安全裁剪摘要注入 Context Pack。
+  - 预算裁剪问题已从“只可观测、可聚合”推进到“关键证据优先保留、未注入证据可见、Prompt 约束 contextStatus / confidence”，并已补充 finding 级二阶段补证据设计。
+  - V2-F-14 已补高频误判 signal：`DTO_FIELD_CHANGED / FIELD_DELETED` 字段引用检索；V2-F-15 已补预算裁剪与上下文完整性保护；V2-F-16 已设计 finding 级二阶段补证据；V2-F-17 做规则缺口补全推荐算法与通用补齐流程；DB / 缓存 / MQ / 配置等业务检索器在这些治理能力之后再按推荐结果排期。
   - 反馈池、项目策略、上下文不足人工标记等“人工沉淀能力”先保留后端和数据结构，但在生产产品界面默认屏蔽，不作为当前验证主线。
   - 不删除 V0 到 V2-F-3 已落地能力；把它们作为可回退、可复用的治理底座。
 
@@ -48,6 +50,18 @@ GitLab webhook/API
 ```
 
 注意：本地仓库检索不是把整个项目交给 AI，而是在本地允许更充分地搜索，再把有限、可解释、预算内的证据交给 AI。
+
+截至 V2-F-13，高准确模式已经缓解了 diff-only 的主要盲区，也能解释哪些 Planner signal、requested context、Retriever 结果和 snippets 被裁剪或缺失。但这不等于误判已彻底解决：如果关键调用方、字段引用、配置读取点或 mapper 关联证据没有进入 Context Pack，模型仍可能基于不完整证据做出错误判断。因此后续阶段把“降低上下文不足导致的误判”作为 P0，而不是单纯堆更多检索器。
+
+短期处理顺序：
+
+```text
+V2-F-14：已完成 DTO / VO 字段引用检索，优先覆盖高频真实误判 signal
+V2-F-15：补预算裁剪与上下文完整性保护，避免缺失证据被误解为不存在
+V2-F-16：已设计 finding 级二阶段补证据，只围绕少数候选问题窄范围再检索
+V2-F-17：下一步补规则缺口补全推荐算法与通用补齐流程，让平台给出“是否值得补、补什么、怎么补”的建议
+V2-F-18：再按推荐结果评估 DB / Mapper / Entity 等业务检索器
+```
 
 ## 二、与 docs/32 / docs/33 的关系
 
@@ -159,14 +173,14 @@ GitLab MR / Push webhook
 
 高准确模式中的几个名词不是同义词，而是流水线里的不同角色：
 
-| 角色 | 任务中的定义 | 当前输入 | 当前输出 | 669 暴露的问题 |
+| 角色 | 任务中的定义 | 当前输入 | 当前输出 | 当前状态 / 后续缺口 |
 |---|---|---|---|---|
 | GitLab diff intake | 变更入口，负责保存 MR / Push 的 changed files 和 diff | webhook payload、GitLab API diff | changed files summary、diff text、任务元数据 | 已可用 |
-| Context Pack Builder | 上下文打包器，把 diff、同文件片段、Planner 输出、本地检索摘要和不可用上下文合并进模型输入 | changed files、same-file snippets、planner、local reference | `reviewContext / contextPack` 和 `CONTEXT_PACK_BUILT` progress | 预算裁剪只显示 `truncated=true`，缺少裁剪明细 |
-| Context Planner | 上下文规划器，基于 diff 的轻量规则判断“应该补什么证据” | changed file path、diff 新增 / 删除行、历史上下文不足统计 | `plannerSignals`、`requestedContexts`、planner unavailable contexts | 前端只展示数量，不展示信号类型和支持状态 |
+| Context Pack Builder | 上下文打包器，把 diff、同文件片段、Planner 输出、本地检索摘要和不可用上下文合并进模型输入 | changed files、same-file snippets、planner、local reference | `reviewContext / contextPack` 和 `CONTEXT_PACK_BUILT` progress | V2-F-11 已补安全摘要；V2-F-15 继续强化裁剪摘要和上下文完整性约束 |
+| Context Planner | 上下文规划器，基于 diff 的轻量规则判断“应该补什么证据” | changed file path、diff 新增 / 删除行、历史上下文不足统计 | `plannerSignals`、`requestedContexts`、planner unavailable contexts | V2-F-11 已展示 signal 类型和支持状态；DTO / VO 字段 signal 已由 V2-F-14 接入检索 |
 | Local Repository Manager | 本地仓库准备器，维护 mirror 并为 task checkout worktree | project repository URL、task head ref | `localRepositoryContext`、`LOCAL_REPO_PREPARED / FAILED` progress | 已能解释仓库是否可用 |
-| Local Context Retriever | 本地证据检索器，在 task worktree 内搜索引用并截取 bounded snippets | worktree、planner signals | `localReferenceSearch`、`localReferenceContext`、`LOCAL_CONTEXT_RETRIEVED / FAILED` progress | 只支持方法删除 / 签名变更，DTO / VO 字段变更尚未检索 |
-| Budget Controller | 预算控制器，决定哪些证据可进入 Prompt，哪些被裁剪 | 完整 context pack 候选内容 | 裁剪后的 prompt text、`truncated` 标记 | 缺少“裁剪了什么”的安全摘要 |
+| Local Context Retriever | 本地证据检索器，在 task worktree 内搜索引用并截取 bounded snippets | worktree、planner signals | `localReferenceSearch`、`localReferenceContext`、`LOCAL_CONTEXT_RETRIEVED / FAILED` progress | 已支持方法删除 / 签名变更 / DTO 字段变更 / 字段删除；DB / 缓存 / MQ / 配置仍后续排期 |
+| Budget Controller | 预算控制器，决定哪些证据可进入 Prompt，哪些被裁剪 | 完整 context pack 候选内容 | 裁剪后的 prompt text、`truncated` 标记和 `budgetCutSummary` | V2-F-11 已可观测；V2-F-15 需要按高误判 signal 做预算优先级和安全裁剪摘要 |
 | Provider Executor | 模型执行器，调用具体 AI Review provider | prompt、profile、provider config | raw output、provider progress | 已有 provider 请求 / 响应 / 解析事件 |
 | Result Parser / Saver | 结果解析和落库角色 | provider output | structured findings、review result、FINISHED progress | 已可用 |
 
@@ -360,6 +374,16 @@ LOCAL_CONTEXT_MAX_TOTAL_CHARS=12000
 - 保留文件路径、命中行号、查询词和截断标记。
 - 不把全部搜索结果塞进 Prompt。
 
+### 预算裁剪与误判控制原则
+
+预算裁剪必须服务于降低误判，而不是只满足 prompt 长度限制。后续阶段按以下原则演进：
+
+- 对高误判 signal 设置最低保留额度，例如 `DTO_FIELD_CHANGED`、`FIELD_DELETED`、`METHOD_SIGNATURE_CHANGED`，避免这些 signal 的关键 snippets 被低价值上下文挤掉。
+- 裁剪不是静默删除。snippet 放不下时，仍应保留安全摘要：查询词、命中文件数、被裁剪 snippet 数、top 相对路径、裁剪原因和未注入说明。
+- 模型必须知道“存在未注入证据”。Prompt / Context Pack 应明确未命中、未注入或上下文不可用不等同于无风险。
+- finding 输出应受到上下文完整性约束：关键 requested context 被裁剪或不可用时，除非 diff 本身已足够证明硬风险，否则 `contextStatus` 应为 `PARTIAL / INSUFFICIENT`，置信度不应标为高。
+- 对依赖 `BUDGET_CUT / UNSUPPORTED_PLANNER_SIGNAL / UNAVAILABLE_REQUESTED_CONTEXT` 的高风险 finding，后续可触发 finding 级二阶段补证据，而不是在第一阶段无差别扩大 Context Pack。
+
 ## 九、排序与去噪
 
 引用搜索结果应排序：
@@ -460,25 +484,25 @@ AI Review 结果
 
 首版可以基于现有 progress 事件映射：
 
-| 前端角色节点 | 可映射的已有事件 | 可展示内容 | 当前粒度缺口 |
+| 前端角色节点 | 可映射的已有事件 | 可展示内容 | 当前状态 / 后续缺口 |
 |---|---|---|---|
 | 变更接入 | 任务详情 / changed files summary | 触发类型、MR / Push、变更文件数、diff 来源 | 无单独 progress 事件 |
-| Context Pack 构建 | `CONTEXT_PACK_BUILT` | changed file 数、diffBytes、promptLength、truncated、unavailableContextCount | 裁剪明细不足 |
-| Context Planner 规划 | `CONTEXT_PACK_BUILT.detail.summary` 中的 planner 统计 | plannerSignalCount、requestedContextTypeCounts、plannerUnavailableContextCount | 缺少 signal type counts、supported / unsupported 分类 |
+| Context Pack 构建 | `CONTEXT_PACK_BUILT` | changed file 数、diffBytes、promptLength、truncated、unavailableContextCount | V2-F-11 已补裁剪摘要；V2-F-15 继续补未注入证据说明 |
+| Context Planner 规划 | `CONTEXT_PACK_BUILT.detail.summary` 中的 planner 统计 | plannerSignalCount、requestedContextTypeCounts、plannerUnavailableContextCount | V2-F-11 已补 signal type counts、supported / unsupported 分类 |
 | 本地仓库准备 | `LOCAL_REPO_PREPARED / LOCAL_REPO_PREPARE_FAILED` | enabled、status、mirrorStatus、worktreeStatus、durationMs、cleanup 摘要 | 已基本足够 |
-| Local Retriever 检索 | `LOCAL_CONTEXT_RETRIEVED / LOCAL_CONTEXT_RETRIEVE_FAILED` | queryCount、matchedFileCount、includedSnippetCount、truncated | 缺少“哪些 signal 被跳过以及原因” |
-| Budget Controller 裁剪 | `CONTEXT_PACK_BUILT.meta.truncated` | 是否截断、promptLength、maxTotalChars | 缺少被裁剪对象计数 |
+| Local Retriever 检索 | `LOCAL_CONTEXT_RETRIEVED / LOCAL_CONTEXT_RETRIEVE_FAILED` | queryCount、matchedFileCount、includedSnippetCount、truncated | V2-F-14 已支持 DTO / VO 字段 signal；后续补预算保护和更多业务 signal |
+| Budget Controller 裁剪 | `CONTEXT_PACK_BUILT.meta.truncated` | 是否截断、promptLength、maxTotalChars、`budgetCutSummary` | V2-F-11 已有对象计数；V2-F-15 继续补高误判 signal 预算优先级 |
 | Provider 执行 | `{PROVIDER}_REQUEST / HTTP_REQUEST_START / {PROVIDER}_RESPONSE` | provider、model、请求 / 响应状态、耗时 | 已有事件偏技术化 |
 | 结果解析与落库 | `OUTPUT_EXTRACTED / JSON_PARSE_START / *_PARSE_RESULT / RESULT_SAVED / FINISHED` | findingCount、overallLevel、保存状态 | 已基本足够 |
 
-V2-F-11 应补齐的后端安全摘要字段：
+V2-F-11 已补齐的后端安全摘要字段，V2-F-15 可在此基础上继续增强上下文完整性说明：
 
 - `plannerSignalTypeCounts`：Planner 命中的信号类型计数。
 - `retrieverSupportedSignalTypes`：当前 Retriever 支持的 signal 类型。
 - `retrieverUnsupportedSignalTypeCounts`：命中但暂未支持检索的 signal 类型计数。
 - `requestedContextAvailability`：requested context 的 available / unavailable 计数和原因类型。
 - `budgetCutSummary`：裁剪对象计数，例如 local reference snippets、same-file snippets、changed files summary；不记录源码内容。
-- `ruleGapSummary`：本次任务暴露的规则缺口摘要，例如“Planner 命中 DTO_FIELD_CHANGED，但 Retriever 暂未支持”。
+- `ruleGapSummary`：本次任务暴露的规则缺口摘要，例如“Planner 命中 DB_SQL_MAPPER_CHANGED，但 Retriever 暂未支持”。
 - `ruleGapItems`：本次任务的规则缺口明细，只记录类型、signal、requested context、建议能力和优先级原因，不记录源码。
 
 V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流转。所有新增 progress / summary 字段仍不得记录源码、token、认证头、本地绝对路径或大段 diff。
@@ -491,7 +515,7 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 
 | 类型 | 触发条件 | 示例 | 后续动作 |
 |---|---|---|---|
-| `UNSUPPORTED_PLANNER_SIGNAL` | Planner 命中 signal，但 Local Retriever 不支持该 signal | 任务 669 的 `DTO_FIELD_CHANGED` | 补对应 Retriever |
+| `UNSUPPORTED_PLANNER_SIGNAL` | Planner 命中 signal，但 Local Retriever 不支持该 signal | `DB_SQL_MAPPER_CHANGED`、`CACHE_WRITE_DELETE_CHANGED` | 补对应 Retriever |
 | `UNAVAILABLE_REQUESTED_CONTEXT` | Planner 请求了上下文，但系统没有对应获取能力 | `RELATED_FILE`、`CALLER_CONTEXT`、`TEST_RESULT_CONTEXT` | 评估是否补检索器、测试集成或仅保留提示 |
 | `RETRIEVAL_FAILED` | Retriever 支持该 signal，但执行失败或超时 | `rg` 超时、worktree 不可用 | 排查稳定性或降级策略 |
 | `BUDGET_CUT` | 已检索到证据，但 Context Pack 预算裁剪 | snippets 被裁剪 | 调整排序、预算或摘要压缩 |
@@ -500,7 +524,7 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 
 - 展示本任务缺失的 Planner / Retriever 能力。
 - 展示为什么本次 `引用查询数=0` 或 `snippet=0`。
-- 展示建议补齐方向，例如 `DTO_FIELD_CHANGED -> DTO / VO 字段引用检索`。
+- 展示建议补齐方向，例如 `DB_SQL_MAPPER_CHANGED -> DB / Mapper / Entity 关联检索`。
 - 明确这些是平台能力 backlog，不是本次代码风险。
 
 沉淀策略：
@@ -721,7 +745,7 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
   - budget cut 次数和影响对象。
   - 关联任务数和最近任务。
 - 给出建议补齐方向和优先级解释，例如：
-  - `DTO_FIELD_CHANGED` 高频且 Retriever 不支持 -> 建议补 DTO / VO 字段引用检索。
+  - `DB_SQL_MAPPER_CHANGED` 高频且 Retriever 不支持 -> 建议补 DB / Mapper / Entity 关联检索。
   - `DB_SQL_MAPPER_CHANGED` 高频且缺 `DB_SCHEMA_CONTEXT` -> 建议设计 DB / Mapper / Entity 检索。
 - 首版可复用 `code_quality_review_progress_events` 中的 `CONTEXT_PACK_BUILT.detail` 安全摘要进行聚合，不强制新增表；如查询性能不足，再新增汇总表。
 - 不展示源码、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
@@ -770,12 +794,13 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 
 目标：
 
-补齐任务 669 这类 DTO / VO 字段变更的第一优先级检索能力，让 `DTO_FIELD_CHANGED / FIELD_DELETED` 能在 task worktree 内搜索字段引用，并把有限 snippets 注入 Context Pack。
+补齐任务 669 这类 DTO / VO 字段变更的第一优先级检索能力，优先降低 `DTO_FIELD_CHANGED / FIELD_DELETED` 因字段引用上下文缺失导致的误判。让字段变更能在 task worktree 内搜索字段引用，并把有限 snippets 或裁剪摘要注入 Context Pack。
 
 范围建议：
 
 - `backend-python/app/review_context/local_retriever.py`
 - `backend-python/app/review_context/service.py`
+- `backend-python/app/review_context/service.py` 中 Context Pack 组装逻辑，如需接入字段引用 snippets / 裁剪摘要
 - `backend-python/app/code_quality/prompt.py` 如需补充说明
 - 相关 unit / contract tests
 - docs/34 落地记录
@@ -787,14 +812,309 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 - 搜索范围只限当前 task head worktree，并继续排除依赖、构建产物和缓存目录。
 - 结果排序优先保留 Controller / Service / Mapper / Repository / DTO / VO / Excel VO / API 相关文件，降低测试、文档、生成代码优先级。
 - snippet reason 区分为 `FIELD_REFERENCE` 或 `DTO_FIELD_REFERENCE`，避免和方法引用混淆。
-- progress 只记录查询数、命中文件数、snippet 数、支持 / 跳过 signal 摘要，不记录源码。
+- progress 只记录查询数、命中文件数、snippet 数、支持 / 跳过 signal 摘要、裁剪摘要和上下文可用性摘要，不记录源码。
+- 如果字段引用 snippets 因预算无法注入，必须至少在 Context Pack / progress 中保留安全摘要：signal、字段名、查询数、命中文件数、被裁剪 snippet 数、top 相对路径和裁剪原因。
+- 当 `DTO_FIELD_CHANGED / FIELD_DELETED` 的关键引用上下文未注入、不可用或被裁剪时，Prompt 应要求 finding 使用 `PARTIAL / INSUFFICIENT` 的 `contextStatus`，除非 diff 本身已经足以证明硬风险。
 - Prompt 明确字段引用 snippets 是有限证据，未命中不等同于无风险。
 
-### V2-F-15：DB / Mapper / Entity 关联检索
+### V2-F-15：预算裁剪与上下文完整性保护
 
 目标：
 
-在 DTO 字段引用检索验证稳定后，再补 DB / SQL / Mapper / Entity 相关证据检索，优先支持后端项目高频数据一致性风险。
+在 V2-F-14 补齐 DTO / VO 字段引用检索后，专门处理“已检索到或已请求的上下文因为预算、能力或环境原因没有进入模型”导致的误判风险。该阶段不扩展新的业务检索器，先让裁剪更可控、缺失更明确、finding 置信度更保守。
+
+范围建议：
+
+- Context Pack 预算分配与排序逻辑。
+- `budgetCutSummary` / `requestedContextAvailability` / `ruleGapItems` 的安全摘要增强。
+- `backend-python/app/code_quality/prompt.py` 的上下文完整性输出约束。
+- 相关 unit / contract tests。
+- docs/34 落地记录。
+
+验收：
+
+- 对 `DTO_FIELD_CHANGED / FIELD_DELETED / METHOD_SIGNATURE_CHANGED / METHOD_DELETED` 等高误判 signal 设置最低保留额度或优先级，避免被低价值 snippets 挤出。
+- `BUDGET_CUT` 不只记录数量，还记录安全摘要：signal、requested context、查询词摘要、命中文件数、被裁剪 snippets 数、top 相对路径和裁剪原因；不记录源码。
+- Context Pack 在 snippets 被裁剪时仍能告诉模型“存在未注入证据”，避免模型把缺失误解成不存在。
+- Prompt 明确：关键 requested context 被裁剪或不可用时，除非 diff 本身足以证明硬风险，否则 finding 应标为 `PARTIAL / INSUFFICIENT`，并降低置信度。
+- 前端高准确模式流转能展示“哪些上下文已请求、哪些被裁剪、为什么没进模型”的摘要。
+- 不自动降级、不自动忽略 finding，不把上下文缺失作为无风险依据。
+
+### V2-F-16：Finding 级二阶段补证据设计
+
+目标：
+
+设计高风险候选 finding 的二阶段补证据机制。第一阶段仍保持预算受控；只有当候选 finding 依赖的 signal 出现 `BUDGET_CUT / UNSUPPORTED_PLANNER_SIGNAL / UNAVAILABLE_REQUESTED_CONTEXT` 时，才围绕少数候选问题做更窄的补检索。
+
+范围建议：
+
+- 先输出设计，不编码。
+- 定义触发条件、最大 finding 数、每个 finding 的补检索预算、超时和失败降级策略。
+- 定义二阶段 progress 事件和前端展示摘要。
+- 定义如何把二阶段证据反馈给 Provider：重跑整个 Review、只重评单个 finding，或生成补充判定。
+
+验收：
+
+- 设计明确不会无差别扩大初始 Context Pack。
+- 设计明确不把检索失败解释为无风险。
+- 设计明确二阶段证据如何影响 `contextStatus / confidence / evidence / missingContext`。
+- 设计明确安全边界：不返回源码到看板、不泄漏 token、不记录本地绝对路径、不做无限制全项目扫描。
+
+#### V2-F-16 设计结论
+
+二阶段补证据不是把第一阶段 Context Pack 变大，也不是把缺失上下文当成自动放行依据。它是一个 finding 级窄范围“补充判定层”：
+
+```text
+第一阶段 AI Review 结果
+  -> 找出少数上下文不完整且影响较高的候选 finding
+  -> 读取同 review 的 CONTEXT_PACK_BUILT 安全摘要
+  -> 基于 finding 文件、类别、missingContext 和 ruleGap / notInjectedEvidence 选择补证据目标
+  -> 在严格预算内补充证据或记录不可补原因
+  -> 让 Provider 只重评该 finding 的上下文充分性和置信度
+  -> 产出 findingContextRefinement 覆盖层
+  -> 前端展示补证据状态、补充证据摘要和剩余缺口
+```
+
+首版二阶段不直接删除 finding、不自动忽略 finding、不自动降低 severity，也不自动修改规则模板。它最多给出结构化补充判定：
+
+- `recommendedContextStatus`
+- `recommendedConfidence`
+- `additionalEvidence`
+- `remainingMissingContext`
+- `refinementDecision`
+- `humanActionRequired`
+
+是否把这些推荐合并回 finding 主体，留到后续实现阶段单独确认。首版前端应把它展示为“二阶段补证据结果 / 建议”，而不是静默覆盖原始模型结论。
+
+#### 触发条件
+
+二阶段只在第一阶段 Review 成功并保存 structured findings 后评估候选。候选 finding 必须同时满足：
+
+- finding 属于需要更完整上下文判断的类别或等级，例如 `CORRECTNESS / SECURITY / TRANSACTION / SQL_PERFORMANCE / CACHE_CONSISTENCY / MQ_CONSISTENCY / EXCEPTION_HANDLING / TEST_GAP`，且 `severity` 为 `MAJOR / CRITICAL`，或 `confidence=HIGH` 但 `contextStatus!=SUFFICIENT`。
+- finding 的 `contextStatus` 为 `PARTIAL / INSUFFICIENT`，或 `missingContext / evidence / contextSummary` 指向引用搜索、调用方、相关文件、配置、表结构、测试结果等缺口。
+- 同 review 的 `CONTEXT_PACK_BUILT.summary` 中存在与该 finding 相关的缺口：
+  - `ruleGapItems.gapType=BUDGET_CUT`
+  - `ruleGapItems.gapType=UNSUPPORTED_PLANNER_SIGNAL`
+  - `ruleGapItems.gapType=UNAVAILABLE_REQUESTED_CONTEXT`
+  - `ruleGapItems.gapType=RETRIEVAL_FAILED`
+  - `budgetCutSummary.notInjectedEvidence` 或 `localReferenceCutDetails`
+  - `requestedContextAvailability.items[].available=false`
+- finding 的 `filePath`、category、title/body 关键词或 `missingContext` 能和上述缺口的 signal / requestedContext 建立弱关联。
+
+不触发二阶段的场景：
+
+- 第一阶段无 finding、Review 失败、Provider 输出无法结构化解析。
+- finding 为 `MINOR` 且不是安全、数据一致性、线上正确性相关硬风险。
+- 该 reviewKey + findingIndex 已执行过二阶段，避免循环补证据。
+- 本地仓库上下文未启用且没有任何可复用的安全摘要。
+- 只存在“模型表达不清”但没有具体上下文缺口。
+
+#### 预算与限流
+
+默认建议值：
+
+| 项目 | 建议值 | 说明 |
+|---|---:|---|
+| 单 review 最大二阶段 finding 数 | 3 | 只处理最可能误判且影响较高的问题 |
+| 单 finding 最大查询数 | 4 | 复用 first-stage signal / missingContext，不做全项目探索 |
+| 单查询最大命中文件数 | 5 | 只取最相关路径 |
+| 单 finding 最大 snippets | 6 | 控制 provider 输入 |
+| 单 snippet 最大字符数 | 1600 | 比第一阶段更紧凑 |
+| 单 finding 补证据总字符数 | 5000 | 不扩大第一阶段全局预算 |
+| 单 finding 超时 | 20 秒 | 超时只记录不可用，不阻断原结果 |
+| 单 review 总超时 | 60 秒 | 防止多 finding 串行拖垮任务 |
+
+排序优先级：
+
+1. 与 finding `filePath` 同文件、同包、同模块的证据。
+2. `notInjectedEvidence.topRelativePaths` 中已确认命中的相对路径。
+3. `src/main` 业务源码。
+4. Controller / Service / Mapper / Repository / DTO / VO / API 相关路径。
+5. 测试代码、文档、生成代码、快照文件降权。
+
+二阶段不为 unsupported signal 临时发明新 Retriever。例如 DB / 缓存 / MQ / 配置 signal 暂不支持时，只能记录 `UNSUPPORTED_PLANNER_SIGNAL` 的不可补原因，不能在 V2-F-16 实现具体业务检索。
+
+#### 数据结构设计
+
+建议后续实现新增持久化表 `code_quality_finding_context_refinements`，也可以先用 progress detail 做 MVP，但表结构更利于前端和审计：
+
+```text
+id
+task_id
+review_key
+finding_index
+project_id
+status                      PENDING / RUNNING / SUCCESS / SKIPPED / FAILED
+trigger_reason              BUDGET_CUT / UNSUPPORTED_PLANNER_SIGNAL / UNAVAILABLE_REQUESTED_CONTEXT / RETRIEVAL_FAILED / MIXED
+trigger_gap_types_json       只存 gapType、signal、requestedContext、reasonCode
+finding_summary_json         filePath、severity、category、confidence、contextStatus、title 摘要
+evidence_plan_json           查询摘要、目标相对路径、预算，不存源码
+evidence_summary_json        matchedFileCount、includedSnippetCount、notInjectedCount、topRelativePaths，不存源码
+provider_decision_json       recommendedContextStatus、recommendedConfidence、additionalEvidence、remainingMissingContext、humanActionRequired
+error_message
+started_at
+finished_at
+created_at
+updated_at
+```
+
+不建议保存二阶段 provider raw output。若为了排障必须保留，应单独受 debug 开关控制，并沿用现有 raw output 脱敏、限长和可关闭策略；默认 progress 和看板永不透传 raw output。
+
+finding 响应建议增加可选覆盖层：
+
+```json
+{
+  "contextRefinement": {
+    "status": "SUCCESS",
+    "triggerReason": "BUDGET_CUT",
+    "recommendedContextStatus": "PARTIAL",
+    "recommendedConfidence": "MEDIUM",
+    "additionalEvidence": ["二阶段补充看到 ... 的安全摘要"],
+    "remainingMissingContext": ["CALLER_CONTEXT", "TEST_RESULT_CONTEXT"],
+    "humanActionRequired": true,
+    "summary": "补充证据仍不足以支持 HIGH confidence。"
+  }
+}
+```
+
+#### Progress 事件
+
+建议新增 progress phase：
+
+| Phase | Level | detail 安全字段 |
+|---|---|---|
+| `FINDING_CONTEXT_REFINE_PLANNED` | INFO | reviewKey、candidateCount、selectedFindingIndexes、triggerReasonCounts |
+| `FINDING_CONTEXT_REFINE_SKIPPED` | INFO | reasonCode、findingIndex、reviewKey |
+| `FINDING_CONTEXT_REFINE_START` | INFO | findingIndex、filePath、category、severity、contextStatus、triggerReasons |
+| `FINDING_CONTEXT_EVIDENCE_RETRIEVED` | INFO | queryCount、matchedFileCount、includedSnippetCount、notInjectedEvidenceCount、topRelativePaths |
+| `FINDING_CONTEXT_EVIDENCE_UNAVAILABLE` | WARN | reasonCode、requestedContext、signal、retryable |
+| `FINDING_CONTEXT_PROVIDER_REQUEST` | INFO | provider、model、findingIndex、inputBytes，不记录 prompt 正文 |
+| `FINDING_CONTEXT_PROVIDER_RESULT` | INFO | recommendedContextStatus、recommendedConfidence、humanActionRequired |
+| `FINDING_CONTEXT_REFINE_FAILED` | ERROR | findingIndex、safe error message |
+| `FINDING_CONTEXT_REFINE_FINISHED` | INFO | status、durationMs、selectedCount、successCount、skippedCount、failedCount |
+
+progress detail 禁止记录：
+
+- 源码片段。
+- 本地绝对路径。
+- token / 认证头。
+- 大段 diff。
+- provider raw output。
+
+#### Provider 交互方式
+
+推荐首版采用“单 finding 补充判定”，不重跑整个 Review：
+
+```text
+输入：
+  原 finding 的结构化字段
+  finding 对应 diff hunk 或第一阶段已有 diff 摘要
+  first-stage contextStatus / confidence / missingContext / evidence
+  相关 ruleGap / notInjectedEvidence / requestedContextAvailability 安全摘要
+  二阶段补充的 bounded snippets 或不可用原因
+
+输出：
+  refinementDecision: KEEP / NEEDS_HUMAN_CONFIRMATION / CONTEXT_STILL_INSUFFICIENT / EVIDENCE_SUFFICIENT
+  recommendedContextStatus
+  recommendedConfidence
+  additionalEvidence
+  remainingMissingContext
+  summary
+```
+
+不推荐首版重跑整个 Review，原因是成本高、结果不稳定、难以解释“为什么 finding 消失”。也不推荐直接让二阶段 Provider 输出“删除 finding”，避免把补证据机制变成自动忽略机制。
+
+#### 对 finding 字段的影响
+
+二阶段结果对原 finding 的影响应是显式覆盖层，不是静默改写：
+
+- `contextStatus`：二阶段若补齐关键证据，可推荐从 `INSUFFICIENT` 到 `PARTIAL` 或 `SUFFICIENT`；若仍缺证据，保持或推荐 `INSUFFICIENT / PARTIAL`。
+- `confidence`：二阶段不得仅因“未检索到”提高 confidence；只有补充证据直接支持原 finding 时，才可推荐提高。若关键证据仍缺失，应推荐 `LOW / MEDIUM`。
+- `evidence`：只能追加二阶段看到的证据摘要或安全引用说明，不追加源码正文。
+- `missingContext`：移除已补齐的缺失项，保留仍不可用或仍未验证的上下文。
+- `severity`：首版不自动修改 severity，不自动降级，不自动忽略 finding。
+
+#### 前端展示
+
+任务详情 finding 卡片建议新增一个轻量区块：
+
+```text
+二阶段补证据
+  状态：未触发 / 已跳过 / 补证据中 / 已完成 / 失败
+  触发原因：BUDGET_CUT / UNAVAILABLE_REQUESTED_CONTEXT / ...
+  补充证据摘要：命中文件数、snippet 数、top 相对路径
+  建议上下文状态 / 建议置信度
+  仍缺上下文
+```
+
+高准确模式流转 tab 可增加“Finding 级补证据”节点，展示 selectedCount / successCount / skippedCount / failedCount。规则缺口看板只聚合安全摘要，不展示源码。
+
+#### 失败降级策略
+
+- 二阶段失败不改变第一阶段 Review 状态。
+- 检索超时、provider 超时或 unsupported signal 只记录 `contextRefinement.status=FAILED/SKIPPED` 和安全原因。
+- 失败不能解释为无风险，前端应提示“二阶段未能补齐证据，原 finding 仍需按原上下文状态判断”。
+- 二阶段不可用时，不重试无限次；默认每个 reviewKey + findingIndex 一次，后续如需重试必须显式用户触发或 scheduler job 重试策略控制。
+
+#### 安全边界
+
+- 不做全项目无限扫描。
+- 不接 RAG / 向量库。
+- 不做 AST / LSP。
+- 不新增 DB / 缓存 / MQ / 配置业务 Retriever。
+- 不记录源码、本地绝对路径、token、认证头、大段 diff 或 provider raw output 到 progress / 看板。
+- 不自动忽略 finding，不自动降级，不自动改规则。
+- 所有文件路径只使用相对路径，并复用本地仓库 workspace path 校验。
+
+### V2-F-17：规则缺口补全推荐算法与通用补齐流程
+
+目标：
+
+让规则缺口看板从“技术缺口列表”升级为“补齐建议入口”。平台根据跨任务规则缺口、影响范围、误判风险和实现成本，自动给出是否值得补全、优先补哪个、应该补 Planner / Retriever / 预算策略 / Prompt 约束 / 稳定性修复，以及下一阶段可直接交给 Agent 的补齐 prompt 草稿。
+
+范围建议：
+
+- 规则缺口聚合 API 增加推荐摘要，或新增只读推荐接口。
+- 前端规则缺口看板增加“建议补全”视图，用业务可读语言解释优先级。
+- 推荐算法先用启发式评分，不接模型，不自动实现。
+- 输出“建议补齐阶段 prompt”草稿，但必须等待用户确认后才进入实现。
+
+推荐评分维度：
+
+```text
+补全优先级 =
+  缺口类型权重
++ signal 风险权重
++ 出现次数
++ 影响任务数
++ 影响项目数
++ 最近出现时间
++ 是否关联 CONTEXT_MISSING / FALSE_POSITIVE 反馈
++ 实现可行性
+- 复杂度惩罚
+```
+
+用户重点关注的产品化字段：
+
+- 是否建议补全：`RECOMMENDED / WATCH / NOT_NOW`。
+- 为什么建议：出现次数、影响任务数 / 项目数、最近任务样例、关联 signal、关联误判反馈。
+- 补全类型：`PLANNER / RETRIEVER / BUDGET / PROMPT / STABILITY / OBSERVABILITY`。
+- 建议下一阶段：例如 `V2-F-18 DB / Mapper / Entity 关联检索`。
+- 建议 prompt：可直接复制给 Agent 的阶段 prompt 草稿。
+
+验收：
+
+- 用户不需要理解所有内部术语，也能看到“是否值得补、为什么、怎么补”。
+- 不自动改规则、不自动改 Prompt、不自动实现 Retriever。
+- 不返回源码片段、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
+- 推荐算法可配置权重或至少集中定义权重，便于后续按真实反馈调整。
+- 每条推荐能跳转最近任务样例，供用户人工确认。
+
+### V2-F-18：DB / Mapper / Entity 关联检索
+
+目标：
+
+在 DTO 字段引用检索、预算裁剪保护、finding 级二阶段补证据设计和规则缺口补全推荐算法之后，再根据推荐结果补 DB / SQL / Mapper / Entity 相关证据检索，优先支持后端项目高频数据一致性风险。
 
 范围建议：
 
@@ -809,11 +1129,13 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 ```text
 请阅读 AGENTS.md、README.md、docs/32-review-feedback-v2-mainline-roadmap.md、docs/33-review-learning-capability-roadmap.md、docs/34-local-repository-context-retrieval-plan.md。
 
-当前 V2-F-12 已完成，高准确本地仓库上下文检索模式已经具备 mirror clone / fetch、task worktree、METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索、bounded snippets 注入 Context Pack、前端证据摘要展示、workspace 清理、高准确模式角色流转可观测和跨任务规则缺口看板。任务 669 暴露出的 Planner / Retriever / Snippet / 预算裁剪解释不足已先通过 V2-F-11 / V2-F-12 形成可解释与可聚合依据；DTO / VO 字段变更尚未触发本地检索的问题留到 V2-F-14。下一阶段只推进 V2-F-13：版本更新页收口。
+当前 V2-F-13 已完成，高准确本地仓库上下文检索模式已经具备 mirror clone / fetch、task worktree、METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索、bounded snippets 注入 Context Pack、前端证据摘要展示、workspace 清理、高准确模式角色流转可观测、跨任务规则缺口看板和版本更新页收口。
+
+当前已解决“预算裁剪看不见、解释不了”的问题，V2-F-14 已补齐 `DTO_FIELD_CHANGED / FIELD_DELETED` 字段引用检索，V2-F-15 已补齐预算裁剪与上下文完整性保护，V2-F-16 已设计 finding 级二阶段补证据机制。后续优先目标是把规则缺口聚合成可执行的补全建议。下一阶段只推进 V2-F-17：规则缺口补全推荐算法与通用补齐流程。
 
 同时，反馈池、项目策略、上下文不足人工标记等人工沉淀能力先保留后端和数据结构，但生产前端默认屏蔽入口；不要删除已实现能力，不要删表，不要破坏现有 API 兼容。
 
-每次只推进一个阶段。当前优先按 docs/34 的 V2-F-13 做版本更新页收口，不扩展新的业务 Retriever。V2-F-13 验收后，再按用户确认进入 V2-F-14 DTO / VO 字段引用检索。不要修改 legacy Java backend；不要做全项目无限扫描；不要把整个项目源码塞进 Prompt；不要接向量库或复杂 RAG；不要自动降级或自动忽略 finding；不要自动改 Prompt。
+每次只推进一个阶段。当前优先按 docs/34 的 V2-F-17 做规则缺口补全推荐算法与通用补齐流程，不直接扩展 DB / 缓存 / MQ / 配置 Retriever。V2-F-17 完成后必须停止，等待用户验证并确认后，才根据推荐结果决定是否进入 V2-F-18 或其它具体 Retriever。不要修改 legacy Java backend；不要做全项目无限扫描；不要把整个项目源码塞进 Prompt；不要接向量库或复杂 RAG；不要自动降级或自动忽略 finding；不要自动改 Prompt。
 
 每个阶段完成后必须停止，输出“改了什么、为什么、如何验证”，等待用户验证并明确回复“继续下一阶段”后再推进。
 ```
@@ -1040,9 +1362,12 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 ```text
 请只落地 docs/34 的 V2-F-14：DTO / VO 字段引用检索 Retriever。
 
+目标是优先降低 DTO / VO 字段变更因上下文不足导致的误判，而不是简单增加 Prompt 长度。
+
 范围：
 - backend-python/app/review_context/local_retriever.py
 - backend-python/app/review_context/service.py
+- backend-python/app/review_context/service.py 中 Context Pack 组装逻辑，如需接入字段引用 snippets / 裁剪摘要
 - backend-python/app/code_quality/prompt.py 如需
 - 相关 tests
 - docs/34 V2-F-14 落地记录
@@ -1053,20 +1378,85 @@ V2-F-11 不要求新增业务检索能力，只做可解释性和前端角色流
 - 搜索必须限制在当前 task head worktree 内，并继续避开依赖、构建产物和缓存目录。
 - 输出 bounded snippets，snippet reason 使用 FIELD_REFERENCE / DTO_FIELD_REFERENCE。
 - 结果排序优先 Controller / Service / Mapper / Repository / DTO / VO / Excel VO / API 相关文件，降低测试、文档、生成代码优先级。
-- progress 只记录摘要：查询数、命中文件数、snippet 数、支持 signal 类型、跳过 signal 类型和截断状态；不记录源码。
-- Prompt 说明字段引用 snippets 是有限证据，未命中不等同于无风险。
+- progress 只记录摘要：查询数、命中文件数、snippet 数、支持 signal 类型、跳过 signal 类型、裁剪摘要和上下文可用性摘要；不记录源码。
+- 如果字段引用 snippets 因预算无法注入，Context Pack / progress 至少保留安全摘要：signal、字段名、查询数、命中文件数、被裁剪 snippet 数、top 相对路径和裁剪原因。
+- Prompt 说明字段引用 snippets 是有限证据，未命中、未注入或上下文不可用不等同于无风险。
+- 当关键 DTO / VO 字段引用上下文未注入、不可用或被裁剪时，除非 diff 本身已经足以证明硬风险，否则 finding 应输出 PARTIAL / INSUFFICIENT 的 contextStatus，并避免高置信结论。
 - 不做 AST / LSP / RAG，不自动降级、不自动忽略 finding。
 
 完成后运行相关后端测试并停止。
 ```
 
-### V2-F-15 Prompt：DB / Mapper / Entity 关联检索设计
+### V2-F-15 Prompt：预算裁剪与上下文完整性保护
 
 ```text
-请只设计 docs/34 的 V2-F-15：DB / Mapper / Entity 关联检索。
+请只落地 docs/34 的 V2-F-15：预算裁剪与上下文完整性保护。
+
+要求：
+- 不扩展新的业务 Retriever。
+- 为 DTO_FIELD_CHANGED / FIELD_DELETED / METHOD_SIGNATURE_CHANGED / METHOD_DELETED 等高误判 signal 增加预算优先级或最低保留额度。
+- BUDGET_CUT 不静默删除证据，必须保留安全摘要：signal、requested context、查询词摘要、命中文件数、被裁剪 snippet 数、top 相对路径和裁剪原因；不记录源码。
+- Context Pack 明确告诉模型“存在未注入证据”，避免把缺失误解为不存在。
+- Prompt 强化上下文完整性约束：关键 requested context 被裁剪或不可用时，除非 diff 本身足以证明硬风险，否则 finding 应为 PARTIAL / INSUFFICIENT，并降低置信度。
+- 前端高准确模式流转展示预算裁剪摘要和未注入原因。
+- 不自动降级、不自动忽略 finding、不自动改规则、不接 RAG。
+
+完成后运行相关后端测试和必要前端 build，并停止。
+```
+
+### V2-F-16 Prompt：Finding 级二阶段补证据设计
+
+```text
+请只设计 docs/34 的 V2-F-16：Finding 级二阶段补证据。
 
 要求：
 - 先输出设计，不编码。
+- 二阶段只在候选 finding 依赖 BUDGET_CUT / UNSUPPORTED_PLANNER_SIGNAL / UNAVAILABLE_REQUESTED_CONTEXT 等高风险缺口时触发。
+- 说明触发条件、最大 finding 数、单 finding 检索预算、超时、失败降级和 progress 事件。
+- 说明二阶段证据如何影响 contextStatus / confidence / evidence / missingContext。
+- 不无差别扩大第一阶段 Context Pack。
+- 不把检索失败解释为无风险。
+- 不做无限制全项目扫描，不记录源码、token、本地绝对路径或 provider raw output。
+
+完成后停止，等待用户确认是否进入实现。
+```
+
+### V2-F-17 Prompt：规则缺口补全推荐算法与通用补齐流程
+
+```text
+请只落地 docs/34 的 V2-F-17：规则缺口补全推荐算法与通用补齐流程。
+
+目标不是补某个具体 Retriever，而是让平台根据规则缺口看板自动给出“是否值得补、为什么、补什么、怎么补”的建议。
+
+范围：
+- backend-python/app/code_quality/rule_gap_dashboard.py 或相关规则缺口聚合模块
+- backend-python/app/code_quality/api.py 如需新增推荐接口或扩展现有响应
+- frontend/src/App.jsx、frontend/src/styles.css 如需展示“建议补全”视图
+- 相关 tests
+- docs/34 V2-F-17 落地记录
+
+要求：
+- 基于最近规则缺口数据生成补全建议，不自动实现补全。
+- 推荐评分至少考虑：缺口类型、signal 风险、出现次数、影响任务数、影响项目数、最近出现时间、是否关联 CONTEXT_MISSING / FALSE_POSITIVE 反馈、实现可行性、复杂度惩罚。
+- 输出用户可读字段：是否建议补全、建议原因、补全类型、建议下一阶段、建议 prompt。
+- 补全类型至少包括：PLANNER / RETRIEVER / BUDGET / PROMPT / STABILITY / OBSERVABILITY。
+- 建议状态至少包括：RECOMMENDED / WATCH / NOT_NOW。
+- 看板术语要产品化解释，避免只展示 gapType / signal / requestedContext 这类内部字段。
+- 推荐结果必须能跳转最近任务样例，供用户人工确认。
+- 不自动改规则、不自动改 Prompt、不自动扩展 Retriever。
+- 不返回源码片段、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
+
+完成后运行相关后端测试和必要前端 build，并停止。
+```
+
+### V2-F-18 Prompt：DB / Mapper / Entity 关联检索设计
+
+```text
+请只设计 docs/34 的 V2-F-18：DB / Mapper / Entity 关联检索。
+
+要求：
+- 先输出设计，不编码。
+- 设计前先查看 V2-F-17 的规则缺口推荐结果，确认 DB_SQL_MAPPER_CHANGED 是否确实建议补全。
 - 说明如何从 DB_SQL_MAPPER_CHANGED signal 提取表名、字段名、Mapper 方法名和 Entity 字段名。
 - 说明如何限制搜索范围、排序结果、控制预算和脱敏 progress。
 - 不连接运行期数据库，不读取生产 schema。
@@ -1085,6 +1475,7 @@ Agent 可自主推进：
 - 新增 progress 摘要事件。
 - 新增高准确模式角色流转 tab 和安全可解释性摘要。
 - 新增规则缺口摘要和跨任务优先级看板。
+- 新增规则缺口补全推荐算法、推荐接口、看板推荐视图和建议 prompt 草稿。
 - 扩展 DTO / VO 字段引用检索 Retriever。
 - 新增配置开关。
 - 新增前端高准确模式摘要展示。
@@ -1101,6 +1492,7 @@ Agent 不可自主推进：
 - 不做自动风险降级。
 - 不自动忽略 finding。
 - 不自动改 Prompt。
+- 不根据规则缺口推荐自动实现 Planner / Retriever / 预算策略 / Prompt 变更；必须等待用户确认。
 - 不跨项目共享策略或源码上下文。
 - 不在日志、progress、前端或模型输入中暴露 token。
 - 不执行未校验路径的递归删除。
@@ -1419,22 +1811,34 @@ V2-F-12：规则缺口沉淀与优先级看板（已完成）
   -> 聚合跨任务规则缺口，形成补齐 Planner / Retriever 能力的优先级依据
   -> 不自动改规则，不自动改 Prompt
 
-V2-F-13：版本更新页收口
+V2-F-13：版本更新页收口（已完成）
   -> 在版本更新页集中说明高准确模式主线
   -> 不提已默认隐藏的误判标识、反馈池、生成项目策略、项目策略管理或上下文不足人工标记
 
-V2-F-14：DTO / VO 字段引用检索 Retriever
-  -> 再支持 DTO_FIELD_CHANGED / FIELD_DELETED 的字段引用搜索
+V2-F-14：DTO / VO 字段引用检索 Retriever（已完成）
+  -> 支持 DTO_FIELD_CHANGED / FIELD_DELETED 的字段引用搜索
   -> 覆盖任务 669 这类真实 DTO / VO 字段变更场景
+  -> 把减少上下文不足误判作为验收重点
 
-V2-F-15：DB / Mapper / Entity 关联检索设计
-  -> 等 DTO Retriever 验证后再设计，不直接编码
+V2-F-15：预算裁剪与上下文完整性保护
+  -> 按高误判 signal 做预算优先级和最低保留额度
+  -> 裁剪 snippets 时保留安全摘要，避免缺失证据被误解为不存在
+  -> 让关键上下文缺失影响 finding 的 contextStatus 和置信度表达
+
+V2-F-16：Finding 级二阶段补证据设计
+  -> 当候选 finding 依赖 BUDGET_CUT / UNSUPPORTED_PLANNER_SIGNAL / UNAVAILABLE_REQUESTED_CONTEXT 时，再围绕少数 finding 窄范围补证据
+
+V2-F-17：规则缺口补全推荐算法与通用补齐流程
+  -> 根据缺口频率、影响范围、误判风险和实现成本，给出是否值得补全和下一阶段 prompt
+
+V2-F-18：DB / Mapper / Entity 关联检索设计
+  -> 等规则缺口推荐确认后再推进
 ```
 
 停止规则：
 
 ```text
-V2-F-12 已完成后，下一阶段只推进 V2-F-13。V2-F-13 完成后必须停止，等待用户验证并明确确认继续后，才进入 V2-F-14。
+V2-F-14 已完成后，下一阶段只推进 V2-F-15。V2-F-15 完成后必须停止，等待用户验证并明确确认继续后，才进入 V2-F-16。
 ```
 
 ## 二十四、V2-F-11 落地记录
@@ -1645,4 +2049,226 @@ V2-F-12 已完成；当前停止等待用户验证，不继续推进 V2-F-13。
 
 ```text
 V2-F-13 已完成；当前停止等待用户验证，不继续推进 V2-F-14。
+```
+
+## 二十七、V2-F-13 后误判优先级调整
+
+调整时间：2026-06-14。
+
+背景：
+
+- V2-F-11 / V2-F-12 / V2-F-13 已经让高准确模式中的 Planner、Retriever、预算裁剪和规则缺口可观测、可解释、可聚合。
+- 但预算裁剪导致的上下文不完整并没有被彻底解决：如果关键调用方、字段引用、配置读取点或 mapper 关联证据没有进入 Context Pack，模型仍可能基于不完整证据误判。
+- 因此后续优先目标从“继续扩展更多检索器”调整为“先降低上下文不足导致的高频误判”。
+
+调整结论：
+
+```text
+V2-F-14：DTO / VO 字段引用检索 Retriever（已完成）
+  -> 优先补 DTO_FIELD_CHANGED / FIELD_DELETED 字段引用检索
+  -> snippets 放不下时保留安全裁剪摘要
+  -> 关键字段引用上下文缺失时，finding 应使用 PARTIAL / INSUFFICIENT 的 contextStatus，并避免高置信结论
+
+V2-F-15：预算裁剪与上下文完整性保护
+  -> 按高误判 signal 做预算优先级和最低保留额度
+  -> BUDGET_CUT 保留安全摘要，告诉模型存在未注入证据
+  -> 前端高准确模式流转展示裁剪原因和未注入摘要
+
+V2-F-16：Finding 级二阶段补证据设计
+  -> 只围绕依赖 BUDGET_CUT / UNSUPPORTED_PLANNER_SIGNAL / UNAVAILABLE_REQUESTED_CONTEXT 的少数候选 finding 补证据
+  -> 不无差别扩大第一阶段 Context Pack
+
+V2-F-17：规则缺口补全推荐算法与通用补齐流程
+  -> 根据缺口频率、影响范围、误判风险和实现成本，给出是否值得补全和下一阶段 prompt
+
+V2-F-18：DB / Mapper / Entity 关联检索设计
+  -> 在规则缺口推荐确认后再推进
+```
+
+停止规则：
+
+```text
+V2-F-14 已完成后，下一阶段只推进 V2-F-15。V2-F-15 完成后必须停止，等待用户验证并明确确认继续后，才进入 V2-F-16。
+```
+
+## 二十八、V2-F-14 落地记录
+
+落地时间：2026-06-14。
+
+已完成：
+
+- Local Retriever 支持 `DTO_FIELD_CHANGED / FIELD_DELETED`，不再把 DTO / VO 字段变更作为 unsupported signal。
+- 字段引用检索会从 `details.fieldNames` 生成有限查询：
+  - 字段名。
+  - getter。
+  - setter。
+  - boolean 风格 `isXxx`。
+- 查询总数继续受 `LOCAL_CONTEXT_MAX_QUERIES` 控制，搜索范围仍限制在当前 task head worktree，并继续排除依赖、构建产物和缓存目录。
+- 字段引用 snippets 使用 `DTO_FIELD_REFERENCE / FIELD_REFERENCE`，和方法引用 `METHOD_REFERENCE` 区分。
+- 路径排序补充 DTO / VO / request / response / payload / form / api / excel 相关优先级，同时保留 Controller / Service / Mapper / Repository 优先级。
+- Local Retriever summary 新增安全摘要：
+  - `supportedSignalTypes`
+  - `skippedSignalTypes`
+  - `candidateSnippetCount`
+  - `fieldNames`
+  - `topMatchedPaths`
+- Context Pack 的 `budgetCutSummary` 新增 `localReferenceCutDetails`，当字段引用 snippets 被裁剪时仍保留查询、signal、字段名、命中文件数、候选 / 注入 snippet 数、top 相对路径和裁剪原因，不记录源码。
+- Prompt 强化字段引用上下文约束：删除字段或修改 DTO / VO 字段时，不能仅凭变更动作判定风险；字段引用 snippets 是有限证据，未命中、未注入或上下文不可用不等同于无风险；关键上下文缺失时应输出 `PARTIAL / INSUFFICIENT` 并避免高置信结论。
+- README 补充高准确模式当前支持的本地引用检索 signal。
+
+明确未做：
+
+- 不扩展 DB / 缓存 / MQ / 配置 Retriever。
+- 不做 AST / LSP / RAG。
+- 不自动降级、不自动忽略 finding。
+- 不恢复反馈池 / 人工沉淀入口。
+- 不修改 legacy Java backend。
+
+新增和调整测试：
+
+- `backend-python/tests/unit/test_local_retriever.py`
+- `backend-python/tests/unit/test_review_context_pack.py`
+- `backend-python/tests/unit/test_code_quality_prompt.py`
+- `backend-python/tests/contract/test_code_quality_api_contract.py`
+
+已验证：
+
+```powershell
+$env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\unit\test_local_retriever.py tests\unit\test_review_context_pack.py tests\unit\test_code_quality_prompt.py
+```
+
+结果：23 passed。
+
+```powershell
+$env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\contract\test_code_quality_api_contract.py::test_manual_review_builds_context_pack_and_records_progress tests\contract\test_code_quality_api_contract.py::test_manual_review_records_local_reference_search_progress_without_source tests\contract\test_code_quality_api_contract.py::test_manual_review_prepares_local_repo_context_without_leaking_token tests\contract\test_code_quality_rule_gaps_api_contract.py
+```
+
+结果：7 passed。
+
+停止规则：
+
+```text
+V2-F-14 已完成；当前停止等待用户验证，不继续推进 V2-F-15。
+```
+
+## 二十九、V2-F-15 落地记录
+
+落地时间：2026-06-15。
+
+已完成：
+
+- Context Pack 预算裁剪对高误判 signal 设置优先级和保底：
+  - `DTO_FIELD_CHANGED`
+  - `FIELD_DELETED`
+  - `METHOD_SIGNATURE_CHANGED`
+  - `METHOD_DELETED`
+- 本地引用 snippets 预算排序优先保留上述 signal 的原始字段名 / 方法名查询证据；getter / setter / `isXxx` 等 accessor 查询作为较低优先级证据参与裁剪。
+- 在删除关键本地引用 snippet 前，预算控制会先裁剪低价值本地引用 snippets、同文件片段、changed files 摘要、unavailable / requested context 摘要，并尽量把保底 snippet 缩小到匹配行窗口。
+- Context Pack 新增 `notInjectedEvidence`，当 snippets 因本地检索预算或 Context Pack prompt 预算未注入时，向模型注入安全摘要：
+  - signal / signalTypes。
+  - requested context。
+  - 查询词摘要。
+  - 命中文件数。
+  - 被裁剪 snippet 数。
+  - top 相对路径。
+  - 裁剪原因。
+- `budgetCutSummary.localReferenceCutDetails` 与 `notInjectedEvidence` 使用同类安全字段，progress / 前端可解释本次裁剪原因。
+- 摘要不记录源码、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
+- Prompt 强化上下文完整性约束：当 `notInjectedEvidence / BUDGET_CUT` 显示关键 requested context 被裁剪、未注入或不可用时，除非 diff 本身足以证明安全、数据一致性或线上正确性硬风险，否则 finding 必须使用 `PARTIAL / INSUFFICIENT`，并避免 `HIGH` confidence。
+- 前端“高准确模式流转 -> 预算裁剪摘要”展示高误判 signal 保留范围、未注入证据表格和裁剪原因。
+- README 补充高准确模式预算保护和未注入证据展示说明。
+
+明确未做：
+
+- 不扩展 DB / 缓存 / MQ / 配置 Retriever。
+- 不做 AST / LSP / RAG。
+- 不做 finding 级二阶段补证据实现。
+- 不自动降级、不自动忽略 finding、不自动改规则。
+- 不恢复反馈池 / 人工沉淀入口。
+- 不修改 legacy Java backend。
+
+新增和调整测试：
+
+- `backend-python/tests/unit/test_review_context_pack.py`
+- `backend-python/tests/unit/test_code_quality_prompt.py`
+- `backend-python/tests/contract/test_code_quality_api_contract.py`
+- `frontend/src/App.jsx`
+
+已验证：
+
+```powershell
+$env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\unit\test_review_context_pack.py tests\unit\test_code_quality_prompt.py
+```
+
+结果：16 passed。
+
+```powershell
+$env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\unit\test_review_context_pack.py tests\unit\test_code_quality_prompt.py tests\contract\test_code_quality_api_contract.py::test_manual_review_builds_context_pack_and_records_progress tests\contract\test_code_quality_api_contract.py::test_manual_review_records_local_reference_search_progress_without_source tests\contract\test_code_quality_rule_gaps_api_contract.py
+```
+
+结果：22 passed。
+
+```powershell
+.\scripts\run-frontend.cmd build
+```
+
+结果：build passed；仅保留既有 Vite chunk size warning。
+
+停止规则：
+
+```text
+V2-F-15 已完成；当前停止等待用户验证，不继续推进 V2-F-16。
+```
+
+## 三十、V2-F-16 落地记录
+
+落地时间：2026-06-15。
+
+已完成：
+
+- 在本文件补充 Finding 级二阶段补证据设计，明确二阶段是 finding 级“补充判定层”，不是扩大第一阶段 Context Pack。
+- 明确触发条件：
+  - 高影响 finding。
+  - `contextStatus=PARTIAL / INSUFFICIENT` 或缺少关键上下文。
+  - 同 review 存在 `BUDGET_CUT / UNSUPPORTED_PLANNER_SIGNAL / UNAVAILABLE_REQUESTED_CONTEXT / RETRIEVAL_FAILED / notInjectedEvidence` 等缺口。
+- 明确不触发条件：
+  - 无 finding、Review 失败、低影响 MINOR finding、重复执行、无可用摘要或只有表达问题。
+- 定义单 review / 单 finding 的二阶段预算、超时和限流建议。
+- 定义建议持久化结构 `code_quality_finding_context_refinements`，以及 finding 响应中的 `contextRefinement` 覆盖层。
+- 定义二阶段 progress 事件：
+  - `FINDING_CONTEXT_REFINE_PLANNED`
+  - `FINDING_CONTEXT_REFINE_SKIPPED`
+  - `FINDING_CONTEXT_REFINE_START`
+  - `FINDING_CONTEXT_EVIDENCE_RETRIEVED`
+  - `FINDING_CONTEXT_EVIDENCE_UNAVAILABLE`
+  - `FINDING_CONTEXT_PROVIDER_REQUEST`
+  - `FINDING_CONTEXT_PROVIDER_RESULT`
+  - `FINDING_CONTEXT_REFINE_FAILED`
+  - `FINDING_CONTEXT_REFINE_FINISHED`
+- 明确 Provider 交互采用“单 finding 补充判定”，不重跑整个 Review，不要求 Provider 删除 finding。
+- 明确二阶段证据对 `contextStatus / confidence / evidence / missingContext` 的影响方式：作为显式覆盖层，不静默覆盖原 finding，不自动改 severity。
+- 明确前端展示方案：finding 卡片增加“二阶段补证据”区块，高准确模式流转增加 Finding 级补证据节点。
+- 明确失败降级和安全边界：失败不改变第一阶段结果，不把检索失败解释为无风险；不记录源码、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
+
+明确未做：
+
+- 不编码二阶段执行器。
+- 不新增表、迁移、API 或前端实现。
+- 不扩展 DB / 缓存 / MQ / 配置 Retriever。
+- 不做 AST / LSP / RAG。
+- 不自动降级、不自动忽略 finding、不自动改规则。
+- 不修改 legacy Java backend。
+
+已验证：
+
+```powershell
+git diff --check
+```
+
+结果：通过；仅有既有 CRLF warning。
+
+停止规则：
+
+```text
+V2-F-16 已完成；当前停止等待用户验证，不继续推进 V2-F-17。
 ```

@@ -34,6 +34,14 @@ CONTEXT_PLANNER_MAX_REQUESTED_CONTEXTS = 16
 CONTEXT_PLANNER_MAX_FILE_PATHS_PER_CONTEXT = 8
 CONTEXT_PLANNER_MAX_FEEDBACK_CONTEXT_TYPES = 5
 RULE_GAP_MAX_ITEMS = 12
+HIGH_MISJUDGMENT_SIGNAL_TYPES = {
+    "DTO_FIELD_CHANGED",
+    "FIELD_DELETED",
+    "METHOD_SIGNATURE_CHANGED",
+    "METHOD_DELETED",
+}
+LOCAL_REFERENCE_MIN_SNIPPETS_PER_HIGH_SIGNAL_SEARCH = 1
+NOT_INJECTED_EVIDENCE_MAX_ITEMS = 8
 
 
 _METHOD_SIGNATURE_PATTERNS = [
@@ -116,6 +124,8 @@ def build_review_context_pack(
         planner_signals=planner_signals,
     )
     local_reference_pack_context = _local_reference_pack_context(local_reference_context)
+    _prioritize_local_reference_context(local_reference_pack_context)
+    not_injected_evidence = _not_injected_evidence_from_local_reference(local_reference_pack_context)
     _apply_local_reference_availability(requested_contexts, local_reference_pack_context)
     planner_unavailable_contexts = _planner_unavailable_contexts(requested_contexts)
     context_plan["unavailableContextCount"] = len(planner_unavailable_contexts)
@@ -140,6 +150,8 @@ def build_review_context_pack(
         "unavailableContexts": unavailable_contexts,
         "unavailableContextsTruncated": len(unavailable_contexts) >= CONTEXT_PACK_MAX_UNAVAILABLE_CONTEXTS,
     }
+    if not_injected_evidence.get("hasNotInjectedEvidence"):
+        context_pack["notInjectedEvidence"] = not_injected_evidence
     review_context = {
         "version": CONTEXT_PACK_VERSION,
         "mode": mode or "DIFF_TEXT",
@@ -1031,7 +1043,7 @@ def _fit_context_pack_budget(
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
             continue
-        if _remove_last_local_reference_snippet(context_pack):
+        if _remove_last_local_reference_snippet(context_pack, protect_high_priority=True):
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
             continue
@@ -1046,6 +1058,26 @@ def _fit_context_pack_budget(
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
             continue
+        if _remove_last_unavailable_context(context_pack):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
+        if _remove_last_requested_context(context_pack):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
+        if _shrink_last_local_reference_snippet(context_pack):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
+        if _remove_last_local_reference_search_metadata(context_pack, protect_high_priority=True):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
+        if _remove_last_local_reference_snippet(context_pack, protect_high_priority=False):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
         break
     return prompt_text, truncated_by_budget
 
@@ -1057,28 +1089,53 @@ def _remove_empty_local_reference_context(context_pack: dict[str, Any]) -> bool:
     summary = local_reference.get("summary") or {}
     if int(summary.get("includedSnippetCount") or 0) > 0:
         return False
+    searches = [item for item in (local_reference.get("searches") or []) if isinstance(item, dict)]
+    if any(
+        item.get("query")
+        or int(item.get("matchedFileCount") or 0) > 0
+        or int(item.get("candidateSnippetCount") or 0) > 0
+        or bool(item.get("truncated"))
+        for item in searches
+    ):
+        return False
     context_pack.pop("localReferenceContext", None)
     if int((context_pack.get("localReferenceSearch") or {}).get("queryCount") or 0) <= 0:
         context_pack.pop("localReferenceSearch", None)
     return True
 
 
-def _remove_last_local_reference_snippet(context_pack: dict[str, Any]) -> bool:
+def _remove_last_local_reference_snippet(
+    context_pack: dict[str, Any],
+    *,
+    protect_high_priority: bool,
+) -> bool:
     local_reference = context_pack.get("localReferenceContext") or {}
     searches = local_reference.get("searches") or []
-    while searches:
-        last_search = searches[-1]
-        snippets = last_search.get("snippets") or []
+    for search in reversed([item for item in searches if isinstance(item, dict)]):
+        snippets = search.get("snippets") or []
         if snippets:
+            if (
+                protect_high_priority
+                and _is_budget_protected_reference_search(search)
+                and len(snippets) <= LOCAL_REFERENCE_MIN_SNIPPETS_PER_HIGH_SIGNAL_SEARCH
+            ):
+                continue
             snippets.pop()
-            last_search["snippets"] = snippets
-            last_search["includedSnippetCount"] = len(snippets)
-            last_search["truncated"] = True
+            search["snippets"] = snippets
+            search["includedSnippetCount"] = len(snippets)
+            search["truncated"] = True
+            _record_not_injected_local_reference(
+                context_pack,
+                search,
+                cut_snippet_count=1,
+                reason=(
+                    "CONTEXT_PACK_PROMPT_BUDGET_LAST_RESORT"
+                    if _is_budget_protected_reference_search(search) and not protect_high_priority
+                    else "CONTEXT_PACK_PROMPT_BUDGET"
+                ),
+            )
             _sync_local_reference_summary(context_pack, truncated=True)
             return True
-        searches.pop()
-        local_reference["searches"] = searches
-        _sync_local_reference_summary(context_pack, truncated=True)
     return False
 
 
@@ -1109,6 +1166,99 @@ def _remove_last_source_snippet(context_pack: dict[str, Any]) -> bool:
         source_contexts.pop()
     same_file["sourceSnippets"] = source_contexts
     return False
+
+
+def _remove_last_unavailable_context(context_pack: dict[str, Any]) -> bool:
+    unavailable_contexts = context_pack.get("unavailableContexts") or []
+    if not unavailable_contexts:
+        return False
+    unavailable_contexts.pop()
+    context_pack["unavailableContexts"] = unavailable_contexts
+    context_pack["unavailableContextsTruncated"] = True
+    return True
+
+
+def _remove_last_requested_context(context_pack: dict[str, Any]) -> bool:
+    requested_contexts = context_pack.get("requestedContexts") or []
+    if len(requested_contexts) <= 1:
+        return False
+    removable_index = next(
+        (
+            index
+            for index in range(len(requested_contexts) - 1, -1, -1)
+            if str((requested_contexts[index] or {}).get("type") or "").upper() != "REFERENCE_SEARCH"
+        ),
+        None,
+    )
+    if removable_index is None:
+        return False
+    requested_contexts.pop(removable_index)
+    context_pack["requestedContexts"] = requested_contexts
+    context_plan = context_pack.get("contextPlan") or {}
+    context_plan["requestedContextsTrimmedByBudget"] = True
+    context_pack["contextPlan"] = context_plan
+    return True
+
+
+def _shrink_last_local_reference_snippet(context_pack: dict[str, Any]) -> bool:
+    local_reference = context_pack.get("localReferenceContext") or {}
+    searches = [item for item in (local_reference.get("searches") or []) if isinstance(item, dict)]
+    for search in reversed(searches):
+        for snippet in reversed([item for item in (search.get("snippets") or []) if isinstance(item, dict)]):
+            if _shrink_snippet_lines(snippet):
+                search["truncated"] = True
+                _sync_local_reference_summary(context_pack, truncated=True)
+                return True
+    return False
+
+
+def _remove_last_local_reference_search_metadata(
+    context_pack: dict[str, Any],
+    *,
+    protect_high_priority: bool,
+) -> bool:
+    local_reference = context_pack.get("localReferenceContext") or {}
+    searches = [item for item in (local_reference.get("searches") or []) if isinstance(item, dict)]
+    for index in range(len(searches) - 1, -1, -1):
+        search = searches[index]
+        if protect_high_priority and _is_budget_protected_reference_search(search):
+            continue
+        cut_snippet_count = int(search.get("includedSnippetCount") or 0)
+        if cut_snippet_count > 0:
+            _record_not_injected_local_reference(
+                context_pack,
+                search,
+                cut_snippet_count=cut_snippet_count,
+                reason="CONTEXT_PACK_PROMPT_BUDGET",
+            )
+        searches.pop(index)
+        local_reference["searches"] = searches
+        _sync_local_reference_summary(context_pack, truncated=True)
+        return True
+    return False
+
+
+def _shrink_snippet_lines(snippet: dict[str, Any]) -> bool:
+    lines = [item for item in (snippet.get("lines") or []) if isinstance(item, dict)]
+    if len(lines) <= 1:
+        return False
+    try:
+        match_line = int(snippet.get("matchLine") or 0)
+    except (TypeError, ValueError):
+        match_line = 0
+    first_number = int(lines[0].get("number") or 0)
+    last_number = int(lines[-1].get("number") or 0)
+    if first_number != match_line and abs(first_number - match_line) >= abs(last_number - match_line):
+        lines.pop(0)
+    elif last_number != match_line:
+        lines.pop()
+    else:
+        lines.pop(0)
+    snippet["lines"] = lines
+    snippet["startLine"] = int(lines[0].get("number") or snippet.get("startLine") or 1)
+    snippet["endLine"] = int(lines[-1].get("number") or snippet.get("endLine") or snippet["startLine"])
+    snippet["truncated"] = True
+    return True
 
 
 def _render_context_pack_text(review_context: dict[str, Any]) -> str:
@@ -1234,10 +1384,168 @@ def _local_reference_pack_context(retrieval: dict[str, Any]) -> dict[str, Any]:
     }
     if included_snippet_count > 0:
         context["note"] = (
-            "Bounded local worktree reference snippets for METHOD_DELETED / METHOD_SIGNATURE_CHANGED. "
+            "Bounded local worktree reference snippets for method and DTO / field change signals. "
             "They are auxiliary evidence only."
         )
     return context
+
+
+def _prioritize_local_reference_context(local_reference_context: dict[str, Any]) -> None:
+    searches = [item for item in (local_reference_context.get("searches") or []) if isinstance(item, dict)]
+    searches.sort(key=_local_reference_budget_rank)
+    local_reference_context["searches"] = searches
+
+
+def _local_reference_budget_rank(search: dict[str, Any]) -> tuple[int, int, str]:
+    high_priority = _is_high_priority_reference_search(search)
+    matched_file_count = int(search.get("matchedFileCount") or 0)
+    return (
+        0 if high_priority else 1,
+        0 if _is_primary_symbol_query(search) else 1,
+        -matched_file_count,
+        str(search.get("query") or ""),
+    )
+
+
+def _is_high_priority_reference_search(search: dict[str, Any]) -> bool:
+    signal_types = {str(item or "").upper() for item in (search.get("signalTypes") or [])}
+    return bool(signal_types & HIGH_MISJUDGMENT_SIGNAL_TYPES)
+
+
+def _is_budget_protected_reference_search(search: dict[str, Any]) -> bool:
+    return _is_high_priority_reference_search(search) and _is_primary_symbol_query(search)
+
+
+def _is_primary_symbol_query(search: dict[str, Any]) -> bool:
+    query = str(search.get("query") or "")
+    field_names = {str(item or "") for item in (search.get("fieldNames") or [])}
+    return not field_names or query in field_names
+
+
+def _not_injected_evidence_from_local_reference(local_reference_context: dict[str, Any]) -> dict[str, Any]:
+    summary = _empty_not_injected_evidence_summary()
+    for search in [item for item in (local_reference_context.get("searches") or []) if isinstance(item, dict)]:
+        candidate_count = int(search.get("candidateSnippetCount") or search.get("includedSnippetCount") or 0)
+        included_count = int(search.get("includedSnippetCount") or 0)
+        cut_count = max(candidate_count - included_count, 0)
+        if cut_count <= 0:
+            continue
+        _append_not_injected_evidence_item(
+            summary,
+            _not_injected_local_reference_item(
+                search,
+                cut_snippet_count=cut_count,
+                reason="LOCAL_REFERENCE_SNIPPET_BUDGET",
+            ),
+        )
+    return summary
+
+
+def _empty_not_injected_evidence_summary() -> dict[str, Any]:
+    return {
+        "hasNotInjectedEvidence": False,
+        "items": [],
+        "note": "Evidence existed but was not injected; do not treat it as absent.",
+    }
+
+
+def _record_not_injected_local_reference(
+    context_pack: dict[str, Any],
+    search: dict[str, Any],
+    *,
+    cut_snippet_count: int,
+    reason: str,
+) -> None:
+    if cut_snippet_count <= 0:
+        return
+    summary = context_pack.get("notInjectedEvidence")
+    if not isinstance(summary, dict):
+        summary = _empty_not_injected_evidence_summary()
+        context_pack["notInjectedEvidence"] = summary
+    _append_not_injected_evidence_item(
+        summary,
+        _not_injected_local_reference_item(
+            search,
+            cut_snippet_count=cut_snippet_count,
+            reason=reason,
+        ),
+    )
+    reasons = [str(item) for item in (search.get("budgetCutReasons") or []) if str(item)]
+    if reason not in reasons:
+        reasons.append(reason)
+    search["budgetCutReasons"] = reasons[:4]
+
+
+def _append_not_injected_evidence_item(summary: dict[str, Any], item: dict[str, Any]) -> None:
+    items = [entry for entry in (summary.get("items") or []) if isinstance(entry, dict)]
+    merge_key = (
+        item.get("signal"),
+        item.get("requestedContext"),
+        item.get("querySummary"),
+        item.get("reason"),
+    )
+    for existing in items:
+        existing_key = (
+            existing.get("signal"),
+            existing.get("requestedContext"),
+            existing.get("querySummary"),
+            existing.get("reason"),
+        )
+        if existing_key != merge_key:
+            continue
+        existing["cutSnippetCount"] = int(existing.get("cutSnippetCount") or 0) + int(item.get("cutSnippetCount") or 0)
+        existing["matchedFileCount"] = max(
+            int(existing.get("matchedFileCount") or 0),
+            int(item.get("matchedFileCount") or 0),
+        )
+        existing["topRelativePaths"] = _merge_limited_strings(
+            existing.get("topRelativePaths") or [],
+            item.get("topRelativePaths") or [],
+            limit=5,
+        )
+        summary["hasNotInjectedEvidence"] = True
+        summary["items"] = items[:NOT_INJECTED_EVIDENCE_MAX_ITEMS]
+        return
+    items.append(item)
+    summary["hasNotInjectedEvidence"] = True
+    summary["items"] = items[:NOT_INJECTED_EVIDENCE_MAX_ITEMS]
+    summary["truncated"] = len(items) > NOT_INJECTED_EVIDENCE_MAX_ITEMS
+
+
+def _not_injected_local_reference_item(
+    search: dict[str, Any],
+    *,
+    cut_snippet_count: int,
+    reason: str,
+) -> dict[str, Any]:
+    signal_types = [str(item).upper()[:80] for item in (search.get("signalTypes") or [])[:4]]
+    return {
+        "type": "LOCAL_REFERENCE_SNIPPET",
+        "signal": ", ".join(signal_types) or "-",
+        "signalTypes": signal_types,
+        "requestedContext": "REFERENCE_SEARCH",
+        "querySummary": _truncate(str(search.get("query") or ""), 120),
+        "fieldNames": [str(item)[:80] for item in (search.get("fieldNames") or [])[:6]],
+        "matchedFileCount": int(search.get("matchedFileCount") or 0),
+        "cutSnippetCount": max(int(cut_snippet_count), 0),
+        "topRelativePaths": [
+            _truncate(str(path or ""), CONTEXT_PACK_MAX_PATH_CHARS)
+            for path in (search.get("topMatchedPaths") or [])[:5]
+        ],
+        "reasonCode": "BUDGET_CUT",
+        "reason": reason,
+    }
+
+
+def _merge_limited_strings(first: list[Any], second: list[Any], *, limit: int) -> list[str]:
+    result: list[str] = []
+    for item in [*first, *second]:
+        value = str(item or "")
+        if value and value not in result:
+            result.append(value)
+        if len(result) >= limit:
+            break
+    return result
 
 
 def _apply_local_reference_availability(
@@ -1259,6 +1567,8 @@ def _empty_local_reference_summary() -> dict[str, Any]:
         "matchedFileCount": 0,
         "includedSnippetCount": 0,
         "truncated": False,
+        "supportedSignalTypes": [],
+        "skippedSignalTypes": [],
     }
 
 
@@ -1268,6 +1578,15 @@ def _local_reference_progress_summary(local_reference: dict[str, Any]) -> dict[s
         "matchedFileCount": int(local_reference.get("matchedFileCount") or 0),
         "includedSnippetCount": int(local_reference.get("includedSnippetCount") or 0),
         "truncated": bool(local_reference.get("truncated", False)),
+        "supportedSignalTypes": [str(item) for item in (local_reference.get("supportedSignalTypes") or [])[:12]],
+        "skippedSignalTypes": [
+            {
+                "type": str(item.get("type") or ""),
+                "count": int(item.get("count") or 0),
+            }
+            for item in (local_reference.get("skippedSignalTypes") or [])[:12]
+            if isinstance(item, dict)
+        ],
     }
 
 
@@ -1433,7 +1752,56 @@ def _budget_cut_summary(
             0,
         ),
         "localReferenceContextRemoved": bool(before.get("hasLocalReferenceContext") and not after.get("hasLocalReferenceContext")),
+        "localReferenceCutDetails": _local_reference_cut_details(context_pack),
+        "notInjectedEvidence": (context_pack.get("notInjectedEvidence") or {}).get("items") or [],
+        "protectedSignalTypes": sorted(HIGH_MISJUDGMENT_SIGNAL_TYPES),
+        "localReferenceMinSnippetsPerProtectedSearch": LOCAL_REFERENCE_MIN_SNIPPETS_PER_HIGH_SIGNAL_SEARCH,
     }
+
+
+def _local_reference_cut_details(context_pack: dict[str, Any]) -> list[dict[str, Any]]:
+    local_reference = context_pack.get("localReferenceContext") or {}
+    searches = [item for item in (local_reference.get("searches") or []) if isinstance(item, dict)]
+    details: list[dict[str, Any]] = []
+    for search in searches:
+        candidate_count = int(search.get("candidateSnippetCount") or search.get("includedSnippetCount") or 0)
+        included_count = int(search.get("includedSnippetCount") or 0)
+        cut_count = max(candidate_count - included_count, 0)
+        if cut_count <= 0:
+            continue
+        details.append(
+            {
+                "type": "LOCAL_REFERENCE_SNIPPET",
+                "signal": ", ".join([str(item).upper()[:80] for item in (search.get("signalTypes") or [])[:4]]) or "-",
+                "requestedContext": "REFERENCE_SEARCH",
+                "querySummary": _truncate(str(search.get("query") or ""), 120),
+                "query": _truncate(str(search.get("query") or ""), 120),
+                "signalTypes": [str(item)[:80] for item in (search.get("signalTypes") or [])[:4]],
+                "fieldNames": [str(item)[:80] for item in (search.get("fieldNames") or [])[:6]],
+                "matchedFileCount": int(search.get("matchedFileCount") or 0),
+                "candidateSnippetCount": candidate_count,
+                "includedSnippetCount": included_count,
+                "cutSnippetCount": cut_count,
+                "topMatchedPaths": [
+                    _truncate(str(path or ""), CONTEXT_PACK_MAX_PATH_CHARS)
+                    for path in (search.get("topMatchedPaths") or [])[:5]
+                ],
+                "topRelativePaths": [
+                    _truncate(str(path or ""), CONTEXT_PACK_MAX_PATH_CHARS)
+                    for path in (search.get("topMatchedPaths") or [])[:5]
+                ],
+                "reasonCode": "BUDGET_CUT",
+                "reason": _local_reference_cut_reason(search),
+            }
+        )
+    return details[:8]
+
+
+def _local_reference_cut_reason(search: dict[str, Any]) -> str:
+    reasons = [str(item) for item in (search.get("budgetCutReasons") or []) if str(item)]
+    if reasons:
+        return ", ".join(reasons[:3])
+    return "LOCAL_REFERENCE_SNIPPET_BUDGET"
 
 
 def _rule_gap_items(

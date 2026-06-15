@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：V2-A / V2-B / V2-C / V2-D / V2-E 已落地并通过相关测试；V2-F-1 / V2-F-2 / V2-F-3 已落地；V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环、V2-F-6 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED` 引用搜索 Retriever MVP、V2-F-7 本地引用证据注入 Context Pack、V2-F-8 前端高准确模式摘要 / 人工沉淀入口熄灯、V2-F-9 生产验证、V2-F-10 本地 workspace 清理与磁盘保护、V2-F-11 高准确模式角色流转可观测、V2-F-12 规则缺口沉淀与优先级看板、V2-F-13 版本更新页收口已落地。V2-F-3 后短期主线调整为 `docs/34-local-repository-context-retrieval-plan.md` 的本地仓库上下文检索 / 高准确 Review 模式，人工沉淀能力先在产品界面默认屏蔽。下一阶段进入 V2-F-14 DTO / VO 字段引用检索。
+- 当前状态：V2-A / V2-B / V2-C / V2-D / V2-E 已落地并通过相关测试；V2-F-1 / V2-F-2 / V2-F-3 已落地；V2-F-5 本地仓库 mirror clone / fetch / worktree 最小闭环、V2-F-6 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED` 引用搜索 Retriever MVP、V2-F-7 本地引用证据注入 Context Pack、V2-F-8 前端高准确模式摘要 / 人工沉淀入口熄灯、V2-F-9 生产验证、V2-F-10 本地 workspace 清理与磁盘保护、V2-F-11 高准确模式角色流转可观测、V2-F-12 规则缺口沉淀与优先级看板、V2-F-13 版本更新页收口、V2-F-14 DTO / VO 字段引用检索、V2-F-15 预算裁剪与上下文完整性保护、V2-F-16 Finding 级二阶段补证据设计已落地。V2-F-3 后短期主线调整为 `docs/34-local-repository-context-retrieval-plan.md` 的本地仓库上下文检索 / 高准确 Review 模式，人工沉淀能力先在产品界面默认屏蔽。下一阶段进入 V2-F-17 规则缺口补全推荐算法与通用补齐流程。
 - 编写时间：2026-06-10
 - 前置版本：
   - `docs/29-review-feedback-v1-implementation.md`
@@ -40,7 +40,10 @@
 已完成：V2-F-11 高准确模式角色流转可观测
 已完成：V2-F-12 规则缺口沉淀与优先级看板
 已完成：V2-F-13 版本更新页收口
-下一步：V2-F-14 DTO / VO 字段引用检索，并根据评估扩展 DB / 缓存 / MQ / 配置检索
+已完成：V2-F-14 DTO / VO 字段引用检索
+已完成：V2-F-15 预算裁剪与上下文完整性保护
+已完成：V2-F-16 设计 finding 级二阶段补证据
+下一步：V2-F-17 做规则缺口补全推荐算法与通用补齐流程，再根据推荐结果扩展 DB / 缓存 / MQ / 配置检索
 ```
 
 原因：
@@ -49,6 +52,7 @@
 2. V2 项目策略注入能直接解决“项目规范导致反复误判”的主线问题，是反馈池从记录台账变成产品能力的关键。
 3. V1.5 已经让 finding 支持 `contextStatus / evidence / missingContext / contextSummary`，足够支撑 V2 先行，不会阻塞策略注入。
 4. 上下文不足反馈和动态上下文补充仍有价值，但应降级为 V2 之后的轻量增强或通用 Context Pack，而不是单点专项。
+5. V2-F-13 已让预算裁剪可观测、可解释、可聚合，但没有彻底消除上下文不完整导致的误判；后续应优先补高频 field signal、预算裁剪摘要、上下文完整性约束和二阶段补证据，而不是仅靠扩大预算。
 
 ## 二、31 阶段 3~5 取舍
 
@@ -340,9 +344,9 @@ V2 项目策略注入解决的是“项目规范 / 团队约定 / 架构事实�
 ```text
 请阅读 AGENTS.md、README.md、docs/32-review-feedback-v2-mainline-roadmap.md、docs/33-review-learning-capability-roadmap.md、docs/34-local-repository-context-retrieval-plan.md。
 
-当前 V2-A 到 V2-E、V2-F-1 / V2-F-2 / V2-F-3、V2-F-5 / V2-F-6 / V2-F-7 / V2-F-8 / V2-F-9 均已落地或已验收。短期主线已经切到 docs/34 的本地仓库上下文检索 / 高准确 Review 模式；下一阶段只推进 V2-F-10：本地 workspace 清理与磁盘保护。
+当前 V2-A 到 V2-E、V2-F-1 / V2-F-2 / V2-F-3、V2-F-5 / V2-F-6 / V2-F-7 / V2-F-8 / V2-F-9 / V2-F-10 / V2-F-11 / V2-F-12 / V2-F-13 / V2-F-14 / V2-F-15 / V2-F-16 均已落地或已验收。短期主线已经切到 docs/34 的本地仓库上下文检索 / 高准确 Review 模式；下一阶段只推进 V2-F-17：规则缺口补全推荐算法与通用补齐流程。
 
-每次只推进一个阶段。V2-F-10 只补本地仓库 workspace 的 worktree TTL 清理、mirror 闲置清理、磁盘占用统计和安全路径校验；不要扩展新的业务检索器，不要恢复人工沉淀前端入口，除非用户完成验证后明确要求进入新阶段。允许自主修改 backend-python、frontend、docs、examples、tests 中与当前阶段直接相关的文件；不要修改 legacy Java backend；不要实现当前阶段外的自动 Prompt 改写、自动降级、模型评测、RAG、向量库、跨项目策略共享或全项目扫描。
+每次只推进一个阶段。V2-F-17 只做规则缺口补全推荐算法与通用补齐流程，让平台根据缺口频率、影响范围、误判风险和实现成本给出“是否值得补、为什么、补什么、怎么补”的建议；不要直接扩展 DB / 缓存 / MQ / 配置 Retriever，不要恢复人工沉淀前端入口，除非用户完成验证后明确要求进入新阶段。允许自主修改 backend-python、frontend、docs、examples、tests 中与当前阶段直接相关的文件；不要修改 legacy Java backend；不要实现当前阶段外的自动 Prompt 改写、自动降级、模型评测、RAG、向量库、跨项目策略共享或全项目扫描。
 
 每个阶段完成后必须停止，输出“改了什么、为什么、如何验证”，等待用户验证并明确回复“继续下一阶段”后再推进。
 ```
@@ -888,8 +892,12 @@ V2-F-9：生产验证与效果复盘（已验收）
 V2-F-10：本地 workspace 清理与磁盘保护（已完成）
 V2-F-11：高准确模式角色流转可观测（已完成）
 V2-F-12：规则缺口沉淀与优先级看板（已完成）
-V2-F-13：版本更新页收口
-V2-F-14：DTO / VO 字段引用检索 Retriever
+V2-F-13：版本更新页收口（已完成）
+V2-F-14：DTO / VO 字段引用检索 Retriever（已完成）
+V2-F-15：预算裁剪与上下文完整性保护（已完成）
+V2-F-16：Finding 级二阶段补证据设计（已完成）
+V2-F-17：规则缺口补全推荐算法与通用补齐流程
+V2-F-18：DB / Mapper / Entity 关联检索设计
 ```
 
 明确保留但默认不展示：

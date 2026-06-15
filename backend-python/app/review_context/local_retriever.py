@@ -10,7 +10,12 @@ from typing import Any
 from app.core.config import get_settings
 
 
-SUPPORTED_REFERENCE_SIGNAL_TYPES = {"METHOD_DELETED", "METHOD_SIGNATURE_CHANGED"}
+SUPPORTED_REFERENCE_SIGNAL_TYPES = {
+    "METHOD_DELETED",
+    "METHOD_SIGNATURE_CHANGED",
+    "FIELD_DELETED",
+    "DTO_FIELD_CHANGED",
+}
 LOCAL_REFERENCE_CONTEXT_TYPE = "REFERENCE_SEARCH"
 
 _DEFAULT_MAX_QUERIES = 8
@@ -55,12 +60,20 @@ def retrieve_local_reference_context(
     worktree_path: Path | str | None,
     planner_signals: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
-    queries = _queries_from_signals(planner_signals or [])
+    signals = planner_signals or []
+    queries = _queries_from_signals(signals)
     max_queries = _env_int("LOCAL_CONTEXT_MAX_QUERIES", _DEFAULT_MAX_QUERIES, minimum=1)
     selected_queries = queries[:max_queries]
     truncated = len(queries) > len(selected_queries)
     if not selected_queries:
-        return _result("SKIPPED", query_count=0, matched_files=set(), searches=[], truncated=truncated)
+        return _result(
+            "SKIPPED",
+            query_count=0,
+            matched_files=set(),
+            searches=[],
+            truncated=truncated,
+            planner_signals=signals,
+        )
 
     started = perf_counter()
     try:
@@ -72,6 +85,7 @@ def retrieve_local_reference_context(
             matched_files=set(),
             searches=[],
             truncated=truncated,
+            planner_signals=signals,
             unavailable_contexts=[
                 {
                     "type": LOCAL_REFERENCE_CONTEXT_TYPE,
@@ -113,6 +127,7 @@ def retrieve_local_reference_context(
         matched_files=matched_files,
         searches=searches,
         truncated=truncated,
+        planner_signals=signals,
         unavailable_contexts=unavailable_contexts,
         duration_ms=_duration_ms(started),
     )
@@ -120,30 +135,76 @@ def retrieve_local_reference_context(
 
 def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     queries: dict[str, dict[str, Any]] = {}
+
+    def add_query(
+        query: str,
+        *,
+        signal_type: str,
+        file_path: str,
+        reason: str,
+        field_name: str | None = None,
+    ) -> None:
+        value = str(query or "").strip()
+        if not value:
+            return
+        item = queries.setdefault(
+            value,
+            {
+                "query": value,
+                "signalTypes": set(),
+                "filePaths": set(),
+                "reasons": set(),
+                "fieldNames": set(),
+            },
+        )
+        item["signalTypes"].add(signal_type)
+        item["reasons"].add(reason)
+        if file_path:
+            item["filePaths"].add(file_path)
+        if field_name:
+            item["fieldNames"].add(field_name)
+
     for signal in signals:
         signal_type = str(signal.get("type") or "").strip().upper()
         if signal_type not in SUPPORTED_REFERENCE_SIGNAL_TYPES:
             continue
         details = signal.get("details") if isinstance(signal.get("details"), dict) else {}
-        method_names = details.get("methodNames") if isinstance(details, dict) else []
-        if not isinstance(method_names, list):
-            continue
-        for method_name in method_names:
-            query = str(method_name or "").strip()
-            if not query:
+        file_path = str(signal.get("filePath") or "").strip()
+        if signal_type in {"METHOD_DELETED", "METHOD_SIGNATURE_CHANGED"}:
+            method_names = details.get("methodNames") if isinstance(details, dict) else []
+            if not isinstance(method_names, list):
                 continue
-            item = queries.setdefault(
-                query,
-                {
-                    "query": query,
-                    "signalTypes": set(),
-                    "filePaths": set(),
-                },
+            for method_name in method_names:
+                add_query(
+                    str(method_name or ""),
+                    signal_type=signal_type,
+                    file_path=file_path,
+                    reason="METHOD_REFERENCE",
+                )
+            continue
+
+        field_names = details.get("fieldNames") if isinstance(details, dict) else []
+        if not isinstance(field_names, list):
+            continue
+        reason = "DTO_FIELD_REFERENCE" if signal_type == "DTO_FIELD_CHANGED" else "FIELD_REFERENCE"
+        fields = [str(field_name or "").strip() for field_name in field_names if str(field_name or "").strip()]
+        for field_name in fields:
+            add_query(
+                field_name,
+                signal_type=signal_type,
+                file_path=file_path,
+                reason=reason,
+                field_name=field_name,
             )
-            item["signalTypes"].add(signal_type)
-            file_path = str(signal.get("filePath") or "").strip()
-            if file_path:
-                item["filePaths"].add(file_path)
+        for field_name in fields:
+            for accessor in _field_accessor_queries(field_name):
+                add_query(
+                    accessor,
+                    signal_type=signal_type,
+                    file_path=file_path,
+                    reason=reason,
+                    field_name=field_name,
+                )
     result = []
     for item in queries.values():
         result.append(
@@ -151,9 +212,30 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "query": item["query"],
                 "signalTypes": sorted(item["signalTypes"]),
                 "filePaths": sorted(item["filePaths"]),
+                "reasons": sorted(item["reasons"]),
+                "fieldNames": sorted(item["fieldNames"]),
             }
         )
     return result
+
+
+def _field_accessor_queries(field_name: str) -> list[str]:
+    suffix = _field_accessor_suffix(field_name)
+    if not suffix:
+        return []
+    return [f"get{suffix}", f"set{suffix}", f"is{suffix}"]
+
+
+def _field_accessor_suffix(field_name: str) -> str:
+    parts = [part for part in str(field_name or "").replace("-", "_").split("_") if part]
+    if len(parts) > 1:
+        return "".join(part[:1].upper() + part[1:] for part in parts if part)
+    value = str(field_name or "").strip()
+    if not value:
+        return ""
+    if len(value) > 1 and value[0].islower() and value[1].isupper():
+        return value
+    return value[:1].upper() + value[1:]
 
 
 def _search_query(worktree: Path, query: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
@@ -183,6 +265,7 @@ def _search_query(worktree: Path, query: dict[str, Any]) -> tuple[dict[str, Any]
                 relative_path,
                 matches[relative_path],
                 max_snippets=max_snippets - len(snippets),
+                reason=_snippet_reason(query),
             )
         )
     truncated = (
@@ -195,12 +278,24 @@ def _search_query(worktree: Path, query: dict[str, Any]) -> tuple[dict[str, Any]
         "query": str(query["query"]),
         "signalTypes": query.get("signalTypes") or [],
         "filePaths": query.get("filePaths") or [],
+        "fieldNames": query.get("fieldNames") or [],
         "matchedFileCount": len(matched_paths),
+        "candidateSnippetCount": int(candidate_snippet_count),
         "includedSnippetCount": len(snippets),
         "truncated": bool(truncated),
+        "topMatchedPaths": ranked_paths[:5],
         "snippets": snippets,
     }
     return search, matched_paths
+
+
+def _snippet_reason(query: dict[str, Any]) -> str:
+    reasons = {str(item or "").upper() for item in query.get("reasons") or []}
+    if "DTO_FIELD_REFERENCE" in reasons:
+        return "DTO_FIELD_REFERENCE"
+    if "FIELD_REFERENCE" in reasons:
+        return "FIELD_REFERENCE"
+    return "METHOD_REFERENCE"
 
 
 def _run_rg(worktree: Path, query: str) -> str:
@@ -300,6 +395,8 @@ def _path_rank(path: str, changed_paths: set[str]) -> int:
         rank -= 15
     if any(token in lower for token in ("controller", "service", "mapper", "repository", "handler")):
         rank -= 10
+    if any(token in lower for token in ("dto", "vo", "request", "response", "payload", "form", "api", "excel")):
+        rank -= 8
     if "/test/" in lower or lower.startswith("test/") or lower.startswith("tests/") or "src/test/" in lower:
         rank += 35
     if any(token in lower for token in ("generated", "snapshot", "fixture", "fixtures")):
@@ -315,6 +412,7 @@ def _snippets_for_file(
     match_lines: list[int],
     *,
     max_snippets: int,
+    reason: str = "METHOD_REFERENCE",
 ) -> list[dict[str, Any]]:
     try:
         file_path = _safe_file_path(worktree, relative_path)
@@ -331,7 +429,7 @@ def _snippets_for_file(
             "startLine": start,
             "endLine": end,
             "matchLine": match_line,
-            "reason": "METHOD_REFERENCE",
+            "reason": reason,
             "truncated": False,
             "lines": snippet_lines,
         }
@@ -430,10 +528,12 @@ def _result(
     matched_files: set[str],
     searches: list[dict[str, Any]],
     truncated: bool,
+    planner_signals: list[dict[str, Any]],
     unavailable_contexts: list[dict[str, Any]] | None = None,
     duration_ms: int = 0,
 ) -> dict[str, Any]:
     included_snippet_count = sum(int(item.get("includedSnippetCount") or 0) for item in searches)
+    supported_signal_types = _supported_signal_types(planner_signals)
     return {
         "status": status,
         "summary": {
@@ -441,11 +541,33 @@ def _result(
             "matchedFileCount": len(matched_files),
             "includedSnippetCount": included_snippet_count,
             "truncated": bool(truncated),
+            "supportedSignalTypes": supported_signal_types,
+            "skippedSignalTypes": _skipped_signal_type_counts(planner_signals),
         },
         "searches": searches,
         "unavailableContexts": unavailable_contexts or [],
         "durationMs": int(duration_ms),
     }
+
+
+def _supported_signal_types(signals: list[dict[str, Any]]) -> list[str]:
+    return sorted(
+        {
+            str(signal.get("type") or "").upper()
+            for signal in signals
+            if str(signal.get("type") or "").upper() in SUPPORTED_REFERENCE_SIGNAL_TYPES
+        }
+    )
+
+
+def _skipped_signal_type_counts(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for signal in signals:
+        signal_type = str(signal.get("type") or "").upper()
+        if not signal_type or signal_type in SUPPORTED_REFERENCE_SIGNAL_TYPES:
+            continue
+        counts[signal_type] = counts.get(signal_type, 0) + 1
+    return [{"type": key, "count": value} for key, value in sorted(counts.items())]
 
 
 def _env_int(name: str, default: int, *, minimum: int) -> int:

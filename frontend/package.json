@@ -15,7 +15,7 @@
     "prismjs": "1.30.0",
     "react": "19.2.5",
     "react-dom": "19.2.5",
-    "react-router-dom": "^7.15.1",
+    "react-router-dom": "7.15.1",
     "vite": "8.0.8"
   }
 }

@@ -16,6 +16,15 @@ def _signal(signal_type: str, method_name: str = "cancelOrder") -> dict:
     }
 
 
+def _field_signal(signal_type: str, field_name: str = "legacyCode") -> dict:
+    return {
+        "type": signal_type,
+        "filePath": "src/main/java/demo/dto/OrderRequestDto.java",
+        "details": {"fieldNames": [field_name]},
+        "requestedContextTypes": ["REFERENCE_SEARCH", "CALLER_CONTEXT"],
+    }
+
+
 def _rg_match(path: str, line_number: int) -> str:
     return json.dumps(
         {
@@ -79,12 +88,12 @@ def test_local_retriever_searches_method_reference_and_ignores_build_outputs(
     snippet = search["snippets"][0]
 
     assert result["status"] == "RETRIEVED"
-    assert result["summary"] == {
-        "queryCount": 1,
-        "matchedFileCount": 1,
-        "includedSnippetCount": 1,
-        "truncated": False,
-    }
+    assert result["summary"]["queryCount"] == 1
+    assert result["summary"]["matchedFileCount"] == 1
+    assert result["summary"]["includedSnippetCount"] == 1
+    assert result["summary"]["truncated"] is False
+    assert result["summary"]["supportedSignalTypes"] == ["METHOD_DELETED"]
+    assert result["summary"]["skippedSignalTypes"] == []
     assert search["query"] == "cancelOrder"
     assert search["matchedFileCount"] == 1
     assert snippet["path"] == "src/main/java/demo/OrderController.java"
@@ -120,12 +129,106 @@ def test_local_retriever_skips_unsupported_planner_signals(
 
     result = retrieve_local_reference_context(
         worktree_path=worktree,
-        planner_signals=[_signal("FIELD_DELETED")],
+        planner_signals=[{"type": "DB_SQL_MAPPER_CHANGED", "requestedContextTypes": ["DB_SCHEMA_CONTEXT"]}],
     )
 
     assert result["status"] == "SKIPPED"
     assert result["summary"]["queryCount"] == 0
     assert result["searches"] == []
+    assert result["summary"]["skippedSignalTypes"] == [{"type": "DB_SQL_MAPPER_CHANGED", "count": 1}]
+
+
+def test_local_retriever_searches_dto_field_references_with_accessors(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "106" / "head"
+    _write(
+        worktree / "src/main/java/demo/web/OrderController.java",
+        "\n".join(
+            [
+                "package demo.web;",
+                "class OrderController {",
+                "  void create(OrderRequestDto request) {",
+                "    audit(request.getLegacyCode());",
+                "  }",
+                "}",
+            ]
+        ),
+    )
+    _write(
+        worktree / "src/main/resources/mapper/OrderMapper.xml",
+        "<if test=\"legacyCode != null\">and legacy_code = #{legacyCode}</if>",
+    )
+    _write(
+        worktree / "src/main/java/demo/dto/OrderRequestDto.java",
+        "class OrderRequestDto { private String legacyCode; }",
+    )
+
+    def fake_rg(_worktree: Path, query: str) -> str:
+        if query == "legacyCode":
+            return "\n".join(
+                [
+                    _rg_match("src/main/resources/mapper/OrderMapper.xml", 1),
+                    _rg_match("src/main/java/demo/dto/OrderRequestDto.java", 1),
+                ]
+            )
+        if query == "getLegacyCode":
+            return _rg_match("src/main/java/demo/web/OrderController.java", 4)
+        return ""
+
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_CONTEXT_SNIPPET_CONTEXT_LINES", "1")
+    monkeypatch.setattr(local_retriever, "_run_rg", fake_rg)
+
+    result = retrieve_local_reference_context(
+        worktree_path=worktree,
+        planner_signals=[_field_signal("DTO_FIELD_CHANGED")],
+    )
+
+    searches = {search["query"]: search for search in result["searches"]}
+    getter_snippet = searches["getLegacyCode"]["snippets"][0]
+
+    assert result["status"] == "RETRIEVED"
+    assert result["summary"]["queryCount"] == 4
+    assert result["summary"]["matchedFileCount"] == 3
+    assert result["summary"]["supportedSignalTypes"] == ["DTO_FIELD_CHANGED"]
+    assert result["summary"]["skippedSignalTypes"] == []
+    assert searches["legacyCode"]["fieldNames"] == ["legacyCode"]
+    assert searches["legacyCode"]["signalTypes"] == ["DTO_FIELD_CHANGED"]
+    assert searches["legacyCode"]["candidateSnippetCount"] >= searches["legacyCode"]["includedSnippetCount"]
+    assert "src/main/resources/mapper/OrderMapper.xml" in searches["legacyCode"]["topMatchedPaths"]
+    assert getter_snippet["reason"] == "DTO_FIELD_REFERENCE"
+    assert getter_snippet["path"] == "src/main/java/demo/web/OrderController.java"
+    assert {"number": 4, "text": "    audit(request.getLegacyCode());"} in getter_snippet["lines"]
+
+
+def test_local_retriever_searches_deleted_field_references(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "107" / "head"
+    _write(worktree / "src/main/java/demo/OrderService.java", "order.legacyCode = null;")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setattr(
+        local_retriever,
+        "_run_rg",
+        lambda _worktree, query: _rg_match("src/main/java/demo/OrderService.java", 1)
+        if query == "legacyCode"
+        else "",
+    )
+
+    result = retrieve_local_reference_context(
+        worktree_path=worktree,
+        planner_signals=[_field_signal("FIELD_DELETED")],
+    )
+
+    first_search = result["searches"][0]
+    assert result["summary"]["supportedSignalTypes"] == ["FIELD_DELETED"]
+    assert first_search["query"] == "legacyCode"
+    assert first_search["snippets"][0]["reason"] == "FIELD_REFERENCE"
 
 
 def test_local_retriever_bounds_files_and_snippets(

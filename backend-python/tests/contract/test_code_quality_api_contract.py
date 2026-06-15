@@ -655,6 +655,8 @@ def test_manual_review_builds_context_pack_and_records_progress(
         {"type": "HISTORICAL_CONTEXT_MISSING_FEEDBACK", "count": 2},
     ]
     assert detail["summary"]["retrieverSupportedSignalTypes"] == [
+        "DTO_FIELD_CHANGED",
+        "FIELD_DELETED",
         "METHOD_DELETED",
         "METHOD_SIGNATURE_CHANGED",
     ]

@@ -2470,6 +2470,11 @@ function HighAccuracyFlowView({ progress }) {
   const zeroReason = zeroQueryExplanation(summary);
   const availabilityItems = safeArray(summary.requestedContextAvailability?.items);
   const ruleGapItems = safeArray(summary.ruleGapItems);
+  const budgetCutDetails = safeArray(
+    summary.budgetCutSummary?.localReferenceCutDetails?.length
+      ? summary.budgetCutSummary.localReferenceCutDetails
+      : summary.budgetCutSummary?.notInjectedEvidence
+  );
   const gapColumns = [
     { title: '缺口类型', dataIndex: 'gapType', width: 190, render: value => <Tag color="orange">{value || '-'}</Tag> },
     { title: 'Signal', dataIndex: 'signal', width: 220, ellipsis: true },
@@ -2488,6 +2493,23 @@ function HighAccuracyFlowView({ progress }) {
     { title: 'Signal 数', dataIndex: 'signalCount', width: 100 },
     { title: '优先级', dataIndex: 'priority', width: 110 },
     { title: '原因', dataIndex: 'reasonCode', ellipsis: true, render: value => value || '-' },
+  ];
+  const budgetCutColumns = [
+    { title: 'Signal', dataIndex: 'signal', width: 190, ellipsis: true },
+    { title: 'Requested Context', dataIndex: 'requestedContext', width: 170, ellipsis: true },
+    { title: '查询摘要', dataIndex: 'querySummary', width: 150, ellipsis: true, render: (value, row) => value || row.query || '-' },
+    { title: '命中文件', dataIndex: 'matchedFileCount', width: 90, render: value => countText(value) },
+    { title: '裁剪 Snippet', dataIndex: 'cutSnippetCount', width: 110, render: value => countText(value) },
+    {
+      title: 'Top 相对路径',
+      dataIndex: 'topRelativePaths',
+      ellipsis: true,
+      render: (value, row) => {
+        const paths = safeArray(value?.length ? value : row.topMatchedPaths);
+        return paths.length ? paths.join('、') : '-';
+      },
+    },
+    { title: '原因', dataIndex: 'reason', width: 220, ellipsis: true, render: value => value || '-' },
   ];
 
   return (
@@ -2529,14 +2551,37 @@ function HighAccuracyFlowView({ progress }) {
         </Col>
         <Col xs={24} xl={12}>
           <Card title="预算裁剪摘要">
-            <Descriptions size="small" column={1}>
-              <Descriptions.Item label="状态">
-                {summary.budgetCutSummary?.truncated ? <Tag color="orange">已裁剪</Tag> : <Tag>未裁剪</Tag>}
-              </Descriptions.Item>
-              <Descriptions.Item label="变更文件排除">{countText(summary.budgetCutSummary?.changedFilesExcluded)}</Descriptions.Item>
-              <Descriptions.Item label="同文件片段裁剪">{countText(summary.budgetCutSummary?.sameFileSourceSnippetsRemoved)}</Descriptions.Item>
-              <Descriptions.Item label="引用片段裁剪">{countText(summary.budgetCutSummary?.localReferenceSnippetsRemoved)}</Descriptions.Item>
-            </Descriptions>
+            <Space direction="vertical" size="middle" className="full-width">
+              <Descriptions size="small" column={1}>
+                <Descriptions.Item label="状态">
+                  {summary.budgetCutSummary?.truncated ? <Tag color="orange">已裁剪</Tag> : <Tag>未裁剪</Tag>}
+                </Descriptions.Item>
+                <Descriptions.Item label="变更文件排除">{countText(summary.budgetCutSummary?.changedFilesExcluded)}</Descriptions.Item>
+                <Descriptions.Item label="同文件片段裁剪">{countText(summary.budgetCutSummary?.sameFileSourceSnippetsRemoved)}</Descriptions.Item>
+                <Descriptions.Item label="引用片段裁剪">{countText(summary.budgetCutSummary?.localReferenceSnippetsRemoved)}</Descriptions.Item>
+                <Descriptions.Item label="高误判 Signal 保留">
+                  {safeArray(summary.budgetCutSummary?.protectedSignalTypes).join('、') || '-'}
+                </Descriptions.Item>
+              </Descriptions>
+              {budgetCutDetails.length > 0 && (
+                <>
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="存在未注入证据"
+                    description="以下为预算裁剪安全摘要，仅包含查询、命中文件数、裁剪数、相对路径和原因，不展示源码片段。"
+                  />
+                  <Table
+                    rowKey={(row, index) => `${row.signal || '-'}-${row.querySummary || row.query || '-'}-${index}`}
+                    size="small"
+                    columns={budgetCutColumns}
+                    dataSource={budgetCutDetails}
+                    pagination={false}
+                    scroll={{ x: 960 }}
+                  />
+                </>
+              )}
+            </Space>
           </Card>
         </Col>
       </Row>

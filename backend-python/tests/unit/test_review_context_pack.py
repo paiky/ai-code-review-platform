@@ -280,15 +280,21 @@ def test_review_context_pack_builds_minimal_context_planner_signals() -> None:
     assert signal_counts["DTO_FIELD_CHANGED"] == 1
     assert signal_counts["METHOD_DELETED"] == 1
     assert context["summary"]["retrieverSupportedSignalTypes"] == [
+        "DTO_FIELD_CHANGED",
+        "FIELD_DELETED",
         "METHOD_DELETED",
         "METHOD_SIGNATURE_CHANGED",
     ]
-    assert unsupported_counts["DTO_FIELD_CHANGED"] == 1
+    assert "DTO_FIELD_CHANGED" not in unsupported_counts
+    assert "FIELD_DELETED" not in unsupported_counts
     assert unsupported_counts["DB_SQL_MAPPER_CHANGED"] == 1
     assert availability["unavailable"] >= 1
     assert any(item["type"] == "REFERENCE_SEARCH" for item in availability["items"])
     assert any(item["gapType"] == "UNSUPPORTED_PLANNER_SIGNAL" for item in rule_gap_items)
-    assert any(item["signal"] == "DTO_FIELD_CHANGED" for item in rule_gap_items)
+    assert not any(
+        item["gapType"] == "UNSUPPORTED_PLANNER_SIGNAL" and item["signal"] == "DTO_FIELD_CHANGED"
+        for item in rule_gap_items
+    )
     assert context["summary"]["ruleGapSummary"]["total"] == len(rule_gap_items)
     for item in rule_gap_items:
         assert set(item) == {
@@ -421,6 +427,97 @@ def test_review_context_pack_injects_local_reference_snippets(
     assert str(tmp_path) not in context["promptText"]
 
 
+def test_review_context_pack_injects_dto_field_reference_snippets(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "505" / "head"
+    commands: list[list[str]] = []
+
+    def write_source() -> None:
+        controller = worktree / "src/main/java/demo/web/OrderController.java"
+        mapper = worktree / "src/main/resources/mapper/OrderMapper.xml"
+        controller.parent.mkdir(parents=True, exist_ok=True)
+        mapper.parent.mkdir(parents=True, exist_ok=True)
+        controller.write_text(
+            "\n".join(
+                [
+                    "package demo.web;",
+                    "class OrderController {",
+                    "  void create(OrderRequestDto request) {",
+                    "    audit(request.getLegacyCode());",
+                    "  }",
+                    "}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        mapper.write_text(
+            "<if test=\"legacyCode != null\">and legacy_code = #{legacyCode}</if>",
+            encoding="utf-8",
+        )
+
+    def fake_run_git(args: list[str], **_kwargs) -> None:
+        commands.append(args)
+        if "worktree" in args and "add" in args:
+            write_source()
+
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_CONTEXT_SNIPPET_CONTEXT_LINES", "1")
+    monkeypatch.setenv("GITLAB_TOKEN", "repo-secret")
+    monkeypatch.setattr(local_repo, "_run_git", fake_run_git)
+
+    context = build_review_context_pack(
+        None,
+        task_id=505,
+        project_id=1,
+        mode="DIFF_TEXT",
+        repository_url="https://gitlab.example.com/demo/service",
+        git_project_id="1001",
+        head_ref="2222222222222222222222222222222222222222",
+        changed_files=[
+            {
+                "path": "src/main/java/demo/dto/OrderRequestDto.java",
+                "diffText": (
+                    "diff --git a/src/main/java/demo/dto/OrderRequestDto.java "
+                    "b/src/main/java/demo/dto/OrderRequestDto.java\n"
+                    "@@ -3,6 +3,6 @@\n"
+                    "-    private String legacyCode;\n"
+                    "+    private String channelCode;\n"
+                ),
+            }
+        ],
+        diff_text=None,
+    )
+
+    retrieval = context["localReferenceRetrieval"]
+    searches = {search["query"]: search for search in retrieval["searches"]}
+    local_reference = context["contextPack"]["localReferenceContext"]
+    availability = context["summary"]["requestedContextAvailability"]
+
+    assert retrieval["summary"]["supportedSignalTypes"] == ["DTO_FIELD_CHANGED", "FIELD_DELETED"]
+    assert retrieval["summary"]["matchedFileCount"] >= 2
+    assert searches["legacyCode"]["fieldNames"] == ["legacyCode"]
+    assert searches["legacyCode"]["signalTypes"] == ["DTO_FIELD_CHANGED", "FIELD_DELETED"]
+    assert searches["legacyCode"]["snippets"][0]["reason"] == "DTO_FIELD_REFERENCE"
+    assert "src/main/resources/mapper/OrderMapper.xml" in searches["legacyCode"]["topMatchedPaths"]
+    assert local_reference["sourceIncluded"] is True
+    assert "legacyCode" in context["promptText"]
+    assert searches["legacyCode"]["candidateSnippetCount"] >= searches["legacyCode"]["includedSnippetCount"]
+    assert context["summary"]["localReferenceSearch"]["supportedSignalTypes"] == [
+        "DTO_FIELD_CHANGED",
+        "FIELD_DELETED",
+    ]
+    assert any(
+        item["type"] == "REFERENCE_SEARCH" and item["available"] is True
+        for item in availability["items"]
+    )
+    assert "repo-secret" not in context["promptText"]
+    assert str(tmp_path) not in context["promptText"]
+
+
 def test_review_context_pack_truncates_local_reference_snippets_to_fit_budget(
     monkeypatch,
     tmp_path: Path,
@@ -435,7 +532,7 @@ def test_review_context_pack_truncates_local_reference_snippets_to_fit_budget(
         lines = []
         for index in range(1, 25):
             filler = "x" * 220
-            if index % 2 == 0:
+            if index % 4 == 0:
                 lines.append(f"    orderService.cancelOrder(id); // {filler}")
             else:
                 lines.append(f"    String filler{index} = \"{filler}\";")
@@ -448,8 +545,8 @@ def test_review_context_pack_truncates_local_reference_snippets_to_fit_budget(
 
     monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
     monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
-    monkeypatch.setenv("LOCAL_CONTEXT_SNIPPET_CONTEXT_LINES", "2")
-    monkeypatch.setenv("LOCAL_CONTEXT_MAX_SNIPPETS_PER_QUERY", "6")
+    monkeypatch.setenv("LOCAL_CONTEXT_SNIPPET_CONTEXT_LINES", "0")
+    monkeypatch.setenv("LOCAL_CONTEXT_MAX_SNIPPETS_PER_QUERY", "3")
     monkeypatch.setenv("GITLAB_TOKEN", "repo-secret")
     monkeypatch.setattr(local_repo, "_run_git", fake_run_git)
 
@@ -478,12 +575,34 @@ def test_review_context_pack_truncates_local_reference_snippets_to_fit_budget(
     )
 
     local_summary = context["contextPack"]["localReferenceSearch"]
+    not_injected = context["contextPack"]["notInjectedEvidence"]
+    cut_detail = context["summary"]["budgetCutSummary"]["localReferenceCutDetails"][0]
 
     assert len(context["promptText"]) <= CONTEXT_PACK_MAX_TOTAL_CHARS
     assert local_summary["queryCount"] == 1
     assert local_summary["matchedFileCount"] == 1
     assert local_summary["truncated"] is True
-    assert local_summary["includedSnippetCount"] < 6
+    assert local_summary["includedSnippetCount"] < 3
+    assert local_summary["includedSnippetCount"] >= 1
+    assert not_injected["hasNotInjectedEvidence"] is True
+    assert not_injected["items"][0]["signal"] == "METHOD_DELETED"
+    assert not_injected["items"][0]["requestedContext"] == "REFERENCE_SEARCH"
+    assert not_injected["items"][0]["querySummary"] == "cancelOrder"
+    assert not_injected["items"][0]["matchedFileCount"] == 1
+    assert not_injected["items"][0]["cutSnippetCount"] >= 1
+    assert not_injected["items"][0]["topRelativePaths"] == ["src/main/java/demo/OrderController.java"]
+    assert not_injected["items"][0]["reasonCode"] == "BUDGET_CUT"
+    assert "orderService.cancelOrder" not in json.dumps(not_injected, ensure_ascii=False)
+    assert "repo-secret" not in json.dumps(not_injected, ensure_ascii=False)
+    assert str(tmp_path) not in json.dumps(not_injected, ensure_ascii=False)
+    assert "notInjectedEvidence" in context["promptText"]
+    assert "Evidence existed but was not injected" in context["promptText"]
+    assert cut_detail["signal"] == "METHOD_DELETED"
+    assert cut_detail["requestedContext"] == "REFERENCE_SEARCH"
+    assert cut_detail["querySummary"] == "cancelOrder"
+    assert cut_detail["cutSnippetCount"] >= 1
+    assert "METHOD_DELETED" in context["summary"]["budgetCutSummary"]["protectedSignalTypes"]
+    assert context["summary"]["budgetCutSummary"]["localReferenceMinSnippetsPerProtectedSearch"] == 1
 
 
 def test_review_context_pack_marks_local_repo_failure_unavailable(
