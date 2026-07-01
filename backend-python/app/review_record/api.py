@@ -6,8 +6,10 @@ from app.code_quality.service import (
     get_progress_response,
     get_push_gate_response,
     get_result_response,
+    list_finding_refinements_response,
     list_fix_previews_response,
     list_results_response,
+    run_finding_refinement_response,
 )
 from app.core.database import get_db
 from app.core.response import ok
@@ -111,6 +113,20 @@ async def list_code_quality_fix_previews(
     db: Session = Depends(get_db),
 ) -> dict:
     return ok(list_fix_previews_response(db, task_id, review_key))
+
+
+@router.post("/{task_id}/code-quality-refinements")
+async def run_code_quality_finding_refinement(task_id: int, request: dict, db: Session = Depends(get_db)) -> dict:
+    return ok(run_finding_refinement_response(db, task_id, request))
+
+
+@router.get("/{task_id}/code-quality-refinements")
+async def list_code_quality_finding_refinements(
+    task_id: int,
+    review_key: str | None = Query(default=None, alias="reviewKey"),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(list_finding_refinements_response(db, task_id, review_key))
 
 
 @router.get("/{task_id}")

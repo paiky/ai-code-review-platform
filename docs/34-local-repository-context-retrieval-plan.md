@@ -2,7 +2,8 @@
 
 ## 状态
 
-- 当前状态：V2-F-16 Finding 级二阶段补证据设计已落地；任务 663 已验证本地 mirror / worktree 模式可用，任务 669 曾暴露出的“仓库已准备但 DTO / VO 字段变更尚未检索、前端角色流转解释不足”已先通过 V2-F-11 角色流转与 V2-F-12 缺口看板形成可解释和可聚合依据，并已通过 V2-F-14 支持字段引用检索。当前确认：V2-F-15 已让高误判 signal 的预算裁剪更有优先级、未注入证据进入 Context Pack 和前端摘要，并强化 finding 的 `contextStatus / confidence` 约束；V2-F-16 已设计只围绕少数候选 finding 补证据的后续机制。下一阶段进入 V2-F-17 规则缺口补全推荐算法与通用补齐流程。
+- 当前总控入口：`docs/36-review-platform-current-roadmap.md`。本文件保留本地仓库上下文检索、高准确模式和 V2-F 阶段细节，不再作为下一阶段推进的唯一判断入口。
+- 当前状态：V2-F-18 DB / Mapper / Entity 关联检索已落地；任务 663 已验证本地 mirror / worktree 模式可用，任务 669 曾暴露出的“仓库已准备但 DTO / VO 字段变更尚未检索、前端角色流转解释不足”已先通过 V2-F-11 角色流转与 V2-F-12 缺口看板形成可解释和可聚合依据，并已通过 V2-F-14 支持字段引用检索。当前确认：V2-F-15 已让高误判 signal 的预算裁剪更有优先级、未注入证据进入 Context Pack 和前端摘要，并强化 finding 的 `contextStatus / confidence` 约束；V2-F-16 已设计只围绕少数候选 finding 补证据的后续机制；V2-F-17 已把跨任务规则缺口聚合成只读补全建议和下一阶段 prompt 草稿；V2-F-18 已把 `DB_SQL_MAPPER_CHANGED` 纳入本地 Retriever，按表名、字段名、Mapper 方法名和 Entity 名做有限关联检索。下一阶段需观察新任务 / 重跑任务的规则缺口推荐结果后，再决定是否补缓存、MQ、配置或其它具体 Retriever。
 - 编写时间：2026-06-11
 - 前置版本：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`
@@ -13,9 +14,9 @@
   - 已通过 V2-F-11 增加高准确模式角色流转视图，解释 Planner、requested contexts、Retriever、Snippet 和预算裁剪之间的关系。
   - 已通过 V2-F-12 从 `CONTEXT_PACK_BUILT` progress 安全摘要聚合跨任务规则缺口，作为后续判断是否补齐 Planner / Retriever / 预算策略 / Prompt 约束的优先级依据。
   - 已通过 V2-F-13 在版本更新页置顶说明高准确模式主线、部署注意和“不把完整项目源码交给模型”的边界。
-  - 当前 Retriever 支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED / DTO_FIELD_CHANGED / FIELD_DELETED`；DTO / VO 字段变更会按字段名、getter、setter 做有限引用搜索，并把预算内 snippets 或安全裁剪摘要注入 Context Pack。
+  - 当前 Retriever 支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED / DTO_FIELD_CHANGED / FIELD_DELETED / DB_SQL_MAPPER_CHANGED`；DTO / VO 字段变更会按字段名、getter、setter 做有限引用搜索，DB / Mapper / Entity 变更会按表名、字段名、Mapper 方法名和 Entity 名做有限关联检索，并把预算内 snippets 或安全裁剪摘要注入 Context Pack。
   - 预算裁剪问题已从“只可观测、可聚合”推进到“关键证据优先保留、未注入证据可见、Prompt 约束 contextStatus / confidence”，并已补充 finding 级二阶段补证据设计。
-  - V2-F-14 已补高频误判 signal：`DTO_FIELD_CHANGED / FIELD_DELETED` 字段引用检索；V2-F-15 已补预算裁剪与上下文完整性保护；V2-F-16 已设计 finding 级二阶段补证据；V2-F-17 做规则缺口补全推荐算法与通用补齐流程；DB / 缓存 / MQ / 配置等业务检索器在这些治理能力之后再按推荐结果排期。
+  - V2-F-14 已补高频误判 signal：`DTO_FIELD_CHANGED / FIELD_DELETED` 字段引用检索；V2-F-15 已补预算裁剪与上下文完整性保护；V2-F-16 已设计 finding 级二阶段补证据；V2-F-17 已做规则缺口补全推荐算法与通用补齐流程；V2-F-18 已补 `DB_SQL_MAPPER_CHANGED` 关联检索；缓存 / MQ / 配置等业务检索器在这些治理能力之后再按推荐结果排期。
   - 反馈池、项目策略、上下文不足人工标记等“人工沉淀能力”先保留后端和数据结构，但在生产产品界面默认屏蔽，不作为当前验证主线。
   - 不删除 V0 到 V2-F-3 已落地能力；把它们作为可回退、可复用的治理底座。
 
@@ -59,8 +60,8 @@ GitLab webhook/API
 V2-F-14：已完成 DTO / VO 字段引用检索，优先覆盖高频真实误判 signal
 V2-F-15：补预算裁剪与上下文完整性保护，避免缺失证据被误解为不存在
 V2-F-16：已设计 finding 级二阶段补证据，只围绕少数候选问题窄范围再检索
-V2-F-17：下一步补规则缺口补全推荐算法与通用补齐流程，让平台给出“是否值得补、补什么、怎么补”的建议
-V2-F-18：再按推荐结果评估 DB / Mapper / Entity 等业务检索器
+V2-F-17：已补规则缺口补全推荐算法与通用补齐流程，让平台给出“是否值得补、补什么、怎么补”的建议
+V2-F-18：已补 DB / Mapper / Entity 关联检索，优先覆盖后端数据一致性高频缺口
 ```
 
 ## 二、与 docs/32 / docs/33 的关系
@@ -1131,11 +1132,11 @@ progress detail 禁止记录：
 
 当前 V2-F-13 已完成，高准确本地仓库上下文检索模式已经具备 mirror clone / fetch、task worktree、METHOD_DELETED / METHOD_SIGNATURE_CHANGED 引用搜索、bounded snippets 注入 Context Pack、前端证据摘要展示、workspace 清理、高准确模式角色流转可观测、跨任务规则缺口看板和版本更新页收口。
 
-当前已解决“预算裁剪看不见、解释不了”的问题，V2-F-14 已补齐 `DTO_FIELD_CHANGED / FIELD_DELETED` 字段引用检索，V2-F-15 已补齐预算裁剪与上下文完整性保护，V2-F-16 已设计 finding 级二阶段补证据机制。后续优先目标是把规则缺口聚合成可执行的补全建议。下一阶段只推进 V2-F-17：规则缺口补全推荐算法与通用补齐流程。
+当前已解决“预算裁剪看不见、解释不了”的问题，V2-F-14 已补齐 `DTO_FIELD_CHANGED / FIELD_DELETED` 字段引用检索，V2-F-15 已补齐预算裁剪与上下文完整性保护，V2-F-16 已设计 finding 级二阶段补证据机制，V2-F-17 已把规则缺口聚合成可执行的补全建议。下一阶段必须等待用户查看推荐结果并确认后，才进入 V2-F-18 或其它具体 Retriever。
 
 同时，反馈池、项目策略、上下文不足人工标记等人工沉淀能力先保留后端和数据结构，但生产前端默认屏蔽入口；不要删除已实现能力，不要删表，不要破坏现有 API 兼容。
 
-每次只推进一个阶段。当前优先按 docs/34 的 V2-F-17 做规则缺口补全推荐算法与通用补齐流程，不直接扩展 DB / 缓存 / MQ / 配置 Retriever。V2-F-17 完成后必须停止，等待用户验证并确认后，才根据推荐结果决定是否进入 V2-F-18 或其它具体 Retriever。不要修改 legacy Java backend；不要做全项目无限扫描；不要把整个项目源码塞进 Prompt；不要接向量库或复杂 RAG；不要自动降级或自动忽略 finding；不要自动改 Prompt。
+每次只推进一个阶段。V2-F-17 完成后必须停止，不直接扩展 DB / 缓存 / MQ / 配置 Retriever；等待用户验证并确认后，才根据推荐结果决定是否进入 V2-F-18 或其它具体 Retriever。不要修改 legacy Java backend；不要做全项目无限扫描；不要把整个项目源码塞进 Prompt；不要接向量库或复杂 RAG；不要自动降级或自动忽略 finding；不要自动改 Prompt。
 
 每个阶段完成后必须停止，输出“改了什么、为什么、如何验证”，等待用户验证并明确回复“继续下一阶段”后再推进。
 ```
@@ -1828,7 +1829,7 @@ V2-F-15：预算裁剪与上下文完整性保护
 V2-F-16：Finding 级二阶段补证据设计
   -> 当候选 finding 依赖 BUDGET_CUT / UNSUPPORTED_PLANNER_SIGNAL / UNAVAILABLE_REQUESTED_CONTEXT 时，再围绕少数 finding 窄范围补证据
 
-V2-F-17：规则缺口补全推荐算法与通用补齐流程
+V2-F-17：规则缺口补全推荐算法与通用补齐流程（已完成）
   -> 根据缺口频率、影响范围、误判风险和实现成本，给出是否值得补全和下一阶段 prompt
 
 V2-F-18：DB / Mapper / Entity 关联检索设计
@@ -2078,7 +2079,7 @@ V2-F-16：Finding 级二阶段补证据设计
   -> 只围绕依赖 BUDGET_CUT / UNSUPPORTED_PLANNER_SIGNAL / UNAVAILABLE_REQUESTED_CONTEXT 的少数候选 finding 补证据
   -> 不无差别扩大第一阶段 Context Pack
 
-V2-F-17：规则缺口补全推荐算法与通用补齐流程
+V2-F-17：规则缺口补全推荐算法与通用补齐流程（已完成）
   -> 根据缺口频率、影响范围、误判风险和实现成本，给出是否值得补全和下一阶段 prompt
 
 V2-F-18：DB / Mapper / Entity 关联检索设计
@@ -2271,4 +2272,123 @@ git diff --check
 
 ```text
 V2-F-16 已完成；当前停止等待用户验证，不继续推进 V2-F-17。
+```
+
+## 三十一、V2-F-17 落地记录
+
+落地时间：2026-06-15。
+
+已完成：
+
+- 规则缺口看板响应新增 `recommendations` 只读推荐摘要，继续复用 `GET /api/code-quality-reviews/rule-gaps`。
+- 推荐算法采用集中定义的启发式评分，考虑：
+  - 缺口类型。
+  - signal 风险。
+  - 出现次数。
+  - 影响任务数。
+  - 影响项目数。
+  - 最近出现时间。
+  - `CONTEXT_MISSING / FALSE_POSITIVE` 反馈信号。
+  - 实现可行性。
+  - 复杂度惩罚。
+- 推荐输出包含：
+  - `recommendationStatus`：`RECOMMENDED / WATCH / NOT_NOW`。
+  - `completionType`：`PLANNER / RETRIEVER / BUDGET / PROMPT / STABILITY / OBSERVABILITY`。
+  - `reasons`。
+  - `suggestedNextStage`。
+  - `suggestedPrompt`。
+  - `recentTaskSamples`。
+  - `feedbackSignals`。
+- 反馈关联当前不保存 rule gap id，因此先按任务级优先、项目近期近似辅助统计，并在响应中明确 `correlation / note`，不把近似统计当精确归因。
+- 前端规则缺口页新增“建议补全 / 缺口明细”视图；“建议补全”展示是否值得补、补全类型、原因、评分、反馈信号、最近任务跳转和 prompt 复制。
+- README 补充规则缺口推荐层说明。
+- docs/32、docs/33、docs/34 同步到 V2-F-17 已完成状态。
+
+明确未做：
+
+- 不实现 DB / 缓存 / MQ / 配置 Retriever。
+- 不新增 DB 表或迁移。
+- 不自动改规则、不自动改 Prompt。
+- 不自动降级、不自动忽略 finding。
+- 不接 RAG，不做 AST / LSP。
+- 不修改 legacy Java backend。
+- 不返回源码片段、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
+
+新增和调整测试：
+
+- `backend-python/tests/contract/test_code_quality_rule_gaps_api_contract.py`
+
+已验证：
+
+```powershell
+$env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\contract\test_code_quality_rule_gaps_api_contract.py tests\unit\test_review_context_pack.py tests\unit\test_code_quality_prompt.py
+```
+
+结果：21 passed。
+
+```powershell
+.\scripts\run-frontend.cmd build
+```
+
+结果：build passed；仅保留既有 Vite chunk size warning。
+
+```powershell
+git diff --check
+```
+
+结果：通过；仅有既有 CRLF warning。
+
+停止规则：
+
+```text
+V2-F-17 已完成；当前停止等待用户验证，不继续推进 V2-F-18 或其它具体 Retriever。
+```
+
+## 三十二、V2-F-18 落地记录
+
+落地时间：2026-06-23。
+
+已完成：
+
+- Local Retriever 支持 `DB_SQL_MAPPER_CHANGED`，不再把 DB / SQL / Mapper 变更作为 unsupported signal。
+- Context Planner 为 `DB_SQL_MAPPER_CHANGED` 提取结构化检索线索：
+  - 表名。
+  - SQL / Entity 字段名。
+  - Mapper XML `id` / Java Mapper 方法名。
+  - Entity / model 类名。
+- 本地检索按上述线索在 task head worktree 内做有限 `rg` 检索，并继续复用 bounded snippets、路径排序、预算裁剪和 `notInjectedEvidence` 安全摘要。
+- `DB_SCHEMA_CONTEXT` 在本地 DB / Mapper / Entity snippets 注入后会标记为可用；未命中或检索失败时仍保留 unavailable context，不把失败解释为无风险。
+- Prompt 补充 DB / Mapper / Entity snippets 的边界：只来自源码、Mapper、Entity 和迁移脚本，不代表运行期生产 schema。
+- 规则缺口推荐层把历史 `DB_SQL_MAPPER_CHANGED -> UNSUPPORTED_PLANNER_SIGNAL` 降为 `NOT_NOW`，并提示通过新任务或重跑验证；历史 progress 不会被自动改写或删除。
+- README 补充当前高准确模式支持 DB / Mapper / Entity 关联检索。
+
+明确未做：
+
+- 不连接运行期数据库。
+- 不读取生产 schema。
+- 不实现缓存 / MQ / 配置 Retriever。
+- 不做 AST / LSP / RAG。
+- 不自动改规则、不自动改 Prompt、不自动降级、不自动忽略 finding。
+- 不修改 legacy Java backend。
+
+新增和调整测试：
+
+- `backend-python/tests/unit/test_local_retriever.py`
+- `backend-python/tests/unit/test_review_context_pack.py`
+- `backend-python/tests/unit/test_code_quality_prompt.py`
+- `backend-python/tests/contract/test_code_quality_rule_gaps_api_contract.py`
+- `backend-python/tests/contract/test_code_quality_api_contract.py`
+
+已验证：
+
+```powershell
+$env:NO_PAUSE='1'; .\scripts\run-backend.cmd test tests\unit\test_local_retriever.py tests\unit\test_review_context_pack.py tests\unit\test_code_quality_prompt.py tests\contract\test_code_quality_rule_gaps_api_contract.py tests\contract\test_code_quality_api_contract.py::test_manual_review_builds_context_pack_and_records_progress
+```
+
+结果：32 passed。
+
+停止规则：
+
+```text
+V2-F-18 已完成；当前停止等待用户验证，不继续推进缓存、MQ、配置或其它具体 Retriever。
 ```

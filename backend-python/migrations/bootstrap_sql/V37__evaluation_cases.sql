@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS evaluation_cases (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  task_id BIGINT NULL,
+  review_key VARCHAR(64) NULL,
+  finding_id VARCHAR(128) NULL,
+  fingerprint VARCHAR(128) NULL,
+  project_id BIGINT NOT NULL,
+  provider VARCHAR(64) NULL,
+  profile VARCHAR(64) NULL,
+  risk_type VARCHAR(64) NULL,
+  severity VARCHAR(32) NULL,
+  context_status VARCHAR(32) NULL,
+  verdict VARCHAR(64) NOT NULL DEFAULT 'UNKNOWN',
+  human_comment TEXT NULL,
+  source VARCHAR(32) NOT NULL DEFAULT 'MANUAL',
+  item_snapshot_json JSON NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  KEY idx_evaluation_cases_project_created (project_id, created_at),
+  KEY idx_evaluation_cases_filters (project_id, provider, profile, risk_type, verdict),
+  KEY idx_evaluation_cases_task_review (task_id, review_key),
+  KEY idx_evaluation_cases_fingerprint (fingerprint)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

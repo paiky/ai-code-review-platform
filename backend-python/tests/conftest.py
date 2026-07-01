@@ -11,6 +11,7 @@ from app.main import create_app
 
 # Import models so SQLAlchemy registers all stage-2 tables in Base.metadata.
 from app.code_quality import models as code_quality_models  # noqa: F401
+from app.evaluation import models as evaluation_models  # noqa: F401
 from app.notification import models as notification_models  # noqa: F401
 from app.project_integration import models as project_models  # noqa: F401
 from app.project_review_policy import models as project_review_policy_models  # noqa: F401

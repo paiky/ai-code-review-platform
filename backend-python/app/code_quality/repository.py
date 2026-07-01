@@ -304,6 +304,7 @@ def ensure_code_quality_config_schema(db: Session) -> None:
     ensure_progress_schema(db)
     ensure_push_gate_schema(db)
     ensure_fix_preview_schema(db)
+    ensure_finding_refinement_schema(db)
     ensure_scheduler_job_schema(db)
     ensure_webhook_schema(db)
 
@@ -515,6 +516,12 @@ def ensure_fix_preview_schema(db: Session) -> None:
         unique=True,
     )
     db.flush()
+
+
+def ensure_finding_refinement_schema(db: Session) -> None:
+    from app.code_quality.refinement_repository import ensure_finding_refinement_schema as ensure_schema
+
+    ensure_schema(db)
 
 
 def ensure_scheduler_job_schema(db: Session) -> None:
@@ -1714,6 +1721,10 @@ def result_to_response(db: Session, result: CodeQualityReviewResult | None) -> d
     if _needs_finding_repair(findings):
         findings = _repair_findings_from_raw_output(findings, result.raw_output, result.provider)
     findings = attach_ai_finding_feedbacks(db, result, findings) if isinstance(findings, list) else findings
+    if isinstance(findings, list):
+        from app.code_quality.refinement_repository import attach_refinement_overlays
+
+        findings = attach_refinement_overlays(db, result, findings)
     return {
         "id": result.id,
         "taskId": result.task_id,

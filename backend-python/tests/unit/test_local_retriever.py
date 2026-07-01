@@ -25,6 +25,20 @@ def _field_signal(signal_type: str, field_name: str = "legacyCode") -> dict:
     }
 
 
+def _db_signal() -> dict:
+    return {
+        "type": "DB_SQL_MAPPER_CHANGED",
+        "filePath": "src/main/resources/mapper/OrderMapper.xml",
+        "details": {
+            "tableNames": ["t_order"],
+            "fieldNames": ["legacy_code"],
+            "mapperMethodNames": ["selectOrder"],
+            "entityNames": ["OrderEntity"],
+        },
+        "requestedContextTypes": ["DB_SCHEMA_CONTEXT", "RELATED_FILE"],
+    }
+
+
 def _rg_match(path: str, line_number: int) -> str:
     return json.dumps(
         {
@@ -129,13 +143,77 @@ def test_local_retriever_skips_unsupported_planner_signals(
 
     result = retrieve_local_reference_context(
         worktree_path=worktree,
-        planner_signals=[{"type": "DB_SQL_MAPPER_CHANGED", "requestedContextTypes": ["DB_SCHEMA_CONTEXT"]}],
+        planner_signals=[{"type": "CACHE_WRITE_DELETE_CHANGED", "requestedContextTypes": ["CACHE_USAGE_CONTEXT"]}],
     )
 
     assert result["status"] == "SKIPPED"
     assert result["summary"]["queryCount"] == 0
     assert result["searches"] == []
-    assert result["summary"]["skippedSignalTypes"] == [{"type": "DB_SQL_MAPPER_CHANGED", "count": 1}]
+    assert result["summary"]["skippedSignalTypes"] == [{"type": "CACHE_WRITE_DELETE_CHANGED", "count": 1}]
+
+
+def test_local_retriever_searches_db_mapper_entity_references(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "108" / "head"
+    _write(
+        worktree / "src/main/resources/mapper/OrderMapper.xml",
+        "\n".join(
+            [
+                "<mapper namespace=\"demo.OrderMapper\">",
+                "  <select id=\"selectOrder\">select legacy_code from t_order</select>",
+                "</mapper>",
+            ]
+        ),
+    )
+    _write(
+        worktree / "src/main/java/demo/entity/OrderEntity.java",
+        "\n".join(
+            [
+                "package demo.entity;",
+                "class OrderEntity {",
+                "  private String legacyCode;",
+                "}",
+            ]
+        ),
+    )
+
+    def fake_rg(_worktree: Path, query: str) -> str:
+        if query == "t_order":
+            return _rg_match("src/main/resources/mapper/OrderMapper.xml", 2)
+        if query == "legacy_code":
+            return _rg_match("src/main/resources/mapper/OrderMapper.xml", 2)
+        if query == "selectOrder":
+            return _rg_match("src/main/resources/mapper/OrderMapper.xml", 2)
+        if query == "OrderEntity":
+            return _rg_match("src/main/java/demo/entity/OrderEntity.java", 2)
+        return ""
+
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_CONTEXT_SNIPPET_CONTEXT_LINES", "1")
+    monkeypatch.setattr(local_retriever, "_run_rg", fake_rg)
+
+    result = retrieve_local_reference_context(
+        worktree_path=worktree,
+        planner_signals=[_db_signal()],
+    )
+
+    searches = {search["query"]: search for search in result["searches"]}
+
+    assert result["status"] == "RETRIEVED"
+    assert result["summary"]["supportedSignalTypes"] == ["DB_SQL_MAPPER_CHANGED"]
+    assert result["summary"]["skippedSignalTypes"] == []
+    assert result["summary"]["queryCount"] == 4
+    assert searches["t_order"]["tableNames"] == ["t_order"]
+    assert searches["t_order"]["snippets"][0]["reason"] == "DB_SCHEMA_REFERENCE"
+    assert searches["legacy_code"]["fieldNames"] == ["legacy_code"]
+    assert searches["legacy_code"]["snippets"][0]["reason"] == "DB_FIELD_REFERENCE"
+    assert searches["selectOrder"]["mapperMethodNames"] == ["selectOrder"]
+    assert searches["selectOrder"]["snippets"][0]["reason"] == "MAPPER_METHOD_REFERENCE"
+    assert searches["OrderEntity"]["entityNames"] == ["OrderEntity"]
+    assert searches["OrderEntity"]["snippets"][0]["reason"] == "ENTITY_REFERENCE"
 
 
 def test_local_retriever_searches_dto_field_references_with_accessors(

@@ -121,6 +121,17 @@ body {
   min-width: 150px;
 }
 
+.filter-input {
+  width: 180px;
+}
+
+.page-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
 .task-project-scope-cascader {
   min-width: 220px;
 }
@@ -135,6 +146,179 @@ body {
   padding: 0;
   text-align: left;
   white-space: normal;
+}
+
+.rule-gap-table .ant-table-thead > tr > th {
+  text-align: center !important;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.rule-gap-table .ant-table-cell {
+  min-width: 0;
+}
+
+.rule-gap-cell-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.rule-gap-type-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.rule-gap-table .ant-table-row-expand-icon-cell {
+  width: 64px;
+  min-width: 64px;
+  text-align: center;
+}
+
+.rule-gap-expand-title {
+  display: inline-block;
+  min-width: 32px;
+  white-space: nowrap;
+}
+
+.rule-gap-stats-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 1.25fr) minmax(260px, 1fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.rule-gap-chart-card {
+  min-width: 0;
+  padding: 4px 8px;
+}
+
+.rule-gap-chart-main {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.rule-gap-donut {
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.rule-gap-donut-inner {
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 0 1px #eef2f7;
+}
+
+.rule-gap-legend {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.rule-gap-legend span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.rule-gap-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.rule-gap-bars {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.rule-gap-bar-row {
+  display: grid;
+  grid-template-columns: 64px 1fr 34px;
+  align-items: center;
+  gap: 10px;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.rule-gap-bar-row strong {
+  color: #111827;
+  text-align: right;
+}
+
+.rule-gap-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: #eef2f7;
+  overflow: hidden;
+}
+
+.rule-gap-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.rule-gap-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.rule-gap-metrics span {
+  padding: 10px 12px;
+  border: 1px solid #edf1f5;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.rule-gap-metrics b,
+.rule-gap-metrics em {
+  display: block;
+  font-style: normal;
+}
+
+.rule-gap-metrics b {
+  color: #111827;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.rule-gap-metrics em {
+  margin-top: 4px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.rule-gap-recommendation-detail {
+  padding: 12px 0;
+}
+
+@media (max-width: 1100px) {
+  .rule-gap-stats-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .ant-pagination {
@@ -676,6 +860,53 @@ body {
   color: #a8071a;
   border-color: #ff7875;
   background: #ffccc7;
+}
+
+.refinement-action {
+  color: #0f766e;
+  border-color: #5eead4;
+  background: #f0fdfa;
+}
+
+.refinement-action:not(:disabled):hover {
+  color: #0f4f48;
+  border-color: #2dd4bf;
+  background: #ccfbf1;
+}
+
+.refinement-action-regenerate {
+  color: #9a3412;
+  border-color: #fdba74;
+  background: #fff7ed;
+}
+
+.refinement-action-regenerate:not(:disabled):hover {
+  color: #7c2d12;
+  border-color: #fb923c;
+  background: #ffedd5;
+}
+
+.finding-refinement-panel {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #99f6e4;
+  border-radius: 6px;
+  background: #f8fffd;
+}
+
+.refinement-stat-block {
+  width: 100%;
+}
+
+.refinement-stat-block .ant-descriptions {
+  margin-top: 6px;
+}
+
+.refinement-missing-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .diff-viewer-modal .ant-modal-body {

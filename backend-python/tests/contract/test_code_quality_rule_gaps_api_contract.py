@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.code_quality.models import CodeQualityReviewProgressEvent
 from app.project_integration.models import Project
+from app.review_feedback.models import ReviewItemFeedback
 from app.review_record.models import ReviewTask
 
 
@@ -33,6 +34,15 @@ def test_rule_gap_dashboard_aggregates_context_pack_rule_gaps(
     assert {project["projectId"] for project in dto_item["projects"]} == {1, 2}
     assert {task["taskId"] for task in dto_item["recentTasks"]} == {101, 102}
     assert {task["reviewKey"] for task in dto_item["recentTasks"]} == {"deepseek-main", "glm-main"}
+    assert dto_item["recommendation"]["recommendationStatus"] in {"RECOMMENDED", "WATCH", "NOT_NOW"}
+    assert dto_item["recommendation"]["completionType"] in {
+        "PLANNER",
+        "RETRIEVER",
+        "BUDGET",
+        "PROMPT",
+        "STABILITY",
+        "OBSERVABILITY",
+    }
     assert data["summary"]["scannedEventCount"] == 3
     assert data["summary"]["parsedEventCount"] == 3
     assert data["summary"]["eventsWithRuleGapCount"] == 3
@@ -108,6 +118,101 @@ def test_rule_gap_dashboard_skips_bad_json_without_breaking_response(
     assert data["summary"]["scannedEventCount"] == 2
     assert data["summary"]["parseFailedEventCount"] == 1
     assert data["summary"]["skippedEventCount"] == 1
+
+
+def test_rule_gap_dashboard_returns_recommendations_with_feedback_signals(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    now = datetime.now()
+    _seed_projects_and_tasks(db_session, now)
+    db_session.add_all(
+        [
+            CodeQualityReviewProgressEvent(
+                id=1,
+                task_id=101,
+                review_key="deepseek-main",
+                phase="CONTEXT_PACK_BUILT",
+                level="INFO",
+                message="Context Pack 已构建",
+                detail=_context_pack_detail(
+                    [
+                        {
+                            "gapType": "UNSUPPORTED_PLANNER_SIGNAL",
+                            "signal": "DB_SQL_MAPPER_CHANGED",
+                            "requestedContext": "DB_SCHEMA_CONTEXT",
+                            "suggestedCapability": "Add DB / Mapper / Entity relationship retrieval.",
+                        }
+                    ]
+                ),
+                created_at=now - timedelta(minutes=2),
+            ),
+            CodeQualityReviewProgressEvent(
+                id=2,
+                task_id=102,
+                review_key="glm-main",
+                phase="CONTEXT_PACK_BUILT",
+                level="INFO",
+                message="Context Pack 已构建",
+                detail=_context_pack_detail(
+                    [
+                        {
+                            "gapType": "UNSUPPORTED_PLANNER_SIGNAL",
+                            "signal": "DB_SQL_MAPPER_CHANGED",
+                            "requestedContext": "DB_SCHEMA_CONTEXT",
+                            "suggestedCapability": "Add DB / Mapper / Entity relationship retrieval.",
+                        }
+                    ]
+                ),
+                created_at=now - timedelta(minutes=1),
+            ),
+            ReviewItemFeedback(
+                id=1,
+                project_id=1,
+                task_id=101,
+                source_type="AI_FINDING",
+                item_fingerprint="finding-1",
+                card_id=None,
+                risk_id=None,
+                review_key="deepseek-main",
+                finding_index=0,
+                risk_type="DATA_CONSISTENCY",
+                risk_title="缺少表结构上下文",
+                original_risk_level="MAJOR",
+                feedback_type="FALSE_POSITIVE",
+                reason_type="CONTEXT_MISSING",
+                reason_text="需要 mapper 和 schema 证据",
+                missing_context_types_json='["DB_SCHEMA_CONTEXT"]',
+                suggest_as_project_rule=False,
+                status="VALID",
+                admin_comment=None,
+                item_snapshot_json=None,
+                operator_name="Alice",
+                operator_username="alice",
+                created_at=now - timedelta(minutes=1),
+                updated_at=now - timedelta(minutes=1),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/code-quality-reviews/rule-gaps?recentDays=30&limit=10")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    recommendations = data["recommendations"]["items"]
+    db_recommendation = next(item for item in recommendations if item["signal"] == "DB_SQL_MAPPER_CHANGED")
+    assert db_recommendation["recommendationStatus"] == "NOT_NOW"
+    assert db_recommendation["completionType"] == "RETRIEVER"
+    assert db_recommendation["suggestedNextStage"] == "已支持 signal 回归复盘：DB / Mapper / Entity 关联检索"
+    assert db_recommendation["scoreBreakdown"]["resolvedCurrentSupport"] < 0
+    assert any("当前代码已支持该 signal" in reason for reason in db_recommendation["reasons"])
+    assert "不自动改规则" in db_recommendation["suggestedPrompt"]
+    assert db_recommendation["feedbackSignals"]["contextMissingCount"] == 1
+    assert db_recommendation["feedbackSignals"]["falsePositiveCount"] == 1
+    assert db_recommendation["feedbackSignals"]["correlation"] == "TASK_LEVEL"
+    assert db_recommendation["recentTaskSamples"][0]["taskId"] in {101, 102}
+    assert data["recommendations"]["summary"]["notNowCount"] >= 1
 
 
 def test_rule_gap_dashboard_does_not_leak_raw_detail_sensitive_fields(

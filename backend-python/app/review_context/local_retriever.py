@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from time import perf_counter
 from typing import Any
@@ -11,6 +12,7 @@ from app.core.config import get_settings
 
 
 SUPPORTED_REFERENCE_SIGNAL_TYPES = {
+    "DB_SQL_MAPPER_CHANGED",
     "METHOD_DELETED",
     "METHOD_SIGNATURE_CHANGED",
     "FIELD_DELETED",
@@ -26,6 +28,7 @@ _DEFAULT_MAX_SNIPPET_CHARS = 3000
 _DEFAULT_MAX_TOTAL_CHARS = 12000
 _DEFAULT_MAX_SEARCH_SECONDS = 30
 _DEFAULT_RG_MAX_MATCHES_PER_FILE = 20
+_DB_FILE_SUFFIX_TRIM_PATTERN = re.compile(r"(mapper|repository|dao|entity|model|po|do)$", re.IGNORECASE)
 
 _IGNORED_DIR_NAMES = {
     ".git",
@@ -143,6 +146,9 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
         file_path: str,
         reason: str,
         field_name: str | None = None,
+        table_name: str | None = None,
+        mapper_method_name: str | None = None,
+        entity_name: str | None = None,
     ) -> None:
         value = str(query or "").strip()
         if not value:
@@ -155,6 +161,9 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "filePaths": set(),
                 "reasons": set(),
                 "fieldNames": set(),
+                "tableNames": set(),
+                "mapperMethodNames": set(),
+                "entityNames": set(),
             },
         )
         item["signalTypes"].add(signal_type)
@@ -163,6 +172,12 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
             item["filePaths"].add(file_path)
         if field_name:
             item["fieldNames"].add(field_name)
+        if table_name:
+            item["tableNames"].add(table_name)
+        if mapper_method_name:
+            item["mapperMethodNames"].add(mapper_method_name)
+        if entity_name:
+            item["entityNames"].add(entity_name)
 
     for signal in signals:
         signal_type = str(signal.get("type") or "").strip().upper()
@@ -170,6 +185,47 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
             continue
         details = signal.get("details") if isinstance(signal.get("details"), dict) else {}
         file_path = str(signal.get("filePath") or "").strip()
+        if signal_type == "DB_SQL_MAPPER_CHANGED":
+            table_names = _safe_string_items(details.get("tableNames"))
+            field_names = _safe_string_items(details.get("fieldNames") or details.get("columnNames"))
+            mapper_method_names = _safe_string_items(details.get("mapperMethodNames"))
+            entity_names = _safe_string_items(details.get("entityNames"))
+            if not any((table_names, field_names, mapper_method_names, entity_names)):
+                entity_names = _db_file_stem_queries(file_path)
+            for table_name in table_names:
+                add_query(
+                    table_name,
+                    signal_type=signal_type,
+                    file_path=file_path,
+                    reason="DB_SCHEMA_REFERENCE",
+                    table_name=table_name,
+                )
+            for field_name in field_names:
+                add_query(
+                    field_name,
+                    signal_type=signal_type,
+                    file_path=file_path,
+                    reason="DB_FIELD_REFERENCE",
+                    field_name=field_name,
+                )
+            for mapper_method_name in mapper_method_names:
+                add_query(
+                    mapper_method_name,
+                    signal_type=signal_type,
+                    file_path=file_path,
+                    reason="MAPPER_METHOD_REFERENCE",
+                    mapper_method_name=mapper_method_name,
+                )
+            for entity_name in entity_names:
+                add_query(
+                    entity_name,
+                    signal_type=signal_type,
+                    file_path=file_path,
+                    reason="ENTITY_REFERENCE",
+                    entity_name=entity_name,
+                )
+            continue
+
         if signal_type in {"METHOD_DELETED", "METHOD_SIGNATURE_CHANGED"}:
             method_names = details.get("methodNames") if isinstance(details, dict) else []
             if not isinstance(method_names, list):
@@ -214,9 +270,37 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "filePaths": sorted(item["filePaths"]),
                 "reasons": sorted(item["reasons"]),
                 "fieldNames": sorted(item["fieldNames"]),
+                "tableNames": sorted(item["tableNames"]),
+                "mapperMethodNames": sorted(item["mapperMethodNames"]),
+                "entityNames": sorted(item["entityNames"]),
             }
         )
     return result
+
+
+def _safe_string_items(value: Any, *, limit: int = 8) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text or text in result:
+            continue
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _db_file_stem_queries(file_path: str) -> list[str]:
+    stem = Path(str(file_path or "").replace("\\", "/")).stem
+    if not stem:
+        return []
+    normalized = _DB_FILE_SUFFIX_TRIM_PATTERN.sub("", stem).strip("_-.")
+    result = [stem]
+    if normalized and normalized != stem:
+        result.append(normalized)
+    return result[:2]
 
 
 def _field_accessor_queries(field_name: str) -> list[str]:
@@ -279,6 +363,9 @@ def _search_query(worktree: Path, query: dict[str, Any]) -> tuple[dict[str, Any]
         "signalTypes": query.get("signalTypes") or [],
         "filePaths": query.get("filePaths") or [],
         "fieldNames": query.get("fieldNames") or [],
+        "tableNames": query.get("tableNames") or [],
+        "mapperMethodNames": query.get("mapperMethodNames") or [],
+        "entityNames": query.get("entityNames") or [],
         "matchedFileCount": len(matched_paths),
         "candidateSnippetCount": int(candidate_snippet_count),
         "includedSnippetCount": len(snippets),
@@ -291,6 +378,14 @@ def _search_query(worktree: Path, query: dict[str, Any]) -> tuple[dict[str, Any]
 
 def _snippet_reason(query: dict[str, Any]) -> str:
     reasons = {str(item or "").upper() for item in query.get("reasons") or []}
+    if "DB_SCHEMA_REFERENCE" in reasons:
+        return "DB_SCHEMA_REFERENCE"
+    if "DB_FIELD_REFERENCE" in reasons:
+        return "DB_FIELD_REFERENCE"
+    if "MAPPER_METHOD_REFERENCE" in reasons:
+        return "MAPPER_METHOD_REFERENCE"
+    if "ENTITY_REFERENCE" in reasons:
+        return "ENTITY_REFERENCE"
     if "DTO_FIELD_REFERENCE" in reasons:
         return "DTO_FIELD_REFERENCE"
     if "FIELD_REFERENCE" in reasons:
@@ -395,6 +490,10 @@ def _path_rank(path: str, changed_paths: set[str]) -> int:
         rank -= 15
     if any(token in lower for token in ("controller", "service", "mapper", "repository", "handler")):
         rank -= 10
+    if any(token in lower for token in ("entity", "/dao/", "/db/", "/sql/", "migration", "migrations")):
+        rank -= 9
+    if lower.endswith((".xml", ".sql")):
+        rank -= 6
     if any(token in lower for token in ("dto", "vo", "request", "response", "payload", "form", "api", "excel")):
         rank -= 8
     if "/test/" in lower or lower.startswith("test/") or lower.startswith("tests/") or "src/test/" in lower:

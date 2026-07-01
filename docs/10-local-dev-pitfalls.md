@@ -1936,3 +1936,23 @@ Windows 文件系统不允许路径中出现 `?` 等字符。Git mirror 可以�
    checkout 方案；不要简单扩大异常忽略范围，因为 `rg` Retriever 依赖可搜索的 task worktree。
 4. 当前 progress 摘要出于脱敏和不泄露源码路径考虑，不展示 Git 原始错误；排查时可在受控环境中对同一 mirror
    执行 `git worktree add --detach --force <worktree> <commit>` 获取 Git 原始错误。
+
+## 84. 历史 `LOCAL_REPO_PREPARED` 不代表当前 task worktree 仍存在
+
+现象：
+
+手工删除 `.local/review-workspaces` 后，旧任务详情里的高准确模式仍可能看到历史
+`LOCAL_REPO_PREPARED` / `localRepositoryStatus=PREPARED`，但 Retriever 步骤提示不可用或失败。
+
+原因：
+
+仓库准备状态来自当次 AI Review 写入数据库的 progress 摘要；它表示“当时准备成功”。如果任务完成后手工删除
+workspace，历史 progress 不会自动回写。Retriever 在执行时会校验当前 task worktree 是否存在，缺失时会降级为
+`UNAVAILABLE`，因此同一任务可能出现“历史准备成功”和“当前检索不可用”的表象差异。
+
+处理方式：
+
+1. 新执行的 Context Pack 在 Retriever 校验发现 task worktree 缺失时，会把本地仓库摘要降级为
+   `UNAVAILABLE`，`worktreeStatus=MISSING`，避免继续展示为单纯“已准备”。
+2. 前端遇到历史 `PREPARED` 但最新 `LOCAL_CONTEXT_RETRIEVE_FAILED` 时，展示为“工作区缺失 / 检索不可用”，不要把它解释为无风险或无引用。
+3. 删除 `.local/review-workspaces` 后需要重新触发 AI Review，平台会重新 clone / fetch / checkout；旧任务的历史 progress 只作为排障记录。

@@ -90,6 +90,7 @@ const HOME_ROUTE = '/';
 const TASK_LIST_ROUTE = '/tasks';
 const RULE_GAPS_ROUTE = '/rule-gaps';
 const FEEDBACK_ROUTE = '/risk-feedback';
+const EVALUATION_CASES_ROUTE = '/evaluation-cases';
 const SETTINGS_ROUTE = '/settings';
 const RELEASES_ROUTE = '/releases';
 const HELP_ROUTE = '/help';
@@ -192,6 +193,16 @@ const REVIEW_FEEDBACK_STATUS_OPTIONS = [
   { label: '信息不足', value: 'INSUFFICIENT' },
   { label: '已忽略', value: 'IGNORED' },
   { label: '已沉淀', value: 'CONVERTED' }
+];
+const EVALUATION_CASE_VERDICT_OPTIONS = [
+  { label: '有效问题', value: 'TRUE_POSITIVE' },
+  { label: '误判', value: 'FALSE_POSITIVE' },
+  { label: '等级过高', value: 'LEVEL_TOO_HIGH' },
+  { label: '等级过低', value: 'LEVEL_TOO_LOW' },
+  { label: '上下文不足', value: 'CONTEXT_MISSING' },
+  { label: '重复问题', value: 'DUPLICATE' },
+  { label: '漏报样本', value: 'MISSING_FINDING' },
+  { label: '待确认', value: 'UNKNOWN' }
 ];
 const PROJECT_REVIEW_POLICY_TYPE_OPTIONS = [
   { label: '项目规则', value: 'PROJECT_RULE' },
@@ -315,6 +326,53 @@ function missingContextLabel(value) {
   return MISSING_CONTEXT_TYPE_OPTIONS.find(item => item.value === value)?.label || value;
 }
 
+const REFINEMENT_CANDIDATE_SEVERITIES = new Set(['CRITICAL', 'MAJOR', 'HIGH']);
+const REFINEMENT_CANDIDATE_CONTEXT_STATUSES = new Set(['PARTIAL', 'INSUFFICIENT']);
+
+function isRefinementCandidate(finding) {
+  return REFINEMENT_CANDIDATE_SEVERITIES.has(String(finding?.severity || '').toUpperCase())
+    && REFINEMENT_CANDIDATE_CONTEXT_STATUSES.has(String(finding?.contextStatus || '').toUpperCase());
+}
+
+function refinementStatusColor(status) {
+  switch (String(status || '').toUpperCase()) {
+    case 'COMPLETED':
+      return 'green';
+    case 'FAILED':
+      return 'red';
+    default:
+      return 'default';
+  }
+}
+
+function refinementStatusLabel(status) {
+  switch (String(status || '').toUpperCase()) {
+    case 'COMPLETED':
+      return '已完成';
+    case 'FAILED':
+      return '失败';
+    default:
+      return status || '未触发';
+  }
+}
+
+function refinementTriggerReasonLabel(value) {
+  switch (value) {
+    case 'HIGH_IMPACT_CONTEXT_INSUFFICIENT':
+      return '高影响且上下文不足';
+    default:
+      return value || '-';
+  }
+}
+
+function sanitizeRefinementText(value) {
+  return String(value ?? '')
+    .replace(/Authorization:\s*Bearer\s+[^\s,;]+/gi, 'Authorization: Bearer ***')
+    .replace(/\b[A-Za-z]:\\[^\s"',;]+/g, '[local-path]')
+    .replace(/\b(?:sk|api|token|key)-[A-Za-z0-9._-]{8,}\b/gi, '[secret]')
+    .slice(0, 500);
+}
+
 function normalizeTextList(value) {
   const raw = Array.isArray(value) ? value : (value ? [value] : []);
   return raw
@@ -377,6 +435,20 @@ function reviewFeedbackStatusColor(value) {
   if (value === 'IGNORED') return 'default';
   if (value === 'CONVERTED') return 'purple';
   return 'blue';
+}
+
+function evaluationCaseVerdictLabel(value) {
+  return EVALUATION_CASE_VERDICT_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function evaluationCaseVerdictColor(value) {
+  if (value === 'TRUE_POSITIVE') return 'green';
+  if (value === 'FALSE_POSITIVE') return 'red';
+  if (value === 'LEVEL_TOO_HIGH' || value === 'LEVEL_TOO_LOW') return 'orange';
+  if (value === 'CONTEXT_MISSING') return 'gold';
+  if (value === 'DUPLICATE') return 'purple';
+  if (value === 'MISSING_FINDING') return 'blue';
+  return 'default';
 }
 
 function projectReviewPolicyTypeLabel(value) {
@@ -1294,11 +1366,11 @@ function renderArtifactCode(artifact) {
   });
 }
 
-async function copyTextToClipboard(text) {
+async function copyTextToClipboard(text, successMessage = '已复制可维护内容') {
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
-    message.success('已复制可维护内容');
+    message.success(successMessage);
   } catch (err) {
     message.error(err?.message || '复制失败');
   }
@@ -1647,6 +1719,122 @@ function ReviewFeedbackControl({
               onChange={checked => setDraft(current => ({ ...current, suggestAsProjectRule: checked }))}
             />
           )}
+        </Space>
+      </Modal>
+    </div>
+  );
+}
+
+function EvaluationCaseControl({ taskId, review, finding, compact = false }) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [savedCase, setSavedCase] = useState(null);
+  const [draft, setDraft] = useState({
+    verdict: 'UNKNOWN',
+    humanComment: ''
+  });
+  const fingerprint = finding?.fingerprint;
+  const disabled = !taskId || !fingerprint;
+
+  const openModal = () => {
+    setDraft({
+      verdict: savedCase?.verdict || 'UNKNOWN',
+      humanComment: savedCase?.humanComment || ''
+    });
+    setModalOpen(true);
+  };
+
+  const submit = async () => {
+    if (disabled) return;
+    setSubmitting(true);
+    try {
+      const created = await fetchApi('/api/evaluation-cases', {
+        method: 'POST',
+        body: JSON.stringify({
+          source: 'AI_FINDING',
+          taskId,
+          reviewKey: review?.reviewKey,
+          fingerprint,
+          findingId: finding?.findingId || finding?.id || null,
+          provider: review?.provider || finding?.source || null,
+          profile: review?.profileCode || null,
+          riskType: finding?.category || null,
+          severity: finding?.severity || null,
+          contextStatus: finding?.contextStatus || null,
+          verdict: draft.verdict,
+          humanComment: draft.humanComment
+        })
+      });
+      setSavedCase(created);
+      setModalOpen(false);
+      message.success('评估样本已保存');
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className={compact ? 'feedback-control feedback-control-compact' : 'feedback-control'}>
+      <Space wrap>
+        {savedCase && (
+          <Tag color={evaluationCaseVerdictColor(savedCase.verdict)}>
+            样本：{evaluationCaseVerdictLabel(savedCase.verdict)}
+          </Tag>
+        )}
+        <Tooltip title={disabled ? '该 finding 缺少 fingerprint，无法定位原始结果' : '保存为 Review 质量评估样本'}>
+          <span>
+            <Button
+              size="small"
+              icon={<PlusOutlined />}
+              disabled={disabled}
+              onClick={openModal}
+            >
+              标注评估样本
+            </Button>
+          </span>
+        </Tooltip>
+      </Space>
+      <Modal
+        title="标注评估样本"
+        open={modalOpen}
+        onCancel={() => setModalOpen(false)}
+        onOk={submit}
+        confirmLoading={submitting}
+        okText="保存样本"
+        cancelText="取消"
+      >
+        <Space direction="vertical" size="middle" className="full-width">
+          <Alert
+            type="info"
+            showIcon
+            message="评估样本只用于后续质量评估"
+            description="不会修改原 AI Review 结果，不会创建反馈池记录，不会生成项目策略，也不会触发模型回放。"
+          />
+          <Select
+            className="full-width"
+            value={draft.verdict}
+            options={EVALUATION_CASE_VERDICT_OPTIONS}
+            onChange={value => setDraft(current => ({ ...current, verdict: value }))}
+          />
+          <Input.TextArea
+            value={draft.humanComment}
+            rows={4}
+            maxLength={4000}
+            placeholder="填写人工说明，例如为什么是误判、等级偏差或上下文不足"
+            onChange={event => setDraft(current => ({ ...current, humanComment: event.target.value }))}
+          />
+          <Descriptions size="small" column={1}>
+            <Descriptions.Item label="任务">{taskId}</Descriptions.Item>
+            <Descriptions.Item label="Review Key">{review?.reviewKey || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Provider">{review?.provider || finding?.source || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Profile">{review?.profileCode || '-'}</Descriptions.Item>
+            <Descriptions.Item label="风险类型">{categoryLabel(finding?.category)}</Descriptions.Item>
+            <Descriptions.Item label="等级">{severityLabel(finding?.severity)}</Descriptions.Item>
+            <Descriptions.Item label="上下文">{contextStatusLabel(finding?.contextStatus)}</Descriptions.Item>
+            <Descriptions.Item label="Fingerprint"><Text code>{fingerprint || '-'}</Text></Descriptions.Item>
+          </Descriptions>
         </Space>
       </Modal>
     </div>
@@ -2141,6 +2329,8 @@ function localRepositoryStatusLabel(status, hasRecord) {
   switch (String(status || '').toUpperCase()) {
     case 'PREPARED':
       return '已准备';
+    case 'WORKTREE_MISSING':
+      return '工作区缺失';
     case 'UNAVAILABLE':
       return '不可用';
     case 'DISABLED':
@@ -2155,6 +2345,8 @@ function localRepositoryStatusColor(status, hasRecord) {
   switch (String(status || '').toUpperCase()) {
     case 'PREPARED':
       return 'green';
+    case 'WORKTREE_MISSING':
+      return 'orange';
     case 'UNAVAILABLE':
       return 'orange';
     case 'DISABLED':
@@ -2206,7 +2398,11 @@ function buildHighAccuracyContextSummary(progress) {
     ? localRepository.enabled
     : meta.localRepositoryEnabled;
   const enabled = Boolean(enabledValue);
-  const status = localRepository.status || meta.localRepositoryStatus || (hasRecord ? (enabled ? 'UNKNOWN' : 'DISABLED') : '');
+  const rawStatus = localRepository.status || meta.localRepositoryStatus || (hasRecord ? (enabled ? 'UNKNOWN' : 'DISABLED') : '');
+  const referenceStatus = String(localReferenceSearch.status || '').toUpperCase();
+  const status = String(rawStatus || '').toUpperCase() === 'PREPARED' && referenceStatus === 'UNAVAILABLE'
+    ? 'WORKTREE_MISSING'
+    : rawStatus;
   return {
     hasRecord,
     enabled,
@@ -2330,7 +2526,22 @@ function roleDetailLine(items) {
   );
 }
 
-function buildHighAccuracyRoleSteps(progress) {
+function buildFindingRefinementSummary(review) {
+  const findings = Array.isArray(review?.findings) ? review.findings : [];
+  const overlays = findings
+    .map((finding, index) => ({ index, overlay: finding?.refinementOverlay }))
+    .filter(item => item.overlay);
+  const completed = overlays.filter(item => String(item.overlay.status || '').toUpperCase() === 'COMPLETED').length;
+  const failed = overlays.filter(item => String(item.overlay.status || '').toUpperCase() === 'FAILED').length;
+  return {
+    total: overlays.length,
+    completed,
+    failed,
+    items: overlays,
+  };
+}
+
+function buildHighAccuracyRoleSteps(progress, refinementSummary) {
   const events = Array.isArray(progress) ? progress : [];
   const summary = buildHighAccuracyContextSummary(events);
   const requestEvent = latestProgressEvent(events, 'REQUEST_BUILT');
@@ -2460,13 +2671,26 @@ function buildHighAccuracyRoleSteps(progress) {
         parsedEvent ? phaseLabel(parsedEvent.phase) : '等待解析',
       ]),
     },
+    {
+      title: 'Finding 补证据',
+      status: roleStepStatus({
+        hasEvent: countValue(refinementSummary?.total) > 0,
+        failed: countValue(refinementSummary?.failed) > 0,
+      }),
+      description: roleDetailLine([
+        `总数 ${countText(refinementSummary?.total)}`,
+        `完成 ${countText(refinementSummary?.completed)}`,
+        `失败 ${countText(refinementSummary?.failed)}`,
+      ]),
+    },
   ];
 }
 
-function HighAccuracyFlowView({ progress }) {
+function HighAccuracyFlowView({ progress, review }) {
   const navigate = useNavigate();
   const location = useLocation();
   const summary = buildHighAccuracyContextSummary(progress);
+  const refinementSummary = buildFindingRefinementSummary(review);
   const zeroReason = zeroQueryExplanation(summary);
   const availabilityItems = safeArray(summary.requestedContextAvailability?.items);
   const ruleGapItems = safeArray(summary.ruleGapItems);
@@ -2475,12 +2699,29 @@ function HighAccuracyFlowView({ progress }) {
       ? summary.budgetCutSummary.localReferenceCutDetails
       : summary.budgetCutSummary?.notInjectedEvidence
   );
+  const gapText = value => {
+    const text = value || '-';
+    return (
+      <Tooltip title={text}>
+        <span className="rule-gap-cell-text">{text}</span>
+      </Tooltip>
+    );
+  };
   const gapColumns = [
-    { title: '缺口类型', dataIndex: 'gapType', width: 190, render: value => <Tag color="orange">{value || '-'}</Tag> },
-    { title: 'Signal', dataIndex: 'signal', width: 220, ellipsis: true },
-    { title: 'Requested Context', dataIndex: 'requestedContext', width: 220, ellipsis: true },
-    { title: '建议能力', dataIndex: 'suggestedCapability', ellipsis: true },
-    { title: '优先级原因', dataIndex: 'priorityReason', ellipsis: true },
+    {
+      title: '缺口类型',
+      dataIndex: 'gapType',
+      width: 210,
+      render: value => (
+        <Tooltip title={value || '-'}>
+          <Tag color="orange" className="rule-gap-type-tag">{value || '-'}</Tag>
+        </Tooltip>
+      ),
+    },
+    { title: 'Signal', dataIndex: 'signal', width: 240, render: gapText },
+    { title: 'Requested Context', dataIndex: 'requestedContext', width: 220, render: gapText },
+    { title: '建议能力', dataIndex: 'suggestedCapability', width: 380, render: gapText },
+    { title: '优先级原因', dataIndex: 'priorityReason', width: 360, render: gapText },
   ];
   const availabilityColumns = [
     { title: 'Context', dataIndex: 'type', width: 220, ellipsis: true },
@@ -2519,8 +2760,27 @@ function HighAccuracyFlowView({ progress }) {
         <Steps
           direction="vertical"
           size="small"
-          items={buildHighAccuracyRoleSteps(progress)}
+          items={buildHighAccuracyRoleSteps(progress, refinementSummary)}
         />
+      </Card>
+      <Card title="Finding 级二次补证据">
+        {refinementSummary.total === 0 ? (
+          <Empty description="当前 Review 暂无 finding 级补证据记录" />
+        ) : (
+          <Space direction="vertical" size="middle" className="full-width">
+            <Descriptions size="small" column={{ xs: 1, md: 3 }}>
+              <Descriptions.Item label="补证据记录"><Text strong>{countText(refinementSummary.total)}</Text></Descriptions.Item>
+              <Descriptions.Item label="已完成"><Text strong>{countText(refinementSummary.completed)}</Text></Descriptions.Item>
+              <Descriptions.Item label="失败"><Text strong>{countText(refinementSummary.failed)}</Text></Descriptions.Item>
+            </Descriptions>
+            <Alert
+              type="info"
+              showIcon
+              message="补证据结果只作为 finding 覆盖层展示"
+              description="这里仅汇总安全摘要；具体触发条件、检索计划、证据摘要、缺失上下文和失败原因请在 AI Review 结果中展开对应 finding 查看。"
+            />
+          </Space>
+        )}
       </Card>
       {zeroReason && (
         <Alert
@@ -2619,6 +2879,9 @@ function HighAccuracyFlowView({ progress }) {
             columns={gapColumns}
             dataSource={ruleGapItems}
             pagination={false}
+            tableLayout="fixed"
+            scroll={{ x: 1410 }}
+            className="rule-gap-table"
           />
         )}
       </Card>
@@ -2679,6 +2942,173 @@ function FindingContext({ finding }) {
         )}
       </Space>
     </div>
+  );
+}
+
+function RefinementStatDescriptions({ title, value, fields }) {
+  const data = value && typeof value === 'object' ? value : {};
+  const visibleFields = fields.filter(field => data[field] !== undefined && data[field] !== null && data[field] !== '');
+  if (visibleFields.length === 0) return null;
+  return (
+    <div className="refinement-stat-block">
+      <Text type="secondary">{title}</Text>
+      <Descriptions size="small" column={{ xs: 1, md: 3 }}>
+        {visibleFields.map(field => (
+          <Descriptions.Item key={field} label={field}>
+            {sanitizeRefinementText(data[field])}
+          </Descriptions.Item>
+        ))}
+      </Descriptions>
+    </div>
+  );
+}
+
+function FindingRefinementPanel({ overlay }) {
+  if (!overlay) return null;
+  const retrievalPlan = overlay.retrievalPlan || {};
+  const evidenceSummary = overlay.evidenceSummary || {};
+  const triggerConditions = overlay.triggerConditions || {};
+  const missingContext = safeArray(overlay.missingContext);
+  const searches = safeArray(evidenceSummary.searches);
+  const completed = String(overlay.status || '').toUpperCase() === 'COMPLETED';
+  const failed = String(overlay.status || '').toUpperCase() === 'FAILED';
+  const searchColumns = [
+    {
+      title: 'Signal',
+      dataIndex: 'signalTypes',
+      width: 220,
+      ellipsis: true,
+      render: value => safeArray(value).join('、') || '-',
+    },
+    { title: '查询数', dataIndex: 'queryCount', width: 90, render: value => countText(value) },
+    { title: '命中文件', dataIndex: 'matchedFileCount', width: 100, render: value => countText(value) },
+    { title: '注入 Snippet', dataIndex: 'includedSnippetCount', width: 120, render: value => countText(value) },
+    {
+      title: '相对路径摘要',
+      dataIndex: 'topMatchedPaths',
+      ellipsis: true,
+      render: (value, row) => {
+        const paths = safeArray(value?.length ? value : row.topRelativePaths);
+        return paths.length ? paths.map(sanitizeRefinementText).join('、') : '-';
+      },
+    },
+  ];
+
+  return (
+    <div className="finding-refinement-panel">
+      <Space direction="vertical" size="middle" className="full-width">
+        <Alert
+          type={failed ? 'error' : completed ? 'success' : 'info'}
+          showIcon
+          message={(
+            <Space wrap>
+              <span>二次补证据覆盖层</span>
+              <Tag color={refinementStatusColor(overlay.status)}>{refinementStatusLabel(overlay.status)}</Tag>
+            </Space>
+          )}
+          description="该结果只作为显式覆盖层展示，不会覆盖原 finding 的等级、上下文状态、置信度或原始证据。"
+        />
+        <Descriptions size="small" column={{ xs: 1, md: 2, xl: 4 }}>
+          <Descriptions.Item label="触发原因">{refinementTriggerReasonLabel(overlay.triggerReason)}</Descriptions.Item>
+          <Descriptions.Item label="触发等级">{severityLabel(triggerConditions.severity)}</Descriptions.Item>
+          <Descriptions.Item label="触发上下文">{contextStatusLabel(triggerConditions.contextStatus)}</Descriptions.Item>
+          <Descriptions.Item label="Context Pack">{sanitizeRefinementText(retrievalPlan.contextPackVersion || '-')}</Descriptions.Item>
+          <Descriptions.Item label="Planner Signal">{countText(retrievalPlan.plannerSignalCount)}</Descriptions.Item>
+          <Descriptions.Item label="Requested Context">{countText(retrievalPlan.requestedContextCount)}</Descriptions.Item>
+          <Descriptions.Item label="开始时间">{overlay.startedAt || '-'}</Descriptions.Item>
+          <Descriptions.Item label="结束时间">{overlay.finishedAt || '-'}</Descriptions.Item>
+        </Descriptions>
+        <RefinementStatDescriptions
+          title="本地仓库摘要"
+          value={evidenceSummary.localRepository}
+          fields={['status', 'enabled', 'failurePhase', 'durationMs', 'sourceIncluded']}
+        />
+        <RefinementStatDescriptions
+          title="引用检索摘要"
+          value={evidenceSummary.localReferenceSearch}
+          fields={['status', 'queryCount', 'matchedFileCount', 'includedSnippetCount', 'truncated']}
+        />
+        {searches.length > 0 && (
+          <Table
+            size="small"
+            rowKey={(row, index) => `${safeArray(row.signalTypes).join('-') || 'search'}-${index}`}
+            columns={searchColumns}
+            dataSource={searches}
+            pagination={false}
+            scroll={{ x: 760 }}
+          />
+        )}
+        {missingContext.length > 0 && (
+          <div>
+            <Text type="secondary">仍缺失上下文</Text>
+            <div className="refinement-missing-context">
+              {missingContext.map((item, index) => {
+                const type = item && typeof item === 'object' ? item.type : item;
+                const reason = item && typeof item === 'object' ? item.reason : '';
+                return (
+                  <Tag key={`${type || 'missing'}-${index}`} color="orange">
+                    {missingContextLabel(sanitizeRefinementText(type))}
+                    {reason ? `：${sanitizeRefinementText(reason)}` : ''}
+                  </Tag>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {overlay.failureReason && (
+          <Alert
+            type="warning"
+            showIcon
+            message="补证据失败原因"
+            description={sanitizeRefinementText(overlay.failureReason)}
+          />
+        )}
+      </Space>
+    </div>
+  );
+}
+
+function FindingRefinementControl({ taskId, review, finding, findingIndex, onRefresh }) {
+  const [loading, setLoading] = useState(false);
+  if (!isRefinementCandidate(finding)) return null;
+  const overlay = finding?.refinementOverlay;
+  const disabled = !taskId || review?.status === 'RUNNING' || (!finding?.fingerprint && findingIndex == null);
+  const run = async () => {
+    setLoading(true);
+    try {
+      await fetchApi(`/api/review-tasks/${taskId}/code-quality-refinements`, {
+        method: 'POST',
+        body: JSON.stringify({
+          reviewKey: review?.reviewKey,
+          findingIndex,
+          fingerprint: finding?.fingerprint,
+          forceRegenerate: Boolean(overlay)
+        })
+      });
+      message.success(overlay ? '已重新补证据' : '已完成补证据');
+      await onRefresh?.();
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Tooltip title={disabled ? '该 finding 暂不能触发补证据' : '只对当前 finding 做定向补证据，不重跑 Review'}>
+      <span>
+        <Button
+          size="small"
+          icon={<FileSearchOutlined />}
+          className={`finding-action-button refinement-action ${overlay ? 'refinement-action-regenerate' : ''}`}
+          loading={loading}
+          disabled={disabled}
+          onClick={run}
+        >
+          {overlay ? '重新补证据' : '补证据'}
+        </Button>
+      </span>
+    </Tooltip>
   );
 }
 
@@ -3215,6 +3645,7 @@ function CodeQualityReviewView({
   changedFilesSummary,
   diffContextCapabilities,
   initialFixPreviews,
+  onRefresh,
   onRetry,
   retrying,
   onCancelReview,
@@ -3254,7 +3685,7 @@ function CodeQualityReviewView({
       <Space direction="vertical" size="large" className="full-width">
         <CodeQualityViewSwitcher value={qualityView} onChange={setQualityView} />
         {qualityView === 'result' && emptyResultContent}
-        {qualityView === 'accuracy-flow' && <HighAccuracyFlowView progress={progress} />}
+        {qualityView === 'accuracy-flow' && <HighAccuracyFlowView progress={progress} review={review} />}
         {qualityView === 'progress' && <CodeQualityProgressView progress={progress} />}
       </Space>
     );
@@ -3416,6 +3847,13 @@ function CodeQualityReviewView({
                               中断
                             </Button>
                           )}
+                          <FindingRefinementControl
+                            taskId={taskId}
+                            review={review}
+                            finding={finding}
+                            findingIndex={index}
+                            onRefresh={onRefresh}
+                          />
                         </Space>
                       </Descriptions.Item>
                       <Descriptions.Item label="来源">{sourceLabel(finding.source || review.provider)}</Descriptions.Item>
@@ -3424,6 +3862,7 @@ function CodeQualityReviewView({
                     {finding.body && <Paragraph>{cleanAiMarkdown(finding.body)}</Paragraph>}
                     {finding.suggestion && <Alert type="info" showIcon message="建议" description={finding.suggestion} />}
                     <FindingContext finding={finding} />
+                    <FindingRefinementPanel overlay={finding.refinementOverlay} />
                     <ReviewFeedbackControl
                       taskId={taskId}
                       sourceType="AI_FINDING"
@@ -3437,6 +3876,12 @@ function CodeQualityReviewView({
                         riskTitle: finding.title,
                         originalRiskLevel: finding.severity
                       }}
+                    />
+                    <EvaluationCaseControl
+                      taskId={taskId}
+                      review={review}
+                      finding={finding}
+                      compact
                     />
                   </Space>
                 )
@@ -3452,7 +3897,7 @@ function CodeQualityReviewView({
     <Space direction="vertical" size="large" className="full-width">
       <CodeQualityViewSwitcher value={qualityView} onChange={setQualityView} />
       {qualityView === 'result' && resultContent}
-      {qualityView === 'accuracy-flow' && <HighAccuracyFlowView progress={progress} />}
+      {qualityView === 'accuracy-flow' && <HighAccuracyFlowView progress={progress} review={review} />}
       {qualityView === 'progress' && (
         <CodeQualityProgressView
           progress={progress}
@@ -3492,6 +3937,7 @@ function CodeQualityReviewsPanel({
   diffContextCapabilities,
   fixPreviews,
   selectedReviewKey,
+  onRefresh,
   onRetry,
   retrying,
   onCancelReview,
@@ -3511,6 +3957,7 @@ function CodeQualityReviewsPanel({
         changedFilesSummary={changedFilesSummary}
         diffContextCapabilities={diffContextCapabilities}
         initialFixPreviews={fixPreviews}
+        onRefresh={onRefresh}
         onRetry={onRetry}
         retrying={retrying}
         onCancelReview={onCancelReview}
@@ -3532,6 +3979,7 @@ function CodeQualityReviewsPanel({
             changedFilesSummary={changedFilesSummary}
             diffContextCapabilities={diffContextCapabilities}
             initialFixPreviews={(fixPreviews || []).filter(item => item.reviewKey === review.reviewKey)}
+            onRefresh={onRefresh}
             onRetry={onRetry}
             retrying={retrying}
             onCancelReview={onCancelReview}
@@ -3747,7 +4195,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   };
 
   const tabItems = useMemo(() => [
-    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} diffContextCapabilities={detail?.diffContextCapabilities} fixPreviews={fixPreviews} selectedReviewKey={selectedReviewKey} onRetry={retryCodeQualityReview} retrying={retrying} onCancelReview={cancelCodeQualityJob} onCancelFixPreview={cancelCodeQualityJob} /> },
+    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} diffContextCapabilities={detail?.diffContextCapabilities} fixPreviews={fixPreviews} selectedReviewKey={selectedReviewKey} onRefresh={() => load({ silent: true })} onRetry={retryCodeQualityReview} retrying={retrying} onCancelReview={cancelCodeQualityJob} onCancelFixPreview={cancelCodeQualityJob} /> },
     ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
       ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
       : []),
@@ -5602,6 +6050,32 @@ const RULE_GAP_TYPE_OPTIONS = [
   { label: '预算裁剪', value: 'BUDGET_CUT' }
 ];
 
+const RULE_GAP_RECOMMENDATION_STATUS = {
+  RECOMMENDED: { label: '建议补全', color: 'red' },
+  WATCH: { label: '继续观察', color: 'gold' },
+  NOT_NOW: { label: '暂不处理', color: 'default' }
+};
+
+const RULE_GAP_COMPLETION_TYPE = {
+  PLANNER: 'Planner 规则',
+  RETRIEVER: '证据检索',
+  BUDGET: '预算策略',
+  PROMPT: 'Prompt 约束',
+  STABILITY: '稳定性',
+  OBSERVABILITY: '观测解释'
+};
+
+const RULE_GAP_FEEDBACK_CORRELATION = {
+  TASK_LEVEL: '任务级关联',
+  PROJECT_RECENT_APPROXIMATION: '项目近期近似',
+  NONE: '暂无关联反馈'
+};
+
+function ruleGapRecommendationStatusTag(status) {
+  const meta = RULE_GAP_RECOMMENDATION_STATUS[status] || { label: status || '-', color: 'default' };
+  return <Tag color={meta.color}>{meta.label}</Tag>;
+}
+
 function RuleGapDashboardPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -5614,7 +6088,11 @@ function RuleGapDashboardPage() {
     recentDays: 30,
     limit: 50
   });
-  const [dashboard, setDashboard] = useState({ items: [], summary: {} });
+  const [dashboard, setDashboard] = useState({
+    items: [],
+    summary: {},
+    recommendations: { items: [], summary: {} }
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -5631,11 +6109,15 @@ function RuleGapDashboardPage() {
       const data = await fetchApi(`/api/code-quality-reviews/rule-gaps?${params.toString()}`);
       setDashboard({
         items: Array.isArray(data?.items) ? data.items : [],
-        summary: data?.summary || {}
+        summary: data?.summary || {},
+        recommendations: {
+          items: Array.isArray(data?.recommendations?.items) ? data.recommendations.items : [],
+          summary: data?.recommendations?.summary || {}
+        }
       });
     } catch (err) {
       setError(err.message);
-      setDashboard({ items: [], summary: {} });
+      setDashboard({ items: [], summary: {}, recommendations: { items: [], summary: {} } });
     } finally {
       setLoading(false);
     }
@@ -5675,6 +6157,31 @@ function RuleGapDashboardPage() {
     value: project.id
   }));
   const summary = dashboard.summary || {};
+  const recommendationItems = safeArray(dashboard.recommendations?.items);
+  const recommendationSummary = dashboard.recommendations?.summary || {};
+  const recommendedCount = Number(recommendationSummary.recommendedCount || 0);
+  const watchCount = Number(recommendationSummary.watchCount || 0);
+  const notNowCount = Number(recommendationSummary.notNowCount || 0);
+  const recommendationTotal = recommendedCount + watchCount + notNowCount;
+  const recommendationChartTotal = Math.max(recommendationTotal, 1);
+  const recommendedEnd = (recommendedCount / recommendationChartTotal) * 100;
+  const watchEnd = ((recommendedCount + watchCount) / recommendationChartTotal) * 100;
+  const recommendationChartStyle = {
+    background: recommendationTotal
+      ? `conic-gradient(#ef4444 0 ${recommendedEnd}%, #f59e0b ${recommendedEnd}% ${watchEnd}%, #94a3b8 ${watchEnd}% 100%)`
+      : 'conic-gradient(#e5e7eb 0 100%)'
+  };
+  const eventBreakdown = [
+    { label: '含缺口', value: Number(summary.eventsWithRuleGapCount || 0), color: '#2563eb' },
+    { label: '无缺口', value: Number(summary.eventsWithoutRuleGapCount || 0), color: '#10b981' },
+    { label: '跳过', value: Number(summary.skippedEventCount || 0), color: '#94a3b8' },
+    { label: '解析失败', value: Number(summary.parseFailedEventCount || 0), color: '#ef4444' }
+  ];
+  const eventTotal = Math.max(
+    Number(summary.scannedEventCount || 0),
+    eventBreakdown.reduce((sum, item) => sum + item.value, 0),
+    1
+  );
   const columns = [
     {
       title: '缺口类型',
@@ -5721,6 +6228,108 @@ function RuleGapDashboardPage() {
       }
     },
   ];
+  const recommendationColumns = [
+    {
+      title: '是否补全',
+      dataIndex: 'recommendationStatus',
+      width: 100,
+      render: value => ruleGapRecommendationStatusTag(value)
+    },
+    {
+      title: '补全类型',
+      dataIndex: 'completionType',
+      width: 108,
+      render: value => <Tag color="blue">{RULE_GAP_COMPLETION_TYPE[value] || value || '-'}</Tag>
+    },
+    {
+      title: '建议下一阶段',
+      dataIndex: 'suggestedNextStage',
+      width: 210,
+      render: value => <Text strong>{value || '-'}</Text>
+    },
+    {
+      title: '为什么',
+      dataIndex: 'reasons',
+      width: 340,
+      render: value => {
+        const reasons = safeArray(value);
+        if (!reasons.length) return '-';
+        return (
+          <Space direction="vertical" size={4} className="full-width">
+            {reasons.slice(0, 4).map((reason, index) => (
+              <Text key={`${reason}-${index}`}>{reason}</Text>
+            ))}
+          </Space>
+        );
+      }
+    },
+    {
+      title: '评分 / 反馈',
+      width: 150,
+      render: (_, row) => {
+        const feedback = row.feedbackSignals || {};
+        return (
+          <Space direction="vertical" size={2}>
+            <Text strong>{countText(row.score)} / 100</Text>
+            <Text type="secondary">
+              {RULE_GAP_FEEDBACK_CORRELATION[feedback.correlation] || feedback.correlation || '暂无关联反馈'}
+            </Text>
+            <Text type="secondary">
+              上下文不足 {countText(feedback.contextMissingCount)} · 误判 {countText(feedback.falsePositiveCount)}
+            </Text>
+          </Space>
+        );
+      }
+    },
+    {
+      title: '最近任务样例',
+      dataIndex: 'recentTaskSamples',
+      width: 220,
+      render: value => {
+        const tasks = safeArray(value);
+        if (!tasks.length) return '-';
+        return (
+          <Space direction="vertical" size={2} className="full-width">
+            {tasks.slice(0, 3).map(task => (
+              <Button
+                key={`${task.taskId}-${task.reviewKey}`}
+                type="link"
+                className="rule-gap-task-link"
+                onClick={() => openTask(task)}
+              >
+                #{task.taskId} · {task.projectName || '-'} · {task.reviewKey || 'default'}
+              </Button>
+            ))}
+          </Space>
+        );
+      }
+    }
+  ];
+  const recommendationExpandable = {
+    columnTitle: <span className="rule-gap-expand-title">详情</span>,
+    columnWidth: 64,
+    expandedRowRender: row => (
+      <div className="rule-gap-recommendation-detail">
+        <Descriptions size="small" column={{ xs: 1, lg: 3 }}>
+          <Descriptions.Item label="Signal">{row.signal || '-'}</Descriptions.Item>
+          <Descriptions.Item label="缺口类型">{row.gapType || '-'}</Descriptions.Item>
+          <Descriptions.Item label="Requested Context">{row.requestedContext || '-'}</Descriptions.Item>
+          <Descriptions.Item label="建议能力">{row.suggestedCapability || '-'}</Descriptions.Item>
+          <Descriptions.Item label="补全类型">
+            {RULE_GAP_COMPLETION_TYPE[row.completionType] || row.completionType || '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="评分">{countText(row.score)} / 100</Descriptions.Item>
+          <Descriptions.Item label="出现次数">{countText(row.occurrenceCount)}</Descriptions.Item>
+          <Descriptions.Item label="影响任务">{countText(row.taskCount)}</Descriptions.Item>
+          <Descriptions.Item label="影响项目">{countText(row.projectCount)}</Descriptions.Item>
+          <Descriptions.Item label="反馈关联" span={3}>
+            {RULE_GAP_FEEDBACK_CORRELATION[row.feedbackSignals?.correlation] || row.feedbackSignals?.correlation || '暂无关联反馈'}
+            {row.feedbackSignals?.note ? `；${row.feedbackSignals.note}` : ''}
+          </Descriptions.Item>
+        </Descriptions>
+      </div>
+    )
+  };
 
   return (
     <div className="page-shell">
@@ -5728,7 +6337,7 @@ function RuleGapDashboardPage() {
         <div className="page-heading-main">
           <Title level={3}>规则缺口看板</Title>
           <Text type="secondary">
-            基于 CONTEXT_PACK_BUILT progress 安全摘要聚合，不展示源码、路径、token、diff 或 provider 原始输出。
+            汇总历史审查中反复缺少的证据，帮助判断下一步最值得补什么；这里只展示统计、建议和任务跳转，不展示源码或敏感信息。
           </Text>
         </div>
         <Button icon={<ReloadOutlined />} onClick={applyFilters} loading={loading}>刷新</Button>
@@ -5782,25 +6391,90 @@ function RuleGapDashboardPage() {
         </Space>
       </Card>
       <Card className="section-gap">
-        <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }}>
-          <Descriptions.Item label="聚合项">{countText(summary.returnedGroups)} / {countText(summary.totalGroups)}</Descriptions.Item>
-          <Descriptions.Item label="出现次数">{countText(summary.totalOccurrences)}</Descriptions.Item>
-          <Descriptions.Item label="扫描事件">{countText(summary.scannedEventCount)}</Descriptions.Item>
-          <Descriptions.Item label="解析失败">{countText(summary.parseFailedEventCount)}</Descriptions.Item>
-          <Descriptions.Item label="跳过事件">{countText(summary.skippedEventCount)}</Descriptions.Item>
-          <Descriptions.Item label="含缺口事件">{countText(summary.eventsWithRuleGapCount)}</Descriptions.Item>
-          <Descriptions.Item label="无缺口事件">{countText(summary.eventsWithoutRuleGapCount)}</Descriptions.Item>
-          <Descriptions.Item label="摘要截断标记">{countText(summary.truncatedProgressSummaryCount)}</Descriptions.Item>
-        </Descriptions>
+        <div className="rule-gap-stats-grid">
+          <div className="rule-gap-chart-card">
+            <div className="rule-gap-chart-main">
+              <div className="rule-gap-donut" style={recommendationChartStyle}>
+                <div className="rule-gap-donut-inner">
+                  <Text strong>{countText(recommendationTotal)}</Text>
+                  <Text type="secondary">条建议</Text>
+                </div>
+              </div>
+              <div>
+                <Text strong>补全建议分布</Text>
+                <div className="rule-gap-legend">
+                  <span><i style={{ background: '#ef4444' }} />建议补全 {countText(recommendedCount)}</span>
+                  <span><i style={{ background: '#f59e0b' }} />继续观察 {countText(watchCount)}</span>
+                  <span><i style={{ background: '#94a3b8' }} />暂不处理 {countText(notNowCount)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="rule-gap-chart-card">
+            <Text strong>审查样本分布</Text>
+            <div className="rule-gap-bars">
+              {eventBreakdown.map(item => (
+                <div className="rule-gap-bar-row" key={item.label}>
+                  <span>{item.label}</span>
+                  <div className="rule-gap-bar-track">
+                    <div
+                      className="rule-gap-bar-fill"
+                      style={{ width: `${Math.max(0, Math.min(100, (item.value / eventTotal) * 100))}%`, background: item.color }}
+                    />
+                  </div>
+                  <strong>{countText(item.value)}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rule-gap-chart-card">
+            <Text strong>关键指标</Text>
+            <div className="rule-gap-metrics">
+              <span><b>{countText(summary.returnedGroups)}</b><em>聚合项</em></span>
+              <span><b>{countText(summary.totalOccurrences)}</b><em>出现次数</em></span>
+              <span><b>{countText(summary.scannedEventCount)}</b><em>扫描事件</em></span>
+              <span><b>{countText(summary.truncatedProgressSummaryCount)}</b><em>截断标记</em></span>
+            </div>
+          </div>
+        </div>
       </Card>
-      <Table
-        rowKey={(row, index) => `${row.gapType}-${row.signal}-${row.requestedContext}-${index}`}
-        loading={loading}
-        columns={columns}
-        dataSource={dashboard.items || []}
-        scroll={{ x: 1380 }}
-        pagination={{ pageSize: 20, showSizeChanger: false }}
-        locale={{ emptyText: <Empty description="暂无规则缺口聚合数据" /> }}
+      <Tabs
+        defaultActiveKey="recommendations"
+        items={[
+          {
+            key: 'recommendations',
+            label: '建议补全',
+            children: (
+              <Table
+                rowKey={(row, index) => `${row.recommendationStatus}-${row.completionType}-${row.signal}-${index}`}
+                loading={loading}
+                columns={recommendationColumns}
+                dataSource={recommendationItems}
+                expandable={recommendationExpandable}
+                className="rule-gap-table"
+                scroll={{ x: 1220 }}
+                pagination={{ pageSize: 10, showSizeChanger: false }}
+                locale={{ emptyText: <Empty description="暂无补全建议" /> }}
+              />
+            )
+          },
+          {
+            key: 'details',
+            label: '缺口明细',
+            children: (
+              <Table
+                rowKey={(row, index) => `${row.gapType}-${row.signal}-${row.requestedContext}-${index}`}
+                loading={loading}
+                columns={columns}
+                dataSource={dashboard.items || []}
+                className="rule-gap-table"
+                scroll={{ x: 1380 }}
+                pagination={{ pageSize: 20, showSizeChanger: false }}
+                locale={{ emptyText: <Empty description="暂无规则缺口聚合数据" /> }}
+              />
+            )
+          }
+        ]}
       />
     </div>
   );
@@ -6610,6 +7284,200 @@ function HelpPage() {
   );
 }
 
+function EvaluationCasesPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const route = currentRoute(location);
+  const [items, setItems] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [pagination, setPagination] = useState({ pageNo: 1, pageSize: 20, total: 0 });
+  const [filters, setFilters] = useState({
+    projectId: null,
+    provider: '',
+    profile: '',
+    riskType: '',
+    verdict: null
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const projectOptions = useMemo(
+    () => projects.map(project => ({ label: project.name, value: project.id })),
+    [projects]
+  );
+
+  const loadProjects = async () => {
+    try {
+      const data = await fetchApi('/api/projects?includeDisabled=true');
+      setProjects(data.items || []);
+    } catch {
+      setProjects([]);
+    }
+  };
+
+  const load = async ({ pageNo = pagination.pageNo, pageSize = pagination.pageSize, nextFilters = filters } = {}) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set('pageNo', String(pageNo));
+      params.set('pageSize', String(pageSize));
+      if (nextFilters.projectId) params.set('projectId', String(nextFilters.projectId));
+      if (nextFilters.provider?.trim()) params.set('provider', nextFilters.provider.trim());
+      if (nextFilters.profile?.trim()) params.set('profile', nextFilters.profile.trim());
+      if (nextFilters.riskType?.trim()) params.set('riskType', nextFilters.riskType.trim());
+      if (nextFilters.verdict) params.set('verdict', nextFilters.verdict);
+      const data = await fetchApi(`/api/evaluation-cases?${params.toString()}`);
+      setItems(data.items || []);
+      setPagination({ pageNo: data.pageNo || pageNo, pageSize: data.pageSize || pageSize, total: data.total || 0 });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProjects();
+    load({ pageNo: 1 });
+  }, []);
+
+  const updateFilter = (field, value) => {
+    setFilters(current => ({
+      ...current,
+      [field]: value === undefined ? null : value
+    }));
+  };
+
+  const resetFilters = () => {
+    const nextFilters = {
+      projectId: null,
+      provider: '',
+      profile: '',
+      riskType: '',
+      verdict: null
+    };
+    setFilters(nextFilters);
+    load({ pageNo: 1, nextFilters });
+  };
+
+  const columns = [
+    { title: 'ID', dataIndex: 'id', width: 80 },
+    { title: '项目', dataIndex: 'projectName', width: 180, ellipsis: true, render: value => value || '-' },
+    {
+      title: '任务',
+      dataIndex: 'taskId',
+      width: 100,
+      render: value => value ? (
+        <Button type="link" onClick={() => navigate(`/tasks/${value}`, { state: { from: route } })}>
+          #{value}
+        </Button>
+      ) : '-'
+    },
+    { title: '来源', dataIndex: 'source', width: 110, render: value => <Tag>{value === 'AI_FINDING' ? 'AI Finding' : '人工样本'}</Tag> },
+    { title: 'Provider', dataIndex: 'provider', width: 120, ellipsis: true, render: value => value || '-' },
+    { title: 'Profile', dataIndex: 'profile', width: 190, ellipsis: true, render: value => value || '-' },
+    { title: 'Review Key', dataIndex: 'reviewKey', width: 150, ellipsis: true, render: value => value || '-' },
+    { title: '风险类型', dataIndex: 'riskType', width: 130, render: value => value ? <Tag color="blue">{categoryLabel(value)}</Tag> : '-' },
+    { title: '等级', dataIndex: 'severity', width: 100, render: value => value ? <Tag color={severityColor(value)}>{severityLabel(value)}</Tag> : '-' },
+    { title: '上下文', dataIndex: 'contextStatus', width: 110, render: value => value ? <Tag color={contextStatusColor(value)}>{contextStatusLabel(value)}</Tag> : '-' },
+    {
+      title: '裁决',
+      dataIndex: 'verdict',
+      width: 130,
+      render: value => <Tag color={evaluationCaseVerdictColor(value)}>{evaluationCaseVerdictLabel(value)}</Tag>
+    },
+    {
+      title: 'Finding',
+      dataIndex: 'itemSnapshot',
+      width: 260,
+      ellipsis: true,
+      render: (value, row) => value?.title || row.findingId || row.fingerprint || '-'
+    },
+    { title: '人工说明', dataIndex: 'humanComment', ellipsis: true, render: value => value || '-' },
+    { title: '创建时间', dataIndex: 'createdAt', width: 180, render: value => value || '-' }
+  ];
+
+  return (
+    <div className="page-shell">
+      <Space direction="vertical" size="large" className="full-width">
+        <div className="page-title-row">
+          <div>
+            <Title level={3}>评估样本</Title>
+            <Text type="secondary">查看从 AI finding 或人工补充沉淀的 Review 质量评估样本。</Text>
+          </div>
+        </div>
+        <Card>
+          <Space wrap className="task-filter-bar">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              className="filter-select"
+              placeholder="项目"
+              value={filters.projectId || undefined}
+              options={projectOptions}
+              onChange={value => updateFilter('projectId', value)}
+            />
+            <Input
+              allowClear
+              className="filter-input"
+              placeholder="Provider"
+              value={filters.provider}
+              onChange={event => updateFilter('provider', event.target.value)}
+              onPressEnter={() => load({ pageNo: 1 })}
+            />
+            <Input
+              allowClear
+              className="filter-input"
+              placeholder="Profile"
+              value={filters.profile}
+              onChange={event => updateFilter('profile', event.target.value)}
+              onPressEnter={() => load({ pageNo: 1 })}
+            />
+            <Input
+              allowClear
+              className="filter-input"
+              placeholder="风险类型"
+              value={filters.riskType}
+              onChange={event => updateFilter('riskType', event.target.value)}
+              onPressEnter={() => load({ pageNo: 1 })}
+            />
+            <Select
+              allowClear
+              className="filter-select"
+              placeholder="人工裁决"
+              value={filters.verdict || undefined}
+              options={EVALUATION_CASE_VERDICT_OPTIONS}
+              onChange={value => updateFilter('verdict', value)}
+            />
+            <Button type="primary" icon={<SearchOutlined />} onClick={() => load({ pageNo: 1 })}>搜索</Button>
+            <Button onClick={resetFilters}>重置</Button>
+          </Space>
+        </Card>
+        {error && <Alert type="error" showIcon message={error} />}
+        <Card>
+          <Table
+            rowKey="id"
+            loading={loading}
+            columns={columns}
+            dataSource={items}
+            tableLayout="fixed"
+            scroll={{ x: 1920 }}
+            pagination={{
+              current: pagination.pageNo,
+              pageSize: pagination.pageSize,
+              total: pagination.total,
+              showTotal: total => `共 ${total} 条`,
+              onChange: (pageNo, pageSize) => load({ pageNo, pageSize })
+            }}
+          />
+        </Card>
+      </Space>
+    </div>
+  );
+}
+
 function HomePage() {
   const location = useLocation();
   const legacyTaskId = new URLSearchParams(location.search).get('taskId');
@@ -6628,6 +7496,7 @@ function AppFrame() {
   const isTaskRoute = location.pathname === HOME_ROUTE || location.pathname.startsWith(TASK_LIST_ROUTE);
   const isRuleGapRoute = location.pathname.startsWith(RULE_GAPS_ROUTE);
   const isFeedbackRoute = location.pathname.startsWith(FEEDBACK_ROUTE);
+  const isEvaluationCasesRoute = location.pathname.startsWith(EVALUATION_CASES_ROUTE);
   const isSettingsRoute = location.pathname.startsWith(SETTINGS_ROUTE);
   const isReleaseRoute = location.pathname.startsWith(RELEASES_ROUTE);
   const isHelpRoute = location.pathname.startsWith(HELP_ROUTE);
@@ -6703,7 +7572,7 @@ function AppFrame() {
     <Layout className="app-layout">
       <Header className="app-header">
         <button className="brand" type="button" onClick={() => navigate(TASK_LIST_ROUTE)}>
-          AI 变更提醒与代码质量审查平台
+          AI代码质量审查平台
         </button>
         <Space className="top-nav">
           <Button
@@ -6729,6 +7598,13 @@ function AppFrame() {
               反馈池
             </Button>
           )}
+          <Button
+            icon={<CommentOutlined />}
+            type={isEvaluationCasesRoute ? 'primary' : 'default'}
+            onClick={() => navigate(EVALUATION_CASES_ROUTE, { state: { from: route } })}
+          >
+            评估样本
+          </Button>
           <Button
             icon={<SettingOutlined />}
             type={isSettingsRoute ? 'primary' : 'default'}
@@ -6787,6 +7663,7 @@ function AppFrame() {
             path={FEEDBACK_ROUTE}
             element={REVIEW_LEARNING_UI_ENABLED ? <RiskFeedbackPage /> : <Navigate to={TASK_LIST_ROUTE} replace />}
           />
+          <Route path={EVALUATION_CASES_ROUTE} element={<EvaluationCasesPage />} />
           <Route path={SETTINGS_ROUTE} element={<SettingsPage />} />
           <Route path={RELEASES_ROUTE} element={<ReleaseNotesPage />} />
           <Route path={HELP_ROUTE} element={<HelpPage />} />

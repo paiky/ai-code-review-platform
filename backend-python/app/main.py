@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.response import ok
 from app.core.tracing import trace_id_middleware
+from app.evaluation.api import router as evaluation_router
 from app.project_integration.api import group_router
 from app.project_integration.api import router as project_router
 from app.project_integration.api import target_mapping_router
@@ -64,6 +65,7 @@ def create_app() -> FastAPI:
     app.include_router(code_quality_review_router)
     app.include_router(code_quality_profile_router)
     app.include_router(code_quality_provider_router)
+    app.include_router(evaluation_router)
 
     @app.get("/api/health")
     async def health() -> dict:

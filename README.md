@@ -12,6 +12,8 @@
 
 常用文档：
 
+- `docs/36-review-platform-current-roadmap.md`：**当前后续推进唯一总控入口**，说明 Review 平台准确率路线、必须 / 可选能力、当前缺口和下一阶段顺序。
+- `docs/37-review-platform-target-product-roadmap.md`：完整产品目标路线，说明最终产品形态、用户体验、长期阶段和完整验收标准。
 - `docs/23-help-gitlab-dingtalk-project-onboarding.md`：接入帮助页文档源，面向首次接入用户，按 GitLab Webhook、钉钉机器人、项目组和模型配置组织。
 - `docs/26-gitlab-diff-context-expansion-plan.md`：GitLab 风格 Diff 上下文展开与暗黑语法高亮分阶段实施计划。
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
@@ -30,7 +32,9 @@
 1. `AGENTS.md`：项目目标、工作方式、脚本使用约束。
 2. `README.md`：本地启动、配置、验证步骤。
 3. `docs/10-local-dev-pitfalls.md`：本地环境与调试避坑。
-4. 与当前任务相关的 `docs/` 设计文档，例如 API、规则、AI Review provider 计划等。
+4. `docs/36-review-platform-current-roadmap.md`：当前 Review 平台后续推进总控。
+5. `docs/37-review-platform-target-product-roadmap.md`：完整产品目标和长期路线。
+6. 与当前任务相关的 `docs/` 设计文档，例如 API、规则、AI Review provider 计划等。
 
 后续开发以 `backend-python/` 和 `frontend/` 为主。
 
@@ -84,7 +88,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持配置 / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、项目组多模型并行 Review、自动触发、重试、执行过程展示。
 - AI Review finding 支持展示上下文状态、置信度、判断依据、缺失上下文和上下文摘要；当模型只能基于 diff 判断时，Prompt 会要求输出“部分 / 不足”上下文状态，避免证据不足时武断判为高风险。
-- 高准确模式的本地引用检索已支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED / DTO_FIELD_CHANGED / FIELD_DELETED`；DTO / VO 字段变更会按字段名、getter、setter 做有限引用搜索，并按高误判 signal 优先保留关键证据。若 snippets 因预算被裁剪，Context Pack 会注入 `notInjectedEvidence` 安全摘要，提示模型存在未注入证据，避免把缺失误解成不存在。
+- 高准确模式的本地引用检索已支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED / DTO_FIELD_CHANGED / FIELD_DELETED / DB_SQL_MAPPER_CHANGED`；DTO / VO 字段变更会按字段名、getter、setter 做有限引用搜索，DB / Mapper / Entity 变更会按表名、字段名、Mapper 方法名和 Entity 名做有限关联检索，并按高误判 signal 优先保留关键证据。若 snippets 因预算被裁剪，Context Pack 会注入 `notInjectedEvidence` 安全摘要，提示模型存在未注入证据，避免把缺失误解成不存在。
 - GitLab MR 自动 AI Review 完成后会向任务所属项目组中已启用的钉钉 webhook 推送“代码质量 Review”结果；项目组未配置机器人时记录为 `SKIPPED`，不会回退推送到默认项目组。
 - GitLab Push webhook 会先按项目组 Push 审核策略中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会根据文件数、diff 大小、commit 数、硬上限和 debounce 自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
 
@@ -591,6 +595,7 @@ V33__glm_model_provider.sql
 V34__review_item_feedbacks.sql
 V35__project_review_policies.sql
 V36__review_feedback_missing_context.sql
+V37__evaluation_cases.sql
 ```
 
 主要表：
@@ -610,6 +615,7 @@ V36__review_feedback_missing_context.sql
 - `code_quality_fix_previews`
 - `code_quality_scheduler_jobs`
 - `review_item_feedbacks`
+- `evaluation_cases`
 - `project_review_policies`
 - `code_quality_push_review_gate_decisions`
 - `project_groups`
@@ -665,8 +671,9 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/review-tasks/$tas
 
 前端任务详情页包含：
 
-- 代码质量 Review：按模型展示 AI Review 结果，并在 Review 内提供“高准确模式流转”和“执行过程”子页；高准确模式流转会展示变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider 和结果解析状态，以及本任务规则缺口。若本地仓库已准备但引用查询数为 0，会说明是没有支持的 signal、Retriever 被跳过或检索失败；若预算裁剪导致引用 snippets 未注入，会展示 signal、requested context、查询摘要、命中文件数、裁剪 snippet 数、top 相对路径和裁剪原因，不展示源码。
-- 规则缺口看板：从已有 `CONTEXT_PACK_BUILT` progress 安全摘要聚合跨任务规则缺口，可按项目、缺口类型、Signal 过滤，查看最近任务样例并跳转任务详情；看板不返回源码片段、本地绝对路径、token、认证头、大段 diff 或 provider raw output。
+- 代码质量 Review：按模型展示 AI Review 结果，并在 Review 内提供“高准确模式流转”和“执行过程”子页；高准确模式流转会展示变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider、结果解析和 finding 级补证据状态，以及本任务规则缺口。若本地仓库已准备但引用查询数为 0，会说明是没有支持的 signal、Retriever 被跳过或检索失败；若预算裁剪导致引用 snippets 未注入，会展示 signal、requested context、查询摘要、命中文件数、裁剪 snippet 数、top 相对路径和裁剪原因，不展示源码。DB / Mapper / Entity 关联检索只基于当前 worktree 中的 SQL、Mapper、Entity 和迁移脚本，不连接运行期数据库，也不读取生产 schema。
+- 二次补证据：任务详情页只在 `CRITICAL / MAJOR / HIGH` 且 `contextStatus=PARTIAL / INSUFFICIENT` 的 AI finding 上展示“补证据”操作；结果以 `refinementOverlay` 覆盖层显示状态、触发条件、检索计划摘要、补到的证据摘要、仍缺失上下文和失败原因，不覆盖原 finding 的等级、上下文状态、置信度或原始证据。
+- 规则缺口看板：从已有 `CONTEXT_PACK_BUILT` progress 安全摘要聚合跨任务规则缺口，可按项目、缺口类型、Signal 过滤，查看最近任务样例并跳转任务详情；接口响应会附带 `recommendations`，用启发式评分给出 `RECOMMENDED / WATCH / NOT_NOW`、补全类型、建议原因、下一阶段和可复制给 Agent 的 prompt 草稿。看板不返回源码片段、本地绝对路径、token、认证头、大段 diff 或 provider raw output，也不会自动改规则、Prompt 或实现 Retriever。
 - 提醒卡片：按提醒类型展示可复制维护内容、命中证据和 Diff 查看入口
 - 分析结果
 - 原始事件摘要
@@ -891,6 +898,52 @@ Invoke-RestMethod "http://localhost:8090/api/code-quality-review-profiles/backen
   ConvertTo-Json -Depth 20
 ```
 
+## Review 质量评估样本
+
+Evaluation Case 用于把 AI finding 或人工补充的漏报样本沉淀为离线质量评估集。它不影响原 Review 结果，不会创建反馈池记录，不会生成项目策略，也不会触发模型回放。
+
+前端最小入口：
+
+- 任务详情 -> 代码质量 Review -> 展开某条 AI finding -> 点击“标注评估样本”，选择 verdict 并填写人工说明。
+- 顶部导航“评估样本”可查看基础样本列表，支持按项目、Provider、Profile、风险类型和 verdict 筛选。
+- 该入口只写入 `/api/evaluation-cases`，不会恢复反馈池复杂能力，也不会触发模型回放。
+
+从已有 AI finding 创建样本时，先从任务结果中读取 finding 的 `fingerprint`：
+
+```powershell
+$finding = (Invoke-RestMethod "http://localhost:8090/api/review-tasks/{taskId}/code-quality-results").data[0].findings[0]
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8090/api/evaluation-cases" `
+  -ContentType "application/json" `
+  -Body (@{
+    source = "AI_FINDING"
+    taskId = {taskId}
+    reviewKey = "deepseek-main"
+    fingerprint = $finding.fingerprint
+    verdict = "FALSE_POSITIVE"
+    humanComment = "人工确认该 finding 是误判。"
+  } | ConvertTo-Json -Compress)
+```
+
+人工补充漏报样本：
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8090/api/evaluation-cases" `
+  -ContentType "application/json" `
+  -Body '{"source":"MANUAL","projectId":1,"riskType":"SECURITY","severity":"MAJOR","contextStatus":"CONTEXT_MISSING","verdict":"MISSING_FINDING","humanComment":"人工发现接口缺少鉴权，但 AI Review 未报告。"}'
+```
+
+查询样本：
+
+```powershell
+Invoke-RestMethod "http://localhost:8090/api/evaluation-cases?projectId=1&provider=DEEPSEEK&profile=backend-default-ai-review&riskType=SECURITY&verdict=MISSING_FINDING" |
+  ConvertTo-Json -Depth 20
+```
+
 ## 代码质量 AI Review
 
 代码质量 Review 默认关闭。兼容环境变量仍可作为初始化默认值：
@@ -974,7 +1027,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/code-quality-revi
 顶部导航：
 
 - `任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程、AI Review 调度队列入口。
-- `规则缺口`：聚合高准确模式流转中沉淀的 Planner / Retriever 能力缺口，用于判断后续 Retriever 能力补齐顺序。
+- `规则缺口`：聚合高准确模式流转中沉淀的 Planner / Retriever 能力缺口，用于诊断上下文为什么不足；后续会收敛到质量治理 / 高准确模式诊断中，Retriever 优先级需结合评估样本、回放结果和 finding 级归因判断。
 - `反馈池`：默认隐藏；前端构建时启用 `VITE_REVIEW_LEARNING_UI_ENABLED=true` 后可查看风险项 / finding 反馈，继续启用 `VITE_PROJECT_REVIEW_POLICY_UI_ENABLED=true` 后可筛选建议沉淀反馈并管理项目策略。
 - 右上角通知图标：查看最近 24 小时内 AI Review 执行失败记录，并可跳转任务详情。
 - `设置`：全局设置、模型 Provider 配置、AI Review 设置、项目组 / 端类型配置、启用的卡片提醒类型；Push 审核策略在 AI Review 设置中按项目组维护。

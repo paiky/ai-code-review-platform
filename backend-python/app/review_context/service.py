@@ -35,6 +35,7 @@ CONTEXT_PLANNER_MAX_FILE_PATHS_PER_CONTEXT = 8
 CONTEXT_PLANNER_MAX_FEEDBACK_CONTEXT_TYPES = 5
 RULE_GAP_MAX_ITEMS = 12
 HIGH_MISJUDGMENT_SIGNAL_TYPES = {
+    "DB_SQL_MAPPER_CHANGED",
     "DTO_FIELD_CHANGED",
     "FIELD_DELETED",
     "METHOD_SIGNATURE_CHANGED",
@@ -69,6 +70,64 @@ _SQL_PATTERN = re.compile(
     r"\b(select|insert|update|delete|merge|create|alter|drop|truncate|replace|where|join)\b",
     re.IGNORECASE,
 )
+_SQL_DDL_TABLE_PATTERN = re.compile(
+    r"\b(?:create|alter|drop|truncate)\s+table\s+(?:if\s+(?:not\s+)?exists\s+)?[`\"\[]?([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)?)",
+    re.IGNORECASE,
+)
+_SQL_TABLE_PATTERN = re.compile(
+    r"\b(?:from|join|into|update|table)\s+[`\"\[]?([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)?)",
+    re.IGNORECASE,
+)
+_SQL_COLUMN_PATTERN = re.compile(
+    r"\b(?:add|drop|modify|change)\s+(?:column\s+)?[`\"\[]?([A-Za-z_][\w$]*)",
+    re.IGNORECASE,
+)
+_SQL_ASSIGNMENT_PATTERN = re.compile(r"\b([A-Za-z_][\w$]*)\s*=", re.IGNORECASE)
+_MYBATIS_ID_PATTERN = re.compile(r"\bid\s*=\s*['\"]([A-Za-z_$][\w$]*)['\"]", re.IGNORECASE)
+_MYBATIS_PARAM_PATTERN = re.compile(r"[#\$]\{\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)")
+_JAVA_CLASS_PATTERN = re.compile(r"\b(?:class|record|interface|enum)\s+([A-Za-z_$][\w$]*)")
+_DB_IDENTIFIER_STOP_WORDS = {
+    "add",
+    "alter",
+    "and",
+    "as",
+    "by",
+    "column",
+    "constraint",
+    "create",
+    "default",
+    "delete",
+    "drop",
+    "exists",
+    "false",
+    "from",
+    "group",
+    "id",
+    "if",
+    "index",
+    "insert",
+    "into",
+    "join",
+    "key",
+    "limit",
+    "modify",
+    "not",
+    "null",
+    "namespace",
+    "on",
+    "or",
+    "order",
+    "primary",
+    "parametertype",
+    "resulttype",
+    "select",
+    "set",
+    "table",
+    "true",
+    "update",
+    "values",
+    "where",
+}
 _CACHE_PATTERN = re.compile(
     r"(redis|redisson|cache|caffeine|ehcache|memcache|setex|setnx|expire|evict|invalidate|put|delete|del)",
     re.IGNORECASE,
@@ -710,6 +769,7 @@ def _planner_signals_for_file(file: dict[str, Any]) -> list[dict[str, Any]]:
                 file,
                 ["DB_SCHEMA_CONTEXT", "RELATED_FILE", "TEST_RESULT_CONTEXT"],
                 priority="HIGH",
+                details=_db_signal_details(file, changed_lines),
             )
         )
     if _has_cache_write_delete_change(path, changed_lines):
@@ -903,6 +963,78 @@ def _is_db_or_mapper_change(path: str, changed_lines: list[str]) -> bool:
     return bool(_SQL_PATTERN.search("\n".join(changed_lines)) and "mapper" in lower)
 
 
+def _db_signal_details(file: dict[str, Any], changed_lines: list[str]) -> dict[str, Any]:
+    path = str(file.get("path") or "")
+    line_text = "\n".join(changed_lines)
+    table_names = _db_table_names(line_text)
+    field_names = _db_field_names(path, changed_lines, line_text)
+    mapper_method_names = _db_mapper_method_names(path, changed_lines, line_text)
+    entity_names = _db_entity_names(path, changed_lines, line_text)
+    return {
+        "tableNames": table_names[:8],
+        "tableCount": len(table_names),
+        "fieldNames": field_names[:10],
+        "fieldCount": len(field_names),
+        "mapperMethodNames": mapper_method_names[:8],
+        "mapperMethodCount": len(mapper_method_names),
+        "entityNames": entity_names[:6],
+        "entityCount": len(entity_names),
+    }
+
+
+def _db_table_names(line_text: str) -> list[str]:
+    candidates = []
+    for pattern in (_SQL_DDL_TABLE_PATTERN, _SQL_TABLE_PATTERN):
+        for match in pattern.finditer(line_text):
+            candidates.append(str(match.group(1) or ""))
+    return _normalized_db_identifiers(candidates)
+
+
+def _db_field_names(path: str, changed_lines: list[str], line_text: str) -> list[str]:
+    candidates: list[str] = []
+    candidates.extend(_field_names(changed_lines))
+    for pattern in (_SQL_COLUMN_PATTERN, _SQL_ASSIGNMENT_PATTERN):
+        candidates.extend(str(match.group(1) or "") for match in pattern.finditer(line_text))
+    for match in _MYBATIS_PARAM_PATTERN.finditer(line_text):
+        candidate = str(match.group(1) or "").rsplit(".", 1)[-1]
+        candidates.append(candidate)
+    lower_path = _normalize_path(path).lower()
+    if any(token in lower_path for token in ("entity", "model", "po", "do")):
+        candidates.extend(_field_names(changed_lines))
+    return _normalized_db_identifiers(candidates)
+
+
+def _db_mapper_method_names(path: str, changed_lines: list[str], line_text: str) -> list[str]:
+    candidates = [str(match.group(1) or "") for match in _MYBATIS_ID_PATTERN.finditer(line_text)]
+    lower_path = _normalize_path(path).lower()
+    if any(token in lower_path for token in ("mapper", "repository", "dao")):
+        candidates.extend(_method_names(changed_lines))
+    return _normalized_db_identifiers(candidates)
+
+
+def _db_entity_names(path: str, changed_lines: list[str], line_text: str) -> list[str]:
+    candidates = [str(match.group(1) or "") for match in _JAVA_CLASS_PATTERN.finditer(line_text)]
+    name = _normalize_path(path).rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    if any(token in _normalize_path(path).lower() for token in ("entity", "model", "/po/", "/do/")):
+        candidates.append(name)
+    return _normalized_db_identifiers(candidates)
+
+
+def _normalized_db_identifiers(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip().strip("`\"[]")
+        if "." in text:
+            text = text.rsplit(".", 1)[-1]
+        if not text:
+            continue
+        if text.lower() in _DB_IDENTIFIER_STOP_WORDS:
+            continue
+        if text not in result:
+            result.append(text)
+    return result
+
+
 def _has_cache_write_delete_change(path: str, changed_lines: list[str]) -> bool:
     lower_path = _normalize_path(path).lower()
     cacheish_path = any(token in lower_path for token in ("cache", "redis", "redisson", "caffeine", "ehcache"))
@@ -950,7 +1082,7 @@ def _unavailable_reason_for_requested_context(context_type: str) -> str:
         "CALLEE_CONTEXT": "Callee inspection is not performed.",
         "SAME_CLASS_METHODS": "Class parsing is not performed.",
         "RELATED_FILE": "Related files are not read.",
-        "DB_SCHEMA_CONTEXT": "DB schema is not retrieved.",
+        "DB_SCHEMA_CONTEXT": "DB / Mapper / Entity relation snippets are unavailable.",
         "CONFIG_CONTEXT": "Runtime config is not retrieved.",
         "MQ_CONFIG_CONTEXT": "MQ config is not retrieved.",
         "CACHE_USAGE_CONTEXT": "Cache usages are not searched.",
@@ -980,7 +1112,7 @@ def _unavailable_contexts(
         },
         {
             "type": "REFERENCE_SEARCH",
-            "reason": "Reference, caller, and usage search is not performed.",
+            "reason": "Reference, caller, DB / Mapper / Entity, and usage search is not performed.",
         },
         {
             "type": "CALLER_CONTEXT",
@@ -992,11 +1124,11 @@ def _unavailable_contexts(
         },
         {
             "type": "RELATED_FILE",
-            "reason": "Related files and full project scan are not performed.",
+            "reason": "Related files are only available when bounded local relation snippets are retrieved.",
         },
         {
             "type": "DB_SCHEMA_CONTEXT",
-            "reason": "Database schema is not retrieved.",
+            "reason": "Database schema is only inferred from bounded SQL / Mapper / Entity snippets; runtime DB is not queried.",
         },
         {
             "type": "CONFIG_CONTEXT",
@@ -1364,27 +1496,45 @@ def _local_reference_context(
         worktree_path = task_head_worktree_path(task_id)
     except Exception:
         worktree_path = None
-    return retrieve_local_reference_context(
+    retrieval = retrieve_local_reference_context(
         worktree_path=worktree_path,
         planner_signals=planner_signals,
     )
+    if str(retrieval.get("status") or "").upper() == "UNAVAILABLE":
+        unavailable_contexts = retrieval.get("unavailableContexts") or []
+        reason = ""
+        if unavailable_contexts and isinstance(unavailable_contexts[0], dict):
+            reason = str(unavailable_contexts[0].get("reason") or "")
+        summary["status"] = "UNAVAILABLE"
+        summary["worktreeStatus"] = "MISSING"
+        summary["failurePhase"] = "RETRIEVER_WORKTREE_VALIDATE"
+        if reason:
+            local_repository_context.setdefault("unavailableContexts", []).append(
+                {
+                    "type": "LOCAL_REPOSITORY",
+                    "reason": _truncate(reason, 240),
+                }
+            )
+    return retrieval
 
 
 def _local_reference_pack_context(retrieval: dict[str, Any]) -> dict[str, Any]:
     summary = dict(retrieval.get("summary") or _empty_local_reference_summary())
+    status = retrieval.get("status") or "SKIPPED"
+    summary["status"] = status
     searches = retrieval.get("searches") if isinstance(retrieval.get("searches"), list) else []
     included_snippet_count = sum(int(item.get("includedSnippetCount") or 0) for item in searches if isinstance(item, dict))
     summary["includedSnippetCount"] = included_snippet_count
     summary["truncated"] = bool(summary.get("truncated", False) or any(bool(item.get("truncated")) for item in searches if isinstance(item, dict)))
     context = {
-        "status": retrieval.get("status") or "SKIPPED",
+        "status": status,
         "sourceIncluded": included_snippet_count > 0,
         "summary": summary,
         "searches": searches,
     }
     if included_snippet_count > 0:
         context["note"] = (
-            "Bounded local worktree reference snippets for method and DTO / field change signals. "
+            "Bounded local worktree reference snippets for method, DTO / field, and DB / Mapper / Entity change signals. "
             "They are auxiliary evidence only."
         )
     return context
@@ -1554,11 +1704,19 @@ def _apply_local_reference_availability(
 ) -> None:
     if int((local_reference_context.get("summary") or {}).get("includedSnippetCount") or 0) <= 0:
         return
+    supported_signals = {
+        str(item or "").upper()
+        for item in ((local_reference_context.get("summary") or {}).get("supportedSignalTypes") or [])
+    }
     for item in requested_contexts:
-        if item.get("type") != "REFERENCE_SEARCH":
+        context_type = str(item.get("type") or "").upper()
+        if context_type == "REFERENCE_SEARCH":
+            item["available"] = True
+            item["availableSource"] = "LOCAL_REFERENCE_CONTEXT"
             continue
-        item["available"] = True
-        item["availableSource"] = "LOCAL_REFERENCE_CONTEXT"
+        if "DB_SQL_MAPPER_CHANGED" in supported_signals and context_type in {"DB_SCHEMA_CONTEXT", "RELATED_FILE"}:
+            item["available"] = True
+            item["availableSource"] = "LOCAL_DB_MAPPER_ENTITY_CONTEXT"
 
 
 def _empty_local_reference_summary() -> dict[str, Any]:
@@ -1574,6 +1732,7 @@ def _empty_local_reference_summary() -> dict[str, Any]:
 
 def _local_reference_progress_summary(local_reference: dict[str, Any]) -> dict[str, Any]:
     return {
+        "status": str(local_reference.get("status") or ""),
         "queryCount": int(local_reference.get("queryCount") or 0),
         "matchedFileCount": int(local_reference.get("matchedFileCount") or 0),
         "includedSnippetCount": int(local_reference.get("includedSnippetCount") or 0),
@@ -1595,6 +1754,7 @@ def _sync_local_reference_summary(context_pack: dict[str, Any], *, truncated: bo
     searches = [item for item in (local_reference.get("searches") or []) if isinstance(item, dict)]
     included_snippet_count = sum(int(item.get("includedSnippetCount") or 0) for item in searches)
     summary = local_reference.get("summary") or _empty_local_reference_summary()
+    summary["status"] = local_reference.get("status") or summary.get("status") or ""
     summary["includedSnippetCount"] = included_snippet_count
     summary["truncated"] = bool(summary.get("truncated", False) or truncated)
     local_reference["summary"] = summary
@@ -1659,6 +1819,8 @@ def _requested_context_availability(requested_contexts: list[dict[str, Any]]) ->
             "signalCount": int(item.get("signalCount") or 0),
             "priority": str(item.get("priority") or "MEDIUM").upper(),
         }
+        if available and item.get("availableSource"):
+            entry["availableSource"] = str(item.get("availableSource") or "")[:120]
         if reason_code:
             entry["reasonCode"] = reason_code
         items.append(entry)

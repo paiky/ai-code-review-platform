@@ -141,6 +141,32 @@ class CodeQualityFixPreview(Base):
     updated_at: Mapped[object | None] = mapped_column(DateTime)
 
 
+class CodeQualityFindingRefinement(Base):
+    __tablename__ = "code_quality_finding_refinements"
+    __table_args__ = (
+        UniqueConstraint("task_id", "review_key", "finding_index", name="uk_code_quality_refinement_task_review_finding"),
+    )
+
+    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    review_key: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
+    finding_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    fingerprint: Mapped[str | None] = mapped_column(String(128))
+    finding_id: Mapped[str | None] = mapped_column(String(128))
+    project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    trigger_reason: Mapped[str | None] = mapped_column(String(255))
+    trigger_conditions_json: Mapped[str] = mapped_column(Text, nullable=False)
+    retrieval_plan_json: Mapped[str | None] = mapped_column(Text)
+    evidence_summary_json: Mapped[str | None] = mapped_column(Text)
+    missing_context_json: Mapped[str | None] = mapped_column(Text)
+    failure_reason: Mapped[str | None] = mapped_column(String(1024))
+    started_at: Mapped[object | None] = mapped_column(DateTime)
+    finished_at: Mapped[object | None] = mapped_column(DateTime)
+    created_at: Mapped[object | None] = mapped_column(DateTime)
+    updated_at: Mapped[object | None] = mapped_column(DateTime)
+
+
 class CodeQualitySchedulerJob(Base):
     __tablename__ = "code_quality_scheduler_jobs"
 

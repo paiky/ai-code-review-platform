@@ -1064,9 +1064,244 @@ PUT /api/project-review-policies/{policyId}/enabled
 
 后续 AI Review 会读取同 `projectId`、`enabled=true`、`policyType in PROJECT_RULE / CONTEXT_FACT` 的策略注入 Prompt。执行过程会记录 `PROJECT_POLICIES_INJECTED` progress event，只包含策略数量、id、标题、类型、风险类型和来源反馈 id，不记录策略正文。
 
-## 9. DTO / VO 边界
+## 9. Evaluation Case API
 
-### 9.1 WebhookTriggerCommand
+Evaluation Case 用于沉淀 Review 质量评估样本，服务于后续误判 / 漏报 / 等级偏差治理。它不修改原 AI Review 结果，不创建反馈池记录，不生成项目策略，也不会触发模型回放。
+
+前端最小入口：
+
+- 任务详情页的 AI finding 操作区可调用 `POST /api/evaluation-cases` 标注评估样本。
+- “评估样本”列表页调用 `GET /api/evaluation-cases`，支持按 `projectId / provider / profile / riskType / verdict` 查询。
+- M2 仅提供标注和基础列表，不提供模型回放、项目策略生成或反馈池转换。
+
+### 9.1 创建评估样本
+
+```http
+POST /api/evaluation-cases
+```
+
+从已有 AI finding 沉淀样本：
+
+```json
+{
+  "source": "AI_FINDING",
+  "taskId": 10001,
+  "reviewKey": "deepseek-main",
+  "fingerprint": "finding-feedback-key",
+  "verdict": "FALSE_POSITIVE",
+  "humanComment": "本项目该入口事务由统一切面注入。"
+}
+```
+
+人工补充漏报样本：
+
+```json
+{
+  "source": "MANUAL",
+  "projectId": 1,
+  "provider": "DEEPSEEK",
+  "profile": "backend-default-ai-review",
+  "riskType": "SECURITY",
+  "severity": "MAJOR",
+  "contextStatus": "CONTEXT_MISSING",
+  "verdict": "MISSING_FINDING",
+  "humanComment": "人工发现接口缺少鉴权，但本次 AI Review 未报告。",
+  "itemSnapshot": {
+    "title": "接口缺少鉴权",
+    "filePath": "src/main/java/demo/OrderController.java"
+  }
+}
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `source` | `AI_FINDING` 或 `MANUAL` |
+| `taskId` | 来源任务 ID；`AI_FINDING` 必填，`MANUAL` 可选 |
+| `reviewKey` | 多模型结果键；用于定位某个模型的 finding |
+| `findingId` | finding JSON 中的 `findingId` 或 `id` |
+| `fingerprint` | AI finding 的稳定反馈键；可从 `/code-quality-results` 返回的 `fingerprint` 读取 |
+| `projectId` | 项目 ID；`MANUAL` 必填，`AI_FINDING` 可由任务 / 结果推导 |
+| `provider` | 模型 Provider，例如 `DEEPSEEK` |
+| `profile` | AI Review Profile code，对应现有 `profileCode` |
+| `riskType` | 风险类型，例如 `TRANSACTION` |
+| `severity` | 风险等级，例如 `CRITICAL / MAJOR / MINOR` |
+| `contextStatus` | finding 上下文状态，例如 `FULL / PARTIAL / INSUFFICIENT / CONTEXT_MISSING` |
+| `verdict` | 人工裁决 |
+| `humanComment` | 人工说明 |
+
+`verdict` 可选值：
+
+```text
+TRUE_POSITIVE / FALSE_POSITIVE / LEVEL_TOO_HIGH / LEVEL_TOO_LOW /
+CONTEXT_MISSING / DUPLICATE / MISSING_FINDING / UNKNOWN
+```
+
+响应 data：
+
+```json
+{
+  "id": 1,
+  "taskId": 10001,
+  "reviewKey": "deepseek-main",
+  "findingId": "finding-1",
+  "fingerprint": "finding-feedback-key",
+  "projectId": 1,
+  "provider": "DEEPSEEK",
+  "profile": "backend-default-ai-review",
+  "riskType": "TRANSACTION",
+  "severity": "MAJOR",
+  "contextStatus": "PARTIAL",
+  "verdict": "FALSE_POSITIVE",
+  "humanComment": "本项目该入口事务由统一切面注入。",
+  "source": "AI_FINDING",
+  "itemSnapshot": {},
+  "createdAt": "2026-07-01T10:00:00",
+  "updatedAt": "2026-07-01T10:00:00"
+}
+```
+
+### 9.2 查询和更新评估样本
+
+```http
+GET /api/evaluation-cases
+GET /api/evaluation-cases/{caseId}
+PUT /api/evaluation-cases/{caseId}
+```
+
+`GET /api/evaluation-cases` 查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `projectId` | Long | 按项目过滤 |
+| `provider` | String | 按 Provider 过滤 |
+| `profile` | String | 按 AI Review Profile 过滤 |
+| `riskType` | String | 按风险类型过滤 |
+| `verdict` | String | 按人工裁决过滤 |
+| `pageNo` / `pageSize` | Number | 分页 |
+
+更新请求示例：
+
+```json
+{
+  "verdict": "CONTEXT_MISSING",
+  "humanComment": "需要调用方上下文才能判断。",
+  "riskType": "TRANSACTION",
+  "contextStatus": "PARTIAL"
+}
+```
+
+可更新字段：`verdict / humanComment / riskType / severity / contextStatus / provider / profile / findingId / fingerprint / source`。
+
+## 10. Finding Refinement API
+
+Finding Refinement 用于对高影响且上下文不足的 AI finding 做一次后端定向补证据。它只保存显式覆盖层，不修改原 AI Review finding，不自动降级、不自动忽略，也不会调用模型回放或生成项目策略。
+
+### 10.1 触发补证据
+
+```http
+POST /api/review-tasks/{taskId}/code-quality-refinements
+```
+
+请求示例：
+
+```json
+{
+  "reviewKey": "deepseek-main",
+  "findingIndex": 0,
+  "fingerprint": "finding-feedback-key",
+  "forceRegenerate": false
+}
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `reviewKey` | 多模型结果键；建议传入 |
+| `findingIndex` | finding 在该模型结果中的下标；可与 `fingerprint` 二选一 |
+| `fingerprint` | AI finding 稳定反馈键；可与 `findingIndex` 二选一 |
+| `forceRegenerate` | 已存在 refinement 时是否强制重新检索 |
+
+候选限制：
+
+```text
+severity in CRITICAL / MAJOR / HIGH
+contextStatus in PARTIAL / INSUFFICIENT
+```
+
+不符合候选条件时返回 `VALIDATION_ERROR`，不会创建 refinement。
+
+响应 data：
+
+```json
+{
+  "id": 1,
+  "taskId": 10001,
+  "reviewKey": "deepseek-main",
+  "findingIndex": 0,
+  "fingerprint": "finding-feedback-key",
+  "findingId": "finding-1",
+  "projectId": 1,
+  "status": "COMPLETED",
+  "triggerReason": "HIGH_IMPACT_CONTEXT_INSUFFICIENT",
+  "triggerConditions": {
+    "severity": "MAJOR",
+    "contextStatus": "PARTIAL"
+  },
+  "retrievalPlan": {
+    "contextPackVersion": "context-pack-v0",
+    "plannerSignalCount": 1,
+    "requestedContextCount": 1
+  },
+  "evidenceSummary": {
+    "localRepository": {
+      "status": "PREPARED"
+    },
+    "localReferenceSearch": {
+      "queryCount": 1,
+      "matchedFileCount": 2,
+      "includedSnippetCount": 2
+    }
+  },
+  "missingContext": [],
+  "failureReason": null,
+  "startedAt": "2026-07-01T10:00:00",
+  "finishedAt": "2026-07-01T10:00:01"
+}
+```
+
+`status` 可选值：
+
+```text
+COMPLETED / FAILED
+```
+
+安全边界：
+
+- 返回内容只包含检索计划、统计和相对路径摘要。
+- 不返回 token、认证头、本地绝对路径、大段源码、provider raw output、raw promptText。
+- worktree 未启用、不可用或检索异常时记录 `FAILED` refinement，不影响原 AI Review 结果。
+
+### 10.2 查询补证据记录
+
+```http
+GET /api/review-tasks/{taskId}/code-quality-refinements
+GET /api/review-tasks/{taskId}/code-quality-refinements?reviewKey=deepseek-main
+```
+
+`GET /api/review-tasks/{taskId}/code-quality-results` 会在对应 finding 上附加可选 `refinementOverlay` 字段，作为显式覆盖层返回；原 finding 的 `severity / contextStatus / confidence / evidence` 不会被覆盖。
+
+前端最小入口：
+
+- 任务详情页只在候选 AI finding 上展示“补证据”操作：`severity=CRITICAL / MAJOR / HIGH` 且 `contextStatus=PARTIAL / INSUFFICIENT`。
+- 展开 finding 后展示 `refinementOverlay` 的状态、触发条件、检索计划摘要、补到的证据摘要、仍缺失上下文和失败原因。
+- “高准确模式流转”会汇总当前 Review 的 finding 级补证据完成 / 失败数量；不展示源码片段、provider raw output、token、认证头或本地绝对路径。
+
+## 11. DTO / VO 边界
+
+### 11.1 WebhookTriggerCommand
 
 用于从 webhook payload 转成内部任务创建命令。
 
@@ -1085,7 +1320,7 @@ PUT /api/project-review-policies/{policyId}/enabled
 }
 ```
 
-### 9.2 ChangeAnalysisResultDTO
+### 11.2 ChangeAnalysisResultDTO
 
 ```json
 {
@@ -1098,6 +1333,6 @@ PUT /api/project-review-policies/{policyId}/enabled
 }
 ```
 
-### 9.3 RiskCardVO
+### 11.3 RiskCardVO
 
 前端直接消费完整 RiskCard JSON；后端不应再拼接不可解析的展示文本作为主要输出。

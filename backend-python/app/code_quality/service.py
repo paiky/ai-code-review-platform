@@ -16,6 +16,12 @@ from sqlalchemy.orm import Session
 from app.code_quality import prompt
 from app.code_quality.providers import run_fix_provider, run_provider, test_provider_connection
 from app.code_quality.rule_gap_dashboard import get_rule_gap_dashboard
+from app.code_quality.refinement_repository import (
+    find_refinement,
+    list_refinement_responses,
+    refinement_to_response,
+    upsert_refinement,
+)
 from app.code_quality.repository import (
     append_progress,
     cancel_active_scheduler_jobs_for_task,
@@ -56,7 +62,7 @@ from app.code_quality.repository import (
 from app.core.database import SessionLocal
 from app.core.errors import AppError
 from app.core.json_utils import read_json, read_json_array
-from app.code_quality.models import CodeQualityModelProvider
+from app.code_quality.models import CodeQualityModelProvider, CodeQualityReviewResult
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.project_integration.repository import (
     find_project_by_id,
@@ -76,10 +82,13 @@ from app.review_record.repository import (
     refresh_review_status,
     save_notification_records,
 )
+from app.review_feedback.service import ai_finding_fingerprint
 
 
 REVIEW_JOB_PRIORITY = 10
 FIX_PREVIEW_JOB_PRIORITY = 50
+REFINEMENT_ALLOWED_SEVERITIES = {"CRITICAL", "MAJOR", "HIGH"}
+REFINEMENT_ALLOWED_CONTEXT_STATUSES = {"PARTIAL", "INSUFFICIENT"}
 SCHEDULER_MAX_WORKERS = 10
 
 
@@ -1531,6 +1540,32 @@ def list_fix_previews_response(db: Session, task_id: int, review_key: str | None
     return list_fix_preview_responses(db, task_id, review_key)
 
 
+def list_finding_refinements_response(
+    db: Session,
+    task_id: int,
+    review_key: str | None = None,
+) -> list[dict[str, Any]]:
+    if db.get(ReviewTask, task_id) is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+    return list_refinement_responses(db, task_id=task_id, review_key=review_key)
+
+
+def run_finding_refinement_response(db: Session, task_id: int, request: dict[str, Any]) -> dict[str, Any]:
+    target = _resolve_refinement_target(db, task_id, request)
+    existing = find_refinement(
+        db,
+        task_id=task_id,
+        review_key=target["result"].review_key,
+        finding_index=target["findingIndex"],
+    )
+    if existing is not None and not request.get("forceRegenerate"):
+        return refinement_to_response(existing)
+    _validate_refinement_candidate(target["finding"])
+    record = _run_finding_refinement(db, target)
+    db.commit()
+    return refinement_to_response(record)
+
+
 def generate_fix_preview_response(db: Session, task_id: int, request: dict[str, Any]) -> dict[str, Any]:
     finding_index = request.get("findingIndex")
     if finding_index is None:
@@ -2486,12 +2521,19 @@ def _append_local_context_progress(
     if status in {"", "SKIPPED"}:
         return
     summary = retrieval.get("summary") or {}
+    unavailable_contexts = [
+        item
+        for item in (retrieval.get("unavailableContexts") or [])
+        if isinstance(item, dict)
+    ]
     detail = json.dumps(
         {
+            "status": status,
             "queryCount": int(summary.get("queryCount") or 0),
             "matchedFileCount": int(summary.get("matchedFileCount") or 0),
             "includedSnippetCount": int(summary.get("includedSnippetCount") or 0),
             "truncated": bool(summary.get("truncated", False)),
+            "unavailableContexts": unavailable_contexts[:3],
         },
         ensure_ascii=False,
     )
@@ -2505,6 +2547,265 @@ def _append_local_context_progress(
         detail,
         review_key=review_key,
     )
+
+
+def _resolve_refinement_target(db: Session, task_id: int, request: dict[str, Any]) -> dict[str, Any]:
+    task = db.get(ReviewTask, task_id)
+    if task is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+    review_key = _clean_optional_text(request.get("reviewKey"), 64)
+    requested_fingerprint = _clean_optional_text(request.get("fingerprint"), 128)
+    finding_index = request.get("findingIndex")
+    if finding_index is not None:
+        try:
+            finding_index = int(finding_index)
+        except (TypeError, ValueError) as exception:
+            raise AppError("VALIDATION_ERROR", "findingIndex must be an integer", 400) from exception
+        if finding_index < 0:
+            raise AppError("VALIDATION_ERROR", "findingIndex must be non-negative", 400)
+    if finding_index is None and not requested_fingerprint:
+        raise AppError("VALIDATION_ERROR", "findingIndex or fingerprint is required", 400)
+
+    stmt = select(CodeQualityReviewResult).where(CodeQualityReviewResult.task_id == task_id)
+    if review_key:
+        stmt = stmt.where(CodeQualityReviewResult.review_key == review_key)
+    records = db.scalars(stmt.order_by(CodeQualityReviewResult.sort_order.asc(), CodeQualityReviewResult.id.asc())).all()
+    for result in records:
+        findings = read_json(result.findings_json, [])
+        if not isinstance(findings, list):
+            continue
+        for index, finding in enumerate(findings):
+            if finding_index is not None and index != finding_index:
+                continue
+            if not isinstance(finding, dict):
+                continue
+            fingerprint = ai_finding_fingerprint(result, finding, index)
+            if requested_fingerprint and requested_fingerprint != fingerprint:
+                continue
+            return {
+                "task": task,
+                "result": result,
+                "finding": finding,
+                "findingIndex": index,
+                "fingerprint": fingerprint,
+            }
+    raise AppError("RESOURCE_NOT_FOUND", "AI finding for refinement not found", 404)
+
+
+def _validate_refinement_candidate(finding: dict[str, Any]) -> None:
+    severity = _normalize_refinement_enum(finding.get("severity"))
+    context_status = _normalize_refinement_enum(finding.get("contextStatus"))
+    if severity not in REFINEMENT_ALLOWED_SEVERITIES:
+        raise AppError(
+            "VALIDATION_ERROR",
+            "finding refinement only supports CRITICAL / MAJOR / HIGH severity",
+            400,
+        )
+    if context_status not in REFINEMENT_ALLOWED_CONTEXT_STATUSES:
+        raise AppError(
+            "VALIDATION_ERROR",
+            "finding refinement only supports PARTIAL / INSUFFICIENT contextStatus",
+            400,
+        )
+
+
+def _run_finding_refinement(db: Session, target: dict[str, Any]):
+    task: ReviewTask = target["task"]
+    result: CodeQualityReviewResult = target["result"]
+    finding: dict[str, Any] = target["finding"]
+    finding_index = int(target["findingIndex"])
+    fingerprint = target["fingerprint"]
+    project = find_project_by_id(db, task.project_id)
+    if project is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
+
+    started_at = datetime.now()
+    trigger_conditions = _refinement_trigger_conditions(finding)
+    changed_files = _changed_files_from_task_event(db, task)
+    file_node = _find_changed_file_for_finding(changed_files, finding)
+    finding_id = _clean_optional_text(finding.get("findingId") or finding.get("id"), 128)
+    if file_node is None:
+        return upsert_refinement(
+            db,
+            task_id=task.id,
+            review_key=result.review_key,
+            finding_index=finding_index,
+            fingerprint=fingerprint,
+            finding_id=finding_id,
+            project_id=project.id,
+            status="FAILED",
+            trigger_reason="HIGH_IMPACT_CONTEXT_INSUFFICIENT",
+            trigger_conditions=trigger_conditions,
+            retrieval_plan={"status": "SKIPPED", "reason": "CHANGED_FILE_NOT_FOUND"},
+            evidence_summary=None,
+            missing_context=[{"type": "CHANGED_FILE", "reason": "Changed file for finding was not found."}],
+            failure_reason="Changed file for finding was not found",
+            started_at=started_at,
+            finished_at=datetime.now(),
+        )
+
+    try:
+        context = build_review_context_pack(
+            db,
+            task_id=task.id,
+            project_id=project.id,
+            changed_files=[file_node],
+            diff_text=_single_file_diff_text(file_node),
+            mode="FINDING_REFINEMENT",
+            repository_url=project.repository_url,
+            git_project_id=project.git_project_id,
+            head_ref=task.commit_sha or task.after_sha or task.target_branch,
+        )
+        retrieval_plan = _refinement_retrieval_plan(context)
+        evidence_summary = _refinement_evidence_summary(context)
+        missing_context = _refinement_missing_context(context)
+        local_repository = ((context.get("summary") or {}).get("localRepository") or {})
+        if str(local_repository.get("status") or "").upper() != "PREPARED":
+            reason = _local_repository_failure_reason(local_repository, missing_context)
+            status = "FAILED"
+            failure_reason = reason
+        else:
+            status = "COMPLETED"
+            failure_reason = None
+        return upsert_refinement(
+            db,
+            task_id=task.id,
+            review_key=result.review_key,
+            finding_index=finding_index,
+            fingerprint=fingerprint,
+            finding_id=finding_id,
+            project_id=project.id,
+            status=status,
+            trigger_reason="HIGH_IMPACT_CONTEXT_INSUFFICIENT",
+            trigger_conditions=trigger_conditions,
+            retrieval_plan=retrieval_plan,
+            evidence_summary=evidence_summary,
+            missing_context=missing_context,
+            failure_reason=failure_reason,
+            started_at=started_at,
+            finished_at=datetime.now(),
+        )
+    except Exception as exception:
+        return upsert_refinement(
+            db,
+            task_id=task.id,
+            review_key=result.review_key,
+            finding_index=finding_index,
+            fingerprint=fingerprint,
+            finding_id=finding_id,
+            project_id=project.id,
+            status="FAILED",
+            trigger_reason="HIGH_IMPACT_CONTEXT_INSUFFICIENT",
+            trigger_conditions=trigger_conditions,
+            retrieval_plan={"status": "FAILED"},
+            evidence_summary=None,
+            missing_context=[],
+            failure_reason=str(exception),
+            started_at=started_at,
+            finished_at=datetime.now(),
+        )
+
+
+def _refinement_trigger_conditions(finding: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "severity": _normalize_refinement_enum(finding.get("severity")),
+        "contextStatus": _normalize_refinement_enum(finding.get("contextStatus")),
+        "allowedSeverities": sorted(REFINEMENT_ALLOWED_SEVERITIES),
+        "allowedContextStatuses": sorted(REFINEMENT_ALLOWED_CONTEXT_STATUSES),
+    }
+
+
+def _refinement_retrieval_plan(context: dict[str, Any]) -> dict[str, Any]:
+    context_pack = context.get("contextPack") or {}
+    plan = context_pack.get("contextPlan") or {}
+    return {
+        "contextPackVersion": context_pack.get("version") or context.get("version"),
+        "mode": ((context.get("reviewContext") or {}).get("mode")) or "FINDING_REFINEMENT",
+        "plannerSignalCount": int(plan.get("plannerSignalCount") or 0),
+        "plannerSignalTotal": int(plan.get("plannerSignalTotal") or 0),
+        "requestedContextCount": int(plan.get("requestedContextCount") or 0),
+        "requestedContextTypeCounts": plan.get("requestedContextTypeCounts") or [],
+        "plannerSignalTypeCounts": context_pack.get("plannerSignalTypeCounts") or [],
+        "retrieverSupportedSignalTypes": context_pack.get("retrieverSupportedSignalTypes") or [],
+        "retrieverUnsupportedSignalTypeCounts": context_pack.get("retrieverUnsupportedSignalTypeCounts") or [],
+        "requestedContextAvailability": context_pack.get("requestedContextAvailability") or {},
+    }
+
+
+def _refinement_evidence_summary(context: dict[str, Any]) -> dict[str, Any]:
+    context_pack = context.get("contextPack") or {}
+    local_reference = context_pack.get("localReferenceContext") or {}
+    searches = []
+    for item in (local_reference.get("searches") or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        searches.append(
+            {
+                "query": item.get("query"),
+                "signalTypes": item.get("signalTypes") or [],
+                "matchedFileCount": int(item.get("matchedFileCount") or 0),
+                "candidateSnippetCount": int(item.get("candidateSnippetCount") or 0),
+                "includedSnippetCount": int(item.get("includedSnippetCount") or 0),
+                "truncated": bool(item.get("truncated", False)),
+                "topRelativePaths": item.get("topMatchedPaths") or [],
+            }
+        )
+    return {
+        "changedFilesSummary": context_pack.get("changedFilesSummary") or {},
+        "localRepository": (context.get("summary") or {}).get("localRepository") or {},
+        "localReferenceSearch": context_pack.get("localReferenceSearch") or {},
+        "searches": searches,
+        "budgetCutSummary": context_pack.get("budgetCutSummary") or {},
+        "notInjectedEvidence": context_pack.get("notInjectedEvidence") or {},
+        "ruleGapSummary": context_pack.get("ruleGapSummary") or {},
+        "ruleGapItems": (context_pack.get("ruleGapItems") or [])[:8],
+    }
+
+
+def _refinement_missing_context(context: dict[str, Any]) -> list[dict[str, Any]]:
+    context_pack = context.get("contextPack") or {}
+    items = []
+    for item in context_pack.get("unavailableContexts") or []:
+        if isinstance(item, dict):
+            items.append(
+                {
+                    "type": str(item.get("type") or "")[:120],
+                    "reason": str(item.get("reason") or "")[:500],
+                }
+            )
+    for item in context_pack.get("requestedContexts") or []:
+        if not isinstance(item, dict) or bool(item.get("available")):
+            continue
+        items.append(
+            {
+                "type": str(item.get("type") or "")[:120],
+                "reason": str(item.get("reason") or "Requested context is unavailable.")[:500],
+            }
+        )
+    return items[:20]
+
+
+def _local_repository_failure_reason(
+    local_repository: dict[str, Any],
+    missing_context: list[dict[str, Any]],
+) -> str:
+    for item in missing_context:
+        if str(item.get("type") or "").upper() == "LOCAL_REPOSITORY" and item.get("reason"):
+            return str(item["reason"])[:1024]
+    status = str(local_repository.get("status") or "UNAVAILABLE")
+    phase = str(local_repository.get("failurePhase") or "")
+    return f"Local repository context is not prepared: status={status}" + (f", failurePhase={phase}" if phase else "")
+
+
+def _normalize_refinement_enum(value: Any) -> str:
+    return str(value or "").strip().upper().replace("-", "_")
+
+
+def _clean_optional_text(value: Any, max_length: int) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text[:max_length] if text else None
 
 
 def _request_from_task_event(db: Session, task: ReviewTask, profile) -> dict[str, Any]:

@@ -266,7 +266,7 @@ def test_review_context_pack_builds_minimal_context_planner_signals() -> None:
         "CONFIG_CONTEXT",
         "TEST_RESULT_CONTEXT",
     }.issubset(requested_types)
-    assert {"REFERENCE_SEARCH", "DB_SCHEMA_CONTEXT", "CONFIG_CONTEXT"}.issubset(unavailable_types)
+    assert {"REFERENCE_SEARCH", "CONFIG_CONTEXT"}.issubset(unavailable_types)
     assert context["summary"]["plannerSignalCount"] >= 8
     assert any(item["type"] == "REFERENCE_SEARCH" for item in context["summary"]["requestedContextTypeCounts"])
     signal_counts = {item["type"]: item["count"] for item in context["summary"]["plannerSignalTypeCounts"]}
@@ -280,15 +280,20 @@ def test_review_context_pack_builds_minimal_context_planner_signals() -> None:
     assert signal_counts["DTO_FIELD_CHANGED"] == 1
     assert signal_counts["METHOD_DELETED"] == 1
     assert context["summary"]["retrieverSupportedSignalTypes"] == [
+        "DB_SQL_MAPPER_CHANGED",
         "DTO_FIELD_CHANGED",
         "FIELD_DELETED",
         "METHOD_DELETED",
         "METHOD_SIGNATURE_CHANGED",
     ]
+    assert "DB_SQL_MAPPER_CHANGED" not in unsupported_counts
     assert "DTO_FIELD_CHANGED" not in unsupported_counts
     assert "FIELD_DELETED" not in unsupported_counts
-    assert unsupported_counts["DB_SQL_MAPPER_CHANGED"] == 1
     assert availability["unavailable"] >= 1
+    assert any(
+        item["type"] == "DB_SCHEMA_CONTEXT" and item["available"] is False
+        for item in availability["items"]
+    )
     assert any(item["type"] == "REFERENCE_SEARCH" for item in availability["items"])
     assert any(item["gapType"] == "UNSUPPORTED_PLANNER_SIGNAL" for item in rule_gap_items)
     assert not any(
@@ -345,6 +350,52 @@ def test_review_context_pack_records_local_repo_prepare_summary(
     assert str(tmp_path) not in context["promptText"]
     assert "repo-secret" not in str(context["summary"]["localRepository"]["cleanup"])
     assert str(tmp_path) not in str(context["summary"]["localRepository"]["cleanup"])
+
+
+def test_review_context_pack_marks_missing_worktree_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("GITLAB_TOKEN", "repo-secret")
+    monkeypatch.setattr(local_repo, "_run_git", lambda *_args, **_kwargs: None)
+
+    context = build_review_context_pack(
+        None,
+        task_id=502,
+        project_id=1,
+        mode="DIFF_TEXT",
+        repository_url="https://gitlab.example.com/demo/service",
+        git_project_id="1001",
+        head_ref="2222222222222222222222222222222222222222",
+        changed_files=[
+            {
+                "path": "src/main/java/demo/OrderService.java",
+                "diffText": (
+                    "diff --git a/src/main/java/demo/OrderService.java "
+                    "b/src/main/java/demo/OrderService.java\n"
+                    "@@ -10,6 +10,3 @@\n"
+                    "-    public Order cancelOrder(Long id) {\n"
+                    "-        return null;\n"
+                    "-    }\n"
+                ),
+            }
+        ],
+        diff_text=None,
+    )
+
+    local_summary = context["contextPack"]["localRepositoryContext"]
+    retrieval = context["localReferenceRetrieval"]
+
+    assert local_summary["status"] == "UNAVAILABLE"
+    assert local_summary["worktreeStatus"] == "MISSING"
+    assert local_summary["failurePhase"] == "RETRIEVER_WORKTREE_VALIDATE"
+    assert retrieval["status"] == "UNAVAILABLE"
+    assert context["summary"]["localRepository"]["status"] == "UNAVAILABLE"
+    assert context["summary"]["localReferenceSearch"]["status"] == "UNAVAILABLE"
 
 
 def test_review_context_pack_injects_local_reference_snippets(
@@ -424,6 +475,107 @@ def test_review_context_pack_injects_local_reference_snippets(
     assert context["summary"]["localReferenceSearch"] == retrieval["summary"]
     assert "localReferenceContext" in context["promptText"]
     assert "orderService.cancelOrder(id)" in context["promptText"]
+    assert str(tmp_path) not in context["promptText"]
+
+
+def test_review_context_pack_injects_db_mapper_entity_reference_snippets(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "506" / "head"
+    commands: list[list[str]] = []
+
+    def write_source() -> None:
+        mapper = worktree / "src/main/resources/mapper/OrderMapper.xml"
+        entity = worktree / "src/main/java/demo/entity/OrderEntity.java"
+        migration = worktree / "src/main/resources/db/migration/V2__order.sql"
+        mapper.parent.mkdir(parents=True, exist_ok=True)
+        entity.parent.mkdir(parents=True, exist_ok=True)
+        migration.parent.mkdir(parents=True, exist_ok=True)
+        mapper.write_text(
+            "\n".join(
+                [
+                    "<mapper namespace=\"demo.OrderMapper\">",
+                    "  <select id=\"selectOrder\">select legacy_code from t_order</select>",
+                    "</mapper>",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        entity.write_text(
+            "\n".join(
+                [
+                    "package demo.entity;",
+                    "class OrderEntity {",
+                    "  private String legacyCode;",
+                    "}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        migration.write_text("alter table t_order add column legacy_code varchar(64);", encoding="utf-8")
+
+    def fake_run_git(args: list[str], **_kwargs) -> None:
+        commands.append(args)
+        if "worktree" in args and "add" in args:
+            write_source()
+
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_CONTEXT_SNIPPET_CONTEXT_LINES", "1")
+    monkeypatch.setenv("GITLAB_TOKEN", "repo-secret")
+    monkeypatch.setattr(local_repo, "_run_git", fake_run_git)
+
+    diff_text = (
+        "diff --git a/src/main/resources/mapper/OrderMapper.xml "
+        "b/src/main/resources/mapper/OrderMapper.xml\n"
+        "@@ -1,3 +1,4 @@\n"
+        " <mapper namespace=\"demo.OrderMapper\">\n"
+        "+  <select id=\"selectOrder\">select legacy_code from t_order</select>\n"
+        " </mapper>\n"
+    )
+    context = build_review_context_pack(
+        None,
+        task_id=506,
+        project_id=1,
+        mode="DIFF_TEXT",
+        repository_url="https://gitlab.example.com/demo/service",
+        git_project_id="1001",
+        head_ref="2222222222222222222222222222222222222222",
+        changed_files=[{"path": "src/main/resources/mapper/OrderMapper.xml", "diffText": diff_text}],
+        diff_text=None,
+    )
+
+    retrieval = context["localReferenceRetrieval"]
+    searches = {search["query"]: search for search in retrieval["searches"]}
+    availability = context["summary"]["requestedContextAvailability"]
+    unsupported_counts = {
+        item["type"]: item["count"]
+        for item in context["summary"]["retrieverUnsupportedSignalTypeCounts"]
+    }
+
+    assert retrieval["summary"]["supportedSignalTypes"] == ["DB_SQL_MAPPER_CHANGED"]
+    assert retrieval["summary"]["matchedFileCount"] >= 1
+    assert "DB_SQL_MAPPER_CHANGED" not in unsupported_counts
+    assert "t_order" in searches
+    assert searches["t_order"]["snippets"][0]["reason"] == "DB_SCHEMA_REFERENCE"
+    assert "selectOrder" in searches
+    assert searches["selectOrder"]["snippets"][0]["reason"] == "MAPPER_METHOD_REFERENCE"
+    assert any(
+        item["type"] == "DB_SCHEMA_CONTEXT"
+        and item["available"] is True
+        and item.get("availableSource") == "LOCAL_DB_MAPPER_ENTITY_CONTEXT"
+        for item in availability["items"]
+    )
+    assert not any(
+        item["gapType"] == "UNSUPPORTED_PLANNER_SIGNAL" and item["signal"] == "DB_SQL_MAPPER_CHANGED"
+        for item in context["summary"]["ruleGapItems"]
+    )
+    assert "localReferenceContext" in context["promptText"]
+    assert "t_order" in context["promptText"]
+    assert "selectOrder" in context["promptText"]
+    assert "repo-secret" not in context["promptText"]
     assert str(tmp_path) not in context["promptText"]
 
 
