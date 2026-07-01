@@ -1299,9 +1299,415 @@ GET /api/review-tasks/{taskId}/code-quality-refinements?reviewKey=deepseek-main
 - 展开 finding 后展示 `refinementOverlay` 的状态、触发条件、检索计划摘要、补到的证据摘要、仍缺失上下文和失败原因。
 - “高准确模式流转”会汇总当前 Review 的 finding 级补证据完成 / 失败数量；不展示源码片段、provider raw output、token、认证头或本地绝对路径。
 
-## 11. DTO / VO 边界
+## 11. Evaluation Run API
 
-### 11.1 WebhookTriggerCommand
+Evaluation Run 用于记录一次离线评估或 Review 回放的版本元信息和样本结果摘要。它只服务于质量治理和后续回放接入，不会自动调用真实模型，不会修改 Prompt、AI Review 结果、finding 等级、项目策略或忽略状态。
+
+### 11.1 创建回放 / 评估运行
+
+```http
+POST /api/evaluation-runs
+```
+
+请求示例：
+
+```json
+{
+  "name": "backend prompt candidate replay",
+  "runType": "REVIEW_REPLAY",
+  "sampleSetName": "backend-security-regression",
+  "caseIds": [1, 2, 3],
+  "projectId": 1,
+  "provider": "DEEPSEEK",
+  "profile": "backend-default-ai-review",
+  "model": "deepseek-v4-pro",
+  "promptHash": "sha256-new",
+  "contextPackVersion": "context-pack-v0",
+  "retrieverVersion": "local-retriever-v0",
+  "ruleGapVersion": "rule-gap-v0",
+  "baseline": {
+    "label": "current-prod",
+    "provider": "DEEPSEEK",
+    "profile": "backend-default-ai-review",
+    "model": "deepseek-v4-pro",
+    "promptHash": "sha256-old"
+  },
+  "candidate": {
+    "label": "m5-candidate",
+    "provider": "DEEPSEEK",
+    "profile": "backend-default-ai-review",
+    "model": "deepseek-v4-pro",
+    "promptHash": "sha256-new"
+  },
+  "notes": "M5 manual replay placeholder"
+}
+```
+
+创建行为：
+
+- `caseIds` 必填且至少 1 个；只从已有 `evaluation_cases` 初始化 run item。
+- run 初始 `status=PENDING`，item 初始 `status=PENDING`。
+- `sampleSet` 只保存 `{caseIds, count, filters?}` 摘要，不复制源码、大段 diff 或 provider raw output。
+- 响应返回 run 详情和初始化后的 `items`。
+
+`runType` 可选值：
+
+```text
+EVALUATION / REVIEW_REPLAY
+```
+
+`status` 可选值：
+
+```text
+PENDING / RUNNING / COMPLETED / FAILED / CANCELED
+```
+
+响应 data 关键字段：
+
+```json
+{
+  "id": 1,
+  "name": "backend prompt candidate replay",
+  "runType": "REVIEW_REPLAY",
+  "sampleSetName": "backend-security-regression",
+  "sampleSet": {
+    "caseIds": [1, 2, 3],
+    "count": 3
+  },
+  "projectId": 1,
+  "projectName": "demo-service",
+  "provider": "DEEPSEEK",
+  "profile": "backend-default-ai-review",
+  "model": "deepseek-v4-pro",
+  "promptHash": "sha256-new",
+  "contextPackVersion": "context-pack-v0",
+  "retrieverVersion": "local-retriever-v0",
+  "ruleGapVersion": "rule-gap-v0",
+  "baseline": {},
+  "candidate": {},
+  "status": "PENDING",
+  "totalCount": 3,
+  "completedCount": 0,
+  "failedCount": 0,
+  "resultSummary": {
+    "totalCount": 3,
+    "statusCounts": {
+      "PENDING": 3
+    }
+  },
+  "durationMs": null,
+  "items": []
+}
+```
+
+### 11.2 查询回放记录
+
+```http
+GET /api/evaluation-runs
+GET /api/evaluation-runs/{runId}
+```
+
+`GET /api/evaluation-runs` 查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `projectId` | Long | 按项目过滤 |
+| `provider` | String | 按 Provider 过滤 |
+| `profile` | String | 按 AI Review Profile 过滤 |
+| `runType` | String | `EVALUATION / REVIEW_REPLAY` |
+| `status` | String | `PENDING / RUNNING / COMPLETED / FAILED / CANCELED` |
+| `pageNo` / `pageSize` | Number | 分页 |
+
+详情接口返回 run 元信息和 `items`。列表接口不返回 `items`。
+
+### 11.3 记录或更新样本运行结果
+
+```http
+PUT /api/evaluation-runs/{runId}/items/{itemId}
+```
+
+请求示例：
+
+```json
+{
+  "status": "COMPLETED",
+  "durationMs": 1234,
+  "baselineSummary": {
+    "findingCount": 2,
+    "falsePositiveCount": 1,
+    "contextMissingCount": 1,
+    "overallLevel": "MAJOR"
+  },
+  "candidateSummary": {
+    "findingCount": 1,
+    "falsePositiveCount": 0,
+    "contextMissingCount": 0,
+    "overallLevel": "MINOR"
+  },
+  "resultSummary": {
+    "matchedVerdict": true,
+    "notes": "candidate reduced false positive on this sample"
+  }
+}
+```
+
+更新行为：
+
+- 只能更新当前 `runId` 下的 item；跨 run item 返回 `RESOURCE_NOT_FOUND`。
+- 自动刷新 run 的 `completedCount / failedCount / resultSummary / durationMs / status`。
+- 不写回 `evaluation_cases`、`code_quality_review_results`、反馈池、项目策略或 Prompt。
+
+前端最小入口：
+
+- 顶部导航“回放记录”查看 run 列表。
+- 回放详情页展示 baseline / candidate、sample set、聚合结果和 item 摘要。
+- 首版不提供模型执行按钮、质量看板或胜出版本选择。
+
+## 12. Deterministic Check API
+
+Deterministic Check 用于把确定性检查结果作为结构化证据进入 Review 平台。M6 仅支持敏感信息扫描 MVP：只扫描当前任务 changed files / diff 的新增行，不做全仓扫描，不执行外部命令，不自动阻塞合并，不修改 AI Review 结果、Prompt、finding 等级或项目策略。
+
+### 12.1 查询任务确定性检查结果
+
+```http
+GET /api/review-tasks/{taskId}/deterministic-checks
+```
+
+无记录响应 data：
+
+```json
+{
+  "taskId": 10001,
+  "status": "NOT_RUN",
+  "latestRun": null,
+  "runs": [],
+  "explanation": "No deterministic check run has been recorded for this task."
+}
+```
+
+有记录响应 data：
+
+```json
+{
+  "taskId": 10001,
+  "status": "COMPLETED",
+  "latestRun": {
+    "id": 1,
+    "taskId": 10001,
+    "projectId": 1,
+    "checkType": "SECRET_SCAN",
+    "status": "COMPLETED",
+    "configSnapshot": {
+      "configSource": "BUILTIN",
+      "checkType": "SECRET_SCAN",
+      "rulesetVersion": "secret-scan-mvp-v1",
+      "scope": "DIFF_ADDED_LINES",
+      "timeoutMs": 0,
+      "maxFindings": 50
+    },
+    "resultSummary": {
+      "scannedFileCount": 2,
+      "addedLineCount": 4,
+      "findingCount": 1,
+      "ruleTypeCounts": {
+        "API_TOKEN_ASSIGNMENT": 1
+      },
+      "truncated": false,
+      "scope": "DIFF_ADDED_LINES"
+    },
+    "findings": [
+      {
+        "ruleType": "API_TOKEN_ASSIGNMENT",
+        "filePath": "src/main/resources/application.yml",
+        "lineNumber": 12,
+        "hunkPosition": 3,
+        "evidence": "apiKey: ****"
+      }
+    ],
+    "durationMs": 3,
+    "failureReason": null
+  },
+  "runs": []
+}
+```
+
+`status` 可选值：
+
+```text
+NOT_RUN / COMPLETED / FAILED / NOT_APPLICABLE
+```
+
+安全边界：
+
+- 只返回相对路径或脱敏后的路径摘要。
+- `findings[].evidence` 必须脱敏，不返回真实 secret、token、认证头、大段源码、本地绝对路径或 provider raw output。
+- 删除行、上下文行和 diff header 不参与扫描。
+
+### 12.2 手动触发或重跑确定性检查
+
+```http
+POST /api/review-tasks/{taskId}/deterministic-checks/run
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "checkType": "SECRET_SCAN"
+}
+```
+
+说明：
+
+- `checkType` 为空时默认 `SECRET_SCAN`。
+- 每次触发都会新增一条 run，查询接口返回最新 run。
+- 无 diff 或无新增行时返回 `NOT_APPLICABLE`，不影响规则提醒和 AI Review 主链路。
+- 扫描失败时记录 `FAILED` 和 `failureReason`，不阻断原任务。
+
+### 12.3 Context Pack 集成
+
+构造 AI Review Context Pack 时，后端会读取当前任务最新确定性检查 run，并注入安全摘要：
+
+```json
+{
+  "contextPack": {
+    "deterministicChecks": {
+      "securitySummary": {
+        "status": "COMPLETED",
+        "checkType": "SECRET_SCAN",
+        "rulesetVersion": "secret-scan-mvp-v1",
+        "scope": "DIFF_ADDED_LINES",
+        "durationMs": 3,
+        "findingCount": 1,
+        "ruleTypeCounts": {
+          "API_TOKEN_ASSIGNMENT": 1
+        },
+        "truncated": false,
+        "failureReason": null,
+        "findings": []
+      }
+    }
+  }
+}
+```
+
+`CONTEXT_PACK_BUILT` progress event 只展示同样的安全统计摘要，不展示源码、真实 secret、token、认证头、本地绝对路径或 provider raw output。
+
+## 13. Review Quality Dashboard API
+
+Review Quality Dashboard 用于把 M1-M6 已沉淀的评估样本、回放记录、finding 补证据和确定性检查结果聚合成最小质量治理看板。M7 只做统计与诊断，不自动修改 Prompt、不自动选择胜出版本、不生成项目策略、不自动降级或忽略 finding。
+
+### 13.1 查询质量看板
+
+```http
+GET /api/review-quality/dashboard
+```
+
+查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `projectId` | Long | 按项目过滤 |
+| `provider` | String | 按 Provider 过滤 |
+| `profile` | String | 按 AI Review Profile 过滤 |
+| `riskType` | String | 按风险类型过滤 |
+| `verdict` | String | 按人工裁决过滤 |
+
+核心统计口径：
+
+- `summary.sampleCount` 来自匹配的 `evaluation_cases` 数量。
+- `falsePositiveCount / contextMissingCount / levelTooHighCount / levelTooLowCount / duplicateFindingCount / missingFindingCount` 均按 `evaluation_cases.verdict` 计数。
+- `falsePositiveRate` 和 `contextMissingRate` 以 `sampleCount` 为分母；空样本返回 `0`。
+- `dimensions.projects / providers / profiles / riskTypes` 返回 top 聚合行，每行包含同样的样本数、verdict 计数和核心率。
+- `replaySummary`、`refinementSummary`、`deterministicCheckSummary` 只作为辅助诊断摘要，不计入主样本数。
+
+响应 data 示例：
+
+```json
+{
+  "filters": {
+    "projectId": 1,
+    "provider": "DEEPSEEK",
+    "profile": "backend-default-ai-review",
+    "riskType": "SECURITY",
+    "verdict": null
+  },
+  "summary": {
+    "sampleCount": 6,
+    "verdictCounts": {
+      "FALSE_POSITIVE": 1,
+      "CONTEXT_MISSING": 1,
+      "LEVEL_TOO_HIGH": 1,
+      "LEVEL_TOO_LOW": 1,
+      "DUPLICATE": 1,
+      "MISSING_FINDING": 1
+    },
+    "falsePositiveCount": 1,
+    "contextMissingCount": 1,
+    "levelTooHighCount": 1,
+    "levelTooLowCount": 1,
+    "duplicateFindingCount": 1,
+    "missingFindingCount": 1,
+    "falsePositiveRate": 0.1667,
+    "contextMissingRate": 0.1667
+  },
+  "verdictDistribution": [
+    { "verdict": "FALSE_POSITIVE", "count": 1 }
+  ],
+  "dimensions": {
+    "projects": [
+      {
+        "key": "1",
+        "label": "demo-service",
+        "projectId": 1,
+        "sampleCount": 6,
+        "falsePositiveRate": 0.1667,
+        "contextMissingRate": 0.1667
+      }
+    ],
+    "providers": [],
+    "profiles": [],
+    "riskTypes": []
+  },
+  "replaySummary": {
+    "itemCount": 2,
+    "statusCounts": { "COMPLETED": 1, "FAILED": 1 },
+    "completedCount": 1,
+    "failedCount": 1,
+    "durationMsTotal": 1234,
+    "durationMsAvg": 617,
+    "baselineTotals": {},
+    "candidateTotals": {},
+    "resultTotals": {}
+  },
+  "refinementSummary": {
+    "recordCount": 2,
+    "statusCounts": { "COMPLETED": 1, "FAILED": 1 },
+    "completedCount": 1,
+    "failedCount": 1,
+    "failureReasons": [],
+    "scopeNote": "Refinements are linked by filtered evaluation case task ids."
+  },
+  "deterministicCheckSummary": {
+    "runCount": 1,
+    "statusCounts": { "COMPLETED": 1 },
+    "findingCount": 2,
+    "ruleTypeCounts": { "API_TOKEN_ASSIGNMENT": 2 },
+    "scopeNote": "Deterministic checks are project-scoped auxiliary diagnostics."
+  }
+}
+```
+
+安全边界：
+
+- 看板不返回源码片段、大段 diff、provider raw output、真实 secret、token、认证头或本地绝对路径。
+- `deterministicCheckSummary` 只能按项目范围精确过滤；当请求包含 `provider / profile / riskType / verdict` 时，响应通过 `scopeNote` 明确该辅助摘要不能直接应用这些过滤。
+- M7 不做 finding 级归因；规则缺口与误判是否存在因果关系放到 M8。
+
+## 14. DTO / VO 边界
+
+### 14.1 WebhookTriggerCommand
 
 用于从 webhook payload 转成内部任务创建命令。
 
@@ -1320,7 +1726,7 @@ GET /api/review-tasks/{taskId}/code-quality-refinements?reviewKey=deepseek-main
 }
 ```
 
-### 11.2 ChangeAnalysisResultDTO
+### 14.2 ChangeAnalysisResultDTO
 
 ```json
 {
@@ -1333,6 +1739,6 @@ GET /api/review-tasks/{taskId}/code-quality-refinements?reviewKey=deepseek-main
 }
 ```
 
-### 11.3 RiskCardVO
+### 14.3 RiskCardVO
 
 前端直接消费完整 RiskCard JSON；后端不应再拼接不可解析的展示文本作为主要输出。

@@ -12,10 +12,19 @@ from app.core.json_utils import read_json
 from app.evaluation.models import EvaluationCase
 from app.evaluation.repository import (
     create_evaluation_case,
+    create_evaluation_run,
     evaluation_case_to_response,
+    evaluation_run_to_response,
+    get_evaluation_cases_by_ids,
     get_evaluation_case,
+    get_evaluation_run,
+    get_evaluation_run_item,
+    list_evaluation_run_items,
+    list_evaluation_runs,
     list_evaluation_cases,
+    refresh_evaluation_run_aggregate,
     update_evaluation_case,
+    update_evaluation_run_item,
 )
 from app.project_integration.models import Project
 from app.review_feedback.service import ai_finding_fingerprint
@@ -33,6 +42,8 @@ VERDICTS = {
     "UNKNOWN",
 }
 SOURCES = {"AI_FINDING", "MANUAL"}
+RUN_TYPES = {"EVALUATION", "REVIEW_REPLAY"}
+RUN_STATUSES = {"PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELED"}
 
 
 def create_evaluation_case_response(db: Session, request: dict[str, Any]) -> dict[str, Any]:
@@ -110,6 +121,134 @@ def update_evaluation_case_response(db: Session, case_id: int, request: dict[str
     updated = update_evaluation_case(db, record, values)
     db.commit()
     return _case_response(db, updated)
+
+
+def create_evaluation_run_response(db: Session, request: dict[str, Any]) -> dict[str, Any]:
+    case_ids = _case_ids(request.get("caseIds"))
+    case_records = get_evaluation_cases_by_ids(db, case_ids)
+    by_id = {case.id: case for case in case_records}
+    missing = [case_id for case_id in case_ids if case_id not in by_id]
+    if missing:
+        raise AppError("RESOURCE_NOT_FOUND", f"Evaluation case not found: {missing[0]}", 404)
+    ordered_cases = [by_id[case_id] for case_id in case_ids]
+    project_id = _to_int(request.get("projectId"))
+    if project_id is not None:
+        _ensure_project_exists(db, project_id)
+    else:
+        distinct_project_ids = {case.project_id for case in ordered_cases}
+        project_id = next(iter(distinct_project_ids)) if len(distinct_project_ids) == 1 else None
+    run_type = _normalize_enum(request.get("runType") or "EVALUATION", RUN_TYPES, "runType")
+    sample_set = {
+        "caseIds": case_ids,
+        "count": len(case_ids),
+    }
+    if request.get("sampleSetFilters") and isinstance(request.get("sampleSetFilters"), dict):
+        sample_set["filters"] = _safe_json_value(request.get("sampleSetFilters"))
+    values = {
+        "name": _clean_text(request.get("name"), 255) or "Evaluation Run",
+        "run_type": run_type,
+        "sample_set_name": _clean_text(request.get("sampleSetName"), 255),
+        "sample_set_json": json.dumps(sample_set, ensure_ascii=False),
+        "project_id": project_id,
+        "provider": _clean_text(request.get("provider"), 64),
+        "profile": _clean_text(request.get("profile"), 64),
+        "model": _clean_text(request.get("model"), 128),
+        "prompt_hash": _clean_text(request.get("promptHash"), 128),
+        "context_pack_version": _clean_text(request.get("contextPackVersion"), 64),
+        "retriever_version": _clean_text(request.get("retrieverVersion"), 64),
+        "rule_gap_version": _clean_text(request.get("ruleGapVersion"), 64),
+        "baseline_json": json.dumps(_safe_json_value(request.get("baseline")), ensure_ascii=False)
+        if isinstance(request.get("baseline"), dict)
+        else None,
+        "candidate_json": json.dumps(_safe_json_value(request.get("candidate")), ensure_ascii=False)
+        if isinstance(request.get("candidate"), dict)
+        else None,
+        "status": "PENDING",
+        "total_count": len(case_ids),
+        "completed_count": 0,
+        "failed_count": 0,
+        "result_summary_json": json.dumps(
+            {
+                "totalCount": len(case_ids),
+                "completedCount": 0,
+                "failedCount": 0,
+                "statusCounts": {"PENDING": len(case_ids)},
+                "verdictCounts": _count_values([case.verdict for case in ordered_cases]),
+            },
+            ensure_ascii=False,
+        ),
+        "duration_ms": None,
+        "notes": _clean_text(request.get("notes"), 4000),
+    }
+    record = create_evaluation_run(db, values, ordered_cases)
+    db.commit()
+    return get_evaluation_run_response(db, record.id)
+
+
+def list_evaluation_run_response(
+    db: Session,
+    *,
+    project_id: int | None,
+    provider: str | None,
+    profile: str | None,
+    run_type: str | None,
+    status: str | None,
+    page_no: int,
+    page_size: int,
+) -> dict[str, Any]:
+    return list_evaluation_runs(
+        db,
+        project_id=project_id,
+        provider=_clean_text(provider, 64),
+        profile=_clean_text(profile, 64),
+        run_type=_normalize_optional_enum(run_type, RUN_TYPES, "runType"),
+        status=_normalize_optional_enum(status, RUN_STATUSES, "status"),
+        page_no=page_no,
+        page_size=page_size,
+    )
+
+
+def get_evaluation_run_response(db: Session, run_id: int) -> dict[str, Any]:
+    record = get_evaluation_run(db, run_id)
+    if record is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Evaluation run not found: {run_id}", 404)
+    project = db.get(Project, record.project_id) if record.project_id is not None else None
+    items = list_evaluation_run_items(db, run_id)
+    return evaluation_run_to_response(record, project=project, items=items)
+
+
+def update_evaluation_run_item_response(
+    db: Session,
+    run_id: int,
+    item_id: int,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    run = get_evaluation_run(db, run_id)
+    if run is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Evaluation run not found: {run_id}", 404)
+    item = get_evaluation_run_item(db, item_id)
+    if item is None or item.run_id != run_id:
+        raise AppError("RESOURCE_NOT_FOUND", f"Evaluation run item not found: {item_id}", 404)
+    values: dict[str, Any] = {}
+    if "status" in request:
+        values["status"] = _normalize_enum(request.get("status"), RUN_STATUSES, "status")
+    if "durationMs" in request:
+        values["duration_ms"] = _non_negative_int(request.get("durationMs"), "durationMs")
+    for api_field, model_field in (
+        ("baselineSummary", "baseline_summary_json"),
+        ("candidateSummary", "candidate_summary_json"),
+        ("resultSummary", "result_summary_json"),
+    ):
+        if api_field in request:
+            values[model_field] = json.dumps(_safe_json_value(request.get(api_field)), ensure_ascii=False)
+    if "errorMessage" in request:
+        values["error_message"] = _clean_text(request.get("errorMessage"), 1024)
+    if not values:
+        return get_evaluation_run_response(db, run_id)
+    update_evaluation_run_item(db, item, values)
+    refresh_evaluation_run_aggregate(db, run)
+    db.commit()
+    return get_evaluation_run_response(db, run_id)
 
 
 def _values_from_ai_finding(
@@ -221,6 +360,60 @@ def _case_response(db: Session, record: EvaluationCase) -> dict[str, Any]:
 def _ensure_project_exists(db: Session, project_id: int) -> None:
     if db.get(Project, project_id) is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
+
+
+def _case_ids(value: Any) -> list[int]:
+    if not isinstance(value, list) or not value:
+        raise AppError("VALIDATION_ERROR", "caseIds is required", 400)
+    result: list[int] = []
+    seen: set[int] = set()
+    for item in value:
+        case_id = _to_int(item)
+        if case_id is None or case_id <= 0:
+            raise AppError("VALIDATION_ERROR", "caseIds is invalid", 400)
+        if case_id in seen:
+            continue
+        seen.add(case_id)
+        result.append(case_id)
+    return result
+
+
+def _non_negative_int(value: Any, field: str) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise AppError("VALIDATION_ERROR", f"{field} is invalid", 400) from None
+    if number < 0:
+        raise AppError("VALIDATION_ERROR", f"{field} is invalid", 400)
+    return number
+
+
+def _safe_json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized_key = str(key)
+            if normalized_key in {"rawOutput", "providerRawOutput", "promptText", "sourceSnippet", "diffText"}:
+                continue
+            result[normalized_key] = _safe_json_value(item)
+        return result
+    if isinstance(value, list):
+        return [_safe_json_value(item) for item in value[:100]]
+    if isinstance(value, str):
+        return _clean_text(value, 1024)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return _clean_text(value, 1024)
+
+
+def _count_values(values: list[str | None]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for value in values:
+        key = value or "UNKNOWN"
+        result[key] = result.get(key, 0) + 1
+    return result
 
 
 def _finding_id(finding: dict[str, Any]) -> str | None:

@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：完整产品目标文档。用于回答“最终要做成什么产品、用户如何使用、从当前状态到完整产品分几步走”；`M4：二次补证据前端可观测` 已落地，等待用户验证是否进入 M5。
+- 当前状态：完整产品目标文档。用于回答“最终要做成什么产品、用户如何使用、从当前状态到完整产品分几步走”；`M7：Review 质量看板 MVP` 已落地，等待用户验证是否进入 M8。
 - 编写时间：2026-07-01
 - 当前阶段总控：`docs/36-review-platform-current-roadmap.md`
 - 历史与细节文档：
@@ -161,7 +161,7 @@ GitLab token 和 clone 权限
 - 检查失败、超时、未配置都可解释。
 - 确定性失败可以按项目策略决定是否阻塞。
 
-当前状态：不足。
+当前状态：已具备敏感信息扫描 MVP；lint、测试命令、类型检查等更多确定性工具待后续阶段。
 
 ### E. 质量评估与回放
 
@@ -174,7 +174,7 @@ GitLab token 和 clone 权限
 - 能比较改动前后的误判、漏报、等级偏差、耗时和成本。
 - 规则缺口和 finding 级误判归因。
 
-当前状态：缺失，是近期最高优先级。
+当前状态：评估样本、二次补证据、回放版本记录和质量看板已具备 MVP；真实批量回放和 finding 级归因仍待后续阶段。
 
 ### F. 项目知识与反馈治理
 
@@ -392,13 +392,12 @@ GitLab token 和 clone 权限
 推荐从 `docs/36` 的近期阶段继续：
 
 ```text
-P1：Review 质量评估集 MVP
-  -> P2：finding 级二次补证据执行器 MVP
-  -> P3：Review 回放与版本记录 MVP
-  -> P4：确定性检查证据接入 MVP
+M8：规则缺口与 finding 级归因
+  -> M9：规则 / Retriever 改动验收门禁
+  -> M10：第一个评估驱动的业务 Retriever
 ```
 
-完成 T1 后，再根据评估样本决定 T2 先补哪类业务上下文。
+M1-M7 已完成 MVP。进入缓存、MQ、配置等业务 Retriever 前，仍应先完成 M8 / M9，让缺口归因和改动验收有样本依据。
 
 ## 八、Agent 总控 Prompt
 
@@ -407,7 +406,7 @@ P1：Review 质量评估集 MVP
 
 docs/36 是近期阶段总控，docs/37 是完整产品目标。后续推进必须先满足 docs/36 当前阶段，不要直接跳到 docs/37 的远期能力。
 
-当前正在推进 M1 / P1 Review 质量评估集后端 MVP。每次只推进一个阶段。允许自主修改 backend-python、frontend、docs、examples、tests 中与当前阶段直接相关的文件；不要修改 legacy Java backend；不要做自动 Prompt 改写、自动风险降级、自动忽略 finding、模型微调、复杂 RAG、跨项目策略共享或无限制全项目扫描。
+当前 M7 Review 质量看板 MVP 已落地，等待用户验证是否进入 M8 规则缺口与 finding 级归因。每次只推进一个阶段。允许自主修改 backend-python、frontend、docs、examples、tests 中与当前阶段直接相关的文件；不要修改 legacy Java backend；不要做自动 Prompt 改写、自动风险降级、自动忽略 finding、模型微调、复杂 RAG、跨项目策略共享或无限制全项目扫描。
 
 每个阶段完成后必须停止，输出“改了什么、为什么、如何验证”，等待用户验证并明确回复“继续下一阶段”后再推进。
 ```
@@ -433,12 +432,11 @@ docs/36 是近期阶段总控，docs/37 是完整产品目标。后续推进必�
 推荐按这个粒度创建 Goal：
 
 ```text
-完成 P1：Review 质量评估集 MVP
-完成 P2：finding 级二次补证据执行器 MVP
-完成 P3：Review 回放与版本记录 MVP
-完成 P4：确定性检查证据接入 MVP
+完成 M8：规则缺口与 finding 级归因
+完成 M9：规则 / Retriever 改动验收门禁
+完成 M10：第一个评估驱动的业务 Retriever
 完成 T2 中某一个经评估确认的专项 Retriever
-完成 T3 中 Review 质量看板 MVP
+完成 T4 中项目知识与反馈治理产品化
 ```
 
 不推荐创建：
@@ -482,39 +480,36 @@ docs/36 是近期阶段总控，docs/37 是完整产品目标。后续推进必�
 
 ### 当前可启动的 Goal
 
-当前正在推进的 Goal 是：
+当前可启动的 Goal 是：
 
 ```text
-完成 M1：评估样本后端 MVP。
+完成 M8：规则缺口与 finding 级归因。
 ```
 
 建议 Goal 文案：
 
 ```text
-请基于 AGENTS.md、README.md、docs/36-review-platform-current-roadmap.md、docs/37-review-platform-target-product-roadmap.md，完成 M1：评估样本后端 MVP。
+请基于 AGENTS.md、README.md、docs/36-review-platform-current-roadmap.md、docs/37-review-platform-target-product-roadmap.md，完成 M8：规则缺口与 finding 级归因。
 
 范围：
 - backend-python
-- migrations / bootstrap SQL
+- frontend
 - backend-python/tests
-- docs / examples 中与 M1 直接相关的文件
+- docs / examples 中与 M8 直接相关的文件
 
 目标：
-- 建立最小 evaluation cases / gold cases 数据结构。
-- 支持记录 taskId、reviewKey、findingId 或 fingerprint、projectId、provider、profile、riskType、severity、contextStatus、人工 verdict 和备注。
-- 支持按项目、Provider、Profile、风险类型筛选。
-- 能通过后台 API 沉淀样本。
-- 预留或记录本次 Review 的关键上下文摘要：项目策略注入摘要、rule gap 摘要、local retriever 摘要、prompt/profile/provider 标识。
-- 首版不要求真实批量模型回放。
-- 首版不要求前端页面，前端入口放到 M2。
-- 不自动影响 Review 结果。
-- 不替代现有反馈池；后续可以从 feedback 生成 evaluation case，但两者语义保持独立。
+- 把规则缺口是否导致误判从 task 级近似推进到 finding 级判断。
+- 在 evaluation case 或关联结构中记录规则缺口摘要和人工归因。
+- 支持归因枚举：RULE_GAP_CAUSED / RULE_GAP_RELATED / NOT_RULE_GAP / PROMPT_ISSUE / MODEL_REASONING_ISSUE / PROJECT_POLICY_MISSING / INSUFFICIENT_LABEL。
+- 规则缺口推荐区分“高频缺口”和“已被样本证明关联误判 / 漏报的缺口”。
+- 收敛规则缺口产品入口，但不删除历史数据和后端聚合能力。
+- 不自动改 Prompt，不自动生成项目策略，不自动降级、不自动忽略 finding。
 
 要求：
 - 先补数据结构与接口契约，再实现业务逻辑。
-- 补最小后端测试。
+- 补最小契约测试和前端 build。
 - 更新 README 或相关 docs 中的使用说明。
-- 完成后停止，输出改了什么、为什么、如何验证，等待用户确认是否继续 M2。
+- 完成后停止，输出改了什么、为什么、如何验证，等待用户确认是否继续 M9。
 ```
 
 ### Goal 模式停止规则
@@ -673,7 +668,7 @@ M0 路线收口
 
 ### M3：finding 级二次补证据后端 MVP
 
-状态：已完成后端 MVP（2026-07-01），M4 前端可观测也已完成，等待用户验证是否进入 M5。
+状态：已完成后端 MVP（2026-07-01），M4 前端可观测、M5 回放记录、M6 确定性检查与 M7 质量看板 MVP 也已完成，等待用户验证是否进入 M8。
 
 目标：
 
@@ -709,7 +704,7 @@ M0 路线收口
 
 停止点：
 
-- 已完成并停止，等待用户确认是否进入 M5。
+- 已完成并停止；M5 已在后续阶段落地。
 
 ### M4：二次补证据前端可观测
 
@@ -744,9 +739,11 @@ M0 路线收口
 
 停止点：
 
-- 当前停止，等待用户基于真实任务验证体验并确认是否进入 M5。
+- 已完成并停止；回放记录已在后续阶段落地，当前等待用户基于真实任务验证体验。
 
 ### M5：Review 回放与版本记录 MVP
+
+状态：已完成 MVP（2026-07-01），M6 确定性检查与 M7 质量看板 MVP 也已完成，等待用户验证是否进入 M8。
 
 目标：
 
@@ -772,9 +769,18 @@ M0 路线收口
 
 停止点：
 
-- 完成后停止，等待用户确认是否进入 M6。
+- 已完成并停止；M6 / M7 已在后续阶段落地，当前等待用户确认是否进入 M8。
+
+落地记录：
+
+- 新增 `evaluation_runs` 和 `evaluation_run_items`，记录 sample set、Provider、Profile、model、prompt hash、Context Pack version、Retriever version、rule gap version、baseline / candidate、状态、耗时和结果摘要。
+- 新增 `POST /api/evaluation-runs`、`GET /api/evaluation-runs`、`GET /api/evaluation-runs/{runId}`、`PUT /api/evaluation-runs/{runId}/items/{itemId}`，支持基于已有 evaluation cases 初始化 run 并人工记录每个样本的结果摘要。
+- 前端新增顶部导航“回放记录”，提供 run 列表和详情页；不做模型执行、质量看板或胜出版本选择。
+- 该阶段不自动调用真实模型，不修改 Prompt，不修改原 Review 结果、项目策略、finding 等级或忽略状态。
 
 ### M6：确定性检查证据接入 MVP
+
+状态：已完成 MVP（2026-07-01），等待用户用真实项目验证。
 
 目标：
 
@@ -808,7 +814,16 @@ M0 路线收口
 
 - 完成后停止，等待用户用真实项目验证。
 
+落地记录：
+
+- 新增 `deterministic_check_runs` 表，记录 task、project、check type、状态、配置快照、耗时、失败原因、结果摘要和脱敏命中项。
+- 新增 `GET /api/review-tasks/{taskId}/deterministic-checks` 与 `POST /api/review-tasks/{taskId}/deterministic-checks/run`，MVP 仅支持 `SECRET_SCAN`。
+- 敏感信息扫描只处理当前任务 diff 新增行，不做全仓扫描、不执行外部命令；命中项只返回规则类型、相对路径、行号 / hunk 位置和脱敏证据摘要。
+- AI Review Context Pack 注入 `deterministicChecks.securitySummary`，任务详情新增“确定性检查”tab；该阶段不自动阻塞合并、不修改 Prompt、不修改 Review 结果、不降级或忽略 finding、不生成项目策略。
+
 ### M7：Review 质量看板 MVP
+
+状态：已完成 MVP（2026-07-01），等待用户验证是否进入 M8。
 
 目标：
 
@@ -839,6 +854,14 @@ M0 路线收口
 停止点：
 
 - 完成后停止，等待用户确认是否进入 M8。
+
+落地记录：
+
+- 新增只读 `/api/review-quality/dashboard` 聚合 API，不新增统计表，不改变 evaluation case / run / deterministic check 既有语义。
+- 主指标以 `evaluation_cases.verdict` 为准，展示样本数、误判率、上下文不足率、等级偏高 / 偏低、重复 finding 和漏报样本。
+- 支持按项目、Provider、Profile、风险类型、verdict 过滤，并返回项目 / Provider / Profile / 风险类型 top 维度摘要。
+- evaluation runs、finding refinements、deterministic checks 只作为辅助诊断摘要；M7 不做 finding 级归因、不自动改 Prompt、不自动选胜出版本、不生成项目策略、不降级或忽略 finding。
+- 前端新增顶部导航“质量看板”，展示过滤器、核心指标卡、verdict 分布、维度聚合表和辅助诊断区。
 
 ### M8：规则缺口与 finding 级归因
 

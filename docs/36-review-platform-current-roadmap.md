@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M4：二次补证据前端可观测` 已落地，等待用户验证是否进入 M5。
+- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M7：Review 质量看板 MVP` 已落地，等待用户验证是否进入 M8。
 - 完整产品目标：`docs/37-review-platform-target-product-roadmap.md`。本文件负责近期阶段推进，`docs/37` 负责最终产品形态和长期路线。
 - 关联历史文档：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`：V2 反馈学习、项目策略、Context Pack 和高准确模式阶段记录。
@@ -73,7 +73,7 @@
 | finding 的 evidence / contextStatus / confidence | 每个结论必须说明证据和不确定性 | 已具备 |
 | 高准确模式流转可观测 | 用户能看到 Planner、Retriever、预算裁剪和 Provider 过程 | 已具备 |
 | finding 级二次补证据 | 对高风险但证据不足的 finding 再定向检索 | 后端 MVP 与前端可观测已具备 |
-| 确定性检查接入 | 编译、测试、lint、静态安全扫描等硬证据 | 当前不足 |
+| 确定性检查接入 | 编译、测试、lint、静态安全扫描等硬证据 | 已具备敏感信息扫描 MVP |
 
 当前 Local Retriever 已支持：
 
@@ -105,8 +105,9 @@ CONFIG_FILE_CHANGED
 | 项目策略 | 人工确认后的项目事实可注入后续 Review | 后端具备，生产前端默认隐藏 |
 | 规则缺口看板 | 聚合 Planner / Retriever / 预算 / Prompt 缺口 | 已具备；后续收敛为质量治理子能力 |
 | 规则缺口推荐 | 给出是否值得补、补什么、下一阶段 prompt | 已具备；后续必须结合评估样本 / 回放，不再单独作为实现依据 |
-| Review 质量评估集 | 沉淀 gold cases，记录 finding 是有效、误判、等级过高、上下文不足或漏报 | M1 正在推进 |
-| Review 回放与版本记录 | 对比改动前后误判、漏报、耗时、成本 | 缺失 |
+| Review 质量评估集 | 沉淀 gold cases，记录 finding 是有效、误判、等级过高、上下文不足或漏报 | 已具备 MVP |
+| Review 回放与版本记录 | 对比改动前后误判、漏报、耗时、成本 | 已具备 MVP |
+| Review 质量看板 | 按项目、Provider、Profile、风险类型聚合误判、上下文不足、等级偏差、重复和漏报 | 已具备 MVP |
 | finding 级缺口归因 | 判断某个误判是否真由某个规则缺口导致 | 缺失 |
 
 ### 可选增强
@@ -185,11 +186,14 @@ Semgrep / CodeQL / Sonar 类静态规则
 
 ```text
 P0：统一文档入口和路线判断（本文件）
-  -> P1：Review 质量评估集 MVP（当前推进中）
-  -> P2：finding 级二次补证据执行器 MVP
-  -> P3：Review 回放与版本记录 MVP
-  -> P4：确定性检查证据接入 MVP
-  -> P5：基于评估结果决定下一个专项 Retriever
+  -> M1：Review 质量评估集后端 MVP（已完成）
+  -> M2：评估样本前端与任务详情入口（已完成）
+  -> M3：finding 级二次补证据后端 MVP（已完成）
+  -> M4：二次补证据前端可观测（已完成）
+  -> M5：Review 回放与版本记录 MVP（已完成）
+  -> M6：确定性检查证据接入 MVP（已完成）
+  -> M7：Review 质量看板 MVP（已完成）
+  -> M8：规则缺口与 finding 级归因（下一阶段）
 ```
 
 ### 为什么不是继续补缓存 / MQ / 配置 Retriever
@@ -366,10 +370,10 @@ finding 展示必须清楚：
 
 ## 八、当前下一步
 
-当前 M4 前端可观测已落地，等待用户验证：
+当前 M7 Review 质量看板 MVP 已落地，等待用户验证：
 
 ```text
-M4：二次补证据前端可观测
+M7：Review 质量看板 MVP
 ```
 
 ### M1 落地记录（2026-07-01）
@@ -403,6 +407,30 @@ M4：二次补证据前端可观测
 - 解决的缺口：补齐“finding 级二次补证据”的前端可观测和手动触发入口。
 - 如何验证：运行前端 build；在任务详情中确认只有 `CRITICAL / MAJOR / HIGH` 且 `PARTIAL / INSUFFICIENT` finding 显示补证据操作，触发后在对应 finding 和高准确模式流转中看到覆盖层摘要。
 - 下一阶段：M5 Review 回放与版本记录 MVP；未经用户确认不继续推进。
+
+### M5 落地记录（2026-07-01）
+
+- 改了什么：新增 `evaluation_runs` / `evaluation_run_items` 后端表、创建 / 查询 / 更新 item 摘要 API、run 聚合刷新、契约测试和顶部导航“回放记录”最小列表 / 详情入口。
+- 为什么做：让评估样本可以沉淀为一次可追溯的 baseline / candidate 运行记录，为后续真实模型回放和质量对比提供版本基础。
+- 解决的缺口：补齐“Review 回放与版本记录”的最小数据结构、API 和前端可观测入口。
+- 如何验证：运行 `tests/contract/test_evaluation_cases_api_contract.py` 与 `tests/contract/test_evaluation_runs_api_contract.py`；用 `POST /api/evaluation-runs` 基于已有样本创建 run，再用 `PUT /api/evaluation-runs/{runId}/items/{itemId}` 保存样本结果摘要，并在前端“回放记录”查看列表和详情。
+- 下一阶段：M6 确定性检查证据接入 MVP；未经用户确认不继续推进。
+
+### M6 落地记录（2026-07-01）
+
+- 改了什么：新增 `deterministic_check_runs` 后端表、敏感信息扫描 API、只扫 diff 新增行的内置规则集、Context Pack 安全摘要注入、契约测试和任务详情“确定性检查”最小 tab。
+- 为什么做：让 Review 平台先接入一种跨项目可用、低风险的确定性证据，而不是只依赖 AI 对 diff 推理。
+- 解决的缺口：补齐“确定性检查证据接入”的 MVP，检查结果可进入任务详情和 AI Review Context Pack。
+- 如何验证：运行 `tests/contract/test_deterministic_checks_api_contract.py` 与 `tests/unit/test_review_context_pack.py`；在任务详情“确定性检查”tab 手动运行敏感信息扫描，确认状态、耗时、摘要、脱敏命中项和失败 / 不适用原因可见。
+- 下一阶段：M7 Review 质量看板 MVP；未经用户确认不继续推进。
+
+### M7 落地记录（2026-07-01）
+
+- 改了什么：新增 `/api/review-quality/dashboard` 只读聚合 API，基于 evaluation cases 统计样本数、误判率、上下文不足率、等级偏差、重复和漏报，并按项目 / Provider / Profile / 风险类型输出 top 维度；前端新增顶部导航“质量看板”，展示过滤器、核心指标卡、verdict 分布、维度聚合表和回放 / 补证据 / 确定性检查辅助摘要。
+- 为什么做：让管理员能先回答“质量问题集中在哪里”，把评估样本和回放记录变成可观察治理入口，而不是继续凭规则缺口直觉补 Retriever。
+- 解决的缺口：补齐“Review 质量看板”的 MVP，质量治理主入口开始从规则缺口转向人工 verdict 和样本统计。
+- 如何验证：运行 `tests/contract/test_review_quality_dashboard_api_contract.py`、`tests/contract/test_evaluation_cases_api_contract.py`、`tests/contract/test_evaluation_runs_api_contract.py`；运行前端 build；在“质量看板”按项目、Provider、Profile、风险类型和 verdict 筛选确认统计变化。
+- 下一阶段：M8 规则缺口与 finding 级归因；未经用户确认不继续推进。
 
 暂不建议进入：
 

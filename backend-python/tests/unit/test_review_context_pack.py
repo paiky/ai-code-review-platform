@@ -8,6 +8,8 @@ import httpx
 import respx
 from sqlalchemy.orm import Session
 
+from app.deterministic_checks.models import DeterministicCheckRun
+from app.deterministic_checks.repository import json_dumps
 from app.review_context import local_repo
 from app.review_context.service import (
     CONTEXT_PACK_MAX_CHANGED_FILES,
@@ -49,6 +51,70 @@ def test_review_context_pack_summarizes_changed_files_without_diff_body() -> Non
     assert pack["sameFileContext"]["fullFileSourceIncluded"] is False
     assert "order.setStatus(null)" not in context["promptText"]
     assert len(context["promptText"]) <= CONTEXT_PACK_MAX_TOTAL_CHARS
+
+
+def test_review_context_pack_includes_deterministic_check_security_summary(
+    db_session: Session,
+) -> None:
+    db_session.add(
+        DeterministicCheckRun(
+            task_id=9101,
+            project_id=1,
+            check_type="SECRET_SCAN",
+            status="COMPLETED",
+            config_snapshot_json=json_dumps(
+                {
+                    "configSource": "BUILTIN",
+                    "rulesetVersion": "secret-scan-mvp-v1",
+                    "scope": "DIFF_ADDED_LINES",
+                }
+            ),
+            result_summary_json=json_dumps(
+                {
+                    "findingCount": 1,
+                    "ruleTypeCounts": {"API_TOKEN_ASSIGNMENT": 1},
+                    "truncated": False,
+                }
+            ),
+            findings_json=json_dumps(
+                [
+                    {
+                        "ruleType": "API_TOKEN_ASSIGNMENT",
+                        "filePath": "src/App.java",
+                        "lineNumber": 12,
+                        "evidence": "apiKey=****",
+                    }
+                ]
+            ),
+            duration_ms=3,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+    )
+    db_session.commit()
+
+    context = build_review_context_pack(
+        db_session,
+        task_id=9101,
+        project_id=1,
+        mode="DIFF_TEXT",
+        changed_files=[
+            {
+                "path": "src/App.java",
+                "diffText": "@@ -10,1 +10,2 @@\n+String apiKey = \"real-secret-token\";\n",
+            }
+        ],
+        diff_text=None,
+    )
+
+    security = context["contextPack"]["deterministicChecks"]["securitySummary"]
+    assert security["status"] == "COMPLETED"
+    assert security["checkType"] == "SECRET_SCAN"
+    assert security["rulesetVersion"] == "secret-scan-mvp-v1"
+    assert security["findingCount"] == 1
+    assert security["findings"][0]["evidence"] == "apiKey=****"
+    assert "real-secret-token" not in context["promptText"]
+    assert context["summary"]["deterministicChecks"]["securitySummary"]["findingCount"] == 1
 
 
 @respx.mock

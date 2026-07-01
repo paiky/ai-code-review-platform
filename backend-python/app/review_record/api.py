@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.deterministic_checks.service import get_deterministic_checks_response, run_deterministic_check_response
 from app.code_quality.service import (
     generate_fix_preview_response,
     get_progress_response,
@@ -127,6 +128,16 @@ async def list_code_quality_finding_refinements(
     db: Session = Depends(get_db),
 ) -> dict:
     return ok(list_finding_refinements_response(db, task_id, review_key))
+
+
+@router.get("/{task_id}/deterministic-checks")
+async def get_deterministic_checks(task_id: int, db: Session = Depends(get_db)) -> dict:
+    return ok(get_deterministic_checks_response(db, task_id))
+
+
+@router.post("/{task_id}/deterministic-checks/run")
+async def run_deterministic_check(task_id: int, request: dict | None = None, db: Session = Depends(get_db)) -> dict:
+    return ok(run_deterministic_check_response(db, task_id, request))
 
 
 @router.get("/{task_id}")

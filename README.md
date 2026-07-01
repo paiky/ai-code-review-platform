@@ -944,6 +944,104 @@ Invoke-RestMethod "http://localhost:8090/api/evaluation-cases?projectId=1&provid
   ConvertTo-Json -Depth 20
 ```
 
+## Review 回放与版本记录
+
+Evaluation Run 用于记录一次离线评估或 Review 回放的 baseline / candidate 元信息和每个样本的最小结果摘要。M5 首版不自动批量调用真实模型，不自动修改 Prompt，不选择胜出版本，也不会修改原 Review 结果、项目策略、finding 等级或忽略状态。
+
+前端最小入口：
+
+- 顶部导航“回放记录”可查看 run 列表。
+- 回放详情页展示 sample set、Provider、Profile、model、prompt hash、Context Pack / Retriever / 规则缺口版本、baseline / candidate、状态、耗时和 item 摘要。
+
+基于已有评估样本创建 run：
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8090/api/evaluation-runs" `
+  -ContentType "application/json" `
+  -Body '{
+    "name": "backend prompt candidate replay",
+    "runType": "REVIEW_REPLAY",
+    "sampleSetName": "backend-security-regression",
+    "caseIds": [1, 2],
+    "projectId": 1,
+    "provider": "DEEPSEEK",
+    "profile": "backend-default-ai-review",
+    "model": "deepseek-v4-pro",
+    "promptHash": "sha256-new",
+    "contextPackVersion": "context-pack-v0",
+    "retrieverVersion": "local-retriever-v0",
+    "ruleGapVersion": "rule-gap-v0",
+    "baseline": {"label":"current-prod","promptHash":"sha256-old"},
+    "candidate": {"label":"m5-candidate","promptHash":"sha256-new"}
+  }'
+```
+
+记录某个样本的运行结果摘要：
+
+```powershell
+Invoke-RestMethod `
+  -Method Put `
+  -Uri "http://localhost:8090/api/evaluation-runs/{runId}/items/{itemId}" `
+  -ContentType "application/json" `
+  -Body '{"status":"COMPLETED","durationMs":1234,"baselineSummary":{"findingCount":2,"falsePositiveCount":1},"candidateSummary":{"findingCount":1,"falsePositiveCount":0},"resultSummary":{"matchedVerdict":true}}'
+```
+
+查询 run：
+
+```powershell
+Invoke-RestMethod "http://localhost:8090/api/evaluation-runs?projectId=1&provider=DEEPSEEK&profile=backend-default-ai-review&runType=REVIEW_REPLAY" |
+  ConvertTo-Json -Depth 20
+```
+
+## Review 质量看板
+
+质量看板用于把 evaluation cases 的人工 verdict 聚合成最小治理视图，并把 evaluation runs、finding 补证据和确定性检查作为辅助诊断摘要。M7 只做统计和诊断，不自动修改 Prompt、不自动选择胜出版本、不生成项目策略、不自动降级、不自动忽略 finding。
+
+前端最小入口：
+
+- 顶部导航“质量看板”。
+- 支持按项目、Provider、Profile、风险类型、verdict 过滤。
+- 展示样本数、误判数 / 率、上下文不足数 / 率、等级偏高 / 偏低、重复 finding、漏报样本，以及项目 / Provider / Profile / 风险类型维度聚合表。
+
+命令行验证：
+
+```powershell
+Invoke-RestMethod "http://localhost:8090/api/review-quality/dashboard?projectId=1&provider=DEEPSEEK&profile=backend-default-ai-review" |
+  ConvertTo-Json -Depth 20
+```
+
+说明：
+
+- 主指标只来自 `evaluation_cases.verdict`，避免把回放 item 或确定性检查重复计为评估样本。
+- `deterministicCheckSummary` 是项目范围辅助摘要；当按 Provider / Profile / 风险类型 / verdict 过滤时，响应中的 `scopeNote` 会说明这些过滤不能直接应用到确定性检查 run。
+- 规则缺口仍保留为独立诊断入口；M7 不做 finding 级缺口归因，归因放到 M8。
+
+## 确定性检查证据
+
+M6 首版只接入敏感信息扫描。扫描范围限定为当前任务 `changedFilesSummary.files[].diffText` 中的新增行，不做全仓扫描，不执行外部命令；结果只作为结构化证据进入任务详情和 AI Review Context Pack，不会自动阻塞合并、修改 Prompt、修改 Review 结果、降级或忽略 finding。
+
+任务详情页新增“确定性检查”tab，可查看状态、配置快照、耗时、摘要、脱敏命中项和失败原因，并可手动运行或重跑敏感信息扫描。
+
+命令行验证：
+
+```powershell
+# 查询某个任务的确定性检查结果
+Invoke-RestMethod "http://localhost:8090/api/review-tasks/{taskId}/deterministic-checks" |
+  ConvertTo-Json -Depth 20
+
+# 手动触发或重跑敏感信息扫描
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8090/api/review-tasks/{taskId}/deterministic-checks/run" `
+  -ContentType "application/json" `
+  -Body '{"checkType":"SECRET_SCAN"}' |
+  ConvertTo-Json -Depth 20
+```
+
+返回的 `findings[].evidence` 已脱敏，只包含规则命中类型、相对文件路径、行号或 hunk 位置和脱敏证据摘要，不返回真实 secret、token、认证头、大段源码、本地绝对路径或 provider raw output。
+
 ## 代码质量 AI Review
 
 代码质量 Review 默认关闭。兼容环境变量仍可作为初始化默认值：
@@ -1029,6 +1127,9 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/code-quality-revi
 - `任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程、AI Review 调度队列入口。
 - `规则缺口`：聚合高准确模式流转中沉淀的 Planner / Retriever 能力缺口，用于诊断上下文为什么不足；后续会收敛到质量治理 / 高准确模式诊断中，Retriever 优先级需结合评估样本、回放结果和 finding 级归因判断。
 - `反馈池`：默认隐藏；前端构建时启用 `VITE_REVIEW_LEARNING_UI_ENABLED=true` 后可查看风险项 / finding 反馈，继续启用 `VITE_PROJECT_REVIEW_POLICY_UI_ENABLED=true` 后可筛选建议沉淀反馈并管理项目策略。
+- `质量看板`：按项目、Provider、Profile、风险类型和 verdict 聚合评估样本，展示误判率、上下文不足率、等级偏差、重复和漏报，并附带回放、补证据和确定性检查辅助摘要。
+- `评估样本`：查看从 AI finding 或人工补充沉淀的 Review 质量评估样本。
+- `回放记录`：查看 evaluation run / review replay run 的版本元信息、baseline / candidate 和样本结果摘要。
 - 右上角通知图标：查看最近 24 小时内 AI Review 执行失败记录，并可跳转任务详情。
 - `设置`：全局设置、模型 Provider 配置、AI Review 设置、项目组 / 端类型配置、启用的卡片提醒类型；Push 审核策略在 AI Review 设置中按项目组维护。
 - `版本更新`：查看近期功能变化、部署注意和验证提示。

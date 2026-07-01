@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.json_utils import read_json_array
+from app.deterministic_checks.service import latest_security_summary
 from app.project_integration import gitlab_client
 from app.review_feedback.models import ReviewItemFeedback
 from app.review_feedback.repository import ensure_feedback_schema
@@ -188,6 +189,9 @@ def build_review_context_pack(
     _apply_local_reference_availability(requested_contexts, local_reference_pack_context)
     planner_unavailable_contexts = _planner_unavailable_contexts(requested_contexts)
     context_plan["unavailableContextCount"] = len(planner_unavailable_contexts)
+    deterministic_checks = {
+        "securitySummary": latest_security_summary(db, task_id),
+    }
     unavailable_contexts = _unavailable_contexts(
         files,
         source_unavailable_contexts,
@@ -202,6 +206,7 @@ def build_review_context_pack(
         "localRepositoryContext": local_repository_context.get("summary") or {},
         "localReferenceSearch": local_reference_pack_context["summary"],
         "localReferenceContext": local_reference_pack_context,
+        "deterministicChecks": deterministic_checks,
         "contextPlan": context_plan,
         "plannerSignals": planner_signals,
         "requestedContexts": requested_contexts,
@@ -263,6 +268,8 @@ def build_review_context_pack(
         "localReferenceMatchedFileCount": local_reference_summary.get("matchedFileCount", 0),
         "localReferenceSnippetCount": local_reference_summary.get("includedSnippetCount", 0),
         "localReferenceTruncated": bool(local_reference_summary.get("truncated", False)),
+        "deterministicCheckStatus": deterministic_checks["securitySummary"].get("status"),
+        "deterministicCheckFindingCount": deterministic_checks["securitySummary"].get("findingCount", 0),
     }
     return {
         "reviewContext": review_context,
@@ -1417,6 +1424,9 @@ def _progress_summary(context_pack: dict[str, Any], meta: dict[str, Any]) -> dic
         "sameFileSourceFileCount": same_file.get("includedSourceFileCount", 0),
         "localRepository": _local_repository_progress_summary(local_repository),
         "localReferenceSearch": _local_reference_progress_summary(local_reference),
+        "deterministicChecks": {
+            "securitySummary": context_pack.get("deterministicChecks", {}).get("securitySummary") or {},
+        },
         "contextMissingFeedbackTotal": feedback["total"],
         "topMissingContextTypes": feedback["byMissingContextType"][:3],
         "plannerSignalCount": context_plan.get("plannerSignalCount", 0),

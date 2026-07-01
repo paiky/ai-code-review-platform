@@ -1,0 +1,1 @@
+"""Review quality dashboard domain."""

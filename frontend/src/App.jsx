@@ -90,7 +90,9 @@ const HOME_ROUTE = '/';
 const TASK_LIST_ROUTE = '/tasks';
 const RULE_GAPS_ROUTE = '/rule-gaps';
 const FEEDBACK_ROUTE = '/risk-feedback';
+const REVIEW_QUALITY_ROUTE = '/review-quality';
 const EVALUATION_CASES_ROUTE = '/evaluation-cases';
+const EVALUATION_RUNS_ROUTE = '/evaluation-runs';
 const SETTINGS_ROUTE = '/settings';
 const RELEASES_ROUTE = '/releases';
 const HELP_ROUTE = '/help';
@@ -126,6 +128,17 @@ const TASK_REVIEW_STATUS_OPTIONS = [
   { label: '已跳过', value: 'SKIPPED' },
   { label: '审查失败', value: 'REVIEW_FAILED' },
   { label: '任务失败', value: 'TASK_FAILED' }
+];
+const EVALUATION_RUN_TYPE_OPTIONS = [
+  { label: '评估运行', value: 'EVALUATION' },
+  { label: 'Review 回放', value: 'REVIEW_REPLAY' }
+];
+const EVALUATION_RUN_STATUS_OPTIONS = [
+  { label: '待记录', value: 'PENDING' },
+  { label: '记录中', value: 'RUNNING' },
+  { label: '已完成', value: 'COMPLETED' },
+  { label: '失败', value: 'FAILED' },
+  { label: '已取消', value: 'CANCELED' }
 ];
 const DEFAULT_AUTO_FIX_PREVIEW_SEVERITIES = ['CRITICAL'];
 const PROJECT_TARGET_TYPE_OPTIONS = TARGET_TYPE_OPTIONS.filter(item => item.value !== 'APP_CROSS_PLATFORM');
@@ -280,6 +293,11 @@ function resolveBackTarget(location, fallbackPath) {
 
 function JsonBlock({ value }) {
   return <pre className="json-block">{JSON.stringify(value ?? {}, null, 2)}</pre>;
+}
+
+function formatRate(value) {
+  const number = Number(value || 0);
+  return `${(number * 100).toFixed(1)}%`;
 }
 
 function confidenceColor(value) {
@@ -449,6 +467,35 @@ function evaluationCaseVerdictColor(value) {
   if (value === 'DUPLICATE') return 'purple';
   if (value === 'MISSING_FINDING') return 'blue';
   return 'default';
+}
+
+function evaluationRunTypeLabel(value) {
+  return EVALUATION_RUN_TYPE_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function evaluationRunStatusLabel(value) {
+  return EVALUATION_RUN_STATUS_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function evaluationRunStatusColor(value) {
+  switch (value) {
+    case 'COMPLETED':
+      return 'green';
+    case 'FAILED':
+      return 'red';
+    case 'RUNNING':
+      return 'processing';
+    case 'CANCELED':
+      return 'default';
+    case 'PENDING':
+      return 'blue';
+    default:
+      return 'default';
+  }
+}
+
+function compactHash(value) {
+  return value ? String(value).slice(0, 12) : '-';
 }
 
 function projectReviewPolicyTypeLabel(value) {
@@ -3991,6 +4038,111 @@ function CodeQualityReviewsPanel({
   );
 }
 
+function deterministicCheckStatusColor(status) {
+  const normalized = String(status || '').toUpperCase();
+  if (normalized === 'COMPLETED') return 'green';
+  if (normalized === 'FAILED') return 'red';
+  if (normalized === 'NOT_APPLICABLE') return 'default';
+  if (normalized === 'RUNNING') return 'blue';
+  return 'default';
+}
+
+function deterministicCheckStatusText(status) {
+  const normalized = String(status || '').toUpperCase();
+  return {
+    COMPLETED: '已完成',
+    FAILED: '失败',
+    NOT_APPLICABLE: '不适用',
+    NOT_RUN: '未运行',
+    RUNNING: '运行中',
+  }[normalized] || (status || '未运行');
+}
+
+function DeterministicChecksPanel({ checks, running, onRun }) {
+  const latest = checks?.latestRun || null;
+  const status = latest?.status || checks?.status || 'NOT_RUN';
+  const summary = latest?.resultSummary || {};
+  const config = latest?.configSnapshot || {};
+  const findings = safeArray(latest?.findings);
+  const ruleTypeCounts = summary.ruleTypeCounts || {};
+  const findingColumns = [
+    { title: '规则类型', dataIndex: 'ruleType', width: 220, render: value => <Tag color="orange">{value || '-'}</Tag> },
+    { title: '文件', dataIndex: 'filePath', ellipsis: true, render: value => value || '-' },
+    { title: '行号', dataIndex: 'lineNumber', width: 90, render: value => value || '-' },
+    { title: 'Hunk 位置', dataIndex: 'hunkPosition', width: 110, render: value => value || '-' },
+    { title: '脱敏证据', dataIndex: 'evidence', ellipsis: true, render: value => <Text code>{value || '-'}</Text> },
+  ];
+  return (
+    <Space direction="vertical" size="middle" className="full-width">
+      <Card
+        title="确定性检查 · 敏感信息扫描"
+        extra={(
+          <Button icon={<ReloadOutlined />} loading={running} onClick={onRun}>
+            {latest ? '重新运行敏感信息扫描' : '运行敏感信息扫描'}
+          </Button>
+        )}
+      >
+        <Space direction="vertical" size="middle" className="full-width">
+          <Alert
+            type={status === 'FAILED' ? 'error' : 'info'}
+            showIcon
+            message={latest ? '检查结果仅作为结构化证据' : '当前任务暂无确定性检查记录'}
+            description={latest
+              ? '敏感信息扫描只检查当前任务 diff 新增行，命中项已脱敏；结果不会自动阻塞合并、修改 AI Review 或生成项目策略。'
+              : (checks?.explanation || '点击运行后，会扫描当前任务 changed files / diff 的新增行。')}
+          />
+          <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }}>
+            <Descriptions.Item label="状态">
+              <Tag color={deterministicCheckStatusColor(status)}>{deterministicCheckStatusText(status)}</Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="检查类型">{latest?.checkType || 'SECRET_SCAN'}</Descriptions.Item>
+            <Descriptions.Item label="规则集">{config.rulesetVersion || '-'}</Descriptions.Item>
+            <Descriptions.Item label="扫描范围">{config.scope || 'DIFF_ADDED_LINES'}</Descriptions.Item>
+            <Descriptions.Item label="扫描文件数"><Text strong>{countText(summary.scannedFileCount)}</Text></Descriptions.Item>
+            <Descriptions.Item label="新增行数"><Text strong>{countText(summary.addedLineCount)}</Text></Descriptions.Item>
+            <Descriptions.Item label="命中数"><Text strong>{countText(summary.findingCount)}</Text></Descriptions.Item>
+            <Descriptions.Item label="耗时">{latest?.durationMs != null ? `${latest.durationMs} ms` : '-'}</Descriptions.Item>
+            <Descriptions.Item label="结果截断">
+              {summary.truncated ? <Tag color="orange">已截断</Tag> : <Tag>未截断</Tag>}
+            </Descriptions.Item>
+            <Descriptions.Item label="配置来源">{config.configSource || '-'}</Descriptions.Item>
+            <Descriptions.Item label="最大命中数">{config.maxFindings ?? '-'}</Descriptions.Item>
+            <Descriptions.Item label="完成时间">{latest?.finishedAt || '-'}</Descriptions.Item>
+          </Descriptions>
+          {latest?.failureReason && (
+            <Alert type="warning" showIcon message="失败原因" description={latest.failureReason} />
+          )}
+          <Card size="small" title="规则命中摘要">
+            {Object.keys(ruleTypeCounts).length === 0 ? (
+              <Empty description="暂无规则命中" />
+            ) : (
+              <Space wrap>
+                {Object.entries(ruleTypeCounts).map(([ruleType, count]) => (
+                  <Tag key={ruleType} color="orange">{ruleType}: {countText(count)}</Tag>
+                ))}
+              </Space>
+            )}
+          </Card>
+          <Card size="small" title="命中项">
+            {findings.length === 0 ? (
+              <Empty description="暂无命中项" />
+            ) : (
+              <Table
+                rowKey={(row, index) => `${row.ruleType}-${row.filePath}-${row.lineNumber || row.hunkPosition}-${index}`}
+                size="small"
+                columns={findingColumns}
+                dataSource={findings}
+                pagination={false}
+                scroll={{ x: 900 }}
+              />
+            )}
+          </Card>
+        </Space>
+      </Card>
+    </Space>
+  );
+}
+
 function TaskDetail({ taskId, onBack, onOpen }) {
   const location = useLocation();
   const selectedReviewKey = new URLSearchParams(location.search).get('reviewKey');
@@ -4001,9 +4153,11 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   const [codeQualityProgress, setCodeQualityProgress] = useState([]);
   const [codeQualityGate, setCodeQualityGate] = useState(null);
   const [fixPreviews, setFixPreviews] = useState([]);
+  const [deterministicChecks, setDeterministicChecks] = useState(null);
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [rerunning, setRerunning] = useState(false);
+  const [runningDeterministicCheck, setRunningDeterministicCheck] = useState(false);
   const [error, setError] = useState(null);
   const [activeTabKey, setActiveTabKey] = useState('quality');
 
@@ -4053,6 +4207,12 @@ function TaskDetail({ taskId, onBack, onOpen }) {
         setFixPreviews(Array.isArray(previews) ? previews : []);
       } catch {
         setFixPreviews([]);
+      }
+      try {
+        const checks = await fetchApi(`/api/review-tasks/${taskId}/deterministic-checks`);
+        setDeterministicChecks(checks);
+      } catch {
+        setDeterministicChecks(null);
       }
     } catch (err) {
       setError(err.message);
@@ -4159,6 +4319,29 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     }
   };
 
+  const runDeterministicCheck = async () => {
+    setRunningDeterministicCheck(true);
+    setError(null);
+    try {
+      const run = await fetchApi(`/api/review-tasks/${taskId}/deterministic-checks/run`, {
+        method: 'POST',
+        body: JSON.stringify({ checkType: 'SECRET_SCAN' })
+      });
+      setDeterministicChecks(current => ({
+        taskId,
+        status: run.status,
+        latestRun: run,
+        runs: [run, ...safeArray(current?.runs).filter(item => item.id !== run.id)].slice(0, 10),
+        explanation: null,
+      }));
+      message.success('敏感信息扫描已完成');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRunningDeterministicCheck(false);
+    }
+  };
+
   const rerunReviewTask = async () => {
     setRerunning(true);
     setError(null);
@@ -4196,6 +4379,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 
   const tabItems = useMemo(() => [
     { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} diffContextCapabilities={detail?.diffContextCapabilities} fixPreviews={fixPreviews} selectedReviewKey={selectedReviewKey} onRefresh={() => load({ silent: true })} onRetry={retryCodeQualityReview} retrying={retrying} onCancelReview={cancelCodeQualityJob} onCancelFixPreview={cancelCodeQualityJob} /> },
+    { key: 'deterministic', label: '确定性检查', children: <DeterministicChecksPanel checks={deterministicChecks} running={runningDeterministicCheck} onRun={runDeterministicCheck} /> },
     ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
       ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
       : []),
@@ -4204,7 +4388,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       : []),
     { key: 'analysis', label: '分析结果', children: <AnalysisView changeAnalysis={result?.changeAnalysis} /> },
     { key: 'event', label: '原始事件摘要', children: <Row gutter={[16, 16]}><Col xs={24} lg={12}><Card title="changedFiles 摘要"><JsonBlock value={detail?.changedFilesSummary} /></Card></Col><Col xs={24} lg={12}><Card title="raw payload"><JsonBlock value={detail?.rawPayload} /></Card></Col></Row> }
-  ], [taskId, detail, result, codeQualityResults, codeQualityProgress, codeQualityGate, fixPreviews, selectedReviewKey, retrying]);
+  ], [taskId, detail, result, codeQualityResults, codeQualityProgress, codeQualityGate, fixPreviews, deterministicChecks, selectedReviewKey, retrying, runningDeterministicCheck]);
   const displayedActiveTabKey = tabItems.some(item => item.key === activeTabKey)
     ? activeTabKey
     : tabItems[0]?.key;
@@ -7284,6 +7468,256 @@ function HelpPage() {
   );
 }
 
+function ReviewQualityDashboardPage() {
+  const [dashboard, setDashboard] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [filters, setFilters] = useState({
+    projectId: null,
+    provider: '',
+    profile: '',
+    riskType: '',
+    verdict: null
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const projectOptions = useMemo(
+    () => projects.map(project => ({ label: project.name, value: project.id })),
+    [projects]
+  );
+
+  const loadProjects = async () => {
+    try {
+      const data = await fetchApi('/api/projects?includeDisabled=true');
+      setProjects(data.items || []);
+    } catch {
+      setProjects([]);
+    }
+  };
+
+  const load = async ({ nextFilters = filters } = {}) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (nextFilters.projectId) params.set('projectId', String(nextFilters.projectId));
+      if (nextFilters.provider?.trim()) params.set('provider', nextFilters.provider.trim());
+      if (nextFilters.profile?.trim()) params.set('profile', nextFilters.profile.trim());
+      if (nextFilters.riskType?.trim()) params.set('riskType', nextFilters.riskType.trim());
+      if (nextFilters.verdict) params.set('verdict', nextFilters.verdict);
+      const query = params.toString();
+      const data = await fetchApi(`/api/review-quality/dashboard${query ? `?${query}` : ''}`);
+      setDashboard(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProjects();
+    load();
+  }, []);
+
+  const updateFilter = (field, value) => {
+    setFilters(current => ({
+      ...current,
+      [field]: value === undefined ? null : value
+    }));
+  };
+
+  const resetFilters = () => {
+    const nextFilters = {
+      projectId: null,
+      provider: '',
+      profile: '',
+      riskType: '',
+      verdict: null
+    };
+    setFilters(nextFilters);
+    load({ nextFilters });
+  };
+
+  const summary = dashboard?.summary || {};
+  const dimensionColumns = [
+    { title: '维度', dataIndex: 'label', ellipsis: true, render: (value, row) => value || row.key || '-' },
+    { title: '样本数', dataIndex: 'sampleCount', width: 90, render: value => value ?? 0 },
+    { title: '误判', dataIndex: 'falsePositiveCount', width: 80, render: value => value ?? 0 },
+    { title: '误判率', dataIndex: 'falsePositiveRate', width: 90, render: value => formatRate(value) },
+    { title: '上下文不足', dataIndex: 'contextMissingCount', width: 110, render: value => value ?? 0 },
+    { title: '上下文不足率', dataIndex: 'contextMissingRate', width: 120, render: value => formatRate(value) },
+    { title: '等级偏高', dataIndex: 'levelTooHighCount', width: 100, render: value => value ?? 0 },
+    { title: '等级偏低', dataIndex: 'levelTooLowCount', width: 100, render: value => value ?? 0 },
+    { title: '重复', dataIndex: 'duplicateFindingCount', width: 80, render: value => value ?? 0 },
+    { title: '漏报', dataIndex: 'missingFindingCount', width: 80, render: value => value ?? 0 }
+  ];
+  const verdictColumns = [
+    {
+      title: '裁决',
+      dataIndex: 'verdict',
+      render: value => <Tag color={evaluationCaseVerdictColor(value)}>{evaluationCaseVerdictLabel(value)}</Tag>
+    },
+    { title: '数量', dataIndex: 'count', width: 100, render: value => value ?? 0 }
+  ];
+  const metricCards = [
+    { label: '样本数', value: summary.sampleCount ?? 0 },
+    { label: '误判数 / 率', value: `${summary.falsePositiveCount ?? 0} / ${formatRate(summary.falsePositiveRate)}` },
+    { label: '上下文不足 / 率', value: `${summary.contextMissingCount ?? 0} / ${formatRate(summary.contextMissingRate)}` },
+    { label: '等级偏高', value: summary.levelTooHighCount ?? 0 },
+    { label: '等级偏低', value: summary.levelTooLowCount ?? 0 },
+    { label: '重复 finding', value: summary.duplicateFindingCount ?? 0 },
+    { label: '漏报样本', value: summary.missingFindingCount ?? 0 }
+  ];
+  const replaySummary = dashboard?.replaySummary || {};
+  const refinementSummary = dashboard?.refinementSummary || {};
+  const deterministicSummary = dashboard?.deterministicCheckSummary || {};
+
+  return (
+    <div className="page-shell">
+      <Space direction="vertical" size="large" className="full-width">
+        <div className="page-title-row">
+          <div>
+            <Title level={3}>质量看板</Title>
+            <Text type="secondary">基于评估样本、回放记录、补证据和确定性检查的最小 Review 质量治理视图。</Text>
+          </div>
+          <Button icon={<ReloadOutlined />} onClick={() => load()}>刷新</Button>
+        </div>
+        <Card>
+          <Space wrap className="task-filter-bar">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              className="filter-select"
+              placeholder="项目"
+              value={filters.projectId || undefined}
+              options={projectOptions}
+              onChange={value => updateFilter('projectId', value)}
+            />
+            <Input
+              allowClear
+              className="filter-input"
+              placeholder="Provider"
+              value={filters.provider}
+              onChange={event => updateFilter('provider', event.target.value)}
+              onPressEnter={() => load()}
+            />
+            <Input
+              allowClear
+              className="filter-input"
+              placeholder="Profile"
+              value={filters.profile}
+              onChange={event => updateFilter('profile', event.target.value)}
+              onPressEnter={() => load()}
+            />
+            <Input
+              allowClear
+              className="filter-input"
+              placeholder="风险类型"
+              value={filters.riskType}
+              onChange={event => updateFilter('riskType', event.target.value)}
+              onPressEnter={() => load()}
+            />
+            <Select
+              allowClear
+              className="filter-select"
+              placeholder="人工裁决"
+              value={filters.verdict || undefined}
+              options={EVALUATION_CASE_VERDICT_OPTIONS}
+              onChange={value => updateFilter('verdict', value)}
+            />
+            <Button type="primary" icon={<SearchOutlined />} onClick={() => load()}>搜索</Button>
+            <Button onClick={resetFilters}>重置</Button>
+          </Space>
+        </Card>
+        {error && <Alert type="error" showIcon message={error} />}
+        <Spin spinning={loading}>
+          <Space direction="vertical" size="large" className="full-width">
+            <Row gutter={[16, 16]}>
+              {metricCards.map(item => (
+                <Col xs={24} sm={12} md={8} lg={6} xl={4} key={item.label}>
+                  <Card size="small">
+                    <Text type="secondary">{item.label}</Text>
+                    <Title level={4}>{item.value}</Title>
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+            <Row gutter={[16, 16]}>
+              <Col xs={24} lg={8}>
+                <Card title="Verdict 分布">
+                  <Table
+                    rowKey="verdict"
+                    size="small"
+                    columns={verdictColumns}
+                    dataSource={dashboard?.verdictDistribution || []}
+                    pagination={false}
+                  />
+                </Card>
+              </Col>
+              <Col xs={24} lg={16}>
+                <Card title="辅助诊断摘要">
+                  <Descriptions column={2} size="small" bordered>
+                    <Descriptions.Item label="回放 item">{replaySummary.itemCount ?? 0}</Descriptions.Item>
+                    <Descriptions.Item label="回放完成 / 失败">{replaySummary.completedCount ?? 0} / {replaySummary.failedCount ?? 0}</Descriptions.Item>
+                    <Descriptions.Item label="回放平均耗时">{replaySummary.durationMsAvg ?? 0} ms</Descriptions.Item>
+                    <Descriptions.Item label="补证据完成 / 失败">{refinementSummary.completedCount ?? 0} / {refinementSummary.failedCount ?? 0}</Descriptions.Item>
+                    <Descriptions.Item label="确定性检查 run">{deterministicSummary.runCount ?? 0}</Descriptions.Item>
+                    <Descriptions.Item label="确定性命中">{deterministicSummary.findingCount ?? 0}</Descriptions.Item>
+                    <Descriptions.Item label="补证据范围" span={2}>{refinementSummary.scopeNote || '-'}</Descriptions.Item>
+                    <Descriptions.Item label="确定性检查范围" span={2}>{deterministicSummary.scopeNote || '-'}</Descriptions.Item>
+                  </Descriptions>
+                </Card>
+              </Col>
+            </Row>
+            <Card title="项目维度 Top">
+              <Table
+                rowKey="key"
+                size="small"
+                columns={dimensionColumns}
+                dataSource={dashboard?.dimensions?.projects || []}
+                pagination={false}
+                scroll={{ x: 1020 }}
+              />
+            </Card>
+            <Card title="Provider 维度 Top">
+              <Table
+                rowKey="key"
+                size="small"
+                columns={dimensionColumns}
+                dataSource={dashboard?.dimensions?.providers || []}
+                pagination={false}
+                scroll={{ x: 1020 }}
+              />
+            </Card>
+            <Card title="Profile 维度 Top">
+              <Table
+                rowKey="key"
+                size="small"
+                columns={dimensionColumns}
+                dataSource={dashboard?.dimensions?.profiles || []}
+                pagination={false}
+                scroll={{ x: 1020 }}
+              />
+            </Card>
+            <Card title="风险类型维度 Top">
+              <Table
+                rowKey="key"
+                size="small"
+                columns={dimensionColumns}
+                dataSource={dashboard?.dimensions?.riskTypes || []}
+                pagination={false}
+                scroll={{ x: 1020 }}
+              />
+            </Card>
+          </Space>
+        </Spin>
+      </Space>
+    </div>
+  );
+}
+
 function EvaluationCasesPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -7478,6 +7912,326 @@ function EvaluationCasesPage() {
   );
 }
 
+function EvaluationRunsPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const route = currentRoute(location);
+  const [items, setItems] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [pagination, setPagination] = useState({ pageNo: 1, pageSize: 20, total: 0 });
+  const [filters, setFilters] = useState({
+    projectId: null,
+    provider: '',
+    profile: '',
+    runType: null,
+    status: null
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const projectOptions = useMemo(
+    () => projects.map(project => ({ label: project.name, value: project.id })),
+    [projects]
+  );
+
+  const loadProjects = async () => {
+    try {
+      const data = await fetchApi('/api/projects?includeDisabled=true');
+      setProjects(data.items || []);
+    } catch {
+      setProjects([]);
+    }
+  };
+
+  const load = async ({ pageNo = pagination.pageNo, pageSize = pagination.pageSize, nextFilters = filters } = {}) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set('pageNo', String(pageNo));
+      params.set('pageSize', String(pageSize));
+      if (nextFilters.projectId) params.set('projectId', String(nextFilters.projectId));
+      if (nextFilters.provider?.trim()) params.set('provider', nextFilters.provider.trim());
+      if (nextFilters.profile?.trim()) params.set('profile', nextFilters.profile.trim());
+      if (nextFilters.runType) params.set('runType', nextFilters.runType);
+      if (nextFilters.status) params.set('status', nextFilters.status);
+      const data = await fetchApi(`/api/evaluation-runs?${params.toString()}`);
+      setItems(data.items || []);
+      setPagination({ pageNo: data.pageNo || pageNo, pageSize: data.pageSize || pageSize, total: data.total || 0 });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProjects();
+    load({ pageNo: 1 });
+  }, []);
+
+  const updateFilter = (field, value) => {
+    setFilters(current => ({
+      ...current,
+      [field]: value === undefined ? null : value
+    }));
+  };
+
+  const resetFilters = () => {
+    const nextFilters = {
+      projectId: null,
+      provider: '',
+      profile: '',
+      runType: null,
+      status: null
+    };
+    setFilters(nextFilters);
+    load({ pageNo: 1, nextFilters });
+  };
+
+  const columns = [
+    { title: 'ID', dataIndex: 'id', width: 80 },
+    {
+      title: '名称',
+      dataIndex: 'name',
+      width: 240,
+      ellipsis: true,
+      render: (value, row) => (
+        <Button type="link" onClick={() => navigate(`${EVALUATION_RUNS_ROUTE}/${row.id}`, { state: { from: route } })}>
+          {value || `Run #${row.id}`}
+        </Button>
+      )
+    },
+    { title: '类型', dataIndex: 'runType', width: 120, render: value => <Tag>{evaluationRunTypeLabel(value)}</Tag> },
+    { title: '状态', dataIndex: 'status', width: 110, render: value => <Tag color={evaluationRunStatusColor(value)}>{evaluationRunStatusLabel(value)}</Tag> },
+    { title: '样本集', dataIndex: 'sampleSetName', width: 180, ellipsis: true, render: value => value || '-' },
+    { title: '样本数', dataIndex: 'totalCount', width: 90, render: value => value ?? 0 },
+    { title: '完成', dataIndex: 'completedCount', width: 90, render: value => value ?? 0 },
+    { title: '失败', dataIndex: 'failedCount', width: 90, render: value => value ?? 0 },
+    { title: '项目', dataIndex: 'projectName', width: 180, ellipsis: true, render: value => value || '-' },
+    { title: 'Provider', dataIndex: 'provider', width: 120, ellipsis: true, render: value => value || '-' },
+    { title: 'Profile', dataIndex: 'profile', width: 190, ellipsis: true, render: value => value || '-' },
+    { title: 'Model', dataIndex: 'model', width: 160, ellipsis: true, render: value => value || '-' },
+    { title: 'Prompt Hash', dataIndex: 'promptHash', width: 140, render: value => <Text code>{compactHash(value)}</Text> },
+    { title: 'Baseline', dataIndex: 'baseline', width: 150, ellipsis: true, render: value => value?.label || value?.promptHash || '-' },
+    { title: 'Candidate', dataIndex: 'candidate', width: 150, ellipsis: true, render: value => value?.label || value?.promptHash || '-' },
+    { title: '耗时', dataIndex: 'durationMs', width: 100, render: value => value == null ? '-' : `${value} ms` },
+    { title: '创建时间', dataIndex: 'createdAt', width: 180, render: value => value || '-' }
+  ];
+
+  return (
+    <div className="page-shell">
+      <Space direction="vertical" size="large" className="full-width">
+        <div className="page-title-row">
+          <div>
+            <Title level={3}>回放记录</Title>
+            <Text type="secondary">查看 evaluation run / review replay run 的版本记录和样本结果摘要。</Text>
+          </div>
+        </div>
+        <Card>
+          <Space wrap className="task-filter-bar">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              className="filter-select"
+              placeholder="项目"
+              value={filters.projectId || undefined}
+              options={projectOptions}
+              onChange={value => updateFilter('projectId', value)}
+            />
+            <Input
+              allowClear
+              className="filter-input"
+              placeholder="Provider"
+              value={filters.provider}
+              onChange={event => updateFilter('provider', event.target.value)}
+              onPressEnter={() => load({ pageNo: 1 })}
+            />
+            <Input
+              allowClear
+              className="filter-input"
+              placeholder="Profile"
+              value={filters.profile}
+              onChange={event => updateFilter('profile', event.target.value)}
+              onPressEnter={() => load({ pageNo: 1 })}
+            />
+            <Select
+              allowClear
+              className="filter-select"
+              placeholder="类型"
+              value={filters.runType || undefined}
+              options={EVALUATION_RUN_TYPE_OPTIONS}
+              onChange={value => updateFilter('runType', value)}
+            />
+            <Select
+              allowClear
+              className="filter-select"
+              placeholder="状态"
+              value={filters.status || undefined}
+              options={EVALUATION_RUN_STATUS_OPTIONS}
+              onChange={value => updateFilter('status', value)}
+            />
+            <Button type="primary" icon={<SearchOutlined />} onClick={() => load({ pageNo: 1 })}>搜索</Button>
+            <Button onClick={resetFilters}>重置</Button>
+          </Space>
+        </Card>
+        {error && <Alert type="error" showIcon message={error} />}
+        <Card>
+          <Table
+            rowKey="id"
+            loading={loading}
+            columns={columns}
+            dataSource={items}
+            tableLayout="fixed"
+            scroll={{ x: 2260 }}
+            pagination={{
+              current: pagination.pageNo,
+              pageSize: pagination.pageSize,
+              total: pagination.total,
+              showTotal: total => `共 ${total} 条`,
+              onChange: (pageNo, pageSize) => load({ pageNo, pageSize })
+            }}
+          />
+        </Card>
+      </Space>
+    </div>
+  );
+}
+
+function EvaluationRunDetailPage() {
+  const { runId } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = resolveBackTarget(location, EVALUATION_RUNS_ROUTE);
+  const [run, setRun] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const load = async () => {
+    if (!runId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchApi(`/api/evaluation-runs/${runId}`);
+      setRun(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [runId]);
+
+  const columns = [
+    { title: '#', dataIndex: 'itemIndex', width: 70, render: value => Number(value ?? 0) + 1 },
+    { title: 'Case ID', dataIndex: 'caseId', width: 100 },
+    {
+      title: '任务',
+      dataIndex: 'taskId',
+      width: 100,
+      render: value => value ? (
+        <Button type="link" onClick={() => navigate(`/tasks/${value}`, { state: { from: currentRoute(location) } })}>
+          #{value}
+        </Button>
+      ) : '-'
+    },
+    { title: '状态', dataIndex: 'status', width: 110, render: value => <Tag color={evaluationRunStatusColor(value)}>{evaluationRunStatusLabel(value)}</Tag> },
+    { title: '裁决', dataIndex: 'verdict', width: 130, render: value => <Tag color={evaluationCaseVerdictColor(value)}>{evaluationCaseVerdictLabel(value)}</Tag> },
+    { title: '风险类型', dataIndex: 'riskType', width: 130, render: value => value ? <Tag color="blue">{categoryLabel(value)}</Tag> : '-' },
+    { title: '等级', dataIndex: 'severity', width: 100, render: value => value ? <Tag color={severityColor(value)}>{severityLabel(value)}</Tag> : '-' },
+    { title: '上下文', dataIndex: 'contextStatus', width: 110, render: value => value ? <Tag color={contextStatusColor(value)}>{contextStatusLabel(value)}</Tag> : '-' },
+    { title: 'Provider', dataIndex: 'provider', width: 120, ellipsis: true, render: value => value || '-' },
+    { title: 'Profile', dataIndex: 'profile', width: 190, ellipsis: true, render: value => value || '-' },
+    { title: 'Review Key', dataIndex: 'reviewKey', width: 150, ellipsis: true, render: value => value || '-' },
+    { title: '耗时', dataIndex: 'durationMs', width: 100, render: value => value == null ? '-' : `${value} ms` },
+    { title: 'Baseline', dataIndex: 'baselineSummary', width: 220, render: value => value ? <JsonBlock value={value} /> : '-' },
+    { title: 'Candidate', dataIndex: 'candidateSummary', width: 220, render: value => value ? <JsonBlock value={value} /> : '-' },
+    { title: '结果摘要', dataIndex: 'resultSummary', width: 240, render: value => value ? <JsonBlock value={value} /> : '-' },
+    { title: '错误', dataIndex: 'errorMessage', width: 180, ellipsis: true, render: value => value || '-' }
+  ];
+
+  return (
+    <div className="page-shell">
+      <Space direction="vertical" size="large" className="full-width">
+        <div className="page-title-row">
+          <Space>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(backTarget)}>返回</Button>
+            <div>
+              <Title level={3}>回放详情</Title>
+              <Text type="secondary">Run #{runId}</Text>
+            </div>
+          </Space>
+          <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+        </div>
+        {error && <Alert type="error" showIcon message={error} />}
+        <Spin spinning={loading}>
+          {run ? (
+            <Space direction="vertical" size="large" className="full-width">
+              <Card>
+                <Descriptions column={2} bordered size="small">
+                  <Descriptions.Item label="名称">{run.name || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="状态"><Tag color={evaluationRunStatusColor(run.status)}>{evaluationRunStatusLabel(run.status)}</Tag></Descriptions.Item>
+                  <Descriptions.Item label="类型">{evaluationRunTypeLabel(run.runType)}</Descriptions.Item>
+                  <Descriptions.Item label="样本集">{run.sampleSetName || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="项目">{run.projectName || run.projectId || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="Provider">{run.provider || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="Profile">{run.profile || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="Model">{run.model || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="Prompt Hash"><Text code>{compactHash(run.promptHash)}</Text></Descriptions.Item>
+                  <Descriptions.Item label="Context Pack">{run.contextPackVersion || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="Retriever">{run.retrieverVersion || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="规则缺口版本">{run.ruleGapVersion || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="样本数">{run.totalCount ?? 0}</Descriptions.Item>
+                  <Descriptions.Item label="完成 / 失败">{run.completedCount ?? 0} / {run.failedCount ?? 0}</Descriptions.Item>
+                  <Descriptions.Item label="耗时">{run.durationMs == null ? '-' : `${run.durationMs} ms`}</Descriptions.Item>
+                  <Descriptions.Item label="创建时间">{run.createdAt || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="说明" span={2}>{run.notes || '-'}</Descriptions.Item>
+                </Descriptions>
+              </Card>
+              <Row gutter={[16, 16]}>
+                <Col xs={24} lg={8}>
+                  <Card title="Sample Set">
+                    <JsonBlock value={run.sampleSet || {}} />
+                  </Card>
+                </Col>
+                <Col xs={24} lg={8}>
+                  <Card title="Baseline">
+                    <JsonBlock value={run.baseline || {}} />
+                  </Card>
+                </Col>
+                <Col xs={24} lg={8}>
+                  <Card title="Candidate">
+                    <JsonBlock value={run.candidate || {}} />
+                  </Card>
+                </Col>
+              </Row>
+              <Card title="结果摘要">
+                <JsonBlock value={run.resultSummary || {}} />
+              </Card>
+              <Card title="样本结果">
+                <Table
+                  rowKey="id"
+                  columns={columns}
+                  dataSource={run.items || []}
+                  tableLayout="fixed"
+                  scroll={{ x: 2360 }}
+                  pagination={false}
+                />
+              </Card>
+            </Space>
+          ) : (
+            !loading && <Empty description="暂无回放记录" />
+          )}
+        </Spin>
+      </Space>
+    </div>
+  );
+}
+
 function HomePage() {
   const location = useLocation();
   const legacyTaskId = new URLSearchParams(location.search).get('taskId');
@@ -7496,7 +8250,9 @@ function AppFrame() {
   const isTaskRoute = location.pathname === HOME_ROUTE || location.pathname.startsWith(TASK_LIST_ROUTE);
   const isRuleGapRoute = location.pathname.startsWith(RULE_GAPS_ROUTE);
   const isFeedbackRoute = location.pathname.startsWith(FEEDBACK_ROUTE);
+  const isReviewQualityRoute = location.pathname.startsWith(REVIEW_QUALITY_ROUTE);
   const isEvaluationCasesRoute = location.pathname.startsWith(EVALUATION_CASES_ROUTE);
+  const isEvaluationRunsRoute = location.pathname.startsWith(EVALUATION_RUNS_ROUTE);
   const isSettingsRoute = location.pathname.startsWith(SETTINGS_ROUTE);
   const isReleaseRoute = location.pathname.startsWith(RELEASES_ROUTE);
   const isHelpRoute = location.pathname.startsWith(HELP_ROUTE);
@@ -7599,11 +8355,25 @@ function AppFrame() {
             </Button>
           )}
           <Button
+            icon={<ClusterOutlined />}
+            type={isReviewQualityRoute ? 'primary' : 'default'}
+            onClick={() => navigate(REVIEW_QUALITY_ROUTE, { state: { from: route } })}
+          >
+            质量看板
+          </Button>
+          <Button
             icon={<CommentOutlined />}
             type={isEvaluationCasesRoute ? 'primary' : 'default'}
             onClick={() => navigate(EVALUATION_CASES_ROUTE, { state: { from: route } })}
           >
             评估样本
+          </Button>
+          <Button
+            icon={<ClusterOutlined />}
+            type={isEvaluationRunsRoute ? 'primary' : 'default'}
+            onClick={() => navigate(EVALUATION_RUNS_ROUTE, { state: { from: route } })}
+          >
+            回放记录
           </Button>
           <Button
             icon={<SettingOutlined />}
@@ -7663,7 +8433,10 @@ function AppFrame() {
             path={FEEDBACK_ROUTE}
             element={REVIEW_LEARNING_UI_ENABLED ? <RiskFeedbackPage /> : <Navigate to={TASK_LIST_ROUTE} replace />}
           />
+          <Route path={REVIEW_QUALITY_ROUTE} element={<ReviewQualityDashboardPage />} />
           <Route path={EVALUATION_CASES_ROUTE} element={<EvaluationCasesPage />} />
+          <Route path={EVALUATION_RUNS_ROUTE} element={<EvaluationRunsPage />} />
+          <Route path={`${EVALUATION_RUNS_ROUTE}/:runId`} element={<EvaluationRunDetailPage />} />
           <Route path={SETTINGS_ROUTE} element={<SettingsPage />} />
           <Route path={RELEASES_ROUTE} element={<ReleaseNotesPage />} />
           <Route path={HELP_ROUTE} element={<HelpPage />} />
