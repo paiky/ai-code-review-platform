@@ -25,6 +25,7 @@ from app.project_review_policy.api import project_policy_router
 from app.review_feedback.api import feedback_pool_router
 from app.review_feedback.api import task_feedback_router
 from app.review_quality.api import router as review_quality_router
+from app.review_quality_acceptance.api import router as review_quality_acceptance_router
 from app.review_record.api import router as review_task_router
 from app.rule_template.api import router as rule_template_router
 
@@ -70,6 +71,7 @@ def create_app() -> FastAPI:
     app.include_router(evaluation_router)
     app.include_router(evaluation_run_router)
     app.include_router(review_quality_router)
+    app.include_router(review_quality_acceptance_router)
 
     @app.get("/api/health")
     async def health() -> dict:

@@ -25,6 +25,11 @@ class EvaluationCase(Base):
     human_comment: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     item_snapshot_json: Mapped[str | None] = mapped_column(Text)
+    rule_gap_attribution_type: Mapped[str | None] = mapped_column(String(64))
+    rule_gap_summary_json: Mapped[str | None] = mapped_column(Text)
+    rule_gap_attribution_comment: Mapped[str | None] = mapped_column(Text)
+    rule_gap_attributed_by: Mapped[str | None] = mapped_column(String(128))
+    rule_gap_attributed_at: Mapped[object | None] = mapped_column(DateTime)
     created_at: Mapped[object | None] = mapped_column(DateTime)
     updated_at: Mapped[object | None] = mapped_column(DateTime)
 

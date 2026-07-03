@@ -36,10 +36,10 @@ def test_chat_prompt_uses_android_profile_as_review_role() -> None:
     assert "上下文不足时不要武断输出高风险或紧急" in system
     assert "Context Planner 只提示本次可能缺少的证据" in system
     assert "本地引用证据只表示" in system
-    assert "字段引用和 DB / Mapper / Entity snippets 也只是有限证据" in system
+    assert "字段引用、缓存使用和 DB / Mapper / Entity snippets 也只是有限证据" in system
     assert "关键字段引用" in system
     assert "notInjectedEvidence / BUDGET_CUT" in system
-    assert "DB_SQL_MAPPER_CHANGED、DTO_FIELD_CHANGED、FIELD_DELETED、METHOD_SIGNATURE_CHANGED、METHOD_DELETED" in system
+    assert "DB_SQL_MAPPER_CHANGED、CACHE_WRITE_DELETE_CHANGED、DTO_FIELD_CHANGED、FIELD_DELETED、METHOD_SIGNATURE_CHANGED、METHOD_DELETED" in system
     assert "不能输出 HIGH confidence" in system
 
 

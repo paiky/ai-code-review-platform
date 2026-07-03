@@ -14,6 +14,7 @@
 
 - `docs/36-review-platform-current-roadmap.md`：**当前后续推进唯一总控入口**，说明 Review 平台准确率路线、必须 / 可选能力、当前缺口和下一阶段顺序。
 - `docs/37-review-platform-target-product-roadmap.md`：完整产品目标路线，说明最终产品形态、用户体验、长期阶段和完整验收标准。
+- `docs/38-review-lifecycle-and-frontend-entrypoints.md`：Review 生命周期与前端入口说明，按设置、任务、评估样本、规则缺口、质量看板、验收记录、回放记录和反馈池解释使用时机。
 - `docs/23-help-gitlab-dingtalk-project-onboarding.md`：接入帮助页文档源，面向首次接入用户，按 GitLab Webhook、钉钉机器人、项目组和模型配置组织。
 - `docs/26-gitlab-diff-context-expansion-plan.md`：GitLab 风格 Diff 上下文展开与暗黑语法高亮分阶段实施计划。
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
@@ -88,7 +89,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持配置 / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、项目组多模型并行 Review、自动触发、重试、执行过程展示。
 - AI Review finding 支持展示上下文状态、置信度、判断依据、缺失上下文和上下文摘要；当模型只能基于 diff 判断时，Prompt 会要求输出“部分 / 不足”上下文状态，避免证据不足时武断判为高风险。
-- 高准确模式的本地引用检索已支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED / DTO_FIELD_CHANGED / FIELD_DELETED / DB_SQL_MAPPER_CHANGED`；DTO / VO 字段变更会按字段名、getter、setter 做有限引用搜索，DB / Mapper / Entity 变更会按表名、字段名、Mapper 方法名和 Entity 名做有限关联检索，并按高误判 signal 优先保留关键证据。若 snippets 因预算被裁剪，Context Pack 会注入 `notInjectedEvidence` 安全摘要，提示模型存在未注入证据，避免把缺失误解成不存在。
+- 高准确模式的本地引用检索已支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED / DTO_FIELD_CHANGED / FIELD_DELETED / DB_SQL_MAPPER_CHANGED / CACHE_WRITE_DELETE_CHANGED`；DTO / VO 字段变更会按字段名、getter、setter 做有限引用搜索，DB / Mapper / Entity 变更会按表名、字段名、Mapper 方法名和 Entity 名做有限关联检索，缓存写入 / 删除变更会按 cache key、cache name、key expression 和必要操作 token 做有限读写链路检索，并按高误判 signal 优先保留关键证据。若 snippets 因预算被裁剪，Context Pack 会注入 `notInjectedEvidence` 安全摘要，提示模型存在未注入证据，避免把缺失误解成不存在。
 - GitLab MR 自动 AI Review 完成后会向任务所属项目组中已启用的钉钉 webhook 推送“代码质量 Review”结果；项目组未配置机器人时记录为 `SKIPPED`，不会回退推送到默认项目组。
 - GitLab Push webhook 会先按项目组 Push 审核策略中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会根据文件数、diff 大小、commit 数、硬上限和 debounce 自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
 
@@ -671,7 +672,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/review-tasks/$tas
 
 前端任务详情页包含：
 
-- 代码质量 Review：按模型展示 AI Review 结果，并在 Review 内提供“高准确模式流转”和“执行过程”子页；高准确模式流转会展示变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider、结果解析和 finding 级补证据状态，以及本任务规则缺口。若本地仓库已准备但引用查询数为 0，会说明是没有支持的 signal、Retriever 被跳过或检索失败；若预算裁剪导致引用 snippets 未注入，会展示 signal、requested context、查询摘要、命中文件数、裁剪 snippet 数、top 相对路径和裁剪原因，不展示源码。DB / Mapper / Entity 关联检索只基于当前 worktree 中的 SQL、Mapper、Entity 和迁移脚本，不连接运行期数据库，也不读取生产 schema。
+- 代码质量 Review：按模型展示 AI Review 结果，并在 Review 内提供“高准确模式流转”和“执行过程”子页；高准确模式流转会展示变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider、结果解析和 finding 级补证据状态，以及本任务规则缺口。若本地仓库已准备但引用查询数为 0，会说明是没有支持的 signal、Retriever 被跳过或检索失败；若预算裁剪导致引用 snippets 未注入，会展示 signal、requested context、查询摘要、命中文件数、裁剪 snippet 数、top 相对路径和裁剪原因，不展示源码。DB / Mapper / Entity 关联检索只基于当前 worktree 中的 SQL、Mapper、Entity 和迁移脚本，不连接运行期数据库，也不读取生产 schema；缓存 Retriever 只基于当前 worktree 中的 cache key、cache name、key expression 与读写 / 删除 / 过期使用点做 bounded `rg` 检索，不读取运行期 Redis 或缓存实例。
 - 二次补证据：任务详情页只在 `CRITICAL / MAJOR / HIGH` 且 `contextStatus=PARTIAL / INSUFFICIENT` 的 AI finding 上展示“补证据”操作；结果以 `refinementOverlay` 覆盖层显示状态、触发条件、检索计划摘要、补到的证据摘要、仍缺失上下文和失败原因，不覆盖原 finding 的等级、上下文状态、置信度或原始证据。
 - 规则缺口看板：从已有 `CONTEXT_PACK_BUILT` progress 安全摘要聚合跨任务规则缺口，可按项目、缺口类型、Signal 过滤，查看最近任务样例并跳转任务详情；接口响应会附带 `recommendations`，用启发式评分给出 `RECOMMENDED / WATCH / NOT_NOW`、补全类型、建议原因、下一阶段和可复制给 Agent 的 prompt 草稿。看板不返回源码片段、本地绝对路径、token、认证头、大段 diff 或 provider raw output，也不会自动改规则、Prompt 或实现 Retriever。
 - 提醒卡片：按提醒类型展示可复制维护内容、命中证据和 Diff 查看入口
@@ -1016,7 +1017,88 @@ Invoke-RestMethod "http://localhost:8090/api/review-quality/dashboard?projectId=
 
 - 主指标只来自 `evaluation_cases.verdict`，避免把回放 item 或确定性检查重复计为评估样本。
 - `deterministicCheckSummary` 是项目范围辅助摘要；当按 Provider / Profile / 风险类型 / verdict 过滤时，响应中的 `scopeNote` 会说明这些过滤不能直接应用到确定性检查 run。
-- 规则缺口仍保留为独立诊断入口；M7 不做 finding 级缺口归因，归因放到 M8。
+- `ruleGapAttributionSummary` 来自 M8 的 evaluation case 人工归因，只用于诊断规则缺口是否被样本证明关联误判、上下文不足或漏报。
+
+## 规则缺口归因
+
+M8 把规则缺口从 task 级近似推进到 evaluation case / finding 级人工归因。归因只作为质量治理证据，不自动补 Retriever、不自动修改 Prompt、不生成项目策略、不降级、不忽略 finding。
+
+前端最小入口：
+
+- 顶部导航“评估样本”列表中可点击“编辑归因”，查看自动带入的安全 rule gap 摘要并保存归因类型。
+- “质量看板”展示已归因样本数、未归因样本数、归因类型分布和关联 verdict 分布。
+- “规则缺口”看板的推荐项会区分“高频观察”和“样本证明 / 样本 + 高频”。
+
+命令行验证：
+
+```powershell
+# 查询某个评估样本的规则缺口归因
+Invoke-RestMethod "http://localhost:8090/api/evaluation-cases/{caseId}/rule-gap-attribution" |
+  ConvertTo-Json -Depth 20
+
+# 更新归因
+Invoke-RestMethod `
+  -Method Put `
+  -Uri "http://localhost:8090/api/evaluation-cases/{caseId}/rule-gap-attribution" `
+  -ContentType "application/json" `
+  -Body '{"attributionType":"RULE_GAP_RELATED","comment":"人工确认与缺少调用方上下文相关。","attributedBy":"admin","ruleGapSummary":[]}'
+
+# 查看质量看板中的 ruleGapAttributionSummary
+Invoke-RestMethod "http://localhost:8090/api/review-quality/dashboard?projectId=1" |
+  ConvertTo-Json -Depth 20
+```
+
+安全边界：归因摘要只保存 `gapType / signal / requestedContext / suggestedCapability / taskId / reviewKey / progressEventId / summaryKey`，不保存源码片段、大段 diff、provider raw output、真实 token、认证头或本地绝对路径。
+
+## 规则 / Retriever 改动验收记录
+
+M9 用“验收记录”记录规则、Retriever、Prompt、Context Pack、确定性检查或 Provider 改动的人工准入和退出验收。它是治理记录，不是 CI / 合并阻塞，也不会自动修改 Prompt、项目策略、AI Review finding 或线上 Review 行为。
+
+前端最小入口：
+
+- 顶部导航“验收记录”：查看、创建和编辑验收记录。
+- “质量看板”辅助诊断区展示验收记录数和最近验收状态。
+
+命令行验证示例：
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8090/api/review-quality/acceptance-gates" `
+  -ContentType "application/json" `
+  -Body '{
+    "projectId": 1,
+    "title": "补缓存 Retriever 准入",
+    "changeType": "RETRIEVER",
+    "status": "ADMITTED",
+    "provider": "DEEPSEEK",
+    "profile": "backend-default-ai-review",
+    "riskType": "CACHE_CONSISTENCY",
+    "evaluationCaseIds": [1],
+    "evaluationRunIds": [1],
+    "ruleGapSummary": [{"gapType":"UNSUPPORTED_PLANNER_SIGNAL","signal":"CACHE_WRITE_DELETE_CHANGED","requestedContext":"CACHE_USAGE_CONTEXT","suggestedCapability":"Add cache retriever.","summaryKey":"cache-gap"}],
+    "admission": {"problemStatement":"缓存误判集中。","expectedBenefit":"降低误判。","riskAssessment":"可能增加耗时。","costEstimate":"低到中等。","decisionBy":"admin","decisionAt":"2026-07-02T10:00:00+08:00"}
+  }'
+
+Invoke-RestMethod "http://localhost:8090/api/review-quality/acceptance-gates?projectId=1&changeType=RETRIEVER" |
+  ConvertTo-Json -Depth 20
+```
+
+记录退出结果：
+
+```powershell
+Invoke-RestMethod `
+  -Method Put `
+  -Uri "http://localhost:8090/api/review-quality/acceptance-gates/{gateId}" `
+  -ContentType "application/json" `
+  -Body '{"status":"PASSED","exit":{"resultStatus":"IMPROVED","falsePositiveDelta":-2,"contextMissingDelta":-1,"missingFindingDelta":0,"findingCountDelta":-3,"durationDeltaMs":120,"tokenCostDelta":12.5,"notes":"目标样本改善。","decidedBy":"admin","decidedAt":"2026-07-02T11:00:00+08:00"}}'
+```
+
+## 评估驱动的缓存 Retriever
+
+M10 已将 `CACHE_WRITE_DELETE_CHANGED` 纳入高准确模式 Local Retriever。Planner 只从 diff 变更行提取安全摘要：`cacheKeys / cacheNames / keyExpressions / cacheOperations`；Retriever 在当前 task worktree 内用 bounded `rg --fixed-strings` 检索缓存 key、cache name、key expression 及必要操作 token 的读写 / 删除 / 过期使用点。
+
+该能力只补 Context Pack 证据，不自动改 Prompt、不自动生成项目策略、不自动降级或忽略 finding，也不连接运行期 Redis / Caffeine / 其它缓存实例。命中后，`CONTEXT_PACK_BUILT` 的 `retrieverSupportedSignalTypes` 会包含 `CACHE_WRITE_DELETE_CHANGED`，`CACHE_USAGE_CONTEXT` 会标记为 `availableSource=LOCAL_CACHE_USAGE_CONTEXT`；若预算裁剪发生，仍通过 `notInjectedEvidence` 返回安全摘要。
 
 ## 确定性检查证据
 
@@ -1128,6 +1210,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/code-quality-revi
 - `规则缺口`：聚合高准确模式流转中沉淀的 Planner / Retriever 能力缺口，用于诊断上下文为什么不足；后续会收敛到质量治理 / 高准确模式诊断中，Retriever 优先级需结合评估样本、回放结果和 finding 级归因判断。
 - `反馈池`：默认隐藏；前端构建时启用 `VITE_REVIEW_LEARNING_UI_ENABLED=true` 后可查看风险项 / finding 反馈，继续启用 `VITE_PROJECT_REVIEW_POLICY_UI_ENABLED=true` 后可筛选建议沉淀反馈并管理项目策略。
 - `质量看板`：按项目、Provider、Profile、风险类型和 verdict 聚合评估样本，展示误判率、上下文不足率、等级偏差、重复和漏报，并附带回放、补证据和确定性检查辅助摘要。
+- `验收记录`：记录规则、Retriever、Prompt、Context Pack、确定性检查或 Provider 改动的人工准入和退出验收，不阻断线上 Review 或代码合并。
 - `评估样本`：查看从 AI finding 或人工补充沉淀的 Review 质量评估样本。
 - `回放记录`：查看 evaluation run / review replay run 的版本元信息、baseline / candidate 和样本结果摘要。
 - 右上角通知图标：查看最近 24 小时内 AI Review 执行失败记录，并可跳转任务详情。

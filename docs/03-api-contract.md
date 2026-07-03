@@ -1594,6 +1594,21 @@ Content-Type: application/json
 
 `CONTEXT_PACK_BUILT` progress event 只展示同样的安全统计摘要，不展示源码、真实 secret、token、认证头、本地绝对路径或 provider raw output。
 
+### 12.4 M10 缓存 Retriever 集成
+
+M10 将 `CACHE_WRITE_DELETE_CHANGED` 纳入 Local Retriever 支持范围。构造 Context Pack 时：
+
+- Planner 从 diff 新增 / 删除行提取安全摘要：`cacheKeys / cacheNames / keyExpressions / cacheOperations`。
+- Retriever 在当前 task worktree 内用 bounded `rg --fixed-strings` 检索缓存 key、cache name、key expression 和必要操作 token 的读写 / 删除 / 过期使用点。
+- 命中 snippets 后，`requestedContexts` 中的 `CACHE_USAGE_CONTEXT` 标记为 `available=true`，`availableSource=LOCAL_CACHE_USAGE_CONTEXT`。
+- `summary.retrieverSupportedSignalTypes` 包含 `CACHE_WRITE_DELETE_CHANGED`；新任务不再为该 signal 生成 `UNSUPPORTED_PLANNER_SIGNAL` rule gap。
+- 该能力不连接运行期 Redis / Caffeine / 其它缓存实例，不执行 AST / LSP / RAG，不修改 AI Review result、finding、Prompt 或项目策略。
+
+安全边界：
+
+- `localReferenceContext.searches[]` 只返回 bounded snippet、相对路径、行号和安全元数据：`cacheKeys / cacheNames / cacheOperations`。
+- 请求或 diff 中的源码大段片段、provider raw output、真实 token、认证头和本地绝对路径不得进入 progress summary 或前端可观测摘要。
+
 ## 13. Review Quality Dashboard API
 
 Review Quality Dashboard 用于把 M1-M6 已沉淀的评估样本、回放记录、finding 补证据和确定性检查结果聚合成最小质量治理看板。M7 只做统计与诊断，不自动修改 Prompt、不自动选择胜出版本、不生成项目策略、不自动降级或忽略 finding。
@@ -1695,6 +1710,19 @@ GET /api/review-quality/dashboard
     "findingCount": 2,
     "ruleTypeCounts": { "API_TOKEN_ASSIGNMENT": 2 },
     "scopeNote": "Deterministic checks are project-scoped auxiliary diagnostics."
+  },
+  "ruleGapAttributionSummary": {
+    "attributedCaseCount": 2,
+    "unattributedCaseCount": 4,
+    "causedOrRelatedCount": 1,
+    "attributionTypeCounts": {
+      "RULE_GAP_CAUSED": 1,
+      "PROMPT_ISSUE": 1
+    },
+    "verdictCounts": {
+      "FALSE_POSITIVE": 1,
+      "CONTEXT_MISSING": 1
+    }
   }
 }
 ```
@@ -1703,11 +1731,282 @@ GET /api/review-quality/dashboard
 
 - 看板不返回源码片段、大段 diff、provider raw output、真实 secret、token、认证头或本地绝对路径。
 - `deterministicCheckSummary` 只能按项目范围精确过滤；当请求包含 `provider / profile / riskType / verdict` 时，响应通过 `scopeNote` 明确该辅助摘要不能直接应用这些过滤。
-- M7 不做 finding 级归因；规则缺口与误判是否存在因果关系放到 M8。
+- `ruleGapAttributionSummary` 来自匹配的 `evaluation_cases`，只统计人工归因结果，不自动推断因果。
 
-## 14. DTO / VO 边界
+## 14. Rule Gap Attribution API
 
-### 14.1 WebhookTriggerCommand
+Rule Gap Attribution 用于在 evaluation case 上记录某个 finding 与规则缺口之间的人工归因。M8 只做诊断，不自动补 Retriever、不自动修改 Prompt、不生成项目策略、不降级或忽略 finding。
+
+### 14.1 查询评估样本规则缺口归因
+
+```http
+GET /api/evaluation-cases/{caseId}/rule-gap-attribution
+```
+
+未归因响应：
+
+```json
+{
+  "caseId": 1,
+  "attributionType": null,
+  "ruleGapSummary": [],
+  "comment": null,
+  "attributedBy": null,
+  "attributedAt": null,
+  "explanation": "Rule gap attribution has not been recorded for this evaluation case."
+}
+```
+
+已归因响应：
+
+```json
+{
+  "caseId": 1,
+  "attributionType": "RULE_GAP_CAUSED",
+  "ruleGapSummary": [
+    {
+      "gapType": "UNSUPPORTED_PLANNER_SIGNAL",
+      "signal": "CACHE_WRITE_DELETE_CHANGED",
+      "requestedContext": "CACHE_USAGE_CONTEXT",
+      "suggestedCapability": "Add cache retriever.",
+      "taskId": 10001,
+      "reviewKey": "deepseek-main",
+      "progressEventId": 123,
+      "summaryKey": "UNSUPPORTED_PLANNER_SIGNAL|CACHE_WRITE_DELETE_CHANGED"
+    }
+  ],
+  "comment": "人工确认该误判与缓存调用链上下文缺失相关。",
+  "attributedBy": "admin",
+  "attributedAt": "2026-07-02T10:00:00"
+}
+```
+
+`attributionType` 可选值：
+
+```text
+RULE_GAP_CAUSED / RULE_GAP_RELATED / NOT_RULE_GAP / PROMPT_ISSUE /
+MODEL_REASONING_ISSUE / PROJECT_POLICY_MISSING / INSUFFICIENT_LABEL
+```
+
+### 14.2 更新评估样本规则缺口归因
+
+```http
+PUT /api/evaluation-cases/{caseId}/rule-gap-attribution
+Content-Type: application/json
+```
+
+请求：
+
+```json
+{
+  "attributionType": "RULE_GAP_RELATED",
+  "ruleGapSummary": [
+    {
+      "gapType": "UNAVAILABLE_REQUESTED_CONTEXT",
+      "signal": "CONFIG_FILE_CHANGED",
+      "requestedContext": "CONFIG_CONTEXT",
+      "suggestedCapability": "Add config usage retrieval.",
+      "taskId": 10001,
+      "reviewKey": "deepseek-main",
+      "progressEventId": 123
+    }
+  ],
+  "comment": "缺少配置读取点上下文，导致模型只能按 diff 猜测。",
+  "attributedBy": "alice"
+}
+```
+
+说明：
+
+- 创建 `source=AI_FINDING` 的 evaluation case 时，如果同任务 / reviewKey 存在最新 `CONTEXT_PACK_BUILT` progress event，后端会自动带入最多 5 条安全 rule gap 摘要。
+- `GET /api/evaluation-cases` 和 `GET /api/evaluation-cases/{caseId}` 会在 `ruleGapAttribution` 字段返回同样的最小摘要。
+- 规则缺口看板的推荐项会返回 `recommendationBasis`：`FREQUENCY_ONLY / PROVEN_BY_EVALUATION_CASES / MIXED`，并在 `attributionSignals` 中返回已归因样本数、归因类型分布和关联 verdict 分布。
+
+安全边界：
+
+- `ruleGapSummary` 只保存 `gapType / signal / requestedContext / suggestedCapability / taskId / reviewKey / progressEventId / summaryKey`。
+- 不保存或返回源码片段、大段 diff、provider raw output、真实 token、认证头、本地绝对路径。
+- 归因不会修改原 AI Review 结果、finding 等级、`contextStatus`、`confidence`、Prompt 或项目策略。
+
+## 15. Review Quality Acceptance Gate API
+
+Review Quality Acceptance Gate 用于记录规则、Retriever、Prompt、Context Pack、确定性检查或 Provider 改动的人工准入和退出验收。M9 只做治理记录和可观测，不做 CI / 合并阻塞，不做线上 Review runtime gate，不自动修改 Prompt、项目策略、AI Review 结果、finding 等级、`contextStatus` 或 `confidence`。
+
+### 15.1 创建验收记录
+
+```http
+POST /api/review-quality/acceptance-gates
+Content-Type: application/json
+```
+
+请求示例：
+
+```json
+{
+  "projectId": 1,
+  "title": "补缓存 Retriever 准入",
+  "changeType": "RETRIEVER",
+  "status": "ADMITTED",
+  "provider": "DEEPSEEK",
+  "profile": "backend-default-ai-review",
+  "riskType": "CACHE_CONSISTENCY",
+  "evaluationCaseIds": [101, 102],
+  "evaluationRunIds": [201],
+  "ruleGapSummary": [
+    {
+      "gapType": "UNSUPPORTED_PLANNER_SIGNAL",
+      "signal": "CACHE_WRITE_DELETE_CHANGED",
+      "requestedContext": "CACHE_USAGE_CONTEXT",
+      "suggestedCapability": "Add cache retriever.",
+      "summaryKey": "UNSUPPORTED_PLANNER_SIGNAL|CACHE_WRITE_DELETE_CHANGED"
+    }
+  ],
+  "admission": {
+    "problemStatement": "缓存类误判集中在缺少调用方和 key 使用上下文。",
+    "expectedBenefit": "降低缓存一致性误判。",
+    "riskAssessment": "可能增加检索耗时和 Context Pack 预算。",
+    "costEstimate": "低到中等。",
+    "decisionBy": "admin",
+    "decisionAt": "2026-07-02T10:00:00+08:00"
+  }
+}
+```
+
+响应 data 关键字段：
+
+```json
+{
+  "id": 1,
+  "projectId": 1,
+  "projectName": "demo-service",
+  "title": "补缓存 Retriever 准入",
+  "changeType": "RETRIEVER",
+  "status": "ADMITTED",
+  "provider": "DEEPSEEK",
+  "profile": "backend-default-ai-review",
+  "riskType": "CACHE_CONSISTENCY",
+  "evaluationCaseIds": [101, 102],
+  "evaluationRunIds": [201],
+  "evaluationCaseCount": 2,
+  "evaluationRunCount": 1,
+  "ruleGapSummary": [],
+  "admission": {},
+  "exit": {},
+  "coreDelta": {},
+  "createdAt": "2026-07-02T10:00:00",
+  "updatedAt": "2026-07-02T10:00:00"
+}
+```
+
+`changeType` 可选值：
+
+```text
+RULE / RETRIEVER / PROMPT / CONTEXT_PACK / DETERMINISTIC_CHECK / PROVIDER / OTHER
+```
+
+`status` 可选值：
+
+```text
+DRAFT / ADMITTED / RUNNING_VALIDATION / PASSED / FAILED / CANCELED
+```
+
+### 15.2 查询验收记录
+
+```http
+GET /api/review-quality/acceptance-gates
+GET /api/review-quality/acceptance-gates/{gateId}
+```
+
+列表查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `projectId` | Long | 按项目过滤 |
+| `changeType` | String | 按改动类型过滤 |
+| `status` | String | 按验收状态过滤 |
+| `provider` | String | 按 Provider 过滤 |
+| `profile` | String | 按 AI Review Profile 过滤 |
+| `riskType` | String | 按风险类型过滤 |
+| `pageNo` / `pageSize` | Number | 分页 |
+
+空列表返回标准分页结构，并包含可解释 `explanation`：
+
+```json
+{
+  "items": [],
+  "pageNo": 1,
+  "pageSize": 20,
+  "total": 0,
+  "explanation": "No review quality acceptance gate record matches the current filters."
+}
+```
+
+列表项不返回完整 `ruleGapSummary / admission / exit`，只返回 `evaluationCaseCount / evaluationRunCount / coreDelta`。详情接口返回完整治理记录。
+
+### 15.3 更新准入信息与退出结果
+
+```http
+PUT /api/review-quality/acceptance-gates/{gateId}
+Content-Type: application/json
+```
+
+请求示例：
+
+```json
+{
+  "status": "PASSED",
+  "exit": {
+    "resultStatus": "IMPROVED",
+    "falsePositiveDelta": -2,
+    "contextMissingDelta": -1,
+    "missingFindingDelta": 0,
+    "findingCountDelta": -3,
+    "durationDeltaMs": 120,
+    "tokenCostDelta": 12.5,
+    "notes": "目标样本误判下降，耗时略增。",
+    "decidedBy": "admin",
+    "decidedAt": "2026-07-02T11:00:00+08:00"
+  }
+}
+```
+
+`resultStatus` 可选值：
+
+```text
+IMPROVED / NEUTRAL / REGRESSED / INCONCLUSIVE
+```
+
+安全边界：
+
+- `ruleGapSummary` 只保存 `gapType / signal / requestedContext / suggestedCapability / summaryKey`。
+- 请求中携带的源码片段、大段 diff、provider raw output、Prompt 原文、真实 token、认证头或本地绝对路径会被忽略或脱敏。
+- 关联 evaluation case / evaluation run 只保存 ID 列表，不复制样本源码、diff 或 provider 输出。
+- 验收记录不会写回 evaluation case、evaluation run、AI Review result、finding、Prompt、项目策略或通知记录。
+
+### 15.4 质量看板摘要
+
+`GET /api/review-quality/dashboard` 会返回 `acceptanceGateSummary`：
+
+```json
+{
+  "recordCount": 1,
+  "statusCounts": {
+    "PASSED": 1
+  },
+  "changeTypeCounts": {
+    "RETRIEVER": 1
+  },
+  "latestStatus": "PASSED",
+  "latestGateId": 1,
+  "latestTitle": "补缓存 Retriever 准入",
+  "latestUpdatedAt": "2026-07-02T11:00:00",
+  "scopeNote": "Acceptance gates are manual governance records and do not block runtime review or code merges."
+}
+```
+
+## 16. DTO / VO 边界
+
+### 16.1 WebhookTriggerCommand
 
 用于从 webhook payload 转成内部任务创建命令。
 
@@ -1726,7 +2025,7 @@ GET /api/review-quality/dashboard
 }
 ```
 
-### 14.2 ChangeAnalysisResultDTO
+### 16.2 ChangeAnalysisResultDTO
 
 ```json
 {
@@ -1739,6 +2038,6 @@ GET /api/review-quality/dashboard
 }
 ```
 
-### 14.3 RiskCardVO
+### 16.3 RiskCardVO
 
 前端直接消费完整 RiskCard JSON；后端不应再拼接不可解析的展示文本作为主要输出。

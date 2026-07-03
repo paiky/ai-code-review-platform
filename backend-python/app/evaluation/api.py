@@ -50,6 +50,16 @@ async def update_evaluation_case(case_id: int, request: dict, db: Session = Depe
     return ok(service.update_evaluation_case_response(db, case_id, request))
 
 
+@router.get("/{case_id}/rule-gap-attribution")
+async def get_rule_gap_attribution(case_id: int, db: Session = Depends(get_db)) -> dict:
+    return ok(service.get_rule_gap_attribution_response(db, case_id))
+
+
+@router.put("/{case_id}/rule-gap-attribution")
+async def update_rule_gap_attribution(case_id: int, request: dict, db: Session = Depends(get_db)) -> dict:
+    return ok(service.update_rule_gap_attribution_response(db, case_id, request))
+
+
 @run_router.post("")
 async def create_evaluation_run(request: dict, db: Session = Depends(get_db)) -> dict:
     return ok(service.create_evaluation_run_response(db, request))

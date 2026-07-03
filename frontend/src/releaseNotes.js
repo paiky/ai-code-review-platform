@@ -23,7 +23,7 @@ export const releaseNotes = [
     summary: '代码质量 Review 从 diff-only 审查升级为高准确模式：平台先在本地准备仓库上下文、规划需要补充的证据，再把预算内片段注入模型输入，并公开展示流转和规则缺口优先级。',
     highlights: [
       '新增 Context Pack 与 Context Planner：先识别方法、字段、DTO、DB、缓存、MQ、配置等变更信号，再决定需要补充哪些上下文证据。',
-      '支持本地 mirror / worktree 准备任务源码，用本地引用检索补充删除方法、方法签名变更等高价值证据。',
+      '支持本地 mirror / worktree 准备任务源码，用本地引用检索补充删除方法、方法签名变更、DTO/字段、DB/Mapper/Entity 和缓存 key 读写链路等高价值证据。',
       '模型不会收到完整项目源码；平台只在本地检索，并把排序后、受预算限制的 bounded snippets 注入 Review 输入。',
       '任务详情新增“高准确模式流转”，按变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider、结果解析展示执行状态。',
       '当本地仓库已准备但引用查询数为 0 时，页面会解释是没有支持的 signal、Retriever 被跳过，还是检索失败。',

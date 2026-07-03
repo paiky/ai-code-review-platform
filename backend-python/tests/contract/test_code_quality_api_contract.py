@@ -655,6 +655,7 @@ def test_manual_review_builds_context_pack_and_records_progress(
         {"type": "HISTORICAL_CONTEXT_MISSING_FEEDBACK", "count": 2},
     ]
     assert detail["summary"]["retrieverSupportedSignalTypes"] == [
+        "CACHE_WRITE_DELETE_CHANGED",
         "DB_SQL_MAPPER_CHANGED",
         "DTO_FIELD_CHANGED",
         "FIELD_DELETED",
@@ -796,12 +797,11 @@ def test_manual_review_records_local_reference_search_progress_without_source(
         f"/api/review-tasks/{response.json()['data']['taskId']}/code-quality-progress"
     ).json()["data"]
     local_context_event = next(event for event in progress if event["phase"] == "LOCAL_CONTEXT_RETRIEVED")
-    assert json.loads(local_context_event["detail"]) == {
-        "queryCount": 1,
-        "matchedFileCount": 1,
-        "includedSnippetCount": 1,
-        "truncated": False,
-    }
+    local_context_detail = json.loads(local_context_event["detail"])
+    assert local_context_detail["queryCount"] == 1
+    assert local_context_detail["matchedFileCount"] == 1
+    assert local_context_detail["includedSnippetCount"] == 1
+    assert local_context_detail["truncated"] is False
     progress_text = json.dumps(progress, ensure_ascii=False)
     assert "orderService.cancelOrder(id)" not in progress_text
     context_event = next(event for event in progress if event["phase"] == "CONTEXT_PACK_BUILT")

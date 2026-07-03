@@ -35,6 +35,11 @@ def ensure_evaluation_case_schema(db: Session) -> None:
     _add_column_if_missing(db, columns, "human_comment", "TEXT NULL")
     _add_column_if_missing(db, columns, "source", "VARCHAR(32) NOT NULL DEFAULT 'MANUAL'")
     _add_column_if_missing(db, columns, "item_snapshot_json", "TEXT NULL")
+    _add_column_if_missing(db, columns, "rule_gap_attribution_type", "VARCHAR(64) NULL")
+    _add_column_if_missing(db, columns, "rule_gap_summary_json", "TEXT NULL")
+    _add_column_if_missing(db, columns, "rule_gap_attribution_comment", "TEXT NULL")
+    _add_column_if_missing(db, columns, "rule_gap_attributed_by", "VARCHAR(128) NULL")
+    _add_column_if_missing(db, columns, "rule_gap_attributed_at", "DATETIME NULL")
     _add_column_if_missing(db, columns, "created_at", "DATETIME NULL")
     _add_column_if_missing(db, columns, "updated_at", "DATETIME NULL")
     db.flush()
@@ -128,8 +133,26 @@ def evaluation_case_to_response(
         "humanComment": record.human_comment,
         "source": record.source,
         "itemSnapshot": read_json(record.item_snapshot_json, None),
+        "ruleGapAttribution": rule_gap_attribution_to_response(record),
         "createdAt": format_datetime(record.created_at),
         "updatedAt": format_datetime(record.updated_at),
+    }
+
+
+def rule_gap_attribution_to_response(record: EvaluationCase) -> dict[str, Any]:
+    summary = read_json(record.rule_gap_summary_json, [])
+    if not isinstance(summary, list):
+        summary = []
+    return {
+        "caseId": record.id,
+        "attributionType": record.rule_gap_attribution_type,
+        "ruleGapSummary": summary,
+        "comment": record.rule_gap_attribution_comment,
+        "attributedBy": record.rule_gap_attributed_by,
+        "attributedAt": format_datetime(record.rule_gap_attributed_at),
+        "explanation": None
+        if record.rule_gap_attribution_type
+        else "Rule gap attribution has not been recorded for this evaluation case.",
     }
 
 

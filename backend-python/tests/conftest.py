@@ -17,6 +17,7 @@ from app.notification import models as notification_models  # noqa: F401
 from app.project_integration import models as project_models  # noqa: F401
 from app.project_review_policy import models as project_review_policy_models  # noqa: F401
 from app.review_feedback import models as review_feedback_models  # noqa: F401
+from app.review_quality_acceptance import models as review_quality_acceptance_models  # noqa: F401
 from app.review_record import models as review_models  # noqa: F401
 from app.rule_template import models as rule_template_models  # noqa: F401
 

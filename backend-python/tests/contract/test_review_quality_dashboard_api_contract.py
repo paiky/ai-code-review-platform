@@ -10,6 +10,7 @@ from app.code_quality.models import CodeQualityFindingRefinement
 from app.deterministic_checks.models import DeterministicCheckRun
 from app.evaluation.models import EvaluationCase, EvaluationRunItem
 from app.project_integration.models import Project
+from app.review_quality_acceptance.models import ReviewQualityAcceptanceGate
 
 
 def test_review_quality_dashboard_empty_state_is_explainable(client: TestClient) -> None:
@@ -26,6 +27,7 @@ def test_review_quality_dashboard_empty_state_is_explainable(client: TestClient)
     assert data["replaySummary"]["itemCount"] == 0
     assert data["refinementSummary"]["recordCount"] == 0
     assert data["deterministicCheckSummary"]["runCount"] == 0
+    assert data["acceptanceGateSummary"]["recordCount"] == 0
 
 
 def test_review_quality_dashboard_aggregates_cases_and_dimensions(
@@ -62,6 +64,8 @@ def test_review_quality_dashboard_aggregates_cases_and_dimensions(
     assert risk_rows["SECURITY"]["sampleCount"] == 3
     assert risk_rows["SECURITY"]["falsePositiveCount"] == 1
     assert risk_rows["TRANSACTION"]["contextMissingCount"] == 1
+    assert data["acceptanceGateSummary"]["recordCount"] == 1
+    assert data["acceptanceGateSummary"]["latestStatus"] == "PASSED"
 
 
 def test_review_quality_dashboard_filters_by_risk_type_and_verdict(
@@ -91,6 +95,8 @@ def test_review_quality_dashboard_filters_by_risk_type_and_verdict(
     assert data["replaySummary"]["itemCount"] == 1
     assert data["replaySummary"]["baselineTotals"]["falsePositiveCount"] == 1
     assert data["replaySummary"]["candidateTotals"]["falsePositiveCount"] == 0
+    assert data["acceptanceGateSummary"]["recordCount"] == 1
+    assert data["acceptanceGateSummary"]["statusCounts"]["PASSED"] == 1
 
 
 def test_review_quality_dashboard_auxiliary_summaries_are_safe(
@@ -109,6 +115,8 @@ def test_review_quality_dashboard_auxiliary_summaries_are_safe(
     assert data["deterministicCheckSummary"]["findingCount"] == 2
     assert data["deterministicCheckSummary"]["ruleTypeCounts"]["API_TOKEN_ASSIGNMENT"] == 2
     assert "Provider/profile/riskType/verdict filters cannot be applied directly" in data["deterministicCheckSummary"]["scopeNote"]
+    assert data["acceptanceGateSummary"]["recordCount"] == 1
+    assert "manual governance records" in data["acceptanceGateSummary"]["scopeNote"]
 
     payload = json.dumps(data, ensure_ascii=False)
     assert "super-secret-token" not in payload
@@ -253,6 +261,44 @@ def _seed_quality_dashboard_data(db_session: Session) -> None:
             created_at=now,
             updated_at=now,
         )
+    )
+    db_session.add_all(
+        [
+            ReviewQualityAcceptanceGate(
+                id=9701,
+                project_id=9101,
+                title="缓存 Retriever 验收",
+                change_type="RETRIEVER",
+                status="PASSED",
+                provider="DEEPSEEK",
+                profile="backend-default-ai-review",
+                risk_type="SECURITY",
+                evaluation_case_ids_json="[9111]",
+                evaluation_run_ids_json="[9401]",
+                rule_gap_summary_json="[]",
+                admission_json='{"problemStatement":"security false positive"}',
+                exit_json='{"resultStatus":"IMPROVED","falsePositiveDelta":-1}',
+                created_at=now,
+                updated_at=now,
+            ),
+            ReviewQualityAcceptanceGate(
+                id=9702,
+                project_id=9102,
+                title="其它项目验收",
+                change_type="PROMPT",
+                status="FAILED",
+                provider="OPENAI",
+                profile="backend-default-ai-review",
+                risk_type="SECURITY",
+                evaluation_case_ids_json="[9117]",
+                evaluation_run_ids_json="[]",
+                rule_gap_summary_json="[]",
+                admission_json="{}",
+                exit_json='{"resultStatus":"REGRESSED"}',
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
     )
     db_session.commit()
 

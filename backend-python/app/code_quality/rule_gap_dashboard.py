@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 from app.code_quality.models import CodeQualityReviewProgressEvent
 from app.code_quality.repository import ensure_progress_schema, scrub_sensitive
 from app.core.json_utils import format_datetime
+from app.evaluation.models import EvaluationCase
+from app.evaluation.repository import ensure_evaluation_case_schema
+from app.evaluation.service import RULE_GAP_PROVEN_ATTRIBUTIONS, RULE_GAP_PROVEN_VERDICTS
 from app.project_integration.models import Project
 from app.review_feedback.models import ReviewItemFeedback
 from app.review_feedback.repository import ensure_feedback_schema
@@ -53,6 +56,7 @@ _COMPLETION_TYPE_FEASIBILITY = {
     "OBSERVABILITY": 7,
 }
 _SUPPORTED_RETRIEVER_SIGNALS = {
+    "CACHE_WRITE_DELETE_CHANGED",
     "DB_SQL_MAPPER_CHANGED",
     "METHOD_DELETED",
     "METHOD_SIGNATURE_CHANGED",
@@ -61,7 +65,7 @@ _SUPPORTED_RETRIEVER_SIGNALS = {
 }
 _SIGNAL_NEXT_STAGE = {
     "DB_SQL_MAPPER_CHANGED": "已支持 signal 回归复盘：DB / Mapper / Entity 关联检索",
-    "CACHE_WRITE_DELETE_CHANGED": "后续阶段：缓存 key 与读写链路检索设计",
+    "CACHE_WRITE_DELETE_CHANGED": "已支持 signal 回归复盘：缓存 key 与读写链路检索",
     "MQ_CONFIG_CHANGED": "后续阶段：MQ producer / consumer / topic 配置检索设计",
     "CONFIG_FILE_CHANGED": "后续阶段：配置读取点与环境覆盖检索设计",
     "METHOD_DELETED": "已支持 signal 回归复盘：方法删除引用检索",
@@ -163,8 +167,17 @@ def get_rule_gap_dashboard(
             diagnostics["eventsWithoutRuleGapCount"] += 1
 
     feedback_stats = _feedback_stats_for_groups(db, groups.values(), cutoff)
+    attribution_stats = _attribution_stats_for_groups(db, groups.values(), project_id=project_id)
     items = [
-        _group_to_response(group, _build_recommendation(group, feedback_stats.get(_group_key(group)), recent_days))
+        _group_to_response(
+            group,
+            _build_recommendation(
+                group,
+                feedback_stats.get(_group_key(group)),
+                attribution_stats.get(_group_key(group)),
+                recent_days,
+            ),
+        )
         for group in groups.values()
     ]
     items.sort(
@@ -381,6 +394,65 @@ def _feedback_stats_for_groups(
     return feedback_stats
 
 
+def _attribution_stats_for_groups(
+    db: Session,
+    groups: Any,
+    *,
+    project_id: int | None,
+) -> dict[tuple[str, str, str, str], dict[str, Any]]:
+    group_list = list(groups)
+    if not group_list:
+        return {}
+    group_keys = {_group_key(group) for group in group_list}
+    project_ids = {int(project_id) for group in group_list for project_id in group.get("projectIds", set())}
+    ensure_evaluation_case_schema(db)
+    stmt = select(EvaluationCase).where(EvaluationCase.rule_gap_attribution_type.is_not(None))
+    if project_id is not None:
+        stmt = stmt.where(EvaluationCase.project_id == project_id)
+    elif project_ids:
+        stmt = stmt.where(EvaluationCase.project_id.in_(project_ids))
+    records = db.scalars(stmt).all()
+    result: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for record in records:
+        summary = _read_case_rule_gap_summary(record)
+        for item in summary:
+            key = (
+                str(item.get("gapType") or ""),
+                str(item.get("signal") or ""),
+                str(item.get("requestedContext") or "-"),
+                str(item.get("suggestedCapability") or "-"),
+            )
+            if key not in group_keys:
+                continue
+            stats = result.setdefault(key, _empty_attribution_stats())
+            attribution = record.rule_gap_attribution_type or "UNKNOWN"
+            verdict = record.verdict or "UNKNOWN"
+            stats["attributedCaseCount"] += 1
+            stats["attributionTypeCounts"][attribution] = stats["attributionTypeCounts"].get(attribution, 0) + 1
+            stats["verdictCounts"][verdict] = stats["verdictCounts"].get(verdict, 0) + 1
+            if attribution in RULE_GAP_PROVEN_ATTRIBUTIONS and verdict in RULE_GAP_PROVEN_VERDICTS:
+                stats["causedOrRelatedCount"] += 1
+                stats["provenCaseIds"].append(int(record.id))
+    for stats in result.values():
+        stats["provenCaseIds"] = stats["provenCaseIds"][:10]
+    return result
+
+
+def _read_case_rule_gap_summary(record: EvaluationCase) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(record.rule_gap_summary_json or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    items = []
+    for raw in parsed:
+        item = _normalize_rule_gap_item(raw)
+        if item:
+            items.append(item)
+    return items
+
+
 def _is_later(left: Any, right: Any) -> bool:
     if right is None:
         return left is not None
@@ -432,11 +504,17 @@ def _group_to_response(group: dict[str, Any], recommendation: dict[str, Any]) ->
 def _build_recommendation(
     group: dict[str, Any],
     feedback_stats: dict[str, Any] | None,
+    attribution_stats: dict[str, Any] | None,
     recent_days: int | None,
 ) -> dict[str, Any]:
     feedback = feedback_stats or _empty_feedback_stats()
+    attribution = attribution_stats or _empty_attribution_stats()
     completion_type = _completion_type(group)
     score_breakdown = _score_breakdown(group, feedback, completion_type)
+    if attribution.get("causedOrRelatedCount"):
+        score_breakdown["evaluationAttribution"] = min(20, int(attribution.get("causedOrRelatedCount") or 0) * 8)
+    else:
+        score_breakdown["evaluationAttribution"] = 0
     score = max(0, min(100, sum(score_breakdown.values())))
     status = _recommendation_status(score)
     signal_tokens = _signal_tokens(str(group.get("signal") or ""))
@@ -449,11 +527,14 @@ def _build_recommendation(
         and not _is_historical_supported_gap(group)
     ):
         status = "WATCH"
+    if attribution.get("causedOrRelatedCount") and status == "NOT_NOW" and not _is_historical_supported_gap(group):
+        status = "WATCH"
     next_stage = _suggested_next_stage(group, completion_type)
-    reasons = _recommendation_reasons(group, feedback, completion_type, recent_days, score)
+    reasons = _recommendation_reasons(group, feedback, attribution, completion_type, recent_days, score)
     return {
         "recommendationVersion": _RECOMMENDATION_VERSION,
         "recommendationStatus": status,
+        "recommendationBasis": _recommendation_basis(group, attribution),
         "completionType": completion_type,
         "completionTypeLabel": _COMPLETION_TYPE_LABELS.get(completion_type, completion_type),
         "score": score,
@@ -462,6 +543,7 @@ def _build_recommendation(
         "suggestedNextStage": next_stage,
         "suggestedPrompt": _suggested_prompt(group, completion_type, next_stage, status),
         "feedbackSignals": feedback,
+        "attributionSignals": attribution,
         "recentTaskSamples": [
             {
                 "taskId": int(item["taskId"]),
@@ -490,6 +572,28 @@ def _empty_feedback_stats() -> dict[str, Any]:
         "correlation": "NONE",
         "note": _FEEDBACK_CORRELATION_NOTE,
     }
+
+
+def _empty_attribution_stats() -> dict[str, Any]:
+    return {
+        "attributedCaseCount": 0,
+        "causedOrRelatedCount": 0,
+        "attributionTypeCounts": {},
+        "verdictCounts": {},
+        "provenCaseIds": [],
+    }
+
+
+def _recommendation_basis(group: dict[str, Any], attribution: dict[str, Any]) -> str:
+    occurrence_count = int(group.get("occurrenceCount") or 0)
+    caused_or_related = int(attribution.get("causedOrRelatedCount") or 0)
+    has_frequency = occurrence_count > 0
+    has_proven = caused_or_related > 0
+    if has_frequency and has_proven and occurrence_count > caused_or_related:
+        return "MIXED"
+    if has_proven:
+        return "PROVEN_BY_EVALUATION_CASES"
+    return "FREQUENCY_ONLY"
 
 
 def _score_breakdown(
@@ -643,6 +747,7 @@ def _suggested_next_stage(group: dict[str, Any], completion_type: str) -> str:
 def _recommendation_reasons(
     group: dict[str, Any],
     feedback: dict[str, Any],
+    attribution: dict[str, Any],
     completion_type: str,
     recent_days: int | None,
     score: int,
@@ -669,11 +774,16 @@ def _recommendation_reasons(
         )
     else:
         reasons.append("暂无可直接关联的 CONTEXT_MISSING / FALSE_POSITIVE 反馈，已预留反馈信号字段继续观察。")
+    caused_or_related = int(attribution.get("causedOrRelatedCount") or 0)
+    if caused_or_related:
+        reasons.append(f"已有 {caused_or_related} 条评估样本证明该缺口与误判、上下文不足或漏报相关。")
+    else:
+        reasons.append("暂无 finding 级评估样本证明该缺口导致误判或漏报，当前主要按高频缺口观察。")
     if feedback.get("correlation") == "PROJECT_RECENT_APPROXIMATION":
         reasons.append("反馈关联为项目近期近似统计，不能视为精确归因。")
     if _is_historical_supported_gap(group):
         reasons.append("当前代码已支持该 signal；该记录来自历史 CONTEXT_PACK_BUILT 摘要，建议通过新任务或重跑验证。")
-    return [_safe_text(reason, 240) for reason in reasons[:6]]
+    return [_safe_text(reason, 240) for reason in reasons[:8]]
 
 
 def _suggested_prompt(
@@ -774,6 +884,7 @@ def _recommendation_dashboard_item(item: dict[str, Any]) -> dict[str, Any]:
         "projects": item.get("projects") or [],
         "recentTasks": item.get("recentTasks") or [],
         "recommendationStatus": recommendation.get("recommendationStatus"),
+        "recommendationBasis": recommendation.get("recommendationBasis"),
         "completionType": recommendation.get("completionType"),
         "completionTypeLabel": recommendation.get("completionTypeLabel"),
         "score": recommendation.get("score"),
@@ -782,5 +893,6 @@ def _recommendation_dashboard_item(item: dict[str, Any]) -> dict[str, Any]:
         "suggestedNextStage": recommendation.get("suggestedNextStage"),
         "suggestedPrompt": recommendation.get("suggestedPrompt"),
         "feedbackSignals": recommendation.get("feedbackSignals") or _empty_feedback_stats(),
+        "attributionSignals": recommendation.get("attributionSignals") or _empty_attribution_stats(),
         "recentTaskSamples": recommendation.get("recentTaskSamples") or [],
     }

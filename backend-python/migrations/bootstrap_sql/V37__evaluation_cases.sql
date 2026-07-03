@@ -14,10 +14,16 @@ CREATE TABLE IF NOT EXISTS evaluation_cases (
   human_comment TEXT NULL,
   source VARCHAR(32) NOT NULL DEFAULT 'MANUAL',
   item_snapshot_json JSON NULL,
+  rule_gap_attribution_type VARCHAR(64) NULL,
+  rule_gap_summary_json JSON NULL,
+  rule_gap_attribution_comment TEXT NULL,
+  rule_gap_attributed_by VARCHAR(128) NULL,
+  rule_gap_attributed_at DATETIME(3) NULL,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   KEY idx_evaluation_cases_project_created (project_id, created_at),
   KEY idx_evaluation_cases_filters (project_id, provider, profile, risk_type, verdict),
+  KEY idx_evaluation_cases_rule_gap_attribution (rule_gap_attribution_type, project_id),
   KEY idx_evaluation_cases_task_review (task_id, review_key),
   KEY idx_evaluation_cases_fingerprint (fingerprint)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

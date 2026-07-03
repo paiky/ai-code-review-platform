@@ -91,6 +91,7 @@ const TASK_LIST_ROUTE = '/tasks';
 const RULE_GAPS_ROUTE = '/rule-gaps';
 const FEEDBACK_ROUTE = '/risk-feedback';
 const REVIEW_QUALITY_ROUTE = '/review-quality';
+const ACCEPTANCE_GATES_ROUTE = '/acceptance-gates';
 const EVALUATION_CASES_ROUTE = '/evaluation-cases';
 const EVALUATION_RUNS_ROUTE = '/evaluation-runs';
 const SETTINGS_ROUTE = '/settings';
@@ -139,6 +140,29 @@ const EVALUATION_RUN_STATUS_OPTIONS = [
   { label: '已完成', value: 'COMPLETED' },
   { label: '失败', value: 'FAILED' },
   { label: '已取消', value: 'CANCELED' }
+];
+const ACCEPTANCE_GATE_CHANGE_TYPE_OPTIONS = [
+  { label: '规则', value: 'RULE' },
+  { label: 'Retriever', value: 'RETRIEVER' },
+  { label: 'Prompt', value: 'PROMPT' },
+  { label: 'Context Pack', value: 'CONTEXT_PACK' },
+  { label: '确定性检查', value: 'DETERMINISTIC_CHECK' },
+  { label: 'Provider', value: 'PROVIDER' },
+  { label: '其他', value: 'OTHER' }
+];
+const ACCEPTANCE_GATE_STATUS_OPTIONS = [
+  { label: '草稿', value: 'DRAFT' },
+  { label: '已准入', value: 'ADMITTED' },
+  { label: '验证中', value: 'RUNNING_VALIDATION' },
+  { label: '通过', value: 'PASSED' },
+  { label: '失败', value: 'FAILED' },
+  { label: '已取消', value: 'CANCELED' }
+];
+const ACCEPTANCE_GATE_RESULT_STATUS_OPTIONS = [
+  { label: '有改善', value: 'IMPROVED' },
+  { label: '中性', value: 'NEUTRAL' },
+  { label: '退化', value: 'REGRESSED' },
+  { label: '不确定', value: 'INCONCLUSIVE' }
 ];
 const DEFAULT_AUTO_FIX_PREVIEW_SEVERITIES = ['CRITICAL'];
 const PROJECT_TARGET_TYPE_OPTIONS = TARGET_TYPE_OPTIONS.filter(item => item.value !== 'APP_CROSS_PLATFORM');
@@ -216,6 +240,15 @@ const EVALUATION_CASE_VERDICT_OPTIONS = [
   { label: '重复问题', value: 'DUPLICATE' },
   { label: '漏报样本', value: 'MISSING_FINDING' },
   { label: '待确认', value: 'UNKNOWN' }
+];
+const RULE_GAP_ATTRIBUTION_OPTIONS = [
+  { label: '规则缺口导致', value: 'RULE_GAP_CAUSED' },
+  { label: '规则缺口相关', value: 'RULE_GAP_RELATED' },
+  { label: '非规则缺口', value: 'NOT_RULE_GAP' },
+  { label: 'Prompt 问题', value: 'PROMPT_ISSUE' },
+  { label: '模型推理问题', value: 'MODEL_REASONING_ISSUE' },
+  { label: '缺少项目策略', value: 'PROJECT_POLICY_MISSING' },
+  { label: '标签信息不足', value: 'INSUFFICIENT_LABEL' }
 ];
 const PROJECT_REVIEW_POLICY_TYPE_OPTIONS = [
   { label: '项目规则', value: 'PROJECT_RULE' },
@@ -469,6 +502,25 @@ function evaluationCaseVerdictColor(value) {
   return 'default';
 }
 
+function ruleGapAttributionLabel(value) {
+  return RULE_GAP_ATTRIBUTION_OPTIONS.find(item => item.value === value)?.label || value || '未归因';
+}
+
+function ruleGapAttributionColor(value) {
+  if (value === 'RULE_GAP_CAUSED') return 'red';
+  if (value === 'RULE_GAP_RELATED') return 'orange';
+  if (value === 'NOT_RULE_GAP') return 'green';
+  if (value === 'INSUFFICIENT_LABEL') return 'default';
+  return value ? 'blue' : 'default';
+}
+
+function recommendationBasisLabel(value) {
+  if (value === 'PROVEN_BY_EVALUATION_CASES') return '样本证明';
+  if (value === 'MIXED') return '样本 + 高频';
+  if (value === 'FREQUENCY_ONLY') return '高频观察';
+  return value || '-';
+}
+
 function evaluationRunTypeLabel(value) {
   return EVALUATION_RUN_TYPE_OPTIONS.find(item => item.value === value)?.label || value || '-';
 }
@@ -489,6 +541,52 @@ function evaluationRunStatusColor(value) {
       return 'default';
     case 'PENDING':
       return 'blue';
+    default:
+      return 'default';
+  }
+}
+
+function acceptanceGateChangeTypeLabel(value) {
+  return ACCEPTANCE_GATE_CHANGE_TYPE_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function acceptanceGateStatusLabel(value) {
+  return ACCEPTANCE_GATE_STATUS_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function acceptanceGateStatusColor(value) {
+  switch (value) {
+    case 'PASSED':
+      return 'green';
+    case 'FAILED':
+      return 'red';
+    case 'RUNNING_VALIDATION':
+      return 'processing';
+    case 'ADMITTED':
+      return 'blue';
+    case 'CANCELED':
+      return 'default';
+    case 'DRAFT':
+      return 'gold';
+    default:
+      return 'default';
+  }
+}
+
+function acceptanceGateResultStatusLabel(value) {
+  return ACCEPTANCE_GATE_RESULT_STATUS_OPTIONS.find(item => item.value === value)?.label || value || '-';
+}
+
+function acceptanceGateResultStatusColor(value) {
+  switch (value) {
+    case 'IMPROVED':
+      return 'green';
+    case 'REGRESSED':
+      return 'red';
+    case 'NEUTRAL':
+      return 'blue';
+    case 'INCONCLUSIVE':
+      return 'gold';
     default:
       return 'default';
   }
@@ -6420,6 +6518,12 @@ function RuleGapDashboardPage() {
       render: value => ruleGapRecommendationStatusTag(value)
     },
     {
+      title: '推荐依据',
+      dataIndex: 'recommendationBasis',
+      width: 110,
+      render: value => <Tag color={value === 'FREQUENCY_ONLY' ? 'default' : 'purple'}>{recommendationBasisLabel(value)}</Tag>
+    },
+    {
       title: '补全类型',
       dataIndex: 'completionType',
       width: 108,
@@ -6449,9 +6553,10 @@ function RuleGapDashboardPage() {
     },
     {
       title: '评分 / 反馈',
-      width: 150,
+      width: 180,
       render: (_, row) => {
         const feedback = row.feedbackSignals || {};
+        const attribution = row.attributionSignals || {};
         return (
           <Space direction="vertical" size={2}>
             <Text strong>{countText(row.score)} / 100</Text>
@@ -6460,6 +6565,9 @@ function RuleGapDashboardPage() {
             </Text>
             <Text type="secondary">
               上下文不足 {countText(feedback.contextMissingCount)} · 误判 {countText(feedback.falsePositiveCount)}
+            </Text>
+            <Text type="secondary">
+              已归因 {countText(attribution.attributedCaseCount)} · 已证明 {countText(attribution.causedOrRelatedCount)}
             </Text>
           </Space>
         );
@@ -6509,6 +6617,15 @@ function RuleGapDashboardPage() {
           <Descriptions.Item label="反馈关联" span={3}>
             {RULE_GAP_FEEDBACK_CORRELATION[row.feedbackSignals?.correlation] || row.feedbackSignals?.correlation || '暂无关联反馈'}
             {row.feedbackSignals?.note ? `；${row.feedbackSignals.note}` : ''}
+          </Descriptions.Item>
+          <Descriptions.Item label="推荐依据">{recommendationBasisLabel(row.recommendationBasis)}</Descriptions.Item>
+          <Descriptions.Item label="已归因样本">{countText(row.attributionSignals?.attributedCaseCount)}</Descriptions.Item>
+          <Descriptions.Item label="已证明相关">{countText(row.attributionSignals?.causedOrRelatedCount)}</Descriptions.Item>
+          <Descriptions.Item label="归因类型分布" span={3}>
+            <JsonBlock value={row.attributionSignals?.attributionTypeCounts || {}} />
+          </Descriptions.Item>
+          <Descriptions.Item label="关联裁决分布" span={3}>
+            <JsonBlock value={row.attributionSignals?.verdictCounts || {}} />
           </Descriptions.Item>
         </Descriptions>
       </div>
@@ -6636,7 +6753,7 @@ function RuleGapDashboardPage() {
                 dataSource={recommendationItems}
                 expandable={recommendationExpandable}
                 className="rule-gap-table"
-                scroll={{ x: 1220 }}
+                scroll={{ x: 1400 }}
                 pagination={{ pageSize: 10, showSizeChanger: false }}
                 locale={{ emptyText: <Empty description="暂无补全建议" /> }}
               />
@@ -7572,6 +7689,8 @@ function ReviewQualityDashboardPage() {
   const replaySummary = dashboard?.replaySummary || {};
   const refinementSummary = dashboard?.refinementSummary || {};
   const deterministicSummary = dashboard?.deterministicCheckSummary || {};
+  const ruleGapAttributionSummary = dashboard?.ruleGapAttributionSummary || {};
+  const acceptanceGateSummary = dashboard?.acceptanceGateSummary || {};
 
   return (
     <div className="page-shell">
@@ -7665,9 +7784,34 @@ function ReviewQualityDashboardPage() {
                     <Descriptions.Item label="补证据完成 / 失败">{refinementSummary.completedCount ?? 0} / {refinementSummary.failedCount ?? 0}</Descriptions.Item>
                     <Descriptions.Item label="确定性检查 run">{deterministicSummary.runCount ?? 0}</Descriptions.Item>
                     <Descriptions.Item label="确定性命中">{deterministicSummary.findingCount ?? 0}</Descriptions.Item>
+                    <Descriptions.Item label="规则缺口已归因 / 未归因">
+                      {ruleGapAttributionSummary.attributedCaseCount ?? 0} / {ruleGapAttributionSummary.unattributedCaseCount ?? 0}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="规则缺口已证明相关">{ruleGapAttributionSummary.causedOrRelatedCount ?? 0}</Descriptions.Item>
+                    <Descriptions.Item label="验收记录数">{acceptanceGateSummary.recordCount ?? 0}</Descriptions.Item>
+                    <Descriptions.Item label="最近验收状态">
+                      {acceptanceGateSummary.latestStatus ? (
+                        <Tag color={acceptanceGateStatusColor(acceptanceGateSummary.latestStatus)}>
+                          {acceptanceGateStatusLabel(acceptanceGateSummary.latestStatus)}
+                        </Tag>
+                      ) : '-'}
+                    </Descriptions.Item>
                     <Descriptions.Item label="补证据范围" span={2}>{refinementSummary.scopeNote || '-'}</Descriptions.Item>
                     <Descriptions.Item label="确定性检查范围" span={2}>{deterministicSummary.scopeNote || '-'}</Descriptions.Item>
+                    <Descriptions.Item label="验收记录范围" span={2}>{acceptanceGateSummary.scopeNote || '-'}</Descriptions.Item>
                   </Descriptions>
+                </Card>
+              </Col>
+            </Row>
+            <Row gutter={[16, 16]}>
+              <Col xs={24} lg={12}>
+                <Card title="规则缺口归因类型">
+                  <JsonBlock value={ruleGapAttributionSummary.attributionTypeCounts || {}} />
+                </Card>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Card title="规则缺口归因关联裁决">
+                  <JsonBlock value={ruleGapAttributionSummary.verdictCounts || {}} />
                 </Card>
               </Col>
             </Row>
@@ -7734,6 +7878,15 @@ function EvaluationCasesPage() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [attributionModalOpen, setAttributionModalOpen] = useState(false);
+  const [attributionSubmitting, setAttributionSubmitting] = useState(false);
+  const [editingAttributionCase, setEditingAttributionCase] = useState(null);
+  const [attributionDraft, setAttributionDraft] = useState({
+    attributionType: null,
+    ruleGapSummary: [],
+    comment: '',
+    attributedBy: ''
+  });
 
   const projectOptions = useMemo(
     () => projects.map(project => ({ label: project.name, value: project.id })),
@@ -7795,6 +7948,47 @@ function EvaluationCasesPage() {
     load({ pageNo: 1, nextFilters });
   };
 
+  const openAttributionModal = async row => {
+    setEditingAttributionCase(row);
+    setAttributionModalOpen(true);
+    const fallback = row.ruleGapAttribution || {};
+    setAttributionDraft({
+      attributionType: fallback.attributionType || null,
+      ruleGapSummary: safeArray(fallback.ruleGapSummary),
+      comment: fallback.comment || '',
+      attributedBy: fallback.attributedBy || ''
+    });
+    try {
+      const data = await fetchApi(`/api/evaluation-cases/${row.id}/rule-gap-attribution`);
+      setAttributionDraft({
+        attributionType: data.attributionType || null,
+        ruleGapSummary: safeArray(data.ruleGapSummary),
+        comment: data.comment || '',
+        attributedBy: data.attributedBy || ''
+      });
+    } catch (err) {
+      message.error(err.message);
+    }
+  };
+
+  const saveAttribution = async () => {
+    if (!editingAttributionCase?.id) return;
+    setAttributionSubmitting(true);
+    try {
+      await fetchApi(`/api/evaluation-cases/${editingAttributionCase.id}/rule-gap-attribution`, {
+        method: 'PUT',
+        body: JSON.stringify(attributionDraft)
+      });
+      message.success('规则缺口归因已保存');
+      setAttributionModalOpen(false);
+      load();
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setAttributionSubmitting(false);
+    }
+  };
+
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 80 },
     { title: '项目', dataIndex: 'projectName', width: 180, ellipsis: true, render: value => value || '-' },
@@ -7822,6 +8016,12 @@ function EvaluationCasesPage() {
       render: value => <Tag color={evaluationCaseVerdictColor(value)}>{evaluationCaseVerdictLabel(value)}</Tag>
     },
     {
+      title: '规则缺口归因',
+      dataIndex: 'ruleGapAttribution',
+      width: 150,
+      render: value => <Tag color={ruleGapAttributionColor(value?.attributionType)}>{ruleGapAttributionLabel(value?.attributionType)}</Tag>
+    },
+    {
       title: 'Finding',
       dataIndex: 'itemSnapshot',
       width: 260,
@@ -7829,7 +8029,13 @@ function EvaluationCasesPage() {
       render: (value, row) => value?.title || row.findingId || row.fingerprint || '-'
     },
     { title: '人工说明', dataIndex: 'humanComment', ellipsis: true, render: value => value || '-' },
-    { title: '创建时间', dataIndex: 'createdAt', width: 180, render: value => value || '-' }
+    { title: '创建时间', dataIndex: 'createdAt', width: 180, render: value => value || '-' },
+    {
+      title: '操作',
+      width: 120,
+      fixed: 'right',
+      render: (_, row) => <Button size="small" onClick={() => openAttributionModal(row)}>编辑归因</Button>
+    }
   ];
 
   return (
@@ -7897,7 +8103,7 @@ function EvaluationCasesPage() {
             columns={columns}
             dataSource={items}
             tableLayout="fixed"
-            scroll={{ x: 1920 }}
+            scroll={{ x: 2190 }}
             pagination={{
               current: pagination.pageNo,
               pageSize: pagination.pageSize,
@@ -7907,9 +8113,597 @@ function EvaluationCasesPage() {
             }}
           />
         </Card>
+        <Modal
+          title="编辑规则缺口归因"
+          open={attributionModalOpen}
+          onCancel={() => setAttributionModalOpen(false)}
+          onOk={saveAttribution}
+          confirmLoading={attributionSubmitting}
+          okText="保存归因"
+          cancelText="取消"
+          width={760}
+        >
+          <Space direction="vertical" size="middle" className="full-width">
+            <Alert
+              type="info"
+              showIcon
+              message="归因只用于质量诊断"
+              description="不会修改原 AI Review 结果、finding 等级、Prompt、项目策略，也不会触发 Retriever 或门禁。"
+            />
+            <Descriptions size="small" column={2} bordered>
+              <Descriptions.Item label="Case ID">{editingAttributionCase?.id || '-'}</Descriptions.Item>
+              <Descriptions.Item label="裁决">{evaluationCaseVerdictLabel(editingAttributionCase?.verdict)}</Descriptions.Item>
+              <Descriptions.Item label="任务">{editingAttributionCase?.taskId || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Review Key">{editingAttributionCase?.reviewKey || '-'}</Descriptions.Item>
+            </Descriptions>
+            <Select
+              allowClear
+              className="full-width"
+              placeholder="选择归因类型"
+              value={attributionDraft.attributionType || undefined}
+              options={RULE_GAP_ATTRIBUTION_OPTIONS}
+              onChange={value => setAttributionDraft(current => ({ ...current, attributionType: value || null }))}
+            />
+            <Input
+              allowClear
+              placeholder="归因人，例如 reviewer / admin"
+              value={attributionDraft.attributedBy}
+              onChange={event => setAttributionDraft(current => ({ ...current, attributedBy: event.target.value }))}
+            />
+            <Input.TextArea
+              rows={3}
+              maxLength={4000}
+              placeholder="归因说明"
+              value={attributionDraft.comment}
+              onChange={event => setAttributionDraft(current => ({ ...current, comment: event.target.value }))}
+            />
+            <Card size="small" title="安全 Rule Gap 摘要">
+              {safeArray(attributionDraft.ruleGapSummary).length ? (
+                <Table
+                  rowKey={(row, index) => row.summaryKey || `${row.gapType}-${row.signal}-${index}`}
+                  size="small"
+                  pagination={false}
+                  columns={[
+                    { title: '缺口类型', dataIndex: 'gapType', width: 190, render: value => <Tag color="orange">{value || '-'}</Tag> },
+                    { title: 'Signal', dataIndex: 'signal', width: 180, ellipsis: true },
+                    { title: 'Requested Context', dataIndex: 'requestedContext', width: 180, ellipsis: true },
+                    { title: '建议能力', dataIndex: 'suggestedCapability', ellipsis: true }
+                  ]}
+                  dataSource={safeArray(attributionDraft.ruleGapSummary)}
+                  scroll={{ x: 760 }}
+                />
+              ) : (
+                <Empty description="暂无 rule gap 摘要；可先从有高准确模式流转的 AI finding 创建样本" />
+              )}
+            </Card>
+          </Space>
+        </Modal>
       </Space>
     </div>
   );
+}
+
+function AcceptanceGatesPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const route = currentRoute(location);
+  const [items, setItems] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [pagination, setPagination] = useState({ pageNo: 1, pageSize: 20, total: 0 });
+  const [filters, setFilters] = useState({
+    projectId: null,
+    changeType: null,
+    status: null,
+    provider: '',
+    profile: '',
+    riskType: ''
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [editingGate, setEditingGate] = useState(null);
+  const [draft, setDraft] = useState(() => emptyAcceptanceGateDraft());
+
+  const projectOptions = useMemo(
+    () => projects.map(project => ({ label: project.name, value: project.id })),
+    [projects]
+  );
+
+  const loadProjects = async () => {
+    try {
+      const data = await fetchApi('/api/projects?includeDisabled=true&pageSize=500');
+      setProjects(data.items || []);
+    } catch {
+      setProjects([]);
+    }
+  };
+
+  const load = async ({ pageNo = pagination.pageNo, pageSize = pagination.pageSize, nextFilters = filters } = {}) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set('pageNo', String(pageNo));
+      params.set('pageSize', String(pageSize));
+      if (nextFilters.projectId) params.set('projectId', String(nextFilters.projectId));
+      if (nextFilters.changeType) params.set('changeType', nextFilters.changeType);
+      if (nextFilters.status) params.set('status', nextFilters.status);
+      if (nextFilters.provider?.trim()) params.set('provider', nextFilters.provider.trim());
+      if (nextFilters.profile?.trim()) params.set('profile', nextFilters.profile.trim());
+      if (nextFilters.riskType?.trim()) params.set('riskType', nextFilters.riskType.trim());
+      const data = await fetchApi(`/api/review-quality/acceptance-gates?${params.toString()}`);
+      setItems(data.items || []);
+      setPagination({ pageNo: data.pageNo || pageNo, pageSize: data.pageSize || pageSize, total: data.total || 0 });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProjects();
+    load({ pageNo: 1 });
+  }, []);
+
+  const updateFilter = (field, value) => {
+    setFilters(current => ({
+      ...current,
+      [field]: value === undefined ? null : value
+    }));
+  };
+
+  const resetFilters = () => {
+    const nextFilters = {
+      projectId: null,
+      changeType: null,
+      status: null,
+      provider: '',
+      profile: '',
+      riskType: ''
+    };
+    setFilters(nextFilters);
+    load({ pageNo: 1, nextFilters });
+  };
+
+  const openCreate = () => {
+    setEditingGate(null);
+    setDraft(emptyAcceptanceGateDraft());
+    setModalOpen(true);
+  };
+
+  const openEdit = async row => {
+    setEditingGate(row);
+    setModalOpen(true);
+    setDraft(emptyAcceptanceGateDraft(row));
+    try {
+      const detail = await fetchApi(`/api/review-quality/acceptance-gates/${row.id}`);
+      setDraft(emptyAcceptanceGateDraft(detail));
+    } catch (err) {
+      message.error(err.message);
+    }
+  };
+
+  const saveGate = async () => {
+    if (!draft.projectId || !draft.title.trim()) {
+      message.error('项目和标题必填');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const payload = acceptanceGateDraftToPayload(draft);
+      const path = editingGate?.id
+        ? `/api/review-quality/acceptance-gates/${editingGate.id}`
+        : '/api/review-quality/acceptance-gates';
+      await fetchApi(path, {
+        method: editingGate?.id ? 'PUT' : 'POST',
+        body: JSON.stringify(payload)
+      });
+      message.success(editingGate?.id ? '验收记录已更新' : '验收记录已创建');
+      setModalOpen(false);
+      load({ pageNo: 1 });
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const columns = [
+    { title: 'ID', dataIndex: 'id', width: 80 },
+    {
+      title: '标题',
+      dataIndex: 'title',
+      width: 240,
+      ellipsis: true,
+      render: (value, row) => (
+        <Button type="link" onClick={() => navigate(`${ACCEPTANCE_GATES_ROUTE}/${row.id}`, { state: { from: route } })}>
+          {value || `Gate #${row.id}`}
+        </Button>
+      )
+    },
+    { title: '项目', dataIndex: 'projectName', width: 180, ellipsis: true, render: value => value || '-' },
+    { title: '改动类型', dataIndex: 'changeType', width: 130, render: value => <Tag>{acceptanceGateChangeTypeLabel(value)}</Tag> },
+    { title: '状态', dataIndex: 'status', width: 120, render: value => <Tag color={acceptanceGateStatusColor(value)}>{acceptanceGateStatusLabel(value)}</Tag> },
+    { title: 'Provider', dataIndex: 'provider', width: 120, ellipsis: true, render: value => value || '-' },
+    { title: 'Profile', dataIndex: 'profile', width: 190, ellipsis: true, render: value => value || '-' },
+    { title: '风险类型', dataIndex: 'riskType', width: 130, render: value => value ? <Tag color="blue">{categoryLabel(value)}</Tag> : '-' },
+    { title: '关联样本', dataIndex: 'evaluationCaseCount', width: 100, render: value => value ?? 0 },
+    { title: '关联 Run', dataIndex: 'evaluationRunCount', width: 100, render: value => value ?? 0 },
+    {
+      title: '核心 Delta',
+      dataIndex: 'coreDelta',
+      width: 260,
+      render: value => (
+        <Space size={4} wrap>
+          {value?.resultStatus && <Tag color={acceptanceGateResultStatusColor(value.resultStatus)}>{acceptanceGateResultStatusLabel(value.resultStatus)}</Tag>}
+          {value?.falsePositiveDelta != null && <Tag>误判 {value.falsePositiveDelta}</Tag>}
+          {value?.contextMissingDelta != null && <Tag>上下文 {value.contextMissingDelta}</Tag>}
+          {value?.missingFindingDelta != null && <Tag>漏报 {value.missingFindingDelta}</Tag>}
+          {value?.findingCountDelta != null && <Tag>Finding {value.findingCountDelta}</Tag>}
+        </Space>
+      )
+    },
+    { title: '更新时间', dataIndex: 'updatedAt', width: 180, render: value => value || '-' },
+    { title: '操作', width: 100, fixed: 'right', render: (_, row) => <Button size="small" onClick={() => openEdit(row)}>编辑</Button> }
+  ];
+
+  return (
+    <div className="page-shell">
+      <Space direction="vertical" size="large" className="full-width">
+        <div className="page-title-row">
+          <div>
+            <Title level={3}>验收记录</Title>
+            <Text type="secondary">记录规则、Retriever、Prompt、Context Pack、确定性检查或 Provider 改动的人工准入和退出验收。</Text>
+          </div>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建验收记录</Button>
+        </div>
+        <Alert
+          type="info"
+          showIcon
+          message="人工治理门禁"
+          description="验收记录不会阻断线上 Review、代码合并或运行时流程，也不会自动修改 Prompt、项目策略或 finding。"
+        />
+        <Card>
+          <Space wrap className="task-filter-bar">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              className="filter-select"
+              placeholder="项目"
+              value={filters.projectId || undefined}
+              options={projectOptions}
+              onChange={value => updateFilter('projectId', value)}
+            />
+            <Select
+              allowClear
+              className="filter-select"
+              placeholder="改动类型"
+              value={filters.changeType || undefined}
+              options={ACCEPTANCE_GATE_CHANGE_TYPE_OPTIONS}
+              onChange={value => updateFilter('changeType', value)}
+            />
+            <Select
+              allowClear
+              className="filter-select"
+              placeholder="状态"
+              value={filters.status || undefined}
+              options={ACCEPTANCE_GATE_STATUS_OPTIONS}
+              onChange={value => updateFilter('status', value)}
+            />
+            <Input allowClear className="filter-input" placeholder="Provider" value={filters.provider} onChange={event => updateFilter('provider', event.target.value)} onPressEnter={() => load({ pageNo: 1 })} />
+            <Input allowClear className="filter-input" placeholder="Profile" value={filters.profile} onChange={event => updateFilter('profile', event.target.value)} onPressEnter={() => load({ pageNo: 1 })} />
+            <Input allowClear className="filter-input" placeholder="风险类型" value={filters.riskType} onChange={event => updateFilter('riskType', event.target.value)} onPressEnter={() => load({ pageNo: 1 })} />
+            <Button type="primary" icon={<SearchOutlined />} onClick={() => load({ pageNo: 1 })}>搜索</Button>
+            <Button onClick={resetFilters}>重置</Button>
+          </Space>
+        </Card>
+        {error && <Alert type="error" showIcon message={error} />}
+        <Card>
+          <Table
+            rowKey="id"
+            loading={loading}
+            columns={columns}
+            dataSource={items}
+            tableLayout="fixed"
+            scroll={{ x: 2040 }}
+            pagination={{
+              current: pagination.pageNo,
+              pageSize: pagination.pageSize,
+              total: pagination.total,
+              showTotal: total => `共 ${total} 条`,
+              onChange: (pageNo, pageSize) => load({ pageNo, pageSize })
+            }}
+          />
+        </Card>
+        <AcceptanceGateModal
+          open={modalOpen}
+          projects={projectOptions}
+          draft={draft}
+          setDraft={setDraft}
+          editing={Boolean(editingGate?.id)}
+          submitting={submitting}
+          onCancel={() => setModalOpen(false)}
+          onOk={saveGate}
+        />
+      </Space>
+    </div>
+  );
+}
+
+function AcceptanceGateModal({ open, projects, draft, setDraft, editing, submitting, onCancel, onOk }) {
+  const update = (field, value) => setDraft(current => ({ ...current, [field]: value }));
+  const updateAdmission = (field, value) => setDraft(current => ({ ...current, admission: { ...current.admission, [field]: value } }));
+  const updateExit = (field, value) => setDraft(current => ({ ...current, exit: { ...current.exit, [field]: value } }));
+
+  return (
+    <Modal
+      title={editing ? '编辑验收记录' : '新建验收记录'}
+      open={open}
+      onCancel={onCancel}
+      onOk={onOk}
+      confirmLoading={submitting}
+      okText={editing ? '保存' : '创建'}
+      cancelText="取消"
+      width={900}
+    >
+      <Space direction="vertical" size="middle" className="full-width">
+        <Row gutter={12}>
+          <Col xs={24} md={12}>
+            <Text type="secondary">项目</Text>
+            <Select showSearch optionFilterProp="label" className="full-width" value={draft.projectId || undefined} options={projects} onChange={value => update('projectId', value)} />
+          </Col>
+          <Col xs={24} md={12}>
+            <Text type="secondary">标题</Text>
+            <Input value={draft.title} onChange={event => update('title', event.target.value)} placeholder="例如：补缓存 Retriever 准入" />
+          </Col>
+        </Row>
+        <Row gutter={12}>
+          <Col xs={24} md={8}>
+            <Text type="secondary">改动类型</Text>
+            <Select className="full-width" value={draft.changeType} options={ACCEPTANCE_GATE_CHANGE_TYPE_OPTIONS} onChange={value => update('changeType', value)} />
+          </Col>
+          <Col xs={24} md={8}>
+            <Text type="secondary">状态</Text>
+            <Select className="full-width" value={draft.status} options={ACCEPTANCE_GATE_STATUS_OPTIONS} onChange={value => update('status', value)} />
+          </Col>
+          <Col xs={24} md={8}>
+            <Text type="secondary">退出结果</Text>
+            <Select allowClear className="full-width" value={draft.exit.resultStatus || undefined} options={ACCEPTANCE_GATE_RESULT_STATUS_OPTIONS} onChange={value => updateExit('resultStatus', value || null)} />
+          </Col>
+        </Row>
+        <Row gutter={12}>
+          <Col xs={24} md={8}><Text type="secondary">Provider</Text><Input value={draft.provider} onChange={event => update('provider', event.target.value)} /></Col>
+          <Col xs={24} md={8}><Text type="secondary">Profile</Text><Input value={draft.profile} onChange={event => update('profile', event.target.value)} /></Col>
+          <Col xs={24} md={8}><Text type="secondary">风险类型</Text><Input value={draft.riskType} onChange={event => update('riskType', event.target.value)} /></Col>
+        </Row>
+        <Row gutter={12}>
+          <Col xs={24} md={12}><Text type="secondary">关联 Evaluation Case IDs</Text><Input value={draft.evaluationCaseIdsText} onChange={event => update('evaluationCaseIdsText', event.target.value)} placeholder="例如：1,2,3" /></Col>
+          <Col xs={24} md={12}><Text type="secondary">关联 Evaluation Run IDs</Text><Input value={draft.evaluationRunIdsText} onChange={event => update('evaluationRunIdsText', event.target.value)} placeholder="例如：10,11" /></Col>
+        </Row>
+        <Card size="small" title="准入信息">
+          <Space direction="vertical" className="full-width">
+            <Input.TextArea rows={2} placeholder="问题说明" value={draft.admission.problemStatement} onChange={event => updateAdmission('problemStatement', event.target.value)} />
+            <Input.TextArea rows={2} placeholder="预期收益" value={draft.admission.expectedBenefit} onChange={event => updateAdmission('expectedBenefit', event.target.value)} />
+            <Input.TextArea rows={2} placeholder="风险评估" value={draft.admission.riskAssessment} onChange={event => updateAdmission('riskAssessment', event.target.value)} />
+            <Input.TextArea rows={2} placeholder="成本估算" value={draft.admission.costEstimate} onChange={event => updateAdmission('costEstimate', event.target.value)} />
+            <Row gutter={12}>
+              <Col xs={24} md={12}><Input placeholder="决策人" value={draft.admission.decisionBy} onChange={event => updateAdmission('decisionBy', event.target.value)} /></Col>
+              <Col xs={24} md={12}><Input placeholder="决策时间，例如 2026-07-02T10:00:00+08:00" value={draft.admission.decisionAt} onChange={event => updateAdmission('decisionAt', event.target.value)} /></Col>
+            </Row>
+          </Space>
+        </Card>
+        <Card size="small" title="退出结果">
+          <Row gutter={12}>
+            <Col xs={12} md={6}><Text type="secondary">误判 Delta</Text><InputNumber className="full-width" value={draft.exit.falsePositiveDelta} onChange={value => updateExit('falsePositiveDelta', value)} /></Col>
+            <Col xs={12} md={6}><Text type="secondary">上下文 Delta</Text><InputNumber className="full-width" value={draft.exit.contextMissingDelta} onChange={value => updateExit('contextMissingDelta', value)} /></Col>
+            <Col xs={12} md={6}><Text type="secondary">漏报 Delta</Text><InputNumber className="full-width" value={draft.exit.missingFindingDelta} onChange={value => updateExit('missingFindingDelta', value)} /></Col>
+            <Col xs={12} md={6}><Text type="secondary">Finding Delta</Text><InputNumber className="full-width" value={draft.exit.findingCountDelta} onChange={value => updateExit('findingCountDelta', value)} /></Col>
+          </Row>
+          <Row gutter={12} className="section-gap">
+            <Col xs={12} md={6}><Text type="secondary">耗时 Delta ms</Text><InputNumber className="full-width" value={draft.exit.durationDeltaMs} onChange={value => updateExit('durationDeltaMs', value)} /></Col>
+            <Col xs={12} md={6}><Text type="secondary">Token 成本 Delta</Text><InputNumber className="full-width" value={draft.exit.tokenCostDelta} onChange={value => updateExit('tokenCostDelta', value)} /></Col>
+            <Col xs={24} md={6}><Text type="secondary">决策人</Text><Input value={draft.exit.decidedBy} onChange={event => updateExit('decidedBy', event.target.value)} /></Col>
+            <Col xs={24} md={6}><Text type="secondary">决策时间</Text><Input value={draft.exit.decidedAt} onChange={event => updateExit('decidedAt', event.target.value)} /></Col>
+          </Row>
+          <Input.TextArea className="section-gap" rows={2} placeholder="退出说明" value={draft.exit.notes} onChange={event => updateExit('notes', event.target.value)} />
+        </Card>
+        <Card size="small" title="Rule Gap 安全摘要 JSON">
+          <Input.TextArea rows={4} value={draft.ruleGapSummaryText} onChange={event => update('ruleGapSummaryText', event.target.value)} placeholder='[{"gapType":"UNSUPPORTED_PLANNER_SIGNAL","signal":"CACHE_WRITE_DELETE_CHANGED","requestedContext":"CACHE_USAGE_CONTEXT","suggestedCapability":"Add cache retriever.","summaryKey":"cache-gap"}]' />
+        </Card>
+      </Space>
+    </Modal>
+  );
+}
+
+function AcceptanceGateDetailPage() {
+  const { gateId } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = resolveBackTarget(location, ACCEPTANCE_GATES_ROUTE);
+  const [gate, setGate] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const load = async () => {
+    if (!gateId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchApi(`/api/review-quality/acceptance-gates/${gateId}`);
+      setGate(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [gateId]);
+
+  const ruleGapColumns = [
+    { title: '缺口类型', dataIndex: 'gapType', width: 190, render: value => <Tag color="orange">{value || '-'}</Tag> },
+    { title: 'Signal', dataIndex: 'signal', width: 190, ellipsis: true },
+    { title: 'Requested Context', dataIndex: 'requestedContext', width: 190, ellipsis: true },
+    { title: '建议能力', dataIndex: 'suggestedCapability', ellipsis: true },
+    { title: 'Summary Key', dataIndex: 'summaryKey', width: 180, ellipsis: true }
+  ];
+
+  return (
+    <div className="page-shell">
+      <Space direction="vertical" size="large" className="full-width">
+        <div className="page-title-row">
+          <Space>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(backTarget)}>返回</Button>
+            <div>
+              <Title level={3}>{gate?.title || '验收详情'}</Title>
+              <Text type="secondary">人工准入和退出验收记录，不阻断线上 Review 或合并流程。</Text>
+            </div>
+          </Space>
+          <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+        </div>
+        {error && <Alert type="error" showIcon message={error} />}
+        <Spin spinning={loading}>
+          {gate ? (
+            <Space direction="vertical" size="large" className="full-width">
+              <Card title="基础信息">
+                <Descriptions column={2} size="small" bordered>
+                  <Descriptions.Item label="ID">{gate.id}</Descriptions.Item>
+                  <Descriptions.Item label="项目">{gate.projectName || gate.projectId}</Descriptions.Item>
+                  <Descriptions.Item label="改动类型"><Tag>{acceptanceGateChangeTypeLabel(gate.changeType)}</Tag></Descriptions.Item>
+                  <Descriptions.Item label="状态"><Tag color={acceptanceGateStatusColor(gate.status)}>{acceptanceGateStatusLabel(gate.status)}</Tag></Descriptions.Item>
+                  <Descriptions.Item label="Provider">{gate.provider || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="Profile">{gate.profile || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="风险类型">{gate.riskType || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="更新时间">{gate.updatedAt || '-'}</Descriptions.Item>
+                </Descriptions>
+              </Card>
+              <Row gutter={[16, 16]}>
+                <Col xs={24} lg={12}>
+                  <Card title="准入信息">
+                    <Descriptions column={1} size="small" bordered>
+                      <Descriptions.Item label="问题说明">{gate.admission?.problemStatement || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="预期收益">{gate.admission?.expectedBenefit || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="风险评估">{gate.admission?.riskAssessment || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="成本估算">{gate.admission?.costEstimate || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="决策人">{gate.admission?.decisionBy || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="决策时间">{gate.admission?.decisionAt || '-'}</Descriptions.Item>
+                    </Descriptions>
+                  </Card>
+                </Col>
+                <Col xs={24} lg={12}>
+                  <Card title="退出结果">
+                    <Descriptions column={1} size="small" bordered>
+                      <Descriptions.Item label="结果状态"><Tag color={acceptanceGateResultStatusColor(gate.exit?.resultStatus)}>{acceptanceGateResultStatusLabel(gate.exit?.resultStatus)}</Tag></Descriptions.Item>
+                      <Descriptions.Item label="误判 Delta">{gate.exit?.falsePositiveDelta ?? '-'}</Descriptions.Item>
+                      <Descriptions.Item label="上下文不足 Delta">{gate.exit?.contextMissingDelta ?? '-'}</Descriptions.Item>
+                      <Descriptions.Item label="漏报 Delta">{gate.exit?.missingFindingDelta ?? '-'}</Descriptions.Item>
+                      <Descriptions.Item label="Finding 数 Delta">{gate.exit?.findingCountDelta ?? '-'}</Descriptions.Item>
+                      <Descriptions.Item label="耗时 Delta">{gate.exit?.durationDeltaMs ?? '-'}</Descriptions.Item>
+                      <Descriptions.Item label="Token 成本 Delta">{gate.exit?.tokenCostDelta ?? '-'}</Descriptions.Item>
+                      <Descriptions.Item label="说明">{gate.exit?.notes || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="决策人">{gate.exit?.decidedBy || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="决策时间">{gate.exit?.decidedAt || '-'}</Descriptions.Item>
+                    </Descriptions>
+                  </Card>
+                </Col>
+              </Row>
+              <Card title="关联对象">
+                <Descriptions column={2} size="small" bordered>
+                  <Descriptions.Item label="Evaluation Cases">
+                    <Space wrap>{safeArray(gate.evaluationCaseIds).map(id => <Tag key={id}>#{id}</Tag>)}</Space>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Evaluation Runs">
+                    <Space wrap>{safeArray(gate.evaluationRunIds).map(id => <Button key={id} type="link" onClick={() => navigate(`${EVALUATION_RUNS_ROUTE}/${id}`, { state: { from: currentRoute(location) } })}>Run #{id}</Button>)}</Space>
+                  </Descriptions.Item>
+                </Descriptions>
+              </Card>
+              <Card title="Rule Gap 安全摘要">
+                <Table rowKey={(row, index) => row.summaryKey || `${row.gapType}-${row.signal}-${index}`} size="small" columns={ruleGapColumns} dataSource={safeArray(gate.ruleGapSummary)} pagination={false} scroll={{ x: 940 }} />
+              </Card>
+            </Space>
+          ) : (
+            !loading && <Empty description="暂无验收记录详情" />
+          )}
+        </Spin>
+      </Space>
+    </div>
+  );
+}
+
+function emptyAcceptanceGateDraft(source = {}) {
+  return {
+    projectId: source.projectId || null,
+    title: source.title || '',
+    changeType: source.changeType || 'OTHER',
+    status: source.status || 'DRAFT',
+    provider: source.provider || '',
+    profile: source.profile || '',
+    riskType: source.riskType || '',
+    evaluationCaseIdsText: safeArray(source.evaluationCaseIds).join(','),
+    evaluationRunIdsText: safeArray(source.evaluationRunIds).join(','),
+    ruleGapSummaryText: JSON.stringify(safeArray(source.ruleGapSummary), null, 2),
+    admission: {
+      problemStatement: source.admission?.problemStatement || '',
+      expectedBenefit: source.admission?.expectedBenefit || '',
+      riskAssessment: source.admission?.riskAssessment || '',
+      costEstimate: source.admission?.costEstimate || '',
+      decisionBy: source.admission?.decisionBy || '',
+      decisionAt: source.admission?.decisionAt || ''
+    },
+    exit: {
+      resultStatus: source.exit?.resultStatus || null,
+      falsePositiveDelta: source.exit?.falsePositiveDelta ?? null,
+      contextMissingDelta: source.exit?.contextMissingDelta ?? null,
+      missingFindingDelta: source.exit?.missingFindingDelta ?? null,
+      findingCountDelta: source.exit?.findingCountDelta ?? null,
+      durationDeltaMs: source.exit?.durationDeltaMs ?? null,
+      tokenCostDelta: source.exit?.tokenCostDelta ?? null,
+      notes: source.exit?.notes || '',
+      decidedBy: source.exit?.decidedBy || '',
+      decidedAt: source.exit?.decidedAt || ''
+    }
+  };
+}
+
+function acceptanceGateDraftToPayload(draft) {
+  return {
+    projectId: draft.projectId,
+    title: draft.title,
+    changeType: draft.changeType,
+    status: draft.status,
+    provider: draft.provider || null,
+    profile: draft.profile || null,
+    riskType: draft.riskType || null,
+    evaluationCaseIds: parseIdList(draft.evaluationCaseIdsText),
+    evaluationRunIds: parseIdList(draft.evaluationRunIdsText),
+    ruleGapSummary: parseJsonArray(draft.ruleGapSummaryText),
+    admission: draft.admission,
+    exit: draft.exit
+  };
+}
+
+function parseIdList(value) {
+  return String(value || '')
+    .split(/[,\s]+/)
+    .map(item => Number(item))
+    .filter(item => Number.isFinite(item) && item > 0);
+}
+
+function parseJsonArray(value) {
+  const text = String(value || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    message.warning('Rule Gap 摘要 JSON 无效，已按空数组提交');
+    return [];
+  }
 }
 
 function EvaluationRunsPage() {
@@ -8251,6 +9045,7 @@ function AppFrame() {
   const isRuleGapRoute = location.pathname.startsWith(RULE_GAPS_ROUTE);
   const isFeedbackRoute = location.pathname.startsWith(FEEDBACK_ROUTE);
   const isReviewQualityRoute = location.pathname.startsWith(REVIEW_QUALITY_ROUTE);
+  const isAcceptanceGatesRoute = location.pathname.startsWith(ACCEPTANCE_GATES_ROUTE);
   const isEvaluationCasesRoute = location.pathname.startsWith(EVALUATION_CASES_ROUTE);
   const isEvaluationRunsRoute = location.pathname.startsWith(EVALUATION_RUNS_ROUTE);
   const isSettingsRoute = location.pathname.startsWith(SETTINGS_ROUTE);
@@ -8362,6 +9157,13 @@ function AppFrame() {
             质量看板
           </Button>
           <Button
+            icon={<FileSearchOutlined />}
+            type={isAcceptanceGatesRoute ? 'primary' : 'default'}
+            onClick={() => navigate(ACCEPTANCE_GATES_ROUTE, { state: { from: route } })}
+          >
+            验收记录
+          </Button>
+          <Button
             icon={<CommentOutlined />}
             type={isEvaluationCasesRoute ? 'primary' : 'default'}
             onClick={() => navigate(EVALUATION_CASES_ROUTE, { state: { from: route } })}
@@ -8434,6 +9236,8 @@ function AppFrame() {
             element={REVIEW_LEARNING_UI_ENABLED ? <RiskFeedbackPage /> : <Navigate to={TASK_LIST_ROUTE} replace />}
           />
           <Route path={REVIEW_QUALITY_ROUTE} element={<ReviewQualityDashboardPage />} />
+          <Route path={ACCEPTANCE_GATES_ROUTE} element={<AcceptanceGatesPage />} />
+          <Route path={`${ACCEPTANCE_GATES_ROUTE}/:gateId`} element={<AcceptanceGateDetailPage />} />
           <Route path={EVALUATION_CASES_ROUTE} element={<EvaluationCasesPage />} />
           <Route path={EVALUATION_RUNS_ROUTE} element={<EvaluationRunsPage />} />
           <Route path={`${EVALUATION_RUNS_ROUTE}/:runId`} element={<EvaluationRunDetailPage />} />

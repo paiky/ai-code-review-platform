@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.code_quality.models import CodeQualityReviewProgressEvent
 from app.code_quality.models import CodeQualityReviewResult
+from app.code_quality.repository import scrub_sensitive
 from app.core.errors import AppError
 from app.core.json_utils import read_json
 from app.evaluation.models import EvaluationCase
@@ -23,6 +27,7 @@ from app.evaluation.repository import (
     list_evaluation_runs,
     list_evaluation_cases,
     refresh_evaluation_run_aggregate,
+    rule_gap_attribution_to_response,
     update_evaluation_case,
     update_evaluation_run_item,
 )
@@ -44,6 +49,21 @@ VERDICTS = {
 SOURCES = {"AI_FINDING", "MANUAL"}
 RUN_TYPES = {"EVALUATION", "REVIEW_REPLAY"}
 RUN_STATUSES = {"PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELED"}
+RULE_GAP_ATTRIBUTION_TYPES = {
+    "RULE_GAP_CAUSED",
+    "RULE_GAP_RELATED",
+    "NOT_RULE_GAP",
+    "PROMPT_ISSUE",
+    "MODEL_REASONING_ISSUE",
+    "PROJECT_POLICY_MISSING",
+    "INSUFFICIENT_LABEL",
+}
+RULE_GAP_PROVEN_ATTRIBUTIONS = {"RULE_GAP_CAUSED", "RULE_GAP_RELATED"}
+RULE_GAP_PROVEN_VERDICTS = {"FALSE_POSITIVE", "CONTEXT_MISSING", "MISSING_FINDING"}
+_LOCAL_PATH_PATTERNS = [
+    re.compile(r"[A-Za-z]:\\[^\s,;'\"}]+"),
+    re.compile(r"/[^\s,;'\"}]+(?:/\.local|/review-workspaces|/worktrees|/mirrors|/tmp)[^\s,;'\"}]*"),
+]
 
 
 def create_evaluation_case_response(db: Session, request: dict[str, Any]) -> dict[str, Any]:
@@ -86,6 +106,31 @@ def get_evaluation_case_response(db: Session, case_id: int) -> dict[str, Any]:
     if record is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Evaluation case not found: {case_id}", 404)
     return _case_response(db, record)
+
+
+def get_rule_gap_attribution_response(db: Session, case_id: int) -> dict[str, Any]:
+    record = get_evaluation_case(db, case_id)
+    if record is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Evaluation case not found: {case_id}", 404)
+    return rule_gap_attribution_to_response(record)
+
+
+def update_rule_gap_attribution_response(db: Session, case_id: int, request: dict[str, Any]) -> dict[str, Any]:
+    record = get_evaluation_case(db, case_id)
+    if record is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Evaluation case not found: {case_id}", 404)
+    values = {
+        "rule_gap_attribution_type": _normalize_optional_enum(
+            request.get("attributionType"), RULE_GAP_ATTRIBUTION_TYPES, "attributionType"
+        ),
+        "rule_gap_summary_json": json.dumps(_rule_gap_summary_from_request(request.get("ruleGapSummary")), ensure_ascii=False),
+        "rule_gap_attribution_comment": _safe_summary_text(request.get("comment"), 4000) or None,
+        "rule_gap_attributed_by": _clean_text(request.get("attributedBy"), 128),
+        "rule_gap_attributed_at": datetime.now(),
+    }
+    updated = update_evaluation_case(db, record, values)
+    db.commit()
+    return rule_gap_attribution_to_response(updated)
 
 
 def update_evaluation_case_response(db: Session, case_id: int, request: dict[str, Any]) -> dict[str, Any]:
@@ -288,6 +333,9 @@ def _values_from_ai_finding(
         "human_comment": _clean_text(request.get("humanComment"), 4000),
         "source": source,
         "item_snapshot_json": json.dumps(finding, ensure_ascii=False),
+        "rule_gap_summary_json": json.dumps(
+            _latest_rule_gap_summary_for_case(db, task.id, result.review_key), ensure_ascii=False
+        ),
     }
 
 
@@ -322,6 +370,7 @@ def _values_from_manual_case(
         "human_comment": _clean_text(request.get("humanComment"), 4000),
         "source": source,
         "item_snapshot_json": json.dumps(snapshot, ensure_ascii=False) if snapshot else None,
+        "rule_gap_summary_json": json.dumps(_rule_gap_summary_from_request(request.get("ruleGapSummary")), ensure_ascii=False),
     }
 
 
@@ -355,6 +404,98 @@ def _case_response(db: Session, record: EvaluationCase) -> dict[str, Any]:
     project = db.get(Project, record.project_id)
     task = db.get(ReviewTask, record.task_id) if record.task_id is not None else None
     return evaluation_case_to_response(record, project=project, task=task)
+
+
+def _latest_rule_gap_summary_for_case(db: Session, task_id: int, review_key: str | None) -> list[dict[str, Any]]:
+    stmt = (
+        select(CodeQualityReviewProgressEvent)
+        .where(CodeQualityReviewProgressEvent.task_id == task_id)
+        .where(CodeQualityReviewProgressEvent.phase == "CONTEXT_PACK_BUILT")
+    )
+    if review_key:
+        stmt = stmt.where(CodeQualityReviewProgressEvent.review_key == review_key)
+    event = db.scalars(stmt.order_by(CodeQualityReviewProgressEvent.created_at.desc(), CodeQualityReviewProgressEvent.id.desc())).first()
+    if event is None:
+        return []
+    detail = read_json(event.detail, {})
+    summary = detail.get("summary") if isinstance(detail, dict) and isinstance(detail.get("summary"), dict) else detail
+    items = summary.get("ruleGapItems") if isinstance(summary, dict) else []
+    enriched = []
+    for index, item in enumerate(items if isinstance(items, list) else []):
+        normalized = _normalize_rule_gap_summary_item(item, task_id=task_id, review_key=review_key, progress_event_id=event.id)
+        if normalized:
+            normalized["summaryKey"] = normalized.get("summaryKey") or _rule_gap_summary_key(normalized, index)
+            enriched.append(normalized)
+        if len(enriched) >= 5:
+            break
+    return enriched
+
+
+def _rule_gap_summary_from_request(value: Any) -> list[dict[str, Any]]:
+    items = value if isinstance(value, list) else []
+    result = []
+    for index, item in enumerate(items):
+        normalized = _normalize_rule_gap_summary_item(item)
+        if normalized:
+            normalized["summaryKey"] = normalized.get("summaryKey") or _rule_gap_summary_key(normalized, index)
+            result.append(normalized)
+        if len(result) >= 20:
+            break
+    return result
+
+
+def _normalize_rule_gap_summary_item(
+    item: Any,
+    *,
+    task_id: int | None = None,
+    review_key: str | None = None,
+    progress_event_id: int | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    gap_type = _safe_summary_text(item.get("gapType"), 64).upper()
+    signal = _safe_summary_text(item.get("signal"), 120).upper()
+    if not gap_type or not signal:
+        return None
+    requested_context = _safe_summary_text(item.get("requestedContext"), 160).upper()
+    suggested_capability = _safe_summary_text(item.get("suggestedCapability"), 240)
+    result: dict[str, Any] = {
+        "gapType": gap_type,
+        "signal": signal,
+        "requestedContext": requested_context or "-",
+        "suggestedCapability": suggested_capability or "-",
+    }
+    item_task_id = _to_int(item.get("taskId")) or task_id
+    if item_task_id is not None:
+        result["taskId"] = item_task_id
+    item_review_key = _clean_text(item.get("reviewKey"), 64) or review_key
+    if item_review_key:
+        result["reviewKey"] = item_review_key
+    item_progress_id = _to_int(item.get("progressEventId")) or progress_event_id
+    if item_progress_id is not None:
+        result["progressEventId"] = item_progress_id
+    summary_key = _clean_text(item.get("summaryKey"), 180)
+    if summary_key:
+        result["summaryKey"] = _safe_summary_text(summary_key, 180)
+    return result
+
+
+def _rule_gap_summary_key(item: dict[str, Any], index: int) -> str:
+    raw = "|".join(
+        str(item.get(key) or "")
+        for key in ("gapType", "signal", "requestedContext", "suggestedCapability", "taskId", "reviewKey")
+    )
+    return _safe_summary_text(raw, 180) or f"rule-gap-{index}"
+
+
+def _safe_summary_text(value: Any, max_length: int) -> str:
+    text = scrub_sensitive(str(value or "").strip())
+    for pattern in _LOCAL_PATH_PATTERNS:
+        text = pattern.sub("[local-path]", text)
+    text = re.sub(r"(?i)authorization\s*[:=]\s*(?:bearer\s+)?[^,\s;}]+", "Authorization: ****", text)
+    text = re.sub(r"(?i)authorization\s*[:=]\s*\*+\s+[^,\s;}]+", "Authorization: ****", text)
+    text = re.sub(r"(?i)(token|secret|password|api[_-]?key)\s*[:=]\s*[^,\s;}]+", r"\1: ****", text)
+    return text[:max_length]
 
 
 def _ensure_project_exists(db: Session, project_id: int) -> None:

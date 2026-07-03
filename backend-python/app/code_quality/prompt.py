@@ -26,9 +26,9 @@ def render_instructions(request: dict[str, Any]) -> str:
         "删除方法、修改方法签名、删除字段或修改 DTO/VO 字段时，不要仅凭变更动作判定风险；必须结合调用方、字段引用、序列化/反序列化、Mapper、前端或外部调用迁移证据，缺少这些证据时输出需要确认。\n"
         "Context Pack / reviewContext 只是辅助证据，用于说明本次可见上下文、不可用上下文和历史上下文不足反馈；"
         "它不能覆盖或削弱明确的安全、数据一致性、事务一致性或线上正确性硬风险。\n"
-        "本地引用证据只表示在当前 task worktree 中检索到的有限引用片段；字段引用和 DB / Mapper / Entity snippets 也只是有限证据，DB 证据仅来自源码、Mapper、Entity 和迁移脚本，不代表运行期生产 schema。不能仅凭未命中引用、引用 snippets 未注入或 requested context 不可用判定无风险，也不能覆盖硬风险。\n"
+        "本地引用证据只表示在当前 task worktree 中检索到的有限引用片段；字段引用、缓存使用和 DB / Mapper / Entity snippets 也只是有限证据，DB 证据仅来自源码、Mapper、Entity 和迁移脚本，不代表运行期生产 schema。不能仅凭未命中引用、引用 snippets 未注入或 requested context 不可用判定无风险，也不能覆盖硬风险。\n"
         "Context Pack 中的 notInjectedEvidence / BUDGET_CUT 表示本地已命中或已请求的证据因预算、能力或环境原因未进入模型；这不是“没有引用”或“没有风险”的证明。\n"
-        "当 DB_SQL_MAPPER_CHANGED、DTO_FIELD_CHANGED、FIELD_DELETED、METHOD_SIGNATURE_CHANGED、METHOD_DELETED 相关的关键字段引用、调用方、Mapper、Entity、迁移脚本、配置读取点或表结构证据被预算裁剪、未注入或不可用时，除非 diff 本身足以证明安全、数据一致性或线上正确性硬风险，否则 finding 必须使用 PARTIAL 或 INSUFFICIENT，并将 confidence 设为 LOW 或 MEDIUM，不能输出 HIGH confidence。\n"
+        "当 DB_SQL_MAPPER_CHANGED、CACHE_WRITE_DELETE_CHANGED、DTO_FIELD_CHANGED、FIELD_DELETED、METHOD_SIGNATURE_CHANGED、METHOD_DELETED 相关的关键字段引用、缓存 key 读写链路、调用方、Mapper、Entity、迁移脚本、配置读取点或表结构证据被预算裁剪、未注入或不可用时，除非 diff 本身足以证明安全、数据一致性或线上正确性硬风险，否则 finding 必须使用 PARTIAL 或 INSUFFICIENT，并将 confidence 设为 LOW 或 MEDIUM，不能输出 HIGH confidence。\n"
         "Context Planner 只提示本次可能缺少的证据和 requestedContexts；它不能作为自动忽略、自动降级或覆盖硬风险的依据。\n"
         "你可以参考上下文，但最终只能报告由 changed files 白名单中的 diff 引入的问题。"
     )

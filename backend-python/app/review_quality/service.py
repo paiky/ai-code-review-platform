@@ -13,8 +13,9 @@ from app.deterministic_checks.models import DeterministicCheckRun
 from app.deterministic_checks.repository import ensure_deterministic_check_schema
 from app.evaluation.models import EvaluationCase, EvaluationRunItem
 from app.evaluation.repository import ensure_evaluation_case_schema, ensure_evaluation_run_schema
-from app.evaluation.service import VERDICTS
+from app.evaluation.service import RULE_GAP_PROVEN_ATTRIBUTIONS, RULE_GAP_PROVEN_VERDICTS, RULE_GAP_ATTRIBUTION_TYPES, VERDICTS
 from app.project_integration.models import Project
+from app.review_quality_acceptance.repository import acceptance_gate_summary
 
 
 _COUNT_FIELDS = (
@@ -70,6 +71,14 @@ def get_review_quality_dashboard(
         "replaySummary": _replay_summary(db, normalized),
         "refinementSummary": _refinement_summary(db, cases, normalized),
         "deterministicCheckSummary": _deterministic_check_summary(db, cases, normalized),
+        "ruleGapAttributionSummary": _rule_gap_attribution_summary(cases),
+        "acceptanceGateSummary": acceptance_gate_summary(
+            db,
+            project_id=normalized["projectId"],
+            provider=normalized["provider"],
+            profile=normalized["profile"],
+            risk_type=normalized["riskType"],
+        ),
     }
 
 
@@ -102,6 +111,30 @@ def _quality_summary(cases: list[EvaluationCase]) -> dict[str, Any]:
     result["falsePositiveRate"] = _rate(result["falsePositiveCount"], sample_count)
     result["contextMissingRate"] = _rate(result["contextMissingCount"], sample_count)
     return result
+
+
+def _rule_gap_attribution_summary(cases: list[EvaluationCase]) -> dict[str, Any]:
+    attribution_counts = {key: 0 for key in sorted(RULE_GAP_ATTRIBUTION_TYPES)}
+    verdict_counts = {key: 0 for key in sorted(VERDICTS)}
+    attributed_count = 0
+    caused_or_related_count = 0
+    for case in cases:
+        attribution = case.rule_gap_attribution_type
+        if not attribution:
+            continue
+        attributed_count += 1
+        attribution_counts[attribution] = attribution_counts.get(attribution, 0) + 1
+        verdict = case.verdict or "UNKNOWN"
+        verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+        if attribution in RULE_GAP_PROVEN_ATTRIBUTIONS and verdict in RULE_GAP_PROVEN_VERDICTS:
+            caused_or_related_count += 1
+    return {
+        "attributedCaseCount": attributed_count,
+        "unattributedCaseCount": max(0, len(cases) - attributed_count),
+        "attributionTypeCounts": attribution_counts,
+        "verdictCounts": verdict_counts,
+        "causedOrRelatedCount": caused_or_related_count,
+    }
 
 
 def _verdict_distribution(verdict_counts: dict[str, int]) -> list[dict[str, Any]]:

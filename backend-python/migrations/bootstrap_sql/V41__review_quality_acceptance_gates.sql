@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS review_quality_acceptance_gates (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  project_id BIGINT NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  change_type VARCHAR(64) NOT NULL DEFAULT 'OTHER',
+  status VARCHAR(64) NOT NULL DEFAULT 'DRAFT',
+  provider VARCHAR(64) NULL,
+  profile VARCHAR(64) NULL,
+  risk_type VARCHAR(64) NULL,
+  evaluation_case_ids_json JSON NULL,
+  evaluation_run_ids_json JSON NULL,
+  rule_gap_summary_json JSON NULL,
+  admission_json JSON NULL,
+  exit_json JSON NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  KEY idx_review_quality_acceptance_project_updated (project_id, updated_at),
+  KEY idx_review_quality_acceptance_filters (project_id, change_type, status, provider, profile, risk_type),
+  KEY idx_review_quality_acceptance_status_updated (status, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

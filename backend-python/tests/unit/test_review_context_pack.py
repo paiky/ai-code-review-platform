@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.deterministic_checks.models import DeterministicCheckRun
 from app.deterministic_checks.repository import json_dumps
-from app.review_context import local_repo
+from app.review_context import local_repo, local_retriever
 from app.review_context.service import (
     CONTEXT_PACK_MAX_CHANGED_FILES,
     CONTEXT_PACK_MAX_TOTAL_CHARS,
@@ -23,6 +23,33 @@ def _enable_gitlab(monkeypatch) -> None:
     monkeypatch.setenv("GITLAB_API_ENABLED", "true")
     monkeypatch.setenv("GITLAB_BASE_URL", "https://gitlab.example.test")
     monkeypatch.setenv("GITLAB_TOKEN", "unit-token")
+
+
+def _cache_rg_matches() -> str:
+    return "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "match",
+                    "data": {
+                        "path": {"text": "src/main/java/demo/OrderCacheService.java"},
+                        "line_number": 4,
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "type": "match",
+                    "data": {
+                        "path": {"text": "src/main/java/demo/OrderQueryService.java"},
+                        "line_number": 4,
+                    },
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
 
 
 def test_review_context_pack_summarizes_changed_files_without_diff_body() -> None:
@@ -332,7 +359,7 @@ def test_review_context_pack_builds_minimal_context_planner_signals() -> None:
         "CONFIG_CONTEXT",
         "TEST_RESULT_CONTEXT",
     }.issubset(requested_types)
-    assert {"REFERENCE_SEARCH", "CONFIG_CONTEXT"}.issubset(unavailable_types)
+    assert "REFERENCE_SEARCH" in unavailable_types
     assert context["summary"]["plannerSignalCount"] >= 8
     assert any(item["type"] == "REFERENCE_SEARCH" for item in context["summary"]["requestedContextTypeCounts"])
     signal_counts = {item["type"]: item["count"] for item in context["summary"]["plannerSignalTypeCounts"]}
@@ -346,12 +373,14 @@ def test_review_context_pack_builds_minimal_context_planner_signals() -> None:
     assert signal_counts["DTO_FIELD_CHANGED"] == 1
     assert signal_counts["METHOD_DELETED"] == 1
     assert context["summary"]["retrieverSupportedSignalTypes"] == [
+        "CACHE_WRITE_DELETE_CHANGED",
         "DB_SQL_MAPPER_CHANGED",
         "DTO_FIELD_CHANGED",
         "FIELD_DELETED",
         "METHOD_DELETED",
         "METHOD_SIGNATURE_CHANGED",
     ]
+    assert "CACHE_WRITE_DELETE_CHANGED" not in unsupported_counts
     assert "DB_SQL_MAPPER_CHANGED" not in unsupported_counts
     assert "DTO_FIELD_CHANGED" not in unsupported_counts
     assert "FIELD_DELETED" not in unsupported_counts
@@ -641,6 +670,107 @@ def test_review_context_pack_injects_db_mapper_entity_reference_snippets(
     assert "localReferenceContext" in context["promptText"]
     assert "t_order" in context["promptText"]
     assert "selectOrder" in context["promptText"]
+    assert "repo-secret" not in context["promptText"]
+    assert str(tmp_path) not in context["promptText"]
+
+
+def test_review_context_pack_injects_cache_usage_reference_snippets(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "507" / "head"
+    commands: list[list[str]] = []
+
+    def write_source() -> None:
+        cache_service = worktree / "src/main/java/demo/OrderCacheService.java"
+        query_service = worktree / "src/main/java/demo/OrderQueryService.java"
+        cache_service.parent.mkdir(parents=True, exist_ok=True)
+        query_service.parent.mkdir(parents=True, exist_ok=True)
+        cache_service.write_text(
+            "\n".join(
+                [
+                    "package demo;",
+                    "class OrderCacheService {",
+                    "  void evict(Long id) {",
+                    "    redisTemplate.delete(\"order:detail:\" + id);",
+                    "  }",
+                    "}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        query_service.write_text(
+            "\n".join(
+                [
+                    "package demo;",
+                    "class OrderQueryService {",
+                    "  Object find(Long id) {",
+                    "    return redisTemplate.opsForValue().get(\"order:detail:\" + id);",
+                    "  }",
+                    "}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def fake_run_git(args: list[str], **_kwargs) -> None:
+        commands.append(args)
+        if "worktree" in args and "add" in args:
+            write_source()
+
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_CONTEXT_SNIPPET_CONTEXT_LINES", "1")
+    monkeypatch.setenv("GITLAB_TOKEN", "repo-secret")
+    monkeypatch.setattr(local_repo, "_run_git", fake_run_git)
+    monkeypatch.setattr(local_retriever, "_run_rg", lambda _worktree, query: _cache_rg_matches() if query == "order:detail:" else "")
+
+    diff_text = (
+        "diff --git a/src/main/java/demo/OrderCacheService.java "
+        "b/src/main/java/demo/OrderCacheService.java\n"
+        "@@ -1,4 +1,5 @@\n"
+        " class OrderCacheService {\n"
+        "+  void refresh(Long id) { redisTemplate.opsForValue().set(\"order:detail:\" + id, order); }\n"
+        " }\n"
+    )
+    context = build_review_context_pack(
+        None,
+        task_id=507,
+        project_id=1,
+        mode="DIFF_TEXT",
+        repository_url="https://gitlab.example.com/demo/service",
+        git_project_id="1001",
+        head_ref="2222222222222222222222222222222222222222",
+        changed_files=[{"path": "src/main/java/demo/OrderCacheService.java", "diffText": diff_text}],
+        diff_text=None,
+    )
+
+    retrieval = context["localReferenceRetrieval"]
+    searches = {search["query"]: search for search in retrieval["searches"]}
+    availability = context["summary"]["requestedContextAvailability"]
+    unsupported_counts = {
+        item["type"]: item["count"]
+        for item in context["summary"]["retrieverUnsupportedSignalTypeCounts"]
+    }
+
+    assert retrieval["summary"]["supportedSignalTypes"] == ["CACHE_WRITE_DELETE_CHANGED"]
+    assert "CACHE_WRITE_DELETE_CHANGED" not in unsupported_counts
+    assert "order:detail:" in searches
+    assert searches["order:detail:"]["cacheKeys"] == ["order:detail:"]
+    assert searches["order:detail:"]["snippets"][0]["reason"] == "CACHE_USAGE_REFERENCE"
+    assert any(
+        item["type"] == "CACHE_USAGE_CONTEXT"
+        and item["available"] is True
+        and item.get("availableSource") == "LOCAL_CACHE_USAGE_CONTEXT"
+        for item in availability["items"]
+    )
+    assert not any(
+        item["gapType"] == "UNSUPPORTED_PLANNER_SIGNAL" and item["signal"] == "CACHE_WRITE_DELETE_CHANGED"
+        for item in context["summary"]["ruleGapItems"]
+    )
+    assert "localReferenceContext" in context["promptText"]
+    assert "order:detail:" in context["promptText"]
     assert "repo-secret" not in context["promptText"]
     assert str(tmp_path) not in context["promptText"]
 

@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M7：Review 质量看板 MVP` 已落地，等待用户验证是否进入 M8。
+- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10：第一个评估驱动的业务 Retriever` 已落地，等待用户验证是否进入 M11。
 - 完整产品目标：`docs/37-review-platform-target-product-roadmap.md`。本文件负责近期阶段推进，`docs/37` 负责最终产品形态和长期路线。
 - 关联历史文档：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`：V2 反馈学习、项目策略、Context Pack 和高准确模式阶段记录。
@@ -83,12 +83,12 @@ METHOD_SIGNATURE_CHANGED
 DTO_FIELD_CHANGED
 FIELD_DELETED
 DB_SQL_MAPPER_CHANGED
+CACHE_WRITE_DELETE_CHANGED
 ```
 
 当前还没有专项支持：
 
 ```text
-CACHE_WRITE_DELETE_CHANGED
 MQ_CONFIG_CHANGED
 CONFIG_FILE_CHANGED
 跨仓 / 前端调用方
@@ -193,7 +193,10 @@ P0：统一文档入口和路线判断（本文件）
   -> M5：Review 回放与版本记录 MVP（已完成）
   -> M6：确定性检查证据接入 MVP（已完成）
   -> M7：Review 质量看板 MVP（已完成）
-  -> M8：规则缺口与 finding 级归因（下一阶段）
+  -> M8：规则缺口与 finding 级归因（已完成）
+  -> M9：规则 / Retriever 改动验收门禁（已完成）
+  -> M10：第一个评估驱动的业务 Retriever（已完成）
+  -> M11：业务 Retriever 扩展循环（下一阶段）
 ```
 
 ### 为什么不是继续补缓存 / MQ / 配置 Retriever
@@ -370,10 +373,10 @@ finding 展示必须清楚：
 
 ## 八、当前下一步
 
-当前 M7 Review 质量看板 MVP 已落地，等待用户验证：
+当前 M10 第一个评估驱动的业务 Retriever 已落地，等待用户验证：
 
 ```text
-M7：Review 质量看板 MVP
+M10：第一个评估驱动的业务 Retriever
 ```
 
 ### M1 落地记录（2026-07-01）
@@ -432,10 +435,33 @@ M7：Review 质量看板 MVP
 - 如何验证：运行 `tests/contract/test_review_quality_dashboard_api_contract.py`、`tests/contract/test_evaluation_cases_api_contract.py`、`tests/contract/test_evaluation_runs_api_contract.py`；运行前端 build；在“质量看板”按项目、Provider、Profile、风险类型和 verdict 筛选确认统计变化。
 - 下一阶段：M8 规则缺口与 finding 级归因；未经用户确认不继续推进。
 
+### M8 落地记录（2026-07-02）
+
+- 改了什么：扩展 `evaluation_cases` 保存规则缺口归因类型、脱敏 rule gap 摘要、归因说明、归因人和归因时间；新增 `GET / PUT /api/evaluation-cases/{caseId}/rule-gap-attribution`；创建 AI finding 样本时自动带入最新 `CONTEXT_PACK_BUILT` 的安全 rule gap 摘要；质量看板新增 `ruleGapAttributionSummary`；规则缺口看板推荐项新增 `recommendationBasis` 和 `attributionSignals`；前端“评估样本”新增编辑归因弹窗，质量看板和规则缺口看板展示归因摘要。
+- 为什么做：把“规则缺口是否导致误判 / 上下文不足 / 漏报”从 task 级近似推进到 finding / evaluation case 级人工判断，避免继续只按高频缺口直觉补 Retriever。
+- 解决的缺口：补齐“finding 级缺口归因”的 MVP，让规则缺口推荐能区分高频缺口和已被评估样本证明关联的缺口。
+- 如何验证：运行 `tests/contract/test_rule_gap_attribution_api_contract.py`、`tests/contract/test_evaluation_cases_api_contract.py`、`tests/contract/test_code_quality_rule_gaps_api_contract.py`、`tests/contract/test_review_quality_dashboard_api_contract.py`；运行前端 build；在“评估样本”编辑归因后，确认“质量看板”和“规则缺口”推荐依据变化。
+- 下一阶段：M9 规则 / Retriever 改动验收门禁；未经用户确认不继续推进。
+
+### M9 落地记录（2026-07-02）
+
+- 改了什么：新增 `review_quality_acceptance_gates` 后端表、`/api/review-quality/acceptance-gates` 创建 / 查询 / 更新 API、质量看板 `acceptanceGateSummary`、顶部导航“验收记录”最小列表 / 创建 / 编辑 / 详情入口、契约测试和 API / README 文档。
+- 为什么做：在进入业务 Retriever 或 Prompt 改动前，先让每次能力改动都有人工准入原因、关联 rule gap / evaluation case / evaluation run、预期收益、风险成本和退出验收结果。
+- 解决的缺口：补齐“规则 / Retriever 改动验收门禁”的治理记录 MVP，让管理员能基于 M7 质量看板和 M8 finding 级归因记录为什么要做某次能力改动，以及改完后是否改善。
+- 如何验证：运行 `tests/contract/test_review_quality_acceptance_gates_api_contract.py` 与 `tests/contract/test_review_quality_dashboard_api_contract.py`；运行前端 build；在“验收记录”创建准入记录，关联样本和 run，更新退出 delta 后确认质量看板展示验收记录数和最近状态。
+- 下一阶段：M10 第一个评估驱动的业务 Retriever；未经用户确认不继续推进。
+
+### M10 落地记录（2026-07-02）
+
+- 改了什么：将 `CACHE_WRITE_DELETE_CHANGED` 纳入 Local Retriever 支持范围；Planner 从 diff 变更行提取 `cacheKeys / cacheNames / keyExpressions / cacheOperations` 安全摘要；Retriever 基于 bounded `rg --fixed-strings` 检索缓存 key、cache name、key expression 的读写 / 删除 / 过期使用点；Context Pack 将 `CACHE_USAGE_CONTEXT` 标记为 `LOCAL_CACHE_USAGE_CONTEXT`，并在预算裁剪时继续用 `notInjectedEvidence` 保护安全摘要。
+- 为什么做：M8 / M9 的评估样本、rule gap 归因和验收记录已反复证明 `CACHE_WRITE_DELETE_CHANGED -> CACHE_USAGE_CONTEXT` 是高价值缺口，适合作为第一个评估驱动业务 Retriever。
+- 解决的缺口：补齐缓存写入 / 删除变更的最小业务上下文检索，让新任务不再把缓存 signal 归为 `UNSUPPORTED_PLANNER_SIGNAL`。
+- 如何验证：运行 `tests/unit/test_local_retriever.py`、`tests/unit/test_review_context_pack.py`、`tests/unit/test_code_quality_prompt.py` 以及相关质量治理契约测试；在高准确模式流转中确认 supported signals 包含 `CACHE_WRITE_DELETE_CHANGED`，命中后 `CACHE_USAGE_CONTEXT` 可用。
+- 下一阶段：M11 业务 Retriever 扩展循环；未经用户确认不继续推进。
+
 暂不建议进入：
 
 ```text
-缓存 Retriever
 MQ Retriever
 配置 Retriever
 AST / LSP / RAG

@@ -36,6 +36,7 @@ CONTEXT_PLANNER_MAX_FILE_PATHS_PER_CONTEXT = 8
 CONTEXT_PLANNER_MAX_FEEDBACK_CONTEXT_TYPES = 5
 RULE_GAP_MAX_ITEMS = 12
 HIGH_MISJUDGMENT_SIGNAL_TYPES = {
+    "CACHE_WRITE_DELETE_CHANGED",
     "DB_SQL_MAPPER_CHANGED",
     "DTO_FIELD_CHANGED",
     "FIELD_DELETED",
@@ -131,6 +132,16 @@ _DB_IDENTIFIER_STOP_WORDS = {
 }
 _CACHE_PATTERN = re.compile(
     r"(redis|redisson|cache|caffeine|ehcache|memcache|setex|setnx|expire|evict|invalidate|put|delete|del)",
+    re.IGNORECASE,
+)
+_CACHE_STRING_LITERAL_PATTERN = re.compile(r"""["']([^"']{2,120})["']""")
+_CACHE_ANNOTATION_VALUE_PATTERN = re.compile(
+    r"\b(?:cacheNames|value)\s*=\s*(?:\{)?\s*['\"]([^'\"]{2,120})['\"]",
+    re.IGNORECASE,
+)
+_CACHE_ANNOTATION_KEY_PATTERN = re.compile(r"\bkey\s*=\s*['\"]([^'\"]{2,120})['\"]", re.IGNORECASE)
+_CACHE_CALL_FIRST_ARG_PATTERN = re.compile(
+    r"\.(?:set|setex|setnx|put|delete|del|expire|evict|invalidate)\s*\(\s*([^,\)]+)",
     re.IGNORECASE,
 )
 _MQ_PATTERN = re.compile(
@@ -786,6 +797,7 @@ def _planner_signals_for_file(file: dict[str, Any]) -> list[dict[str, Any]]:
                 file,
                 ["CACHE_USAGE_CONTEXT", "REFERENCE_SEARCH", "TEST_RESULT_CONTEXT"],
                 priority="HIGH",
+                details=_cache_signal_details(path, changed_lines),
             )
         )
     if _is_mq_config_change(path, changed_lines):
@@ -1055,6 +1067,98 @@ def _has_cache_write_delete_change(path: str, changed_lines: list[str]) -> bool:
     return False
 
 
+def _cache_signal_details(path: str, changed_lines: list[str]) -> dict[str, Any]:
+    cache_lines = [line for line in changed_lines if _CACHE_PATTERN.search(line)]
+    line_text = "\n".join(cache_lines)
+    cache_names: list[str] = []
+    cache_keys: list[str] = []
+    key_expressions: list[str] = []
+    operations: list[str] = []
+    for line in cache_lines:
+        lower = line.lower()
+        if "@cacheput" in lower:
+            operations.append("@CachePut")
+        if "@cacheevict" in lower:
+            operations.append("@CacheEvict")
+        if "@cacheable" in lower:
+            operations.append("@Cacheable")
+        for token, operation in (
+            ("opsforvalue", "opsForValue"),
+            ("setex", "setex"),
+            ("setnx", "setnx"),
+            (".set", "set"),
+            ("put(", "put"),
+            (".put", "put"),
+            ("delete(", "delete"),
+            (".delete", "delete"),
+            ("del(", "del"),
+            (".del", "del"),
+            ("expire(", "expire"),
+            ("evict", "evict"),
+            ("invalidate", "invalidate"),
+        ):
+            if token in lower:
+                operations.append(operation)
+    cache_names.extend(str(match.group(1) or "") for match in _CACHE_ANNOTATION_VALUE_PATTERN.finditer(line_text))
+    key_expressions.extend(str(match.group(1) or "") for match in _CACHE_ANNOTATION_KEY_PATTERN.finditer(line_text))
+    for match in _CACHE_CALL_FIRST_ARG_PATTERN.finditer(line_text):
+        key_expressions.append(str(match.group(1) or ""))
+    for literal in _CACHE_STRING_LITERAL_PATTERN.findall(line_text):
+        if _looks_like_cache_literal(literal):
+            cache_keys.append(literal)
+    return {
+        "cacheKeys": _normalized_cache_tokens(cache_keys, limit=8),
+        "cacheNames": _normalized_cache_tokens(cache_names, limit=8),
+        "keyExpressions": _normalized_cache_tokens(key_expressions, limit=8),
+        "cacheOperations": _normalized_cache_tokens(operations, limit=8),
+        "cacheSignalSource": "DIFF_CHANGED_LINES",
+        "cacheLineCount": len(cache_lines),
+        "fileStem": _normalize_path(path).rsplit("/", 1)[-1].rsplit(".", 1)[0][:80],
+    }
+
+
+def _looks_like_cache_literal(value: str) -> bool:
+    text = str(value or "").strip()
+    lower = text.lower()
+    if not text or len(text) > 120:
+        return False
+    if _is_sensitive_cache_token(text):
+        return False
+    return (
+        "cache" in lower
+        or "redis" in lower
+        or (":" in text and "://" not in text)
+        or lower.endswith(("key", "keys"))
+        or lower.startswith(("cache:", "redis:"))
+    )
+
+
+def _normalized_cache_tokens(values: list[str], *, limit: int) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip().strip("{}").strip()
+        text = text.strip('"').strip("'").strip()
+        if not text or len(text) > 120:
+            continue
+        if _is_sensitive_cache_token(text):
+            continue
+        if text.lower() in {"null", "true", "false", "this", "return"}:
+            continue
+        if text not in result:
+            result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _is_sensitive_cache_token(value: str) -> bool:
+    text = str(value or "")
+    lower = text.lower()
+    if re.search(r"[A-Za-z]:\\|/(?:home|users|var|tmp|opt|private)/", text):
+        return True
+    return any(token in lower for token in ("authorization", "bearer", "token", "secret", "password", "apikey", "api_key"))
+
+
 def _is_mq_config_change(path: str, changed_lines: list[str]) -> bool:
     lower_path = _normalize_path(path).lower()
     path_match = any(token in lower_path for token in ("mq", "kafka", "rabbit", "rocketmq", "pulsar"))
@@ -1119,7 +1223,7 @@ def _unavailable_contexts(
         },
         {
             "type": "REFERENCE_SEARCH",
-            "reason": "Reference, caller, DB / Mapper / Entity, and usage search is not performed.",
+            "reason": "Reference, caller, DB / Mapper / Entity, cache usage, and usage search availability depends on bounded local retrieval.",
         },
         {
             "type": "CALLER_CONTEXT",
@@ -1544,7 +1648,7 @@ def _local_reference_pack_context(retrieval: dict[str, Any]) -> dict[str, Any]:
     }
     if included_snippet_count > 0:
         context["note"] = (
-            "Bounded local worktree reference snippets for method, DTO / field, and DB / Mapper / Entity change signals. "
+            "Bounded local worktree reference snippets for method, DTO / field, cache usage, and DB / Mapper / Entity change signals. "
             "They are auxiliary evidence only."
         )
     return context
@@ -1727,6 +1831,9 @@ def _apply_local_reference_availability(
         if "DB_SQL_MAPPER_CHANGED" in supported_signals and context_type in {"DB_SCHEMA_CONTEXT", "RELATED_FILE"}:
             item["available"] = True
             item["availableSource"] = "LOCAL_DB_MAPPER_ENTITY_CONTEXT"
+        if "CACHE_WRITE_DELETE_CHANGED" in supported_signals and context_type == "CACHE_USAGE_CONTEXT":
+            item["available"] = True
+            item["availableSource"] = "LOCAL_CACHE_USAGE_CONTEXT"
 
 
 def _empty_local_reference_summary() -> dict[str, Any]:

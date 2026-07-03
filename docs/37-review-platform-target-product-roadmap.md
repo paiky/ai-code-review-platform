@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：完整产品目标文档。用于回答“最终要做成什么产品、用户如何使用、从当前状态到完整产品分几步走”；`M7：Review 质量看板 MVP` 已落地，等待用户验证是否进入 M8。
+- 当前状态：完整产品目标文档。用于回答“最终要做成什么产品、用户如何使用、从当前状态到完整产品分几步走”；`M10：第一个评估驱动的业务 Retriever` 已落地，等待用户验证是否进入 M11。
 - 编写时间：2026-07-01
 - 当前阶段总控：`docs/36-review-platform-current-roadmap.md`
 - 历史与细节文档：
@@ -174,7 +174,7 @@ GitLab token 和 clone 权限
 - 能比较改动前后的误判、漏报、等级偏差、耗时和成本。
 - 规则缺口和 finding 级误判归因。
 
-当前状态：评估样本、二次补证据、回放版本记录和质量看板已具备 MVP；真实批量回放和 finding 级归因仍待后续阶段。
+当前状态：评估样本、二次补证据、回放版本记录、质量看板、finding 级规则缺口归因和规则 / Retriever 改动验收门禁已具备 MVP；真实批量回放仍待后续阶段。
 
 ### F. 项目知识与反馈治理
 
@@ -387,17 +387,15 @@ GitLab token 和 clone 权限
 
 ## 七、当前推荐下一步
 
-当前不直接进入缓存、MQ、配置 Retriever。
+当前不直接进入 MQ、配置等后续 Retriever。
 
 推荐从 `docs/36` 的近期阶段继续：
 
 ```text
-M8：规则缺口与 finding 级归因
-  -> M9：规则 / Retriever 改动验收门禁
-  -> M10：第一个评估驱动的业务 Retriever
+M11：业务 Retriever 扩展循环
 ```
 
-M1-M7 已完成 MVP。进入缓存、MQ、配置等业务 Retriever 前，仍应先完成 M8 / M9，让缺口归因和改动验收有样本依据。
+M1-M10 已完成 MVP。缓存 Retriever 已作为第一个评估驱动业务 Retriever 落地；后续进入 MQ、配置、测试覆盖或跨端调用方 Retriever 前，仍必须由评估样本、归因、回放和验收记录证明高价值。
 
 ## 八、Agent 总控 Prompt
 
@@ -406,7 +404,7 @@ M1-M7 已完成 MVP。进入缓存、MQ、配置等业务 Retriever 前，仍应
 
 docs/36 是近期阶段总控，docs/37 是完整产品目标。后续推进必须先满足 docs/36 当前阶段，不要直接跳到 docs/37 的远期能力。
 
-当前 M7 Review 质量看板 MVP 已落地，等待用户验证是否进入 M8 规则缺口与 finding 级归因。每次只推进一个阶段。允许自主修改 backend-python、frontend、docs、examples、tests 中与当前阶段直接相关的文件；不要修改 legacy Java backend；不要做自动 Prompt 改写、自动风险降级、自动忽略 finding、模型微调、复杂 RAG、跨项目策略共享或无限制全项目扫描。
+当前 M10 第一个评估驱动的业务 Retriever 已落地，等待用户验证是否进入 M11 业务 Retriever 扩展循环。每次只推进一个阶段。允许自主修改 backend-python、frontend、docs、examples、tests 中与当前阶段直接相关的文件；不要修改 legacy Java backend；不要做自动 Prompt 改写、自动风险降级、自动忽略 finding、模型微调、复杂 RAG、跨项目策略共享或无限制全项目扫描。
 
 每个阶段完成后必须停止，输出“改了什么、为什么、如何验证”，等待用户验证并明确回复“继续下一阶段”后再推进。
 ```
@@ -432,7 +430,6 @@ docs/36 是近期阶段总控，docs/37 是完整产品目标。后续推进必�
 推荐按这个粒度创建 Goal：
 
 ```text
-完成 M8：规则缺口与 finding 级归因
 完成 M9：规则 / Retriever 改动验收门禁
 完成 M10：第一个评估驱动的业务 Retriever
 完成 T2 中某一个经评估确认的专项 Retriever
@@ -483,33 +480,32 @@ docs/36 是近期阶段总控，docs/37 是完整产品目标。后续推进必�
 当前可启动的 Goal 是：
 
 ```text
-完成 M8：规则缺口与 finding 级归因。
+完成 M11：业务 Retriever 扩展循环中的下一个经评估确认的 Retriever。
 ```
 
 建议 Goal 文案：
 
 ```text
-请基于 AGENTS.md、README.md、docs/36-review-platform-current-roadmap.md、docs/37-review-platform-target-product-roadmap.md，完成 M8：规则缺口与 finding 级归因。
+请基于 AGENTS.md、README.md、docs/36-review-platform-current-roadmap.md、docs/37-review-platform-target-product-roadmap.md，完成 M11：业务 Retriever 扩展循环中的下一个经评估确认的 Retriever。
 
 范围：
 - backend-python
 - frontend
 - backend-python/tests
-- docs / examples 中与 M8 直接相关的文件
+- docs / examples 中与 M11 直接相关的文件
 
 目标：
-- 把规则缺口是否导致误判从 task 级近似推进到 finding 级判断。
-- 在 evaluation case 或关联结构中记录规则缺口摘要和人工归因。
-- 支持归因枚举：RULE_GAP_CAUSED / RULE_GAP_RELATED / NOT_RULE_GAP / PROMPT_ISSUE / MODEL_REASONING_ISSUE / PROJECT_POLICY_MISSING / INSUFFICIENT_LABEL。
-- 规则缺口推荐区分“高频缺口”和“已被样本证明关联误判 / 漏报的缺口”。
-- 收敛规则缺口产品入口，但不删除历史数据和后端聚合能力。
+- 只选择一个由评估样本、质量看板、规则缺口归因和验收记录证明高价值的业务 Retriever。
+- 补齐该类变更所需的最小 Planner / Retriever / Context Pack 能力。
+- 用目标 evaluation cases 和 evaluation runs 证明上下文充分性提升或误判 / 漏报改善。
+- 实现前必须先创建或确认 M9 准入记录；完成后必须更新退出验收结果。
 - 不自动改 Prompt，不自动生成项目策略，不自动降级、不自动忽略 finding。
 
 要求：
 - 先补数据结构与接口契约，再实现业务逻辑。
 - 补最小契约测试和前端 build。
 - 更新 README 或相关 docs 中的使用说明。
-- 完成后停止，输出改了什么、为什么、如何验证，等待用户确认是否继续 M9。
+- 完成后停止，输出改了什么、为什么、如何验证，等待用户确认是否继续 M11。
 ```
 
 ### Goal 模式停止规则
@@ -668,7 +664,7 @@ M0 路线收口
 
 ### M3：finding 级二次补证据后端 MVP
 
-状态：已完成后端 MVP（2026-07-01），M4 前端可观测、M5 回放记录、M6 确定性检查与 M7 质量看板 MVP 也已完成，等待用户验证是否进入 M8。
+状态：已完成后端 MVP（2026-07-01），M4 前端可观测、M5 回放记录、M6 确定性检查、M7 质量看板与 M8 规则缺口归因也已完成，等待用户验证是否进入 M9。
 
 目标：
 
@@ -743,7 +739,7 @@ M0 路线收口
 
 ### M5：Review 回放与版本记录 MVP
 
-状态：已完成 MVP（2026-07-01），M6 确定性检查与 M7 质量看板 MVP 也已完成，等待用户验证是否进入 M8。
+状态：已完成 MVP（2026-07-01），M6 确定性检查、M7 质量看板与 M8 规则缺口归因也已完成，等待用户验证是否进入 M9。
 
 目标：
 
@@ -769,7 +765,7 @@ M0 路线收口
 
 停止点：
 
-- 已完成并停止；M6 / M7 已在后续阶段落地，当前等待用户确认是否进入 M8。
+- 已完成并停止；M6 / M7 / M8 已在后续阶段落地，当前等待用户确认是否进入 M9。
 
 落地记录：
 
@@ -823,7 +819,7 @@ M0 路线收口
 
 ### M7：Review 质量看板 MVP
 
-状态：已完成 MVP（2026-07-01），等待用户验证是否进入 M8。
+状态：已完成 MVP（2026-07-01），M8 规则缺口与 finding 级归因也已完成，等待用户验证是否进入 M9。
 
 目标：
 
@@ -853,7 +849,7 @@ M0 路线收口
 
 停止点：
 
-- 完成后停止，等待用户确认是否进入 M8。
+- 已完成并停止；M8 已在后续阶段落地，当前等待用户确认是否进入 M9。
 
 落地记录：
 
@@ -864,6 +860,8 @@ M0 路线收口
 - 前端新增顶部导航“质量看板”，展示过滤器、核心指标卡、verdict 分布、维度聚合表和辅助诊断区。
 
 ### M8：规则缺口与 finding 级归因
+
+状态：已完成 MVP（2026-07-02），等待用户验证是否进入 M9。
 
 目标：
 
@@ -891,9 +889,18 @@ M0 路线收口
 
 停止点：
 
-- 完成后停止，等待用户确认是否进入 M9。
+- 已完成并停止，等待用户确认是否进入 M9。
+
+落地记录：
+
+- 扩展 evaluation case，保存规则缺口归因类型、脱敏 rule gap 摘要、归因说明、归因人和归因时间。
+- 新增 `GET / PUT /api/evaluation-cases/{caseId}/rule-gap-attribution`，创建 AI finding 样本时自动带入最新 `CONTEXT_PACK_BUILT` 安全 rule gap 摘要。
+- 质量看板新增 `ruleGapAttributionSummary`；规则缺口看板推荐项新增 `recommendationBasis` 和 `attributionSignals`，区分高频缺口与已被 evaluation case 证明关联的缺口。
+- 前端“评估样本”新增编辑归因入口，“质量看板”和“规则缺口”展示归因统计摘要。
 
 ### M9：规则 / Retriever 改动验收门禁
+
+状态：已完成 MVP（2026-07-02），M10 已在后续阶段落地。
 
 目标：
 
@@ -920,7 +927,15 @@ M0 路线收口
 
 - 完成后停止，后续才进入评估驱动的业务 Retriever。
 
+落地记录：
+
+- 新增 `review_quality_acceptance_gates` 表和 `/api/review-quality/acceptance-gates` 创建 / 查询 / 更新 API，记录 changeType、status、provider、profile、riskType、evaluationCaseIds、evaluationRunIds、安全 ruleGapSummary、admission 和 exit。
+- 前端新增顶部导航“验收记录”，支持列表过滤、创建 / 编辑和详情查看；质量看板展示 `acceptanceGateSummary`。
+- 该阶段只做人工治理记录，不自动阻断线上 Review，不自动选择胜出版本，不自动修改 Prompt、项目策略或 finding。
+
 ### M10：第一个评估驱动的业务 Retriever
+
+状态：已完成 MVP（2026-07-02），等待用户验证是否进入 M11。
 
 目标：
 
@@ -949,6 +964,13 @@ M0 路线收口
 停止点：
 
 - 完成后停止，不自动进入下一个业务 Retriever。
+
+落地记录：
+
+- 选择缓存 Retriever 作为第一个评估驱动业务 Retriever，依据是 M8 / M9 已沉淀的 `CACHE_WRITE_DELETE_CHANGED -> CACHE_USAGE_CONTEXT -> Add cache retriever` 评估样本、rule gap 归因和验收记录。
+- 后端将 `CACHE_WRITE_DELETE_CHANGED` 纳入 Local Retriever 支持范围；Planner 从 diff 变更行提取 `cacheKeys / cacheNames / keyExpressions / cacheOperations` 安全摘要；Retriever 基于 bounded `rg --fixed-strings` 检索缓存 key、cache name、key expression 的读写 / 删除 / 过期使用点。
+- Context Pack 命中后将 `CACHE_USAGE_CONTEXT` 标记为 `LOCAL_CACHE_USAGE_CONTEXT`，新任务不再把缓存 signal 归为 `UNSUPPORTED_PLANNER_SIGNAL`；该能力不连接运行期缓存实例，不自动改 Prompt、项目策略或 AI finding。
+- 已补单元 / 契约测试和 README / API / 路线文档说明。
 
 ### M11：业务 Retriever 扩展循环
 

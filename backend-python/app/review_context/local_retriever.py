@@ -13,6 +13,7 @@ from app.core.config import get_settings
 
 SUPPORTED_REFERENCE_SIGNAL_TYPES = {
     "DB_SQL_MAPPER_CHANGED",
+    "CACHE_WRITE_DELETE_CHANGED",
     "METHOD_DELETED",
     "METHOD_SIGNATURE_CHANGED",
     "FIELD_DELETED",
@@ -149,6 +150,9 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
         table_name: str | None = None,
         mapper_method_name: str | None = None,
         entity_name: str | None = None,
+        cache_key: str | None = None,
+        cache_name: str | None = None,
+        cache_operation: str | None = None,
     ) -> None:
         value = str(query or "").strip()
         if not value:
@@ -164,6 +168,9 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "tableNames": set(),
                 "mapperMethodNames": set(),
                 "entityNames": set(),
+                "cacheKeys": set(),
+                "cacheNames": set(),
+                "cacheOperations": set(),
             },
         )
         item["signalTypes"].add(signal_type)
@@ -178,6 +185,12 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
             item["mapperMethodNames"].add(mapper_method_name)
         if entity_name:
             item["entityNames"].add(entity_name)
+        if cache_key:
+            item["cacheKeys"].add(cache_key)
+        if cache_name:
+            item["cacheNames"].add(cache_name)
+        if cache_operation:
+            item["cacheOperations"].add(cache_operation)
 
     for signal in signals:
         signal_type = str(signal.get("type") or "").strip().upper()
@@ -223,6 +236,53 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
                     file_path=file_path,
                     reason="ENTITY_REFERENCE",
                     entity_name=entity_name,
+                )
+            continue
+
+        if signal_type == "CACHE_WRITE_DELETE_CHANGED":
+            cache_keys = _safe_string_items(details.get("cacheKeys"))
+            cache_names = _safe_string_items(details.get("cacheNames"))
+            key_expressions = _safe_string_items(details.get("keyExpressions"), limit=6)
+            cache_operations = _safe_string_items(details.get("cacheOperations"), limit=6)
+            for cache_key in cache_keys:
+                add_query(
+                    cache_key,
+                    signal_type=signal_type,
+                    file_path=file_path,
+                    reason="CACHE_USAGE_REFERENCE",
+                    cache_key=cache_key,
+                )
+            for cache_name in cache_names:
+                add_query(
+                    cache_name,
+                    signal_type=signal_type,
+                    file_path=file_path,
+                    reason="CACHE_USAGE_REFERENCE",
+                    cache_name=cache_name,
+                )
+            for expression in key_expressions:
+                add_query(
+                    expression,
+                    signal_type=signal_type,
+                    file_path=file_path,
+                    reason="CACHE_USAGE_REFERENCE",
+                    cache_key=expression,
+                )
+            if not any((cache_keys, cache_names, key_expressions)):
+                for operation in cache_operations:
+                    add_query(
+                        operation,
+                        signal_type=signal_type,
+                        file_path=file_path,
+                        reason="CACHE_USAGE_REFERENCE",
+                        cache_operation=operation,
+                    )
+            for fallback in _cache_file_stem_queries(file_path):
+                add_query(
+                    fallback,
+                    signal_type=signal_type,
+                    file_path=file_path,
+                    reason="CACHE_USAGE_REFERENCE",
                 )
             continue
 
@@ -273,6 +333,9 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "tableNames": sorted(item["tableNames"]),
                 "mapperMethodNames": sorted(item["mapperMethodNames"]),
                 "entityNames": sorted(item["entityNames"]),
+                "cacheKeys": sorted(item["cacheKeys"]),
+                "cacheNames": sorted(item["cacheNames"]),
+                "cacheOperations": sorted(item["cacheOperations"]),
             }
         )
     return result
@@ -301,6 +364,16 @@ def _db_file_stem_queries(file_path: str) -> list[str]:
     if normalized and normalized != stem:
         result.append(normalized)
     return result[:2]
+
+
+def _cache_file_stem_queries(file_path: str) -> list[str]:
+    stem = Path(str(file_path or "").replace("\\", "/")).stem
+    if not stem:
+        return []
+    lower = stem.lower()
+    if "cache" not in lower and "redis" not in lower:
+        return []
+    return [stem[:80]]
 
 
 def _field_accessor_queries(field_name: str) -> list[str]:
@@ -366,6 +439,9 @@ def _search_query(worktree: Path, query: dict[str, Any]) -> tuple[dict[str, Any]
         "tableNames": query.get("tableNames") or [],
         "mapperMethodNames": query.get("mapperMethodNames") or [],
         "entityNames": query.get("entityNames") or [],
+        "cacheKeys": query.get("cacheKeys") or [],
+        "cacheNames": query.get("cacheNames") or [],
+        "cacheOperations": query.get("cacheOperations") or [],
         "matchedFileCount": len(matched_paths),
         "candidateSnippetCount": int(candidate_snippet_count),
         "includedSnippetCount": len(snippets),
@@ -386,6 +462,8 @@ def _snippet_reason(query: dict[str, Any]) -> str:
         return "MAPPER_METHOD_REFERENCE"
     if "ENTITY_REFERENCE" in reasons:
         return "ENTITY_REFERENCE"
+    if "CACHE_USAGE_REFERENCE" in reasons:
+        return "CACHE_USAGE_REFERENCE"
     if "DTO_FIELD_REFERENCE" in reasons:
         return "DTO_FIELD_REFERENCE"
     if "FIELD_REFERENCE" in reasons:
@@ -494,6 +572,8 @@ def _path_rank(path: str, changed_paths: set[str]) -> int:
         rank -= 9
     if lower.endswith((".xml", ".sql")):
         rank -= 6
+    if any(token in lower for token in ("cache", "redis", "redisson", "caffeine", "ehcache")):
+        rank -= 10
     if any(token in lower for token in ("dto", "vo", "request", "response", "payload", "form", "api", "excel")):
         rank -= 8
     if "/test/" in lower or lower.startswith("test/") or lower.startswith("tests/") or "src/test/" in lower:

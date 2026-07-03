@@ -39,6 +39,20 @@ def _db_signal() -> dict:
     }
 
 
+def _cache_signal() -> dict:
+    return {
+        "type": "CACHE_WRITE_DELETE_CHANGED",
+        "filePath": "src/main/java/demo/OrderCacheService.java",
+        "details": {
+            "cacheKeys": ["order:detail:"],
+            "cacheNames": ["orderCache"],
+            "keyExpressions": ["cacheKey"],
+            "cacheOperations": ["set", "delete", "expire"],
+        },
+        "requestedContextTypes": ["CACHE_USAGE_CONTEXT", "REFERENCE_SEARCH"],
+    }
+
+
 def _rg_match(path: str, line_number: int) -> str:
     return json.dumps(
         {
@@ -143,13 +157,88 @@ def test_local_retriever_skips_unsupported_planner_signals(
 
     result = retrieve_local_reference_context(
         worktree_path=worktree,
-        planner_signals=[{"type": "CACHE_WRITE_DELETE_CHANGED", "requestedContextTypes": ["CACHE_USAGE_CONTEXT"]}],
+        planner_signals=[{"type": "MQ_CONFIG_CHANGED", "requestedContextTypes": ["MQ_CONFIG_CONTEXT"]}],
     )
 
     assert result["status"] == "SKIPPED"
     assert result["summary"]["queryCount"] == 0
     assert result["searches"] == []
-    assert result["summary"]["skippedSignalTypes"] == [{"type": "CACHE_WRITE_DELETE_CHANGED", "count": 1}]
+    assert result["summary"]["skippedSignalTypes"] == [{"type": "MQ_CONFIG_CHANGED", "count": 1}]
+
+
+def test_local_retriever_searches_cache_key_read_write_usage(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "109" / "head"
+    _write(
+        worktree / "src/main/java/demo/OrderQueryService.java",
+        "\n".join(
+            [
+                "package demo;",
+                "class OrderQueryService {",
+                "  Object get(Long id) {",
+                "    return redisTemplate.opsForValue().get(\"order:detail:\" + id);",
+                "  }",
+                "}",
+            ]
+        ),
+    )
+    _write(
+        worktree / "src/main/java/demo/OrderCacheService.java",
+        "\n".join(
+            [
+                "package demo;",
+                "class OrderCacheService {",
+                "  void clear(String cacheKey) {",
+                "    redisTemplate.delete(cacheKey);",
+                "  }",
+                "}",
+            ]
+        ),
+    )
+    _write(worktree / "node_modules/noisy.js", "order:detail:")
+    _write(worktree / "target/Generated.java", "cacheKey")
+
+    def fake_rg(_worktree: Path, query: str) -> str:
+        if query == "order:detail:":
+            return "\n".join(
+                [
+                    _rg_match("src/main/java/demo/OrderQueryService.java", 4),
+                    _rg_match("node_modules/noisy.js", 1),
+                ]
+            )
+        if query == "cacheKey":
+            return "\n".join(
+                [
+                    _rg_match("src/main/java/demo/OrderCacheService.java", 4),
+                    _rg_match("target/Generated.java", 1),
+                ]
+            )
+        return ""
+
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_CONTEXT_SNIPPET_CONTEXT_LINES", "1")
+    monkeypatch.setattr(local_retriever, "_run_rg", fake_rg)
+
+    result = retrieve_local_reference_context(
+        worktree_path=worktree,
+        planner_signals=[_cache_signal()],
+    )
+
+    searches = {search["query"]: search for search in result["searches"]}
+
+    assert result["status"] == "RETRIEVED"
+    assert result["summary"]["supportedSignalTypes"] == ["CACHE_WRITE_DELETE_CHANGED"]
+    assert result["summary"]["skippedSignalTypes"] == []
+    assert searches["order:detail:"]["cacheKeys"] == ["order:detail:"]
+    assert searches["cacheKey"]["cacheKeys"] == ["cacheKey"]
+    assert searches["cacheKey"]["snippets"][0]["reason"] == "CACHE_USAGE_REFERENCE"
+    assert searches["cacheKey"]["snippets"][0]["path"] == "src/main/java/demo/OrderCacheService.java"
+    payload = json.dumps(result, ensure_ascii=False)
+    assert "node_modules" not in payload
+    assert "target/Generated.java" not in payload
 
 
 def test_local_retriever_searches_db_mapper_entity_references(
