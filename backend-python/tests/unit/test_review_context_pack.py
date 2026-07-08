@@ -439,12 +439,18 @@ def test_review_context_pack_records_local_repo_prepare_summary(
     assert local_summary["mirrorStatus"] == "CLONED"
     assert local_summary["worktreeStatus"] == "CHECKED_OUT"
     assert context["summary"]["localRepository"]["status"] == "PREPARED"
+    assert context["summary"]["sourceWorkspaceSummary"]["status"] == "PREPARED"
+    assert context["summary"]["sourceWorkspaceSummary"]["remoteUrl"] == "https://gitlab.example.com/demo/service.git"
+    assert context["summary"]["sourceWorkspaceSummary"]["mirror"]["status"] == "CLONED"
+    assert context["summary"]["sourceWorkspaceSummary"]["worktree"]["status"] == "CHECKED_OUT"
     assert context["summary"]["localRepository"]["cleanup"]["status"] == "COMPLETED"
     assert commands
     assert "repo-secret" not in context["promptText"]
     assert str(tmp_path) not in context["promptText"]
     assert "repo-secret" not in str(context["summary"]["localRepository"]["cleanup"])
     assert str(tmp_path) not in str(context["summary"]["localRepository"]["cleanup"])
+    assert "repo-secret" not in str(context["summary"]["sourceWorkspaceSummary"])
+    assert str(tmp_path) not in str(context["summary"]["sourceWorkspaceSummary"])
 
 
 def test_review_context_pack_marks_missing_worktree_unavailable(
@@ -490,6 +496,10 @@ def test_review_context_pack_marks_missing_worktree_unavailable(
     assert local_summary["failurePhase"] == "RETRIEVER_WORKTREE_VALIDATE"
     assert retrieval["status"] == "UNAVAILABLE"
     assert context["summary"]["localRepository"]["status"] == "UNAVAILABLE"
+    assert context["summary"]["sourceWorkspaceSummary"]["status"] == "UNAVAILABLE"
+    assert context["summary"]["sourceWorkspaceSummary"]["failurePhase"] == "RETRIEVER_WORKTREE_VALIDATE"
+    assert context["summary"]["sourceWorkspaceSummary"]["worktree"]["exists"] is False
+    assert context["summary"]["sourceWorkspaceSummary"]["worktree"]["status"] == "MISSING"
     assert context["summary"]["localReferenceSearch"]["status"] == "UNAVAILABLE"
 
 
@@ -658,6 +668,11 @@ def test_review_context_pack_injects_db_mapper_entity_reference_snippets(
     assert "selectOrder" in searches
     assert searches["selectOrder"]["snippets"][0]["reason"] == "MAPPER_METHOD_REFERENCE"
     assert any(
+        item["relation"] == "MYBATIS_MAPPER_METHOD"
+        and item["symbol"] == "demo.OrderMapper.selectOrder"
+        for item in searches["selectOrder"]["evidenceCandidates"]
+    )
+    assert any(
         item["type"] == "DB_SCHEMA_CONTEXT"
         and item["available"] is True
         and item.get("availableSource") == "LOCAL_DB_MAPPER_ENTITY_CONTEXT"
@@ -670,6 +685,7 @@ def test_review_context_pack_injects_db_mapper_entity_reference_snippets(
     assert "localReferenceContext" in context["promptText"]
     assert "t_order" in context["promptText"]
     assert "selectOrder" in context["promptText"]
+    assert "evidenceCandidates" not in context["promptText"]
     assert "repo-secret" not in context["promptText"]
     assert str(tmp_path) not in context["promptText"]
 

@@ -2,13 +2,14 @@
 
 ## 状态
 
-- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10：第一个评估驱动的业务 Retriever` 已落地，等待用户验证是否进入 M11。
+- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10：第一个评估驱动的业务 Retriever` 已落地；源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 前端重构专项见 `docs/39-review-accuracy-and-material-ui-roadmap.md`，当前已完成阶段 2 源码检索能力升级，等待用户验证。
 - 完整产品目标：`docs/37-review-platform-target-product-roadmap.md`。本文件负责近期阶段推进，`docs/37` 负责最终产品形态和长期路线。
 - 关联历史文档：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`：V2 反馈学习、项目策略、Context Pack 和高准确模式阶段记录。
   - `docs/33-review-learning-capability-roadmap.md`：长期学习能力愿景。
   - `docs/34-local-repository-context-retrieval-plan.md`：本地仓库上下文检索和高准确 Review 细节。
   - `docs/35-review-quality-evaluation-and-rule-gap-governance.md`：规则缺口治理和质量评估路线。
+  - `docs/39-review-accuracy-and-material-ui-roadmap.md`：源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 / MUI 前端重构专项路线。
 - 本文件用途：回答“近期哪些能力必须先补、当前缺什么、下一步先做什么”。完整产品目标和长期阶段路线见 `docs/37-review-platform-target-product-roadmap.md`。后续阶段推进优先更新本文件，再按需更新细节文档。
 
 ## 一、通俗结论
@@ -373,10 +374,10 @@ finding 展示必须清楚：
 
 ## 八、当前下一步
 
-当前 M10 第一个评估驱动的业务 Retriever 已落地，等待用户验证：
+当前 M10 第一个评估驱动的业务 Retriever 已落地。当前专项已完成 `docs/39` 阶段 1 和阶段 2，下一阶段需等待用户确认后进入：
 
 ```text
-M10：第一个评估驱动的业务 Retriever
+docs/39 阶段 3：Context Pack 裁剪规则升级
 ```
 
 ### M1 落地记录（2026-07-01）
@@ -458,6 +459,22 @@ M10：第一个评估驱动的业务 Retriever
 - 解决的缺口：补齐缓存写入 / 删除变更的最小业务上下文检索，让新任务不再把缓存 signal 归为 `UNSUPPORTED_PLANNER_SIGNAL`。
 - 如何验证：运行 `tests/unit/test_local_retriever.py`、`tests/unit/test_review_context_pack.py`、`tests/unit/test_code_quality_prompt.py` 以及相关质量治理契约测试；在高准确模式流转中确认 supported signals 包含 `CACHE_WRITE_DELETE_CHANGED`，命中后 `CACHE_USAGE_CONTEXT` 可用。
 - 下一阶段：M11 业务 Retriever 扩展循环；未经用户确认不继续推进。
+
+### docs/39 阶段 1 落地记录（2026-07-08）
+
+- 改了什么：在本地仓库上下文摘要中补充安全的源码工作区诊断，包含 mirror / worktree 存在状态、远程 URL 脱敏摘要、最近拉取 / 检出时间、清理策略和最近清理结果；任务详情高准确模式流转展示这些诊断；新增 `docs/39-review-accuracy-and-material-ui-roadmap.md`。
+- 为什么做：用户在本地和远程 Docker 目录看到 `review-workspaces` 为空时，需要从任务详情直接判断是未启用、clone / fetch 失败、worktree checkout 失败、task worktree 被清理，还是 Retriever 未命中。
+- 解决的缺口：补齐源码工作区可靠性与可观测性，为后续源码索引、关系检索和 Context Pack 裁剪改进提供清晰基础。
+- 如何验证：运行 `tests/unit/test_local_repo_context.py`、`tests/unit/test_review_context_pack.py` 以及相关 AI Review 契约测试；前端运行 build，确认高准确模式流转展示源码工作区诊断。
+- 下一阶段：`docs/39` 阶段 2 源码检索能力升级；未经用户确认不继续推进。
+
+### docs/39 阶段 2 落地记录（2026-07-08）
+
+- 改了什么：新增统一内部证据模型 `EvidenceCandidate / EvidenceRelation / EvidencePriority / EvidenceSource / EvidenceBudgetHint`；Local Retriever 在 bounded `rg` 兜底之外，增加受控 worktree 内 Java / Spring / MyBatis 轻量源码索引和关系证据输出，覆盖方法 caller / callee、interface implementation、Controller -> Service、Service -> Mapper、MyBatis XML `namespace / id` 与 DTO / field 引用。
+- 为什么做：远程 AI Review 只看 diff 或字符串 snippets 时，很难判断调用链、接口实现、Mapper 方法和字段访问证据是否存在；先把这些证据结构化，给后续 Context Pack 证据排序和裁剪提供统一输入。
+- 解决的缺口：补齐源码检索从“按 signal 拼 rg query”到“关系证据候选 + rg 兜底”的第一步，降低后续误判样本中“缺调用方 / Mapper / DTO 字段引用上下文”的比例。
+- 如何验证：运行 `tests/unit/test_local_retriever.py`、`tests/unit/test_review_context_pack.py`、`tests/unit/test_local_repo_context.py` 以及相关 AI Review progress 契约测试。
+- 下一阶段：`docs/39` 阶段 3 Context Pack 裁剪规则升级；未经用户确认不继续推进。
 
 暂不建议进入：
 

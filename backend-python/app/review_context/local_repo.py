@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import os
 from pathlib import Path
@@ -62,11 +63,12 @@ def prepare_local_repository_context(
 ) -> dict[str, Any]:
     settings = get_settings()
     if not settings.local_repo_context_enabled:
-        return _disabled_result(project_id, task_id)
+        return _disabled_result(project_id, task_id, settings)
 
     started = perf_counter()
     phase = "VALIDATE"
     cleanup_summary: dict[str, Any] | None = None
+    plan: _LocalRepoPlan | None = None
     try:
         plan = _build_plan(
             settings,
@@ -92,6 +94,8 @@ def prepare_local_repository_context(
             project_id=project_id,
             task_id=task_id,
             head_ref=head_ref,
+            plan=plan,
+            settings=settings,
             mirror_status=mirror_status,
             duration_ms=_duration_ms(started),
             cleanup_summary=cleanup_summary,
@@ -101,6 +105,8 @@ def prepare_local_repository_context(
             project_id=project_id,
             task_id=task_id,
             head_ref=head_ref,
+            plan=plan,
+            settings=settings,
             failure_phase=phase,
             reason=str(exception),
             duration_ms=_duration_ms(started),
@@ -111,6 +117,8 @@ def prepare_local_repository_context(
             project_id=project_id,
             task_id=task_id,
             head_ref=head_ref,
+            plan=plan,
+            settings=settings,
             failure_phase=exception.operation.upper(),
             reason=exception.public_message,
             duration_ms=_duration_ms(started),
@@ -121,6 +129,8 @@ def prepare_local_repository_context(
             project_id=project_id,
             task_id=task_id,
             head_ref=head_ref,
+            plan=plan,
+            settings=settings,
             failure_phase=phase,
             reason=_sanitize_text(str(exception), settings.gitlab_token),
             duration_ms=_duration_ms(started),
@@ -582,10 +592,20 @@ def _lock_for(key: str) -> Lock:
         return lock
 
 
-def _disabled_result(project_id: int | None, task_id: int | None) -> dict[str, Any]:
+def _disabled_result(project_id: int | None, task_id: int | None, settings: Settings) -> dict[str, Any]:
     summary = {
         "enabled": False,
         "status": "DISABLED",
+        "sourceWorkspaceSummary": _source_workspace_summary(
+            settings=settings,
+            plan=None,
+            enabled=False,
+            status="DISABLED",
+            mirror_status="SKIPPED",
+            worktree_status="SKIPPED",
+            failure_phase="LOCAL_REPO_CONTEXT_DISABLED",
+            cleanup_summary=None,
+        ),
     }
     return {"summary": summary, "unavailableContexts": []}
 
@@ -595,6 +615,8 @@ def _prepared_result(
     project_id: int | None,
     task_id: int | None,
     head_ref: str | None,
+    plan: _LocalRepoPlan,
+    settings: Settings,
     mirror_status: str,
     duration_ms: int,
     cleanup_summary: dict[str, Any] | None,
@@ -611,6 +633,18 @@ def _prepared_result(
         "sourceIncluded": False,
     }
     _attach_cleanup_summary(summary, cleanup_summary)
+    _attach_source_workspace_summary(
+        summary,
+        _source_workspace_summary(
+            settings=settings,
+            plan=plan,
+            enabled=True,
+            status="PREPARED",
+            mirror_status=mirror_status,
+            worktree_status="CHECKED_OUT",
+            cleanup_summary=cleanup_summary,
+        ),
+    )
     return {"summary": summary, "unavailableContexts": []}
 
 
@@ -619,6 +653,8 @@ def _unavailable_result(
     project_id: int | None,
     task_id: int | None,
     head_ref: str | None,
+    plan: _LocalRepoPlan | None,
+    settings: Settings,
     failure_phase: str,
     reason: str,
     duration_ms: int,
@@ -641,6 +677,19 @@ def _unavailable_result(
         "sourceIncluded": False,
     }
     _attach_cleanup_summary(summary, cleanup_summary)
+    _attach_source_workspace_summary(
+        summary,
+        _source_workspace_summary(
+            settings=settings,
+            plan=plan,
+            enabled=True,
+            status="UNAVAILABLE",
+            mirror_status=_mirror_status_for_failure(plan, failure_phase),
+            worktree_status=_worktree_status_for_failure(failure_phase),
+            failure_phase=failure_phase,
+            cleanup_summary=cleanup_summary,
+        ),
+    )
     return {
         "summary": summary,
         "unavailableContexts": [
@@ -658,6 +707,101 @@ def _attach_cleanup_summary(
 ) -> None:
     if cleanup_summary is not None:
         summary["cleanup"] = cleanup_summary
+
+
+def _attach_source_workspace_summary(
+    summary: dict[str, Any],
+    source_workspace_summary: dict[str, Any],
+) -> None:
+    summary["sourceWorkspaceSummary"] = source_workspace_summary
+
+
+def _source_workspace_summary(
+    *,
+    settings: Settings,
+    plan: _LocalRepoPlan | None,
+    enabled: bool,
+    status: str,
+    mirror_status: str,
+    worktree_status: str,
+    cleanup_summary: dict[str, Any] | None,
+    failure_phase: str | None = None,
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "enabled": bool(enabled),
+        "status": status,
+        "mode": "GIT_MIRROR_AND_TASK_WORKTREE",
+        "cleanupPolicy": {
+            "enabled": bool(settings.local_repo_cleanup_enabled),
+            "worktreeRetentionHours": max(int(settings.local_repo_worktree_retention_hours or 0), 0),
+            "mirrorRetentionDays": max(int(settings.local_repo_mirror_retention_days or 0), 0),
+        },
+    }
+    if cleanup_summary is not None:
+        summary["cleanup"] = cleanup_summary
+    if failure_phase:
+        summary["failurePhase"] = failure_phase
+    if plan is None:
+        summary["mirror"] = {"exists": False, "status": mirror_status}
+        summary["worktree"] = {"exists": False, "status": worktree_status}
+        return summary
+
+    summary["remoteUrl"] = _public_remote_url(plan.clone_url, plan.token)
+    summary["mirror"] = _workspace_path_summary(
+        plan.mirror_path,
+        status=mirror_status,
+        timestamp_label="lastFetchedAt",
+    )
+    summary["worktree"] = _workspace_path_summary(
+        plan.worktree_path,
+        status=worktree_status,
+        timestamp_label="lastCheckedOutAt",
+    )
+    return summary
+
+
+def _workspace_path_summary(
+    path: Path,
+    *,
+    status: str,
+    timestamp_label: str,
+) -> dict[str, Any]:
+    exists = path.exists()
+    result: dict[str, Any] = {
+        "exists": bool(exists),
+        "status": status,
+    }
+    touched_at = _path_modified_at(path)
+    if touched_at:
+        result[timestamp_label] = touched_at
+    return result
+
+
+def _path_modified_at(path: Path) -> str | None:
+    try:
+        modified_at = path.stat().st_mtime
+    except OSError:
+        return None
+    return datetime.fromtimestamp(modified_at, tz=timezone.utc).isoformat(timespec="seconds")
+
+
+def _public_remote_url(value: str, token: str | None) -> str:
+    return _truncate(_sanitize_text(value, token), 240)
+
+
+def _mirror_status_for_failure(plan: _LocalRepoPlan | None, failure_phase: str) -> str:
+    if plan is None:
+        return "SKIPPED"
+    if str(failure_phase or "").upper() in {"CLONE", "FETCH"}:
+        return "UNAVAILABLE"
+    return "PRESENT" if plan.mirror_path.exists() else "MISSING"
+
+
+def _worktree_status_for_failure(failure_phase: str) -> str:
+    phase = str(failure_phase or "").upper()
+    if phase == "WORKTREE":
+        return "CHECKOUT_FAILED"
+    return "SKIPPED"
 
 
 def _short_ref(value: str | None) -> str | None:

@@ -14,7 +14,8 @@
 
 - `docs/36-review-platform-current-roadmap.md`：**当前后续推进唯一总控入口**，说明 Review 平台准确率路线、必须 / 可选能力、当前缺口和下一阶段顺序。
 - `docs/37-review-platform-target-product-roadmap.md`：完整产品目标路线，说明最终产品形态、用户体验、长期阶段和完整验收标准。
-- `docs/38-review-lifecycle-and-frontend-entrypoints.md`：Review 生命周期与前端入口说明，按设置、任务、评估样本、规则缺口、质量看板、验收记录、回放记录和反馈池解释使用时机。
+- `docs/38-review-lifecycle-and-frontend-entrypoints.md`：Review 生命周期与前端入口说明，按任务、质量治理、设置和默认隐藏的反馈池解释使用时机。
+- `docs/39-review-accuracy-and-material-ui-roadmap.md`：源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 / MUI 前端重构的分阶段推进计划。
 - `docs/23-help-gitlab-dingtalk-project-onboarding.md`：接入帮助页文档源，面向首次接入用户，按 GitLab Webhook、钉钉机器人、项目组和模型配置组织。
 - `docs/26-gitlab-diff-context-expansion-plan.md`：GitLab 风格 Diff 上下文展开与暗黑语法高亮分阶段实施计划。
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
@@ -35,7 +36,8 @@
 3. `docs/10-local-dev-pitfalls.md`：本地环境与调试避坑。
 4. `docs/36-review-platform-current-roadmap.md`：当前 Review 平台后续推进总控。
 5. `docs/37-review-platform-target-product-roadmap.md`：完整产品目标和长期路线。
-6. 与当前任务相关的 `docs/` 设计文档，例如 API、规则、AI Review provider 计划等。
+6. `docs/39-review-accuracy-and-material-ui-roadmap.md`：当前准确率和前端体验专项推进计划。
+7. 与当前任务相关的 `docs/` 设计文档，例如 API、规则、AI Review provider 计划等。
 
 后续开发以 `backend-python/` 和 `frontend/` 为主。
 
@@ -89,7 +91,7 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 代码质量 AI Review 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM 和 OpenAI-compatible 自定义模型 Provider。
 - AI Review 支持配置 / prompt 配置、模型端点 URL / 模型名称 / API Key 配置、项目组多模型并行 Review、自动触发、重试、执行过程展示。
 - AI Review finding 支持展示上下文状态、置信度、判断依据、缺失上下文和上下文摘要；当模型只能基于 diff 判断时，Prompt 会要求输出“部分 / 不足”上下文状态，避免证据不足时武断判为高风险。
-- 高准确模式的本地引用检索已支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED / DTO_FIELD_CHANGED / FIELD_DELETED / DB_SQL_MAPPER_CHANGED / CACHE_WRITE_DELETE_CHANGED`；DTO / VO 字段变更会按字段名、getter、setter 做有限引用搜索，DB / Mapper / Entity 变更会按表名、字段名、Mapper 方法名和 Entity 名做有限关联检索，缓存写入 / 删除变更会按 cache key、cache name、key expression 和必要操作 token 做有限读写链路检索，并按高误判 signal 优先保留关键证据。若 snippets 因预算被裁剪，Context Pack 会注入 `notInjectedEvidence` 安全摘要，提示模型存在未注入证据，避免把缺失误解成不存在。
+- 高准确模式的本地引用检索已支持 `METHOD_DELETED / METHOD_SIGNATURE_CHANGED / DTO_FIELD_CHANGED / FIELD_DELETED / DB_SQL_MAPPER_CHANGED / CACHE_WRITE_DELETE_CHANGED`；DTO / VO 字段变更会按字段名、getter、setter 做有限引用搜索，DB / Mapper / Entity 变更会按表名、字段名、Mapper 方法名和 Entity 名做有限关联检索，缓存写入 / 删除变更会按 cache key、cache name、key expression 和必要操作 token 做有限读写链路检索，并按高误判 signal 优先保留关键证据。Local Retriever 还会输出受控 worktree 内的关系证据候选，例如 caller / callee、接口实现、Controller -> Service、Service -> Mapper、MyBatis namespace / id 和 DTO 字段访问；当前候选先进入 Context Pack 返回结构和 progress 摘要，完整 evidence-first prompt 裁剪放到后续阶段。若 snippets 因预算被裁剪，Context Pack 会注入 `notInjectedEvidence` 安全摘要，提示模型存在未注入证据，避免把缺失误解成不存在。
 - GitLab MR 自动 AI Review 完成后会向任务所属项目组中已启用的钉钉 webhook 推送“代码质量 Review”结果；项目组未配置机器人时记录为 `SKIPPED`，不会回退推送到默认项目组。
 - GitLab Push webhook 会先按项目组 Push 审核策略中的 `pushBranchPatterns` 做入口过滤，只有允许分支会创建审查任务并进入后续流程；Push 自动 AI Review 还需要通过 Push 审核层。该审核层会根据文件数、diff 大小、commit 数、硬上限和 debounce 自动判定是否允许进入 AI Review，并在任务详情页公开展示放行或拦截原因。
 
@@ -196,8 +198,8 @@ GITLAB_TOKEN=GitLab access token
 LOCAL_REPO_CONTEXT_ENABLED=true
 LOCAL_REPO_WORKSPACE_ROOT=/app/.local/review-workspaces
 LOCAL_REPO_WORKSPACE_HOST_DIR=./review-workspaces
-LOCAL_REPO_WORKTREE_RETENTION_HOURS=24
-LOCAL_REPO_MIRROR_RETENTION_DAYS=30
+LOCAL_REPO_WORKTREE_RETENTION_HOURS=72
+LOCAL_REPO_MIRROR_RETENTION_DAYS=180
 CODE_QUALITY_REVIEW_ENABLED=true
 DEEPSEEK_API_KEY=...
 XIAOMIMO_API_KEY=...
@@ -206,7 +208,7 @@ OPENAI_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
 
-`LOCAL_REPO_CONTEXT_ENABLED=true` 会启用高准确模式的本地仓库上下文检索。`LOCAL_REPO_WORKSPACE_ROOT` 是 backend 容器内路径，默认挂载到 `/app/.local/review-workspaces`；`LOCAL_REPO_WORKSPACE_HOST_DIR` 是宿主机缓存目录，默认是运行目录下的 `./review-workspaces`，用于持久化 Git mirror 和 task worktree。GitLab token 需要具备 `read_repository` 权限，否则本地 clone / fetch 会失败并在任务详情中显示本地仓库不可用。启用本地仓库上下文时，后端默认会 best-effort 清理超过 `LOCAL_REPO_WORKTREE_RETENTION_HOURS` 的 `worktrees/{taskId}`，并按 `LOCAL_REPO_MIRROR_RETENTION_DAYS` 清理长期闲置 mirror；清理失败不会阻断 AI Review。
+`LOCAL_REPO_CONTEXT_ENABLED=true` 会启用高准确模式的本地仓库上下文检索。`LOCAL_REPO_WORKSPACE_ROOT` 是 backend 容器内路径，默认挂载到 `/app/.local/review-workspaces`；`LOCAL_REPO_WORKSPACE_HOST_DIR` 是宿主机缓存目录，默认是运行目录下的 `./review-workspaces`，用于持久化 Git mirror 和 task worktree。GitLab token 需要具备 `read_repository` 权限，否则本地 clone / fetch 会失败并在任务详情中显示本地仓库不可用。启用本地仓库上下文时，后端默认会 best-effort 清理超过 `LOCAL_REPO_WORKTREE_RETENTION_HOURS` 的 `worktrees/{taskId}`，并按 `LOCAL_REPO_MIRROR_RETENTION_DAYS` 清理长期闲置 mirror；清理失败不会阻断 AI Review。生产环境建议把 worktree 至少保留 72 小时、mirror 至少保留 180 天，让 mirror 作为项目级源码缓存长期复用，worktree 仍作为 task 级临时 checkout。
 
 如果高准确模式显示 `LOCAL_REPO_PREPARE_FAILED` 且 `failurePhase=CLONE`，先确认项目的 `repositoryUrl` 已经使用 `GITLAB_BASE_URL` 中可访问的 scheme / host / port，而不是 GitLab webhook payload 里的容器内 hostname。旧任务或旧项目数据不会自动改写，需要下一次同项目 webhook 覆盖，或在设置页 / 数据库中手动修正项目仓库地址。
 
@@ -322,8 +324,8 @@ LOCAL_REPO_WORKSPACE_HOST_DIR=./review-workspaces
 LOCAL_REPO_MAX_FETCH_SECONDS=120
 LOCAL_REPO_MAX_SEARCH_SECONDS=30
 LOCAL_REPO_CLEANUP_ENABLED=true
-LOCAL_REPO_WORKTREE_RETENTION_HOURS=24
-LOCAL_REPO_MIRROR_RETENTION_DAYS=30
+LOCAL_REPO_WORKTREE_RETENTION_HOURS=72
+LOCAL_REPO_MIRROR_RETENTION_DAYS=180
 ```
 
 运行目录下的 `review-workspaces/` 会被挂载进 backend 容器，用来保留 mirror 缓存和 task worktree；升级镜像不会清空该目录。当前本地仓库检索主链路已支持 mirror / worktree 复用，并会在准备本地仓库上下文时执行 best-effort 清理：优先清理过期 `worktrees/{taskId}`，`mirrors/{projectId}.git` 只按较长闲置周期清理。清理前会校验目标绝对路径位于 `LOCAL_REPO_WORKSPACE_ROOT` 内且不会删除 root 本身；当前 task worktree 和当前项目 mirror 会被跳过。清理 worktree 不影响后续新 MR，清理 mirror 后同项目下一次审查会重新 clone，正确性不受影响但首次准备耗时会增加。
@@ -906,7 +908,7 @@ Evaluation Case 用于把 AI finding 或人工补充的漏报样本沉淀为离�
 前端最小入口：
 
 - 任务详情 -> 代码质量 Review -> 展开某条 AI finding -> 点击“标注评估样本”，选择 verdict 并填写人工说明。
-- 顶部导航“评估样本”可查看基础样本列表，支持按项目、Provider、Profile、风险类型和 verdict 筛选。
+- 顶部导航“质量治理 -> 评估样本”可查看基础样本列表，支持按项目、Provider、Profile、风险类型和 verdict 筛选。
 - 该入口只写入 `/api/evaluation-cases`，不会恢复反馈池复杂能力，也不会触发模型回放。
 
 从已有 AI finding 创建样本时，先从任务结果中读取 finding 的 `fingerprint`：
@@ -951,7 +953,7 @@ Evaluation Run 用于记录一次离线评估或 Review 回放的 baseline / can
 
 前端最小入口：
 
-- 顶部导航“回放记录”可查看 run 列表。
+- 顶部导航“质量治理 -> 回放记录”可查看 run 列表。
 - 回放详情页展示 sample set、Provider、Profile、model、prompt hash、Context Pack / Retriever / 规则缺口版本、baseline / candidate、状态、耗时和 item 摘要。
 
 基于已有评估样本创建 run：
@@ -1002,7 +1004,7 @@ Invoke-RestMethod "http://localhost:8090/api/evaluation-runs?projectId=1&provide
 
 前端最小入口：
 
-- 顶部导航“质量看板”。
+- 顶部导航“质量治理 -> 质量看板”。
 - 支持按项目、Provider、Profile、风险类型、verdict 过滤。
 - 展示样本数、误判数 / 率、上下文不足数 / 率、等级偏高 / 偏低、重复 finding、漏报样本，以及项目 / Provider / Profile / 风险类型维度聚合表。
 
@@ -1025,7 +1027,7 @@ M8 把规则缺口从 task 级近似推进到 evaluation case / finding 级人�
 
 前端最小入口：
 
-- 顶部导航“评估样本”列表中可点击“编辑归因”，查看自动带入的安全 rule gap 摘要并保存归因类型。
+- 顶部导航“质量治理 -> 评估样本”列表中可点击“编辑归因”，查看自动带入的安全 rule gap 摘要并保存归因类型。
 - “质量看板”展示已归因样本数、未归因样本数、归因类型分布和关联 verdict 分布。
 - “规则缺口”看板的推荐项会区分“高频观察”和“样本证明 / 样本 + 高频”。
 
@@ -1056,7 +1058,7 @@ M9 用“验收记录”记录规则、Retriever、Prompt、Context Pack、确�
 
 前端最小入口：
 
-- 顶部导航“验收记录”：查看、创建和编辑验收记录。
+- 顶部导航“质量治理 -> 验收记录”：查看、创建和编辑验收记录。
 - “质量看板”辅助诊断区展示验收记录数和最近验收状态。
 
 命令行验证示例：
@@ -1207,12 +1209,8 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/code-quality-revi
 顶部导航：
 
 - `任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程、AI Review 调度队列入口。
-- `规则缺口`：聚合高准确模式流转中沉淀的 Planner / Retriever 能力缺口，用于诊断上下文为什么不足；后续会收敛到质量治理 / 高准确模式诊断中，Retriever 优先级需结合评估样本、回放结果和 finding 级归因判断。
-- `反馈池`：默认隐藏；前端构建时启用 `VITE_REVIEW_LEARNING_UI_ENABLED=true` 后可查看风险项 / finding 反馈，继续启用 `VITE_PROJECT_REVIEW_POLICY_UI_ENABLED=true` 后可筛选建议沉淀反馈并管理项目策略。
-- `质量看板`：按项目、Provider、Profile、风险类型和 verdict 聚合评估样本，展示误判率、上下文不足率、等级偏差、重复和漏报，并附带回放、补证据和确定性检查辅助摘要。
-- `验收记录`：记录规则、Retriever、Prompt、Context Pack、确定性检查或 Provider 改动的人工准入和退出验收，不阻断线上 Review 或代码合并。
-- `评估样本`：查看从 AI finding 或人工补充沉淀的 Review 质量评估样本。
-- `回放记录`：查看 evaluation run / review replay run 的版本元信息、baseline / candidate 和样本结果摘要。
+- `质量治理`：管理员入口，聚合质量看板、评估样本、规则缺口、验收记录和回放记录；其中验收记录与回放记录是治理能力，不是普通 Review 必经步骤。
+- `反馈池`：默认隐藏；前端构建时启用 `VITE_REVIEW_LEARNING_UI_ENABLED=true` 后会出现在“质量治理”中，可查看风险项 / finding 反馈，继续启用 `VITE_PROJECT_REVIEW_POLICY_UI_ENABLED=true` 后可筛选建议沉淀反馈并管理项目策略。
 - 右上角通知图标：查看最近 24 小时内 AI Review 执行失败记录，并可跳转任务详情。
 - `设置`：全局设置、模型 Provider 配置、AI Review 设置、项目组 / 端类型配置、启用的卡片提醒类型；Push 审核策略在 AI Review 设置中按项目组维护。
 - `版本更新`：查看近期功能变化、部署注意和验证提示。

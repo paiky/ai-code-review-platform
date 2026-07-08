@@ -1956,3 +1956,34 @@ workspace，历史 progress 不会自动回写。Retriever 在执行时会校验
    `UNAVAILABLE`，`worktreeStatus=MISSING`，避免继续展示为单纯“已准备”。
 2. 前端遇到历史 `PREPARED` 但最新 `LOCAL_CONTEXT_RETRIEVE_FAILED` 时，展示为“工作区缺失 / 检索不可用”，不要把它解释为无风险或无引用。
 3. 删除 `.local/review-workspaces` 后需要重新触发 AI Review，平台会重新 clone / fetch / checkout；旧任务的历史 progress 只作为排障记录。
+
+## 85. `review-workspaces` 目录为空不一定是清理任务导致
+
+现象：
+
+本地 `.local/review-workspaces/worktrees` 为空，或 Docker 远程部署目录
+`/opt/ai-code-review-platform/runtime/review-workspaces/mirrors` 为空，容易误判为后台定时任务把源码缓存清掉。
+
+原因：
+
+当前没有常驻定时清理任务。清理只在准备本地仓库上下文时 best-effort 执行，并且默认只清理过期
+`worktrees/{taskId}` 和长期闲置 `mirrors/{projectId}.git`。目录为空更常见的原因是：
+
+1. `LOCAL_REPO_CONTEXT_ENABLED=false`，高准确模式本地仓库上下文未启用。
+2. 还没有触发过需要本地仓库上下文的 AI Review。
+3. GitLab token、`projects.repository_url`、commit / branch ref 或网络导致 clone / fetch 失败。
+4. Docker `LOCAL_REPO_WORKSPACE_HOST_DIR` 指向了另一个宿主机目录。
+5. task worktree 已按 `LOCAL_REPO_WORKTREE_RETENTION_HOURS` 清理。
+
+处理方式：
+
+1. 先看任务详情“高准确模式流转”的源码工作区诊断，不要只看宿主机目录。
+2. 确认 `LOCAL_REPO_CONTEXT_ENABLED=true`、`GITLAB_TOKEN` 有 `read_repository` 权限，且 `repository_url` 是容器可访问的 `GITLAB_BASE_URL` 地址。
+3. 推荐生产配置把 worktree 至少保留 72 小时，把 mirror 至少保留 180 天：
+
+```text
+LOCAL_REPO_WORKTREE_RETENTION_HOURS=72
+LOCAL_REPO_MIRROR_RETENTION_DAYS=180
+```
+
+4. mirror 是项目级源码缓存，建议长期保留；worktree 是 task 级临时 checkout，不建议永久保留。

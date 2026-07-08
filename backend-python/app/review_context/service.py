@@ -210,11 +210,13 @@ def build_review_context_pack(
         local_repository_context.get("unavailableContexts") or [],
         local_reference_context.get("unavailableContexts") or [],
     )
+    local_repository_summary = dict(local_repository_context.get("summary") or {})
+    source_workspace_summary = local_repository_summary.pop("sourceWorkspaceSummary", {}) or {}
     context_pack = {
         "version": CONTEXT_PACK_VERSION,
         "changedFilesSummary": _changed_files_summary(files, diff_text),
         "sameFileContext": same_file_context,
-        "localRepositoryContext": local_repository_context.get("summary") or {},
+        "localRepositoryContext": local_repository_summary,
         "localReferenceSearch": local_reference_pack_context["summary"],
         "localReferenceContext": local_reference_pack_context,
         "deterministicChecks": deterministic_checks,
@@ -233,7 +235,9 @@ def build_review_context_pack(
         "contextPack": context_pack,
     }
     budget_before = _budget_count_snapshot(context_pack)
+    detached_evidence_candidates = _detach_local_reference_evidence_candidates(context_pack)
     prompt_text, truncated_by_budget = _fit_context_pack_budget(context_pack, review_context)
+    _restore_local_reference_evidence_candidates(context_pack, detached_evidence_candidates)
     local_reference_summary = context_pack.get("localReferenceSearch") or _empty_local_reference_summary()
     local_reference_context["summary"] = local_reference_summary
     local_reference_context["searches"] = (context_pack.get("localReferenceContext") or {}).get("searches") or []
@@ -251,6 +255,8 @@ def build_review_context_pack(
         budget_cut_summary=budget_cut_summary,
     )
     context_pack.update(observability_summary)
+    if source_workspace_summary:
+        context_pack["sourceWorkspaceSummary"] = source_workspace_summary
 
     meta = {
         "version": CONTEXT_PACK_VERSION,
@@ -1286,6 +1292,10 @@ def _fit_context_pack_budget(
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
             continue
+        if _remove_last_local_reference_evidence_candidate(context_pack):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
         if _remove_last_local_reference_snippet(context_pack, protect_high_priority=True):
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
@@ -1325,6 +1335,50 @@ def _fit_context_pack_budget(
     return prompt_text, truncated_by_budget
 
 
+def _detach_local_reference_evidence_candidates(context_pack: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    local_reference = context_pack.get("localReferenceContext") or {}
+    searches = [item for item in (local_reference.get("searches") or []) if isinstance(item, dict)]
+    detached: dict[str, list[dict[str, Any]]] = {}
+    for search in searches:
+        candidates = [item for item in (search.get("evidenceCandidates") or []) if isinstance(item, dict)]
+        if not candidates:
+            continue
+        key = _local_reference_search_key(search)
+        detached[key] = candidates
+        search.pop("evidenceCandidates", None)
+        search["candidateEvidenceCount"] = 0
+    if detached:
+        summary = context_pack.get("localReferenceSearch") if isinstance(context_pack.get("localReferenceSearch"), dict) else {}
+        detached["__summary__"] = [{"evidenceCandidateCount": int(summary.get("evidenceCandidateCount") or 0)}]
+        summary["evidenceCandidateCount"] = 0
+        nested_summary = local_reference.get("summary") if isinstance(local_reference.get("summary"), dict) else {}
+        nested_summary["evidenceCandidateCount"] = 0
+    return detached
+
+
+def _restore_local_reference_evidence_candidates(
+    context_pack: dict[str, Any],
+    detached: dict[str, list[dict[str, Any]]],
+) -> None:
+    if not detached:
+        return
+    local_reference = context_pack.get("localReferenceContext") or {}
+    searches = [item for item in (local_reference.get("searches") or []) if isinstance(item, dict)]
+    for search in searches:
+        key = _local_reference_search_key(search)
+        candidates = detached.get(key)
+        if candidates is None:
+            continue
+        search["evidenceCandidates"] = candidates
+        search["candidateEvidenceCount"] = len(candidates)
+    _sync_local_reference_summary(context_pack, truncated=False)
+
+
+def _local_reference_search_key(search: dict[str, Any]) -> str:
+    signal_types = ",".join(str(item) for item in (search.get("signalTypes") or []))
+    return f"{search.get('query') or ''}|{signal_types}"
+
+
 def _remove_empty_local_reference_context(context_pack: dict[str, Any]) -> bool:
     local_reference = context_pack.get("localReferenceContext") or {}
     if not local_reference:
@@ -1345,6 +1399,22 @@ def _remove_empty_local_reference_context(context_pack: dict[str, Any]) -> bool:
     if int((context_pack.get("localReferenceSearch") or {}).get("queryCount") or 0) <= 0:
         context_pack.pop("localReferenceSearch", None)
     return True
+
+
+def _remove_last_local_reference_evidence_candidate(context_pack: dict[str, Any]) -> bool:
+    local_reference = context_pack.get("localReferenceContext") or {}
+    searches = local_reference.get("searches") or []
+    for search in reversed([item for item in searches if isinstance(item, dict)]):
+        candidates = search.get("evidenceCandidates") or []
+        if not candidates:
+            continue
+        candidates.pop()
+        search["evidenceCandidates"] = candidates
+        search["candidateEvidenceCount"] = len(candidates)
+        search["truncated"] = True
+        _sync_local_reference_summary(context_pack, truncated=True)
+        return True
+    return False
 
 
 def _remove_last_local_reference_snippet(
@@ -1430,6 +1500,7 @@ def _remove_last_requested_context(context_pack: dict[str, Any]) -> bool:
             index
             for index in range(len(requested_contexts) - 1, -1, -1)
             if str((requested_contexts[index] or {}).get("type") or "").upper() != "REFERENCE_SEARCH"
+            and not bool((requested_contexts[index] or {}).get("available"))
         ),
         None,
     )
@@ -1527,6 +1598,7 @@ def _progress_summary(context_pack: dict[str, Any], meta: dict[str, Any]) -> dic
         "sameFileSourceSnippetCount": same_file.get("sourceSnippetCount", 0),
         "sameFileSourceFileCount": same_file.get("includedSourceFileCount", 0),
         "localRepository": _local_repository_progress_summary(local_repository),
+        "sourceWorkspaceSummary": context_pack.get("sourceWorkspaceSummary") or {},
         "localReferenceSearch": _local_reference_progress_summary(local_reference),
         "deterministicChecks": {
             "securitySummary": context_pack.get("deterministicChecks", {}).get("securitySummary") or {},
@@ -1622,6 +1694,14 @@ def _local_reference_context(
         summary["status"] = "UNAVAILABLE"
         summary["worktreeStatus"] = "MISSING"
         summary["failurePhase"] = "RETRIEVER_WORKTREE_VALIDATE"
+        source_workspace = summary.get("sourceWorkspaceSummary") if isinstance(summary.get("sourceWorkspaceSummary"), dict) else {}
+        source_workspace["status"] = "UNAVAILABLE"
+        source_workspace["failurePhase"] = "RETRIEVER_WORKTREE_VALIDATE"
+        worktree_summary = source_workspace.get("worktree") if isinstance(source_workspace.get("worktree"), dict) else {}
+        worktree_summary["exists"] = False
+        worktree_summary["status"] = "MISSING"
+        source_workspace["worktree"] = worktree_summary
+        summary["sourceWorkspaceSummary"] = source_workspace
         if reason:
             local_repository_context.setdefault("unavailableContexts", []).append(
                 {
@@ -1638,17 +1718,19 @@ def _local_reference_pack_context(retrieval: dict[str, Any]) -> dict[str, Any]:
     summary["status"] = status
     searches = retrieval.get("searches") if isinstance(retrieval.get("searches"), list) else []
     included_snippet_count = sum(int(item.get("includedSnippetCount") or 0) for item in searches if isinstance(item, dict))
+    evidence_candidate_count = sum(int(item.get("candidateEvidenceCount") or 0) for item in searches if isinstance(item, dict))
     summary["includedSnippetCount"] = included_snippet_count
+    summary["evidenceCandidateCount"] = evidence_candidate_count
     summary["truncated"] = bool(summary.get("truncated", False) or any(bool(item.get("truncated")) for item in searches if isinstance(item, dict)))
     context = {
         "status": status,
-        "sourceIncluded": included_snippet_count > 0,
+        "sourceIncluded": included_snippet_count > 0 or evidence_candidate_count > 0,
         "summary": summary,
         "searches": searches,
     }
-    if included_snippet_count > 0:
+    if included_snippet_count > 0 or evidence_candidate_count > 0:
         context["note"] = (
-            "Bounded local worktree reference snippets for method, DTO / field, cache usage, and DB / Mapper / Entity change signals. "
+            "Bounded local worktree reference snippets and relation evidence for method, DTO / field, cache usage, and DB / Mapper / Entity change signals. "
             "They are auxiliary evidence only."
         )
     return context
@@ -1816,11 +1898,13 @@ def _apply_local_reference_availability(
     requested_contexts: list[dict[str, Any]],
     local_reference_context: dict[str, Any],
 ) -> None:
-    if int((local_reference_context.get("summary") or {}).get("includedSnippetCount") or 0) <= 0:
+    summary = local_reference_context.get("summary") or {}
+    available_evidence_count = int(summary.get("includedSnippetCount") or 0) + int(summary.get("evidenceCandidateCount") or 0)
+    if available_evidence_count <= 0:
         return
     supported_signals = {
         str(item or "").upper()
-        for item in ((local_reference_context.get("summary") or {}).get("supportedSignalTypes") or [])
+        for item in (summary.get("supportedSignalTypes") or [])
     }
     for item in requested_contexts:
         context_type = str(item.get("type") or "").upper()
@@ -1841,6 +1925,7 @@ def _empty_local_reference_summary() -> dict[str, Any]:
         "queryCount": 0,
         "matchedFileCount": 0,
         "includedSnippetCount": 0,
+        "evidenceCandidateCount": 0,
         "truncated": False,
         "supportedSignalTypes": [],
         "skippedSignalTypes": [],
@@ -1853,6 +1938,7 @@ def _local_reference_progress_summary(local_reference: dict[str, Any]) -> dict[s
         "queryCount": int(local_reference.get("queryCount") or 0),
         "matchedFileCount": int(local_reference.get("matchedFileCount") or 0),
         "includedSnippetCount": int(local_reference.get("includedSnippetCount") or 0),
+        "evidenceCandidateCount": int(local_reference.get("evidenceCandidateCount") or 0),
         "truncated": bool(local_reference.get("truncated", False)),
         "supportedSignalTypes": [str(item) for item in (local_reference.get("supportedSignalTypes") or [])[:12]],
         "skippedSignalTypes": [
@@ -1870,12 +1956,14 @@ def _sync_local_reference_summary(context_pack: dict[str, Any], *, truncated: bo
     local_reference = context_pack.get("localReferenceContext") or {}
     searches = [item for item in (local_reference.get("searches") or []) if isinstance(item, dict)]
     included_snippet_count = sum(int(item.get("includedSnippetCount") or 0) for item in searches)
+    evidence_candidate_count = sum(int(item.get("candidateEvidenceCount") or 0) for item in searches)
     summary = local_reference.get("summary") or _empty_local_reference_summary()
     summary["status"] = local_reference.get("status") or summary.get("status") or ""
     summary["includedSnippetCount"] = included_snippet_count
+    summary["evidenceCandidateCount"] = evidence_candidate_count
     summary["truncated"] = bool(summary.get("truncated", False) or truncated)
     local_reference["summary"] = summary
-    local_reference["sourceIncluded"] = included_snippet_count > 0
+    local_reference["sourceIncluded"] = included_snippet_count > 0 or evidence_candidate_count > 0
     context_pack["localReferenceContext"] = local_reference
     context_pack["localReferenceSearch"] = summary
 
@@ -1973,6 +2061,7 @@ def _budget_count_snapshot(context_pack: dict[str, Any]) -> dict[str, Any]:
         "sameFileSourceSnippetCount": int(same_file.get("sourceSnippetCount") or 0),
         "sameFileSourceFileCount": int(same_file.get("includedSourceFileCount") or 0),
         "localReferenceSnippetCount": sum(int(item.get("includedSnippetCount") or 0) for item in local_searches),
+        "localReferenceEvidenceCount": sum(int(item.get("candidateEvidenceCount") or 0) for item in local_searches),
         "localReferenceSearchCount": len(local_searches),
         "hasLocalReferenceContext": bool(local_reference),
     }
@@ -2028,6 +2117,10 @@ def _budget_cut_summary(
         ),
         "localReferenceSnippetsRemoved": max(
             int(before.get("localReferenceSnippetCount") or 0) - int(after.get("localReferenceSnippetCount") or 0),
+            0,
+        ),
+        "localReferenceEvidenceRemoved": max(
+            int(before.get("localReferenceEvidenceCount") or 0) - int(after.get("localReferenceEvidenceCount") or 0),
             0,
         ),
         "localReferenceContextRemoved": bool(before.get("hasLocalReferenceContext") and not after.get("hasLocalReferenceContext")),

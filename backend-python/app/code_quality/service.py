@@ -2461,20 +2461,53 @@ def _review_context_progress_detail(context: dict[str, Any]) -> str:
     requested_availability["items"] = (requested_availability.get("items") or [])[:6]
     summary["requestedContextAvailability"] = requested_availability
     summary["ruleGapItems"] = (summary.get("ruleGapItems") or [])[:3]
+    summary["sourceWorkspaceSummary"] = _bounded_source_workspace_summary(
+        summary.get("sourceWorkspaceSummary") or {},
+        include_cleanup_errors=False,
+    )
     payload["summary"] = summary
     text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     if len(text) <= 3800:
         return text
     requested_availability.pop("items", None)
     summary["requestedContextAvailability"] = requested_availability
-    summary["ruleGapItems"] = (payload["summary"].get("ruleGapItems") or [])[:1]
+    summary["ruleGapItems"] = (summary.get("ruleGapItems") or [])[:1]
     summary["progressSummaryTruncated"] = True
     payload["summary"] = summary
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(text) <= 3800:
+        return text
+    payload["summary"] = _minimal_review_context_progress_summary(summary)
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(text) <= 3800:
+        return text
+    payload["meta"] = _minimal_review_context_progress_meta(payload.get("meta") or {})
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(text) <= 3800:
+        return text
+    return json.dumps(
+        {
+            "meta": _minimal_review_context_progress_meta(payload.get("meta") or {}),
+            "summary": {"progressSummaryTruncated": True},
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def _bounded_review_context_summary(summary: dict[str, Any]) -> dict[str, Any]:
     result = dict(summary)
+    local_repository = dict(result.get("localRepository") or {})
+    local_repository.pop("sourceWorkspaceSummary", None)
+    result["localRepository"] = local_repository
+    local_repository_source = summary.get("localRepository") if isinstance(summary.get("localRepository"), dict) else {}
+    source_workspace_summary = _bounded_source_workspace_summary(
+        summary.get("sourceWorkspaceSummary") or local_repository_source.get("sourceWorkspaceSummary") or {}
+    )
+    if source_workspace_summary:
+        result["sourceWorkspaceSummary"] = source_workspace_summary
+    else:
+        result.pop("sourceWorkspaceSummary", None)
     result["plannerSignalTypeCounts"] = (summary.get("plannerSignalTypeCounts") or [])[:8]
     result["retrieverUnsupportedSignalTypeCounts"] = (summary.get("retrieverUnsupportedSignalTypeCounts") or [])[:8]
     availability = dict(summary.get("requestedContextAvailability") or {})
@@ -2489,15 +2522,165 @@ def _bounded_review_context_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _bounded_source_workspace_summary(
+    summary: dict[str, Any],
+    *,
+    include_cleanup_errors: bool = True,
+) -> dict[str, Any]:
+    if not isinstance(summary, dict) or not summary:
+        return {}
+    result = _pick_dict(
+        summary,
+        (
+            "enabled",
+            "status",
+            "mode",
+            "failurePhase",
+            "remoteUrl",
+            "lastPreparedAt",
+        ),
+    )
+    mirror = _pick_dict(
+        summary.get("mirror") if isinstance(summary.get("mirror"), dict) else {},
+        (
+            "exists",
+            "status",
+            "lastFetchedAt",
+            "lastModifiedAt",
+        ),
+    )
+    if mirror:
+        result["mirror"] = mirror
+    worktree = _pick_dict(
+        summary.get("worktree") if isinstance(summary.get("worktree"), dict) else {},
+        (
+            "exists",
+            "status",
+            "lastCheckedOutAt",
+            "lastModifiedAt",
+        ),
+    )
+    if worktree:
+        result["worktree"] = worktree
+    cleanup_policy = _pick_dict(
+        summary.get("cleanupPolicy") if isinstance(summary.get("cleanupPolicy"), dict) else {},
+        (
+            "enabled",
+            "worktreeRetentionHours",
+            "mirrorRetentionDays",
+        ),
+    )
+    if cleanup_policy:
+        result["cleanupPolicy"] = cleanup_policy
+    cleanup = _pick_dict(
+        summary.get("cleanup") if isinstance(summary.get("cleanup"), dict) else {},
+        (
+            "enabled",
+            "status",
+            "deletedWorktreeCount",
+            "deletedMirrorCount",
+            "errorCount",
+            "durationMs",
+        ),
+    )
+    if include_cleanup_errors and cleanup and int(cleanup.get("errorCount") or 0) > 0:
+        errors = summary.get("cleanup", {}).get("errors") if isinstance(summary.get("cleanup"), dict) else []
+        cleanup["errors"] = [str(item)[:160] for item in (errors or [])[:2]]
+    if cleanup:
+        result["cleanup"] = cleanup
+    return result
+
+
+def _pick_dict(source: Any, keys: tuple[str, ...]) -> dict[str, Any]:
+    if not isinstance(source, dict):
+        return {}
+    return {key: source[key] for key in keys if key in source and source.get(key) is not None}
+
+
+def _minimal_review_context_progress_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    local_repository = dict(summary.get("localRepository") or {})
+    if local_repository:
+        local_repository = _pick_dict(
+            local_repository,
+            (
+                "enabled",
+                "status",
+                "projectId",
+                "taskId",
+                "mirrorStatus",
+                "worktreeStatus",
+                "failurePhase",
+                "sourceIncluded",
+            ),
+        )
+    availability = dict(summary.get("requestedContextAvailability") or {})
+    availability = _pick_dict(
+        availability,
+        (
+            "total",
+            "available",
+            "unavailable",
+            "unknown",
+        ),
+    )
+    return {
+        "version": summary.get("version"),
+        "projectId": summary.get("projectId"),
+        "changedFileCount": summary.get("changedFileCount"),
+        "includedChangedFileCount": summary.get("includedChangedFileCount"),
+        "contextMissingFeedbackTotal": summary.get("contextMissingFeedbackTotal"),
+        "plannerSignalCount": summary.get("plannerSignalCount"),
+        "plannerSignalTypeCounts": (summary.get("plannerSignalTypeCounts") or [])[:4],
+        "requestedContextTypeCounts": (summary.get("requestedContextTypeCounts") or [])[:4],
+        "retrieverSupportedSignalTypes": (summary.get("retrieverSupportedSignalTypes") or [])[:12],
+        "requestedContextAvailability": availability,
+        "unavailableContextCount": summary.get("unavailableContextCount"),
+        "localRepository": local_repository,
+        "sourceWorkspaceSummary": _bounded_source_workspace_summary(
+            summary.get("sourceWorkspaceSummary") or {},
+            include_cleanup_errors=False,
+        ),
+        "localReferenceSearch": summary.get("localReferenceSearch") or {},
+        "budgetCutSummary": summary.get("budgetCutSummary") or {},
+        "ruleGapSummary": summary.get("ruleGapSummary") or {},
+        "ruleGapItems": (summary.get("ruleGapItems") or [])[:1],
+        "promptLength": summary.get("promptLength"),
+        "truncated": bool(summary.get("truncated", False)),
+        "progressSummaryTruncated": True,
+    }
+
+
+def _minimal_review_context_progress_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    return _pick_dict(
+        meta,
+        (
+            "version",
+            "projectId",
+            "mode",
+            "promptLength",
+            "truncated",
+            "localRepositoryEnabled",
+            "localRepositoryStatus",
+            "localReferenceSnippetCount",
+        ),
+    )
+
+
 def _append_local_repo_progress(
     db: Session,
     task_id: int,
     context: dict[str, Any],
     review_key: str | None,
 ) -> None:
-    local_repository = ((context.get("summary") or {}).get("localRepository") or {})
+    progress_summary = context.get("summary") or {}
+    local_repository = dict(progress_summary.get("localRepository") or {})
     if not local_repository.get("enabled"):
         return
+    source_workspace_summary = _bounded_source_workspace_summary(
+        progress_summary.get("sourceWorkspaceSummary") or {}
+    )
+    if source_workspace_summary:
+        local_repository["sourceWorkspaceSummary"] = source_workspace_summary
     prepared = str(local_repository.get("status") or "").upper() == "PREPARED"
     append_progress(
         db,
@@ -2532,6 +2715,7 @@ def _append_local_context_progress(
             "queryCount": int(summary.get("queryCount") or 0),
             "matchedFileCount": int(summary.get("matchedFileCount") or 0),
             "includedSnippetCount": int(summary.get("includedSnippetCount") or 0),
+            "evidenceCandidateCount": int(summary.get("evidenceCandidateCount") or 0),
             "truncated": bool(summary.get("truncated", False)),
             "unavailableContexts": unavailable_contexts[:3],
         },

@@ -59,6 +59,15 @@ def test_local_repo_context_clones_mirror_and_checks_out_head_worktree(
     assert summary["worktreeStatus"] == "CHECKED_OUT"
     assert summary["headRef"] == "222222222222"
     assert summary["sourceIncluded"] is False
+    workspace = summary["sourceWorkspaceSummary"]
+    assert workspace["enabled"] is True
+    assert workspace["status"] == "PREPARED"
+    assert workspace["mode"] == "GIT_MIRROR_AND_TASK_WORKTREE"
+    assert workspace["remoteUrl"] == "https://gitlab.example.com/demo/service.git"
+    assert workspace["mirror"]["status"] == "CLONED"
+    assert workspace["worktree"]["status"] == "CHECKED_OUT"
+    assert workspace["cleanupPolicy"]["worktreeRetentionHours"] == 24
+    assert workspace["cleanupPolicy"]["mirrorRetentionDays"] == 30
     assert context["unavailableContexts"] == []
     assert commands[0][:3] == ["git", "clone", "--mirror"]
     assert commands[0][3] == "https://gitlab.example.com/demo/service.git"
@@ -132,12 +141,20 @@ def test_local_repo_context_sanitizes_git_failure_without_raising(
     )
 
     reason = context["unavailableContexts"][0]["reason"]
+    workspace = context["summary"]["sourceWorkspaceSummary"]
     assert context["summary"]["status"] == "UNAVAILABLE"
     assert context["summary"]["failurePhase"] == "CLONE"
+    assert workspace["status"] == "UNAVAILABLE"
+    assert workspace["failurePhase"] == "CLONE"
+    assert workspace["remoteUrl"] == "https://gitlab.example.com/demo/service.git"
+    assert workspace["mirror"]["status"] == "UNAVAILABLE"
+    assert workspace["worktree"]["status"] == "SKIPPED"
     assert context["unavailableContexts"][0]["type"] == "LOCAL_REPOSITORY"
     assert "secret-token" not in reason
     assert basic_token not in reason
     assert "****" in reason
+    assert "secret-token" not in str(workspace)
+    assert basic_token not in str(workspace)
 
 
 def test_local_repo_cleanup_removes_expired_worktrees_and_idle_mirrors(
@@ -231,8 +248,12 @@ def test_local_repo_cleanup_failure_does_not_block_prepare(
     )
 
     cleanup = context["summary"]["cleanup"]
+    workspace = context["summary"]["sourceWorkspaceSummary"]
     assert context["summary"]["status"] == "PREPARED"
     assert cleanup["status"] == "PARTIAL"
+    assert workspace["cleanup"]["status"] == "PARTIAL"
+    assert workspace["mirror"]["status"] == "CLONED"
+    assert workspace["worktree"]["status"] == "CHECKED_OUT"
     assert cleanup["errorCount"] == 1
     assert cleanup["errors"] == ["worktree cleanup failed: PermissionError"]
     assert commands

@@ -305,6 +305,179 @@ def test_local_retriever_searches_db_mapper_entity_references(
     assert searches["OrderEntity"]["snippets"][0]["reason"] == "ENTITY_REFERENCE"
 
 
+def test_local_retriever_adds_method_relation_evidence_candidates(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "110" / "head"
+    _write(
+        worktree / "src/main/java/demo/OrderService.java",
+        "\n".join(
+            [
+                "package demo;",
+                "class OrderService {",
+                "  Order cancelOrder(Long id) {",
+                "    validateOrder(id);",
+                "    return null;",
+                "  }",
+                "}",
+            ]
+        ),
+    )
+    _write(
+        worktree / "src/main/java/demo/OrderController.java",
+        "\n".join(
+            [
+                "package demo;",
+                "class OrderController {",
+                "  void cancel(Long id) {",
+                "    orderService.cancelOrder(id);",
+                "  }",
+                "}",
+            ]
+        ),
+    )
+    _write(
+        worktree / "src/main/java/demo/OrderValidator.java",
+        "\n".join(
+            [
+                "package demo;",
+                "class OrderValidator {",
+                "  void validateOrder(Long id) {}",
+                "}",
+            ]
+        ),
+    )
+
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setattr(
+        local_retriever,
+        "_run_rg",
+        lambda _worktree, query: _rg_match("src/main/java/demo/OrderController.java", 4)
+        if query == "cancelOrder"
+        else "",
+    )
+
+    result = retrieve_local_reference_context(
+        worktree_path=worktree,
+        planner_signals=[_signal("METHOD_SIGNATURE_CHANGED")],
+    )
+
+    search = result["searches"][0]
+    relations = {item["relation"] for item in search["evidenceCandidates"]}
+
+    assert result["summary"]["evidenceCandidateCount"] >= 2
+    assert "CONTROLLER_SERVICE" in relations
+    assert "CALLEE" in relations
+    assert any(item["symbol"] == "validateOrder" for item in search["evidenceCandidates"])
+    assert "validateOrder(id);" not in json.dumps(search["evidenceCandidates"], ensure_ascii=False)
+
+
+def test_local_retriever_adds_interface_implementation_evidence_without_rg_match(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "111" / "head"
+    _write(
+        worktree / "src/main/java/demo/OrderPort.java",
+        "\n".join(
+            [
+                "package demo;",
+                "interface OrderPort {",
+                "  Order cancelOrder(Long id);",
+                "}",
+            ]
+        ),
+    )
+    _write(
+        worktree / "src/main/java/demo/OrderService.java",
+        "\n".join(
+            [
+                "package demo;",
+                "class OrderService implements OrderPort {",
+                "  public Order cancelOrder(Long id) { return null; }",
+                "}",
+            ]
+        ),
+    )
+
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setattr(local_retriever, "_run_rg", lambda _worktree, _query: "")
+
+    result = retrieve_local_reference_context(
+        worktree_path=worktree,
+        planner_signals=[
+            {
+                "type": "METHOD_SIGNATURE_CHANGED",
+                "filePath": "src/main/java/demo/OrderPort.java",
+                "details": {"methodNames": ["cancelOrder"]},
+                "requestedContextTypes": ["REFERENCE_SEARCH", "CALLER_CONTEXT"],
+            }
+        ],
+    )
+
+    search = result["searches"][0]
+    evidence = search["evidenceCandidates"][0]
+
+    assert result["status"] == "RETRIEVED"
+    assert result["summary"]["includedSnippetCount"] == 0
+    assert result["summary"]["evidenceCandidateCount"] == 1
+    assert search["matchedFileCount"] == 1
+    assert evidence["relation"] == "INTERFACE_IMPLEMENTATION"
+    assert evidence["path"] == "src/main/java/demo/OrderService.java"
+    assert evidence["symbol"] == "OrderService implements OrderPort"
+
+
+def test_local_retriever_adds_mybatis_namespace_and_service_mapper_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    worktree = root / "worktrees" / "112" / "head"
+    _write(
+        worktree / "src/main/resources/mapper/OrderMapper.xml",
+        "\n".join(
+            [
+                "<mapper namespace=\"demo.OrderMapper\">",
+                "  <select id=\"selectOrder\">select * from t_order</select>",
+                "</mapper>",
+            ]
+        ),
+    )
+    _write(
+        worktree / "src/main/java/demo/OrderService.java",
+        "\n".join(
+            [
+                "package demo;",
+                "class OrderService {",
+                "  Order find(Long id) {",
+                "    return orderMapper.selectOrder(id);",
+                "  }",
+                "}",
+            ]
+        ),
+    )
+
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setattr(local_retriever, "_run_rg", lambda _worktree, _query: "")
+
+    result = retrieve_local_reference_context(
+        worktree_path=worktree,
+        planner_signals=[_db_signal()],
+    )
+
+    searches = {search["query"]: search for search in result["searches"]}
+    evidence = searches["selectOrder"]["evidenceCandidates"]
+    relations = {item["relation"] for item in evidence}
+
+    assert "MYBATIS_MAPPER_METHOD" in relations
+    assert "SERVICE_MAPPER" in relations
+    assert any(item["symbol"] == "demo.OrderMapper.selectOrder" for item in evidence)
+    assert any(item["path"] == "src/main/java/demo/OrderService.java" for item in evidence)
+
+
 def test_local_retriever_searches_dto_field_references_with_accessors(
     monkeypatch,
     tmp_path: Path,
@@ -369,6 +542,12 @@ def test_local_retriever_searches_dto_field_references_with_accessors(
     assert getter_snippet["reason"] == "DTO_FIELD_REFERENCE"
     assert getter_snippet["path"] == "src/main/java/demo/web/OrderController.java"
     assert {"number": 4, "text": "    audit(request.getLegacyCode());"} in getter_snippet["lines"]
+    assert any(
+        item["relation"] == "DTO_FIELD_REFERENCE"
+        and item["symbol"] == "getLegacyCode"
+        and item["path"] == "src/main/java/demo/web/OrderController.java"
+        for item in searches["getLegacyCode"]["evidenceCandidates"]
+    )
 
 
 def test_local_retriever_searches_deleted_field_references(

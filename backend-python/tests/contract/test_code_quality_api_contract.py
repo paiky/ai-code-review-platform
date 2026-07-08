@@ -716,6 +716,10 @@ def test_manual_review_prepares_local_repo_context_without_leaking_token(
     assert local_detail["status"] == "PREPARED"
     assert local_detail["mirrorStatus"] == "CLONED"
     assert local_detail["worktreeStatus"] == "CHECKED_OUT"
+    assert local_detail["sourceWorkspaceSummary"]["status"] == "PREPARED"
+    assert local_detail["sourceWorkspaceSummary"]["remoteUrl"] == "https://gitlab.example.com/demo/service.git"
+    assert local_detail["sourceWorkspaceSummary"]["mirror"]["status"] == "CLONED"
+    assert local_detail["sourceWorkspaceSummary"]["worktree"]["status"] == "CHECKED_OUT"
     assert local_detail["sourceIncluded"] is False
     assert commands
     assert "local-repo-secret" not in json.dumps(progress, ensure_ascii=False)

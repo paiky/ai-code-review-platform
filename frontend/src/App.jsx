@@ -9,6 +9,7 @@ import {
   Collapse,
   Descriptions,
   Divider,
+  Dropdown,
   Empty,
   Input,
   InputNumber,
@@ -2469,6 +2470,12 @@ function safeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function boolText(value) {
+  if (value === true) return '是';
+  if (value === false) return '否';
+  return '-';
+}
+
 function localRepositoryStatusLabel(status, hasRecord) {
   if (!hasRecord) return '未产生记录';
   switch (String(status || '').toUpperCase()) {
@@ -2534,6 +2541,11 @@ function buildHighAccuracyContextSummary(progress) {
     ...(summary.localRepository || {}),
     ...repoDetail
   };
+  const sourceWorkspaceSummary = {
+    ...(summary.sourceWorkspaceSummary || {}),
+    ...((summary.localRepository || {}).sourceWorkspaceSummary || {}),
+    ...(repoDetail.sourceWorkspaceSummary || {}),
+  };
   const localReferenceSearch = {
     ...(summary.localReferenceSearch || {}),
     ...referenceDetail
@@ -2569,6 +2581,7 @@ function buildHighAccuracyContextSummary(progress) {
     repoEvent,
     referenceEvent,
     localRepository,
+    sourceWorkspaceSummary,
     localReferenceSearch,
     meta,
     rawSummary: summary
@@ -2585,6 +2598,12 @@ function HighAccuracyContextSummary({ progress }) {
   const description = summary.hasRecord
     ? '高准确模式会把预算内的本地引用证据注入 Context Pack；页面仅展示统计摘要，不展开源码片段。'
     : '触发代码质量 AI Review 后，这里会展示高准确模式的仓库准备和引用检索计数。';
+  const workspace = summary.sourceWorkspaceSummary || {};
+  const mirror = workspace.mirror || {};
+  const worktree = workspace.worktree || {};
+  const cleanupPolicy = workspace.cleanupPolicy || {};
+  const cleanup = workspace.cleanup || {};
+  const showWorkspaceDiagnostics = summary.hasRecord && Object.keys(workspace).length > 0;
 
   return (
     <Card
@@ -2631,6 +2650,34 @@ function HighAccuracyContextSummary({ progress }) {
             {summary.truncated ? <Tag color="orange">已截断</Tag> : <Tag>未截断</Tag>}
           </Descriptions.Item>
         </Descriptions>
+        {showWorkspaceDiagnostics && (
+          <>
+            <Divider plain>源码工作区诊断</Divider>
+            <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
+              <Descriptions.Item label="工作区模式">{workspace.mode || '-'}</Descriptions.Item>
+              <Descriptions.Item label="远程仓库">{workspace.remoteUrl || '-'}</Descriptions.Item>
+              <Descriptions.Item label="失败阶段">{workspace.failurePhase || summary.localRepository?.failurePhase || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Mirror 存在">{boolText(mirror.exists)}</Descriptions.Item>
+              <Descriptions.Item label="Mirror 状态">{mirror.status || summary.localRepository?.mirrorStatus || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Mirror 最近拉取">{mirror.lastFetchedAt || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Worktree 存在">{boolText(worktree.exists)}</Descriptions.Item>
+              <Descriptions.Item label="Worktree 状态">{worktree.status || summary.localRepository?.worktreeStatus || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Worktree 最近检出">{worktree.lastCheckedOutAt || '-'}</Descriptions.Item>
+              <Descriptions.Item label="清理策略">
+                {cleanupPolicy.enabled === false
+                  ? '未启用'
+                  : `worktree ${countText(cleanupPolicy.worktreeRetentionHours)}h / mirror ${countText(cleanupPolicy.mirrorRetentionDays)}d`}
+              </Descriptions.Item>
+              <Descriptions.Item label="最近清理">
+                {cleanup.status || '-'}
+                {cleanup.deletedWorktreeCount || cleanup.deletedMirrorCount
+                  ? `，删除 worktree ${countText(cleanup.deletedWorktreeCount)} / mirror ${countText(cleanup.deletedMirrorCount)}`
+                  : ''}
+              </Descriptions.Item>
+              <Descriptions.Item label="清理异常">{countText(cleanup.errorCount)}</Descriptions.Item>
+            </Descriptions>
+          </>
+        )}
       </Space>
     </Card>
   );
@@ -2647,8 +2694,12 @@ function zeroQueryExplanation(summary) {
   if (summary.referenceEvent?.phase === 'LOCAL_CONTEXT_RETRIEVE_FAILED') {
     return '引用查询数为 0：Local Retriever 执行失败或检索不可用，本次不会把检索失败解释为无风险。';
   }
+  if (!summary.enabled && summary.hasRecord) {
+    return '引用查询数为 0：LOCAL_REPO_CONTEXT_ENABLED 未开启，本次保持 diff-only 或同文件上下文。';
+  }
   if (summary.enabled && repositoryStatus !== 'PREPARED') {
-    return '引用查询数为 0：本地仓库未准备完成，Retriever 被跳过。';
+    const failurePhase = summary.sourceWorkspaceSummary?.failurePhase || summary.localRepository?.failurePhase;
+    return `引用查询数为 0：本地仓库未准备完成${failurePhase ? `（${failurePhase}）` : ''}，Retriever 被跳过。`;
   }
   if (supportedSignalCount === 0 && unsupportedSignalCount > 0) {
     const unsupported = countItemsText(summary.retrieverUnsupportedSignalTypeCounts);
@@ -2768,8 +2819,8 @@ function buildHighAccuracyRoleSteps(progress, refinementSummary) {
       status: roleStepStatus({ hasEvent: Boolean(summary.repoEvent || summary.hasRecord), failed: repoFailed }),
       description: roleDetailLine([
         localRepositoryStatusLabel(summary.status, summary.hasRecord),
-        summary.localRepository?.mirrorStatus && `mirror ${summary.localRepository.mirrorStatus}`,
-        summary.localRepository?.worktreeStatus && `worktree ${summary.localRepository.worktreeStatus}`,
+        (summary.sourceWorkspaceSummary?.mirror?.status || summary.localRepository?.mirrorStatus) && `mirror ${summary.sourceWorkspaceSummary?.mirror?.status || summary.localRepository?.mirrorStatus}`,
+        (summary.sourceWorkspaceSummary?.worktree?.status || summary.localRepository?.worktreeStatus) && `worktree ${summary.sourceWorkspaceSummary?.worktree?.status || summary.localRepository?.worktreeStatus}`,
       ]),
     },
     {
@@ -7698,7 +7749,7 @@ function ReviewQualityDashboardPage() {
         <div className="page-title-row">
           <div>
             <Title level={3}>质量看板</Title>
-            <Text type="secondary">基于评估样本、回放记录、补证据和确定性检查的最小 Review 质量治理视图。</Text>
+            <Text type="secondary">面向管理员的 Review 质量治理视图，聚合评估样本、补证据、确定性检查、回放和改动记录。</Text>
           </div>
           <Button icon={<ReloadOutlined />} onClick={() => load()}>刷新</Button>
         </div>
@@ -7776,7 +7827,7 @@ function ReviewQualityDashboardPage() {
                 </Card>
               </Col>
               <Col xs={24} lg={16}>
-                <Card title="辅助诊断摘要">
+                <Card title="治理摘要">
                   <Descriptions column={2} size="small" bordered>
                     <Descriptions.Item label="回放 item">{replaySummary.itemCount ?? 0}</Descriptions.Item>
                     <Descriptions.Item label="回放完成 / 失败">{replaySummary.completedCount ?? 0} / {replaySummary.failedCount ?? 0}</Descriptions.Item>
@@ -9051,10 +9102,73 @@ function AppFrame() {
   const isSettingsRoute = location.pathname.startsWith(SETTINGS_ROUTE);
   const isReleaseRoute = location.pathname.startsWith(RELEASES_ROUTE);
   const isHelpRoute = location.pathname.startsWith(HELP_ROUTE);
+  const isGovernanceRoute = (
+    isReviewQualityRoute
+    || isEvaluationCasesRoute
+    || isRuleGapRoute
+    || isAcceptanceGatesRoute
+    || isEvaluationRunsRoute
+    || isFeedbackRoute
+  );
   const [jobQueue, setJobQueue] = useState({ activeCount: 0, groups: [] });
   const [jobQueueOpen, setJobQueueOpen] = useState(false);
   const [failureNotifications, setFailureNotifications] = useState({ failureCount: 0, items: [] });
   const [failureNotificationsOpen, setFailureNotificationsOpen] = useState(false);
+  const governanceSelectedKey = isReviewQualityRoute
+    ? REVIEW_QUALITY_ROUTE
+    : isEvaluationCasesRoute
+      ? EVALUATION_CASES_ROUTE
+      : isRuleGapRoute
+        ? RULE_GAPS_ROUTE
+        : isAcceptanceGatesRoute
+          ? ACCEPTANCE_GATES_ROUTE
+          : isEvaluationRunsRoute
+            ? EVALUATION_RUNS_ROUTE
+            : isFeedbackRoute
+              ? FEEDBACK_ROUTE
+              : '';
+  const governanceMenuItems = [
+    {
+      key: REVIEW_QUALITY_ROUTE,
+      icon: <ClusterOutlined />,
+      label: '质量看板'
+    },
+    {
+      key: EVALUATION_CASES_ROUTE,
+      icon: <CommentOutlined />,
+      label: '评估样本'
+    },
+    {
+      key: RULE_GAPS_ROUTE,
+      icon: <FileSearchOutlined />,
+      label: '规则缺口'
+    },
+    {
+      type: 'divider'
+    },
+    {
+      key: ACCEPTANCE_GATES_ROUTE,
+      icon: <FileSearchOutlined />,
+      label: '验收记录'
+    },
+    {
+      key: EVALUATION_RUNS_ROUTE,
+      icon: <ClusterOutlined />,
+      label: '回放记录'
+    },
+    ...(REVIEW_LEARNING_UI_ENABLED
+      ? [
+          {
+            type: 'divider'
+          },
+          {
+            key: FEEDBACK_ROUTE,
+            icon: <CommentOutlined />,
+            label: '反馈池'
+          }
+        ]
+      : [])
+  ];
 
   const loadJobQueue = async () => {
     try {
@@ -9133,50 +9247,21 @@ function AppFrame() {
           >
             任务
           </Button>
-          <Button
-            icon={<FileSearchOutlined />}
-            type={isRuleGapRoute ? 'primary' : 'default'}
-            onClick={() => navigate(RULE_GAPS_ROUTE, { state: { from: route } })}
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: governanceMenuItems,
+              selectedKeys: [governanceSelectedKey],
+              onClick: ({ key }) => navigate(key, { state: { from: route } })
+            }}
           >
-            规则缺口
-          </Button>
-          {REVIEW_LEARNING_UI_ENABLED && (
             <Button
-              icon={<CommentOutlined />}
-              type={isFeedbackRoute ? 'primary' : 'default'}
-              onClick={() => navigate(FEEDBACK_ROUTE, { state: { from: route } })}
+              icon={<ClusterOutlined />}
+              type={isGovernanceRoute ? 'primary' : 'default'}
             >
-              反馈池
+              质量治理
             </Button>
-          )}
-          <Button
-            icon={<ClusterOutlined />}
-            type={isReviewQualityRoute ? 'primary' : 'default'}
-            onClick={() => navigate(REVIEW_QUALITY_ROUTE, { state: { from: route } })}
-          >
-            质量看板
-          </Button>
-          <Button
-            icon={<FileSearchOutlined />}
-            type={isAcceptanceGatesRoute ? 'primary' : 'default'}
-            onClick={() => navigate(ACCEPTANCE_GATES_ROUTE, { state: { from: route } })}
-          >
-            验收记录
-          </Button>
-          <Button
-            icon={<CommentOutlined />}
-            type={isEvaluationCasesRoute ? 'primary' : 'default'}
-            onClick={() => navigate(EVALUATION_CASES_ROUTE, { state: { from: route } })}
-          >
-            评估样本
-          </Button>
-          <Button
-            icon={<ClusterOutlined />}
-            type={isEvaluationRunsRoute ? 'primary' : 'default'}
-            onClick={() => navigate(EVALUATION_RUNS_ROUTE, { state: { from: route } })}
-          >
-            回放记录
-          </Button>
+          </Dropdown>
           <Button
             icon={<SettingOutlined />}
             type={isSettingsRoute ? 'primary' : 'default'}
