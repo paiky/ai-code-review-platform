@@ -19,7 +19,8 @@
 - `docs/23-help-gitlab-dingtalk-project-onboarding.md`：接入帮助页文档源，面向首次接入用户，按 GitLab Webhook、钉钉机器人、项目组和模型配置组织。
 - `docs/26-gitlab-diff-context-expansion-plan.md`：GitLab 风格 Diff 上下文展开与暗黑语法高亮分阶段实施计划。
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
-- `docs/10-local-dev-pitfalls.md`：本地环境与调试避坑（按条目累积，含迁移期记录）。
+- `docs/11-agent-environment-pitfalls.md`：Agent 环境、脚本、部署、Codex、检索和工具链避坑（新对话优先读）。
+- `docs/10-local-dev-pitfalls.md`：历史避坑归档（按条目累积，含迁移期和业务修复记录；仅追溯旧问题时阅读）。
 - `docs/03-api-contract.md`：HTTP API 契约。
 - `docs/04-risk-card-schema.md`：提醒卡片 JSON schema。
 - `docs/02-domain-model.md` / `docs/06-change-analysis-rules.md`：领域模型与变更分析规则。
@@ -33,7 +34,7 @@
 
 1. `AGENTS.md`：项目目标、工作方式、脚本使用约束。
 2. `README.md`：本地启动、配置、验证步骤。
-3. `docs/10-local-dev-pitfalls.md`：本地环境与调试避坑。
+3. `docs/11-agent-environment-pitfalls.md`：Agent 环境与工具避坑。
 4. `docs/36-review-platform-current-roadmap.md`：当前 Review 平台后续推进总控。
 5. `docs/37-review-platform-target-product-roadmap.md`：完整产品目标和长期路线。
 6. `docs/39-review-accuracy-and-material-ui-roadmap.md`：当前准确率和前端体验专项推进计划。
@@ -55,7 +56,7 @@
 - 只改 Python 后端局部逻辑：优先跑相关 pytest 文件或测试类。
 - 改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容或跨模块边界时，再跑 `.\scripts\run-backend.cmd test` 全量 Python 测试。
 
-搜索代码时排除依赖和构建产物目录，例如 `frontend/node_modules/`、`frontend/dist/`、`backend-python/.venv/`、`__pycache__/`、`.pytest_cache/`。仓库根目录提供 `.rgignore`，优先使用 `rg` 遵守该忽略规则。
+搜索代码时排除依赖和构建产物目录，例如 `frontend/node_modules/`、`frontend/dist/`、`backend-python/.venv/`、`__pycache__/`、`.pytest_cache/`。仓库根目录提供 `.rgignore`，优先使用 `rg` 遵守该忽略规则。环境、工具、部署和 Codex 类踩坑写入 `docs/11-agent-environment-pitfalls.md`；业务缺陷和规则误判写入对应设计文档或 `docs/24-bug-log.md`。
 
 ## 当前主链路
 

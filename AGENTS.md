@@ -86,8 +86,8 @@ AI 变更提醒与代码质量审查平台
 - 后续落地的多阶段推进计划文档，必须在文档中写清分阶段落地 prompt、总控 prompt、Agent 可按总控 prompt 自主推进的授权边界，并明确每个阶段完成后必须停止，等待用户验证并确认“继续下一阶段”后再推进。可参考 `docs/19-python-backend-refactor-plan.md` 的分阶段 prompt 写法。
 - 完成后必须补测试与示例数据
 - 所有 PR/patch 必须附带“改了什么、为什么、如何验证”
-- 遇到问题或异常现象时，先查阅 `docs/10-local-dev-pitfalls.md` 是否已有解决方式。
-- 新解决的踩坑、误判根因、环境问题或调试结论，完成后必须补充到 `docs/10-local-dev-pitfalls.md`。
+- 遇到环境、脚本、部署、Codex、检索或工具链问题时，先查阅 `docs/11-agent-environment-pitfalls.md` 是否已有解决方式。
+- 新解决的环境、工具、部署、Codex 或检索类踩坑，完成后补充到 `docs/11-agent-environment-pitfalls.md`；业务规则误判、接口语义和产品行为问题写入对应设计文档或 `docs/24-bug-log.md`，不要继续堆到环境避坑文档。
 
 ## Definition of done
 - 能本地跑通

@@ -1,6 +1,6 @@
-# 本地开发避坑记录
+# 本地开发避坑历史归档
 
-> 状态说明：本文按时间累积记录本地开发与调试踩坑，条目编号只增不减。§14 等迁移期条目可能仍提及 Java 对照，默认开发以 `backend-python/` 为准；权威契约见 `docs/03-api-contract.md`，启动验证见 `README.md`。
+> 状态说明：本文是历史归档，按时间累积记录本地开发、调试、迁移期和业务修复踩坑，条目编号只增不减。新对话和日常 Agent 协作不要默认通读本文；环境、脚本、部署、Codex、检索和工具链避坑优先阅读 `docs/11-agent-environment-pitfalls.md`。业务规则、接口语义、AI Review 行为和前端展示问题应写入对应设计文档或 `docs/24-bug-log.md`，不再继续堆到本文。§14 等迁移期条目可能仍提及 Java 对照，默认开发以 `backend-python/` 为准；权威契约见 `docs/03-api-contract.md`，启动验证见 `README.md`。
 
 ## 1. Codex 沙箱内 Git 推送凭据问题
 

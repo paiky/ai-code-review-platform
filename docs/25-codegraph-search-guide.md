@@ -121,4 +121,4 @@ codegraph.cmd index --force
 codegraph.cmd sync
 ```
 
-Codex App 与 Cursor 的 MCP 配置和常见问题见 `docs/10-local-dev-pitfalls.md`。
+Codex App 与 Cursor 的 MCP 配置和常见问题见 `docs/11-agent-environment-pitfalls.md`。
