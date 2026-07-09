@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 import json
+from pathlib import Path
 import re
 from typing import Any
 
@@ -45,6 +46,16 @@ HIGH_MISJUDGMENT_SIGNAL_TYPES = {
 }
 LOCAL_REFERENCE_MIN_SNIPPETS_PER_HIGH_SIGNAL_SEARCH = 1
 NOT_INJECTED_EVIDENCE_MAX_ITEMS = 8
+CONTEXT_PACK_MAX_SELECTED_EVIDENCE = 8
+CONTEXT_PACK_SELECTED_EVIDENCE_MAX_CHARS = 1800
+HIGH_PRIORITY_EVIDENCE_RELATIONS = {
+    "CALLER",
+    "CALLEE",
+    "INTERFACE_IMPLEMENTATION",
+    "CONTROLLER_SERVICE",
+    "SERVICE_MAPPER",
+    "MYBATIS_MAPPER_METHOD",
+}
 
 
 _METHOD_SIGNATURE_PATTERNS = [
@@ -196,6 +207,7 @@ def build_review_context_pack(
     )
     local_reference_pack_context = _local_reference_pack_context(local_reference_context)
     _prioritize_local_reference_context(local_reference_pack_context)
+    _apply_layered_evidence_budget(local_reference_pack_context)
     not_injected_evidence = _not_injected_evidence_from_local_reference(local_reference_pack_context)
     _apply_local_reference_availability(requested_contexts, local_reference_pack_context)
     planner_unavailable_contexts = _planner_unavailable_contexts(requested_contexts)
@@ -1296,6 +1308,18 @@ def _fit_context_pack_budget(
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
             continue
+        if _remove_last_not_injected_evidence(context_pack, protect_high_priority=True):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
+        if _remove_last_selected_evidence(context_pack, protect_high_priority=True):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
+        if _remove_evidence_budget_policy(context_pack):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
         if _remove_last_local_reference_snippet(context_pack, protect_high_priority=True):
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
@@ -1328,6 +1352,14 @@ def _fit_context_pack_budget(
             prompt_text = _render_context_pack_text(review_context)
             continue
         if _remove_last_local_reference_snippet(context_pack, protect_high_priority=False):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
+        if _remove_last_selected_evidence(context_pack, protect_high_priority=False):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
+        if _remove_last_not_injected_evidence(context_pack, protect_high_priority=False):
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
             continue
@@ -1552,6 +1584,86 @@ def _remove_last_local_reference_search_metadata(
     return False
 
 
+def _remove_last_selected_evidence(
+    context_pack: dict[str, Any],
+    *,
+    protect_high_priority: bool,
+) -> bool:
+    local_reference = context_pack.get("localReferenceContext") or {}
+    selected = [item for item in (local_reference.get("selectedEvidence") or []) if isinstance(item, dict)]
+    for index in range(len(selected) - 1, -1, -1):
+        evidence = selected[index]
+        if protect_high_priority and _is_protected_selected_evidence(evidence):
+            continue
+        removed = selected.pop(index)
+        local_reference["selectedEvidence"] = selected
+        _record_not_injected_evidence_candidate(
+            context_pack,
+            removed,
+            reason="CONTEXT_PACK_PROMPT_BUDGET",
+        )
+        _sync_evidence_budget_audit(local_reference)
+        _sync_local_reference_summary(context_pack, truncated=True)
+        return True
+    return False
+
+
+def _remove_last_not_injected_evidence(
+    context_pack: dict[str, Any],
+    *,
+    protect_high_priority: bool,
+) -> bool:
+    summary = context_pack.get("notInjectedEvidence")
+    if not isinstance(summary, dict):
+        return False
+    items = [item for item in (summary.get("items") or []) if isinstance(item, dict)]
+    for index in range(len(items) - 1, -1, -1):
+        item = items[index]
+        if protect_high_priority and item.get("type") == "LOCAL_REFERENCE_EVIDENCE" and bool(item.get("highPriority")):
+            continue
+        items.pop(index)
+        if items:
+            summary["items"] = items
+            summary["hasNotInjectedEvidence"] = True
+            summary["truncated"] = True
+            context_pack["notInjectedEvidence"] = summary
+        else:
+            context_pack.pop("notInjectedEvidence", None)
+        _sync_context_pack_evidence_budget_audit(context_pack)
+        return True
+    return False
+
+
+def _remove_evidence_budget_policy(context_pack: dict[str, Any]) -> bool:
+    local_reference = context_pack.get("localReferenceContext")
+    if not isinstance(local_reference, dict) or "evidenceBudgetPolicy" not in local_reference:
+        return False
+    local_reference.pop("evidenceBudgetPolicy", None)
+    context_pack["localReferenceContext"] = local_reference
+    return True
+
+
+def _sync_context_pack_evidence_budget_audit(context_pack: dict[str, Any]) -> None:
+    local_reference = context_pack.get("localReferenceContext")
+    if not isinstance(local_reference, dict):
+        return
+    not_injected = context_pack.get("notInjectedEvidence")
+    if isinstance(not_injected, dict):
+        local_reference["notInjectedEvidence"] = {
+            "hasNotInjectedEvidence": bool(not_injected.get("hasNotInjectedEvidence")),
+            "items": [
+                item
+                for item in (not_injected.get("items") or [])
+                if isinstance(item, dict) and item.get("type") == "LOCAL_REFERENCE_EVIDENCE"
+            ],
+            "truncated": bool(not_injected.get("truncated", False)),
+        }
+    else:
+        local_reference.pop("notInjectedEvidence", None)
+    _sync_evidence_budget_audit(local_reference)
+    _sync_local_reference_summary(context_pack, truncated=True)
+
+
 def _shrink_snippet_lines(snippet: dict[str, Any]) -> bool:
     lines = [item for item in (snippet.get("lines") or []) if isinstance(item, dict)]
     if len(lines) <= 1:
@@ -1740,6 +1852,10 @@ def _prioritize_local_reference_context(local_reference_context: dict[str, Any])
     searches = [item for item in (local_reference_context.get("searches") or []) if isinstance(item, dict)]
     searches.sort(key=_local_reference_budget_rank)
     local_reference_context["searches"] = searches
+    for search in searches:
+        candidates = [item for item in (search.get("evidenceCandidates") or []) if isinstance(item, dict)]
+        candidates.sort(key=_evidence_candidate_rank)
+        search["evidenceCandidates"] = candidates
 
 
 def _local_reference_budget_rank(search: dict[str, Any]) -> tuple[int, int, str]:
@@ -1768,8 +1884,279 @@ def _is_primary_symbol_query(search: dict[str, Any]) -> bool:
     return not field_names or query in field_names
 
 
+def _apply_layered_evidence_budget(local_reference_context: dict[str, Any]) -> None:
+    candidate_refs = _flatten_evidence_candidate_refs(local_reference_context)
+    if not candidate_refs:
+        _sync_evidence_budget_audit(local_reference_context)
+        return
+    selected_keys: set[tuple[str, str, int, str]] = set()
+    selected: list[dict[str, Any]] = []
+
+    for signal_type in sorted(_high_priority_candidate_signals(candidate_refs)):
+        if _signal_has_included_snippet(candidate_refs, signal_type):
+            continue
+        candidate = next(
+            (
+                item
+                for item in candidate_refs
+                if signal_type in _candidate_signal_types(item["candidate"])
+            ),
+            None,
+        )
+        if candidate:
+            _select_evidence_candidate(selected, selected_keys, candidate["candidate"])
+
+    for relation in ("CALLER", "CALLEE"):
+        candidate = next(
+            (
+                item
+                for item in candidate_refs
+                if _normalized_relation(item["candidate"]) == relation
+            ),
+            None,
+        )
+        if candidate:
+            _select_evidence_candidate(selected, selected_keys, candidate["candidate"])
+
+    for item in candidate_refs:
+        if len(selected) >= CONTEXT_PACK_MAX_SELECTED_EVIDENCE:
+            break
+        if not _should_select_candidate_with_snippet_state(item):
+            continue
+        if not _selected_evidence_within_char_budget(selected, item["candidate"]):
+            continue
+        _select_evidence_candidate(selected, selected_keys, item["candidate"])
+
+    selected_evidence = [_safe_evidence_candidate_for_prompt(item) for item in selected]
+    local_reference_context["selectedEvidence"] = selected_evidence
+    local_reference_context["evidenceBudgetPolicy"] = {
+        "protectedLayers": [
+            "DIFF",
+            "CHANGED_FILE_SUMMARY",
+            "DIRECT_CHANGED_SYMBOL",
+        ],
+        "highPriorityLayers": [
+            "CALLER_CALLEE",
+            "INTERFACE_IMPLEMENTATION",
+            "CONTROLLER_SERVICE",
+            "SERVICE_MAPPER",
+            "DB_MAPPER_CACHE_CONFIG_MQ",
+        ],
+        "auxiliaryLayers": [
+            "TESTS",
+            "HISTORICAL_FEEDBACK",
+            "PROJECT_POLICIES",
+            "LOW_RELEVANCE_SNIPPETS",
+        ],
+        "summaryOnlyPolicy": "Unselected evidence candidates are represented only by safeSummary, relative path, relation, and counts.",
+    }
+    summary = _empty_not_injected_evidence_summary()
+    for item in candidate_refs:
+        candidate = item["candidate"]
+        if _candidate_is_represented_by_snippet(item):
+            continue
+        if _evidence_key(candidate) in selected_keys:
+            continue
+        if _should_summarize_unselected_candidate(candidate, summary):
+            _append_not_injected_evidence_item(
+                summary,
+                _not_injected_evidence_candidate_item(
+                    candidate,
+                    reason="EVIDENCE_CANDIDATE_LAYERED_BUDGET",
+                ),
+            )
+    if summary.get("hasNotInjectedEvidence"):
+        local_reference_context["notInjectedEvidence"] = summary
+    _sync_evidence_budget_audit(local_reference_context)
+
+
+def _flatten_evidence_candidate_refs(local_reference_context: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, int, str]] = set()
+    for search in [item for item in (local_reference_context.get("searches") or []) if isinstance(item, dict)]:
+        for candidate in [item for item in (search.get("evidenceCandidates") or []) if isinstance(item, dict)]:
+            key = _evidence_key(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append({"search": search, "candidate": candidate})
+    return sorted(result, key=lambda item: _evidence_candidate_rank(item["candidate"]))
+
+
+def _high_priority_candidate_signals(candidate_refs: list[dict[str, Any]]) -> set[str]:
+    result: set[str] = set()
+    for item in candidate_refs:
+        candidate = item["candidate"]
+        result.update(
+            signal
+            for signal in _candidate_signal_types(candidate)
+            if signal in HIGH_MISJUDGMENT_SIGNAL_TYPES
+        )
+    return result
+
+
+def _signal_has_included_snippet(candidate_refs: list[dict[str, Any]], signal_type: str) -> bool:
+    for item in candidate_refs:
+        search = item.get("search") or {}
+        candidate = item.get("candidate") or {}
+        if signal_type in _candidate_signal_types(candidate) and int(search.get("includedSnippetCount") or 0) > 0:
+            return True
+    return False
+
+
+def _should_select_candidate_with_snippet_state(item: dict[str, Any]) -> bool:
+    search = item.get("search") or {}
+    candidate = item.get("candidate") or {}
+    relation = _normalized_relation(candidate)
+    if relation in {"CALLER", "CALLEE", "INTERFACE_IMPLEMENTATION"}:
+        return True
+    return int(search.get("includedSnippetCount") or 0) <= 0
+
+
+def _candidate_is_represented_by_snippet(item: dict[str, Any]) -> bool:
+    search = item.get("search") or {}
+    candidate = item.get("candidate") or {}
+    relation = _normalized_relation(candidate)
+    if relation in {"CALLER", "CALLEE", "INTERFACE_IMPLEMENTATION"}:
+        return False
+    return int(search.get("includedSnippetCount") or 0) > 0
+
+
+def _select_evidence_candidate(
+    selected: list[dict[str, Any]],
+    selected_keys: set[tuple[str, str, int, str]],
+    candidate: dict[str, Any],
+) -> None:
+    key = _evidence_key(candidate)
+    if key in selected_keys:
+        return
+    selected.append(candidate)
+    selected_keys.add(key)
+
+
+def _selected_evidence_within_char_budget(selected: list[dict[str, Any]], candidate: dict[str, Any]) -> bool:
+    payload = [_safe_evidence_candidate_for_prompt(item) for item in [*selected, candidate]]
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))) <= CONTEXT_PACK_SELECTED_EVIDENCE_MAX_CHARS
+
+
+def _safe_evidence_candidate_for_prompt(candidate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "relation": _normalized_relation(candidate),
+        "path": _safe_evidence_path(candidate.get("path")),
+        "lineRange": _safe_line_range(candidate.get("lineRange")),
+        "symbol": _safe_public_text(candidate.get("symbol"), 120),
+        "reason": _safe_public_text(candidate.get("reason"), 160),
+        "confidence": _safe_int(candidate.get("confidence"), default=0),
+        "safeSummary": _safe_public_text(candidate.get("safeSummary"), 220),
+        "source": _safe_public_text(candidate.get("source"), 80),
+        "priority": _safe_public_text(candidate.get("priority"), 20).upper() or "MEDIUM",
+        "signalTypes": _candidate_signal_types(candidate)[:6],
+        "querySummary": _safe_public_text(candidate.get("query") or candidate.get("querySummary"), 120),
+    }
+
+
+def _safe_line_range(value: Any) -> dict[str, int]:
+    item = value if isinstance(value, dict) else {}
+    start = _safe_int(item.get("start"), default=1)
+    end = _safe_int(item.get("end"), default=start)
+    return {"start": max(start, 1), "end": max(end, start, 1)}
+
+
+def _safe_int(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_evidence_path(value: Any) -> str:
+    text = _safe_public_text(value, CONTEXT_PACK_MAX_PATH_CHARS).replace("\\", "/").strip()
+    if not text:
+        return "-"
+    candidate = Path(text)
+    if candidate.is_absolute() or re.match(r"^[A-Za-z]:/", text) or text.startswith("../") or "/../" in text:
+        parts = [part for part in text.split("/") if part]
+        return "/".join(parts[-3:])[:CONTEXT_PACK_MAX_PATH_CHARS] or Path(text).name or "-"
+    return text.lstrip("/")[:CONTEXT_PACK_MAX_PATH_CHARS]
+
+
+def _safe_public_text(value: Any, limit: int) -> str:
+    text = str(value or "")
+    token = (get_settings().gitlab_token or "").strip()
+    if token:
+        text = text.replace(token, "****")
+    text = re.sub(r"(?i)(authorization\s*[:=]\s*)\S+(?:\s+\S+)?", r"\1****", text)
+    text = re.sub(r"(?i)(private-token\s*[:=]\s*)\S+", r"\1****", text)
+    text = re.sub(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*[^,\s;}]+", r"\1=****", text)
+    return _truncate(text, limit)
+
+
+def _candidate_signal_types(candidate: dict[str, Any]) -> list[str]:
+    return [str(item or "").upper()[:80] for item in (candidate.get("signalTypes") or []) if str(item or "").strip()]
+
+
+def _normalized_relation(candidate: dict[str, Any]) -> str:
+    return str(candidate.get("relation") or "").upper()
+
+
+def _evidence_key(candidate: dict[str, Any]) -> tuple[str, str, int, str]:
+    line_range = candidate.get("lineRange") if isinstance(candidate.get("lineRange"), dict) else {}
+    return (
+        _normalized_relation(candidate),
+        _safe_evidence_path(candidate.get("path")),
+        _safe_int(line_range.get("start"), default=1),
+        _safe_public_text(candidate.get("symbol"), 120),
+    )
+
+
+def _is_high_priority_evidence_candidate(candidate: dict[str, Any]) -> bool:
+    priority = str(candidate.get("priority") or "").upper()
+    relation = _normalized_relation(candidate)
+    return bool(priority == "HIGH" or relation in HIGH_PRIORITY_EVIDENCE_RELATIONS)
+
+
+def _is_protected_selected_evidence(evidence: dict[str, Any]) -> bool:
+    relation = str(evidence.get("relation") or "").upper()
+    return relation in {"CALLER", "CALLEE"}
+
+
+def _should_summarize_unselected_candidate(candidate: dict[str, Any], summary: dict[str, Any]) -> bool:
+    items = [item for item in (summary.get("items") or []) if isinstance(item, dict)]
+    if _is_high_priority_evidence_candidate(candidate):
+        return True
+    return len(items) < NOT_INJECTED_EVIDENCE_MAX_ITEMS
+
+
+def _evidence_candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, int, str, int]:
+    relation_rank = {
+        "CALLER": 0,
+        "CALLEE": 1,
+        "INTERFACE_IMPLEMENTATION": 2,
+        "CONTROLLER_SERVICE": 3,
+        "SERVICE_MAPPER": 4,
+        "MYBATIS_MAPPER_METHOD": 5,
+        "DB_SCHEMA_REFERENCE": 6,
+        "CACHE_USAGE_REFERENCE": 7,
+        "DTO_FIELD_REFERENCE": 8,
+        "FIELD_REFERENCE": 9,
+    }.get(_normalized_relation(candidate), 20)
+    priority_rank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(str(candidate.get("priority") or "").upper(), 1)
+    line_range = candidate.get("lineRange") if isinstance(candidate.get("lineRange"), dict) else {}
+    return (
+        priority_rank,
+        relation_rank,
+        -_safe_int(candidate.get("confidence"), default=0),
+        _safe_evidence_path(candidate.get("path")),
+        _safe_int(line_range.get("start"), default=1),
+    )
+
+
 def _not_injected_evidence_from_local_reference(local_reference_context: dict[str, Any]) -> dict[str, Any]:
     summary = _empty_not_injected_evidence_summary()
+    candidate_summary = local_reference_context.get("notInjectedEvidence")
+    if isinstance(candidate_summary, dict):
+        for item in [entry for entry in (candidate_summary.get("items") or []) if isinstance(entry, dict)]:
+            _append_not_injected_evidence_item(summary, item)
     for search in [item for item in (local_reference_context.get("searches") or []) if isinstance(item, dict)]:
         candidate_count = int(search.get("candidateSnippetCount") or search.get("includedSnippetCount") or 0)
         included_count = int(search.get("includedSnippetCount") or 0)
@@ -1822,21 +2209,27 @@ def _record_not_injected_local_reference(
     search["budgetCutReasons"] = reasons[:4]
 
 
+def _record_not_injected_evidence_candidate(
+    context_pack: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    reason: str,
+) -> None:
+    summary = context_pack.get("notInjectedEvidence")
+    if not isinstance(summary, dict):
+        summary = _empty_not_injected_evidence_summary()
+        context_pack["notInjectedEvidence"] = summary
+    _append_not_injected_evidence_item(
+        summary,
+        _not_injected_evidence_candidate_item(candidate, reason=reason),
+    )
+
+
 def _append_not_injected_evidence_item(summary: dict[str, Any], item: dict[str, Any]) -> None:
     items = [entry for entry in (summary.get("items") or []) if isinstance(entry, dict)]
-    merge_key = (
-        item.get("signal"),
-        item.get("requestedContext"),
-        item.get("querySummary"),
-        item.get("reason"),
-    )
+    merge_key = _not_injected_merge_key(item)
     for existing in items:
-        existing_key = (
-            existing.get("signal"),
-            existing.get("requestedContext"),
-            existing.get("querySummary"),
-            existing.get("reason"),
-        )
+        existing_key = _not_injected_merge_key(existing)
         if existing_key != merge_key:
             continue
         existing["cutSnippetCount"] = int(existing.get("cutSnippetCount") or 0) + int(item.get("cutSnippetCount") or 0)
@@ -1850,12 +2243,51 @@ def _append_not_injected_evidence_item(summary: dict[str, Any], item: dict[str, 
             limit=5,
         )
         summary["hasNotInjectedEvidence"] = True
-        summary["items"] = items[:NOT_INJECTED_EVIDENCE_MAX_ITEMS]
+        summary["items"] = _bounded_not_injected_items(items)
+        summary["truncated"] = len(items) > len(summary["items"])
         return
     items.append(item)
     summary["hasNotInjectedEvidence"] = True
-    summary["items"] = items[:NOT_INJECTED_EVIDENCE_MAX_ITEMS]
-    summary["truncated"] = len(items) > NOT_INJECTED_EVIDENCE_MAX_ITEMS
+    summary["items"] = _bounded_not_injected_items(items)
+    summary["truncated"] = len(items) > len(summary["items"])
+
+
+def _bounded_not_injected_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    high_priority = [
+        item
+        for item in items
+        if item.get("type") == "LOCAL_REFERENCE_EVIDENCE" and bool(item.get("highPriority"))
+    ]
+    result: list[dict[str, Any]] = []
+    for item in [*high_priority, *items]:
+        if item in result:
+            continue
+        if len(result) >= NOT_INJECTED_EVIDENCE_MAX_ITEMS and not (
+            item.get("type") == "LOCAL_REFERENCE_EVIDENCE" and bool(item.get("highPriority"))
+        ):
+            continue
+        result.append(item)
+    return result
+
+
+def _not_injected_merge_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    if item.get("type") == "LOCAL_REFERENCE_EVIDENCE":
+        return (
+            item.get("type"),
+            item.get("signal"),
+            item.get("requestedContext"),
+            item.get("relation"),
+            item.get("path"),
+            item.get("safeSummary"),
+            item.get("reason"),
+        )
+    return (
+        item.get("type"),
+        item.get("signal"),
+        item.get("requestedContext"),
+        item.get("querySummary"),
+        item.get("reason"),
+    )
 
 
 def _not_injected_local_reference_item(
@@ -1881,6 +2313,80 @@ def _not_injected_local_reference_item(
         "reasonCode": "BUDGET_CUT",
         "reason": reason,
     }
+
+
+def _not_injected_evidence_candidate_item(
+    candidate: dict[str, Any],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    signal_types = _candidate_signal_types(candidate)[:4]
+    safe_candidate = _safe_evidence_candidate_for_prompt(candidate)
+    return {
+        "type": "LOCAL_REFERENCE_EVIDENCE",
+        "signal": ", ".join(signal_types) or "-",
+        "signalTypes": signal_types,
+        "requestedContext": _requested_context_for_evidence_candidate(candidate),
+        "querySummary": safe_candidate.get("querySummary") or "-",
+        "relation": safe_candidate.get("relation") or "-",
+        "priority": safe_candidate.get("priority") or "MEDIUM",
+        "highPriority": _is_high_priority_evidence_candidate(candidate),
+        "path": safe_candidate.get("path") or "-",
+        "lineRange": safe_candidate.get("lineRange") or {"start": 1, "end": 1},
+        "safeSummary": safe_candidate.get("safeSummary") or "-",
+        "matchedFileCount": 1,
+        "cutSnippetCount": 1,
+        "topRelativePaths": [safe_candidate.get("path") or "-"],
+        "reasonCode": "BUDGET_CUT",
+        "reason": reason,
+    }
+
+
+def _requested_context_for_evidence_candidate(candidate: dict[str, Any]) -> str:
+    relation = _normalized_relation(candidate)
+    signals = set(_candidate_signal_types(candidate))
+    if relation in {"CALLER", "CALLEE", "CONTROLLER_SERVICE"}:
+        return "CALLER_CONTEXT"
+    if relation in {"MYBATIS_MAPPER_METHOD", "SERVICE_MAPPER", "DB_SCHEMA_REFERENCE"}:
+        return "DB_SCHEMA_CONTEXT"
+    if relation == "CACHE_USAGE_REFERENCE" or "CACHE_WRITE_DELETE_CHANGED" in signals:
+        return "CACHE_USAGE_CONTEXT"
+    if relation in {"DTO_FIELD_REFERENCE", "FIELD_REFERENCE", "INTERFACE_IMPLEMENTATION"}:
+        return "REFERENCE_SEARCH"
+    return "REFERENCE_SEARCH"
+
+
+def _sync_evidence_budget_audit(local_reference_context: dict[str, Any]) -> None:
+    candidate_refs = _flatten_evidence_candidate_refs(local_reference_context)
+    candidates = [item["candidate"] for item in candidate_refs]
+    selected = [item for item in (local_reference_context.get("selectedEvidence") or []) if isinstance(item, dict)]
+    selected_keys = {_evidence_key(item) for item in selected}
+    summary_only_items = [
+        item
+        for item in ((local_reference_context.get("notInjectedEvidence") or {}).get("items") or [])
+        if isinstance(item, dict) and item.get("type") == "LOCAL_REFERENCE_EVIDENCE"
+    ]
+    summary_only_count = len(summary_only_items)
+    candidate_count = len(candidates)
+    selected_count = len(selected)
+    protected_count = sum(1 for item in candidates if _is_high_priority_evidence_candidate(item))
+    high_priority_dropped = sum(
+        1
+        for item in candidates
+        if _is_high_priority_evidence_candidate(item) and _evidence_key(item) not in selected_keys
+    )
+    audit = {
+        "candidateCount": candidate_count,
+        "selectedCount": selected_count,
+        "summaryOnlyCount": summary_only_count,
+        "droppedCount": max(candidate_count - selected_count - summary_only_count, 0),
+        "protectedCandidateCount": protected_count,
+        "highPriorityDroppedCount": high_priority_dropped,
+    }
+    local_reference_context["budgetAuditSummary"] = audit
+    summary = local_reference_context.get("summary") if isinstance(local_reference_context.get("summary"), dict) else {}
+    summary["budgetAuditSummary"] = audit
+    local_reference_context["summary"] = summary
 
 
 def _merge_limited_strings(first: list[Any], second: list[Any], *, limit: int) -> list[str]:
@@ -1933,7 +2439,7 @@ def _empty_local_reference_summary() -> dict[str, Any]:
 
 
 def _local_reference_progress_summary(local_reference: dict[str, Any]) -> dict[str, Any]:
-    return {
+    summary = {
         "status": str(local_reference.get("status") or ""),
         "queryCount": int(local_reference.get("queryCount") or 0),
         "matchedFileCount": int(local_reference.get("matchedFileCount") or 0),
@@ -1950,6 +2456,10 @@ def _local_reference_progress_summary(local_reference: dict[str, Any]) -> dict[s
             if isinstance(item, dict)
         ],
     }
+    audit = local_reference.get("budgetAuditSummary")
+    if isinstance(audit, dict):
+        summary["budgetAuditSummary"] = _evidence_budget_audit_summary(audit)
+    return summary
 
 
 def _sync_local_reference_summary(context_pack: dict[str, Any], *, truncated: bool) -> None:
@@ -1962,10 +2472,23 @@ def _sync_local_reference_summary(context_pack: dict[str, Any], *, truncated: bo
     summary["includedSnippetCount"] = included_snippet_count
     summary["evidenceCandidateCount"] = evidence_candidate_count
     summary["truncated"] = bool(summary.get("truncated", False) or truncated)
+    if isinstance(local_reference.get("budgetAuditSummary"), dict):
+        summary["budgetAuditSummary"] = _evidence_budget_audit_summary(local_reference["budgetAuditSummary"])
     local_reference["summary"] = summary
     local_reference["sourceIncluded"] = included_snippet_count > 0 or evidence_candidate_count > 0
     context_pack["localReferenceContext"] = local_reference
     context_pack["localReferenceSearch"] = summary
+
+
+def _evidence_budget_audit_summary(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "candidateCount": int(value.get("candidateCount") or 0),
+        "selectedCount": int(value.get("selectedCount") or 0),
+        "summaryOnlyCount": int(value.get("summaryOnlyCount") or 0),
+        "droppedCount": int(value.get("droppedCount") or 0),
+        "protectedCandidateCount": int(value.get("protectedCandidateCount") or 0),
+        "highPriorityDroppedCount": int(value.get("highPriorityDroppedCount") or 0),
+    }
 
 
 def _observability_summary(
@@ -2078,6 +2601,8 @@ def _budget_cut_summary(
     changed = context_pack.get("changedFilesSummary") or {}
     same_file = context_pack.get("sameFileContext") or {}
     local_reference = context_pack.get("localReferenceSearch") or {}
+    local_reference_context = context_pack.get("localReferenceContext") or {}
+    budget_audit = local_reference_context.get("budgetAuditSummary") if isinstance(local_reference_context, dict) else {}
     changed_files_excluded = max(int(changed.get("total") or 0) - int(changed.get("included") or 0), 0)
     same_file_candidate_excluded = (
         max(
@@ -2126,6 +2651,7 @@ def _budget_cut_summary(
         "localReferenceContextRemoved": bool(before.get("hasLocalReferenceContext") and not after.get("hasLocalReferenceContext")),
         "localReferenceCutDetails": _local_reference_cut_details(context_pack),
         "notInjectedEvidence": (context_pack.get("notInjectedEvidence") or {}).get("items") or [],
+        "budgetAuditSummary": _evidence_budget_audit_summary(budget_audit if isinstance(budget_audit, dict) else {}),
         "protectedSignalTypes": sorted(HIGH_MISJUDGMENT_SIGNAL_TYPES),
         "localReferenceMinSnippetsPerProtectedSearch": LOCAL_REFERENCE_MIN_SNIPPETS_PER_HIGH_SIGNAL_SEARCH,
     }
@@ -2323,6 +2849,7 @@ def _suggested_capability(signal_type: str | None, requested_contexts: list[str]
 def _has_budget_cut(summary: dict[str, Any]) -> bool:
     if not summary.get("truncated"):
         return False
+    audit = summary.get("budgetAuditSummary") if isinstance(summary.get("budgetAuditSummary"), dict) else {}
     count_fields = [
         "changedFilesExcluded",
         "changedFilesRemovedByPromptBudget",
@@ -2331,8 +2858,14 @@ def _has_budget_cut(summary: dict[str, Any]) -> bool:
         "sameFileSourceSnippetsRemoved",
         "localReferenceSearchesRemoved",
         "localReferenceSnippetsRemoved",
+        "localReferenceEvidenceRemoved",
     ]
-    return bool(summary.get("localReferenceContextRemoved") or any(int(summary.get(field) or 0) > 0 for field in count_fields))
+    return bool(
+        summary.get("localReferenceContextRemoved")
+        or any(int(summary.get(field) or 0) > 0 for field in count_fields)
+        or int(audit.get("summaryOnlyCount") or 0) > 0
+        or int(audit.get("droppedCount") or 0) > 0
+    )
 
 
 def _rule_gap_summary(items: list[dict[str, Any]]) -> dict[str, Any]:

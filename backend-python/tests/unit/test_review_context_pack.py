@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.deterministic_checks.models import DeterministicCheckRun
 from app.deterministic_checks.repository import json_dumps
 from app.review_context import local_repo, local_retriever
+from app.review_context import service as context_service
 from app.review_context.service import (
     CONTEXT_PACK_MAX_CHANGED_FILES,
     CONTEXT_PACK_MAX_TOTAL_CHARS,
@@ -939,34 +940,142 @@ def test_review_context_pack_truncates_local_reference_snippets_to_fit_budget(
     )
 
     local_summary = context["contextPack"]["localReferenceSearch"]
-    not_injected = context["contextPack"]["notInjectedEvidence"]
-    cut_detail = context["summary"]["budgetCutSummary"]["localReferenceCutDetails"][0]
+    budget_summary = context["summary"]["budgetCutSummary"]
+    audit = budget_summary["budgetAuditSummary"]
 
     assert len(context["promptText"]) <= CONTEXT_PACK_MAX_TOTAL_CHARS
     assert local_summary["queryCount"] == 1
     assert local_summary["matchedFileCount"] == 1
     assert local_summary["truncated"] is True
     assert local_summary["includedSnippetCount"] < 3
-    assert local_summary["includedSnippetCount"] >= 1
-    assert not_injected["hasNotInjectedEvidence"] is True
-    assert not_injected["items"][0]["signal"] == "METHOD_DELETED"
-    assert not_injected["items"][0]["requestedContext"] == "REFERENCE_SEARCH"
-    assert not_injected["items"][0]["querySummary"] == "cancelOrder"
-    assert not_injected["items"][0]["matchedFileCount"] == 1
-    assert not_injected["items"][0]["cutSnippetCount"] >= 1
-    assert not_injected["items"][0]["topRelativePaths"] == ["src/main/java/demo/OrderController.java"]
-    assert not_injected["items"][0]["reasonCode"] == "BUDGET_CUT"
-    assert "orderService.cancelOrder" not in json.dumps(not_injected, ensure_ascii=False)
-    assert "repo-secret" not in json.dumps(not_injected, ensure_ascii=False)
-    assert str(tmp_path) not in json.dumps(not_injected, ensure_ascii=False)
-    assert "notInjectedEvidence" in context["promptText"]
-    assert "Evidence existed but was not injected" in context["promptText"]
-    assert cut_detail["signal"] == "METHOD_DELETED"
-    assert cut_detail["requestedContext"] == "REFERENCE_SEARCH"
-    assert cut_detail["querySummary"] == "cancelOrder"
-    assert cut_detail["cutSnippetCount"] >= 1
+    assert budget_summary["localReferenceSnippetsRemoved"] >= 1
+    assert audit["candidateCount"] >= audit["selectedCount"]
+    assert set(audit) == {
+        "candidateCount",
+        "selectedCount",
+        "summaryOnlyCount",
+        "droppedCount",
+        "protectedCandidateCount",
+        "highPriorityDroppedCount",
+    }
     assert "METHOD_DELETED" in context["summary"]["budgetCutSummary"]["protectedSignalTypes"]
     assert context["summary"]["budgetCutSummary"]["localReferenceMinSnippetsPerProtectedSearch"] == 1
+
+
+def test_review_context_pack_layers_evidence_candidates_and_summarizes_cuts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("GITLAB_TOKEN", "repo-secret-token")
+    monkeypatch.setattr(context_service, "CONTEXT_PACK_MAX_SELECTED_EVIDENCE", 2)
+
+    local_reference = {
+        "status": "RETRIEVED",
+        "sourceIncluded": True,
+        "summary": {
+            "queryCount": 1,
+            "matchedFileCount": 4,
+            "includedSnippetCount": 0,
+            "evidenceCandidateCount": 4,
+            "truncated": False,
+            "supportedSignalTypes": ["METHOD_SIGNATURE_CHANGED"],
+            "skippedSignalTypes": [],
+        },
+        "searches": [
+            {
+                "type": "REFERENCE_SEARCH",
+                "query": "cancelOrder",
+                "signalTypes": ["METHOD_SIGNATURE_CHANGED"],
+                "matchedFileCount": 4,
+                "includedSnippetCount": 0,
+                "candidateSnippetCount": 0,
+                "topMatchedPaths": ["src/main/java/demo/OrderController.java"],
+                "evidenceCandidates": [
+                    {
+                        "relation": "CALLER",
+                        "path": "src/main/java/demo/OrderController.java",
+                        "lineRange": {"start": 4, "end": 4},
+                        "symbol": "cancelOrder",
+                        "reason": "METHOD_CALLER",
+                        "confidence": 91,
+                        "safeSummary": "Controller calls cancelOrder.",
+                        "source": "RELATION_INDEX",
+                        "priority": "HIGH",
+                        "budgetHint": "PROTECT",
+                        "signalTypes": ["METHOD_SIGNATURE_CHANGED"],
+                        "query": "cancelOrder",
+                    },
+                    {
+                        "relation": "CALLEE",
+                        "path": "src/main/java/demo/OrderService.java",
+                        "lineRange": {"start": 12, "end": 12},
+                        "symbol": "validateOrder",
+                        "reason": "METHOD_CALLEE",
+                        "confidence": 89,
+                        "safeSummary": "Changed method calls validateOrder.",
+                        "source": "SOURCE_INDEX",
+                        "priority": "MEDIUM",
+                        "budgetHint": "NORMAL",
+                        "signalTypes": ["METHOD_SIGNATURE_CHANGED"],
+                        "query": "cancelOrder",
+                    },
+                    {
+                        "relation": "CONTROLLER_SERVICE",
+                        "path": str(tmp_path / "workspaces" / "worktrees" / "1" / "head" / "src" / "Controller.java"),
+                        "lineRange": {"start": 7, "end": 7},
+                        "symbol": "cancelOrder",
+                        "reason": "CONTROLLER_SERVICE_RELATION",
+                        "confidence": 87,
+                        "safeSummary": "apiKey=repo-secret-token should be redacted.",
+                        "source": "RELATION_INDEX",
+                        "priority": "HIGH",
+                        "budgetHint": "PROTECT",
+                        "signalTypes": ["METHOD_SIGNATURE_CHANGED"],
+                        "query": "cancelOrder",
+                    },
+                    {
+                        "relation": "SERVICE_MAPPER",
+                        "path": "src/main/java/demo/OrderService.java",
+                        "lineRange": {"start": 20, "end": 20},
+                        "symbol": "orderMapper.updateOrder",
+                        "reason": "SERVICE_MAPPER_RELATION",
+                        "confidence": 84,
+                        "safeSummary": "Service references mapper updateOrder.",
+                        "source": "RELATION_INDEX",
+                        "priority": "HIGH",
+                        "budgetHint": "PROTECT",
+                        "signalTypes": ["METHOD_SIGNATURE_CHANGED"],
+                        "query": "cancelOrder",
+                    },
+                ],
+            }
+        ],
+    }
+
+    context_service._prioritize_local_reference_context(local_reference)
+    context_service._apply_layered_evidence_budget(local_reference)
+    not_injected = context_service._not_injected_evidence_from_local_reference(local_reference)
+
+    selected_relations = {item["relation"] for item in local_reference["selectedEvidence"]}
+    audit = local_reference["budgetAuditSummary"]
+    payload = json.dumps(not_injected, ensure_ascii=False)
+
+    assert {"CALLER", "CALLEE"}.issubset(selected_relations)
+    assert audit == {
+        "candidateCount": 4,
+        "selectedCount": 2,
+        "summaryOnlyCount": 2,
+        "droppedCount": 0,
+        "protectedCandidateCount": 4,
+        "highPriorityDroppedCount": 2,
+    }
+    assert not_injected["hasNotInjectedEvidence"] is True
+    assert {item["relation"] for item in not_injected["items"]} == {"CONTROLLER_SERVICE", "SERVICE_MAPPER"}
+    assert "apiKey=****" in payload
+    assert "repo-secret-token" not in payload
+    assert str(tmp_path) not in payload
+    assert "Service references mapper updateOrder." in payload
+    assert "orderMapper.updateOrder(" not in payload
 
 
 def test_review_context_pack_marks_local_repo_failure_unavailable(

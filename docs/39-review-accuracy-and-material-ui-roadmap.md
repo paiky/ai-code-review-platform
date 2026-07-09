@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：阶段 2 源码检索能力升级已落地，等待用户验证；后续阶段必须逐阶段推进。
+- 当前状态：阶段 3 Context Pack 裁剪规则升级已落地，等待用户验证；后续阶段必须逐阶段推进。
 - 关联文档：
   - `docs/36-review-platform-current-roadmap.md`：近期总控入口。
   - `docs/37-review-platform-target-product-roadmap.md`：完整产品目标。
@@ -49,6 +49,14 @@
 - 如何验证：运行 `tests/unit/test_local_retriever.py`、`tests/unit/test_review_context_pack.py`、`tests/unit/test_local_repo_context.py` 和相关 `test_code_quality_api_contract.py` 用例。
 - 遗留风险：当前源码索引是正则启发式，不是 AST / LSP；完整 evidence-first 排序、分层预算和 prompt 注入控制放到阶段 3。
 - 下一阶段：阶段 3 Context Pack 裁剪规则升级；未经用户确认不继续推进。
+
+### 2026-07-09：阶段 3 Context Pack 裁剪规则升级
+
+- 改了什么：Context Pack 在 Local Retriever 的 `evidenceCandidates` 之上新增候选评分、`selectedEvidence` 安全摘要、分层预算策略和 `budgetAuditSummary`；保留 diff、变更文件摘要和已有直接 snippets 的优先级，caller / callee 关系证据优先各保留 1 条；未注入的高优先级候选进入 `notInjectedEvidence`，只暴露 `safeSummary`、相对路径、关系和计数，不暴露源码片段。
+- 为什么：阶段 2 已能产生关系证据候选，但如果仍按顺序删除 snippets，预算紧张时会丢掉最关键的 caller / callee、接口实现、Controller -> Service、Service -> Mapper、DB / Mapper 和缓存证据，模型也无法区分“未命中”和“已命中但未注入”。
+- 如何验证：运行 `tests/unit/test_local_retriever.py`、`tests/unit/test_review_context_pack.py`、`tests/unit/test_code_quality_prompt.py`，并补跑 `test_code_quality_api_contract.py` 中 Context Pack / Local Reference / retry same-file context 相关 contract 用例。
+- 遗留风险：候选评分仍是启发式和固定配额，不是 AST / LSP 级精确调用图；MQ、配置、跨端 API、测试覆盖 Retriever 仍未实现；预算极端紧张时仍可能只保留摘要而非源码片段。
+- 下一阶段：阶段 4 质量治理页面收敛；未经用户确认不继续推进。
 
 ## 阶段 1：源码工作区可靠性与可观测性
 

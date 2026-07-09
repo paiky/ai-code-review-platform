@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10：第一个评估驱动的业务 Retriever` 已落地；源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 前端重构专项见 `docs/39-review-accuracy-and-material-ui-roadmap.md`，当前已完成阶段 2 源码检索能力升级，等待用户验证。
+- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10：第一个评估驱动的业务 Retriever` 已落地；源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 前端重构专项见 `docs/39-review-accuracy-and-material-ui-roadmap.md`，当前已完成阶段 3 Context Pack 裁剪规则升级，等待用户验证。
 - 完整产品目标：`docs/37-review-platform-target-product-roadmap.md`。本文件负责近期阶段推进，`docs/37` 负责最终产品形态和长期路线。
 - 关联历史文档：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`：V2 反馈学习、项目策略、Context Pack 和高准确模式阶段记录。
@@ -374,10 +374,10 @@ finding 展示必须清楚：
 
 ## 八、当前下一步
 
-当前 M10 第一个评估驱动的业务 Retriever 已落地。当前专项已完成 `docs/39` 阶段 1 和阶段 2，下一阶段需等待用户确认后进入：
+当前 M10 第一个评估驱动的业务 Retriever 已落地。当前专项已完成 `docs/39` 阶段 1、阶段 2 和阶段 3，下一阶段需等待用户确认后进入：
 
 ```text
-docs/39 阶段 3：Context Pack 裁剪规则升级
+docs/39 阶段 4：质量治理页面收敛
 ```
 
 ### M1 落地记录（2026-07-01）
@@ -475,6 +475,14 @@ docs/39 阶段 3：Context Pack 裁剪规则升级
 - 解决的缺口：补齐源码检索从“按 signal 拼 rg query”到“关系证据候选 + rg 兜底”的第一步，降低后续误判样本中“缺调用方 / Mapper / DTO 字段引用上下文”的比例。
 - 如何验证：运行 `tests/unit/test_local_retriever.py`、`tests/unit/test_review_context_pack.py`、`tests/unit/test_local_repo_context.py` 以及相关 AI Review progress 契约测试。
 - 下一阶段：`docs/39` 阶段 3 Context Pack 裁剪规则升级；未经用户确认不继续推进。
+
+### docs/39 阶段 3 落地记录（2026-07-09）
+
+- 改了什么：Context Pack 新增基于 `evidenceCandidates` 的候选评分和分层预算，输出 `selectedEvidence` 安全摘要、候选级 `notInjectedEvidence` 和 `budgetAuditSummary`；保留 diff、变更文件摘要、直接 snippets 优先级，caller / callee 关系证据优先各保留 1 条；预算裁剪时只用 safeSummary、相对路径、关系和计数表达未注入候选。
+- 为什么做：阶段 2 已经能产出结构化关系证据，但旧预算控制仍可能按顺序裁剪，导致关键关系证据和未注入证据摘要不可解释。阶段 3 让模型和 progress 明确区分“已注入直接证据”“只注入安全摘要”和“被预算裁剪”。
+- 解决的缺口：补齐 Context Pack 从顺序删除 snippets 到证据优先级、分层预算和预算审计的升级，降低预算紧张时误把缺失证据当成无风险的概率。
+- 如何验证：运行 `tests/unit/test_local_retriever.py`、`tests/unit/test_review_context_pack.py`、`tests/unit/test_code_quality_prompt.py`，并补跑 `test_code_quality_api_contract.py` 中 Context Pack / Local Reference / retry same-file context 相关 contract 用例。
+- 下一阶段：`docs/39` 阶段 4 质量治理页面收敛；未经用户确认不继续推进。
 
 暂不建议进入：
 
