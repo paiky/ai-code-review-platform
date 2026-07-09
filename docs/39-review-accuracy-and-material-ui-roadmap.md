@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：阶段 3 Context Pack 裁剪规则升级已落地，等待用户验证；后续阶段必须逐阶段推进。
+- 当前状态：阶段 5.4 质量治理高级诊断统一壳已落地，等待用户验证；后续阶段必须逐阶段推进。
 - 关联文档：
   - `docs/36-review-platform-current-roadmap.md`：近期总控入口。
   - `docs/37-review-platform-target-product-roadmap.md`：完整产品目标。
@@ -57,6 +57,46 @@
 - 如何验证：运行 `tests/unit/test_local_retriever.py`、`tests/unit/test_review_context_pack.py`、`tests/unit/test_code_quality_prompt.py`，并补跑 `test_code_quality_api_contract.py` 中 Context Pack / Local Reference / retry same-file context 相关 contract 用例。
 - 遗留风险：候选评分仍是启发式和固定配额，不是 AST / LSP 级精确调用图；MQ、配置、跨端 API、测试覆盖 Retriever 仍未实现；预算极端紧张时仍可能只保留摘要而非源码片段。
 - 下一阶段：阶段 4 质量治理页面收敛；未经用户确认不继续推进。
+
+### 2026-07-09：阶段 4 质量治理页面收敛
+
+- 改了什么：顶部“质量治理”下拉统一承载质量看板、评估样本、规则缺口、验收记录和回放记录；`/rule-gaps`、`/acceptance-gates`、`/evaluation-runs` 直接路由和页面能力继续保留；质量治理页面页头不再散落跨页导航按钮；反馈池继续只在 `VITE_REVIEW_LEARNING_UI_ENABLED=true` 时展示。
+- 为什么：质量治理入口过度分散会让页面页头和下拉框职责重叠；统一由顶部“质量治理”下拉承担导航，页面页头只保留本页必要操作。
+- 如何验证：运行 `scripts/run-frontend.cmd build`；打开顶部“质量治理”确认可进入“质量看板 / 评估样本 / 规则缺口 / 验收记录 / 回放记录”；直接访问 `/rule-gaps`、`/acceptance-gates`、`/evaluation-runs` 确认仍可用；质量治理各页面页头不再出现跨页导航按钮。
+- 遗留风险：本阶段只调整入口层级和文档，不做 Material 3 / MUI 迁移，不重构现有 Ant Design 页面，也不改变后端 API 或历史数据。
+- 下一阶段：阶段 5 Material Design 3 / MUI 前端重构第一小步；未经用户确认不继续推进。
+
+### 2026-07-09：阶段 5 第一小步 Material Design 3 / MUI 前端基础设施
+
+- 改了什么：新增 `@mui/material`、`@emotion/react`、`@emotion/styled` 依赖；新增 `MuiAppShell`，在 React 根节点接入 MUI `ThemeProvider` 和 `CssBaseline`；新增 MUI 主题文件，提供 light / dark color schemes、基础 palette、shape、typography 和少量组件默认值；旧 Ant Design 页面继续原样运行。
+- 为什么：先建立 MUI / Emotion 和主题基础，让后续质量看板、评估样本等页面可以逐步迁移到 Material Design 3 风格，而不是一次性替换全部前端。
+- 如何验证：运行 `scripts/run-frontend.cmd build`；确认前端能在 MUI ThemeProvider + CssBaseline + Ant Design reset 共存下完成生产构建。
+- 遗留风险：本阶段只接入基础设施，没有迁移质量看板和评估样本页面；暗色方案目前随系统偏好生效，尚未提供用户可见主题切换；bundle 体积因新增 MUI 依赖继续触发 Vite 大 chunk 警告。
+- 下一阶段：阶段 5 后续小步迁移质量看板和评估样本到 MUI 布局；未经用户确认不继续推进。
+
+### 2026-07-09：阶段 5.2 质量看板 MUI 布局迁移
+
+- 改了什么：只迁移“质量看板”页面的页面壳、页头、筛选区、指标卡、治理摘要区和规则缺口归因摘要容器到 MUI；质量维度表格继续使用现有 Ant Design Table；按浏览器反馈收敛为后台密度布局，修正浅色背景上的低对比文字和过大的顶部按钮；页头改为左侧标题说明、右侧仅保留本页刷新操作；主题主色从绿色改为蓝 / 粉系，指标卡改为白底多色强调线；MUI 主题先固定为 light palette，避免 Ant Design 与 MUI 共存阶段受系统暗色偏好影响；数据请求、过滤参数和 `/api/review-quality/dashboard` 契约保持不变。
+- 为什么：阶段 5.1 只接入了基础设施，用户在页面上感知不到明显变化；阶段 5.2 让质量治理主入口先呈现 Material 3 风格的 surface、outline、按钮、输入框、状态区和响应式指标布局，同时避免一次性迁移复杂表格带来回归。
+- 如何验证：运行 `scripts/run-frontend.cmd build`；确认质量看板仍能按项目、Provider、Profile、风险类型和 verdict 过滤；规则缺口、验收记录和回放记录统一从顶部“质量治理”下拉进入。
+- 遗留风险：Ant Design Table、Tag 和 Spin 仍与 MUI 外壳共存；未做真实浏览器截图验证；暗色模式已暂停，后续需要在全站 MUI 迁移更完整后再做产品化主题切换；bundle 体积继续触发 Vite 大 chunk 警告。
+- 下一阶段：阶段 5.3 评估样本 MUI 布局迁移；未经用户确认不继续推进。
+
+### 2026-07-09：阶段 5.3 评估样本 MUI 布局迁移
+
+- 改了什么：迁移“评估样本”页面的页面壳、页头、筛选区和规则缺口归因弹窗到 MUI；页头沿用左侧标题说明，右侧不放跨页导航按钮；筛选控件改为 MUI TextField / Select / Button；样本列表和 Rule Gap 摘要表继续使用 Ant Design Table；`/api/evaluation-cases` 和 `/api/evaluation-cases/{caseId}/rule-gap-attribution` 契约保持不变。
+- 为什么：评估样本是质量治理主入口之一，需要与质量看板保持一致的后台密度、可扫描布局和操作区位置，同时避免重写宽表和归因业务逻辑。
+- 如何验证：运行 `scripts/run-frontend.cmd build`；确认评估样本仍可按项目、Provider、Profile、风险类型和 verdict 查询，任务跳转、编辑归因、保存归因和高级诊断入口不回归。
+- 遗留风险：样本主表、任务链接、Tag、Empty 和 Rule Gap 摘要表仍与 MUI 外壳共存；未做真实浏览器截图验证；暗色模式仍暂停；bundle 体积继续触发 Vite 大 chunk 警告。
+- 下一阶段：阶段 5.4 质量治理高级诊断统一壳；未经用户确认不继续推进。
+
+### 2026-07-09：阶段 5.4 质量治理高级诊断统一壳
+
+- 改了什么：新增统一 MUI 高级诊断页壳，规则缺口诊断、验收记录、验收详情、回放记录和回放详情统一使用“高级诊断”标签、左侧标题说明、右侧仅放本页必要操作、直接路由说明和 MUI surface；筛选容器和列表容器改为 MUI Paper；复杂统计图、Tabs、宽表、详情 Descriptions、创建 / 编辑验收记录 Modal 和后端 API 保持不变。
+- 为什么：规则缺口、验收记录和回放记录需要视觉定位一致，同时跨页导航统一回到顶部“质量治理”下拉框，避免页头按钮和顶部下拉重复。
+- 如何验证：运行 `scripts/run-frontend.cmd build`；确认 `/rule-gaps`、`/acceptance-gates`、`/acceptance-gates/{gateId}`、`/evaluation-runs`、`/evaluation-runs/{runId}` 直接路由仍可访问，筛选、刷新、详情跳转和创建 / 编辑验收记录不回归。
+- 遗留风险：高级诊断页内部仍有 Ant Design Table、Tabs、Card、Descriptions、Modal 与 MUI 壳共存；未做真实浏览器截图验证；暗色模式仍暂停；bundle 体积继续触发 Vite 大 chunk 警告。
+- 下一阶段：阶段 5.5 任务列表和任务详情主框架；未经用户确认不继续推进。
 
 ## 阶段 1：源码工作区可靠性与可观测性
 
@@ -129,8 +169,8 @@ highPriorityDroppedCount
 
 目标：
 
-- 顶部默认只突出“质量看板”和“评估样本”。
-- 规则缺口、验收记录、回放记录保留直接路由，但降级为高级诊断入口。
+- 顶部“质量治理”下拉统一承载质量看板、评估样本、规则缺口、验收记录和回放记录。
+- 规则缺口、验收记录、回放记录保留直接路由和后端能力，但页面页头不再散落跨页导航按钮。
 - 反馈池继续由 feature flag 控制，默认隐藏。
 
 页面定位：
@@ -152,19 +192,139 @@ highPriorityDroppedCount
 迁移顺序：
 
 ```text
-质量看板和评估样本
-  -> 任务列表和任务详情主框架
-  -> 设置页和版本更新页
+5.1 MUI / Emotion 基础设施（已完成）
+  -> 5.2 质量看板 MUI 布局迁移（已完成）
+  -> 5.3 评估样本 MUI 布局迁移（已完成）
+  -> 5.4 质量治理高级诊断统一壳（已完成）
+  -> 5.5 任务列表和任务详情主框架
+  -> 5.6 设置页和版本更新页
 ```
 
 设计要求：
 
 - 优先使用 MUI 组件，不自造复杂视觉系统。
 - Material 3 风格圆角、surface、outline、按钮、输入框和状态层。
-- Gemini 式 AI 产品感：留白充足、输入框突出、卡片轻量、交互克制。
-- 不做传统后台模板。
+- 管理后台页面优先采用紧凑、可扫描的信息架构，不做大 Hero、不让操作按钮漂在页面中间。
+- 页面页头采用“左侧标题 / 说明，右侧本页主操作”的两栏布局；宽屏右对齐，窄屏再自然换行；跨页导航统一交给顶部“质量治理”下拉框。
+- 顶部操作按钮必须固定紧凑高度和内容宽度，不能在宽屏下被容器拉伸变大。
+- Gemini 式 AI 产品感只体现在轻量 surface、清晰输入区和克制状态层，不牺牲后台页面密度和可读性。
+- 质量治理、设置、任务等后台页面保留表格用于 Top 维度、列表、记录和横向比较；外层可用 MUI surface，但不要为了卡片化而替代表格。
+- 色系避免单独大面积绿色；主色优先蓝 / 粉等更明快的多巴胺色系，指标卡可用白底多色强调线，而不是整块高饱和色块。
 - hover / focus / disabled 状态必须覆盖。
-- 支持响应式和暗色模式。
+- Ant Design 与 MUI 共存阶段先固定 light palette，避免暗色方案导致浅色背景低对比；暗色模式等全站 MUI 迁移更完整后再产品化。
+
+### 阶段 5.1：MUI / Emotion 基础设施（已完成）
+
+目标：
+
+- 新增 MUI / Emotion 依赖。
+- 增加 MUI ThemeProvider、CssBaseline、light / dark color schemes 和 App Shell 基础。
+- 旧 Ant Design 页面允许短期共存，不做页面迁移。
+
+验收：
+
+- 前端 build 通过。
+- 现有页面路由、顶部导航和 Ant Design 页面不回归。
+
+### 阶段 5.2：质量看板 MUI 布局迁移（已完成）
+
+目标：
+
+- 只迁移“质量看板”页面的页面壳、页头、筛选区、指标卡和治理摘要区。
+- 数据请求、过滤参数、表格数据和后端 API 保持不变。
+- 复杂表格可以继续使用 Ant Design Table，外层布局与视觉容器优先改成 MUI。
+- 明确呈现 Material 3 风格的 surface、outline、按钮、输入框、状态区和响应式布局。
+
+边界：
+
+- 不迁移任务列表、任务详情、设置页。
+- 不改 `/api/review-quality/dashboard` 契约。
+- 不做全站主题切换产品化。
+
+验收：
+
+- 前端 build 通过。
+- 质量看板在桌面和窄屏下无明显重叠、截断或按钮文本溢出。
+- 质量看板仍可按项目、Provider、Profile、风险类型和 verdict 过滤。
+
+### 阶段 5.3：评估样本 MUI 布局迁移（已完成）
+
+目标：
+
+- 迁移“评估样本”页面的页面壳、页头、筛选区、操作入口和规则缺口归因弹窗外观。
+- 表格可以短期继续使用 Ant Design Table。
+- 保持“编辑归因”、任务跳转和筛选行为不变；跨页导航统一交给顶部“质量治理”下拉框。
+
+边界：
+
+- 不改 `/api/evaluation-cases` 和 `/api/evaluation-cases/{caseId}/rule-gap-attribution` 契约。
+- 不恢复反馈池默认展示。
+- 不把 evaluation case 与反馈池合并。
+
+验收：
+
+- 前端 build 通过。
+- 新建 / 编辑归因弹窗的字段、保存行为和错误提示不回归。
+- 评估样本列表仍可按项目、Provider、Profile、风险类型和 verdict 查询。
+
+### 阶段 5.4：质量治理高级诊断统一壳（已完成）
+
+目标：
+
+- 给规则缺口、验收记录、回放记录统一 MUI 风格页面壳、页头和诊断说明区。
+- 保留这些页面作为质量治理下拉中的高级诊断入口，不在页面页头重复放跨页导航按钮。
+- 复杂表格和历史详情区域可继续短期使用 Ant Design。
+
+边界：
+
+- 不删除直接路由。
+- 不删除后端 API、历史数据或诊断能力。
+- 不把规则缺口重新提升为实现优先级主入口。
+
+验收：
+
+- 前端 build 通过。
+- `/rule-gaps`、`/acceptance-gates`、`/evaluation-runs` 和详情页直接访问正常。
+- 从顶部“质量治理”下拉进入规则缺口、验收记录和回放记录的路径正常。
+
+### 阶段 5.5：任务列表和任务详情主框架
+
+目标：
+
+- 迁移任务列表和任务详情的页面壳、主导航区域、标题区和高层布局。
+- 任务详情内部复杂 tab、diff viewer、AI Review finding 展示和设置类弹窗可分批迁移。
+- 保持任务直达链接、`reviewKey` 参数、调度队列、失败通知入口和现有轮询行为。
+
+边界：
+
+- 不改任务详情 API 契约。
+- 不重写 diff viewer 或 patch preview 逻辑。
+- 不改变 AI Review 结果展示语义。
+
+验收：
+
+- 前端 build 通过。
+- `/tasks`、`/tasks/{taskId}`、`?reviewKey=` 直达路径正常。
+- 任务列表筛选、任务详情 tab 切换、AI Review 轮询和高准确模式流转不回归。
+
+### 阶段 5.6：设置页和版本更新页
+
+目标：
+
+- 迁移设置页、版本更新页和接入帮助页的页面壳与主要 surface。
+- 设置页复杂表单按模块逐步迁移，优先保持配置保存和测试连接稳定。
+- 版本更新页可改为 MUI 风格时间线或列表。
+
+边界：
+
+- 不改 Provider、Profile、项目组、钉钉 webhook、Push 审核策略 API 契约。
+- 不一次性重写所有设置表单组件。
+
+验收：
+
+- 前端 build 通过。
+- 设置页保存、测试 Provider、Prompt 预览、项目组配置和 Push 策略维护不回归。
+- 版本更新和接入帮助页面在桌面 / 移动宽度下可读。
 
 ## 总控 Prompt
 
@@ -225,14 +385,14 @@ highPriorityDroppedCount
 请只落地 docs/39 的阶段 4：质量治理页面收敛。
 
 目标：
-- 顶部质量治理默认只展示质量看板和评估样本。
-- 规则缺口、验收记录、回放记录保留直接路由，并从质量看板 / 评估样本 / 规则缺口推荐进入。
+- 顶部质量治理下拉展示质量看板、评估样本、规则缺口、验收记录和回放记录。
+- 质量治理页面页头不放跨页导航按钮；规则缺口、验收记录、回放记录保留直接路由。
 - 更新 docs/38 的生命周期说明。
 
 完成后运行前端 build，并停止等待验证。
 ```
 
-## 阶段 5 Prompt
+## 阶段 5.1 Prompt
 
 ```text
 请只落地 docs/39 的阶段 5 第一小步：Material Design 3 / MUI 前端基础设施。
@@ -244,4 +404,97 @@ highPriorityDroppedCount
 - 新页面优先使用 MUI 组件，旧 Ant Design 页面允许短期共存。
 
 完成后运行前端 build，并停止等待验证。
+```
+
+## 阶段 5.2 Prompt
+
+```text
+请只落地 docs/39 的阶段 5.2：质量看板 MUI 布局迁移。
+
+目标：
+- 只迁移“质量看板”页面的页面壳、页头、筛选区、指标卡和治理摘要区。
+- 使用已接入的 MUI ThemeProvider / CssBaseline / appMuiTheme。
+- 数据请求、过滤参数、表格数据和后端 API 保持不变。
+- 复杂表格可以继续使用 Ant Design Table，外层布局与视觉容器优先改成 MUI。
+- 让页面能明显呈现 Material 3 风格的 surface、outline、按钮、输入框、状态区和响应式布局。
+
+边界：
+- 不迁移任务列表、任务详情、设置页。
+- 不改 `/api/review-quality/dashboard` 契约。
+- 不做全站主题切换产品化。
+- 不恢复反馈池默认展示。
+
+完成后运行 `scripts/run-frontend.cmd build`，并停止等待验证。
+```
+
+## 阶段 5.3 Prompt
+
+```text
+请只落地 docs/39 的阶段 5.3：评估样本 MUI 布局迁移。
+
+目标：
+- 迁移“评估样本”页面的页面壳、页头、筛选区、操作入口和规则缺口归因弹窗外观。
+- 使用已接入的 MUI 主题和基础壳。
+- 表格可以短期继续使用 Ant Design Table。
+- 保持“编辑归因”、任务跳转和筛选行为不变；跨页导航统一由顶部“质量治理”下拉承载。
+
+边界：
+- 不改 `/api/evaluation-cases` 和 `/api/evaluation-cases/{caseId}/rule-gap-attribution` 契约。
+- 不恢复反馈池默认展示。
+- 不把 evaluation case 与反馈池合并。
+
+完成后运行 `scripts/run-frontend.cmd build`，并停止等待验证。
+```
+
+## 阶段 5.4 Prompt
+
+```text
+请只落地 docs/39 的阶段 5.4：质量治理高级诊断统一壳。
+
+目标：
+- 给规则缺口、验收记录、回放记录统一 MUI 风格页面壳、页头和诊断说明区。
+- 保留这些页面作为顶部“质量治理”下拉中的高级诊断入口，不在页面页头重复放跨页导航按钮。
+- 复杂表格和历史详情区域可继续短期使用 Ant Design。
+
+边界：
+- 不删除直接路由。
+- 不删除后端 API、历史数据或诊断能力。
+- 不把规则缺口重新提升为实现优先级主入口。
+
+完成后运行 `scripts/run-frontend.cmd build`，并停止等待验证。
+```
+
+## 阶段 5.5 Prompt
+
+```text
+请只落地 docs/39 的阶段 5.5：任务列表和任务详情主框架 MUI 迁移。
+
+目标：
+- 迁移任务列表和任务详情的页面壳、主导航区域、标题区和高层布局。
+- 任务详情内部复杂 tab、diff viewer、AI Review finding 展示和设置类弹窗可分批迁移。
+- 保持任务直达链接、`reviewKey` 参数、调度队列、失败通知入口和现有轮询行为。
+
+边界：
+- 不改任务详情 API 契约。
+- 不重写 diff viewer 或 patch preview 逻辑。
+- 不改变 AI Review 结果展示语义。
+
+完成后运行 `scripts/run-frontend.cmd build`，并停止等待验证。
+```
+
+## 阶段 5.6 Prompt
+
+```text
+请只落地 docs/39 的阶段 5.6：设置页和版本更新页 MUI 迁移。
+
+目标：
+- 迁移设置页、版本更新页和接入帮助页的页面壳与主要 surface。
+- 设置页复杂表单按模块逐步迁移，优先保持配置保存和测试连接稳定。
+- 版本更新页可改为 MUI 风格时间线或列表。
+
+边界：
+- 不改 Provider、Profile、项目组、钉钉 webhook、Push 审核策略 API 契约。
+- 不一次性重写所有设置表单组件。
+
+完成后运行 `scripts/run-frontend.cmd build`，并停止等待验证。
 ```

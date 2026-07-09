@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10：第一个评估驱动的业务 Retriever` 已落地；源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 前端重构专项见 `docs/39-review-accuracy-and-material-ui-roadmap.md`，当前已完成阶段 3 Context Pack 裁剪规则升级，等待用户验证。
+- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10：第一个评估驱动的业务 Retriever` 已落地；源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 前端重构专项见 `docs/39-review-accuracy-and-material-ui-roadmap.md`，当前已完成阶段 5.4 质量治理高级诊断统一壳，等待用户验证。
 - 完整产品目标：`docs/37-review-platform-target-product-roadmap.md`。本文件负责近期阶段推进，`docs/37` 负责最终产品形态和长期路线。
 - 关联历史文档：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`：V2 反馈学习、项目策略、Context Pack 和高准确模式阶段记录。
@@ -374,11 +374,13 @@ finding 展示必须清楚：
 
 ## 八、当前下一步
 
-当前 M10 第一个评估驱动的业务 Retriever 已落地。当前专项已完成 `docs/39` 阶段 1、阶段 2 和阶段 3，下一阶段需等待用户确认后进入：
+当前 M10 第一个评估驱动的业务 Retriever 已落地。当前专项已完成 `docs/39` 阶段 1、阶段 2、阶段 3、阶段 4、阶段 5 第一小步、阶段 5.2、阶段 5.3 和阶段 5.4，下一阶段需等待用户确认后进入：
 
 ```text
-docs/39 阶段 4：质量治理页面收敛
+docs/39 阶段 5.5：任务列表和任务详情主框架 MUI 迁移
 ```
+
+阶段 5 后续 UI 迁移必须沿用质量看板已确认的偏好：后台页面保持紧凑、可扫描，不做大 Hero；页头采用左侧标题说明、右侧操作入口；宽屏按钮不拉伸；Top 维度和记录类内容继续用表格；配色避免大面积绿色，优先蓝 / 粉等明快色系和白底多色强调线。
 
 ### M1 落地记录（2026-07-01）
 
@@ -483,6 +485,46 @@ docs/39 阶段 4：质量治理页面收敛
 - 解决的缺口：补齐 Context Pack 从顺序删除 snippets 到证据优先级、分层预算和预算审计的升级，降低预算紧张时误把缺失证据当成无风险的概率。
 - 如何验证：运行 `tests/unit/test_local_retriever.py`、`tests/unit/test_review_context_pack.py`、`tests/unit/test_code_quality_prompt.py`，并补跑 `test_code_quality_api_contract.py` 中 Context Pack / Local Reference / retry same-file context 相关 contract 用例。
 - 下一阶段：`docs/39` 阶段 4 质量治理页面收敛；未经用户确认不继续推进。
+
+### docs/39 阶段 4 落地记录（2026-07-09）
+
+- 改了什么：顶部“质量治理”下拉统一承载质量看板、评估样本、规则缺口、验收记录和回放记录；规则缺口、验收记录和回放记录继续保留直接路由与后端能力；质量治理页面页头不再散落跨页导航按钮；反馈池继续受 `VITE_REVIEW_LEARNING_UI_ENABLED` feature flag 控制，默认隐藏。
+- 为什么做：让质量治理导航集中在一个下拉框里，避免页面页头和顶部导航重复承载跨页跳转；规则缺口、验收记录和回放记录仍作为诊断支撑，但入口位置更清晰。
+- 解决的缺口：完成质量治理入口收敛，前端入口与 `docs/38` 生命周期定位保持一致。
+- 如何验证：运行 `scripts/run-frontend.cmd build`；确认顶部“质量治理”下拉可进入“质量看板 / 评估样本 / 规则缺口 / 验收记录 / 回放记录”，直接访问 `/rule-gaps`、`/acceptance-gates`、`/evaluation-runs` 仍可用，质量治理页面页头不再出现跨页导航按钮。
+- 下一阶段：`docs/39` 阶段 5 Material Design 3 / MUI 前端重构第一小步；未经用户确认不继续推进。
+
+### docs/39 阶段 5 第一小步落地记录（2026-07-09）
+
+- 改了什么：前端新增 MUI / Emotion 依赖，增加 `MuiAppShell`、MUI `ThemeProvider`、`CssBaseline` 和 light / dark color schemes；旧 Ant Design 页面短期继续共存。
+- 为什么做：先搭好 Material Design 3 / MUI 基础设施，让后续质量看板和评估样本能逐页迁移，避免一次性重构整个前端视觉系统。
+- 解决的缺口：补齐 MUI 主题、App Shell 和依赖基础，进入可分阶段迁移状态。
+- 如何验证：运行 `scripts/run-frontend.cmd build`，确认生产构建通过。
+- 下一阶段：`docs/39` 阶段 5.2 质量看板 MUI 布局迁移；未经用户确认不继续推进。
+
+### docs/39 阶段 5.2 落地记录（2026-07-09）
+
+- 改了什么：质量看板页面壳、页头、筛选区、指标卡、治理摘要和规则缺口归因摘要容器迁移到 MUI；按浏览器反馈收敛为后台密度布局，修正浅色背景上的低对比文字和过大的顶部按钮；页头改为左侧标题说明、右侧仅保留本页刷新操作；主题主色从绿色改为蓝 / 粉系，指标卡改为白底多色强调线；MUI 主题先固定为 light palette，避免 Ant Design 与 MUI 共存阶段受系统暗色偏好影响；维度表格继续使用 Ant Design Table；数据请求、过滤参数和 `/api/review-quality/dashboard` 契约不变。
+- 为什么做：让质量治理主入口先出现可见的 Material 3 风格变化，同时控制迁移范围，避免复杂表格和其它页面被连带重构。
+- 解决的缺口：补齐阶段 5.1 “有基础设施但页面无明显变化”的体验缺口，质量看板成为第一批 MUI 布局页面。
+- 如何验证：运行 `scripts/run-frontend.cmd build`，确认生产构建通过；质量看板仍支持项目、Provider、Profile、风险类型和 verdict 筛选；规则缺口、验收记录和回放记录统一从顶部“质量治理”下拉进入。
+- 下一阶段：`docs/39` 阶段 5.3 评估样本 MUI 布局迁移；未经用户确认不继续推进。
+
+### docs/39 阶段 5.3 落地记录（2026-07-09）
+
+- 改了什么：评估样本页面壳、页头、筛选区和规则缺口归因弹窗迁移到 MUI；沿用质量看板确认的后台密度、左标题右操作页头和紧凑按钮，页头不放跨页导航按钮；样本列表和 Rule Gap 摘要继续使用 Ant Design Table；`/api/evaluation-cases` 和归因 API 契约不变。
+- 为什么做：让质量治理两个默认入口具备一致的 MUI 布局和操作体验，同时保留宽表扫描、任务跳转和归因保存等既有行为。
+- 解决的缺口：补齐评估样本页在阶段 5 迁移中的主入口一致性，进入质量治理高级诊断页统一壳之前，先稳定默认入口体验。
+- 如何验证：运行 `scripts/run-frontend.cmd build`，确认生产构建通过；评估样本仍支持项目、Provider、Profile、风险类型和 verdict 筛选，任务跳转、编辑归因和保存归因不回归。
+- 下一阶段：`docs/39` 阶段 5.4 质量治理高级诊断统一壳；未经用户确认不继续推进。
+
+### docs/39 阶段 5.4 落地记录（2026-07-09）
+
+- 改了什么：新增统一 MUI 高级诊断页壳，规则缺口诊断、验收记录、验收详情、回放记录和回放详情统一使用高级诊断标签、左标题右操作页头、直接路由说明和 MUI surface；页头右侧仅保留本页必要操作，跨页导航统一回到顶部“质量治理”下拉；筛选容器和列表容器改为 MUI Paper；复杂统计图、Tabs、宽表、详情 Descriptions 和验收记录创建 / 编辑 Modal 继续保留既有实现。
+- 为什么做：规则缺口、验收记录和回放记录需要视觉定位一致，但跨页导航应集中在顶部“质量治理”下拉框，避免页头按钮和顶部导航重复。
+- 解决的缺口：补齐质量治理高级诊断页的一致页面壳，为后续任务列表和任务详情主框架迁移腾出默认入口和诊断入口之间的视觉层级。
+- 如何验证：运行 `scripts/run-frontend.cmd build`，确认生产构建通过；直接访问 `/rule-gaps`、`/acceptance-gates`、`/acceptance-gates/{gateId}`、`/evaluation-runs`、`/evaluation-runs/{runId}`，筛选、刷新、详情跳转和创建 / 编辑验收记录不回归。
+- 下一阶段：`docs/39` 阶段 5.5 任务列表和任务详情主框架 MUI 迁移；未经用户确认不继续推进。
 
 暂不建议进入：
 

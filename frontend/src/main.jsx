@@ -4,11 +4,14 @@ import { BrowserRouter } from 'react-router-dom';
 import 'antd/dist/reset.css';
 import './styles.css';
 import App from './App.jsx';
+import { MuiAppShell } from './MuiAppShell.jsx';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <MuiAppShell>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </MuiAppShell>
   </React.StrictMode>
 );

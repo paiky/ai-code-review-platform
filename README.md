@@ -5,7 +5,7 @@
 代码目录：
 
 - `backend-python/`：当前主后端，FastAPI 实现，后续功能开发默认在这里落地。
-- `frontend/`：React + Ant Design 前端。
+- `frontend/`：React 前端，当前 Ant Design 页面为主，已接入 Material Design 3 / MUI 基础设施用于后续分阶段迁移。
 - `docs/`：设计、API、schema 与实施计划文档。
 - `examples/`：Webhook 与手动审查示例请求。
 - `scripts/`：本地启动与 Docker 打包脚本。
@@ -954,7 +954,7 @@ Evaluation Run 用于记录一次离线评估或 Review 回放的 baseline / can
 
 前端最小入口：
 
-- 顶部导航“质量治理 -> 回放记录”可查看 run 列表。
+- 回放记录是高级诊断页；可从顶部“质量治理 -> 回放记录”进入，也可直接访问 `/evaluation-runs` 查看 run 列表。
 - 回放详情页展示 sample set、Provider、Profile、model、prompt hash、Context Pack / Retriever / 规则缺口版本、baseline / candidate、状态、耗时和 item 摘要。
 
 基于已有评估样本创建 run：
@@ -1008,6 +1008,7 @@ Invoke-RestMethod "http://localhost:8090/api/evaluation-runs?projectId=1&provide
 - 顶部导航“质量治理 -> 质量看板”。
 - 支持按项目、Provider、Profile、风险类型、verdict 过滤。
 - 展示样本数、误判数 / 率、上下文不足数 / 率、等级偏高 / 偏低、重复 finding、漏报样本，以及项目 / Provider / Profile / 风险类型维度聚合表。
+- 规则缺口诊断、验收记录和回放记录统一放在顶部“质量治理”下拉框中；这些页面保留直接路由和后端能力。
 
 命令行验证：
 
@@ -1030,7 +1031,7 @@ M8 把规则缺口从 task 级近似推进到 evaluation case / finding 级人�
 
 - 顶部导航“质量治理 -> 评估样本”列表中可点击“编辑归因”，查看自动带入的安全 rule gap 摘要并保存归因类型。
 - “质量看板”展示已归因样本数、未归因样本数、归因类型分布和关联 verdict 分布。
-- “规则缺口”看板的推荐项会区分“高频观察”和“样本证明 / 样本 + 高频”。
+- “规则缺口”看板是高级诊断页，可从顶部“质量治理 -> 规则缺口”进入，也可直接访问 `/rule-gaps`；推荐项会区分“高频观察”和“样本证明 / 样本 + 高频”。
 
 命令行验证：
 
@@ -1059,7 +1060,7 @@ M9 用“验收记录”记录规则、Retriever、Prompt、Context Pack、确�
 
 前端最小入口：
 
-- 顶部导航“质量治理 -> 验收记录”：查看、创建和编辑验收记录。
+- 验收记录是高级诊断页；可从顶部“质量治理 -> 验收记录”进入，也可直接访问 `/acceptance-gates` 查看、创建和编辑验收记录。
 - “质量看板”辅助诊断区展示验收记录数和最近验收状态。
 
 命令行验证示例：
@@ -1210,7 +1211,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/code-quality-revi
 顶部导航：
 
 - `任务`：任务列表、任务详情、提醒卡片、分析结果、AI Review 结果与执行过程、AI Review 调度队列入口。
-- `质量治理`：管理员入口，聚合质量看板、评估样本、规则缺口、验收记录和回放记录；其中验收记录与回放记录是治理能力，不是普通 Review 必经步骤。
+- `质量治理`：管理员入口，下拉框统一包含质量看板、评估样本、规则缺口、验收记录和回放记录；反馈池仍默认隐藏，仅在 feature flag 开启后展示。
 - `反馈池`：默认隐藏；前端构建时启用 `VITE_REVIEW_LEARNING_UI_ENABLED=true` 后会出现在“质量治理”中，可查看风险项 / finding 反馈，继续启用 `VITE_PROJECT_REVIEW_POLICY_UI_ENABLED=true` 后可筛选建议沉淀反馈并管理项目策略。
 - 右上角通知图标：查看最近 24 小时内 AI Review 执行失败记录，并可跳转任务详情。
 - `设置`：全局设置、模型 Provider 配置、AI Review 设置、项目组 / 端类型配置、启用的卡片提醒类型；Push 审核策略在 AI Review 设置中按项目组维护。

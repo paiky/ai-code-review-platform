@@ -51,6 +51,24 @@ import {
   SunOutlined,
   UnorderedListOutlined
 } from '@ant-design/icons';
+import MuiAlert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import MuiButton from '@mui/material/Button';
+import MuiCard from '@mui/material/Card';
+import CardContent from '@mui/material/CardContent';
+import Chip from '@mui/material/Chip';
+import Dialog from '@mui/material/Dialog';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogTitle from '@mui/material/DialogTitle';
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
+import MenuItem from '@mui/material/MenuItem';
+import Paper from '@mui/material/Paper';
+import MuiSelect from '@mui/material/Select';
+import Stack from '@mui/material/Stack';
+import TextField from '@mui/material/TextField';
+import MuiTypography from '@mui/material/Typography';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-bash';
@@ -6409,6 +6427,62 @@ function ruleGapRecommendationStatusTag(status) {
   return <Tag color={meta.color}>{meta.label}</Tag>;
 }
 
+function GovernanceDiagnosticsShell({ title, description, children, actions, backAction, statusLabel }) {
+  return (
+    <Box
+      sx={{
+        px: { xs: 2, md: 3 },
+        py: { xs: 2, md: 2.5 },
+        minHeight: 'calc(100vh - 64px)',
+        backgroundColor: '#f6f8fb'
+      }}
+    >
+      <Stack spacing={2.5}>
+        <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff', color: '#1f2933' }}>
+          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', lg: 'center' }}>
+            <Box sx={{ minWidth: 0, flex: '1 1 auto', maxWidth: 820 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }} flexWrap="wrap" useFlexGap>
+                {backAction}
+                <Chip size="small" color="primary" variant="outlined" label="高级诊断" sx={{ height: 24 }} />
+                {statusLabel && <Chip size="small" variant="outlined" label={statusLabel} sx={{ height: 24 }} />}
+              </Stack>
+              <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: 0.75 }}>
+                {title}
+              </MuiTypography>
+              <MuiTypography variant="body2" sx={{ color: '#5f6b76' }}>
+                {description}
+              </MuiTypography>
+            </Box>
+            {actions && (
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={1}
+                flexWrap="wrap"
+                useFlexGap
+                justifyContent="flex-end"
+                alignItems={{ xs: 'stretch', sm: 'center' }}
+                sx={{
+                  flex: '0 0 auto',
+                  width: { xs: '100%', lg: 'auto' },
+                  maxWidth: { lg: 560 },
+                  ml: { lg: 'auto' },
+                  '& .MuiButton-root': { minHeight: 36, height: 36, px: 1.75, flex: '0 0 auto' }
+                }}
+              >
+                {actions}
+              </Stack>
+            )}
+          </Stack>
+        </Paper>
+        <MuiAlert severity="info" variant="outlined" sx={{ backgroundColor: '#ffffff' }}>
+          高级诊断页用于解释质量问题、验收能力改动和查看回放记录；统一从顶部“质量治理”下拉框或直接路由进入。
+        </MuiAlert>
+        {children}
+      </Stack>
+    </Box>
+  );
+}
+
 function RuleGapDashboardPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -6684,18 +6758,13 @@ function RuleGapDashboardPage() {
   };
 
   return (
-    <div className="page-shell">
-      <div className="page-heading">
-        <div className="page-heading-main">
-          <Title level={3}>规则缺口看板</Title>
-          <Text type="secondary">
-            汇总历史审查中反复缺少的证据，帮助判断下一步最值得补什么；这里只展示统计、建议和任务跳转，不展示源码或敏感信息。
-          </Text>
-        </div>
-        <Button icon={<ReloadOutlined />} onClick={applyFilters} loading={loading}>刷新</Button>
-      </div>
-      {error && <Alert type="error" showIcon message={error} className="section-gap" />}
-      <Card className="section-gap">
+    <GovernanceDiagnosticsShell
+      title="规则缺口诊断"
+      description="汇总历史审查中反复缺少的证据，解释 Planner、Retriever 和预算裁剪为什么没有拿到足够上下文。"
+      actions={<MuiButton size="small" variant="contained" startIcon={<ReloadOutlined />} onClick={applyFilters} disabled={loading}>刷新</MuiButton>}
+    >
+      {error && <MuiAlert severity="error" variant="outlined">{error}</MuiAlert>}
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
         <Space wrap>
           <Select
             allowClear
@@ -6741,8 +6810,8 @@ function RuleGapDashboardPage() {
           <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={applyFilters}>筛选</Button>
           <Button onClick={resetFilters}>重置</Button>
         </Space>
-      </Card>
-      <Card className="section-gap">
+      </Paper>
+      <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
         <div className="rule-gap-stats-grid">
           <div className="rule-gap-chart-card">
             <div className="rule-gap-chart-main">
@@ -6789,7 +6858,7 @@ function RuleGapDashboardPage() {
             </div>
           </div>
         </div>
-      </Card>
+      </Paper>
       <Tabs
         defaultActiveKey="recommendations"
         items={[
@@ -6828,7 +6897,7 @@ function RuleGapDashboardPage() {
           }
         ]}
       />
-    </div>
+    </GovernanceDiagnosticsShell>
   );
 }
 
@@ -7637,6 +7706,9 @@ function HelpPage() {
 }
 
 function ReviewQualityDashboardPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const route = currentRoute(location);
   const [dashboard, setDashboard] = useState(null);
   const [projects, setProjects] = useState([]);
   const [filters, setFilters] = useState({
@@ -7737,179 +7809,330 @@ function ReviewQualityDashboardPage() {
     { label: '重复 finding', value: summary.duplicateFindingCount ?? 0 },
     { label: '漏报样本', value: summary.missingFindingCount ?? 0 }
   ];
+  const metricAccentColors = ['#2563eb', '#ec4899', '#f59e0b', '#8b5cf6', '#06b6d4', '#f97316', '#84cc16'];
   const replaySummary = dashboard?.replaySummary || {};
   const refinementSummary = dashboard?.refinementSummary || {};
   const deterministicSummary = dashboard?.deterministicCheckSummary || {};
   const ruleGapAttributionSummary = dashboard?.ruleGapAttributionSummary || {};
   const acceptanceGateSummary = dashboard?.acceptanceGateSummary || {};
+  const governanceSummaryRows = [
+    { label: '回放 item', value: replaySummary.itemCount ?? 0 },
+    { label: '回放完成 / 失败', value: `${replaySummary.completedCount ?? 0} / ${replaySummary.failedCount ?? 0}` },
+    { label: '回放平均耗时', value: `${replaySummary.durationMsAvg ?? 0} ms` },
+    { label: '补证据完成 / 失败', value: `${refinementSummary.completedCount ?? 0} / ${refinementSummary.failedCount ?? 0}` },
+    { label: '确定性检查 run', value: deterministicSummary.runCount ?? 0 },
+    { label: '确定性命中', value: deterministicSummary.findingCount ?? 0 },
+    {
+      label: '规则缺口已归因 / 未归因',
+      value: `${ruleGapAttributionSummary.attributedCaseCount ?? 0} / ${ruleGapAttributionSummary.unattributedCaseCount ?? 0}`
+    },
+    { label: '规则缺口已证明相关', value: ruleGapAttributionSummary.causedOrRelatedCount ?? 0 },
+    { label: '验收记录数', value: acceptanceGateSummary.recordCount ?? 0 },
+    {
+      label: '最近验收状态',
+      value: acceptanceGateSummary.latestStatus ? (
+        <Tag color={acceptanceGateStatusColor(acceptanceGateSummary.latestStatus)}>
+          {acceptanceGateStatusLabel(acceptanceGateSummary.latestStatus)}
+        </Tag>
+      ) : '-'
+    }
+  ];
+  const scopeNotes = [
+    { label: '补证据范围', value: refinementSummary.scopeNote },
+    { label: '确定性检查范围', value: deterministicSummary.scopeNote },
+    { label: '验收记录范围', value: acceptanceGateSummary.scopeNote }
+  ].filter(item => item.value);
 
   return (
-    <div className="page-shell">
-      <Space direction="vertical" size="large" className="full-width">
-        <div className="page-title-row">
-          <div>
-            <Title level={3}>质量看板</Title>
-            <Text type="secondary">面向管理员的 Review 质量治理视图，聚合评估样本、补证据、确定性检查、回放和改动记录。</Text>
-          </div>
-          <Button icon={<ReloadOutlined />} onClick={() => load()}>刷新</Button>
-        </div>
-        <Card>
-          <Space wrap className="task-filter-bar">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              className="filter-select"
-              placeholder="项目"
-              value={filters.projectId || undefined}
-              options={projectOptions}
-              onChange={value => updateFilter('projectId', value)}
-            />
-            <Input
-              allowClear
-              className="filter-input"
-              placeholder="Provider"
-              value={filters.provider}
-              onChange={event => updateFilter('provider', event.target.value)}
-              onPressEnter={() => load()}
-            />
-            <Input
-              allowClear
-              className="filter-input"
-              placeholder="Profile"
-              value={filters.profile}
-              onChange={event => updateFilter('profile', event.target.value)}
-              onPressEnter={() => load()}
-            />
-            <Input
-              allowClear
-              className="filter-input"
-              placeholder="风险类型"
-              value={filters.riskType}
-              onChange={event => updateFilter('riskType', event.target.value)}
-              onPressEnter={() => load()}
-            />
-            <Select
-              allowClear
-              className="filter-select"
-              placeholder="人工裁决"
-              value={filters.verdict || undefined}
-              options={EVALUATION_CASE_VERDICT_OPTIONS}
-              onChange={value => updateFilter('verdict', value)}
-            />
-            <Button type="primary" icon={<SearchOutlined />} onClick={() => load()}>搜索</Button>
-            <Button onClick={resetFilters}>重置</Button>
-          </Space>
-        </Card>
-        {error && <Alert type="error" showIcon message={error} />}
+    <Box
+      sx={{
+        px: { xs: 2, md: 3 },
+        py: { xs: 2, md: 2.5 },
+        minHeight: 'calc(100vh - 64px)',
+        backgroundColor: '#f6f8fb'
+      }}
+    >
+      <Stack spacing={2.5}>
+        <Paper
+          variant="outlined"
+          sx={{
+            p: { xs: 2, md: 2.25 },
+            borderRadius: 1,
+            backgroundColor: '#ffffff',
+            color: '#1f2933'
+          }}
+        >
+          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', lg: 'center' }}>
+            <Box sx={{ minWidth: 0, flex: '1 1 auto', maxWidth: 760 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
+                <Chip size="small" color="primary" variant="outlined" label="质量治理" sx={{ height: 24 }} />
+              </Stack>
+              <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: 0.75 }}>
+                质量看板
+              </MuiTypography>
+              <MuiTypography variant="body2" sx={{ color: '#5f6b76' }}>
+                面向管理员的 Review 质量治理视图，聚合评估样本、补证据、确定性检查、回放和改动记录。
+              </MuiTypography>
+            </Box>
+            <Stack
+              direction={{ xs: 'column', sm: 'row' }}
+              spacing={1}
+              flexWrap="wrap"
+              useFlexGap
+              justifyContent="flex-end"
+              alignItems={{ xs: 'stretch', sm: 'center' }}
+              sx={{
+                flex: '0 0 auto',
+                width: { xs: '100%', lg: 'auto' },
+                maxWidth: { lg: 520 },
+                ml: { lg: 'auto' },
+                '& .MuiButton-root': { minHeight: 36, height: 36, px: 1.75, flex: '0 0 auto' }
+              }}
+            >
+              <MuiButton size="small" variant="contained" startIcon={<ReloadOutlined />} onClick={() => load()}>
+                刷新
+              </MuiButton>
+            </Stack>
+          </Stack>
+        </Paper>
+
+        <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
+          <Stack spacing={2}>
+            <MuiTypography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              筛选范围
+            </MuiTypography>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: {
+                  xs: '1fr',
+                  sm: 'repeat(2, minmax(0, 1fr))',
+                  lg: '1.1fr repeat(4, minmax(136px, 1fr)) auto auto'
+                },
+                gap: 1.25,
+                alignItems: 'center'
+              }}
+            >
+              <FormControl size="small" fullWidth>
+                <InputLabel id="review-quality-project-label">项目</InputLabel>
+                <MuiSelect
+                  labelId="review-quality-project-label"
+                  label="项目"
+                  value={filters.projectId || ''}
+                  onChange={event => updateFilter('projectId', event.target.value || null)}
+                >
+                  <MenuItem value="">全部项目</MenuItem>
+                  {projectOptions.map(option => (
+                    <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                  ))}
+                </MuiSelect>
+              </FormControl>
+              <TextField
+                size="small"
+                label="Provider"
+                value={filters.provider}
+                onChange={event => updateFilter('provider', event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') load();
+                }}
+              />
+              <TextField
+                size="small"
+                label="Profile"
+                value={filters.profile}
+                onChange={event => updateFilter('profile', event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') load();
+                }}
+              />
+              <TextField
+                size="small"
+                label="风险类型"
+                value={filters.riskType}
+                onChange={event => updateFilter('riskType', event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') load();
+                }}
+              />
+              <FormControl size="small" fullWidth>
+                <InputLabel id="review-quality-verdict-label">人工裁决</InputLabel>
+                <MuiSelect
+                  labelId="review-quality-verdict-label"
+                  label="人工裁决"
+                  value={filters.verdict || ''}
+                  onChange={event => updateFilter('verdict', event.target.value || null)}
+                >
+                  <MenuItem value="">全部裁决</MenuItem>
+                  {EVALUATION_CASE_VERDICT_OPTIONS.map(option => (
+                    <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                  ))}
+                </MuiSelect>
+              </FormControl>
+              <MuiButton size="small" variant="contained" startIcon={<SearchOutlined />} onClick={() => load()} sx={{ minHeight: 40 }}>
+                搜索
+              </MuiButton>
+              <MuiButton size="small" variant="outlined" onClick={resetFilters} sx={{ minHeight: 40 }}>
+                重置
+              </MuiButton>
+            </Box>
+          </Stack>
+        </Paper>
+
+        {error && <MuiAlert severity="error" variant="outlined">{error}</MuiAlert>}
+
         <Spin spinning={loading}>
-          <Space direction="vertical" size="large" className="full-width">
-            <Row gutter={[16, 16]}>
-              {metricCards.map(item => (
-                <Col xs={24} sm={12} md={8} lg={6} xl={4} key={item.label}>
-                  <Card size="small">
-                    <Text type="secondary">{item.label}</Text>
-                    <Title level={4}>{item.value}</Title>
-                  </Card>
-                </Col>
+          <Stack spacing={2.5}>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: {
+                  xs: '1fr',
+                  sm: 'repeat(2, minmax(0, 1fr))',
+                  md: 'repeat(3, minmax(0, 1fr))',
+                  xl: 'repeat(7, minmax(0, 1fr))'
+                },
+                gap: 1.5
+              }}
+            >
+              {metricCards.map((item, index) => (
+                <MuiCard
+                  key={item.label}
+                  variant="outlined"
+                  sx={{
+                    minHeight: 98,
+                    borderRadius: 1,
+                    borderTop: `4px solid ${metricAccentColors[index % metricAccentColors.length]}`,
+                    backgroundColor: '#ffffff',
+                    color: '#1f2933'
+                  }}
+                >
+                  <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                    <MuiTypography
+                      variant="body2"
+                      sx={{
+                        color: '#5f6b76',
+                        mb: 0.75
+                      }}
+                    >
+                      {item.label}
+                    </MuiTypography>
+                    <MuiTypography variant="h6" component="div" sx={{ color: '#1f2933', fontWeight: 760, overflowWrap: 'anywhere' }}>
+                      {item.value}
+                    </MuiTypography>
+                  </CardContent>
+                </MuiCard>
               ))}
-            </Row>
-            <Row gutter={[16, 16]}>
-              <Col xs={24} lg={8}>
-                <Card title="Verdict 分布">
-                  <Table
-                    rowKey="verdict"
+            </Box>
+
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(280px, 0.8fr) minmax(0, 1.4fr)' }, gap: 1.5 }}>
+              <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
+                <MuiTypography variant="h6" sx={{ fontWeight: 720, mb: 2 }}>
+                  Verdict 分布
+                </MuiTypography>
+                <Table
+                  rowKey="verdict"
+                  size="small"
+                  columns={verdictColumns}
+                  dataSource={dashboard?.verdictDistribution || []}
+                  pagination={false}
+                />
+              </Paper>
+
+              <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ xs: 'flex-start', md: 'center' }} sx={{ mb: 2 }}>
+                  <Box>
+                    <MuiTypography variant="h6" sx={{ fontWeight: 720 }}>
+                      治理摘要
+                    </MuiTypography>
+                    <MuiTypography variant="body2" color="text.secondary">
+                      回放、补证据、确定性检查、规则缺口和验收记录的辅助诊断。
+                    </MuiTypography>
+                  </Box>
+                  <Chip
                     size="small"
-                    columns={verdictColumns}
-                    dataSource={dashboard?.verdictDistribution || []}
-                    pagination={false}
+                    color={acceptanceGateSummary.latestStatus ? 'primary' : 'default'}
+                    variant="outlined"
+                    label={acceptanceGateSummary.latestStatus ? acceptanceGateStatusLabel(acceptanceGateSummary.latestStatus) : '暂无最近验收'}
                   />
-                </Card>
-              </Col>
-              <Col xs={24} lg={16}>
-                <Card title="治理摘要">
-                  <Descriptions column={2} size="small" bordered>
-                    <Descriptions.Item label="回放 item">{replaySummary.itemCount ?? 0}</Descriptions.Item>
-                    <Descriptions.Item label="回放完成 / 失败">{replaySummary.completedCount ?? 0} / {replaySummary.failedCount ?? 0}</Descriptions.Item>
-                    <Descriptions.Item label="回放平均耗时">{replaySummary.durationMsAvg ?? 0} ms</Descriptions.Item>
-                    <Descriptions.Item label="补证据完成 / 失败">{refinementSummary.completedCount ?? 0} / {refinementSummary.failedCount ?? 0}</Descriptions.Item>
-                    <Descriptions.Item label="确定性检查 run">{deterministicSummary.runCount ?? 0}</Descriptions.Item>
-                    <Descriptions.Item label="确定性命中">{deterministicSummary.findingCount ?? 0}</Descriptions.Item>
-                    <Descriptions.Item label="规则缺口已归因 / 未归因">
-                      {ruleGapAttributionSummary.attributedCaseCount ?? 0} / {ruleGapAttributionSummary.unattributedCaseCount ?? 0}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="规则缺口已证明相关">{ruleGapAttributionSummary.causedOrRelatedCount ?? 0}</Descriptions.Item>
-                    <Descriptions.Item label="验收记录数">{acceptanceGateSummary.recordCount ?? 0}</Descriptions.Item>
-                    <Descriptions.Item label="最近验收状态">
-                      {acceptanceGateSummary.latestStatus ? (
-                        <Tag color={acceptanceGateStatusColor(acceptanceGateSummary.latestStatus)}>
-                          {acceptanceGateStatusLabel(acceptanceGateSummary.latestStatus)}
-                        </Tag>
-                      ) : '-'}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="补证据范围" span={2}>{refinementSummary.scopeNote || '-'}</Descriptions.Item>
-                    <Descriptions.Item label="确定性检查范围" span={2}>{deterministicSummary.scopeNote || '-'}</Descriptions.Item>
-                    <Descriptions.Item label="验收记录范围" span={2}>{acceptanceGateSummary.scopeNote || '-'}</Descriptions.Item>
-                  </Descriptions>
-                </Card>
-              </Col>
-            </Row>
-            <Row gutter={[16, 16]}>
-              <Col xs={24} lg={12}>
-                <Card title="规则缺口归因类型">
-                  <JsonBlock value={ruleGapAttributionSummary.attributionTypeCounts || {}} />
-                </Card>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Card title="规则缺口归因关联裁决">
-                  <JsonBlock value={ruleGapAttributionSummary.verdictCounts || {}} />
-                </Card>
-              </Col>
-            </Row>
-            <Card title="项目维度 Top">
-              <Table
-                rowKey="key"
-                size="small"
-                columns={dimensionColumns}
-                dataSource={dashboard?.dimensions?.projects || []}
-                pagination={false}
-                scroll={{ x: 1020 }}
-              />
-            </Card>
-            <Card title="Provider 维度 Top">
-              <Table
-                rowKey="key"
-                size="small"
-                columns={dimensionColumns}
-                dataSource={dashboard?.dimensions?.providers || []}
-                pagination={false}
-                scroll={{ x: 1020 }}
-              />
-            </Card>
-            <Card title="Profile 维度 Top">
-              <Table
-                rowKey="key"
-                size="small"
-                columns={dimensionColumns}
-                dataSource={dashboard?.dimensions?.profiles || []}
-                pagination={false}
-                scroll={{ x: 1020 }}
-              />
-            </Card>
-            <Card title="风险类型维度 Top">
-              <Table
-                rowKey="key"
-                size="small"
-                columns={dimensionColumns}
-                dataSource={dashboard?.dimensions?.riskTypes || []}
-                pagination={false}
-                scroll={{ x: 1020 }}
-              />
-            </Card>
-          </Space>
+                </Stack>
+                <Box
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
+                    gap: 1,
+                    mb: scopeNotes.length ? 2 : 0
+                  }}
+                >
+                  {governanceSummaryRows.map(item => (
+                    <Box
+                      key={item.label}
+                      sx={{
+                        p: 1.5,
+                        borderRadius: 2,
+                        border: theme => `1px solid ${theme.palette.divider}`,
+                        backgroundColor: '#f8fafc'
+                      }}
+                    >
+                      <MuiTypography variant="caption" sx={{ color: '#5f6b76' }}>
+                        {item.label}
+                      </MuiTypography>
+                      <MuiTypography variant="body1" sx={{ color: '#1f2933', fontWeight: 650, mt: 0.5, overflowWrap: 'anywhere' }}>
+                        {item.value}
+                      </MuiTypography>
+                    </Box>
+                  ))}
+                </Box>
+                {scopeNotes.length > 0 && (
+                  <Stack spacing={1}>
+                    {scopeNotes.map(item => (
+                      <MuiAlert key={item.label} severity="info" variant="outlined">
+                        <strong>{item.label}：</strong>{item.value}
+                      </MuiAlert>
+                    ))}
+                  </Stack>
+                )}
+              </Paper>
+            </Box>
+
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>
+              <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
+                <MuiTypography variant="h6" sx={{ fontWeight: 720, mb: 2 }}>
+                  规则缺口归因类型
+                </MuiTypography>
+                <JsonBlock value={ruleGapAttributionSummary.attributionTypeCounts || {}} />
+              </Paper>
+              <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
+                <MuiTypography variant="h6" sx={{ fontWeight: 720, mb: 2 }}>
+                  规则缺口归因关联裁决
+                </MuiTypography>
+                <JsonBlock value={ruleGapAttributionSummary.verdictCounts || {}} />
+              </Paper>
+            </Box>
+
+            {[
+              { title: '项目维度 Top', data: dashboard?.dimensions?.projects || [] },
+              { title: 'Provider 维度 Top', data: dashboard?.dimensions?.providers || [] },
+              { title: 'Profile 维度 Top', data: dashboard?.dimensions?.profiles || [] },
+              { title: '风险类型维度 Top', data: dashboard?.dimensions?.riskTypes || [] }
+            ].map(section => (
+              <Paper key={section.title} variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
+                <MuiTypography variant="h6" sx={{ fontWeight: 720, mb: 2 }}>
+                  {section.title}
+                </MuiTypography>
+                <Table
+                  rowKey="key"
+                  size="small"
+                  columns={dimensionColumns}
+                  dataSource={section.data}
+                  pagination={false}
+                  scroll={{ x: 1020 }}
+                />
+              </Paper>
+            ))}
+          </Stack>
         </Spin>
-      </Space>
-    </div>
+      </Stack>
+    </Box>
   );
 }
 
@@ -8090,64 +8313,127 @@ function EvaluationCasesPage() {
   ];
 
   return (
-    <div className="page-shell">
-      <Space direction="vertical" size="large" className="full-width">
-        <div className="page-title-row">
-          <div>
-            <Title level={3}>评估样本</Title>
-            <Text type="secondary">查看从 AI finding 或人工补充沉淀的 Review 质量评估样本。</Text>
-          </div>
-        </div>
-        <Card>
-          <Space wrap className="task-filter-bar">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              className="filter-select"
-              placeholder="项目"
-              value={filters.projectId || undefined}
-              options={projectOptions}
-              onChange={value => updateFilter('projectId', value)}
-            />
-            <Input
-              allowClear
-              className="filter-input"
-              placeholder="Provider"
-              value={filters.provider}
-              onChange={event => updateFilter('provider', event.target.value)}
-              onPressEnter={() => load({ pageNo: 1 })}
-            />
-            <Input
-              allowClear
-              className="filter-input"
-              placeholder="Profile"
-              value={filters.profile}
-              onChange={event => updateFilter('profile', event.target.value)}
-              onPressEnter={() => load({ pageNo: 1 })}
-            />
-            <Input
-              allowClear
-              className="filter-input"
-              placeholder="风险类型"
-              value={filters.riskType}
-              onChange={event => updateFilter('riskType', event.target.value)}
-              onPressEnter={() => load({ pageNo: 1 })}
-            />
-            <Select
-              allowClear
-              className="filter-select"
-              placeholder="人工裁决"
-              value={filters.verdict || undefined}
-              options={EVALUATION_CASE_VERDICT_OPTIONS}
-              onChange={value => updateFilter('verdict', value)}
-            />
-            <Button type="primary" icon={<SearchOutlined />} onClick={() => load({ pageNo: 1 })}>搜索</Button>
-            <Button onClick={resetFilters}>重置</Button>
-          </Space>
-        </Card>
-        {error && <Alert type="error" showIcon message={error} />}
-        <Card>
+    <Box
+      sx={{
+        px: { xs: 2, md: 3 },
+        py: { xs: 2, md: 2.5 },
+        minHeight: 'calc(100vh - 64px)',
+        backgroundColor: '#f6f8fb'
+      }}
+    >
+      <Stack spacing={2.5}>
+        <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff', color: '#1f2933' }}>
+          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', lg: 'center' }}>
+            <Box sx={{ minWidth: 0, flex: '1 1 auto', maxWidth: 760 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
+                <Chip size="small" color="primary" variant="outlined" label="质量治理" sx={{ height: 24 }} />
+              </Stack>
+              <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: 0.75 }}>
+                评估样本
+              </MuiTypography>
+              <MuiTypography variant="body2" sx={{ color: '#5f6b76' }}>
+                查看从 AI finding 或人工补充沉淀的 Review 质量评估样本。
+              </MuiTypography>
+            </Box>
+          </Stack>
+        </Paper>
+
+        <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
+          <Stack spacing={2}>
+            <MuiTypography variant="subtitle1" sx={{ color: '#1f2933', fontWeight: 700 }}>
+              筛选范围
+            </MuiTypography>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: {
+                  xs: '1fr',
+                  sm: 'repeat(2, minmax(0, 1fr))',
+                  lg: '1.1fr repeat(4, minmax(136px, 1fr)) auto auto'
+                },
+                gap: 1.25,
+                alignItems: 'center'
+              }}
+            >
+              <FormControl size="small" fullWidth>
+                <InputLabel id="evaluation-case-project-label">项目</InputLabel>
+                <MuiSelect
+                  labelId="evaluation-case-project-label"
+                  label="项目"
+                  value={filters.projectId || ''}
+                  onChange={event => updateFilter('projectId', event.target.value || null)}
+                >
+                  <MenuItem value="">全部项目</MenuItem>
+                  {projectOptions.map(option => (
+                    <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                  ))}
+                </MuiSelect>
+              </FormControl>
+              <TextField
+                size="small"
+                label="Provider"
+                value={filters.provider}
+                onChange={event => updateFilter('provider', event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') load({ pageNo: 1 });
+                }}
+              />
+              <TextField
+                size="small"
+                label="Profile"
+                value={filters.profile}
+                onChange={event => updateFilter('profile', event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') load({ pageNo: 1 });
+                }}
+              />
+              <TextField
+                size="small"
+                label="风险类型"
+                value={filters.riskType}
+                onChange={event => updateFilter('riskType', event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') load({ pageNo: 1 });
+                }}
+              />
+              <FormControl size="small" fullWidth>
+                <InputLabel id="evaluation-case-verdict-label">人工裁决</InputLabel>
+                <MuiSelect
+                  labelId="evaluation-case-verdict-label"
+                  label="人工裁决"
+                  value={filters.verdict || ''}
+                  onChange={event => updateFilter('verdict', event.target.value || null)}
+                >
+                  <MenuItem value="">全部裁决</MenuItem>
+                  {EVALUATION_CASE_VERDICT_OPTIONS.map(option => (
+                    <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                  ))}
+                </MuiSelect>
+              </FormControl>
+              <MuiButton size="small" variant="contained" startIcon={<SearchOutlined />} onClick={() => load({ pageNo: 1 })} sx={{ minHeight: 40 }}>
+                搜索
+              </MuiButton>
+              <MuiButton size="small" variant="outlined" onClick={resetFilters} sx={{ minHeight: 40 }}>
+                重置
+              </MuiButton>
+            </Box>
+          </Stack>
+        </Paper>
+
+        {error && <MuiAlert severity="error" variant="outlined">{error}</MuiAlert>}
+
+        <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ xs: 'flex-start', md: 'center' }} sx={{ mb: 2 }}>
+            <Box>
+              <MuiTypography variant="h6" sx={{ color: '#1f2933', fontWeight: 720 }}>
+                样本列表
+              </MuiTypography>
+              <MuiTypography variant="body2" sx={{ color: '#5f6b76' }}>
+                保留表格视图用于扫描、筛选和横向比较。
+              </MuiTypography>
+            </Box>
+            <Chip size="small" variant="outlined" color="primary" label={`共 ${pagination.total || 0} 条`} />
+          </Stack>
           <Table
             rowKey="id"
             loading={loading}
@@ -8163,74 +8449,122 @@ function EvaluationCasesPage() {
               onChange: (pageNo, pageSize) => load({ pageNo, pageSize })
             }}
           />
-        </Card>
-        <Modal
-          title="编辑规则缺口归因"
+        </Paper>
+
+        <Dialog
           open={attributionModalOpen}
-          onCancel={() => setAttributionModalOpen(false)}
-          onOk={saveAttribution}
-          confirmLoading={attributionSubmitting}
-          okText="保存归因"
-          cancelText="取消"
-          width={760}
+          onClose={() => setAttributionModalOpen(false)}
+          fullWidth
+          maxWidth="md"
+          PaperProps={{ sx: { borderRadius: 1 } }}
         >
-          <Space direction="vertical" size="middle" className="full-width">
-            <Alert
-              type="info"
-              showIcon
-              message="归因只用于质量诊断"
-              description="不会修改原 AI Review 结果、finding 等级、Prompt、项目策略，也不会触发 Retriever 或门禁。"
-            />
-            <Descriptions size="small" column={2} bordered>
-              <Descriptions.Item label="Case ID">{editingAttributionCase?.id || '-'}</Descriptions.Item>
-              <Descriptions.Item label="裁决">{evaluationCaseVerdictLabel(editingAttributionCase?.verdict)}</Descriptions.Item>
-              <Descriptions.Item label="任务">{editingAttributionCase?.taskId || '-'}</Descriptions.Item>
-              <Descriptions.Item label="Review Key">{editingAttributionCase?.reviewKey || '-'}</Descriptions.Item>
-            </Descriptions>
-            <Select
-              allowClear
-              className="full-width"
-              placeholder="选择归因类型"
-              value={attributionDraft.attributionType || undefined}
-              options={RULE_GAP_ATTRIBUTION_OPTIONS}
-              onChange={value => setAttributionDraft(current => ({ ...current, attributionType: value || null }))}
-            />
-            <Input
-              allowClear
-              placeholder="归因人，例如 reviewer / admin"
-              value={attributionDraft.attributedBy}
-              onChange={event => setAttributionDraft(current => ({ ...current, attributedBy: event.target.value }))}
-            />
-            <Input.TextArea
-              rows={3}
-              maxLength={4000}
-              placeholder="归因说明"
-              value={attributionDraft.comment}
-              onChange={event => setAttributionDraft(current => ({ ...current, comment: event.target.value }))}
-            />
-            <Card size="small" title="安全 Rule Gap 摘要">
-              {safeArray(attributionDraft.ruleGapSummary).length ? (
-                <Table
-                  rowKey={(row, index) => row.summaryKey || `${row.gapType}-${row.signal}-${index}`}
-                  size="small"
-                  pagination={false}
-                  columns={[
-                    { title: '缺口类型', dataIndex: 'gapType', width: 190, render: value => <Tag color="orange">{value || '-'}</Tag> },
-                    { title: 'Signal', dataIndex: 'signal', width: 180, ellipsis: true },
-                    { title: 'Requested Context', dataIndex: 'requestedContext', width: 180, ellipsis: true },
-                    { title: '建议能力', dataIndex: 'suggestedCapability', ellipsis: true }
-                  ]}
-                  dataSource={safeArray(attributionDraft.ruleGapSummary)}
-                  scroll={{ x: 760 }}
-                />
-              ) : (
-                <Empty description="暂无 rule gap 摘要；可先从有高准确模式流转的 AI finding 创建样本" />
-              )}
-            </Card>
-          </Space>
-        </Modal>
-      </Space>
-    </div>
+          <DialogTitle sx={{ pb: 1 }}>
+            <MuiTypography variant="h6" component="div" sx={{ color: '#1f2933', fontWeight: 750 }}>
+              编辑规则缺口归因
+            </MuiTypography>
+            <MuiTypography variant="body2" sx={{ color: '#5f6b76', mt: 0.5 }}>
+              归因只用于质量诊断，不会修改原 AI Review 结果、Prompt 或项目策略。
+            </MuiTypography>
+          </DialogTitle>
+          <DialogContent dividers>
+            <Stack spacing={2}>
+              <MuiAlert severity="info" variant="outlined">
+                不会触发 Retriever、门禁、自动降级或自动忽略 finding。
+              </MuiAlert>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
+                  gap: 1
+                }}
+              >
+                {[
+                  { label: 'Case ID', value: editingAttributionCase?.id || '-' },
+                  { label: '裁决', value: evaluationCaseVerdictLabel(editingAttributionCase?.verdict) },
+                  { label: '任务', value: editingAttributionCase?.taskId || '-' },
+                  { label: 'Review Key', value: editingAttributionCase?.reviewKey || '-' }
+                ].map(item => (
+                  <Box
+                    key={item.label}
+                    sx={{
+                      p: 1.5,
+                      borderRadius: 1,
+                      border: theme => `1px solid ${theme.palette.divider}`,
+                      backgroundColor: '#f8fafc'
+                    }}
+                  >
+                    <MuiTypography variant="caption" sx={{ color: '#5f6b76' }}>{item.label}</MuiTypography>
+                    <MuiTypography variant="body2" sx={{ color: '#1f2933', fontWeight: 650, mt: 0.5, overflowWrap: 'anywhere' }}>
+                      {item.value}
+                    </MuiTypography>
+                  </Box>
+                ))}
+              </Box>
+              <FormControl size="small" fullWidth>
+                <InputLabel id="rule-gap-attribution-type-label">归因类型</InputLabel>
+                <MuiSelect
+                  labelId="rule-gap-attribution-type-label"
+                  label="归因类型"
+                  value={attributionDraft.attributionType || ''}
+                  onChange={event => setAttributionDraft(current => ({ ...current, attributionType: event.target.value || null }))}
+                >
+                  <MenuItem value="">未选择</MenuItem>
+                  {RULE_GAP_ATTRIBUTION_OPTIONS.map(option => (
+                    <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                  ))}
+                </MuiSelect>
+              </FormControl>
+              <TextField
+                size="small"
+                label="归因人"
+                placeholder="例如 reviewer / admin"
+                value={attributionDraft.attributedBy}
+                onChange={event => setAttributionDraft(current => ({ ...current, attributedBy: event.target.value }))}
+              />
+              <TextField
+                size="small"
+                multiline
+                minRows={3}
+                label="归因说明"
+                inputProps={{ maxLength: 4000 }}
+                value={attributionDraft.comment}
+                onChange={event => setAttributionDraft(current => ({ ...current, comment: event.target.value }))}
+              />
+              <Paper variant="outlined" sx={{ p: 2, borderRadius: 1 }}>
+                <MuiTypography variant="subtitle1" sx={{ color: '#1f2933', fontWeight: 700, mb: 1.5 }}>
+                  安全 Rule Gap 摘要
+                </MuiTypography>
+                {safeArray(attributionDraft.ruleGapSummary).length ? (
+                  <Table
+                    rowKey={(row, index) => row.summaryKey || `${row.gapType}-${row.signal}-${index}`}
+                    size="small"
+                    pagination={false}
+                    columns={[
+                      { title: '缺口类型', dataIndex: 'gapType', width: 190, render: value => <Tag color="orange">{value || '-'}</Tag> },
+                      { title: 'Signal', dataIndex: 'signal', width: 180, ellipsis: true },
+                      { title: 'Requested Context', dataIndex: 'requestedContext', width: 180, ellipsis: true },
+                      { title: '建议能力', dataIndex: 'suggestedCapability', ellipsis: true }
+                    ]}
+                    dataSource={safeArray(attributionDraft.ruleGapSummary)}
+                    scroll={{ x: 760 }}
+                  />
+                ) : (
+                  <Empty description="暂无 rule gap 摘要；可先从有高准确模式流转的 AI finding 创建样本" />
+                )}
+              </Paper>
+            </Stack>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, py: 1.5 }}>
+            <MuiButton variant="outlined" onClick={() => setAttributionModalOpen(false)}>
+              取消
+            </MuiButton>
+            <MuiButton variant="contained" onClick={saveAttribution} disabled={attributionSubmitting}>
+              保存归因
+            </MuiButton>
+          </DialogActions>
+        </Dialog>
+      </Stack>
+    </Box>
   );
 }
 
@@ -8401,22 +8735,15 @@ function AcceptanceGatesPage() {
   ];
 
   return (
-    <div className="page-shell">
-      <Space direction="vertical" size="large" className="full-width">
-        <div className="page-title-row">
-          <div>
-            <Title level={3}>验收记录</Title>
-            <Text type="secondary">记录规则、Retriever、Prompt、Context Pack、确定性检查或 Provider 改动的人工准入和退出验收。</Text>
-          </div>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建验收记录</Button>
-        </div>
-        <Alert
-          type="info"
-          showIcon
-          message="人工治理门禁"
-          description="验收记录不会阻断线上 Review、代码合并或运行时流程，也不会自动修改 Prompt、项目策略或 finding。"
-        />
-        <Card>
+    <GovernanceDiagnosticsShell
+      title="验收记录"
+      description="记录规则、Retriever、Prompt、Context Pack、确定性检查或 Provider 改动的人工准入和退出验收。"
+      actions={<MuiButton size="small" variant="contained" startIcon={<PlusOutlined />} onClick={openCreate}>新建验收记录</MuiButton>}
+    >
+        <MuiAlert severity="info" variant="outlined" sx={{ backgroundColor: '#ffffff' }}>
+          验收记录不会阻断线上 Review、代码合并或运行时流程，也不会自动修改 Prompt、项目策略或 finding。
+        </MuiAlert>
+        <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
           <Space wrap className="task-filter-bar">
             <Select
               allowClear
@@ -8450,9 +8777,9 @@ function AcceptanceGatesPage() {
             <Button type="primary" icon={<SearchOutlined />} onClick={() => load({ pageNo: 1 })}>搜索</Button>
             <Button onClick={resetFilters}>重置</Button>
           </Space>
-        </Card>
-        {error && <Alert type="error" showIcon message={error} />}
-        <Card>
+        </Paper>
+        {error && <MuiAlert severity="error" variant="outlined">{error}</MuiAlert>}
+        <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
           <Table
             rowKey="id"
             loading={loading}
@@ -8468,7 +8795,7 @@ function AcceptanceGatesPage() {
               onChange: (pageNo, pageSize) => load({ pageNo, pageSize })
             }}
           />
-        </Card>
+        </Paper>
         <AcceptanceGateModal
           open={modalOpen}
           projects={projectOptions}
@@ -8479,8 +8806,7 @@ function AcceptanceGatesPage() {
           onCancel={() => setModalOpen(false)}
           onOk={saveGate}
         />
-      </Space>
-    </div>
+    </GovernanceDiagnosticsShell>
   );
 }
 
@@ -8605,19 +8931,14 @@ function AcceptanceGateDetailPage() {
   ];
 
   return (
-    <div className="page-shell">
-      <Space direction="vertical" size="large" className="full-width">
-        <div className="page-title-row">
-          <Space>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(backTarget)}>返回</Button>
-            <div>
-              <Title level={3}>{gate?.title || '验收详情'}</Title>
-              <Text type="secondary">人工准入和退出验收记录，不阻断线上 Review 或合并流程。</Text>
-            </div>
-          </Space>
-          <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-        </div>
-        {error && <Alert type="error" showIcon message={error} />}
+    <GovernanceDiagnosticsShell
+      title={gate?.title || '验收详情'}
+      description="人工准入和退出验收记录，不阻断线上 Review 或合并流程。"
+      backAction={<MuiButton size="small" variant="outlined" startIcon={<ArrowLeftOutlined />} onClick={() => navigate(backTarget)}>返回</MuiButton>}
+      actions={<MuiButton size="small" variant="contained" startIcon={<ReloadOutlined />} onClick={load}>刷新</MuiButton>}
+      statusLabel={gate?.status ? acceptanceGateStatusLabel(gate.status) : undefined}
+    >
+        {error && <MuiAlert severity="error" variant="outlined">{error}</MuiAlert>}
         <Spin spinning={loading}>
           {gate ? (
             <Space direction="vertical" size="large" className="full-width">
@@ -8681,8 +9002,7 @@ function AcceptanceGateDetailPage() {
             !loading && <Empty description="暂无验收记录详情" />
           )}
         </Spin>
-      </Space>
-    </div>
+    </GovernanceDiagnosticsShell>
   );
 }
 
@@ -8865,15 +9185,11 @@ function EvaluationRunsPage() {
   ];
 
   return (
-    <div className="page-shell">
-      <Space direction="vertical" size="large" className="full-width">
-        <div className="page-title-row">
-          <div>
-            <Title level={3}>回放记录</Title>
-            <Text type="secondary">查看 evaluation run / review replay run 的版本记录和样本结果摘要。</Text>
-          </div>
-        </div>
-        <Card>
+    <GovernanceDiagnosticsShell
+      title="回放记录"
+      description="查看 evaluation run / review replay run 的版本记录和样本结果摘要，用于支撑能力改动验收。"
+    >
+        <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
           <Space wrap className="task-filter-bar">
             <Select
               allowClear
@@ -8920,9 +9236,9 @@ function EvaluationRunsPage() {
             <Button type="primary" icon={<SearchOutlined />} onClick={() => load({ pageNo: 1 })}>搜索</Button>
             <Button onClick={resetFilters}>重置</Button>
           </Space>
-        </Card>
-        {error && <Alert type="error" showIcon message={error} />}
-        <Card>
+        </Paper>
+        {error && <MuiAlert severity="error" variant="outlined">{error}</MuiAlert>}
+        <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
           <Table
             rowKey="id"
             loading={loading}
@@ -8938,9 +9254,8 @@ function EvaluationRunsPage() {
               onChange: (pageNo, pageSize) => load({ pageNo, pageSize })
             }}
           />
-        </Card>
-      </Space>
-    </div>
+        </Paper>
+    </GovernanceDiagnosticsShell>
   );
 }
 
@@ -9000,19 +9315,14 @@ function EvaluationRunDetailPage() {
   ];
 
   return (
-    <div className="page-shell">
-      <Space direction="vertical" size="large" className="full-width">
-        <div className="page-title-row">
-          <Space>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(backTarget)}>返回</Button>
-            <div>
-              <Title level={3}>回放详情</Title>
-              <Text type="secondary">Run #{runId}</Text>
-            </div>
-          </Space>
-          <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-        </div>
-        {error && <Alert type="error" showIcon message={error} />}
+    <GovernanceDiagnosticsShell
+      title="回放详情"
+      description={`Run #${runId} 的版本记录、baseline / candidate 摘要和样本结果。`}
+      backAction={<MuiButton size="small" variant="outlined" startIcon={<ArrowLeftOutlined />} onClick={() => navigate(backTarget)}>返回</MuiButton>}
+      actions={<MuiButton size="small" variant="contained" startIcon={<ReloadOutlined />} onClick={load}>刷新</MuiButton>}
+      statusLabel={run?.status ? evaluationRunStatusLabel(run.status) : undefined}
+    >
+        {error && <MuiAlert severity="error" variant="outlined">{error}</MuiAlert>}
         <Spin spinning={loading}>
           {run ? (
             <Space direction="vertical" size="large" className="full-width">
@@ -9072,8 +9382,7 @@ function EvaluationRunDetailPage() {
             !loading && <Empty description="暂无回放记录" />
           )}
         </Spin>
-      </Space>
-    </div>
+    </GovernanceDiagnosticsShell>
   );
 }
 

@@ -1987,3 +1987,34 @@ LOCAL_REPO_MIRROR_RETENTION_DAYS=180
 ```
 
 4. mirror 是项目级源码缓存，建议长期保留；worktree 是 task 级临时 checkout，不建议永久保留。
+
+## 86. Codex / Windows 沙箱内新增 npm 依赖可能被用户目录 cache 权限阻断
+
+现象：
+
+在前端新增依赖时，沙箱内执行：
+
+```powershell
+npm.cmd install --save-exact @mui/material @emotion/react @emotion/styled
+```
+
+可能失败：
+
+```text
+EPERM: operation not permitted, open 'C:\Users\<user>\AppData\Local\npm-cache\_cacache\tmp\...'
+```
+
+原因：
+
+npm 默认 cache 位于用户目录，Codex 沙箱命令可能没有权限写入该目录，同时安装新依赖还需要访问 registry。
+这类错误不代表 `package.json`、`package-lock.json` 或依赖版本本身一定有问题。
+
+处理方式：
+
+1. 如果任务确实需要新增依赖，按权限规则请求用户授权后重跑同一条 `npm.cmd install ...`。
+2. 不要手工拼 `package-lock.json` 或只改 `package.json` 伪造安装结果。
+3. 安装后继续通过仓库脚本验证：
+
+```powershell
+.\scripts\run-frontend.cmd build
+```

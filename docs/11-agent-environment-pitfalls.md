@@ -104,6 +104,14 @@ codegraph.cmd index --force
 
 ## Docker 与部署
 
+- Codex / Windows 沙箱中执行 `npm install` 可能因为 npm 默认 cache 位于用户目录而失败，例如：
+
+```text
+EPERM: operation not permitted, open 'C:\Users\<user>\AppData\Local\npm-cache\_cacache\tmp\...'
+```
+
+  这通常不是 `package.json` 或 lockfile 本身损坏，而是命令需要写入沙箱外 npm cache 或访问 registry。若本次任务确实需要新增依赖，应按权限规则请求用户授权后重跑同一条 `npm.cmd install ...`；不要手工改 lockfile 伪造安装结果。
+
 - `scripts/package-docker-deploy.cmd` 依赖 Docker CLI 和 Docker Engine。执行前先启动 Docker Desktop，并确认：
 
 ```powershell
