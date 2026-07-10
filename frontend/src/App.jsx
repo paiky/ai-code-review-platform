@@ -1576,6 +1576,65 @@ function MaintenanceArtifacts({ artifacts }) {
   );
 }
 
+function TaskWorkspaceShell({ title, description, actions, children, leading }) {
+  return (
+    <Box
+      sx={{
+        px: { xs: 2, md: 3 },
+        py: { xs: 2, md: 2.5 },
+        minHeight: 'calc(100vh - 64px)',
+        backgroundColor: '#f6f8fb'
+      }}
+    >
+      <Stack spacing={2.5}>
+        <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
+          <Stack
+            direction={{ xs: 'column', lg: 'row' }}
+            spacing={2}
+            justifyContent="space-between"
+            alignItems={{ xs: 'stretch', lg: 'center' }}
+          >
+            <Box sx={{ minWidth: 0, flex: '1 1 auto', maxWidth: 900 }}>
+              {leading && (
+                <Box sx={{ mb: 0.75 }}>
+                  {leading}
+                </Box>
+              )}
+              <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: 0.75, color: '#1f2933' }}>
+                {title}
+              </MuiTypography>
+              {description && (
+                <MuiTypography variant="body2" sx={{ color: '#5f6b76' }}>
+                  {description}
+                </MuiTypography>
+              )}
+            </Box>
+            {actions && (
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={1}
+                flexWrap="wrap"
+                useFlexGap
+                justifyContent="flex-end"
+                alignItems={{ xs: 'stretch', sm: 'center' }}
+                sx={{
+                  flex: '0 0 auto',
+                  width: { xs: '100%', lg: 'auto' },
+                  ml: { lg: 'auto' },
+                  '& .MuiButton-root': { minHeight: 36, height: 36, px: 1.75, flex: '0 0 auto' }
+                }}
+              >
+                {actions}
+              </Stack>
+            )}
+          </Stack>
+        </Paper>
+        {children}
+      </Stack>
+    </Box>
+  );
+}
+
 function TaskList({ onOpen }) {
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState('');
@@ -1656,9 +1715,12 @@ function TaskList({ onOpen }) {
   ];
 
   return (
-    <div className="page-shell">
-      <div className="page-heading">
-        <Space>
+    <TaskWorkspaceShell
+      title="任务列表"
+      description="查看 GitLab MR、Push 和手动审查任务，按项目、端类型、触发类型和 Review 状态筛选。"
+    >
+      <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
+        <Space wrap className="task-filter-bar">
           <Cascader
             allowClear
             changeOnSelect
@@ -1707,9 +1769,9 @@ function TaskList({ onOpen }) {
           />
           <Button type="primary" onClick={() => load({ pageNo: 1 })}>搜索</Button>
         </Space>
-      </div>
+      </Paper>
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
-      <Card>
+      <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
         <Table
           rowKey="id"
           loading={loading}
@@ -1724,8 +1786,8 @@ function TaskList({ onOpen }) {
             onChange: (pageNo, pageSize) => load({ pageNo, pageSize })
           }}
         />
-      </Card>
-    </div>
+      </Paper>
+    </TaskWorkspaceShell>
   );
 }
 
@@ -4560,41 +4622,57 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     ? activeTabKey
     : tabItems[0]?.key;
 
+  const canRerunTask = Boolean(detail && ['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(detail.triggerType));
+  const taskHeaderTitle = detail ? taskTitle(detail) : `任务 #${taskId}`;
+  const taskHeaderDescription = detail
+    ? branchSummary(detail)
+    : '查看任务提醒卡片、AI Review 结果、高准确模式流转和确定性检查。';
+  const detailActions = (
+    <>
+      <MuiButton
+        variant="outlined"
+        startIcon={<ArrowLeftOutlined />}
+        onClick={onBack}
+      >
+        返回上一层
+      </MuiButton>
+      <MuiButton
+        variant="contained"
+        startIcon={<ReloadOutlined />}
+        disabled={!canRerunTask || rerunning}
+        onClick={rerunReviewTask}
+      >
+        {rerunning ? '执行中' : '重新执行审阅'}
+      </MuiButton>
+      <MuiButton
+        variant="outlined"
+        disabled={!canRerunTask || rerunning}
+        onClick={cloneAndRerunReviewTask}
+      >
+        复制为新任务重跑
+      </MuiButton>
+    </>
+  );
+
   return (
-    <div className="page-shell">
-      <Space className="detail-toolbar">
-        <Button icon={<ArrowLeftOutlined />} onClick={onBack}>返回上一层</Button>
-        <Button
-          type="primary"
-          icon={<ReloadOutlined />}
-          loading={rerunning}
-          disabled={!detail || !['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(detail.triggerType)}
-          onClick={rerunReviewTask}
-        >
-          重新执行审阅
-        </Button>
-        <Button
-          disabled={!detail || rerunning || !['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(detail.triggerType)}
-          onClick={cloneAndRerunReviewTask}
-        >
-          复制为新任务重跑
-        </Button>
-      </Space>
+    <TaskWorkspaceShell
+      title={taskHeaderTitle}
+      description={taskHeaderDescription}
+      actions={detailActions}
+    >
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
       <Spin spinning={loading}>
         {detail ? (
           <Space direction="vertical" size="large" className="full-width">
-            <Card>
-              <div className="detail-title-row">
-                <div>
-                  <Title level={3}>{taskTitle(detail)}</Title>
-                  <Text type="secondary">{branchSummary(detail)}</Text>
-                </div>
-                <Space>
-                  <Tag color={taskReviewStatusColor(detail.reviewStatus)}>{taskReviewStatusLabel(detail.reviewStatus)}</Tag>
-                </Space>
-              </div>
-              <Divider />
+            <Paper variant="outlined" sx={{ p: { xs: 1.75, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', md: 'center' }} justifyContent="space-between" sx={{ mb: 1.75 }}>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                  <Chip size="small" label={`#${detail.id}`} sx={{ height: 24, borderColor: '#c9d5e2' }} variant="outlined" />
+                  <Chip size="small" label={taskTypeLabel(detail.triggerType)} sx={{ height: 24 }} variant="outlined" />
+                  <Chip size="small" label={targetTypeLabel(detail.targetType)} sx={{ height: 24 }} variant="outlined" />
+                </Stack>
+                <Tag color={taskReviewStatusColor(detail.reviewStatus)}>{taskReviewStatusLabel(detail.reviewStatus)}</Tag>
+              </Stack>
               <Descriptions column={{ xs: 1, md: 2, xl: 3 }} size="small">
                 <Descriptions.Item label="任务 ID">{detail.id}</Descriptions.Item>
                 <Descriptions.Item label="GitLab 项目">
@@ -4625,12 +4703,14 @@ function TaskDetail({ taskId, onBack, onOpen }) {
               {detail.errorMessage && (
                 <Alert className="section-gap" type="error" showIcon message="任务执行失败" description={detail.errorMessage} />
               )}
-            </Card>
-            <Tabs activeKey={displayedActiveTabKey} onChange={setActiveTabKey} items={tabItems} />
+            </Paper>
+            <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 2 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
+              <Tabs activeKey={displayedActiveTabKey} onChange={setActiveTabKey} items={tabItems} />
+            </Paper>
           </Space>
         ) : !loading ? <Empty description="任务不存在" /> : null}
       </Spin>
-    </div>
+    </TaskWorkspaceShell>
   );
 }
 
@@ -6350,13 +6430,18 @@ function TemplateConfig() {
     .filter(Boolean);
 
   return (
-    <div className="page-shell">
+    <TaskWorkspaceShell
+      title="设置"
+      description="维护全局 Review 能力、项目组、端类型、模型 Provider、AI Review Profile 和 Push 审核策略。"
+    >
       {contextHolder}
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
-      <Spin spinning={loading}>
-        <Collapse className="settings-collapse" items={orderedCollapseItems} />
-      </Spin>
-    </div>
+      <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 2 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
+        <Spin spinning={loading}>
+          <Collapse className="settings-collapse" items={orderedCollapseItems} />
+        </Spin>
+      </Paper>
+    </TaskWorkspaceShell>
   );
 }
 function TaskListPage() {
@@ -6379,9 +6464,17 @@ function TaskDetailPage() {
 
   if (!Number.isFinite(numericTaskId)) {
     return (
-      <div className="page-shell">
+      <TaskWorkspaceShell
+        title="任务详情"
+        description="任务 ID 无效，无法加载任务详情。"
+        actions={(
+          <MuiButton variant="outlined" startIcon={<ArrowLeftOutlined />} onClick={() => navigate(backTarget)}>
+            返回上一层
+          </MuiButton>
+        )}
+      >
         <Alert type="error" showIcon message="任务 ID 无效" />
-      </div>
+      </TaskWorkspaceShell>
     );
   }
 
@@ -6427,7 +6520,8 @@ function ruleGapRecommendationStatusTag(status) {
   return <Tag color={meta.color}>{meta.label}</Tag>;
 }
 
-function GovernanceDiagnosticsShell({ title, description, children, actions, backAction, statusLabel }) {
+function GovernanceDiagnosticsShell({ title, description, children, actions, backAction }) {
+  const combinedDescription = `${description} 高级诊断页用于解释质量问题、验收能力改动和查看回放记录；统一从顶部“质量治理”下拉框或直接路由进入。`;
   return (
     <Box
       sx={{
@@ -6441,16 +6535,16 @@ function GovernanceDiagnosticsShell({ title, description, children, actions, bac
         <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff', color: '#1f2933' }}>
           <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', lg: 'center' }}>
             <Box sx={{ minWidth: 0, flex: '1 1 auto', maxWidth: 820 }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }} flexWrap="wrap" useFlexGap>
-                {backAction}
-                <Chip size="small" color="primary" variant="outlined" label="高级诊断" sx={{ height: 24 }} />
-                {statusLabel && <Chip size="small" variant="outlined" label={statusLabel} sx={{ height: 24 }} />}
-              </Stack>
+              {backAction && (
+                <Box sx={{ mb: 0.75 }}>
+                  {backAction}
+                </Box>
+              )}
               <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: 0.75 }}>
                 {title}
               </MuiTypography>
               <MuiTypography variant="body2" sx={{ color: '#5f6b76' }}>
-                {description}
+                {combinedDescription}
               </MuiTypography>
             </Box>
             {actions && (
@@ -6474,9 +6568,6 @@ function GovernanceDiagnosticsShell({ title, description, children, actions, bac
             )}
           </Stack>
         </Paper>
-        <MuiAlert severity="info" variant="outlined" sx={{ backgroundColor: '#ffffff' }}>
-          高级诊断页用于解释质量问题、验收能力改动和查看回放记录；统一从顶部“质量治理”下拉框或直接路由进入。
-        </MuiAlert>
         {children}
       </Stack>
     </Box>
@@ -6761,7 +6852,6 @@ function RuleGapDashboardPage() {
     <GovernanceDiagnosticsShell
       title="规则缺口诊断"
       description="汇总历史审查中反复缺少的证据，解释 Planner、Retriever 和预算裁剪为什么没有拿到足够上下文。"
-      actions={<MuiButton size="small" variant="contained" startIcon={<ReloadOutlined />} onClick={applyFilters} disabled={loading}>刷新</MuiButton>}
     >
       {error && <MuiAlert severity="error" variant="outlined">{error}</MuiAlert>}
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
@@ -7536,61 +7626,66 @@ function ReleaseNotesPage() {
   const [activeReleaseId, setActiveReleaseId] = useState(releaseNotes[0]?.id || null);
 
   return (
-    <div className="page-shell release-page-shell">
-      <div className="release-list">
-        {releaseNotes.map((item, index) => {
-          const isActive = activeReleaseId === item.id;
-          const isLast = index === releaseNotes.length - 1;
-          const visibleHighlights = (item.highlights || []).slice(0, 3);
-          return (
-            <article
-              key={item.id}
-              className={`release-entry ${isActive ? 'is-active' : ''}`}
-              style={{ '--item-index': index }}
-              onMouseEnter={() => setActiveReleaseId(item.id)}
-              onFocus={() => setActiveReleaseId(item.id)}
-            >
-              <div className="release-track">
-                <Text className="release-date">{item.releaseDate}</Text>
-                <button
-                  type="button"
-                  className="release-marker"
-                  aria-label={`${item.version} ${item.title}`}
-                  onMouseEnter={() => setActiveReleaseId(item.id)}
-                  onFocus={() => setActiveReleaseId(item.id)}
-                  onClick={() => setActiveReleaseId(item.id)}
-                >
-                  <span className="release-marker-core" />
-                  <span className="release-marker-ripple" />
-                </button>
-                {!isLast && <span className="release-track-line" aria-hidden="true" />}
-              </div>
-              <div className="release-card">
-                <div className="release-card-head">
-                  <div>
-                    <Text className="release-version">{item.version}</Text>
-                    <Title level={4}>{item.title}</Title>
-                  </div>
-                  <Space wrap>
-                    {(item.tags || []).map(tag => (
-                      <Tag key={tag} className="release-tag">
-                        {tag}
-                      </Tag>
-                    ))}
-                  </Space>
+    <TaskWorkspaceShell
+      title="版本更新"
+      description="查看近期功能变化、部署注意和验证提示。"
+    >
+      <Paper variant="outlined" className="release-page-shell" sx={{ p: { xs: 1.5, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
+        <div className="release-list">
+          {releaseNotes.map((item, index) => {
+            const isActive = activeReleaseId === item.id;
+            const isLast = index === releaseNotes.length - 1;
+            const visibleHighlights = (item.highlights || []).slice(0, 3);
+            return (
+              <article
+                key={item.id}
+                className={`release-entry ${isActive ? 'is-active' : ''}`}
+                style={{ '--item-index': index }}
+                onMouseEnter={() => setActiveReleaseId(item.id)}
+                onFocus={() => setActiveReleaseId(item.id)}
+              >
+                <div className="release-track">
+                  <Text className="release-date">{item.releaseDate}</Text>
+                  <button
+                    type="button"
+                    className="release-marker"
+                    aria-label={`${item.version} ${item.title}`}
+                    onMouseEnter={() => setActiveReleaseId(item.id)}
+                    onFocus={() => setActiveReleaseId(item.id)}
+                    onClick={() => setActiveReleaseId(item.id)}
+                  >
+                    <span className="release-marker-core" />
+                    <span className="release-marker-ripple" />
+                  </button>
+                  {!isLast && <span className="release-track-line" aria-hidden="true" />}
                 </div>
-                <Paragraph className="release-summary">{item.summary}</Paragraph>
-                <ul className="release-highlights">
-                  {visibleHighlights.map(highlight => (
-                    <li key={highlight}>{highlight}</li>
-                  ))}
-                </ul>
-              </div>
-            </article>
-          );
-        })}
-      </div>
-    </div>
+                <div className="release-card">
+                  <div className="release-card-head">
+                    <div>
+                      <Text className="release-version">{item.version}</Text>
+                      <Title level={4}>{item.title}</Title>
+                    </div>
+                    <Space wrap>
+                      {(item.tags || []).map(tag => (
+                        <Tag key={tag} className="release-tag">
+                          {tag}
+                        </Tag>
+                      ))}
+                    </Space>
+                  </div>
+                  <Paragraph className="release-summary">{item.summary}</Paragraph>
+                  <ul className="release-highlights">
+                    {visibleHighlights.map(highlight => (
+                      <li key={highlight}>{highlight}</li>
+                    ))}
+                  </ul>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </Paper>
+    </TaskWorkspaceShell>
   );
 }
 
@@ -7609,19 +7704,12 @@ function HelpImage({ src, alt }) {
 
 function HelpPage() {
   return (
-    <div className="page-shell help-page-shell">
-      <section className="help-hero">
-        <Space orientation="vertical" size={10}>
-          <Tag color="blue">接入帮助</Tag>
-          <Title level={2}>GitLab / 钉钉 / 项目组接入</Title>
-          <Paragraph>
-            按 GitLab Webhook、钉钉机器人、平台项目组、GitLab 项目和模型配置的顺序完成接入，
-            平台即可从 Merge Request 或 Push 事件生成提醒卡片并推送到钉钉群。
-          </Paragraph>
-        </Space>
-      </section>
-
-      <div className="help-section-list">
+    <TaskWorkspaceShell
+      title="GitLab / 钉钉 / 项目组接入"
+      description="按 GitLab Webhook、钉钉机器人、平台项目组、GitLab 项目和模型配置的顺序完成接入。"
+    >
+      <Paper variant="outlined" className="help-page-shell" sx={{ p: { xs: 1.5, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff', maxWidth: 1180, width: '100%', mx: 'auto' }}>
+        <div className="help-section-list">
         <section className="help-section">
           <div className="help-section-number">一</div>
           <div className="help-section-content">
@@ -7700,8 +7788,9 @@ function HelpPage() {
             />
           </div>
         </section>
-      </div>
-    </div>
+        </div>
+      </Paper>
+    </TaskWorkspaceShell>
   );
 }
 
@@ -7864,9 +7953,6 @@ function ReviewQualityDashboardPage() {
         >
           <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', lg: 'center' }}>
             <Box sx={{ minWidth: 0, flex: '1 1 auto', maxWidth: 760 }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
-                <Chip size="small" color="primary" variant="outlined" label="质量治理" sx={{ height: 24 }} />
-              </Stack>
               <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: 0.75 }}>
                 质量看板
               </MuiTypography>
@@ -7874,25 +7960,6 @@ function ReviewQualityDashboardPage() {
                 面向管理员的 Review 质量治理视图，聚合评估样本、补证据、确定性检查、回放和改动记录。
               </MuiTypography>
             </Box>
-            <Stack
-              direction={{ xs: 'column', sm: 'row' }}
-              spacing={1}
-              flexWrap="wrap"
-              useFlexGap
-              justifyContent="flex-end"
-              alignItems={{ xs: 'stretch', sm: 'center' }}
-              sx={{
-                flex: '0 0 auto',
-                width: { xs: '100%', lg: 'auto' },
-                maxWidth: { lg: 520 },
-                ml: { lg: 'auto' },
-                '& .MuiButton-root': { minHeight: 36, height: 36, px: 1.75, flex: '0 0 auto' }
-              }}
-            >
-              <MuiButton size="small" variant="contained" startIcon={<ReloadOutlined />} onClick={() => load()}>
-                刷新
-              </MuiButton>
-            </Stack>
           </Stack>
         </Paper>
 
@@ -8325,9 +8392,6 @@ function EvaluationCasesPage() {
         <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff', color: '#1f2933' }}>
           <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', lg: 'center' }}>
             <Box sx={{ minWidth: 0, flex: '1 1 auto', maxWidth: 760 }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
-                <Chip size="small" color="primary" variant="outlined" label="质量治理" sx={{ height: 24 }} />
-              </Stack>
               <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: 0.75 }}>
                 评估样本
               </MuiTypography>
@@ -8935,8 +8999,6 @@ function AcceptanceGateDetailPage() {
       title={gate?.title || '验收详情'}
       description="人工准入和退出验收记录，不阻断线上 Review 或合并流程。"
       backAction={<MuiButton size="small" variant="outlined" startIcon={<ArrowLeftOutlined />} onClick={() => navigate(backTarget)}>返回</MuiButton>}
-      actions={<MuiButton size="small" variant="contained" startIcon={<ReloadOutlined />} onClick={load}>刷新</MuiButton>}
-      statusLabel={gate?.status ? acceptanceGateStatusLabel(gate.status) : undefined}
     >
         {error && <MuiAlert severity="error" variant="outlined">{error}</MuiAlert>}
         <Spin spinning={loading}>
@@ -9319,8 +9381,6 @@ function EvaluationRunDetailPage() {
       title="回放详情"
       description={`Run #${runId} 的版本记录、baseline / candidate 摘要和样本结果。`}
       backAction={<MuiButton size="small" variant="outlined" startIcon={<ArrowLeftOutlined />} onClick={() => navigate(backTarget)}>返回</MuiButton>}
-      actions={<MuiButton size="small" variant="contained" startIcon={<ReloadOutlined />} onClick={load}>刷新</MuiButton>}
-      statusLabel={run?.status ? evaluationRunStatusLabel(run.status) : undefined}
     >
         {error && <MuiAlert severity="error" variant="outlined">{error}</MuiAlert>}
         <Spin spinning={loading}>

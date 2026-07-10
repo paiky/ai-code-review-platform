@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：阶段 5.4 质量治理高级诊断统一壳已落地，等待用户验证；后续阶段必须逐阶段推进。
+- 当前状态：阶段 5.6 设置页和版本更新页 MUI 迁移已落地，阶段 5 Material Design 3 / MUI 分阶段迁移完成，等待用户验证；后续阶段必须逐阶段推进。
 - 关联文档：
   - `docs/36-review-platform-current-roadmap.md`：近期总控入口。
   - `docs/37-review-platform-target-product-roadmap.md`：完整产品目标。
@@ -97,6 +97,22 @@
 - 如何验证：运行 `scripts/run-frontend.cmd build`；确认 `/rule-gaps`、`/acceptance-gates`、`/acceptance-gates/{gateId}`、`/evaluation-runs`、`/evaluation-runs/{runId}` 直接路由仍可访问，筛选、刷新、详情跳转和创建 / 编辑验收记录不回归。
 - 遗留风险：高级诊断页内部仍有 Ant Design Table、Tabs、Card、Descriptions、Modal 与 MUI 壳共存；未做真实浏览器截图验证；暗色模式仍暂停；bundle 体积继续触发 Vite 大 chunk 警告。
 - 下一阶段：阶段 5.5 任务列表和任务详情主框架；未经用户确认不继续推进。
+
+### 2026-07-10：阶段 5.5 任务列表和任务详情主框架 MUI 迁移
+
+- 改了什么：新增任务页统一 MUI 外层壳，任务列表页头、筛选 surface 和表格容器迁移到 MUI；任务详情页头、返回 / 重新执行 / 复制重跑操作区、概要信息 surface 和 Tabs 外层容器迁移到 MUI；任务列表筛选、分页、Ant Design Table、任务详情 Tabs 内部内容、Diff viewer、Patch 预览、AI Review finding 展示、`reviewKey` 直达和轮询逻辑保持不变。
+- 为什么：任务列表和任务详情是普通开发与 Reviewer 的日常主入口，需要与质量治理页面一样具备清晰的 Material 3 surface、outline 和紧凑后台布局，同时避免一次性重写复杂 Review 内容造成行为回归。
+- 如何验证：运行 `scripts/run-frontend.cmd build`；确认 `/tasks`、`/tasks/{taskId}` 和 `/tasks/{taskId}?reviewKey=...` 路由仍可访问，任务列表筛选 / 分页、详情 tab 切换、重新执行审阅、复制为新任务重跑、AI Review 轮询、高准确模式流转和确定性检查入口不回归。
+- 遗留风险：任务详情内部复杂 Ant Design Tabs 内容、Descriptions、Table、Diff / Patch 代码视图、finding 展开区和设置类弹窗仍未迁移；本阶段未做真实浏览器截图验证；暗色模式仍暂停；bundle 体积继续触发 Vite 大 chunk 警告。
+- 下一阶段：阶段 5.6 设置页和版本更新页；未经用户确认不继续推进。
+
+### 2026-07-10：阶段 5.6 设置页和版本更新页 MUI 迁移
+
+- 改了什么：复用统一 MUI 后台页面壳，设置页页头、刷新操作和 Collapse 外层容器迁移到 MUI；版本更新页页头和时间线外层容器迁移到 MUI，并把原绿色强调色调整为蓝 / 粉系；接入帮助页页头和内容外层容器迁移到 MUI；设置页内部复杂 Ant Design Collapse、表单、表格、Provider 测试、Prompt 预览、项目组配置和 Push 策略逻辑保持不变。
+- 为什么：设置页、版本更新页和接入帮助页是阶段 5 最后一批高层页面，需要与任务页、质量治理页形成一致的 Material 3 surface、outline 和紧凑后台布局，同时避免一次性重写复杂设置表单导致保存行为回归。
+- 如何验证：运行 `scripts/run-frontend.cmd build`；确认 `/settings`、`/releases` 和 `/help` 可构建通过，设置页刷新、配置保存、Provider 测试、Prompt 预览、项目组配置、Push 策略维护等内部行为未改动 API 契约。
+- 遗留风险：设置页内部 Ant Design Collapse、Card、Table、Form 控件和 Modal 仍未逐项迁移；版本更新和接入帮助未做真实浏览器截图验证；暗色模式仍暂停；bundle 体积继续触发 Vite 大 chunk 警告。
+- 下一阶段：`docs/39` 阶段 5 已完成；后续回到 `docs/36` 的 M11 业务 Retriever 扩展循环或由用户确认新的专项计划。
 
 ## 阶段 1：源码工作区可靠性与可观测性
 
@@ -196,8 +212,8 @@ highPriorityDroppedCount
   -> 5.2 质量看板 MUI 布局迁移（已完成）
   -> 5.3 评估样本 MUI 布局迁移（已完成）
   -> 5.4 质量治理高级诊断统一壳（已完成）
-  -> 5.5 任务列表和任务详情主框架
-  -> 5.6 设置页和版本更新页
+  -> 5.5 任务列表和任务详情主框架（已完成）
+  -> 5.6 设置页和版本更新页（已完成）
 ```
 
 设计要求：
@@ -206,6 +222,9 @@ highPriorityDroppedCount
 - Material 3 风格圆角、surface、outline、按钮、输入框和状态层。
 - 管理后台页面优先采用紧凑、可扫描的信息架构，不做大 Hero、不让操作按钮漂在页面中间。
 - 页面页头采用“左侧标题 / 说明，右侧本页主操作”的两栏布局；宽屏右对齐，窄屏再自然换行；跨页导航统一交给顶部“质量治理”下拉框。
+- 页面页头不放“任务 / 质量治理 / 高级诊断 / 设置”等分类 chip；页面所在模块由顶部导航和标题表达。
+- 页面页头不放纯刷新按钮；需要重新查询时优先使用筛选区的搜索 / 筛选动作，只有新建、返回、保存等明确业务主操作才放在页头右侧。
+- 说明性提示不要作为独立 alert 占用首屏主视觉空间；能并入页头描述时优先并入页头描述。
 - 顶部操作按钮必须固定紧凑高度和内容宽度，不能在宽屏下被容器拉伸变大。
 - Gemini 式 AI 产品感只体现在轻量 surface、清晰输入区和克制状态层，不牺牲后台页面密度和可读性。
 - 质量治理、设置、任务等后台页面保留表格用于 Top 维度、列表、记录和横向比较；外层可用 MUI surface，但不要为了卡片化而替代表格。
@@ -287,7 +306,7 @@ highPriorityDroppedCount
 - `/rule-gaps`、`/acceptance-gates`、`/evaluation-runs` 和详情页直接访问正常。
 - 从顶部“质量治理”下拉进入规则缺口、验收记录和回放记录的路径正常。
 
-### 阶段 5.5：任务列表和任务详情主框架
+### 阶段 5.5：任务列表和任务详情主框架（已完成）
 
 目标：
 
@@ -307,7 +326,7 @@ highPriorityDroppedCount
 - `/tasks`、`/tasks/{taskId}`、`?reviewKey=` 直达路径正常。
 - 任务列表筛选、任务详情 tab 切换、AI Review 轮询和高准确模式流转不回归。
 
-### 阶段 5.6：设置页和版本更新页
+### 阶段 5.6：设置页和版本更新页（已完成）
 
 目标：
 
