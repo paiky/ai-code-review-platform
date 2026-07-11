@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10：第一个评估驱动的业务 Retriever` 已落地；源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 前端重构专项见 `docs/39-review-accuracy-and-material-ui-roadmap.md`，当前已完成阶段 5.6 设置页和版本更新页 MUI 迁移，等待用户验证。
+- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10：第一个评估驱动的业务 Retriever` 和 `docs/39` 全阶段已落地；下一轮专项见 `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`，当前等待用户确认是否进入阶段 1“首次 Review 前确定性检查 Preflight”。
 - 完整产品目标：`docs/37-review-platform-target-product-roadmap.md`。本文件负责近期阶段推进，`docs/37` 负责最终产品形态和长期路线。
 - 关联历史文档：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`：V2 反馈学习、项目策略、Context Pack 和高准确模式阶段记录。
@@ -10,6 +10,7 @@
   - `docs/34-local-repository-context-retrieval-plan.md`：本地仓库上下文检索和高准确 Review 细节。
   - `docs/35-review-quality-evaluation-and-rule-gap-governance.md`：规则缺口治理和质量评估路线。
   - `docs/39-review-accuracy-and-material-ui-roadmap.md`：源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 / MUI 前端重构专项路线。
+  - `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`：首次 Review 前确定性检查、Planner 多端感知、评估驱动的多端 Planner / Retriever 配对扩展和 finding 二次复评专项路线。
 - 本文件用途：回答“近期哪些能力必须先补、当前缺什么、下一步先做什么”。完整产品目标和长期阶段路线见 `docs/37-review-platform-target-product-roadmap.md`。后续阶段推进优先更新本文件，再按需更新细节文档。
 
 ## 一、通俗结论
@@ -67,14 +68,14 @@
 | 能力 | 说明 | 当前状态 |
 |---|---|---|
 | 本地 mirror / worktree | 平台能 checkout 当前任务源码 | 已具备 |
-| Context Planner | 能判断这次变更需要查什么上下文 | 已具备 |
-| Local Retriever | 能按 signal 检索引用、调用方或关联文件 | 部分具备 |
+| Context Planner | 能判断这次变更需要查什么上下文 | 通用规则已具备；多端专项提取不足 |
+| Local Retriever | 能按 signal 检索引用、调用方或关联文件 | Java / XML 关系检索已具备；其它端主要为字符串检索 |
 | Context Pack 预算控制 | 只把有限、可解释、预算内证据交给模型 | 已具备 |
 | 未注入证据摘要 | 让模型知道存在被裁剪证据，避免误把缺失当不存在 | 已具备 |
 | finding 的 evidence / contextStatus / confidence | 每个结论必须说明证据和不确定性 | 已具备 |
 | 高准确模式流转可观测 | 用户能看到 Planner、Retriever、预算裁剪和 Provider 过程 | 已具备 |
 | finding 级二次补证据 | 对高风险但证据不足的 finding 再定向检索 | 后端 MVP 与前端可观测已具备 |
-| 确定性检查接入 | 编译、测试、lint、静态安全扫描等硬证据 | 已具备敏感信息扫描 MVP |
+| 确定性检查接入 | 编译、测试、lint、静态安全扫描等硬证据 | 已具备手动敏感信息扫描 MVP；首次 Review 前自动 Preflight 缺失 |
 
 当前 Local Retriever 已支持：
 
@@ -181,6 +182,8 @@ Semgrep / CodeQL / Sonar 类静态规则
 
 这些不是都要马上做，但“确定性工具结果进入 Review 证据包”是成熟平台必备方向。
 
+当前 `SECRET_SCAN` 虽然能进入 Context Pack，但尚未自动编排到首次 AI Review 前。用户通常需要在任务详情手动运行后，再通过 retry、重跑或 finding 级补证据让结果进入新的 Context Pack。因此下一步先补 Preflight 编排，而不是立即继续实现新的业务 Retriever。
+
 ## 四、后续推进顺序
 
 ### 当前主线
@@ -197,7 +200,11 @@ P0：统一文档入口和路线判断（本文件）
   -> M8：规则缺口与 finding 级归因（已完成）
   -> M9：规则 / Retriever 改动验收门禁（已完成）
   -> M10：第一个评估驱动的业务 Retriever（已完成）
-  -> M11：业务 Retriever 扩展循环（下一阶段）
+  -> docs/39：源码检索、Context Pack 裁剪与 MUI 专项（已完成）
+  -> docs/40 阶段 1：首次 Review 前确定性检查 Preflight（下一阶段）
+  -> docs/40 阶段 2：Planner 多端感知与覆盖基线
+  -> docs/40 阶段 3：第一个多端 Planner / Retriever 配对扩展
+  -> M11：评估驱动的业务 Retriever / 多端能力循环
 ```
 
 ### 为什么不是继续补缓存 / MQ / 配置 Retriever
@@ -374,11 +381,13 @@ finding 展示必须清楚：
 
 ## 八、当前下一步
 
-当前 M10 第一个评估驱动的业务 Retriever 已落地。当前专项已完成 `docs/39` 阶段 1、阶段 2、阶段 3、阶段 4 和阶段 5.1 ~ 5.6，`docs/39` 本轮源码检索、Context Pack 裁剪、质量治理入口收敛和 MUI 分阶段迁移专项已完成。下一阶段需等待用户确认后进入：
+当前 M10 第一个评估驱动的业务 Retriever 已落地，`docs/39` 阶段 1、阶段 2、阶段 3、阶段 4 和阶段 5.1 ~ 5.6 已全部完成。后续专项已经落到 `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`。下一阶段需等待用户确认后进入：
 
 ```text
-M11：业务 Retriever 扩展循环，或由用户确认新的专项计划
+docs/40 阶段 1：首次 Review 前确定性检查 Preflight
 ```
+
+选择该阶段的原因：现有 `SECRET_SCAN` 只有手动运行和后续 Context Pack 注入，首次 MR / Push / manual Review 在 Provider 调用前拿不到本次确定性证据；这个时序缺口比继续新增一个 Retriever 更基础。阶段 1 完成后停止，等待用户验证，再决定是否进入 Planner 多端感知。
 
 阶段 5 后续 UI 迁移必须沿用质量看板已确认的偏好：后台页面保持紧凑、可扫描，不做大 Hero；页头采用左侧标题说明、右侧只放明确业务主操作，不放分类 chip 和纯刷新按钮；说明性提示优先并入页头描述；宽屏按钮不拉伸；Top 维度和记录类内容继续用表格；配色避免大面积绿色，优先蓝 / 粉等明快色系和白底多色强调线。
 

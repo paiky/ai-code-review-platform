@@ -16,29 +16,32 @@
 - `docs/37-review-platform-target-product-roadmap.md`：完整产品目标路线，说明最终产品形态、用户体验、长期阶段和完整验收标准。
 - `docs/38-review-lifecycle-and-frontend-entrypoints.md`：Review 生命周期与前端入口说明，按任务、质量治理、设置和默认隐藏的反馈池解释使用时机。
 - `docs/39-review-accuracy-and-material-ui-roadmap.md`：源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 / MUI 前端重构的分阶段推进计划。
+- `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`：`docs/39` 完成后的下一轮专项路线，优先推进首次 Review 前确定性检查、Planner 多端感知、评估驱动的多端 Planner / Retriever 配对扩展和 finding 二次复评。
 - `docs/23-help-gitlab-dingtalk-project-onboarding.md`：接入帮助页文档源，面向首次接入用户，按 GitLab Webhook、钉钉机器人、项目组和模型配置组织。
 - `docs/26-gitlab-diff-context-expansion-plan.md`：GitLab 风格 Diff 上下文展开与暗黑语法高亮分阶段实施计划。
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册，按 GitLab 接入、项目设置、钉钉推送链路组织。
-- `docs/11-agent-environment-pitfalls.md`：Agent 环境、脚本、部署、Codex、检索和工具链避坑（新对话优先读）。
+- `docs/11-agent-environment-pitfalls.md`：Agent 环境、脚本、部署、Codex、检索和工具链避坑（遇到相关问题时按关键词检索）。
 - `docs/10-local-dev-pitfalls.md`：历史避坑归档（按条目累积，含迁移期和业务修复记录；仅追溯旧问题时阅读）。
 - `docs/03-api-contract.md`：HTTP API 契约。
 - `docs/04-risk-card-schema.md`：提醒卡片 JSON schema。
 - `docs/02-domain-model.md` / `docs/06-change-analysis-rules.md`：领域模型与变更分析规则。
 - `docs/24-bug-log.md`：已知 BUG 与修复记录。
-- `docs/19-python-backend-refactor-plan.md`：Python 迁移计划（**已完成**，保留分阶段 prompt 写法参考）。
+- `docs/19-python-backend-refactor-plan.md`：Python 迁移计划（**已完成**，仅追溯迁移历史时阅读）。
 - 其它 `docs/1*.md` / `docs/2*.md` 多为计划、历史方案或 PPT 素材；使用前请看文首状态说明。
 
-## Agent / 新对话入口
+## Agent 文档路由
 
-新对话或自动化 Agent 理解项目时，优先阅读：
+新对话默认只读取 `AGENTS.md`。不要完整通读 README，也不要按下面的列表批量加载文档；先根据任务使用 `rg` 搜索关键词，再局部读取命中章节。
 
-1. `AGENTS.md`：项目目标、工作方式、脚本使用约束。
-2. `README.md`：本地启动、配置、验证步骤。
-3. `docs/11-agent-environment-pitfalls.md`：Agent 环境与工具避坑。
-4. `docs/36-review-platform-current-roadmap.md`：当前 Review 平台后续推进总控。
-5. `docs/37-review-platform-target-product-roadmap.md`：完整产品目标和长期路线。
-6. `docs/39-review-accuracy-and-material-ui-roadmap.md`：当前准确率和前端体验专项推进计划。
-7. 与当前任务相关的 `docs/` 设计文档，例如 API、规则、AI Review provider 计划等。
+- 启动、配置、部署和验证命令：在 `README.md` 中搜索对应章节。
+- 当前阶段规划与推进顺序：`docs/36-review-platform-current-roadmap.md`。
+- 长期产品目标：`docs/37-review-platform-target-product-roadmap.md`。
+- 已完成的准确率和前端专项：仅追溯历史决策时读取 `docs/39-review-accuracy-and-material-ui-roadmap.md`。
+- Review 证据链和多端能力专项：`docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`。
+- 环境、脚本、部署、Codex、检索和工具链问题：在 `docs/11-agent-environment-pitfalls.md` 中搜索症状或关键词。
+- 多阶段计划写法：遵守 `AGENTS.md` 中的阶段、授权边界和停止条件，不要为参考格式读取完整历史计划。
+- API、规则、schema 或具体模块设计：使用 `rg` 定位对应文档，只读取与当前任务相关的章节。
+- 历史迁移和旧问题：仅在明确追溯时读取 `docs/10-local-dev-pitfalls.md`、`docs/19-python-backend-refactor-plan.md` 等归档文档。
 
 后续开发以 `backend-python/` 和 `frontend/` 为主。
 
@@ -1109,6 +1112,8 @@ M10 已将 `CACHE_WRITE_DELETE_CHANGED` 纳入高准确模式 Local Retriever。
 M6 首版只接入敏感信息扫描。扫描范围限定为当前任务 `changedFilesSummary.files[].diffText` 中的新增行，不做全仓扫描，不执行外部命令；结果只作为结构化证据进入任务详情和 AI Review Context Pack，不会自动阻塞合并、修改 Prompt、修改 Review 结果、降级或忽略 finding。
 
 任务详情页新增“确定性检查”tab，可查看状态、配置快照、耗时、摘要、脱敏命中项和失败原因，并可手动运行或重跑敏感信息扫描。
+
+当前 `SECRET_SCAN` 尚未自动编排到首次 AI Review 之前；通常需要人工运行后，再通过重试、重跑或 finding 级补证据进入新的 Context Pack。后续前置自动执行、失败降级和多模型复用按 `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md` 分阶段推进。
 
 命令行验证：
 

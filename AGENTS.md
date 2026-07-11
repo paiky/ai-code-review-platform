@@ -66,7 +66,8 @@ AI 变更提醒与代码质量审查平台
 - 本地启动、测试、迁移、部署与示例数据文档
 
 ## Working style
-- 新对话理解项目时，先读 `AGENTS.md`、`README.md`，再按任务需要阅读 `docs/` 下相关设计文档。
+- 新对话默认只读取 `AGENTS.md`。不要默认通读 `README.md` 或批量读取 `docs/`；先根据当前任务使用 `rg` 定位相关章节、代码和测试，再局部读取命中内容。
+- 只有涉及启动、配置、部署、验证命令或项目入口说明时，才在 `README.md` 中检索并读取相关章节。README 中的文档导航只是任务路由，不代表必读清单。
 - 在 Windows PowerShell 中阅读中文 Markdown / 文档时，优先使用 `Get-Content -Raw -Encoding UTF8 <path>`，避免默认编码导致中文乱码并影响理解。
 - 后续开发以后端 Python 为主，默认只维护 `backend-python/` 与 `frontend/`。`backend/` Java 后端已停止维护，不再新增实现、测试或编译验证，除非用户明确要求对照历史行为。
 - 搜索代码时必须避开依赖和构建产物目录，例如 `frontend/node_modules/`、`frontend/dist/`、`backend/target/`、`backend-python/.venv/`、`__pycache__/`、`.pytest_cache/`、`.codegraph/`。使用 `rg` 时遵守仓库根目录 `.rgignore`，不要用会扫进这些目录的全盘搜索。
@@ -83,10 +84,10 @@ AI 变更提醒与代码质量审查平台
 - 先写设计，再实现
 - 先补充 README，再写代码
 - 先写数据结构与接口，再写业务逻辑
-- 后续落地的多阶段推进计划文档，必须在文档中写清分阶段落地 prompt、总控 prompt、Agent 可按总控 prompt 自主推进的授权边界，并明确每个阶段完成后必须停止，等待用户验证并确认“继续下一阶段”后再推进。可参考 `docs/19-python-backend-refactor-plan.md` 的分阶段 prompt 写法。
+- 后续落地的多阶段推进计划文档，必须写清分阶段落地 prompt、总控 prompt、Agent 自主推进的授权边界，并明确每个阶段完成后必须停止，等待用户验证并确认“继续下一阶段”后再推进。不要为参考格式读取完整历史计划。
 - 完成后必须补测试与示例数据
 - 所有 PR/patch 必须附带“改了什么、为什么、如何验证”
-- 遇到环境、脚本、部署、Codex、检索或工具链问题时，先查阅 `docs/11-agent-environment-pitfalls.md` 是否已有解决方式。
+- 遇到环境、脚本、部署、Codex、检索或工具链问题时，先用 `rg` 在 `docs/11-agent-environment-pitfalls.md` 中搜索症状或关键词，只读取命中章节；未命中时再浏览目录，不要默认通读全文。
 - 新解决的环境、工具、部署、Codex 或检索类踩坑，完成后补充到 `docs/11-agent-environment-pitfalls.md`；业务规则误判、接口语义和产品行为问题写入对应设计文档或 `docs/24-bug-log.md`，不要继续堆到环境避坑文档。
 
 ## Definition of done

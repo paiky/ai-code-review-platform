@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：完整产品目标文档。用于回答“最终要做成什么产品、用户如何使用、从当前状态到完整产品分几步走”；`M10：第一个评估驱动的业务 Retriever` 已落地，等待用户验证是否进入 M11。
+- 当前状态：完整产品目标文档。用于回答“最终要做成什么产品、用户如何使用、从当前状态到完整产品分几步走”；`M10` 和 `docs/39` 已落地，下一轮近期专项见 `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`。
 - 编写时间：2026-07-01
 - 当前阶段总控：`docs/36-review-platform-current-roadmap.md`
 - 历史与细节文档：
@@ -10,6 +10,8 @@
   - `docs/33-review-learning-capability-roadmap.md`
   - `docs/34-local-repository-context-retrieval-plan.md`
   - `docs/35-review-quality-evaluation-and-rule-gap-governance.md`
+  - `docs/39-review-accuracy-and-material-ui-roadmap.md`
+  - `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`
 
 说明：`docs/36` 负责近期阶段推进；本文件负责完整产品目标和长期路线。后续如果阶段方向发生变化，先更新 `docs/36`；如果产品目标、里程碑或验收标准变化，再更新本文件。
 
@@ -161,7 +163,7 @@ GitLab token 和 clone 权限
 - 检查失败、超时、未配置都可解释。
 - 确定性失败可以按项目策略决定是否阻塞。
 
-当前状态：已具备敏感信息扫描 MVP；lint、测试命令、类型检查等更多确定性工具待后续阶段。
+当前状态：已具备敏感信息扫描 MVP 和 Context Pack 摘要注入；首次 AI Review 前自动 Preflight 尚未实现，按 `docs/40` 阶段 1 推进；lint、测试命令、类型检查等更多确定性工具待后续阶段。
 
 ### E. 质量评估与回放
 
@@ -392,19 +394,19 @@ GitLab token 和 clone 权限
 推荐从 `docs/36` 的近期阶段继续：
 
 ```text
-M11：业务 Retriever 扩展循环
+docs/40 阶段 1：首次 Review 前确定性检查 Preflight
 ```
 
-M1-M10 已完成 MVP。缓存 Retriever 已作为第一个评估驱动业务 Retriever 落地；后续进入 MQ、配置、测试覆盖或跨端调用方 Retriever 前，仍必须由评估样本、归因、回放和验收记录证明高价值。
+M1-M10 和 docs/39 已完成。阶段 1 先修复 `SECRET_SCAN` 只能人工运行、无法进入首次 Review Context Pack 的时序缺口；之后再建立 Planner 多端感知基线。后续进入 MQ、配置、测试覆盖、跨端调用方或任一语言 Retriever 前，仍必须由评估样本、归因、回放和验收记录证明高价值。
 
 ## 八、Agent 总控 Prompt
 
 ```text
-请阅读 AGENTS.md、README.md、docs/36-review-platform-current-roadmap.md、docs/37-review-platform-target-product-roadmap.md。
+请阅读 AGENTS.md、README.md、docs/36-review-platform-current-roadmap.md、docs/37-review-platform-target-product-roadmap.md、docs/40-review-evidence-pipeline-and-multi-target-roadmap.md。
 
 docs/36 是近期阶段总控，docs/37 是完整产品目标。后续推进必须先满足 docs/36 当前阶段，不要直接跳到 docs/37 的远期能力。
 
-当前 M10 第一个评估驱动的业务 Retriever 已落地，等待用户验证是否进入 M11 业务 Retriever 扩展循环。每次只推进一个阶段。允许自主修改 backend-python、frontend、docs、examples、tests 中与当前阶段直接相关的文件；不要修改 legacy Java backend；不要做自动 Prompt 改写、自动风险降级、自动忽略 finding、模型微调、复杂 RAG、跨项目策略共享或无限制全项目扫描。
+当前 M10 和 docs/39 已落地，等待用户确认是否进入 docs/40 阶段 1“首次 Review 前确定性检查 Preflight”。每次只推进一个阶段。允许自主修改 backend-python、frontend、docs、examples、tests 中与当前阶段直接相关的文件；不要修改 legacy Java backend；不要做自动 Prompt 改写、自动风险降级、自动忽略 finding、模型微调、复杂 RAG、跨项目策略共享或无限制全项目扫描。
 
 每个阶段完成后必须停止，输出“改了什么、为什么、如何验证”，等待用户验证并明确回复“继续下一阶段”后再推进。
 ```
@@ -480,32 +482,31 @@ docs/36 是近期阶段总控，docs/37 是完整产品目标。后续推进必�
 当前可启动的 Goal 是：
 
 ```text
-完成 M11：业务 Retriever 扩展循环中的下一个经评估确认的 Retriever。
+完成 docs/40 阶段 1：首次 Review 前确定性检查 Preflight。
 ```
 
 建议 Goal 文案：
 
 ```text
-请基于 AGENTS.md、README.md、docs/36-review-platform-current-roadmap.md、docs/37-review-platform-target-product-roadmap.md，完成 M11：业务 Retriever 扩展循环中的下一个经评估确认的 Retriever。
+请基于 AGENTS.md、README.md、docs/36-review-platform-current-roadmap.md、docs/37-review-platform-target-product-roadmap.md、docs/40-review-evidence-pipeline-and-multi-target-roadmap.md，完成 docs/40 阶段 1：首次 Review 前确定性检查 Preflight。
 
 范围：
 - backend-python
 - frontend
 - backend-python/tests
-- docs / examples 中与 M11 直接相关的文件
+- docs / examples 中与阶段 1 直接相关的文件
 
 目标：
-- 只选择一个由评估样本、质量看板、规则缺口归因和验收记录证明高价值的业务 Retriever。
-- 补齐该类变更所需的最小 Planner / Retriever / Context Pack 能力。
-- 用目标 evaluation cases 和 evaluation runs 证明上下文充分性提升或误判 / 漏报改善。
-- 实现前必须先创建或确认 M9 准入记录；完成后必须更新退出验收结果。
-- 不自动改 Prompt，不自动生成项目策略，不自动降级、不自动忽略 finding。
+- 在 MR、Push、manual、retry 的首次 Provider 调用前自动运行内置 SECRET_SCAN。
+- 同一 task 同一次多模型调度只运行一次，各 reviewKey 复用同一结果。
+- 检查失败默认 fail-open，将脱敏失败摘要写入 progress 和 Context Pack 后继续 Review。
+- 保留现有手动运行 / 重跑 API，不做合并阻塞，不修改 finding。
 
 要求：
-- 先补数据结构与接口契约，再实现业务逻辑。
-- 补最小契约测试和前端 build。
-- 更新 README 或相关 docs 中的使用说明。
-- 完成后停止，输出改了什么、为什么、如何验证，等待用户确认是否继续 M11。
+- 先核对所有触发路径和多模型 fan-out 点，再确定 Preflight 编排位置。
+- 补最小单元、契约和主链路测试；只有涉及前端变化时才运行前端 build。
+- 更新 README、docs/36 和 docs/40 阶段记录。
+- 完成后停止，输出改了什么、为什么、如何验证、遗留风险和下一阶段，等待用户确认是否进入 docs/40 阶段 2。
 ```
 
 ### Goal 模式停止规则
@@ -545,6 +546,7 @@ M0 路线收口
   -> M8 规则缺口与 finding 级归因
   -> M9 规则 / Retriever 改动验收门禁
   -> M10 第一个评估驱动的业务 Retriever
+  -> docs/40 阶段 1~3 证据前置与多端能力基线
   -> M11 业务 Retriever 扩展循环
   -> M12 项目知识与反馈治理产品化
   -> M13 平台运维、成本与安全治理
