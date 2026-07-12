@@ -90,8 +90,11 @@ def deterministic_check_security_summary(record: DeterministicCheckRun | None) -
     config = data.get("configSnapshot") or {}
     findings = data.get("findings") or []
     return {
+        "runId": data["id"],
         "status": data["status"],
         "checkType": data["checkType"],
+        "trigger": config.get("trigger") or "MANUAL",
+        "freshness": config.get("freshness") or "UNKNOWN",
         "rulesetVersion": config.get("rulesetVersion"),
         "scope": config.get("scope"),
         "durationMs": data.get("durationMs"),

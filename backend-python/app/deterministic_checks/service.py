@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.core.json_utils import read_json
+from app.code_quality.repository import append_progress
 from app.deterministic_checks.repository import (
     create_check_run,
     deterministic_check_run_to_response,
@@ -70,9 +71,58 @@ def run_deterministic_check_response(db: Session, task_id: int, request: dict[st
     check_type = str((request or {}).get("checkType") or CHECK_TYPE_SECRET_SCAN).strip().upper()
     if check_type != CHECK_TYPE_SECRET_SCAN:
         raise AppError("VALIDATION_ERROR", f"Unsupported deterministic check type: {check_type}", 400)
-    record = _run_secret_scan(db, task)
+    record = _run_secret_scan(db, task, trigger="MANUAL")
     db.commit()
     return deterministic_check_run_to_response(record)
+
+
+def ensure_deterministic_preflight(
+    db: Session,
+    task_id: int,
+    *,
+    changed_files: list[dict[str, Any]] | None = None,
+    review_key: str | None = None,
+) -> dict[str, Any]:
+    """Run one SECRET_SCAN for one Review dispatch before Provider fan-out."""
+    task = _require_task(db, task_id)
+    append_progress(
+        db,
+        task_id,
+        "DETERMINISTIC_PRECHECK_STARTED",
+        "INFO",
+        "首次 Review 前确定性检查已开始",
+        '{"checkType":"SECRET_SCAN","trigger":"AUTO_PREFLIGHT","scope":"DIFF_ADDED_LINES"}',
+        review_key=review_key,
+    )
+    try:
+        record = _run_secret_scan(
+            db,
+            task,
+            changed_files=changed_files,
+            trigger="AUTO_PREFLIGHT",
+        )
+        summary = deterministic_check_security_summary(record)
+    except Exception as exception:
+        summary = {
+            "runId": None,
+            "status": "UNAVAILABLE",
+            "checkType": CHECK_TYPE_SECRET_SCAN,
+            "trigger": "AUTO_PREFLIGHT",
+            "freshness": "CURRENT_TASK_INPUT",
+            "failureReason": _safe_failure(str(exception) or "Secret scan preflight failed"),
+        }
+    failed = summary.get("status") in {"FAILED", "UNAVAILABLE"}
+    append_progress(
+        db,
+        task_id,
+        "DETERMINISTIC_PRECHECK_FAILED" if failed else "DETERMINISTIC_PRECHECK_COMPLETED",
+        "WARN" if failed else "INFO",
+        "首次 Review 前确定性检查失败，已降级继续 Review" if failed else "首次 Review 前确定性检查已完成",
+        _preflight_progress_detail(summary),
+        review_key=review_key,
+    )
+    db.commit()
+    return summary
 
 
 def latest_security_summary(db: Session | None, task_id: int | None) -> dict[str, Any]:
@@ -92,7 +142,13 @@ def latest_security_summary(db: Session | None, task_id: int | None) -> dict[str
         }
 
 
-def _run_secret_scan(db: Session, task: ReviewTask) -> Any:
+def _run_secret_scan(
+    db: Session,
+    task: ReviewTask,
+    *,
+    changed_files: list[dict[str, Any]] | None = None,
+    trigger: str = "MANUAL",
+) -> Any:
     started = datetime.now()
     start_counter = perf_counter()
     config = {
@@ -102,9 +158,11 @@ def _run_secret_scan(db: Session, task: ReviewTask) -> Any:
         "scope": "DIFF_ADDED_LINES",
         "timeoutMs": 0,
         "maxFindings": MAX_FINDINGS,
+        "trigger": trigger,
+        "freshness": "CURRENT_TASK_INPUT" if trigger == "AUTO_PREFLIGHT" else "UNKNOWN",
     }
     try:
-        files = _changed_files_from_task(db, task.id)
+        files = changed_files if changed_files is not None else _changed_files_from_task(db, task.id)
         scan = _scan_changed_files(files)
         status = "NOT_APPLICABLE" if scan["scannedFileCount"] == 0 or scan["addedLineCount"] == 0 else "COMPLETED"
         summary = {
@@ -271,3 +329,21 @@ def _safe_failure(value: str) -> str:
     text = re.sub(r"(Authorization\s*[:=]\s*Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1****", text, flags=re.IGNORECASE)
     text = re.sub(r"((?:api[_-]?key|token|secret|password|passwd|pwd)\s*[:=]\s*['\"]?)[^'\"\s,;]+", r"\1****", text, flags=re.IGNORECASE)
     return text[:1024]
+
+
+def _preflight_progress_detail(summary: dict[str, Any]) -> str:
+    import json
+
+    return json.dumps(
+        {
+            "runId": summary.get("runId"),
+            "checkType": summary.get("checkType"),
+            "status": summary.get("status"),
+            "trigger": summary.get("trigger"),
+            "freshness": summary.get("freshness"),
+            "findingCount": summary.get("findingCount", 0),
+            "failureReason": summary.get("failureReason"),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )

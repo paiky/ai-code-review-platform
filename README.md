@@ -679,6 +679,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/review-tasks/$tas
 前端任务详情页包含：
 
 - 代码质量 Review：按模型展示 AI Review 结果，并在 Review 内提供“高准确模式流转”和“执行过程”子页；高准确模式流转会展示变更接入、Context Pack、Planner、本地仓库、Retriever、预算裁剪、Provider、结果解析和 finding 级补证据状态，以及本任务规则缺口。若本地仓库已准备但引用查询数为 0，会说明是没有支持的 signal、Retriever 被跳过或检索失败；若预算裁剪导致引用 snippets 未注入，会展示 signal、requested context、查询摘要、命中文件数、裁剪 snippet 数、top 相对路径和裁剪原因，不展示源码。DB / Mapper / Entity 关联检索只基于当前 worktree 中的 SQL、Mapper、Entity 和迁移脚本，不连接运行期数据库，也不读取生产 schema；缓存 Retriever 只基于当前 worktree 中的 cache key、cache name、key expression 与读写 / 删除 / 过期使用点做 bounded `rg` 检索，不读取运行期 Redis 或缓存实例。
+- Context Planner 多端覆盖基线：Planner 从任务读取 `targetType`，按变更文件后缀输出 `detectedLanguages`、`extractorVersions` 和 `coverageSummary`。现阶段继续由 `generic-v1` 运行已有方法、字段、DTO、DB、缓存、MQ、配置等通用规则；各端注册 `*-v0` 占位提取器但不新增端侧规则，因此 BACKEND、WEB_PC、APP_IOS、APP_ANDROID、APP_CROSS_PLATFORM 没有专项覆盖时会明确显示 `GENERIC_FALLBACK`，GENERAL 显示 `GENERIC_ONLY`。未识别文件和未支持语言会计数，不会静默伪装为完整覆盖。
 - 二次补证据：任务详情页只在 `CRITICAL / MAJOR / HIGH` 且 `contextStatus=PARTIAL / INSUFFICIENT` 的 AI finding 上展示“补证据”操作；结果以 `refinementOverlay` 覆盖层显示状态、触发条件、检索计划摘要、补到的证据摘要、仍缺失上下文和失败原因，不覆盖原 finding 的等级、上下文状态、置信度或原始证据。
 - 规则缺口看板：从已有 `CONTEXT_PACK_BUILT` progress 安全摘要聚合跨任务规则缺口，可按项目、缺口类型、Signal 过滤，查看最近任务样例并跳转任务详情；接口响应会附带 `recommendations`，用启发式评分给出 `RECOMMENDED / WATCH / NOT_NOW`、补全类型、建议原因、下一阶段和可复制给 Agent 的 prompt 草稿。看板不返回源码片段、本地绝对路径、token、认证头、大段 diff 或 provider raw output，也不会自动改规则、Prompt 或实现 Retriever。
 - 提醒卡片：按提醒类型展示可复制维护内容、命中证据和 Diff 查看入口
@@ -1109,11 +1110,11 @@ M10 已将 `CACHE_WRITE_DELETE_CHANGED` 纳入高准确模式 Local Retriever。
 
 ## 确定性检查证据
 
-M6 首版只接入敏感信息扫描。扫描范围限定为当前任务 `changedFilesSummary.files[].diffText` 中的新增行，不做全仓扫描，不执行外部命令；结果只作为结构化证据进入任务详情和 AI Review Context Pack，不会自动阻塞合并、修改 Prompt、修改 Review 结果、降级或忽略 finding。
+M6 首版只接入敏感信息扫描。扫描范围限定为当前任务 `changedFilesSummary.files[].diffText`（manual 使用本次请求中的 `changedFileDetails` 或 `diffText` 快照）中的新增行，不做全仓扫描，不执行外部命令；结果只作为结构化证据进入任务详情和 AI Review Context Pack，不会自动阻塞合并、修改 Prompt、修改 Review 结果、降级或忽略 finding。
 
 任务详情页新增“确定性检查”tab，可查看状态、配置快照、耗时、摘要、脱敏命中项和失败原因，并可手动运行或重跑敏感信息扫描。
 
-当前 `SECRET_SCAN` 尚未自动编排到首次 AI Review 之前；通常需要人工运行后，再通过重试、重跑或 finding 级补证据进入新的 Context Pack。后续前置自动执行、失败降级和多模型复用按 `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md` 分阶段推进。
+MR、Push、manual 和 retry 会在本次调度的首次 Provider 调用前自动运行一次内置 `SECRET_SCAN`。自动 Preflight 位于多模型 fan-out 之前，同一次调度的所有模型复用同一个 run 及其脱敏摘要；下一次 retry 会创建新的自动 run。检查失败默认 fail-open：`DETERMINISTIC_PRECHECK_FAILED` progress 和 Context Pack 会记录脱敏失败摘要，Provider 仍继续执行。现有手动运行 / 重跑 API 保持不变。
 
 命令行验证：
 
@@ -1128,6 +1129,18 @@ Invoke-RestMethod `
   -Uri "http://localhost:8090/api/review-tasks/{taskId}/deterministic-checks/run" `
   -ContentType "application/json" `
   -Body '{"checkType":"SECRET_SCAN"}' |
+  ConvertTo-Json -Depth 20
+```
+
+自动 Preflight 验证时，可在首次 Review 后同时检查：
+
+```powershell
+# 应只看到一个 trigger=AUTO_PREFLIGHT 的新 run
+Invoke-RestMethod "http://localhost:8090/api/review-tasks/{taskId}/deterministic-checks" |
+  ConvertTo-Json -Depth 20
+
+# 每个模型的 CONTEXT_PACK_BUILT 均应包含同一 runId，且 Provider 前可见 PRECHECK 事件
+Invoke-RestMethod "http://localhost:8090/api/review-tasks/{taskId}/code-quality-progress" |
   ConvertTo-Json -Depth 20
 ```
 

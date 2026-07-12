@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10：第一个评估驱动的业务 Retriever` 和 `docs/39` 全阶段已落地；下一轮专项见 `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`，当前等待用户确认是否进入阶段 1“首次 Review 前确定性检查 Preflight”。
+- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10`、`docs/39` 全阶段和 `docs/40` 阶段 1、阶段 2 已落地；当前停止等待用户验证，阶段 3 必须先核对 evaluation cases、人工归因、acceptance gate 和 baseline run，未经确认不得开始。
 - 完整产品目标：`docs/37-review-platform-target-product-roadmap.md`。本文件负责近期阶段推进，`docs/37` 负责最终产品形态和长期路线。
 - 关联历史文档：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`：V2 反馈学习、项目策略、Context Pack 和高准确模式阶段记录。
@@ -201,9 +201,9 @@ P0：统一文档入口和路线判断（本文件）
   -> M9：规则 / Retriever 改动验收门禁（已完成）
   -> M10：第一个评估驱动的业务 Retriever（已完成）
   -> docs/39：源码检索、Context Pack 裁剪与 MUI 专项（已完成）
-  -> docs/40 阶段 1：首次 Review 前确定性检查 Preflight（下一阶段）
-  -> docs/40 阶段 2：Planner 多端感知与覆盖基线
-  -> docs/40 阶段 3：第一个多端 Planner / Retriever 配对扩展
+  -> docs/40 阶段 1：首次 Review 前确定性检查 Preflight（已完成，待用户验证）
+  -> docs/40 阶段 2：Planner 多端感知与覆盖基线（已完成，待用户验证）
+  -> docs/40 阶段 3：第一个多端 Planner / Retriever 配对扩展（需先核对进入条件）
   -> M11：评估驱动的业务 Retriever / 多端能力循环
 ```
 
@@ -381,13 +381,13 @@ finding 展示必须清楚：
 
 ## 八、当前下一步
 
-当前 M10 第一个评估驱动的业务 Retriever 已落地，`docs/39` 阶段 1、阶段 2、阶段 3、阶段 4 和阶段 5.1 ~ 5.6 已全部完成。后续专项已经落到 `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`。下一阶段需等待用户确认后进入：
+当前 `docs/40` 阶段 2 已落地并停止，正在等待用户验证。只有用户明确回复“继续下一阶段”，且阶段 3 的 evaluation cases、人工 rule gap attribution、acceptance gate 和 baseline evaluation run 进入条件满足后，才可进入：
 
 ```text
-docs/40 阶段 1：首次 Review 前确定性检查 Preflight
+docs/40 阶段 3：第一个多端 Planner / Retriever 配对扩展
 ```
 
-选择该阶段的原因：现有 `SECRET_SCAN` 只有手动运行和后续 Context Pack 注入，首次 MR / Push / manual Review 在 Provider 调用前拿不到本次确定性证据；这个时序缺口比继续新增一个 Retriever 更基础。阶段 1 完成后停止，等待用户验证，再决定是否进入 Planner 多端感知。
+阶段 2 已让 Planner 接收任务 targetType，输出检测语言、提取器版本、覆盖模式和不支持语言计数；各端仍只注册 v0 占位提取器，不代表已具备专项规则。当前不选择阶段 3 的端类型或能力缺口。
 
 阶段 5 后续 UI 迁移必须沿用质量看板已确认的偏好：后台页面保持紧凑、可扫描，不做大 Hero；页头采用左侧标题说明、右侧只放明确业务主操作，不放分类 chip 和纯刷新按钮；说明性提示优先并入页头描述；宽屏按钮不拉伸；Top 维度和记录类内容继续用表格；配色避免大面积绿色，优先蓝 / 粉等明快色系和白底多色强调线。
 
@@ -550,6 +550,24 @@ docs/40 阶段 1：首次 Review 前确定性检查 Preflight
 - 解决的缺口：补齐 `docs/39` Material Design 3 / MUI 分阶段迁移的最后一段页面壳，阶段 5 收尾。
 - 如何验证：运行 `scripts/run-frontend.cmd build`，确认生产构建通过；确认 `/settings`、`/releases`、`/help` 可构建，设置页保存、测试 Provider、Prompt 预览、项目组配置和 Push 策略维护不改 API 契约。
 - 下一阶段：`docs/39` 本轮专项完成；后续回到 M11 业务 Retriever 扩展循环，或等待用户确认新的专项计划。
+
+### docs/40 阶段 1 落地记录（2026-07-11）
+
+- 改了什么：在 MR、Push、manual、retry 的 Provider fan-out 前统一运行一次内置 `SECRET_SCAN`；将固定 `runId / trigger / freshness` 脱敏摘要复用于所有模型 Context Pack；新增 `DETERMINISTIC_PRECHECK_STARTED / COMPLETED / FAILED / REUSED` progress；保留手动检查 GET / POST API。
+- 为什么做：首次 Review 过去无法拿到确定性硬证据，多模型若在 Provider 内扫描还会重复执行；前置编排可确保首轮证据一致且成本可控。
+- 解决的缺口：补齐首次 Review 前确定性检查、同次调度多模型复用和失败可观测 fail-open。
+- 如何验证：相关契约与单元回归 105 passed（另有 3 个与本阶段无关、可独立复现的既有失败测试被排除）；重点用例覆盖 MR、Push、manual、retry、多模型单 run 复用、失败脱敏继续 Provider、手动 API 与 Context Pack。
+- 遗留风险：自动 Preflight 当前仅支持内置 `SECRET_SCAN`；manual 同时缺少 `changedFileDetails.diffText` 和顶层 `diffText` 时结果为 `NOT_APPLICABLE`；不做合并阻塞。
+- 下一阶段：`docs/40` 阶段 2 Planner 多端感知与覆盖基线；未经用户明确确认不得开始。
+
+### docs/40 阶段 2 落地记录（2026-07-12）
+
+- 改了什么：Planner 接收任务 `targetType`；新增 `generic-v1` 和六类 targetType 的提取器注册表；Context Pack/progress 输出 `detectedLanguages / extractorVersions / coverageSummary`；前端高准确模式展示端类型、覆盖模式、语言、版本和暂不支持语言计数。
+- 为什么做：在继续扩展某个端之前，先公开当前变更属于哪个端、识别了哪些语言、实际使用了哪些提取器，以及哪些语言仍未被专项支持，避免把通用规则伪装成完整多端能力。
+- 解决的缺口：补齐 Planner 多端感知和覆盖基线，为阶段 3 用评估样本选择一个端和一个缺口提供可观测数据。
+- 如何验证：Planner / Context Pack / Local Retriever / Prompt 定向测试 43 passed；受影响后端回归 132 passed、3 个已知无关既有失败用例排除；前端 production build 通过；阶段 2 修改文件定向 ruff 通过。
+- 遗留风险：各端专项提取器仍为 v0 空实现，WEB_PC、iOS、Android、跨端等语言只统计、不新增信号；多端摘要为避免挤占证据预算，不注入 Provider prompt，只在内部 Context Pack 返回对象、progress 和前端展示。
+- 下一阶段：阶段 3 前必须先核对 evaluation cases、人工 rule gap attribution、acceptance gate 和 baseline evaluation run；证据不足时应停止，不得自行选择端类型。
 
 暂不建议进入：
 

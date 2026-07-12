@@ -654,6 +654,16 @@ def test_manual_review_builds_context_pack_and_records_progress(
     assert detail["summary"]["plannerSignalTypeCounts"] == [
         {"type": "HISTORICAL_CONTEXT_MISSING_FEEDBACK", "count": 2},
     ]
+    assert detail["summary"]["plannerTargetType"] == "BACKEND"
+    assert detail["summary"]["detectedLanguages"] == ["JAVA"]
+    assert detail["summary"]["extractorVersions"] == ["generic-v1", "backend-v0"]
+    assert detail["summary"]["plannerCoverageSummary"] == {
+        "coverageMode": "GENERIC_FALLBACK",
+        "changedFileCount": 1,
+        "recognizedFileCount": 1,
+        "unrecognizedFileCount": 0,
+        "unsupportedLanguageCounts": [],
+    }
     assert detail["summary"]["retrieverSupportedSignalTypes"] == [
         "CACHE_WRITE_DELETE_CHANGED",
         "DB_SQL_MAPPER_CHANGED",
@@ -1210,7 +1220,14 @@ def test_project_group_multi_model_manual_review_saves_result_list(
         return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("MiMo 完成")}}]})
     )
 
-    response = client.post("/api/code-quality-reviews/manual", json=manual_request())
+    request = manual_request()
+    request["changedFileDetails"] = [
+        {
+            "path": "src/OrderService.java",
+            "diffText": "@@ -1,1 +1,2 @@\n class OrderService {}\n+String apiKey = 'multi-model-secret-token';",
+        }
+    ]
+    response = client.post("/api/code-quality-reviews/manual", json=request)
 
     assert response.status_code == 200
     task_id = response.json()["data"]["taskId"]
@@ -1222,6 +1239,65 @@ def test_project_group_multi_model_manual_review_saves_result_list(
     assert all(item["status"] == "SUCCESS" for item in results)
     assert deepseek_route.called
     assert mimo_route.called
+    checks = client.get(f"/api/review-tasks/{task_id}/deterministic-checks").json()["data"]
+    assert len(checks["runs"]) == 1
+    assert checks["latestRun"]["configSnapshot"]["trigger"] == "AUTO_PREFLIGHT"
+    assert checks["latestRun"]["resultSummary"]["findingCount"] == 1
+    run_id = checks["latestRun"]["id"]
+    for route in (deepseek_route, mimo_route):
+        provider_payload = json.loads(route.calls[0].request.content)
+        assert f'"runId":{run_id}' in provider_payload["messages"][1]["content"]
+        assert "multi-model-secret-token" not in json.dumps(provider_payload, ensure_ascii=False)
+    progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
+    assert [item["phase"] for item in progress].count("DETERMINISTIC_PRECHECK_STARTED") == 1
+    assert [item["phase"] for item in progress].count("DETERMINISTIC_PRECHECK_COMPLETED") == 1
+    assert [item["phase"] for item in progress].count("DETERMINISTIC_PRECHECK_REUSED") == 2
+
+
+@respx.mock
+def test_manual_preflight_failure_is_redacted_and_fail_open(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    from app.deterministic_checks import service as deterministic_service
+
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
+    seed_project(db_session, "DEEPSEEK")
+    monkeypatch.setattr(
+        deterministic_service,
+        "_scan_changed_files",
+        lambda files: (_ for _ in ()).throw(
+            RuntimeError(r"D:\private\repo token=raw-failure-secret")
+        ),
+    )
+    provider_route = respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json()}}]})
+    )
+    request = manual_request()
+    request["changedFileDetails"] = [{"path": "src/OrderService.java", "diffText": "+ token=secret-value"}]
+
+    response = client.post("/api/code-quality-reviews/manual", json=request)
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "SUCCESS"
+    assert provider_route.called
+    task_id = response.json()["data"]["taskId"]
+    checks = client.get(f"/api/review-tasks/{task_id}/deterministic-checks").json()["data"]
+    assert checks["status"] == "FAILED"
+    payload = json.dumps(checks, ensure_ascii=False)
+    assert "raw-failure-secret" not in payload
+    assert r"D:\private\repo" not in payload
+    progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
+    failed = next(item for item in progress if item["phase"] == "DETERMINISTIC_PRECHECK_FAILED")
+    assert "raw-failure-secret" not in failed["detail"]
+    context = next(item for item in progress if item["phase"] == "CONTEXT_PACK_BUILT")
+    context_detail = json.loads(context["detail"])
+    security = context_detail["summary"]["deterministicChecks"]["securitySummary"]
+    assert security["status"] == "FAILED"
+    assert security["trigger"] == "AUTO_PREFLIGHT"
 
 
 def test_project_group_multi_model_manual_review_creates_model_level_queue_jobs(
@@ -2672,6 +2748,13 @@ def test_mr_auto_review_sends_combined_review_summary(
     assert "变更审查结果" in notifications[0]["requestDigest"]
     assert "代码质量 Review" in notifications[0]["requestDigest"]
     assert "auto-secret" not in json.dumps(notifications, ensure_ascii=False)
+    checks = client.get(f"/api/review-tasks/{task_id}/deterministic-checks").json()["data"]
+    assert checks["status"] == "COMPLETED"
+    assert len(checks["runs"]) == 1
+    progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
+    assert [item["phase"] for item in progress].index("DETERMINISTIC_PRECHECK_COMPLETED") < [
+        item["phase"] for item in progress
+    ].index("PROVIDER_SELECTED")
 
 
 @respx.mock
@@ -2787,6 +2870,9 @@ def test_retry_gitlab_mr_ai_review_uses_saved_changed_files(
     assert retry.json()["data"]["status"] == "SUCCESS"
     result = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-result").json()["data"]
     assert result["findingCount"] == 1
+    checks = client.get(f"/api/review-tasks/{created['taskId']}/deterministic-checks").json()["data"]
+    assert len(checks["runs"]) == 1
+    assert checks["latestRun"]["configSnapshot"]["trigger"] == "AUTO_PREFLIGHT"
 
 
 @respx.mock
@@ -3315,6 +3401,9 @@ def test_push_gate_allows_large_push_without_risk_match(
     assert "Commit数 3 >= 3" in gate["reasonSummary"]
     assert "Push 审核策略已满足" in gate["reasonSummary"]
     assert gate["metrics"]["changedFileCount"] == 10
+    checks = client.get(f"/api/review-tasks/{created['taskId']}/deterministic-checks").json()["data"]
+    assert checks["status"] == "COMPLETED"
+    assert len(checks["runs"]) == 1
 
 
 @respx.mock

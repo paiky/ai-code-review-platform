@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：专项规划已落地，等待用户确认是否进入阶段 1；未经确认不得开始实现。
+- 当前状态：阶段 1、阶段 2 已落地，当前停止等待用户验证；阶段 3 进入前必须核对 evaluation cases、人工归因、acceptance gate 和 baseline run，未经用户明确确认不得开始。
 - 上游阶段：`docs/39-review-accuracy-and-material-ui-roadmap.md` 已完成源码工作区诊断、Java / Spring / MyBatis 关系证据、Context Pack 分层预算、质量治理入口收敛和 MUI 页面壳迁移。
 - 近期总控：`docs/36-review-platform-current-roadmap.md`。本文是 `docs/39` 完成后的下一轮专项实施路线，阶段是否启动仍以 `docs/36` 和用户确认为准。
 - 长期目标：`docs/37-review-platform-target-product-roadmap.md`。
@@ -206,6 +206,23 @@ HISTORICAL_CONTEXT_MISSING_FEEDBACK
 
 - 完成后停止；不自动进入 Planner 多端改造。
 
+#### 阶段 1 实施设计（2026-07-11）
+
+- 统一编排点：MR / Push 分别在 `trigger_auto_review` / `_trigger_push_auto_review`，manual / retry 分别在 `create_manual_review` / `retry_review_task`，均在 Provider job fan-out 前调用 `ensure_deterministic_preflight`；禁止下沉到 `_run_review` 执行扫描。
+- 复用契约：编排层生成一次 `SECRET_SCAN` run，把包含 `runId / trigger / freshness` 的脱敏 security summary 固定到本次各模型 request；Context Pack 使用该固定摘要，不因并发手动重跑而漂移到别的 run。
+- 失败契约：扫描内部异常落一条 `FAILED` run，progress 记录脱敏原因，Context Pack 注入相同失败摘要，Provider 调用继续执行。
+- 数据与接口：复用 `deterministic_check_runs` 的配置快照和结果摘要，不新增表、不改变现有 GET / POST 手动检查 API。
+- manual 输入：自动 Preflight 使用本次 manual 请求的 `changedFileDetails / changedFiles` 快照；GitLab MR / Push / retry 使用已落库事件的 changed-files 快照。
+
+#### 阶段 1 落地记录（2026-07-11）
+
+- 改了什么：新增统一 `ensure_deterministic_preflight` 编排；MR、Push、manual、retry 均在 Provider fan-out 前调用一次；多模型 request 固定携带同一脱敏 security summary；progress 展示开始、完成、失败和复用状态。
+- 为什么：确保首次模型请求已经包含当前输入的确定性证据，避免多模型重复扫描，并让失败降级可解释。
+- 验收结果：MR、Push、manual、retry、两模型复用、失败 fail-open 与脱敏、现有手动 API、Context Pack 单元 / 契约测试均已覆盖；受影响回归 105 passed。
+- 边界确认：未新增表，未做合并阻塞，未修改 finding，未进入 Planner 多端改造，未提前实施后续阶段。
+- 遗留风险：只自动执行内置 `SECRET_SCAN`；manual 同时缺少明细 diff 和顶层 `diffText` 时无法产生有效扫描输入；仓库完整 lint 仍有 6 个既有未使用导入 / 变量问题。
+- 下一阶段：阶段 2 Planner 多端感知与覆盖基线；当前停止等待用户验证。
+
 ### 阶段 2：Planner 多端感知与覆盖基线
 
 目标：
@@ -249,6 +266,24 @@ HISTORICAL_CONTEXT_MISSING_FEEDBACK
 停止点：
 
 - 完成后先收集或核对 evaluation cases，再决定阶段 3 选择哪个端和哪个缺口。
+
+#### 阶段 2 实施设计（2026-07-12）
+
+- 统一契约：`build_review_context_pack` 接收任务 `targetType`，Planner 输出 `targetType / detectedLanguages / extractorVersions / coverageSummary`，并继续保留现有 signal / requested context 字段。
+- 注册机制：新增通用 `generic-v1` 与六类 targetType 的提取器注册表；阶段 2 的端侧提取器使用 `*-v0` 空实现，只声明选择结果，不新增 TypeScript、Swift、Kotlin、Dart 等专项信号。
+- 兼容语义：已有 `_planner_signals_for_file` 继续由 `generic-v1` 调用，保持 Java / SQL / XML 等现有行为；未知或非法 targetType 归一为 `GENERAL`。
+- 覆盖语义：文件后缀只生成语言和计数摘要；无专项提取器时 `coverageMode=GENERIC_FALLBACK`，GENERAL 为 `GENERIC_ONLY`；`unsupportedLanguageCounts` 明确统计当前 generic 基线未声明支持的语言。
+- 安全边界：Context Pack、progress 和前端只展示 targetType、语言枚举、提取器版本、覆盖模式和计数，不展示源码、绝对路径或 diff 内容。
+- 数据与接口：不新增表，不改变 Provider / Profile 解析优先级，不修改 finding，不新增 Retriever。
+
+#### 阶段 2 落地记录（2026-07-12）
+
+- 改了什么：新增 Planner 提取器注册模块；六类 targetType 均生成可解释摘要；保留 `generic-v1` 现有 Java / DB / 缓存等信号，端侧 `*-v0` 只作为明确占位；前端新增安全覆盖摘要展示。
+- 验收结果：BACKEND、WEB_PC、APP_IOS、APP_ANDROID、APP_CROSS_PLATFORM、GENERAL 均有单元覆盖；未知扩展名计入 unrecognized，TypeScript / Swift / Kotlin / Dart 等未支持语言计入 `unsupportedLanguageCounts`；现有 Java 信号、Retriever snippets、Context Pack 预算和 Prompt 测试通过。
+- 兼容处理：多端摘要在 Context Pack 完成预算裁剪后恢复到返回对象，不进入 Provider prompt 字符预算，避免挤掉已有直接证据和关系 snippets。
+- 验证结果：后端定向 43 passed；受影响回归 132 passed、3 deselected；前端 build 通过；阶段修改文件定向 ruff 通过。
+- 边界确认：未增加任何端侧业务信号，未新增 Retriever，未改变 Provider / Profile，未修改 finding，未进入阶段 3。
+- 下一阶段：先核对阶段 3 的样本与治理进入条件；当前停止等待用户验证。
 
 ### 阶段 3：第一个多端 Planner / Retriever 配对扩展
 

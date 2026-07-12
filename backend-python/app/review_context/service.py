@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.json_utils import read_json_array
 from app.deterministic_checks.service import latest_security_summary
+from app.review_context.planner import build_planner_baseline
 from app.project_integration import gitlab_client
 from app.review_feedback.models import ReviewItemFeedback
 from app.review_feedback.repository import ensure_feedback_schema
@@ -181,6 +182,8 @@ def build_review_context_pack(
     repository_url: str | None = None,
     git_project_id: str | None = None,
     head_ref: str | None = None,
+    deterministic_security_summary: dict[str, Any] | None = None,
+    target_type: str | None = None,
 ) -> dict[str, Any]:
     files = _normalize_changed_files(changed_files or [], diff_text)
     feedback_summary = _context_missing_feedback_summary(db, project_id)
@@ -189,7 +192,7 @@ def build_review_context_pack(
         git_project_id=git_project_id,
         head_ref=head_ref,
     )
-    context_plan = _context_plan(files, feedback_summary, same_file_context)
+    context_plan = _context_plan(files, feedback_summary, same_file_context, target_type)
     planner_signals = context_plan.pop("_plannerSignals", [])
     requested_contexts = context_plan.pop("_requestedContexts", [])
     planner_unavailable_contexts = context_plan.pop("_unavailableContexts", [])
@@ -213,7 +216,7 @@ def build_review_context_pack(
     planner_unavailable_contexts = _planner_unavailable_contexts(requested_contexts)
     context_plan["unavailableContextCount"] = len(planner_unavailable_contexts)
     deterministic_checks = {
-        "securitySummary": latest_security_summary(db, task_id),
+        "securitySummary": deterministic_security_summary or latest_security_summary(db, task_id),
     }
     unavailable_contexts = _unavailable_contexts(
         files,
@@ -247,9 +250,11 @@ def build_review_context_pack(
         "contextPack": context_pack,
     }
     budget_before = _budget_count_snapshot(context_pack)
+    planner_baseline_summary = _detach_planner_baseline_summary(context_pack)
     detached_evidence_candidates = _detach_local_reference_evidence_candidates(context_pack)
     prompt_text, truncated_by_budget = _fit_context_pack_budget(context_pack, review_context)
     _restore_local_reference_evidence_candidates(context_pack, detached_evidence_candidates)
+    _restore_planner_baseline_summary(context_pack, planner_baseline_summary)
     local_reference_summary = context_pack.get("localReferenceSearch") or _empty_local_reference_summary()
     local_reference_context["summary"] = local_reference_summary
     local_reference_context["searches"] = (context_pack.get("localReferenceContext") or {}).get("searches") or []
@@ -308,6 +313,23 @@ def build_review_context_pack(
         "summary": _progress_summary(context_pack, meta),
         "meta": meta,
     }
+
+
+def _detach_planner_baseline_summary(context_pack: dict[str, Any]) -> dict[str, Any]:
+    context_plan = context_pack.get("contextPlan") or {}
+    return {
+        key: context_plan.pop(key)
+        for key in ("targetType", "detectedLanguages", "extractorVersions", "coverageSummary")
+        if key in context_plan
+    }
+
+
+def _restore_planner_baseline_summary(
+    context_pack: dict[str, Any],
+    summary: dict[str, Any],
+) -> None:
+    if summary:
+        (context_pack.get("contextPlan") or {}).update(summary)
 
 
 def _normalize_changed_files(raw_files: list[Any], diff_text: str | None) -> list[dict[str, Any]]:
@@ -706,10 +728,10 @@ def _context_plan(
     files: list[dict[str, Any]],
     feedback_summary: dict[str, Any],
     same_file_context: dict[str, Any],
+    target_type: str | None = None,
 ) -> dict[str, Any]:
-    raw_signals: list[dict[str, Any]] = []
-    for file in files:
-        raw_signals.extend(_planner_signals_for_file(file))
+    baseline = build_planner_baseline(files, target_type, _generic_planner_signals)
+    raw_signals = list(baseline["signals"])
     raw_signals.extend(_planner_signals_from_feedback(feedback_summary))
 
     signals = raw_signals[:CONTEXT_PLANNER_MAX_SIGNALS]
@@ -721,6 +743,10 @@ def _context_plan(
     ]
     return {
         "version": CONTEXT_PLANNER_VERSION,
+        "targetType": baseline["targetType"],
+        "detectedLanguages": baseline["detectedLanguages"],
+        "extractorVersions": baseline["extractorVersions"],
+        "coverageSummary": baseline["coverageSummary"],
         "plannerSignalCount": len(signals),
         "plannerSignalTotal": len(raw_signals),
         "plannerSignalsTruncated": len(raw_signals) > len(signals),
@@ -739,6 +765,13 @@ def _context_plan(
         "_requestedContexts": requested_contexts,
         "_unavailableContexts": unavailable_contexts,
     }
+
+
+def _generic_planner_signals(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    signals: list[dict[str, Any]] = []
+    for file in files:
+        signals.extend(_planner_signals_for_file(file))
+    return signals
 
 
 def _planner_signals_for_file(file: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1719,6 +1752,10 @@ def _progress_summary(context_pack: dict[str, Any], meta: dict[str, Any]) -> dic
         "topMissingContextTypes": feedback["byMissingContextType"][:3],
         "plannerSignalCount": context_plan.get("plannerSignalCount", 0),
         "plannerSignalTotal": context_plan.get("plannerSignalTotal", 0),
+        "plannerTargetType": context_plan.get("targetType"),
+        "detectedLanguages": context_plan.get("detectedLanguages") or [],
+        "extractorVersions": context_plan.get("extractorVersions") or [],
+        "plannerCoverageSummary": context_plan.get("coverageSummary") or {},
         "plannerSignalTypeCounts": (context_pack.get("plannerSignalTypeCounts") or [])[:12],
         "requestedContextCount": context_plan.get("requestedContextCount", 0),
         "requestedContextTypeCounts": context_plan.get("requestedContextTypeCounts", [])[:8],

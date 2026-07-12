@@ -2646,6 +2646,10 @@ function buildHighAccuracyContextSummary(progress) {
     status,
     truncated: Boolean(localReferenceSearch.truncated || meta.localReferenceTruncated || summary.truncated || meta.truncated),
     plannerSignalCount: hasRecord ? (summary.plannerSignalCount ?? meta.plannerSignalCount) : null,
+    plannerTargetType: summary.plannerTargetType || 'GENERAL',
+    detectedLanguages: safeArray(summary.detectedLanguages),
+    extractorVersions: safeArray(summary.extractorVersions),
+    plannerCoverageSummary: summary.plannerCoverageSummary || {},
     plannerSignalTypeCounts: safeArray(summary.plannerSignalTypeCounts),
     retrieverSupportedSignalTypes: safeArray(summary.retrieverSupportedSignalTypes),
     retrieverUnsupportedSignalTypeCounts: safeArray(summary.retrieverUnsupportedSignalTypeCounts),
@@ -2713,6 +2717,17 @@ function HighAccuracyContextSummary({ progress }) {
           </Descriptions.Item>
           <Descriptions.Item label="Planner Signal 数">
             <Text strong>{countText(summary.plannerSignalCount)}</Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="Planner 端类型">
+            <Tag>{summary.plannerTargetType || 'GENERAL'}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="检测语言">
+            {(summary.detectedLanguages || []).join('、') || '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="覆盖模式">
+            <Tag color={summary.plannerCoverageSummary?.coverageMode === 'GENERIC_FALLBACK' ? 'orange' : 'blue'}>
+              {summary.plannerCoverageSummary?.coverageMode || '-'}
+            </Tag>
           </Descriptions.Item>
           <Descriptions.Item label="引用查询数">
             <Text strong>{countText(summary.queryCount)}</Text>
@@ -2892,6 +2907,8 @@ function buildHighAccuracyRoleSteps(progress, refinementSummary) {
       description: roleDetailLine([
         `Signal ${countText(summary.plannerSignalCount)}`,
         `类型 ${countItemsText(summary.plannerSignalTypeCounts)}`,
+        summary.plannerTargetType,
+        summary.plannerCoverageSummary?.coverageMode,
       ]),
     },
     {
@@ -3072,6 +3089,21 @@ function HighAccuracyFlowView({ progress, review }) {
             <Descriptions size="small" column={1}>
               <Descriptions.Item label="Planner Signal 类型">
                 {countItemsText(summary.plannerSignalTypeCounts)}
+              </Descriptions.Item>
+              <Descriptions.Item label="端类型 / 覆盖模式">
+                {summary.plannerTargetType || 'GENERAL'} / {summary.plannerCoverageSummary?.coverageMode || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="检测语言">
+                {(summary.detectedLanguages || []).join('、') || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="提取器版本">
+                {(summary.extractorVersions || []).join('、') || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="暂不支持语言">
+                {countItemsText((summary.plannerCoverageSummary?.unsupportedLanguageCounts || []).map((item) => ({
+                  type: item.language,
+                  count: item.count,
+                })))}
               </Descriptions.Item>
               <Descriptions.Item label="Retriever 支持 Signal">
                 {(summary.retrieverSupportedSignalTypes || []).join('、') || '-'}

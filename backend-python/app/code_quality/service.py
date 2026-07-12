@@ -61,7 +61,8 @@ from app.code_quality.repository import (
 )
 from app.core.database import SessionLocal
 from app.core.errors import AppError
-from app.core.json_utils import read_json, read_json_array
+from app.core.json_utils import read_json
+from app.deterministic_checks.service import ensure_deterministic_preflight
 from app.code_quality.models import CodeQualityModelProvider, CodeQualityReviewResult
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.project_integration.repository import (
@@ -224,6 +225,12 @@ def _submit_provider_job(
 def create_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any]:
     response = enqueue_manual_review(db, request)
     task_id = response["taskId"]
+    preflight_summary = ensure_deterministic_preflight(
+        db,
+        task_id,
+        changed_files=_manual_preflight_changed_files(request),
+    )
+    request = {**request, "_deterministicPreflightSummary": preflight_summary}
     if _inline_enabled():
         result = run_manual_review_now(db, task_id, request)
         db.commit()
@@ -437,8 +444,14 @@ def run_manual_review_now(db: Session, task_id: int, request: dict[str, Any]) ->
 def retry_review_task(db: Session, task_id: int, request: dict[str, Any] | None = None) -> dict[str, Any]:
     review_key = (request or {}).get("reviewKey")
     response = enqueue_retry_review(db, task_id, review_key=review_key)
+    preflight_summary = ensure_deterministic_preflight(db, task_id, review_key=review_key)
     if _inline_enabled():
-        result = run_retry_review_now(db, task_id, review_key=review_key)
+        result = run_retry_review_now(
+            db,
+            task_id,
+            review_key=review_key,
+            preflight_summary=preflight_summary,
+        )
         db.commit()
         return {
             "taskId": task_id,
@@ -459,6 +472,7 @@ def retry_review_task(db: Session, task_id: int, request: dict[str, Any] | None 
             review.get("model"),
             review.get("displayName"),
             int(review.get("sortOrder") or 0),
+            preflight_summary,
             job_type="AI_REVIEW",
             task_id=task_id,
             project_id=response.get("projectId"),
@@ -567,6 +581,7 @@ def run_retry_review_target_job(
     model: str | None,
     display_name: str | None,
     sort_order: int,
+    preflight_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     db = SessionLocal()
     try:
@@ -581,6 +596,7 @@ def run_retry_review_target_job(
         request = _request_from_task_event(db, task, profile)
         request["model"] = model
         request["reviewKey"] = review_key
+        request["_deterministicPreflightSummary"] = preflight_summary
         result = _run_review(
             db,
             task.id,
@@ -608,7 +624,12 @@ def run_retry_review_target_job(
         db.close()
 
 
-def run_retry_review_now(db: Session, task_id: int, review_key: str | None = None) -> dict[str, Any]:
+def run_retry_review_now(
+    db: Session,
+    task_id: int,
+    review_key: str | None = None,
+    preflight_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     task = db.get(ReviewTask, task_id)
     if task is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
@@ -626,6 +647,7 @@ def run_retry_review_now(db: Session, task_id: int, review_key: str | None = Non
         request = _request_from_task_event(db, task, profile)
         request["model"] = target["model"]
         request["reviewKey"] = target["reviewKey"]
+        request["_deterministicPreflightSummary"] = preflight_summary
         results.append(_run_review(db, task.id, project, profile, target["provider"], request, target))
     return _aggregate_review_results(results)
 
@@ -695,10 +717,12 @@ def trigger_auto_review(
         "changedFileDetails": changed_files,
     }
     delete_progress(db, task.id)
+    preflight_summary = ensure_deterministic_preflight(db, task.id, changed_files=changed_files)
     for target in targets:
         provider = target["provider"]
         request = _build_review_request(profile, {**base_request, "model": target["model"]})
         request["reviewKey"] = target["reviewKey"]
+        request["_deterministicPreflightSummary"] = preflight_summary
         append_progress(
             db,
             task.id,
@@ -822,12 +846,14 @@ def _trigger_push_auto_review(
         "changedFileDetails": changed_files,
     }
     delete_progress(db, task.id)
+    preflight_summary = ensure_deterministic_preflight(db, task.id, changed_files=changed_files)
     gate["ai_review_scheduled"] = True
     save_push_gate_decision(db, **gate)
     for target in targets:
         provider = target["provider"]
         request = _build_review_request(profile, {**base_request, "model": target["model"]})
         request["reviewKey"] = target["reviewKey"]
+        request["_deterministicPreflightSummary"] = preflight_summary
         append_progress(
             db,
             task.id,
@@ -2036,6 +2062,27 @@ def _run_review(
     target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     review_key = request.get("reviewKey") or (target or {}).get("reviewKey")
+    preflight_summary = request.get("_deterministicPreflightSummary")
+    if preflight_summary:
+        append_progress(
+            db,
+            task_id,
+            "DETERMINISTIC_PRECHECK_REUSED",
+            "WARN" if preflight_summary.get("status") in {"FAILED", "UNAVAILABLE"} else "INFO",
+            "当前模型复用本次调度的确定性检查摘要",
+            json.dumps(
+                {
+                    "runId": preflight_summary.get("runId"),
+                    "status": preflight_summary.get("status"),
+                    "trigger": preflight_summary.get("trigger"),
+                    "freshness": preflight_summary.get("freshness"),
+                    "failureReason": preflight_summary.get("failureReason"),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            review_key=review_key,
+        )
     policy_context = _attach_project_review_policies(db, project, request)
     review_context = _attach_review_context_pack(db, task_id, project, request)
     append_progress(
@@ -2369,6 +2416,7 @@ def _build_review_request(profile, request: dict[str, Any]) -> dict[str, Any]:
         "reviewContextText": request.get("reviewContextText"),
         "reviewContextMeta": request.get("reviewContextMeta"),
         "reviewContextSummary": request.get("reviewContextSummary"),
+        "_deterministicPreflightSummary": request.get("_deterministicPreflightSummary"),
     }
 
 
@@ -2413,6 +2461,8 @@ def _attach_review_context_pack(
         repository_url=project.repository_url if project is not None else None,
         git_project_id=project.git_project_id if project is not None else None,
         head_ref=head_ref or request.get("commitSha"),
+        deterministic_security_summary=request.get("_deterministicPreflightSummary"),
+        target_type=task.target_type if task is not None else None,
     )
     request["reviewContext"] = context["reviewContext"]
     request["contextPack"] = context["contextPack"]
@@ -2628,8 +2678,15 @@ def _minimal_review_context_progress_summary(summary: dict[str, Any]) -> dict[st
         "projectId": summary.get("projectId"),
         "changedFileCount": summary.get("changedFileCount"),
         "includedChangedFileCount": summary.get("includedChangedFileCount"),
+        "sameFileSourceSnippetCount": summary.get("sameFileSourceSnippetCount"),
+        "sameFileSourceFileCount": summary.get("sameFileSourceFileCount"),
+        "deterministicChecks": summary.get("deterministicChecks") or {},
         "contextMissingFeedbackTotal": summary.get("contextMissingFeedbackTotal"),
         "plannerSignalCount": summary.get("plannerSignalCount"),
+        "plannerTargetType": summary.get("plannerTargetType"),
+        "detectedLanguages": (summary.get("detectedLanguages") or [])[:12],
+        "extractorVersions": (summary.get("extractorVersions") or [])[:12],
+        "plannerCoverageSummary": summary.get("plannerCoverageSummary") or {},
         "plannerSignalTypeCounts": (summary.get("plannerSignalTypeCounts") or [])[:4],
         "requestedContextTypeCounts": (summary.get("requestedContextTypeCounts") or [])[:4],
         "retrieverSupportedSignalTypes": (summary.get("retrieverSupportedSignalTypes") or [])[:12],
@@ -2839,6 +2896,7 @@ def _run_finding_refinement(db: Session, target: dict[str, Any]):
             repository_url=project.repository_url,
             git_project_id=project.git_project_id,
             head_ref=task.commit_sha or task.after_sha or task.target_branch,
+            target_type=task.target_type,
         )
         retrieval_plan = _refinement_retrieval_plan(context)
         evidence_summary = _refinement_evidence_summary(context)
@@ -3019,6 +3077,18 @@ def _changed_file_paths(changed_files: list[Any]) -> list[str]:
         if normalized:
             paths.append(normalized)
     return paths
+
+
+def _manual_preflight_changed_files(request: dict[str, Any]) -> list[dict[str, Any]]:
+    changed_files = request.get("changedFileDetails") or request.get("changedFiles") or []
+    normalized = [item if isinstance(item, dict) else {"path": item} for item in changed_files]
+    if any(str(item.get("diffText") or "").strip() for item in normalized):
+        return normalized
+    diff_text = str(request.get("diffText") or "")
+    if not diff_text.strip():
+        return normalized
+    first_path = next((item.get("path") for item in normalized if item.get("path")), "manual-review.diff")
+    return [{"path": first_path, "diffText": diff_text}]
 
 
 def _changed_files_from_task_event(db: Session, task: ReviewTask) -> list[dict[str, Any]]:

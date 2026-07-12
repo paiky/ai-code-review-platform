@@ -2022,6 +2022,12 @@ def _mask_after_marker(text: str, marker: str) -> str:
         index = lower.find(marker_lower, start)
         if index < 0:
             return text
+        before = lower[index - 1] if index > 0 else ""
+        after_index = index + len(marker_lower)
+        after = lower[after_index] if after_index < len(lower) else ""
+        if before.isalnum() or before == "_" or after.isalnum() or after == "_":
+            start = after_index
+            continue
         colon = text.find(":", index)
         equals = text.find("=", index)
         separator = min([pos for pos in (colon, equals) if pos >= 0], default=-1)
