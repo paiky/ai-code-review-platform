@@ -1,0 +1,30 @@
+{
+  "agentSettings": {
+    "enabled": true,
+    "apiKey": "在设置页输入，不要把真实 Key 保存到文件"
+  },
+  "projectGroupPolicy": {
+    "reviewEngine": "AGENT",
+    "agentSourceExportAllowed": true,
+    "aiReviewEnabled": true,
+    "triggerOnManual": true,
+    "triggerOnMr": true,
+    "triggerOnPush": false
+  },
+  "manualReview": {
+    "projectId": 1,
+    "profileCode": "backend-default-ai-review",
+    "reviewEngine": "AGENT",
+    "mode": "DIFF_TEXT",
+    "commitSha": "替换为本地 worktree 可准备的真实 commit sha",
+    "title": "Agent Review 受控生产验证",
+    "changedFiles": [
+      "src/service.py"
+    ],
+    "diffText": "diff --git a/src/service.py b/src/service.py\n--- a/src/service.py\n+++ b/src/service.py\n@@ -1 +1 @@\n-old_value\n+new_value"
+  },
+  "comparisonRetry": {
+    "reviewEngine": "STANDARD",
+    "comparisonMode": true
+  }
+}

@@ -49,6 +49,12 @@ class Settings:
     glm_base_url: str
     glm_code_review_model: str
     glm_code_review_timeout_seconds: int
+    agent_review_config_encryption_key: str
+    agent_review_worker_token: str
+    agent_review_backend_url: str
+    agent_review_worker_id: str
+    agent_review_worker_poll_seconds: int
+    agent_review_lease_seconds: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -119,6 +125,18 @@ class Settings:
             glm_code_review_timeout_seconds=int(
                 os.getenv("GLM_CODE_REVIEW_TIMEOUT_SECONDS", "1000")
             ),
+            agent_review_config_encryption_key=os.getenv(
+                "AGENT_REVIEW_CONFIG_ENCRYPTION_KEY", ""
+            ),
+            agent_review_worker_token=os.getenv("AGENT_REVIEW_WORKER_TOKEN", ""),
+            agent_review_backend_url=os.getenv(
+                "AGENT_REVIEW_BACKEND_URL", "http://backend:8090"
+            ),
+            agent_review_worker_id=os.getenv("AGENT_REVIEW_WORKER_ID", "agent-worker-1"),
+            agent_review_worker_poll_seconds=int(
+                os.getenv("AGENT_REVIEW_WORKER_POLL_SECONDS", "5")
+            ),
+            agent_review_lease_seconds=int(os.getenv("AGENT_REVIEW_LEASE_SECONDS", "60")),
         )
 
 

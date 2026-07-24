@@ -12,6 +12,8 @@ $OutputDir = Join-Path $RepoRoot ".local\docker-deploy\$Version"
 
 $BackendImage = "ai-code-review-backend:$Version"
 $FrontendImage = "ai-code-review-frontend:$Version"
+$AgentWorkerImage = "ai-code-review-agent-worker:$Version"
+$AgentEgressImage = "ai-code-review-agent-egress:$Version"
 $MysqlImage = "mysql:8.4"
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -84,10 +86,18 @@ Invoke-Docker build -f (Join-Path $DeployDir "backend.Dockerfile") -t $BackendIm
 Write-Host "Building frontend image: $FrontendImage"
 Invoke-Docker build -f (Join-Path $DeployDir "frontend.Dockerfile") -t $FrontendImage $RepoRoot
 
+Write-Host "Building Agent Worker image: $AgentWorkerImage"
+Invoke-Docker build -f (Join-Path $DeployDir "agent-review-worker.Dockerfile") -t $AgentWorkerImage $RepoRoot
+
+Write-Host "Building Agent egress proxy image: $AgentEgressImage"
+Invoke-Docker build -f (Join-Path $DeployDir "agent-egress-proxy.Dockerfile") -t $AgentEgressImage $RepoRoot
+
 Write-Host "Saving application images"
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-backend-$Version.tar") $BackendImage
 Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-frontend-$Version.tar") $FrontendImage
+Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-agent-worker-$Version.tar") $AgentWorkerImage
+Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-agent-egress-$Version.tar") $AgentEgressImage
 
 if ($IncludeMysqlImage) {
   Write-Host "Pulling and saving MySQL image: $MysqlImage"
@@ -136,6 +146,8 @@ cleanup_old_images() {
 
 docker load -i ai-code-review-backend-$Version.tar
 docker load -i ai-code-review-frontend-$Version.tar
+docker load -i ai-code-review-agent-worker-$Version.tar
+docker load -i ai-code-review-agent-egress-$Version.tar
 
 if [ -f mysql-8.4.tar ]; then
   docker load -i mysql-8.4.tar
@@ -163,6 +175,8 @@ fi
 
 cleanup_old_images "ai-code-review-backend" "`$KEEP_IMAGE_VERSIONS"
 cleanup_old_images "ai-code-review-frontend" "`$KEEP_IMAGE_VERSIONS"
+cleanup_old_images "ai-code-review-agent-worker" "`$KEEP_IMAGE_VERSIONS"
+cleanup_old_images "ai-code-review-agent-egress" "`$KEEP_IMAGE_VERSIONS"
 
 echo "Images loaded. Runtime files are in: `$DEPLOY_HOME"
 echo "Start or upgrade with:"

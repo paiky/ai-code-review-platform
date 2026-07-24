@@ -534,6 +534,22 @@ body {
   background: #fafafa;
 }
 
+.project-review-switch-row .ant-space {
+  min-width: 0;
+}
+
+.project-review-policy-panels > .ant-col {
+  display: flex;
+}
+
+.project-review-policy-panel {
+  width: 100%;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
 .project-config-save-row {
   align-items: flex-end;
   height: 100%;

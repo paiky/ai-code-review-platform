@@ -11,6 +11,7 @@ from app.main import create_app
 
 # Import models so SQLAlchemy registers all stage-2 tables in Base.metadata.
 from app.code_quality import models as code_quality_models  # noqa: F401
+from app.agent_review import models as agent_review_models  # noqa: F401
 from app.deterministic_checks import models as deterministic_check_models  # noqa: F401
 from app.evaluation import models as evaluation_models  # noqa: F401
 from app.notification import models as notification_models  # noqa: F401
@@ -47,6 +48,8 @@ def isolate_external_integrations(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GLM_BASE_URL", raising=False)
     monkeypatch.delenv("GLM_CODE_REVIEW_MODEL", raising=False)
     monkeypatch.delenv("GLM_CODE_REVIEW_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("AGENT_REVIEW_CONFIG_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("AGENT_REVIEW_WORKER_TOKEN", raising=False)
 
 
 @pytest.fixture()

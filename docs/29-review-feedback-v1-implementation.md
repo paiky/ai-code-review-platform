@@ -110,6 +110,7 @@ V1 覆盖两类反馈对象：
 - `test_fix_preview_schema_removes_legacy_task_finding_unique_index`：当前 service 对不存在的 task 返回 404，而测试期望 200。
 - `test_openai_and_anthropic_provider_mocks`：同一测试内项目默认 provider 从 OPENAI 改为 ANTHROPIC 后，第二次手动 Review 仍返回 OPENAI。
 - `test_push_gate_debounces_recent_allowed_push`：首个 Push gate 决策返回 REJECTED，测试期望 ALLOWED。
+- `test_unmatched_new_project_uses_general_and_records_ai_review_profile_failure`：当前未配置 Profile 的自动 Review 保存为 SKIPPED，测试仍期望旧语义 FAILED。
 
 这 3 个失败与 V1 feedback 新增 API、表结构和响应回显无直接耦合，本次未扩大修复范围。
 

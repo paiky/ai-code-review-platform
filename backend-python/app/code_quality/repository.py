@@ -450,6 +450,10 @@ def ensure_result_schema(db: Session) -> None:
     )
     _add_column_if_missing(db, columns, "code_quality_review_results", "display_name", "VARCHAR(128) NULL")
     _add_column_if_missing(db, columns, "code_quality_review_results", "sort_order", "INT NOT NULL DEFAULT 0")
+    _add_column_if_missing(db, columns, "code_quality_review_results", "requested_engine", "VARCHAR(32) NOT NULL DEFAULT 'STANDARD'")
+    _add_column_if_missing(db, columns, "code_quality_review_results", "effective_engine", "VARCHAR(32) NOT NULL DEFAULT 'STANDARD'")
+    _add_column_if_missing(db, columns, "code_quality_review_results", "agent_run_id", "BIGINT NULL")
+    _add_column_if_missing(db, columns, "code_quality_review_results", "agent_summary_json", "TEXT NULL")
     _drop_index_if_exists(db, "code_quality_review_results", "uk_task")
     _add_index_if_missing(
         db,
@@ -562,6 +566,13 @@ def ensure_scheduler_job_schema(db: Session) -> None:
     _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "label", "VARCHAR(255) NULL")
     _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "file_path", "VARCHAR(512) NULL")
     _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "error_message", "VARCHAR(1024) NULL")
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "lease_owner", "VARCHAR(128) NULL")
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "lease_expires_at", "DATETIME NULL")
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "heartbeat_at", "DATETIME NULL")
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "attempt", "INT NOT NULL DEFAULT 0")
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "max_attempts", "INT NOT NULL DEFAULT 2")
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "cancel_requested_at", "DATETIME NULL")
+    _add_column_if_missing(db, columns, "code_quality_scheduler_jobs", "idempotency_key", "VARCHAR(128) NULL")
     _add_index_if_missing(
         db,
         "code_quality_scheduler_jobs",
@@ -1208,6 +1219,7 @@ def create_scheduler_job(
     finding_index: int | None = None,
     label: str | None = None,
     file_path: str | None = None,
+    idempotency_key: str | None = None,
 ) -> CodeQualitySchedulerJob:
     ensure_scheduler_job_schema(db)
     now = datetime.now()
@@ -1222,6 +1234,7 @@ def create_scheduler_job(
         label=_truncate(label, 255),
         file_path=_truncate(file_path, 512),
         error_message=None,
+        idempotency_key=idempotency_key,
         queued_at=now,
         started_at=None,
         finished_at=None,
@@ -1270,8 +1283,13 @@ def cancel_scheduler_job(db: Session, job_id: int, reason: str | None = None) ->
     if record is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Scheduler job not found: {job_id}", 404)
     if record.status in {"QUEUED", "RUNNING"}:
-        _mark_scheduler_job_interrupted(record, reason)
-        if record.job_type == "AI_REVIEW":
+        if record.job_type == "AGENT_REVIEW" and record.status == "RUNNING":
+            record.cancel_requested_at = datetime.now()
+            record.error_message = _truncate(reason or "用户请求取消 Agent Review", 1024)
+            record.updated_at = datetime.now()
+        else:
+            _mark_scheduler_job_interrupted(record, reason)
+        if record.job_type in {"AI_REVIEW", "AGENT_REVIEW"} and record.status == "SKIPPED":
             _mark_review_result_interrupted(db, record.task_id, record.review_key, reason)
         elif record.job_type == "FIX_PREVIEW" and record.finding_index is not None:
             _mark_fix_preview_interrupted(db, record.task_id, record.review_key, record.finding_index, reason)
@@ -1302,8 +1320,13 @@ def cancel_active_scheduler_jobs_for_task(
         stmt = stmt.where(CodeQualitySchedulerJob.finding_index == finding_index)
     records = db.scalars(stmt.order_by(CodeQualitySchedulerJob.id.asc())).all()
     for record in records:
-        _mark_scheduler_job_interrupted(record, reason)
-    if job_type == "AI_REVIEW":
+        if record.job_type == "AGENT_REVIEW" and record.status == "RUNNING":
+            record.cancel_requested_at = datetime.now()
+            record.error_message = _truncate(reason or "用户请求取消 Agent Review", 1024)
+            record.updated_at = datetime.now()
+        else:
+            _mark_scheduler_job_interrupted(record, reason)
+    if job_type in {"AI_REVIEW", "AGENT_REVIEW"}:
         _mark_review_result_interrupted(db, task_id, review_key, reason)
     elif job_type == "FIX_PREVIEW" and finding_index is not None:
         _mark_fix_preview_interrupted(db, task_id, review_key, finding_index, reason)
@@ -1442,7 +1465,7 @@ def list_scheduler_queue_snapshot(db: Session, limit: int = 100) -> dict[str, An
         if result is None and not record.review_key:
             result = results_by_key.get((record.task_id, DEFAULT_REVIEW_KEY))
         job = scheduler_job_to_dict(record, result)
-        if record.job_type == "AI_REVIEW":
+        if record.job_type in {"AI_REVIEW", "AGENT_REVIEW"}:
             group["reviewJobs"].append(job)
             group["reviewJob"] = group["reviewJob"] or job
         else:
@@ -1459,13 +1482,13 @@ def list_ai_review_failure_notifications(db: Session, limit: int = 100) -> dict[
     failure_count = db.scalar(
         select(func.count())
         .select_from(CodeQualitySchedulerJob)
-        .where(CodeQualitySchedulerJob.job_type == "AI_REVIEW")
+        .where(CodeQualitySchedulerJob.job_type.in_(["AI_REVIEW", "AGENT_REVIEW"]))
         .where(CodeQualitySchedulerJob.status == "FAILED")
         .where(CodeQualitySchedulerJob.created_at >= cutoff)
     ) or 0
     records = db.scalars(
         select(CodeQualitySchedulerJob)
-        .where(CodeQualitySchedulerJob.job_type == "AI_REVIEW")
+        .where(CodeQualitySchedulerJob.job_type.in_(["AI_REVIEW", "AGENT_REVIEW"]))
         .where(CodeQualitySchedulerJob.status == "FAILED")
         .where(CodeQualitySchedulerJob.created_at >= cutoff)
         .order_by(CodeQualitySchedulerJob.created_at.desc(), CodeQualitySchedulerJob.id.desc())
@@ -1553,6 +1576,12 @@ def scheduler_job_to_dict(
         "label": record.label,
         "filePath": record.file_path,
         "errorMessage": record.error_message,
+        "leaseOwner": record.lease_owner,
+        "leaseExpiresAt": format_datetime(record.lease_expires_at),
+        "heartbeatAt": format_datetime(record.heartbeat_at),
+        "attempt": int(record.attempt or 0),
+        "maxAttempts": int(record.max_attempts or 0),
+        "cancelRequestedAt": format_datetime(record.cancel_requested_at),
         "queuedAt": format_datetime(record.queued_at),
         "startedAt": format_datetime(record.started_at),
         "finishedAt": format_datetime(record.finished_at),
@@ -1648,6 +1677,10 @@ def save_result(
             raw_output=result.get("rawOutput"),
             exit_code=result.get("exitCode"),
             error_message=_truncate(result.get("errorMessage"), 1024),
+            requested_engine=str(result.get("requestedEngine") or "STANDARD"),
+            effective_engine=str(result.get("effectiveEngine") or result.get("requestedEngine") or "STANDARD"),
+            agent_run_id=result.get("agentRunId"),
+            agent_summary_json=json.dumps(result.get("agentRunSummary"), ensure_ascii=False) if result.get("agentRunSummary") is not None else None,
             started_at=result.get("startedAt"),
             finished_at=result.get("finishedAt"),
             created_at=now,
@@ -1669,6 +1702,10 @@ def save_result(
         existing.raw_output = result.get("rawOutput")
         existing.exit_code = result.get("exitCode")
         existing.error_message = _truncate(result.get("errorMessage"), 1024)
+        existing.requested_engine = str(result.get("requestedEngine") or "STANDARD")
+        existing.effective_engine = str(result.get("effectiveEngine") or result.get("requestedEngine") or "STANDARD")
+        existing.agent_run_id = result.get("agentRunId")
+        existing.agent_summary_json = json.dumps(result.get("agentRunSummary"), ensure_ascii=False) if result.get("agentRunSummary") is not None else None
         existing.started_at = result.get("startedAt")
         existing.finished_at = result.get("finishedAt")
         existing.updated_at = now
@@ -1743,6 +1780,10 @@ def result_to_response(db: Session, result: CodeQualityReviewResult | None) -> d
         "rawOutput": result.raw_output,
         "exitCode": result.exit_code,
         "errorMessage": result.error_message,
+        "requestedEngine": result.requested_engine or "STANDARD",
+        "effectiveEngine": result.effective_engine or result.requested_engine or "STANDARD",
+        "agentRunId": result.agent_run_id,
+        "agentRunSummary": read_json(result.agent_summary_json, None),
         "startedAt": format_datetime(result.started_at),
         "finishedAt": format_datetime(result.finished_at),
     }

@@ -207,6 +207,8 @@ const REVIEW_PROFILE_DROPDOWN_LABELS = REVIEW_PROFILE_DROPDOWN_ITEMS.reduce(
   {}
 );
 const DEFAULT_PUSH_REVIEW_POLICY = {
+  reviewEngine: 'STANDARD',
+  agentSourceExportAllowed: false,
   aiReviewEnabled: true,
   triggerOnManual: true,
   triggerOnMr: true,
@@ -1591,8 +1593,7 @@ function TaskWorkspaceShell({ title, description, actions, children, leading }) 
           <Stack
             direction={{ xs: 'column', lg: 'row' }}
             spacing={2}
-            justifyContent="space-between"
-            alignItems={{ xs: 'stretch', lg: 'center' }}
+            sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', lg: 'center' } }}
           >
             <Box sx={{ minWidth: 0, flex: '1 1 auto', maxWidth: 900 }}>
               {leading && (
@@ -1613,14 +1614,14 @@ function TaskWorkspaceShell({ title, description, actions, children, leading }) 
               <Stack
                 direction={{ xs: 'column', sm: 'row' }}
                 spacing={1}
-                flexWrap="wrap"
                 useFlexGap
-                justifyContent="flex-end"
-                alignItems={{ xs: 'stretch', sm: 'center' }}
                 sx={{
                   flex: '0 0 auto',
                   width: { xs: '100%', lg: 'auto' },
                   ml: { lg: 'auto' },
+                  flexWrap: 'wrap',
+                  justifyContent: 'flex-end',
+                  alignItems: { xs: 'stretch', sm: 'center' },
                   '& .MuiButton-root': { minHeight: 36, height: 36, px: 1.75, flex: '0 0 auto' }
                 }}
               >
@@ -2992,6 +2993,9 @@ function HighAccuracyFlowView({ progress, review }) {
       ? summary.budgetCutSummary.localReferenceCutDetails
       : summary.budgetCutSummary?.notInjectedEvidence
   );
+  const requestedEngine = String(review?.requestedEngine || 'STANDARD').toUpperCase();
+  const effectiveEngine = String(review?.effectiveEngine || requestedEngine).toUpperCase();
+  const agentRunSummary = review?.agentRunSummary || null;
   const gapText = value => {
     const text = value || '-';
     return (
@@ -3048,6 +3052,33 @@ function HighAccuracyFlowView({ progress, review }) {
 
   return (
     <Space direction="vertical" size="large" className="full-width">
+      {requestedEngine === 'AGENT' && (
+        <Card title="Agent Review 流转">
+          <Descriptions size="small" column={{ xs: 1, md: 2, xl: 4 }}>
+            <Descriptions.Item label="请求引擎">{requestedEngine}</Descriptions.Item>
+            <Descriptions.Item label="实际引擎">
+              <Tag color={effectiveEngine === 'AGENT' ? 'purple' : 'orange'}>{effectiveEngine}</Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="Run ID">{agentRunSummary?.runId ?? review?.agentRunId ?? '-'}</Descriptions.Item>
+            <Descriptions.Item label="运行状态">{agentRunSummary?.status || review?.status || '-'}</Descriptions.Item>
+            <Descriptions.Item label="Agent turns">{agentRunSummary?.turnCount ?? '-'}</Descriptions.Item>
+            <Descriptions.Item label="工具调用">{agentRunSummary?.toolCallCount ?? '-'}</Descriptions.Item>
+            <Descriptions.Item label="源码返回">{agentRunSummary?.sourceBytesReturned == null ? '-' : `${agentRunSummary.sourceBytesReturned} bytes`}</Descriptions.Item>
+            <Descriptions.Item label="Diff 返回">{agentRunSummary?.diffBytesReturned == null ? '-' : `${agentRunSummary.diffBytesReturned} bytes`}</Descriptions.Item>
+            <Descriptions.Item label="耗时">{agentRunSummary?.durationMs == null ? '-' : formatDuration(agentRunSummary.durationMs / 1000)}</Descriptions.Item>
+            <Descriptions.Item label="降级原因">{agentRunSummary?.failureCode || '-'}</Descriptions.Item>
+          </Descriptions>
+          {effectiveEngine === 'STANDARD_FALLBACK' && (
+            <Alert
+              className="top-gap"
+              type="warning"
+              showIcon
+              message="Agent Review 已显式降级为普通 Review"
+              description={agentRunSummary?.failureCode || 'Agent Worker 或执行链路不可用'}
+            />
+          )}
+        </Card>
+      )}
       <HighAccuracyContextSummary progress={progress} />
       <Card title="角色流转">
         <Steps
@@ -3953,6 +3984,7 @@ function CodeQualityReviewView({
   changedFilesSummary,
   diffContextCapabilities,
   initialFixPreviews,
+  triggerType,
   onRefresh,
   onRetry,
   retrying,
@@ -4000,6 +4032,11 @@ function CodeQualityReviewView({
   }
 
   const findings = Array.isArray(review.findings) ? review.findings : [];
+  const requestedEngine = String(review.requestedEngine || 'STANDARD').toUpperCase();
+  const effectiveEngine = String(review.effectiveEngine || requestedEngine).toUpperCase();
+  const agentRunSummary = review.agentRunSummary || null;
+  const isGitLabTask = ['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(triggerType);
+  const alternateEngine = requestedEngine === 'AGENT' ? 'STANDARD' : 'AGENT';
   const summaryText = codeQualitySummary(review, findings);
   const activeChangedFile = diffTarget?.changedFile || null;
   const generateFixPreview = async index => {
@@ -4035,7 +4072,10 @@ function CodeQualityReviewView({
     const key = `review-${review?.reviewKey || 'default'}`;
     setCancelingAction(key);
     try {
-      await onCancelReview?.({ jobType: 'AI_REVIEW', reviewKey: review?.reviewKey });
+      await onCancelReview?.({
+        jobType: requestedEngine === 'AGENT' ? 'AGENT_REVIEW' : 'AI_REVIEW',
+        reviewKey: review?.reviewKey
+      });
       message.success('AI Review 已中断');
     } catch (err) {
       message.error(err.message);
@@ -4064,6 +4104,10 @@ function CodeQualityReviewView({
               <Tag color={statusColor(review.status)}>{review.status || '-'}</Tag>
               <Tag color="blue">{review.provider || '-'}</Tag>
               {review.model && <Tag>{review.model}</Tag>}
+              <Tag color={requestedEngine === 'AGENT' ? 'purple' : 'default'}>请求 {requestedEngine}</Tag>
+              <Tag color={effectiveEngine === 'AGENT' ? 'purple' : effectiveEngine === 'STANDARD_FALLBACK' ? 'orange' : 'default'}>
+                实际 {effectiveEngine}
+              </Tag>
               {review.overallLevel && <Tag color={riskColor(review.overallLevel)}>{severityLabel(review.overallLevel)}</Tag>}
               <Tag>{review.findingCount ?? findings.length} 个问题</Tag>
             </Space>
@@ -4078,18 +4122,47 @@ function CodeQualityReviewView({
                   中断 AI Review
                 </Button>
               )}
-              <Button loading={retrying} disabled={review.status === 'RUNNING'} onClick={() => onRetry?.(review?.reviewKey)}>重试 AI Review</Button>
+              {isGitLabTask && (
+                <Button
+                  loading={retrying}
+                  disabled={review.status === 'RUNNING'}
+                  onClick={() => onRetry?.(undefined, alternateEngine)}
+                >
+                  {alternateEngine === 'AGENT' ? '追加 Agent 对照' : '追加普通 Review 对照'}
+                </Button>
+              )}
+              <Button
+                loading={retrying}
+                disabled={review.status === 'RUNNING'}
+                onClick={() => onRetry?.(requestedEngine === 'AGENT' ? undefined : review?.reviewKey, requestedEngine)}
+              >
+                重试 AI Review
+              </Button>
             </Space>
           </div>
           <Alert type={findings.length > 0 ? 'warning' : 'info'} showIcon message={summaryText} />
           {review.status === 'RUNNING' && <Alert type="info" showIcon message="AI Review 正在执行" description="模型 Provider 正在分析代码变更，完成后结果会自动刷新。" />}
           {review.errorMessage && review.status === 'SKIPPED' && <Alert type="warning" showIcon message="AI Review 未执行" description={review.errorMessage} />}
           {review.errorMessage && review.status !== 'SKIPPED' && <Alert type="error" showIcon message="AI Review 执行失败" description={review.errorMessage} />}
+          {effectiveEngine === 'STANDARD_FALLBACK' && (
+            <Alert
+              type="warning"
+              showIcon
+              message="本次 Agent Review 已降级为普通 Review"
+              description={agentRunSummary?.failureCode || 'Agent Worker 或执行链路不可用'}
+            />
+          )}
           <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
             <Descriptions.Item label="Profile">{review.profileCode || '-'}</Descriptions.Item>
+            <Descriptions.Item label="请求引擎">{requestedEngine}</Descriptions.Item>
+            <Descriptions.Item label="实际引擎">{effectiveEngine}</Descriptions.Item>
             <Descriptions.Item label="开始时间">{review.startedAt || '-'}</Descriptions.Item>
             <Descriptions.Item label="结束时间">{review.finishedAt || '-'}</Descriptions.Item>
             <Descriptions.Item label="Exit Code">{review.exitCode ?? '-'}</Descriptions.Item>
+            {requestedEngine === 'AGENT' && <Descriptions.Item label="Agent Run">{agentRunSummary?.runId ?? review.agentRunId ?? '-'}</Descriptions.Item>}
+            {requestedEngine === 'AGENT' && <Descriptions.Item label="Agent turns / 工具">{agentRunSummary ? `${agentRunSummary.turnCount ?? 0} / ${agentRunSummary.toolCallCount ?? 0}` : '-'}</Descriptions.Item>}
+            {requestedEngine === 'AGENT' && <Descriptions.Item label="源码 / Diff 返回">{agentRunSummary ? `${agentRunSummary.sourceBytesReturned ?? 0} / ${agentRunSummary.diffBytesReturned ?? 0} bytes` : '-'}</Descriptions.Item>}
+            {requestedEngine === 'AGENT' && <Descriptions.Item label="Agent 耗时">{agentRunSummary?.durationMs == null ? '-' : formatDuration(agentRunSummary.durationMs / 1000)}</Descriptions.Item>}
           </Descriptions>
         </Space>
       </Card>
@@ -4232,6 +4305,11 @@ function CodeQualityReviewView({
 }
 
 function codeQualityReviewTabLabel(review) {
+  const requestedEngine = String(review?.requestedEngine || 'STANDARD').toUpperCase();
+  const effectiveEngine = String(review?.effectiveEngine || requestedEngine).toUpperCase();
+  if (requestedEngine === 'AGENT') {
+    return effectiveEngine === 'STANDARD_FALLBACK' ? 'Agent → 普通 Review' : 'Agent Review';
+  }
   const providerLabel = sourceLabel(review?.provider);
   if (providerLabel && providerLabel !== '-') return providerLabel;
   return review?.displayName || review?.model || '-';
@@ -4244,6 +4322,7 @@ function CodeQualityReviewsPanel({
   changedFilesSummary,
   diffContextCapabilities,
   fixPreviews,
+  triggerType,
   selectedReviewKey,
   onRefresh,
   onRetry,
@@ -4265,6 +4344,7 @@ function CodeQualityReviewsPanel({
         changedFilesSummary={changedFilesSummary}
         diffContextCapabilities={diffContextCapabilities}
         initialFixPreviews={fixPreviews}
+        triggerType={triggerType}
         onRefresh={onRefresh}
         onRetry={onRetry}
         retrying={retrying}
@@ -4287,6 +4367,7 @@ function CodeQualityReviewsPanel({
             changedFilesSummary={changedFilesSummary}
             diffContextCapabilities={diffContextCapabilities}
             initialFixPreviews={(fixPreviews || []).filter(item => item.reviewKey === review.reviewKey)}
+            triggerType={triggerType}
             onRefresh={onRefresh}
             onRetry={onRetry}
             retrying={retrying}
@@ -4506,13 +4587,16 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     return () => window.clearInterval(timer);
   }, [taskId, codeQualityResult?.status, codeQualityResults, fixPreviews]);
 
-  const retryCodeQualityReview = async reviewKey => {
+  const retryCodeQualityReview = async (reviewKey, reviewEngine) => {
     setRetrying(true);
     setError(null);
     try {
       const retryResult = await fetchApi(`/api/code-quality-reviews/tasks/${taskId}/retry`, {
         method: 'POST',
-        body: reviewKey ? JSON.stringify({ reviewKey }) : undefined
+        body: JSON.stringify({
+          ...(reviewKey ? { reviewKey } : {}),
+          ...(reviewEngine ? { reviewEngine, comparisonMode: true } : {})
+        })
       });
       const optimisticReviews = (retryResult.reviews || [retryResult]).map(item => ({
         taskId: retryResult.taskId,
@@ -4522,6 +4606,9 @@ function TaskDetail({ taskId, onBack, onOpen }) {
         provider: item.provider || retryResult.provider,
         model: item.model,
         displayName: item.displayName,
+        requestedEngine: item.requestedEngine || retryResult.requestedEngine || reviewEngine || 'STANDARD',
+        effectiveEngine: item.effectiveEngine || retryResult.effectiveEngine || reviewEngine || 'STANDARD',
+        agentRunSummary: item.agentRunSummary || retryResult.agentRunSummary,
         status: item.status || retryResult.status,
         overallLevel: item.overallLevel || retryResult.overallLevel,
         summary: 'AI code review is running',
@@ -4529,7 +4616,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
         findings: []
       }));
       setCodeQualityResults(current => {
-        if (!reviewKey) return optimisticReviews;
+        if (!reviewKey && !reviewEngine) return optimisticReviews;
         const byKey = new Map(optimisticReviews.map(item => [item.reviewKey, item]));
         const merged = current.map(item => byKey.get(item.reviewKey) || item);
         const knownKeys = new Set(current.map(item => item.reviewKey));
@@ -4551,11 +4638,11 @@ function TaskDetail({ taskId, onBack, onOpen }) {
           detail: `provider=${retryResult.provider}, profile=${retryResult.profileCode}`,
           createdAt: new Date().toISOString()
         };
-        if (!reviewKey) return [localQueued];
+        if (!reviewKey && !reviewEngine) return [localQueued];
         return [...current.filter(item => item.reviewKey !== reviewKey), localQueued];
       });
       setFixPreviews(current => (
-        reviewKey ? current.filter(item => item.reviewKey !== reviewKey) : []
+        reviewKey ? current.filter(item => item.reviewKey !== reviewKey) : reviewEngine ? current : []
       ));
       requestJobQueueRefresh();
     } catch (err) {
@@ -4639,7 +4726,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   };
 
   const tabItems = useMemo(() => [
-    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} diffContextCapabilities={detail?.diffContextCapabilities} fixPreviews={fixPreviews} selectedReviewKey={selectedReviewKey} onRefresh={() => load({ silent: true })} onRetry={retryCodeQualityReview} retrying={retrying} onCancelReview={cancelCodeQualityJob} onCancelFixPreview={cancelCodeQualityJob} /> },
+    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} diffContextCapabilities={detail?.diffContextCapabilities} fixPreviews={fixPreviews} triggerType={detail?.triggerType} selectedReviewKey={selectedReviewKey} onRefresh={() => load({ silent: true })} onRetry={retryCodeQualityReview} retrying={retrying} onCancelReview={cancelCodeQualityJob} onCancelFixPreview={cancelCodeQualityJob} /> },
     { key: 'deterministic', label: '确定性检查', children: <DeterministicChecksPanel checks={deterministicChecks} running={runningDeterministicCheck} onRun={runDeterministicCheck} /> },
     ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
       ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
@@ -4697,8 +4784,8 @@ function TaskDetail({ taskId, onBack, onOpen }) {
         {detail ? (
           <Space direction="vertical" size="large" className="full-width">
             <Paper variant="outlined" sx={{ p: { xs: 1.75, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', md: 'center' }} justifyContent="space-between" sx={{ mb: 1.75 }}>
-                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} sx={{ mb: 1.75, alignItems: { xs: 'stretch', md: 'center' }, justifyContent: 'space-between' }}>
+                <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
                   <Chip size="small" label={`#${detail.id}`} sx={{ height: 24, borderColor: '#c9d5e2' }} variant="outlined" />
                   <Chip size="small" label={taskTypeLabel(detail.triggerType)} sx={{ height: 24 }} variant="outlined" />
                   <Chip size="small" label={targetTypeLabel(detail.targetType)} sx={{ height: 24 }} variant="outlined" />
@@ -4778,6 +4865,11 @@ function TemplateConfig() {
   const [promptPreview, setPromptPreview] = useState(null);
   const [aiSettings, setAiSettings] = useState(null);
   const [settingsDraft, setSettingsDraft] = useState(null);
+  const [agentSettings, setAgentSettings] = useState(null);
+  const [agentSettingsDraft, setAgentSettingsDraft] = useState({ enabled: false, apiKey: '' });
+  const [agentSettingsSaving, setAgentSettingsSaving] = useState(false);
+  const [agentSettingsTesting, setAgentSettingsTesting] = useState(false);
+  const [agentSettingsTestResult, setAgentSettingsTestResult] = useState(null);
   const [providerApiKeyDraft, setProviderApiKeyDraft] = useState('');
   const [loading, setLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -4801,8 +4893,9 @@ function TemplateConfig() {
     setLoading(true);
     setError(null);
     try {
-      const [settingsData, profileData, providerData, groupData, projectData, pathMappingData] = await Promise.all([
+      const [settingsData, agentSettingsData, profileData, providerData, groupData, projectData, pathMappingData] = await Promise.all([
         fetchApi('/api/code-quality-reviews/settings'),
+        fetchApi('/api/code-quality-reviews/agent-settings'),
         fetchApi('/api/code-quality-review-profiles'),
         fetchApi('/api/code-quality-review-providers'),
         fetchApi('/api/project-groups'),
@@ -4829,6 +4922,10 @@ function TemplateConfig() {
           : projectItems.find(project => project.groupId === projectGroupFilter)?.id || null)
         : null;
       setAiSettings(settingsData);
+      setAgentSettings(agentSettingsData);
+      setAgentSettingsDraft({ enabled: agentSettingsData?.enabled ?? false, apiKey: '' });
+      setAgentSettingsTestResult(agentSettingsData?.configurationTest || null);
+      setAgentSettingsTesting(['QUEUED', 'RUNNING'].includes(agentSettingsData?.configurationTest?.status));
       setSettingsDraft({
         reviewEnabled: settingsData?.reviewEnabled ?? false,
         dingtalkNotificationEnabled: settingsData?.dingtalkNotificationEnabled ?? true,
@@ -4874,6 +4971,60 @@ function TemplateConfig() {
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    const requestId = agentSettingsTestResult?.requestId;
+    const initialStatus = agentSettingsTestResult?.status;
+    if (!requestId || !['QUEUED', 'RUNNING'].includes(initialStatus)) return undefined;
+
+    let cancelled = false;
+    let timer = null;
+    const deadline = Date.now() + 210000;
+    const poll = async () => {
+      if (cancelled) return;
+      if (Date.now() >= deadline) {
+        setAgentSettingsTesting(false);
+        setAgentSettingsTestResult(current => ({
+          ...(current || {}),
+          status: 'POLL_TIMEOUT',
+          message: '等待配置测试结果超时，请稍后刷新设置页查看最终状态。'
+        }));
+        return;
+      }
+      try {
+        const settings = await fetchApi('/api/code-quality-reviews/agent-settings');
+        if (cancelled) return;
+        const nextTest = settings?.configurationTest || null;
+        setAgentSettings(settings);
+        setAgentSettingsTestResult(nextTest);
+        if (['QUEUED', 'RUNNING'].includes(nextTest?.status)) {
+          timer = window.setTimeout(poll, 2000);
+          return;
+        }
+        setAgentSettingsTesting(false);
+        if (nextTest?.status === 'SUCCESS') {
+          messageApi.success('Agent 配置测试成功');
+        } else {
+          messageApi.error(nextTest?.message || 'Agent 配置测试失败');
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setAgentSettingsTesting(false);
+        setAgentSettingsTestResult(current => ({
+          ...(current || {}),
+          status: 'POLL_FAILED',
+          message: err.message
+        }));
+        messageApi.error(err.message);
+      }
+    };
+
+    timer = window.setTimeout(poll, 1500);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [agentSettingsTestResult?.requestId]);
 
   const loadProjectTargetConfigs = async (projectId, targetType = selectedTargetType, projectList = projects) => {
     if (!projectId) {
@@ -5412,6 +5563,64 @@ function TemplateConfig() {
     saveAiSettings(nextSettings, successText);
   };
 
+  const saveAgentSettings = async ({ clearApiKey = false } = {}) => {
+    if (agentSettingsSaving) return;
+    const apiKey = String(agentSettingsDraft.apiKey || '').trim();
+    if (!clearApiKey && agentSettingsDraft.enabled && !apiKey && !agentSettings?.apiKeyConfigured) {
+      messageApi.error('启用 Agent Review 前请填写独立 DeepSeek API Key');
+      return;
+    }
+    setAgentSettingsSaving(true);
+    try {
+      const body = clearApiKey
+        ? { clearApiKey: true, enabled: false }
+        : {
+            enabled: agentSettingsDraft.enabled,
+            ...(apiKey ? { apiKey } : {})
+          };
+      const settings = await fetchApi('/api/code-quality-reviews/agent-settings', {
+        method: 'PUT',
+        body: JSON.stringify(body)
+      });
+      setAgentSettings(settings);
+      setAgentSettingsDraft({ enabled: settings?.enabled ?? false, apiKey: '' });
+      setAgentSettingsTestResult(settings?.configurationTest || null);
+      messageApi.success(clearApiKey ? 'Agent API Key 已清除' : 'Agent Review 设置已保存');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setAgentSettingsSaving(false);
+    }
+  };
+
+  const testAgentSettings = async () => {
+    if (agentSettingsTesting) return;
+    if (!agentSettings?.enabled || !agentSettings?.apiKeyConfigured) {
+      messageApi.warning('请先保存并启用 Agent Review 配置');
+      return;
+    }
+    if (agentSettings?.workerStatus !== 'ONLINE') {
+      messageApi.warning('Agent Worker 当前离线，无法执行配置测试');
+      return;
+    }
+    setAgentSettingsTesting(true);
+    setAgentSettingsTestResult(null);
+    try {
+      const result = await fetchApi('/api/code-quality-reviews/agent-settings/test', { method: 'POST' });
+      setAgentSettingsTestResult(result);
+      setAgentSettings(current => current ? { ...current, configurationTest: result } : current);
+      if (['QUEUED', 'RUNNING'].includes(result?.status)) {
+        messageApi.info('Agent 配置测试已提交，正在等待 Worker 完成');
+      } else {
+        setAgentSettingsTesting(false);
+      }
+    } catch (err) {
+      setAgentSettingsTesting(false);
+      setAgentSettingsTestResult({ status: 'FAILED', message: err.message });
+      messageApi.error(err.message);
+    }
+  };
+
   const selectProvider = (providerCode) => {
     setSelectedProviderCode(providerCode);
     setProviderDraft(providers.find(provider => provider.providerCode === providerCode) || null);
@@ -5550,11 +5759,19 @@ function TemplateConfig() {
 
   const savePushReviewPolicy = async () => {
     if (!selectedPushPolicyGroupId || !pushPolicyDraft) return;
+    const reviewEngine = String(pushPolicyDraft.reviewEngine || 'STANDARD').toUpperCase();
+    const agentSourceExportAllowed = pushPolicyDraft.agentSourceExportAllowed === true;
+    if (reviewEngine === 'AGENT' && !agentSourceExportAllowed) {
+      messageApi.error('切换为 Agent Review 前，必须明确授权该项目组按需外发源码片段');
+      return;
+    }
     setPushPolicySaving(true);
     try {
       const updated = await fetchApi(`/api/project-groups/${selectedPushPolicyGroupId}`, {
         method: 'PUT',
         body: JSON.stringify({
+          reviewEngine,
+          agentSourceExportAllowed,
           aiReviewEnabled: pushPolicyDraft.aiReviewEnabled !== false,
           triggerOnManual: pushPolicyDraft.triggerOnManual !== false,
           triggerOnMr: pushPolicyDraft.triggerOnMr !== false,
@@ -5784,6 +6001,25 @@ function TemplateConfig() {
     }
   ];
 
+  const agentTestStatus = String(agentSettingsTestResult?.status || 'NOT_RUN').toUpperCase();
+  const agentTestPending = ['QUEUED', 'RUNNING'].includes(agentTestStatus);
+  const agentTestSuccess = agentTestStatus === 'SUCCESS';
+  const agentTestAlertType = agentTestSuccess
+    ? 'success'
+    : agentTestPending
+      ? 'info'
+      : agentTestStatus === 'POLL_TIMEOUT'
+        ? 'warning'
+        : 'error';
+  const agentTestMessage = agentTestSuccess
+    ? 'Agent 配置可用'
+    : agentTestPending
+      ? 'Agent 配置测试进行中'
+      : 'Agent 配置不可用';
+  const agentSaveRequiresEncryption = Boolean(
+    agentSettingsDraft.enabled || String(agentSettingsDraft.apiKey || '').trim()
+  );
+
   const collapseItems = [
     {
       key: 'global-settings',
@@ -5830,6 +6066,98 @@ function TemplateConfig() {
                 关闭后，规则审查和 AI Review 仍会正常执行与落库，但不会向钉钉发送消息。
               </Text>
             </div>
+          </Space>
+        </Card>
+      )
+    },
+    {
+      key: 'agent-review-settings',
+      label: (
+        <Space wrap>
+          <Text strong>Agent Review（Claude Code + DeepSeek）</Text>
+          <Tag color={agentSettings?.enabled ? 'purple' : 'default'}>{agentSettings?.enabled ? '已启用' : '未启用'}</Tag>
+          <Tag color={agentSettings?.workerStatus === 'ONLINE' ? 'green' : 'red'}>Worker {agentSettings?.workerStatus || 'OFFLINE'}</Tag>
+        </Space>
+      ),
+      children: (
+        <Card bordered={false} className="settings-inner-card">
+          <Space direction="vertical" size="middle" className="full-width">
+            <Alert
+              showIcon
+              type="info"
+              message="首版固定组合，不复用普通 Provider Key"
+              description="Claude Code 2.1.112 · DeepSeek · deepseek-v4-pro[1m] · https://api.deepseek.com/anthropic。源码仅对已授权项目组按需只读导出。"
+            />
+            <Alert
+              showIcon
+              type="warning"
+              message="启用 Agent 能力不会自动切换现有项目组"
+              description="需要测试时，请展开下方“AI Review 配置”，选择项目组，将“Review 引擎”改为 AGENT，同时开启源码片段外发授权并保存。Agent 失败时仍会显式降级到 STANDARD。"
+            />
+            <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
+              <Descriptions.Item label="Runner">Claude Code {agentSettings?.cliVersion || '2.1.112'}</Descriptions.Item>
+              <Descriptions.Item label="模型">{agentSettings?.model || 'deepseek-v4-pro[1m]'}</Descriptions.Item>
+              <Descriptions.Item label="Worker">{agentSettings?.workerId || '-'} / {agentSettings?.workerStatus || 'OFFLINE'}</Descriptions.Item>
+              <Descriptions.Item label="最近心跳">{agentSettings?.lastWorkerHeartbeatAt || '-'}</Descriptions.Item>
+              <Descriptions.Item label="预算">8 turns / 40 tools / 200 KB source</Descriptions.Item>
+              <Descriptions.Item label="超时">600 秒</Descriptions.Item>
+            </Descriptions>
+            {!agentSettings?.encryptionAvailable && (
+              <Alert
+                type="error"
+                showIcon
+                message="后端缺少 Agent 配置加密主密钥，暂不能保存 Key"
+                description={(
+                  <span>
+                    本地开发请在仓库根目录执行 <Text code>.\scripts\init-agent-review-secrets.cmd</Text>，然后重启后端。该命令不会生成、读取或输出 DeepSeek API Key。
+                  </span>
+                )}
+              />
+            )}
+            <Row gutter={[16, 16]} align="middle">
+              <Col xs={24} md={5}>
+                <Space direction="vertical">
+                  <Text strong>启用 Agent Review</Text>
+                  <Switch
+                    checked={agentSettingsDraft.enabled}
+                    disabled={agentSettingsSaving}
+                    onChange={checked => setAgentSettingsDraft(current => ({ ...current, enabled: checked }))}
+                  />
+                </Space>
+              </Col>
+              <Col xs={24} md={13}>
+                <Text strong>独立 DeepSeek API Key</Text>
+                <Input.Password
+                  value={agentSettingsDraft.apiKey}
+                  disabled={agentSettingsSaving}
+                  placeholder={agentSettings?.apiKeyConfigured ? `${agentSettings.apiKeyMasked || '已配置'}；留空保持原值` : '请输入 Agent 专用 API Key'}
+                  onChange={event => setAgentSettingsDraft(current => ({ ...current, apiKey: event.target.value }))}
+                />
+              </Col>
+              <Col xs={24} md={6}>
+                <Space wrap>
+                  <Button
+                    type="primary"
+                    loading={agentSettingsSaving}
+                    onClick={() => saveAgentSettings()}
+                    disabled={!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption}
+                    title={!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption ? '请先初始化加密主密钥并重启后端' : undefined}
+                  >
+                    保存
+                  </Button>
+                  <Button loading={agentSettingsTesting} onClick={testAgentSettings}>测试配置</Button>
+                  <Button danger loading={agentSettingsSaving} disabled={!agentSettings?.apiKeyConfigured} onClick={() => saveAgentSettings({ clearApiKey: true })}>清除 Key</Button>
+                </Space>
+              </Col>
+            </Row>
+            {agentSettingsTestResult && agentTestStatus !== 'NOT_RUN' && (
+              <Alert
+                showIcon
+                type={agentTestAlertType}
+                message={agentTestMessage}
+                description={agentSettingsTestResult.message || (agentTestPending ? 'Worker 正在执行 Claude Code + DeepSeek 最小连通性测试。' : undefined)}
+              />
+            )}
           </Space>
         </Card>
       )
@@ -6200,6 +6528,7 @@ function TemplateConfig() {
       label: (
         <Space wrap>
           <Text strong>AI Review 配置</Text>
+          <Tag>Profile / 项目组策略</Tag>
         </Space>
       ),
       children: (
@@ -6280,6 +6609,22 @@ function TemplateConfig() {
               </div>
               <div className="settings-subsection" style={{ order: 1 }}>
                 <Space direction="vertical" size="middle" className="full-width">
+                  <div className="settings-inline-head">
+                    <Space wrap>
+                      <Text strong>项目组主 Review 引擎</Text>
+                      {selectedPushPolicyGroupId && (
+                        <Tag color={pushPolicyDraft?.reviewEngine === 'AGENT' ? 'purple' : 'blue'}>
+                          {pushPolicyDraft?.reviewEngine || 'STANDARD'}
+                        </Tag>
+                      )}
+                    </Space>
+                  </div>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="此处决定所选项目组后续 MR、Push 和默认 Manual Review 使用的主引擎"
+                    description="选择 AGENT 时必须同时确认源码片段外发授权；Agent 不可用或执行失败会记录原因并执行 STANDARD_FALLBACK。"
+                  />
                   <Row gutter={[16, 16]}>
                     <Col xs={24} md={10}>
                       <Text strong>项目组</Text>
@@ -6294,17 +6639,21 @@ function TemplateConfig() {
                   </Row>
                   <Row gutter={[16, 16]} align="middle">
                     <Col xs={24} md={8}>
-                      <Space direction="vertical">
-                        <Text strong>启用项目组 AI Review</Text>
-                        <Switch
-                          checked={pushPolicyDraft?.aiReviewEnabled !== false}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => updatePushPolicyDraft('aiReviewEnabled', checked)}
+                      <Space direction="vertical" className="full-width">
+                        <Text strong>Review 引擎</Text>
+                        <Select
+                          value={pushPolicyDraft?.reviewEngine || 'STANDARD'}
+                          options={[
+                            { label: '普通 Review（STANDARD）', value: 'STANDARD' },
+                            { label: 'Agent Review（Claude Code + DeepSeek）', value: 'AGENT' }
+                          ]}
+                          onChange={value => updatePushPolicyDraft('reviewEngine', value)}
                         />
                       </Space>
                     </Col>
-                    <Col xs={24} md={8}>
+                  </Row>
+                  <Row gutter={[16, 16]} align="middle" className="project-review-switch-row">
+                    <Col xs={12} sm={8} lg={4}>
                       <Space direction="vertical">
                         <Text strong>手动触发</Text>
                         <Switch
@@ -6315,7 +6664,29 @@ function TemplateConfig() {
                         />
                       </Space>
                     </Col>
-                    <Col xs={24} md={8}>
+                    <Col xs={12} sm={8} lg={4}>
+                      <Space direction="vertical">
+                        <Text strong>允许 Agent 外发源码片段</Text>
+                        <Switch
+                          checked={pushPolicyDraft?.agentSourceExportAllowed === true}
+                          checkedChildren="已授权"
+                          unCheckedChildren="未授权"
+                          onChange={checked => updatePushPolicyDraft('agentSourceExportAllowed', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={12} sm={8} lg={4}>
+                      <Space direction="vertical">
+                        <Text strong>启用项目组 AI Review</Text>
+                        <Switch
+                          checked={pushPolicyDraft?.aiReviewEnabled !== false}
+                          checkedChildren="开启"
+                          unCheckedChildren="关闭"
+                          onChange={checked => updatePushPolicyDraft('aiReviewEnabled', checked)}
+                        />
+                      </Space>
+                    </Col>
+                    <Col xs={12} sm={8} lg={4}>
                       <Space direction="vertical">
                         <Text strong>MR 自动触发</Text>
                         <Switch
@@ -6326,7 +6697,7 @@ function TemplateConfig() {
                         />
                       </Space>
                     </Col>
-                    <Col xs={24} md={8}>
+                    <Col xs={12} sm={8} lg={4}>
                       <Space direction="vertical">
                         <Text strong>Push 自动触发</Text>
                         <Switch
@@ -6337,7 +6708,7 @@ function TemplateConfig() {
                         />
                       </Space>
                     </Col>
-                    <Col xs={24} md={8}>
+                    <Col xs={12} sm={8} lg={4}>
                       <Space direction="vertical">
                         <Text strong>自动生成修复预览</Text>
                         <Switch
@@ -6348,8 +6719,13 @@ function TemplateConfig() {
                         />
                       </Space>
                     </Col>
-                    <Col xs={24} md={16}>
-                      <div style={{ opacity: (pushPolicyDraft?.autoFixPreviewEnabled === true) ? 1 : 0.55 }}>
+                  </Row>
+                  <Row gutter={[16, 16]} align="stretch" className="project-review-policy-panels">
+                    <Col xs={24} lg={8}>
+                      <div
+                        className="project-review-policy-panel"
+                        style={{ opacity: (pushPolicyDraft?.autoFixPreviewEnabled === true) ? 1 : 0.55 }}
+                      >
                         <Space direction="vertical" size={4} className="full-width">
                           <Text strong>自动生成修复预览</Text>
                           <Text type="secondary">
@@ -6365,75 +6741,79 @@ function TemplateConfig() {
                         />
                       </div>
                     </Col>
-                  </Row>
-                  <Space direction="vertical" size={4}>
-                    <Text strong>Push 审核策略</Text>
-                    <Text type="secondary">允许分支匹配后，最小文件数、最小 Diff、最小 Commit、最大文件数、最大 Diff、Debounce 全部满足才会自动进入 AI Review；-1 表示不限制。</Text>
-                  </Space>
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24}>
-                      <Text strong>允许分支</Text>
-                      <Select
-                        mode="tags"
-                        className="full-width prompt-field"
-                        value={pushPolicyDraft?.pushBranchPatterns || []}
-                        onChange={value => updatePushPolicyDraft('pushBranchPatterns', value)}
-                        placeholder="例如 master、release/*"
-                      />
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Text strong>最小文件数</Text>
-                      <InputNumber
-                        className="full-width prompt-field"
-                        min={-1}
-                        value={pushPolicyDraft?.pushMinChangedFiles}
-                        onChange={value => updatePushPolicyDraft('pushMinChangedFiles', value)}
-                      />
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Text strong>最小 Diff 字节</Text>
-                      <InputNumber
-                        className="full-width prompt-field"
-                        min={-1}
-                        value={pushPolicyDraft?.pushMinDiffBytes}
-                        onChange={value => updatePushPolicyDraft('pushMinDiffBytes', value)}
-                      />
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Text strong>最小 Commit 数</Text>
-                      <InputNumber
-                        className="full-width prompt-field"
-                        min={-1}
-                        value={pushPolicyDraft?.pushMinCommitCount}
-                        onChange={value => updatePushPolicyDraft('pushMinCommitCount', value)}
-                      />
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Text strong>最大文件数</Text>
-                      <InputNumber
-                        className="full-width prompt-field"
-                        min={-1}
-                        value={pushPolicyDraft?.pushMaxChangedFiles}
-                        onChange={value => updatePushPolicyDraft('pushMaxChangedFiles', value)}
-                      />
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Text strong>最大 Diff 字节</Text>
-                      <InputNumber
-                        className="full-width prompt-field"
-                        min={-1}
-                        value={pushPolicyDraft?.pushMaxDiffBytes}
-                        onChange={value => updatePushPolicyDraft('pushMaxDiffBytes', value)}
-                      />
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Text strong>Debounce 秒数</Text>
-                      <InputNumber
-                        className="full-width prompt-field"
-                        min={-1}
-                        value={pushPolicyDraft?.pushDebounceSeconds}
-                        onChange={value => updatePushPolicyDraft('pushDebounceSeconds', value)}
-                      />
+                    <Col xs={24} lg={16}>
+                      <div className="project-review-policy-panel">
+                        <Space direction="vertical" size={4} className="full-width">
+                          <Text strong>Push 审核策略</Text>
+                          <Text type="secondary">允许分支匹配后，最小文件数、最小 Diff、最小 Commit、最大文件数、最大 Diff、Debounce 全部满足才会自动进入 AI Review；-1 表示不限制。</Text>
+                        </Space>
+                        <Row gutter={[16, 16]}>
+                          <Col xs={24}>
+                            <Text strong>允许分支</Text>
+                            <Select
+                              mode="tags"
+                              className="full-width prompt-field"
+                              value={pushPolicyDraft?.pushBranchPatterns || []}
+                              onChange={value => updatePushPolicyDraft('pushBranchPatterns', value)}
+                              placeholder="例如 master、release/*"
+                            />
+                          </Col>
+                          <Col xs={24} md={8}>
+                            <Text strong>最小文件数</Text>
+                            <InputNumber
+                              className="full-width prompt-field"
+                              min={-1}
+                              value={pushPolicyDraft?.pushMinChangedFiles}
+                              onChange={value => updatePushPolicyDraft('pushMinChangedFiles', value)}
+                            />
+                          </Col>
+                          <Col xs={24} md={8}>
+                            <Text strong>最小 Diff 字节</Text>
+                            <InputNumber
+                              className="full-width prompt-field"
+                              min={-1}
+                              value={pushPolicyDraft?.pushMinDiffBytes}
+                              onChange={value => updatePushPolicyDraft('pushMinDiffBytes', value)}
+                            />
+                          </Col>
+                          <Col xs={24} md={8}>
+                            <Text strong>最小 Commit 数</Text>
+                            <InputNumber
+                              className="full-width prompt-field"
+                              min={-1}
+                              value={pushPolicyDraft?.pushMinCommitCount}
+                              onChange={value => updatePushPolicyDraft('pushMinCommitCount', value)}
+                            />
+                          </Col>
+                          <Col xs={24} md={8}>
+                            <Text strong>最大文件数</Text>
+                            <InputNumber
+                              className="full-width prompt-field"
+                              min={-1}
+                              value={pushPolicyDraft?.pushMaxChangedFiles}
+                              onChange={value => updatePushPolicyDraft('pushMaxChangedFiles', value)}
+                            />
+                          </Col>
+                          <Col xs={24} md={8}>
+                            <Text strong>最大 Diff 字节</Text>
+                            <InputNumber
+                              className="full-width prompt-field"
+                              min={-1}
+                              value={pushPolicyDraft?.pushMaxDiffBytes}
+                              onChange={value => updatePushPolicyDraft('pushMaxDiffBytes', value)}
+                            />
+                          </Col>
+                          <Col xs={24} md={8}>
+                            <Text strong>Debounce 秒数</Text>
+                            <InputNumber
+                              className="full-width prompt-field"
+                              min={-1}
+                              value={pushPolicyDraft?.pushDebounceSeconds}
+                              onChange={value => updatePushPolicyDraft('pushDebounceSeconds', value)}
+                            />
+                          </Col>
+                        </Row>
+                      </div>
                     </Col>
                   </Row>
                   <div className="settings-action-row">
@@ -6457,7 +6837,13 @@ function TemplateConfig() {
     }
   ];
 
-  const orderedCollapseItems = ['project-target-configs', 'profile-settings', 'provider-settings', 'global-settings']
+  const orderedCollapseItems = [
+    'project-target-configs',
+    'profile-settings',
+    'provider-settings',
+    'agent-review-settings',
+    'global-settings'
+  ]
     .map(key => collapseItems.find(item => item.key === key))
     .filter(Boolean);
 
@@ -6565,7 +6951,7 @@ function GovernanceDiagnosticsShell({ title, description, children, actions, bac
     >
       <Stack spacing={2.5}>
         <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff', color: '#1f2933' }}>
-          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', lg: 'center' }}>
+          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', lg: 'center' } }}>
             <Box sx={{ minWidth: 0, flex: '1 1 auto', maxWidth: 820 }}>
               {backAction && (
                 <Box sx={{ mb: 0.75 }}>
@@ -6583,15 +6969,15 @@ function GovernanceDiagnosticsShell({ title, description, children, actions, bac
               <Stack
                 direction={{ xs: 'column', sm: 'row' }}
                 spacing={1}
-                flexWrap="wrap"
                 useFlexGap
-                justifyContent="flex-end"
-                alignItems={{ xs: 'stretch', sm: 'center' }}
                 sx={{
                   flex: '0 0 auto',
                   width: { xs: '100%', lg: 'auto' },
                   maxWidth: { lg: 560 },
                   ml: { lg: 'auto' },
+                  flexWrap: 'wrap',
+                  justifyContent: 'flex-end',
+                  alignItems: { xs: 'stretch', sm: 'center' },
                   '& .MuiButton-root': { minHeight: 36, height: 36, px: 1.75, flex: '0 0 auto' }
                 }}
               >
@@ -7831,13 +8217,19 @@ function ReviewQualityDashboardPage() {
   const location = useLocation();
   const route = currentRoute(location);
   const [dashboard, setDashboard] = useState(null);
+  const [agentObservation, setAgentObservation] = useState(null);
   const [projects, setProjects] = useState([]);
   const [filters, setFilters] = useState({
     projectId: null,
     provider: '',
     profile: '',
     riskType: '',
-    verdict: null
+    verdict: null,
+    taskId: '',
+    groupId: '',
+    startAt: '',
+    endAt: '',
+    syntheticDemo: false
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -7867,8 +8259,20 @@ function ReviewQualityDashboardPage() {
       if (nextFilters.riskType?.trim()) params.set('riskType', nextFilters.riskType.trim());
       if (nextFilters.verdict) params.set('verdict', nextFilters.verdict);
       const query = params.toString();
-      const data = await fetchApi(`/api/review-quality/dashboard${query ? `?${query}` : ''}`);
+      const observationParams = new URLSearchParams();
+      if (nextFilters.taskId?.trim()) observationParams.set('taskId', nextFilters.taskId.trim());
+      if (nextFilters.groupId?.trim()) observationParams.set('groupId', nextFilters.groupId.trim());
+      if (nextFilters.projectId) observationParams.set('projectId', String(nextFilters.projectId));
+      if (nextFilters.profile?.trim()) observationParams.set('profile', nextFilters.profile.trim());
+      if (nextFilters.startAt) observationParams.set('startAt', nextFilters.startAt);
+      if (nextFilters.endAt) observationParams.set('endAt', nextFilters.endAt);
+      if (nextFilters.syntheticDemo) observationParams.set('syntheticDemo', 'true');
+      const [data, observation] = await Promise.all([
+        fetchApi(`/api/review-quality/dashboard${query ? `?${query}` : ''}`),
+        fetchApi(`/api/review-quality/agent-observation?${observationParams.toString()}`)
+      ]);
       setDashboard(data);
+      setAgentObservation(observation);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -7894,7 +8298,12 @@ function ReviewQualityDashboardPage() {
       provider: '',
       profile: '',
       riskType: '',
-      verdict: null
+      verdict: null,
+      taskId: '',
+      groupId: '',
+      startAt: '',
+      endAt: '',
+      syntheticDemo: false
     };
     setFilters(nextFilters);
     load({ nextFilters });
@@ -7936,6 +8345,74 @@ function ReviewQualityDashboardPage() {
   const deterministicSummary = dashboard?.deterministicCheckSummary || {};
   const ruleGapAttributionSummary = dashboard?.ruleGapAttributionSummary || {};
   const acceptanceGateSummary = dashboard?.acceptanceGateSummary || {};
+  const agentSampleSummary = agentObservation?.sampleSummary || {};
+  const agentAnnotationProgress = agentObservation?.annotationProgress || {};
+  const agentFindingSummary = agentObservation?.findingSummary || {};
+  const agentReliability = agentObservation?.agentReliability || {};
+  const agentExecutionMetrics = agentObservation?.agentExecutionMetrics || {};
+  const agentSampleGate = agentObservation?.sampleGate || {};
+  const agentObservationCards = [
+    { label: '普通 / Agent 样本', value: `${agentSampleSummary.standardSampleCount ?? 0} / ${agentSampleSummary.agentSampleCount ?? 0}` },
+    { label: '已配对任务', value: agentSampleSummary.pairedTaskCount ?? 0 },
+    { label: '人工标注样本进度', value: `${agentAnnotationProgress.annotationSampleCount ?? 0} / ${agentAnnotationProgress.targetAnnotatedSampleCount ?? 30}` },
+    { label: 'finding（普通 / Agent）', value: `${agentFindingSummary.standardFindingCount ?? 0} / ${agentFindingSummary.agentFindingCount ?? 0}` },
+    { label: '误判 / 漏报 / 上下文不足', value: `${agentFindingSummary.humanFalsePositiveCount ?? 0} / ${agentFindingSummary.missingFindingCount ?? 0} / ${agentFindingSummary.contextInsufficientCount ?? 0}` },
+    { label: 'Agent 成功 / 失败 / fallback', value: `${agentReliability.successCount ?? 0} / ${agentReliability.failureCount ?? 0} / ${agentReliability.fallbackCount ?? 0}` },
+    { label: '成功率 / 失败率 / fallback 率', value: `${formatRate(agentReliability.successRate)} / ${formatRate(agentReliability.failureRate)} / ${formatRate(agentReliability.fallbackRate)}` },
+    { label: '耗时 p50 / p95', value: `${agentExecutionMetrics.durationMs?.p50 ?? 0} / ${agentExecutionMetrics.durationMs?.p95 ?? 0} ms` },
+    { label: 'turn p50 / p95', value: `${agentExecutionMetrics.turnCount?.p50 ?? 0} / ${agentExecutionMetrics.turnCount?.p95 ?? 0}` },
+    { label: '工具调用 p50 / p95', value: `${agentExecutionMetrics.toolCallCount?.p50 ?? 0} / ${agentExecutionMetrics.toolCallCount?.p95 ?? 0}` },
+    { label: '源码返回 p50 / p95', value: `${agentExecutionMetrics.sourceBytesReturned?.p50 ?? 0} / ${agentExecutionMetrics.sourceBytesReturned?.p95 ?? 0} B` },
+    { label: 'Token 输入 / 输出', value: `${agentExecutionMetrics.usageSummary?.inputTokens ?? 0} / ${agentExecutionMetrics.usageSummary?.outputTokens ?? 0}` }
+  ];
+  const agentComparisonColumns = [
+    { title: '任务', dataIndex: 'taskId', width: 90, render: value => <Button type="link" onClick={() => navigate(`${TASK_LIST_ROUTE}/${value}`)}>#{value}</Button> },
+    { title: '项目组 / 项目', key: 'scope', ellipsis: true, render: (_, row) => `${row.groupName || row.groupId || '-'} / ${row.projectName || row.projectId || '-'}` },
+    { title: 'Profile', dataIndex: 'profile', width: 180, ellipsis: true },
+    { title: '普通 / Agent 结果', key: 'results', width: 130, render: (_, row) => `${row.standardResultCount ?? 0} / ${row.agentResultCount ?? 0}` },
+    { title: 'finding（普通 / Agent）', key: 'findings', width: 155, render: (_, row) => `${row.standardFindingCount ?? 0} / ${row.agentFindingCount ?? 0}` },
+    { title: '人工标注', dataIndex: 'annotationCount', width: 95, render: value => value ?? 0 },
+    { title: 'Agent 状态', dataIndex: 'agentStatus', width: 120, render: value => value ? <Tag color={value === 'SUCCEEDED' ? 'green' : 'red'}>{value}</Tag> : '-' },
+    { title: 'fallback', dataIndex: 'fallbackTriggered', width: 90, render: value => <Tag color={value ? 'orange' : 'default'}>{value ? '是' : '否'}</Tag> },
+    { title: '耗时', dataIndex: 'durationMs', width: 100, render: value => value == null ? '-' : `${value} ms` },
+    { title: 'turn / tool', key: 'tools', width: 110, render: (_, row) => `${row.turnCount ?? 0} / ${row.toolCallCount ?? 0}` },
+    { title: '源码返回', dataIndex: 'sourceBytesReturned', width: 110, render: value => value == null ? '-' : `${value} B` }
+  ];
+  const exportAgentObservation = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchApi('/api/review-quality/agent-observation/export', {
+        method: 'POST',
+        body: JSON.stringify({
+          confirmation: 'SANITIZED_SUMMARY_ONLY',
+          filters: {
+            taskId: filters.taskId || null,
+            groupId: filters.groupId || null,
+            projectId: filters.projectId || null,
+            profile: filters.profile || null,
+            startAt: filters.startAt || null,
+            endAt: filters.endAt || null,
+            syntheticDemo: filters.syntheticDemo
+          }
+        })
+      });
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `agent-review-observation-${Date.now()}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      message.success('已导出强制脱敏的阶段 3A 对照摘要');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
   const governanceSummaryRows = [
     { label: '回放 item', value: replaySummary.itemCount ?? 0 },
     { label: '回放完成 / 失败', value: `${replaySummary.completedCount ?? 0} / ${replaySummary.failedCount ?? 0}` },
@@ -7983,7 +8460,7 @@ function ReviewQualityDashboardPage() {
             color: '#1f2933'
           }}
         >
-          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', lg: 'center' }}>
+          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', lg: 'center' } }}>
             <Box sx={{ minWidth: 0, flex: '1 1 auto', maxWidth: 760 }}>
               <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: 0.75 }}>
                 质量看板
@@ -8074,6 +8551,35 @@ function ReviewQualityDashboardPage() {
                 重置
               </MuiButton>
             </Box>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(150px, 1fr)) auto' },
+                gap: 1.25,
+                alignItems: 'center'
+              }}
+            >
+              <TextField size="small" label="任务 ID（Agent 观察）" value={filters.taskId} onChange={event => updateFilter('taskId', event.target.value)} />
+              <TextField size="small" label="项目组 ID（Agent 观察）" value={filters.groupId} onChange={event => updateFilter('groupId', event.target.value)} />
+              <TextField size="small" label="开始时间" type="datetime-local" value={filters.startAt} onChange={event => updateFilter('startAt', event.target.value)} InputLabelProps={{ shrink: true }} />
+              <TextField size="small" label="结束时间" type="datetime-local" value={filters.endAt} onChange={event => updateFilter('endAt', event.target.value)} InputLabelProps={{ shrink: true }} />
+              <Stack direction="row" spacing={1} sx={{ minHeight: 40, alignItems: 'center' }}>
+                <Switch
+                  checked={filters.syntheticDemo}
+                  onChange={checked => {
+                    setFilters(current => ({
+                      ...current,
+                      syntheticDemo: checked,
+                      projectId: checked ? null : current.projectId,
+                      profile: checked ? '' : current.profile,
+                      taskId: checked ? '' : current.taskId,
+                      groupId: checked ? '' : current.groupId
+                    }));
+                  }}
+                />
+                <MuiTypography variant="body2">合成 demo（不调用模型）</MuiTypography>
+              </Stack>
+            </Box>
           </Stack>
         </Paper>
 
@@ -8123,6 +8629,44 @@ function ReviewQualityDashboardPage() {
               ))}
             </Box>
 
+            <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
+              <Stack direction={{ xs: 'column', lg: 'row' }} spacing={1.5} sx={{ mb: 2, justifyContent: 'space-between', alignItems: { xs: 'stretch', lg: 'center' } }}>
+                <Box>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                    <MuiTypography variant="h6" sx={{ fontWeight: 720 }}>Agent Review 生产观察（阶段 3A）</MuiTypography>
+                    <Tag color={agentObservation?.dataMode === 'SYNTHETIC_DEMO' ? 'purple' : 'blue'}>{agentObservation?.dataMode || 'PRODUCTION_OBSERVATION'}</Tag>
+                    <Tag color={agentSampleGate.status === 'INSUFFICIENT_SAMPLE' ? 'orange' : 'blue'}>{agentSampleGate.status || 'INSUFFICIENT_SAMPLE'}</Tag>
+                  </Stack>
+                  <MuiTypography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                    只观察和收集数据，不计算 Agent 准确性或扩大范围结论。合成 demo 不含真实模型调用。
+                  </MuiTypography>
+                </Box>
+                <MuiButton variant="outlined" startIcon={<ExportOutlined />} onClick={exportAgentObservation}>
+                  导出脱敏摘要
+                </MuiButton>
+              </Stack>
+              <MuiAlert severity={agentSampleGate.status === 'INSUFFICIENT_SAMPLE' ? 'warning' : 'info'} variant="outlined" sx={{ mb: 2 }}>
+                {agentSampleGate.message || '人工标注样本不足 30 条，不计算扩大范围结论。'}
+              </MuiAlert>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }, gap: 1 }}>
+                {agentObservationCards.map(item => (
+                  <Box key={item.label} sx={{ p: 1.5, borderRadius: 2, border: theme => `1px solid ${theme.palette.divider}`, backgroundColor: '#f8fafc' }}>
+                    <MuiTypography variant="caption" color="text.secondary">{item.label}</MuiTypography>
+                    <MuiTypography variant="body1" sx={{ fontWeight: 700, mt: 0.5, overflowWrap: 'anywhere' }}>{item.value}</MuiTypography>
+                  </Box>
+                ))}
+              </Box>
+              <MuiTypography variant="subtitle1" sx={{ fontWeight: 700, mt: 2.5, mb: 1 }}>任务级 STANDARD / AGENT 对照</MuiTypography>
+              <Table
+                rowKey="taskId"
+                size="small"
+                columns={agentComparisonColumns}
+                dataSource={agentObservation?.comparisons || []}
+                pagination={{ pageSize: 10, hideOnSinglePage: true }}
+                scroll={{ x: 1300 }}
+              />
+            </Paper>
+
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(280px, 0.8fr) minmax(0, 1.4fr)' }, gap: 1.5 }}>
               <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
                 <MuiTypography variant="h6" sx={{ fontWeight: 720, mb: 2 }}>
@@ -8138,7 +8682,7 @@ function ReviewQualityDashboardPage() {
               </Paper>
 
               <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
-                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ xs: 'flex-start', md: 'center' }} sx={{ mb: 2 }}>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ mb: 2, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' } }}>
                   <Box>
                     <MuiTypography variant="h6" sx={{ fontWeight: 720 }}>
                       治理摘要
@@ -8422,7 +8966,7 @@ function EvaluationCasesPage() {
     >
       <Stack spacing={2.5}>
         <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff', color: '#1f2933' }}>
-          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', lg: 'center' }}>
+          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', lg: 'center' } }}>
             <Box sx={{ minWidth: 0, flex: '1 1 auto', maxWidth: 760 }}>
               <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: 0.75 }}>
                 评估样本
@@ -8519,7 +9063,7 @@ function EvaluationCasesPage() {
         {error && <MuiAlert severity="error" variant="outlined">{error}</MuiAlert>}
 
         <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, backgroundColor: '#ffffff' }}>
-          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ xs: 'flex-start', md: 'center' }} sx={{ mb: 2 }}>
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ mb: 2, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' } }}>
             <Box>
               <MuiTypography variant="h6" sx={{ color: '#1f2933', fontWeight: 720 }}>
                 样本列表

@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $backendDir = Join-Path $repoRoot "backend-python"
 $localGitLabEnv = Join-Path $repoRoot ".local\gitlab.env"
+$agentWorkerScript = Join-Path $PSScriptRoot "run-agent-worker.ps1"
 
 function Import-DotEnvIfPresent {
     param([string] $Path)
@@ -50,6 +51,42 @@ function Enable-BackendPythonStartupHooks {
     if ($pythonPaths -notcontains $backendDir) {
         $env:PYTHONPATH = "$backendDir$pathSeparator$env:PYTHONPATH"
     }
+}
+
+function Start-AgentReviewWorkerIfConfigured {
+    param([string] $BackendPort)
+
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return }
+    if ($env:AGENT_REVIEW_AUTO_START_WORKER -and $env:AGENT_REVIEW_AUTO_START_WORKER.Trim().ToLowerInvariant() -eq "false") {
+        Write-Host "Agent Worker auto-start is disabled by AGENT_REVIEW_AUTO_START_WORKER=false."
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($env:AGENT_REVIEW_WORKER_TOKEN)) { return }
+    if ($BackendPort -ne "8090") {
+        Write-Warning "Agent Worker auto-start only supports the secured local backend port 8090; current port is $BackendPort."
+        return
+    }
+    if (-not (Test-Path -LiteralPath $agentWorkerScript) -or -not (Get-Command docker -ErrorAction SilentlyContinue)) {
+        Write-Warning "Agent Worker auto-start was skipped because its script or Docker CLI is unavailable."
+        return
+    }
+
+    $localDirectory = Join-Path $repoRoot ".local"
+    New-Item -ItemType Directory -Path $localDirectory -Force | Out-Null
+    $logSuffix = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+    $stdoutLog = Join-Path $localDirectory "agent-worker-startup-$logSuffix.out.log"
+    $stderrLog = Join-Path $localDirectory "agent-worker-startup-$logSuffix.err.log"
+
+    $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
+    $arguments = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", "`"$agentWorkerScript`"",
+        "ensure",
+        "-WaitForBackendSeconds", "60"
+    )
+    Start-Process -FilePath $powershell -ArgumentList $arguments -WorkingDirectory $repoRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog | Out-Null
+    Write-Host "Agent Worker auto-start scheduled; logs: $stdoutLog and $stderrLog"
 }
 
 function Resolve-PythonCommand {
@@ -152,6 +189,7 @@ try {
                 $port = "8090"
             }
             $resolvedDev = Resolve-DevPort -CommandArgs $remainingArgs -DefaultPort $port
+            Start-AgentReviewWorkerIfConfigured -BackendPort $resolvedDev.Port
             Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", $resolvedDev.Port, "--reload") + $resolvedDev.RemainingArgs)
         }
         default {

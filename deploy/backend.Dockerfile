@@ -5,6 +5,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     SERVER_PORT=8090
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY backend-python/pyproject.toml /app/pyproject.toml

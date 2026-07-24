@@ -4,7 +4,7 @@
 
 ## 使用原则
 
-1. 新对话先读 `AGENTS.md`、`README.md` 和本文，再按任务读取相关设计文档。
+1. 新对话默认只读 `AGENTS.md`；遇到环境、脚本、部署、Codex、检索或工具链问题时，先用 `rg` 在本文搜索症状或关键词，只读取命中章节。启动、配置、部署和验证步骤按需检索 `docs/42-development-deployment-and-validation-guide.md`。
 2. 启动、测试、构建、迁移优先使用 `scripts/` 目录下脚本。
 3. 搜索默认使用 `rg`，并遵守仓库 `.rgignore`，不要扫依赖、构建产物、虚拟环境和停止维护的 Java 后端。
 4. 新增踩坑时，只有环境、工具、部署、Codex、检索类问题追加到本文；业务缺陷写入 `docs/24-bug-log.md` 或对应设计 / 路线文档。
@@ -30,6 +30,18 @@ Get-Content -Raw -Encoding UTF8 <path>
 .\scripts\run-backend.cmd test
 .\scripts\run-backend.cmd lint
 .\scripts\run-backend.cmd migrate
+```
+
+- `run-backend.cmd lint` 当前固定扫描整个 Python 后端，不会把后续路径参数透传给 Ruff。若本次只需检查新增文件，且全量 lint 被既有无关问题阻塞，可改用同一虚拟环境执行聚焦检查，并在结论中同时说明全量 lint 的阻塞项：
+
+```powershell
+.\backend-python\.venv\Scripts\ruff.exe check <本次文件或目录>
+```
+
+- Windows 上并行执行 pytest 与 Ruff 时，Ruff 可能因 `.ruff_cache/.../.tmp*` 被占用而报 `Failed to create temporary file / Access is denied`。先不要改源码或删除整个缓存；改为串行执行聚焦检查，并加 `--no-cache` 避免缓存竞争：
+
+```powershell
+.\backend-python\.venv\Scripts\ruff.exe check --no-cache <本次文件或目录>
 ```
 
 - 排查脚本行为或直连 Python 后端时，再使用：
@@ -81,6 +93,7 @@ backend-python\.venv\Scripts\python.exe
 ```
 
 - 不要为了“保险”默认全量验证。先按影响范围选择最小可复现验证，再在需要时扩大。
+- Windows/Codex 环境若 pytest 在用户临时目录 `pytest-of-*` 或仓库 `.pytest_cache` 报 `PermissionError [WinError 5]`，可为本次验证使用工作区内唯一 `--basetemp=../.local/pytest-<唯一值>`，并加 `-p no:cacheprovider`。这属于临时目录 ACL，不要因此修改业务测试或降低断言。
 
 ## Codex 沙箱
 
@@ -119,6 +132,8 @@ docker version
 ```
 
 - Docker Engine 未启动、CLI 不在 PATH 或 Windows 终端未刷新 PATH 时，先修本机 Docker 环境，不要改项目打包脚本。
+- Codex Windows 沙箱内执行 `docker build` 若出现 `open C:\Users\<user>\.docker\buildx\.lock: Access is denied`，说明 buildx 需要写用户目录；在任务确实要求构建镜像时按权限规则授权重跑，不要改 Dockerfile 绕过。
+- 非 root Squid 容器若启动后立即退出，先检查是否仍尝试写默认 PID 文件；只读代理镜像可配置 `pid_filename none`，并关闭 cache/access log，再用 `squid -k parse -f /etc/squid/squid.conf` 验证。仅设置 `read_only` 不能限制外网，必须结合 internal network 与域名白名单代理或等效防火墙。
 - Docker 前端镜像构建使用 `npm ci`，要求 `frontend/package.json` 和 `frontend/package-lock.json` 同步。不要使用 `latest` 或浮动顶层依赖；更新依赖后同步 lock。
 - 如果本机 npm 与 Dockerfile 的 Node / npm 版本差异导致 lock 不一致，用与 Dockerfile 一致的 Node 镜像更新 lock。
 - 离线部署升级时，`runtime/.env` 会保留。修改新包里的 `.env.example` 不会自动影响线上配置，需要同步修改运行目录的 `.env`。
@@ -137,6 +152,20 @@ BACKEND_PORT = 容器内后端监听端口，只在 Docker 网络内使用
 
 - `PUBLIC_HTTP_PORT` 和 `PLATFORM_BASE_URL` 通常应指向同一个用户可访问地址；`BACKEND_PORT` 不应暴露给用户配置 webhook。
 
+## Agent Review 本地密钥
+
+- 设置页填写 DeepSeek Key 后“保存”仍为禁用，且页面显示 `未配置 AGENT_REVIEW_CONFIG_ENCRYPTION_KEY`，说明缺少的是后端加密主密钥，不是输入框或保存接口失效。不得删除该门禁或降级为明文落库。
+- 执行 `.\scripts\init-agent-review-secrets.cmd` 可安全补齐 `.local/gitlab.env` 中缺失或空白的加密主密钥与 Worker Token；脚本不覆盖非空值、不接触 DeepSeek Key，也不回显生成的秘密。
+- `.local/gitlab.env` 只在后端进程启动时加载。生成后必须重启 `scripts/run-backend.cmd dev`，浏览器刷新和 uvicorn 源码热重载都不能替代进程重启。
+- 如果数据库里已有加密的 Agent Key，不要随意轮换或丢失 `AGENT_REVIEW_CONFIG_ENCRYPTION_KEY`；旧密文无法用新主密钥解密。需要轮换时应先设计显式迁移流程。
+- Windows 本地后端不要直接执行生产完整 Compose 来“补一个 Worker”，否则可能额外启动连接同一数据库的 backend 并形成重复调度。使用 `.\scripts\run-agent-worker.cmd start`，它只启动 Windows 专用 Worker 和代理。
+- Docker internal 网络不能假设可直接解析或访问 `host.docker.internal`。Windows 专用方案通过双网卡代理严格放行 `host.docker.internal:8090`；不要把 Worker 直接加入普通网络来绕过连接问题。
+- Docker Desktop 可能同时返回 IPv6/IPv4，而 Squid 5 已移除 `dns_v4_first`。Windows 一键脚本会查询实际 IPv4 host-gateway，并生成 `.local/agent-review-squid-hosts` 只读挂载给代理；不要硬编码 Docker Desktop 网段。
+- Worker 容器有 `HTTP_PROXY/HTTPS_PROXY` 但配置测试恰好在 180 秒返回 `AGENT_TIMEOUT` 时，检查 Claude Code 子进程是否丢失了代理变量。子进程只能选择性继承代理变量，不能复制包含数据库、GitLab 等凭据的整个 Worker 环境。局域网上游代理应配置到白名单 Squid 的 `AGENT_REVIEW_UPSTREAM_PROXY`，不得让 Worker 绕过 Squid 直连。
+- Linux 生产不使用 Windows 专用 Compose。生产 Worker 通过 internal 网络访问 Compose backend，并与 backend 只读挂载同一个 `LOCAL_REPO_WORKSPACE_HOST_DIR`。
+- Windows 的 `run-backend.cmd dev` 会异步启动 Worker，不能在 uvicorn 启动前同步等待 Worker 心跳，否则会形成启动死锁。失败详情查看 `.local/agent-worker-startup.*.log`；设置 `AGENT_REVIEW_AUTO_START_WORKER=false` 可排除 Docker 启动因素。
+- 自动启动只作用于 Windows `dev`，不得影响 `test`、`lint`、`migrate` 或 Linux runtime。远程离线包继续使用 `docker-compose.runtime.yml`，不要把 `docker-compose.windows-agent.yml` 上传叠加到生产环境。
+
 ## 数据库与迁移
 
 - Python 后端优先使用 `DATABASE_URL`：
@@ -148,6 +177,7 @@ $env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?chars
 - 如果沿用旧 `MYSQL_URL`，不要把 JDBC 专属参数如 `serverTimezone`、`useSSL`、`allowPublicKeyRetrieval` 透传给 PyMySQL。
 - `/api/health` 不访问数据库，不能仅凭 health 判断数据库链路可用；还应访问 `/api/review-tasks` 或 `/api/projects`。
 - Python 后端以 `backend-python/migrations/bootstrap_sql/` 为 schema 基准，日常不要依赖 legacy Java Flyway 迁移。
+- Agent Worker 上线后若出现 `1064 ... near 'SKIP LOCKED'`，通常是后端连接到了 MySQL 5.7。Agent Job claim 在 MySQL 5.7 下必须使用带行锁的普通 `FOR UPDATE` 串行领取，在 MySQL 8.0+ 才使用 `FOR UPDATE SKIP LOCKED`；不要通过移除行锁来规避语法错误。生产仍推荐 MySQL 8.0+。
 
 ## GitLab 本地仓库上下文
 

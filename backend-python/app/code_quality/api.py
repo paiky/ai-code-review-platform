@@ -25,6 +25,27 @@ async def get_settings(db: Session = Depends(get_db)) -> dict:
     return ok(service.get_settings_response(db))
 
 
+@review_router.get("/agent-settings")
+async def get_agent_settings(db: Session = Depends(get_db)) -> dict:
+    from app.agent_review.service import get_settings_response
+
+    return ok(get_settings_response(db))
+
+
+@review_router.put("/agent-settings")
+async def update_agent_settings(request: dict, db: Session = Depends(get_db)) -> dict:
+    from app.agent_review.service import update_settings
+
+    return ok(update_settings(db, request))
+
+
+@review_router.post("/agent-settings/test")
+async def test_agent_settings(db: Session = Depends(get_db)) -> dict:
+    from app.agent_review.service import test_settings
+
+    return ok(test_settings(db))
+
+
 @review_router.get("/job-queue")
 async def get_job_queue(db: Session = Depends(get_db)) -> dict:
     return ok(service.get_job_queue_response(db))

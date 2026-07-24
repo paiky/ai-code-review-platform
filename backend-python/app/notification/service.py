@@ -281,6 +281,7 @@ def format_review_summary_markdown(
         f"项目：{_project_text(context)}\n\n"
         f"分支：{_branch_text(context)}\n\n"
         f"AI 模型：{_provider_label((code_quality_result or {}).get('provider'))}\n\n"
+        f"Review 引擎：{_review_engine_text(code_quality_result)}\n\n"
         f"{_event_label(context)} 作者：{_author_text(context)}\n\n"
     )
     result += (
@@ -290,6 +291,17 @@ def format_review_summary_markdown(
     if detail_url:
         result += f"详情：{detail_url}"
     return result
+
+
+def _review_engine_text(result: dict | None) -> str:
+    value = result or {}
+    requested = str(value.get("requestedEngine") or "STANDARD")
+    effective = str(value.get("effectiveEngine") or requested)
+    text = f"{requested} → {effective}"
+    summary = value.get("agentRunSummary") if isinstance(value.get("agentRunSummary"), dict) else {}
+    if effective == "STANDARD_FALLBACK" and summary.get("failureCode"):
+        text += f"（{summary['failureCode']}）"
+    return text
 
 
 def _format_reminders(risk_items: list[dict]) -> str:

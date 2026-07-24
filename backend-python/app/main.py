@@ -1,11 +1,14 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from contextlib import suppress
+import asyncio
 from datetime import datetime, timezone
 import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.agent_review.api import router as agent_review_worker_router
 from app.code_quality.api import profile_router as code_quality_profile_router
 from app.code_quality.api import provider_router as code_quality_provider_router
 from app.code_quality.api import review_router as code_quality_review_router
@@ -39,7 +42,26 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         recover_stale_running_reviews_on_startup()
     except Exception as exception:
         log.warning("Code quality startup recovery skipped: %s", exception)
-    yield
+    recovery_task = asyncio.create_task(_agent_recovery_loop())
+    try:
+        yield
+    finally:
+        recovery_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await recovery_task
+
+
+async def _agent_recovery_loop() -> None:
+    from app.agent_review.service import recover_unavailable_agent_jobs
+
+    while True:
+        try:
+            await asyncio.to_thread(recover_unavailable_agent_jobs)
+        except asyncio.CancelledError:
+            return
+        except Exception as exception:
+            log.warning("Agent Review recovery sweep skipped: %s", exception)
+        await asyncio.sleep(15)
 
 
 def create_app() -> FastAPI:
@@ -68,6 +90,7 @@ def create_app() -> FastAPI:
     app.include_router(code_quality_review_router)
     app.include_router(code_quality_profile_router)
     app.include_router(code_quality_provider_router)
+    app.include_router(agent_review_worker_router)
     app.include_router(evaluation_router)
     app.include_router(evaluation_run_router)
     app.include_router(review_quality_router)

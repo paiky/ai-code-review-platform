@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10`、`docs/39` 全阶段和 `docs/40` 阶段 1、阶段 2 已落地；当前停止等待用户验证，阶段 3 必须先核对 evaluation cases、人工归因、acceptance gate 和 baseline run，未经确认不得开始。
+- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10`、`docs/39` 全阶段和 `docs/40` 阶段 1、阶段 2 已落地。`docs/41` 阶段 1、阶段 2 工程实现和阶段 3A 生产观察能力准备已落地，当前等待用户验证 3A；只有用户明确回复“继续阶段 3B”后才进入真实样本准确性验收与扩大门禁。
 - 完整产品目标：`docs/37-review-platform-target-product-roadmap.md`。本文件负责近期阶段推进，`docs/37` 负责最终产品形态和长期路线。
 - 关联历史文档：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`：V2 反馈学习、项目策略、Context Pack 和高准确模式阶段记录。
@@ -11,6 +11,7 @@
   - `docs/35-review-quality-evaluation-and-rule-gap-governance.md`：规则缺口治理和质量评估路线。
   - `docs/39-review-accuracy-and-material-ui-roadmap.md`：源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 / MUI 前端重构专项路线。
   - `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`：首次 Review 前确定性检查、Planner 多端感知、评估驱动的多端 Planner / Retriever 配对扩展和 finding 二次复评专项路线。
+  - `docs/41-server-side-readonly-agent-review-plan.md`：服务器侧只读 Agent Review 可选模式，负责阶段 1 Spike、阶段 2 受控生产验证、阶段 3A 生产观察准备和阶段 3B 真实样本准确性验收/扩大范围门禁。
 - 本文件用途：回答“近期哪些能力必须先补、当前缺什么、下一步先做什么”。完整产品目标和长期阶段路线见 `docs/37-review-platform-target-product-roadmap.md`。后续阶段推进优先更新本文件，再按需更新细节文档。
 
 ## 一、通俗结论
@@ -206,6 +207,35 @@ P0：统一文档入口和路线判断（本文件）
   -> docs/40 阶段 3：第一个多端 Planner / Retriever 配对扩展（需先核对进入条件）
   -> M11：评估驱动的业务 Retriever / 多端能力循环
 ```
+
+可选并行验证线：
+
+```text
+docs/41 阶段 1 工程 Spike（已完成）
+  -> 新版生产验证方案与六项决策（已完成）
+  -> 阶段 2：项目组可选的正式 Agent Review + 显式 STANDARD_FALLBACK（工程实现完成，待真实生产验收）
+  -> 阶段 3A：生产观察、对照识别、脱敏导出、合成 demo 和样本门禁状态（已完成，待用户验证）
+  -> 阶段 3B：真实已授权项目观察、至少 30 条去重人工标注样本和配对覆盖验收
+  -> 用户决定是否扩大 Agent 使用范围；STANDARD 仍保持默认
+```
+
+`docs/41` 是独立的受控生产验证线，不依赖 `docs/40` 阶段 3 先完成，也不改变 `docs/40` 自身的进入条件。30 条 Agent evaluation cases 用于阶段 3B 判断是否扩大范围，不是实现阶段 2 生产闭环或阶段 3A 观察能力的技术依赖；人工归因、STANDARD/AGENT 对照和 acceptance gate 必须在阶段 3B 基于真实数据成立。
+
+`docs/41` 阶段 2 于 2026-07-18 完成工程落地：固定 Claude Code 2.1.112 + DeepSeek、独立加密 Key/Worker、项目组引擎与源码授权、混合 Diff、持久化 Run/Job、正式结果、显式降级、同任务对照、页面/通知和 DeepSeek-only 出站均已接入。本地未配置真实生产 Key，因此当前只进入用户生产验收，不进入阶段 3。
+
+阶段 2 最终工程验证：Agent 专项与 Spike 安全测试 `39 passed, 1 skipped`（其中阶段 2 契约 `11 passed`）；剔除 4 个已记录既有失败后的 Python 回归 `301 passed, 1 skipped, 4 deselected`；定向 Ruff、前端 production build、开发/运行时 Compose 配置和最终 Worker 非 root/Claude Code 2.1.112 镜像检查均通过。真实 DeepSeek 调用仍由用户生产验收完成。
+
+阶段 3A 只在现有质量治理和 Agent Run 数据上增加只读观察视图：按任务、项目组、项目、Profile、时间筛选 STANDARD / AGENT 结果，统计样本、配对、人工标注、finding 反馈、成功/失败/fallback、耗时和安全用量；提供不含源码/diff/Key/Prompt/思维过程/MCP 源码的强制脱敏导出；用合成数据验证无真实 Key 场景。样本不足 30 条时必须返回 `INSUFFICIENT_SAMPLE`，且不产生扩大范围结论。
+
+阶段 3A 落地记录（2026-07-18）：
+
+- 复用：没有新增评估主表；人工 verdict 继续来自 `evaluation_cases`，回放继续使用 `evaluation_runs`，finding 人工反馈继续使用 `review_item_feedbacks`，执行数据来自现有 Review Result / Agent Run。
+- 观察：新增 `/api/review-quality/agent-observation` 和质量看板观察区，支持 task、项目组、项目、Profile、开始/结束时间筛选，展示样本/配对/标注、finding 人工问题、Agent 可靠性、p50/p95 和安全用量摘要。
+- 门禁：按去重 evaluation case / finding feedback 统计人工标注样本，已配对任务数单独展示；少于 30 条样本固定返回 `INSUFFICIENT_SAMPLE`，达到数量也只返回 `READY_FOR_STAGE_3B_REVIEW`，阶段 3A 始终保持 `expansionConclusion=null`。
+- 导出与权限：`/api/review-quality/agent-observation/export` 仅接受 `SANITIZED_SUMMARY_ONLY`，标识伪名化且无自由文本；请求源码、完整 diff、Key、Prompt、reasoning、session 或 MCP 源码字段返回 403。平台仍无内建登录/RBAC，部署层管理员鉴权是遗留风险。
+- Demo：`syntheticDemo=true` 返回显式 `SYNTHETIC_DEMO`，不读 Key、不调用模型，可验证 2 个配对任务、成功/失败/fallback、分位值和样本不足门禁。
+- 验证：阶段 3A 定向与关联回归 `32 passed`；阶段 3A 文件定向 Ruff 通过；前端 production build 通过。全仓 Ruff 仍有 5 个与本阶段无关的既有未使用导入/变量问题，本阶段未修改。
+- 下一阶段：停止并等待用户验证；只有用户明确回复“继续阶段 3B”后，才允许读取真实观察数据并执行准确性验收，不自动扩大项目范围。
 
 ### 为什么不是继续补缓存 / MQ / 配置 Retriever
 

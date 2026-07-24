@@ -1,5 +1,22 @@
 export const releaseNotes = [
   {
+    id: '2026-07-24-agent-review-observability-1-1-0',
+    version: 'v1.1.0',
+    releaseDate: '2026-07-24',
+    title: 'Agent Review 正式上线与智能审查升级',
+    summary: '平台升级至 1.1.0：Agent Review 已具备按项目组安全启用、独立 Worker 稳定执行、失败自动降级、全链路可观测和脱敏治理能力；完成 DeepSeek 配置与源码外发授权后，即可接入正式生产 Review，STANDARD 继续作为可选主引擎和可靠 fallback。',
+    highlights: [
+      'Agent Review 正式接入 MR、Push 和 Manual Review 主链路；项目组可在 STANDARD 与 AGENT 之间选择主引擎，Agent 成功结果统一进入现有 finding、任务详情和通知链路。',
+      '生产执行具备明确的可靠性保障：Agent 不可用、超时或执行失败时记录真实原因并自动执行 STANDARD_FALLBACK，不会阻断 Review，也不会把降级结果伪装为 Agent 成功。',
+      '新增独立 Agent Worker、加密 API Key、任务级只读 worktree 和受限 MCP 工具；Agent 可按需读取 diff、搜索调用方与相关源码，但不能执行命令、写文件、访问其它项目或绕过 DeepSeek-only 出站限制。',
+      '质量看板提供 STANDARD / AGENT 样本和同任务配对观察，持续展示人工标注进度、误判、漏报、上下文不足、成功率、fallback、p50/p95、turn、工具调用和源码返回量，为生产运营和后续扩大范围提供数据依据。',
+      '新增强制脱敏的 Agent 对照摘要导出和合成 Demo；导出不包含源码、完整 diff、API Key、Prompt、模型思维过程、会话内容或 MCP 返回源码。',
+      '首次 Review 前确定性 Preflight 已接入调度链路，Planner 增加端类型、语言、提取器版本和覆盖模式摘要，为后续评估驱动的多端 Planner / Retriever 扩展建立基线。',
+      '完善 Windows + Docker Desktop 一键启动、局域网上游代理、Linux Compose 部署、Worker 健康检查和 MySQL 5.7 Job claim 兼容；生产仍推荐 MySQL 8.0+。'
+    ],
+    tags: ['1.1.0', 'Agent Review', 'Claude Code', 'DeepSeek', '正式上线', '可靠降级', '只读 MCP', '部署升级']
+  },
+  {
     id: '2026-07-10-quality-governance-mui-1-0-0',
     version: 'v1.0.0',
     releaseDate: '2026-07-10',

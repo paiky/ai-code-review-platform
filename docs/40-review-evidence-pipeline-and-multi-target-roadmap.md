@@ -456,7 +456,7 @@ Evaluation Case
 
 同步要求：
 
-- 更新 `README.md` 当前能力和验证步骤。
+- 更新本文和对应设计文档中的能力、阶段与验收记录；操作步骤变化写入 `docs/42-development-deployment-and-validation-guide.md`。只有项目入口或文档路由变化时才更新 `README.md`。
 - 更新 `docs/36-review-platform-current-roadmap.md` 近期状态。
 - 若改变长期里程碑，再更新 `docs/37-review-platform-target-product-roadmap.md`。
 - 环境和工具踩坑写入 `docs/11-agent-environment-pitfalls.md`；业务行为问题写入对应设计文档或 `docs/24-bug-log.md`。
@@ -464,13 +464,13 @@ Evaluation Case
 ## 八、总控 Prompt
 
 ```text
-请阅读 AGENTS.md、README.md、docs/11-agent-environment-pitfalls.md、docs/36-review-platform-current-roadmap.md、docs/37-review-platform-target-product-roadmap.md、docs/38-review-lifecycle-and-frontend-entrypoints.md、docs/39-review-accuracy-and-material-ui-roadmap.md、docs/40-review-evidence-pipeline-and-multi-target-roadmap.md。
+请先阅读 AGENTS.md，并在 docs/40-review-evidence-pipeline-and-multi-target-roadmap.md 中只读取当前阶段、验收标准和阶段边界。使用 rg 按需定位 docs/36 的当前状态、docs/38 的相关生命周期和代码调用链；不要默认通读 README、docs/37、docs/39 或环境避坑文档。
 
 当前 docs/39 已完成，后续以 docs/40 为“Review 证据链前置与多端能力”专项路线，以 docs/36 为近期总控。每次只推进 docs/40 的一个阶段。允许修改 backend-python、frontend、docs、examples、tests 中与当前阶段直接相关的文件；不要修改 legacy Java backend。
 
 必须保持以下边界：不自动修改 Prompt，不自动降级或忽略 finding，不自动启用项目策略，不执行模型生成的任意命令，不做无限制全仓扫描，不直接实现没有 evaluation case / rule gap attribution / acceptance gate 依据的多端 Retriever。
 
-阶段完成后必须更新 README、docs/36 和 docs/40 阶段落地记录，运行影响范围内最小测试，输出“改了什么、为什么、如何验证、遗留风险、下一阶段”，然后停止，等待用户验证并明确回复“继续下一阶段”。
+阶段完成后必须更新 docs/36 和 docs/40 的阶段落地记录；操作或验证步骤变化时更新 docs/42，只有项目入口或文档路由变化时才更新 README。运行影响范围内最小测试，输出“改了什么、为什么、如何验证、遗留风险、下一阶段”，然后停止，等待用户验证并明确回复“继续下一阶段”。
 ```
 
 ## 九、各阶段起手式 Prompt
@@ -486,7 +486,7 @@ Evaluation Case
 - 检查失败默认 fail-open，将脱敏失败摘要写入 progress 和 Context Pack 后继续 Review。
 - 保留现有手动运行 / 重跑 API，不做合并阻塞，不修改 finding。
 
-先梳理所有触发路径和多模型 fan-out 点，补 README 和设计记录，再实现后端编排、progress、Context Pack 摘要和测试。完成后停止等待验证，不进入阶段 2。
+先梳理所有触发路径和多模型 fan-out 点，更新本文的设计记录，再实现后端编排、progress、Context Pack 摘要和测试；操作或验证方式变化时更新 docs/42。完成后停止等待验证，不进入阶段 2。
 ```
 
 ### 阶段 2 Prompt
@@ -551,9 +551,9 @@ Evaluation Case
 ## 十、推荐的新对话起手式
 
 ```text
-请阅读 AGENTS.md、README.md、docs/11-agent-environment-pitfalls.md、docs/36-review-platform-current-roadmap.md、docs/37-review-platform-target-product-roadmap.md、docs/38-review-lifecycle-and-frontend-entrypoints.md、docs/39-review-accuracy-and-material-ui-roadmap.md、docs/40-review-evidence-pipeline-and-multi-target-roadmap.md。
+请先阅读 AGENTS.md，并在 docs/40-review-evidence-pipeline-and-multi-target-roadmap.md 中只读取阶段 1、验收标准和阶段边界。使用 rg 按需定位 docs/36 的阶段状态、docs/38 的 MR/Push/manual/retry 生命周期以及相关代码；不要默认通读 README、docs/37、docs/39 或环境避坑文档。
 
 docs/39 已完成。现在请只落地 docs/40 阶段 1“首次 Review 前确定性检查 Preflight”：在 MR、Push、manual、retry 的首次 Provider 调用前自动运行内置 SECRET_SCAN；同一 task 同一次多模型调度只运行一次并复用结果；失败默认 fail-open，将脱敏失败摘要写入 progress 和 Context Pack 后继续 Review；保留现有手动运行和重跑 API；不做合并阻塞，不修改 finding，不进入 Planner 多端改造。
 
-请先核对当前所有触发路径和多模型 fan-out 点，按仓库规范先更新 README / 设计记录，再实现后端编排、progress、Context Pack 摘要和测试。只做本阶段。完成后更新 docs/36 与 docs/40 的阶段落地记录，输出“改了什么、为什么、如何验证、遗留风险、下一阶段”，然后停止等待我验证并确认“继续下一阶段”。
+请先核对当前所有触发路径和多模型 fan-out 点，先更新 docs/40 的设计记录，再实现后端编排、progress、Context Pack 摘要和测试；操作或验证步骤变化时更新 docs/42。只做本阶段。完成后更新 docs/36 与 docs/40 的阶段落地记录，输出“改了什么、为什么、如何验证、遗留风险、下一阶段”，然后停止等待我验证并确认“继续下一阶段”。
 ```

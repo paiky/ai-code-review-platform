@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "name": "agent-review-stage1-example",
+  "sandboxAttestation": {
+    "readOnlyMount": false,
+    "deepseekOnlyEgress": false
+  },
+  "cases": [
+    {
+      "id": "annotated-case-001",
+      "title": "事务提交后才更新缓存",
+      "worktree": "case-001",
+      "baseRef": "main",
+      "commitSha": "replace-with-reviewed-commit-sha",
+      "changedFiles": [
+        "src/order_service.py"
+      ],
+      "verdict": "TRUE_POSITIVE",
+      "expectation": "REPORT",
+      "contextRelated": true,
+      "targetFinding": {
+        "filePath": "src/order_service.py",
+        "startLine": 42,
+        "endLine": 46,
+        "lineTolerance": 5,
+        "category": "TRANSACTION",
+        "titleKeywords": [
+          "事务"
+        ]
+      },
+      "baselineContext": "同一份现有 Context Pack 内容；baseline 与 candidate 必须完全一致。",
+      "diff": "diff --git a/src/order_service.py b/src/order_service.py\n--- a/src/order_service.py\n+++ b/src/order_service.py\n@@ -42,0 +43,4 @@\n+save_order(order)\n+cache.set(order.id, order)\n+publish_order_changed(order.id)\n+return order",
+      "reviewInstructions": "使用与线上目标 Review Profile 相同的补充审查说明。"
+    }
+  ]
+}

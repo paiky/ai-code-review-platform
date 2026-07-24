@@ -36,3 +36,62 @@
 回归验证：
 
 - 运行 `backend-python/tests/contract/test_gitlab_dingtalk_integration.py::test_dingtalk_delivery_skips_when_project_group_has_no_webhooks`。
+
+## BUG-20260718-001 Agent Review 设置页因未定义处理函数崩溃
+
+状态：已修复
+
+发现时间：2026-07-18
+
+现象：
+
+- 打开设置页后，浏览器控制台报 `ReferenceError: testAgentSettings is not defined`。
+- `TemplateConfig` 渲染失败，整个设置页面无法使用。
+
+根因：
+
+- Agent Review 设置卡片引用了 `testAgentSettings`，但没有实现该函数，React 在渲染 `onClick` 属性时立即抛错。
+- `saveAgentSettings` 同样未实现，只因位于箭头函数体内而没有在首屏渲染时立即报错。
+- 前端将配置测试成功状态误写为 `READY`，与后端 `QUEUED / RUNNING / SUCCESS / FAILED` 契约不一致。
+- Agent 设置卡片虽然加入了 `collapseItems`，但没有加入最终的 `orderedCollapseItems` 白名单；即使修复运行时错误，卡片仍不会显示。
+
+修复：
+
+- 实现 Agent 设置保存、保留原 Key、替换 Key 和清除 Key。
+- 实现 Worker 配置测试提交及两秒间隔的状态轮询，并支持页面重新打开后恢复轮询。
+- 按后端状态展示排队、运行、成功、失败和轮询超时；成功状态统一为 `SUCCESS`。
+- Worker 离线或设置尚未保存时，在前端给出明确提示。
+- 将 `agent-review-settings` 加入设置页最终渲染顺序。
+
+回归验证：
+
+- 运行 `scripts/run-frontend.cmd build`。
+- 打开 `/settings`，确认页面正常渲染；分别验证保存、清除 Key、Worker 离线提示和配置测试状态流转。
+
+## BUG-20260724-001 项目组 Agent Review 引擎选择未保存
+
+状态：已修复
+
+发现时间：2026-07-24
+
+现象：
+
+- 设置页已经提供项目组 `STANDARD / AGENT` 选择和 Agent 源码外发授权，但入口位于“AI Review 配置”，用户容易在“项目组 / 端类型配置”中找不到。
+- 即使在“AI Review 配置”完成选择并保存，刷新后仍恢复原值。
+
+根因：
+
+- “保存项目组 AI Review 策略”的请求体遗漏 `reviewEngine` 和 `agentSourceExportAllowed`，界面状态没有持久化到后端。
+- Agent 全局配置卡没有说明“启用能力”与“切换项目组主引擎”是两个独立步骤。
+
+修复：
+
+- 保存项目组策略时一并提交 `reviewEngine` 和 `agentSourceExportAllowed`。
+- 前端在选择 `AGENT` 但未确认源码外发授权时直接阻止保存并提示。
+- Agent 设置卡和“AI Review 配置”项目组策略区增加明确的切换路径、主引擎和 fallback 说明。
+- 项目组策略区按“Review 引擎 → 触发与授权开关 → 修复预览 / Push 策略”重新分组：桌面端开关保持同一行，修复预览与 Push 策略并排，窄屏自动换行。
+
+回归验证：
+
+- 运行 `scripts/run-frontend.cmd build`。
+- 打开 `/settings`，在“AI Review 配置”选择项目组，切换为 `AGENT`、确认源码外发授权并保存；刷新后确认两项保持，随后可用该项目的 Manual Review 验证请求引擎为 `AGENT`。

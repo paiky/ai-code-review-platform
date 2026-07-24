@@ -1,0 +1,80 @@
+name: ai-code-review-windows-agent
+
+services:
+  agent-worker:
+    build:
+      context: ..
+      dockerfile: deploy/agent-review-worker.Dockerfile
+    restart: unless-stopped
+    environment:
+      AGENT_REVIEW_BACKEND_URL: http://host.docker.internal:8090
+      AGENT_REVIEW_WORKER_TOKEN: ${AGENT_REVIEW_WORKER_TOKEN:?AGENT_REVIEW_WORKER_TOKEN is required}
+      AGENT_REVIEW_WORKER_ID: ${AGENT_REVIEW_WORKER_ID:-windows-agent-worker-1}
+      AGENT_REVIEW_WORKSPACE_ROOT: /workspaces
+      HTTP_PROXY: http://agent-egress-proxy:3128
+      HTTPS_PROXY: http://agent-egress-proxy:3128
+      NO_PROXY: 127.0.0.1,localhost
+    volumes:
+      - type: bind
+        source: ${LOCAL_REPO_WORKSPACE_HOST_DIR:?LOCAL_REPO_WORKSPACE_HOST_DIR is required}
+        target: /workspaces
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+      - /home/agent-review:rw,noexec,nosuid,size=64m
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 2g
+    cpus: 2.0
+    depends_on:
+      agent-egress-proxy:
+        condition: service_started
+    networks:
+      - agent-internal
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import json,os,urllib.request; data=json.load(urllib.request.urlopen(os.environ['AGENT_REVIEW_BACKEND_URL'].rstrip('/') + '/api/code-quality-reviews/agent-settings', timeout=5)); assert data['data']['workerStatus'] == 'ONLINE'",
+        ]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 20s
+
+  agent-egress-proxy:
+    build:
+      context: ..
+      dockerfile: deploy/agent-egress-proxy.Dockerfile
+    restart: unless-stopped
+    read_only: true
+    volumes:
+      - type: bind
+        source: ${AGENT_REVIEW_WINDOWS_PROXY_CONFIG_FILE:?AGENT_REVIEW_WINDOWS_PROXY_CONFIG_FILE is required}
+        target: /etc/squid/squid.conf
+        read_only: true
+      - type: bind
+        source: ${AGENT_REVIEW_WINDOWS_PROXY_HOSTS_FILE:?AGENT_REVIEW_WINDOWS_PROXY_HOSTS_FILE is required}
+        target: /etc/squid/hosts.windows
+        read_only: true
+    tmpfs:
+      - /var/spool/squid:rw,nosuid,size=64m
+      - /var/log/squid:rw,nosuid,size=16m
+      - /run:rw,nosuid,size=8m
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks:
+      - default
+      - agent-internal
+
+networks:
+  agent-internal:
+    internal: true

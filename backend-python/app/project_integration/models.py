@@ -40,6 +40,8 @@ class ProjectGroup(Base):
     group_code: Mapped[str | None] = mapped_column(String(64))
     default_code_quality_profile_code: Mapped[str | None] = mapped_column(String(64))
     default_provider_code: Mapped[str | None] = mapped_column(String(64))
+    review_engine: Mapped[str] = mapped_column(String(32), nullable=False, default="STANDARD")
+    agent_source_export_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     trigger_on_manual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     trigger_on_mr: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
