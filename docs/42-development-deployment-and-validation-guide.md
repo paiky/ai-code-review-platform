@@ -260,6 +260,8 @@ docker compose up -d --build
 .local/docker-deploy/{版本号}/
   ai-code-review-backend-{版本号}.tar
   ai-code-review-frontend-{版本号}.tar
+  ai-code-review-agent-worker-{版本号}.tar
+  ai-code-review-agent-egress-{版本号}.tar
   docker-compose.yml
   .env.example
   load-images.sh
@@ -276,7 +278,7 @@ cd ../runtime
 docker compose up -d
 ```
 
-`load-images.sh` 只在首次部署创建 `runtime/.env`，升级时只更新 `APP_VERSION`，不覆盖已有连接和密钥。默认保留最近两个应用镜像版本；可用 `KEEP_IMAGE_VERSIONS=3 ./load-images.sh` 临时增加保留数。
+`load-images.sh` 是每次离线部署和升级的必执行步骤：它会加载 backend、frontend、Agent Worker 和 Agent 出站代理镜像，并自动将当前版本的 `docker-compose.yml` 复制到 `runtime`，不需要手工替换。脚本只在首次部署创建 `runtime/.env`，升级时只更新 `APP_VERSION`，不覆盖已有连接和密钥。默认保留最近两个应用镜像版本；可用 `KEEP_IMAGE_VERSIONS=3 ./load-images.sh` 临时增加保留数。
 
 回滚时修改 `runtime/.env` 中的 `APP_VERSION`，再执行：
 

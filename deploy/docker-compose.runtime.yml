@@ -25,9 +25,6 @@ services:
   backend:
     image: ai-code-review-backend:${APP_VERSION:-local}
     restart: unless-stopped
-    env_file:
-      - path: .env
-        required: false
     environment:
       SERVER_PORT: ${BACKEND_PORT:-8090}
       DATABASE_URL: ${DATABASE_URL:-}

@@ -6003,19 +6003,14 @@ function TemplateConfig() {
 
   const agentTestStatus = String(agentSettingsTestResult?.status || 'NOT_RUN').toUpperCase();
   const agentTestPending = ['QUEUED', 'RUNNING'].includes(agentTestStatus);
-  const agentTestSuccess = agentTestStatus === 'SUCCESS';
-  const agentTestAlertType = agentTestSuccess
-    ? 'success'
-    : agentTestPending
-      ? 'info'
-      : agentTestStatus === 'POLL_TIMEOUT'
-        ? 'warning'
-        : 'error';
-  const agentTestMessage = agentTestSuccess
-    ? 'Agent 配置可用'
-    : agentTestPending
-      ? 'Agent 配置测试进行中'
-      : 'Agent 配置不可用';
+  const agentTestAlertType = agentTestPending
+    ? 'info'
+    : agentTestStatus === 'POLL_TIMEOUT'
+      ? 'warning'
+      : 'error';
+  const agentTestMessage = agentTestPending
+    ? 'Agent 配置测试进行中'
+    : 'Agent 配置不可用';
   const agentSaveRequiresEncryption = Boolean(
     agentSettingsDraft.enabled || String(agentSettingsDraft.apiKey || '').trim()
   );
@@ -6082,18 +6077,6 @@ function TemplateConfig() {
       children: (
         <Card bordered={false} className="settings-inner-card">
           <Space direction="vertical" size="middle" className="full-width">
-            <Alert
-              showIcon
-              type="info"
-              message="首版固定组合，不复用普通 Provider Key"
-              description="Claude Code 2.1.112 · DeepSeek · deepseek-v4-pro[1m] · https://api.deepseek.com/anthropic。源码仅对已授权项目组按需只读导出。"
-            />
-            <Alert
-              showIcon
-              type="warning"
-              message="启用 Agent 能力不会自动切换现有项目组"
-              description="需要测试时，请展开下方“AI Review 配置”，选择项目组，将“Review 引擎”改为 AGENT，同时开启源码片段外发授权并保存。Agent 失败时仍会显式降级到 STANDARD。"
-            />
             <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
               <Descriptions.Item label="Runner">Claude Code {agentSettings?.cliVersion || '2.1.112'}</Descriptions.Item>
               <Descriptions.Item label="模型">{agentSettings?.model || 'deepseek-v4-pro[1m]'}</Descriptions.Item>
@@ -6106,12 +6089,8 @@ function TemplateConfig() {
               <Alert
                 type="error"
                 showIcon
-                message="后端缺少 Agent 配置加密主密钥，暂不能保存 Key"
-                description={(
-                  <span>
-                    本地开发请在仓库根目录执行 <Text code>.\scripts\init-agent-review-secrets.cmd</Text>，然后重启后端。该命令不会生成、读取或输出 DeepSeek API Key。
-                  </span>
-                )}
+                message="需要配置 Agent 加密主密钥"
+                description="请在后端运行环境设置 AGENT_REVIEW_CONFIG_ENCRYPTION_KEY 并重启服务。该密钥只用于加密保存 Agent 专用 DeepSeek Key。"
               />
             )}
             <Row gutter={[16, 16]} align="middle">
@@ -6150,7 +6129,7 @@ function TemplateConfig() {
                 </Space>
               </Col>
             </Row>
-            {agentSettingsTestResult && agentTestStatus !== 'NOT_RUN' && (
+            {agentSettingsTestResult && !['NOT_RUN', 'SUCCESS'].includes(agentTestStatus) && (
               <Alert
                 showIcon
                 type={agentTestAlertType}
