@@ -84,7 +84,7 @@ def test_provider_connection(
     try:
         prepared = _provider_connection_request(provider, request)
         started = perf_counter()
-        with httpx.Client(timeout=prepared["timeout_seconds"]) as client:
+        with _provider_http_client(prepared["timeout_seconds"]) as client:
             response = client.post(
                 prepared["endpoint"],
                 json=prepared["body"],
@@ -639,7 +639,7 @@ def _run_json_http_provider(
         )
         db.commit()
 
-        with httpx.Client(timeout=timeout_seconds) as client:
+        with _provider_http_client(timeout_seconds) as client:
             response = client.post(endpoint, json=body, headers=headers)
         raw = response.text
         append_progress(
@@ -769,7 +769,7 @@ def _run_text_http_provider(
         )
         append_progress(db, task_id, "FIX_HTTP_REQUEST_START", "INFO", "已发起修复预览 Provider HTTP 请求", f"provider={source}, url={endpoint}, model={model}, timeoutSeconds={timeout_seconds}")
         db.commit()
-        with httpx.Client(timeout=timeout_seconds) as client:
+        with _provider_http_client(timeout_seconds) as client:
             response = client.post(endpoint, json=body, headers=headers)
         raw = response.text
         append_progress(
@@ -1128,6 +1128,11 @@ def _provider_error_message(exception: Exception, timeout_seconds: int) -> str:
             f"http_status_error: status={response.status_code}, body={_abbreviate(response.text, 1000)}"
         )
     return scrub_sensitive(str(exception))
+
+
+def _provider_http_client(timeout_seconds: int) -> httpx.Client:
+    proxy = get_settings().code_quality_review_proxy or None
+    return httpx.Client(timeout=timeout_seconds, proxy=proxy, trust_env=False)
 
 
 def _response_summary(response: httpx.Response, raw: str) -> str:

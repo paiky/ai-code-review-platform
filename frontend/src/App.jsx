@@ -4307,12 +4307,14 @@ function CodeQualityReviewView({
 function codeQualityReviewTabLabel(review) {
   const requestedEngine = String(review?.requestedEngine || 'STANDARD').toUpperCase();
   const effectiveEngine = String(review?.effectiveEngine || requestedEngine).toUpperCase();
-  if (requestedEngine === 'AGENT') {
-    return effectiveEngine === 'STANDARD_FALLBACK' ? 'Agent → 普通 Review' : 'Agent Review';
-  }
   const providerLabel = sourceLabel(review?.provider);
-  if (providerLabel && providerLabel !== '-') return providerLabel;
-  return review?.displayName || review?.model || '-';
+  const standardLabel = providerLabel && providerLabel !== '-'
+    ? providerLabel
+    : review?.displayName || review?.model || '普通 Review';
+  if (requestedEngine === 'AGENT') {
+    return effectiveEngine === 'STANDARD_FALLBACK' ? `${standardLabel}（Agent 降级）` : 'Agent Review';
+  }
+  return standardLabel;
 }
 
 function CodeQualityReviewsPanel({

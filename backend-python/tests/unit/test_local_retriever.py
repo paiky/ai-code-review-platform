@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.review_context import local_retriever
 from app.review_context.local_retriever import retrieve_local_reference_context
@@ -627,3 +628,31 @@ def test_local_retriever_rejects_worktree_outside_workspace(
     assert result["status"] == "UNAVAILABLE"
     assert result["summary"]["queryCount"] == 0
     assert result["unavailableContexts"][0]["type"] == "REFERENCE_SEARCH"
+
+
+def test_local_retriever_falls_back_to_git_grep_when_rg_is_missing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_kwargs):
+        calls.append(args)
+        if args[0] == "rg":
+            raise FileNotFoundError("rg")
+        return SimpleNamespace(
+            returncode=0,
+            stdout="./src/OrderService.java:7:cancelOrder(id)\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(local_retriever.subprocess, "run", fake_run)
+
+    output = local_retriever._run_rg(worktree, "cancelOrder")
+    matches = local_retriever._parse_rg_matches(output, worktree)
+
+    assert calls[0][0] == "rg"
+    assert calls[1][:5] == ["git", "grep", "-n", "-I", "-F"]
+    assert matches == {"src/OrderService.java": [7]}

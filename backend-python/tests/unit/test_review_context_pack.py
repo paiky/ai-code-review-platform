@@ -504,6 +504,54 @@ def test_review_context_pack_marks_missing_worktree_unavailable(
     assert context["summary"]["localReferenceSearch"]["status"] == "UNAVAILABLE"
 
 
+def test_local_reference_tool_failure_does_not_mask_prepared_worktree(
+    monkeypatch,
+) -> None:
+    local_repository_context = {
+        "summary": {
+            "status": "PREPARED",
+            "worktreeStatus": "CHECKED_OUT",
+            "failurePhase": None,
+            "sourceWorkspaceSummary": {
+                "status": "PREPARED",
+                "failurePhase": None,
+                "worktree": {"exists": True, "status": "CHECKED_OUT"},
+            },
+        },
+        "unavailableContexts": [],
+    }
+    monkeypatch.setattr(context_service, "task_head_worktree_path", lambda _task_id: Path("worktree"))
+    monkeypatch.setattr(
+        context_service,
+        "retrieve_local_reference_context",
+        lambda **_kwargs: {
+            "status": "UNAVAILABLE",
+            "summary": {},
+            "searches": [],
+            "unavailableContexts": [
+                {
+                    "type": "REFERENCE_SEARCH",
+                    "reason": "Local reference search cannot start: rg is unavailable.",
+                }
+            ],
+            "durationMs": 1,
+        },
+    )
+
+    retrieval = context_service._local_reference_context(
+        task_id=502,
+        local_repository_context=local_repository_context,
+        planner_signals=[{"type": "METHOD_DELETED"}],
+    )
+
+    summary = local_repository_context["summary"]
+    assert retrieval["status"] == "UNAVAILABLE"
+    assert summary["status"] == "PREPARED"
+    assert summary["worktreeStatus"] == "CHECKED_OUT"
+    assert summary["sourceWorkspaceSummary"]["worktree"]["exists"] is True
+    assert local_repository_context["unavailableContexts"] == []
+
+
 def test_review_context_pack_injects_local_reference_snippets(
     monkeypatch,
     tmp_path: Path,

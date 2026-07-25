@@ -51,6 +51,7 @@ $env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?chars
 | `LOCAL_REPO_MIRROR_RETENTION_DAYS` | `30` | 项目 mirror 保留时间 |
 | `CODE_QUALITY_REVIEW_ENABLED` | `false` | AI Review 首次初始化兼容值；以后以数据库设置为准 |
 | `CODE_QUALITY_REVIEW_PROVIDER` | `DEEPSEEK` | 默认 Provider 初始化值 |
+| `CODE_QUALITY_REVIEW_PROXY` | 空 | 普通 Review / Provider 测试 / 修复预览专用 HTTP 代理；不影响 GitLab、钉钉和数据库 |
 | `OPENAI_API_KEY` | 空 | OpenAI 初始化 Key |
 | `OPENAI_RESPONSES_URL` | `https://api.openai.com/v1/responses` | OpenAI Responses API |
 | `OPENAI_CODE_REVIEW_MODEL` | `gpt-5.4` | OpenAI 模型 |
@@ -339,9 +340,10 @@ Windows 专用代理只允许 Worker 访问 `host.docker.internal:8090` 和 `api
 
 ```text
 AGENT_REVIEW_UPSTREAM_PROXY=http://192.168.100.133:7897
+CODE_QUALITY_REVIEW_PROXY=http://192.168.100.133:7897
 ```
 
-重新执行 `.\scripts\run-agent-worker.cmd start` 后，Windows 启动脚本会生成本机专用 Squid 配置。上游代理只承接已经通过 `api.deepseek.com` 白名单的 HTTPS CONNECT；Claude Code 不直接持有局域网代理地址，Linux 生产也不会继承该本机设置。未配置该变量时，Squid 保持直接访问 DeepSeek。
+重新执行 `.\scripts\run-agent-worker.cmd start` 后，Windows 启动脚本会生成本机专用 Squid 配置。`AGENT_REVIEW_UPSTREAM_PROXY` 供 Agent Worker 使用，`CODE_QUALITY_REVIEW_PROXY` 供 Python backend 的普通 Provider 请求使用；本地未显式配置后者时会兼容复用前者。上游代理只承接模型请求，Linux 生产不会自动继承该本机设置。
 
 Agent Job 领取兼容现有 MySQL 5.7 数据库：后端会使用普通 `FOR UPDATE` 串行领取；MySQL 8.0+ 自动使用 `FOR UPDATE SKIP LOCKED`，多 Worker 并发更好。新建和生产数据库仍按环境要求使用 MySQL 8.0+，无需为 Windows 本地兼容模式修改 Compose。
 

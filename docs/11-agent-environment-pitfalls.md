@@ -164,6 +164,7 @@ BACKEND_PORT = 容器内后端监听端口，只在 Docker 网络内使用
 - Docker internal 网络不能假设可直接解析或访问 `host.docker.internal`。Windows 专用方案通过双网卡代理严格放行 `host.docker.internal:8090`；不要把 Worker 直接加入普通网络来绕过连接问题。
 - Docker Desktop 可能同时返回 IPv6/IPv4，而 Squid 5 已移除 `dns_v4_first`。Windows 一键脚本会查询实际 IPv4 host-gateway，并生成 `.local/agent-review-squid-hosts` 只读挂载给代理；不要硬编码 Docker Desktop 网段。
 - Worker 容器有 `HTTP_PROXY/HTTPS_PROXY` 但配置测试恰好在 180 秒返回 `AGENT_TIMEOUT` 时，检查 Claude Code 子进程是否丢失了代理变量。子进程只能选择性继承代理变量，不能复制包含数据库、GitLab 等凭据的整个 Worker 环境。局域网上游代理应配置到白名单 Squid 的 `AGENT_REVIEW_UPSTREAM_PROXY`，不得让 Worker 绕过 Squid 直连。
+- `connect_error: [Errno -2] Name or service not known` 是发起请求一侧的 DNS / 出站链路错误，不是模型业务错误。Agent 可用但普通 DeepSeek 失败时，通常是只配置了 `AGENT_REVIEW_UPSTREAM_PROXY`；普通 Provider 应配置 `CODE_QUALITY_REVIEW_PROXY`，该变量只代理模型请求，不要用全局 `HTTP_PROXY` 误伤 GitLab、钉钉和内网请求。
 - Linux 生产不使用 Windows 专用 Compose。生产 Worker 通过 internal 网络访问 Compose backend，并与 backend 只读挂载同一个 `LOCAL_REPO_WORKSPACE_HOST_DIR`。
 - Windows 的 `run-backend.cmd dev` 会异步启动 Worker，不能在 uvicorn 启动前同步等待 Worker 心跳，否则会形成启动死锁。失败详情查看 `.local/agent-worker-startup.*.log`；设置 `AGENT_REVIEW_AUTO_START_WORKER=false` 可排除 Docker 启动因素。
 - 自动启动只作用于 Windows `dev`，不得影响 `test`、`lint`、`migrate` 或 Linux runtime。远程离线包继续使用 `docker-compose.runtime.yml`，不要把 `docker-compose.windows-agent.yml` 上传叠加到生产环境。
@@ -187,6 +188,8 @@ $env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?chars
 - Git 命令不要把 token 拼进 clone URL，避免日志、命令行和 progress 泄露凭据；应使用临时 Git env config 注入认证头，并保持 `GIT_TERMINAL_PROMPT=0`。
 - `projects.repository_url` 必须归一化为运行环境可访问的 `GITLAB_BASE_URL` 地址。Webhook payload 中的容器内 hostname 可能导致 clone 失败。
 - Windows 本地 worktree 会被仓库里的非法文件名阻断，例如路径包含 `?`。mirror fetch 可以成功，但 `git worktree add` checkout 会失败。此类仓库建议在 Linux / WSL / Linux Docker volume 上运行高准确模式，或先清理非法文件名。
+- Push webhook 的事件 SHA 与分支当前 SHA 不一定相同，临时分支或 force-push 后尤其常见。普通 mirror fetch 后若事件 SHA 不可检出，应先按精确 SHA 定向 fetch 并重试；服务端仍不允许获取时必须明确降级，不能改用分支最新提交冒充事件版本。
+- 本地引用搜索优先使用 `rg`；后端 Docker 镜像应包含 `ripgrep`，Windows 等环境找不到 `rg` 时可回退到仓库自带的 `git grep`，避免仅因搜索工具 PATH 不同而中断上下文准备。
 - `LOCAL_REPO_PREPARED` 是历史 progress 状态，不代表当前 task worktree 仍存在。删除 `.local/review-workspaces` 后，需要重新触发 AI Review 才会重新准备 workspace。
 - `review-workspaces` 为空不一定是清理任务导致。先检查 `LOCAL_REPO_CONTEXT_ENABLED`、GitLab token 权限、仓库 URL、commit / branch ref、Docker volume 映射和任务详情里的工作区诊断。
 

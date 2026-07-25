@@ -29,6 +29,7 @@ class Settings:
     local_repo_mirror_retention_days: int
     code_quality_review_enabled: bool
     code_quality_review_provider: str
+    code_quality_review_proxy: str
     openai_api_key: str
     openai_responses_url: str
     openai_code_review_model: str
@@ -89,6 +90,10 @@ class Settings:
             code_quality_review_enabled=os.getenv("CODE_QUALITY_REVIEW_ENABLED", "false").lower()
             == "true",
             code_quality_review_provider=os.getenv("CODE_QUALITY_REVIEW_PROVIDER", "DEEPSEEK"),
+            code_quality_review_proxy=os.getenv(
+                "CODE_QUALITY_REVIEW_PROXY",
+                os.getenv("AGENT_REVIEW_UPSTREAM_PROXY", ""),
+            ).strip(),
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             openai_responses_url=os.getenv(
                 "OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses"

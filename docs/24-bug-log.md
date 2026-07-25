@@ -118,3 +118,61 @@
 
 - 运行 `scripts/run-frontend.cmd build`。
 - 打开 `/settings` 的 Agent Review 配置，确认正常状态没有常驻说明或历史成功 Alert；缺少加密主密钥时仅显示一条环境无关的阻塞提示。
+
+## BUG-20260724-003 Agent fallback 页签重名且工作区失败原因被覆盖
+
+状态：已修复
+
+发现时间：2026-07-24
+
+现象：
+
+- 任务 `1015` 请求 `AGENT` 后降级到 `STANDARD_FALLBACK`，两个普通 Review 结果页签都显示为“Agent → 普通 Review”，无法区分实际执行的 GLM 与 DeepSeek。
+- 项目 mirror 已成功 fetch，但事件提交已不在 mirror 中，任务 worktree 无法按精确 SHA 检出，Agent Run 未创建并记录 `AGENT_WORKTREE_UNAVAILABLE`。
+- 本地引用搜索缺少 `rg` 时，会把已经准备好的仓库摘要覆盖成 `worktree MISSING`，掩盖真实失败阶段。
+
+根因：
+
+- 页签文案只判断请求引擎与实际引擎，没有在 fallback 后保留实际 Provider 名称。
+- 临时分支或 force-push 分支可能在 webhook 到达后继续移动；普通 mirror fetch 只能获得服务器当前可达的 refs，事件 SHA 可能未被带回。
+- 本地引用搜索不可用与 worktree 不存在共用同一段摘要覆盖逻辑。
+
+修复：
+
+- fallback 结果页签显示实际 Provider，并附带“Agent 降级”标识。
+- 普通 fetch 后若精确 40 位提交 SHA 无法检出，额外按该 SHA 定向 fetch 一次并重试；仍不可达时保持失败，禁止改用分支最新提交代替。
+- `rg` 不可执行时使用 `git grep` 作为本地引用搜索后备；Docker 后端镜像同时安装 `ripgrep`。
+- 只有本地引用检索明确报告 worktree 不存在时才更新 worktree 摘要，搜索工具异常不再覆盖仓库准备结果。
+
+回归验证：
+
+- 运行 `scripts/run-backend.cmd test tests/unit/test_local_repo_context.py tests/unit/test_local_retriever.py tests/unit/test_review_context_pack.py`。
+- 运行 `scripts/run-frontend.cmd build`。
+- 对包含两个普通 Provider 的 Agent fallback 任务确认页签分别显示实际 Provider；用可定向获取的精确 SHA 验证 worktree 重试，用不可达 SHA 验证仍安全降级且保留真实原因。
+
+## BUG-20260724-004 普通 Review 未复用可用的 Provider 出站代理
+
+状态：已修复
+
+发现时间：2026-07-24
+
+现象：
+
+- DeepSeek 普通 Review 或 Agent fallback 后的 DeepSeek 结果偶发失败，错误为 `connect_error: [Errno -2] Name or service not known`。
+- 同一环境的 Agent 配置测试可用。
+
+根因：
+
+- `AGENT_REVIEW_UPSTREAM_PROXY` 只作用于隔离的 Agent Worker 出站链路。
+- 普通 Review 由 Python backend 直接请求 Provider；backend 未配置 Provider 专用代理时仍依赖本机或容器 DNS，因此 Agent 可用不代表普通 DeepSeek 链路可用。
+
+修复：
+
+- 新增 `CODE_QUALITY_REVIEW_PROXY`，只用于普通 Review、Provider 连接测试和修复预览的模型 HTTP 请求。
+- 本地未显式配置时兼容复用 `AGENT_REVIEW_UPSTREAM_PROXY`，避免同一台开发机重复填写代理；生产环境可分别配置两条链路。
+- Docker Compose 将该变量传给 backend，不设置时保持原有直连行为；GitLab、钉钉和数据库请求不受影响。
+
+回归验证：
+
+- 配置 `CODE_QUALITY_REVIEW_PROXY=http://代理地址:端口` 并重启 backend。
+- 在设置页测试 DeepSeek Provider，再重试普通 Review，确认不再出现本机 DNS 的 `Errno -2`。

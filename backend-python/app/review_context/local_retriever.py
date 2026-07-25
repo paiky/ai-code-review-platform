@@ -1192,6 +1192,8 @@ def _run_rg(worktree: Path, query: str) -> str:
         )
     except subprocess.TimeoutExpired as exception:
         raise LocalReferenceSearchError("Local reference search timed out.") from exception
+    except FileNotFoundError:
+        return _run_git_grep_as_rg_json(worktree, query)
     except OSError as exception:
         raise LocalReferenceSearchError(f"Local reference search cannot start: {_public_error(str(exception), worktree)}") from exception
     if completed.returncode == 1:
@@ -1200,6 +1202,67 @@ def _run_rg(worktree: Path, query: str) -> str:
         output = completed.stderr or completed.stdout or ""
         raise LocalReferenceSearchError(f"Local reference search failed: {_public_error(output, worktree)}")
     return completed.stdout or ""
+
+
+def _run_git_grep_as_rg_json(worktree: Path, query: str) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "grep", "-n", "-I", "-F", "-e", query, "--", "."],
+            cwd=str(worktree),
+            capture_output=True,
+            text=True,
+            timeout=_env_int("LOCAL_REPO_MAX_SEARCH_SECONDS", _DEFAULT_MAX_SEARCH_SECONDS, minimum=1),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exception:
+        raise LocalReferenceSearchError("Local reference fallback search timed out.") from exception
+    except OSError as exception:
+        raise LocalReferenceSearchError(
+            f"Local reference fallback search cannot start: {_public_error(str(exception), worktree)}"
+        ) from exception
+    if completed.returncode == 1:
+        return ""
+    if completed.returncode != 0:
+        output = completed.stderr or completed.stdout or ""
+        raise LocalReferenceSearchError(f"Local reference fallback search failed: {_public_error(output, worktree)}")
+
+    max_per_file = _env_int(
+        "LOCAL_CONTEXT_RG_MAX_MATCHES_PER_FILE",
+        _DEFAULT_RG_MAX_MATCHES_PER_FILE,
+        minimum=1,
+    )
+    counts: dict[str, int] = {}
+    json_lines: list[str] = []
+    for raw_line in (completed.stdout or "").splitlines():
+        parts = raw_line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        relative_path, raw_line_number, line_text = parts
+        try:
+            line_number = max(int(raw_line_number), 1)
+        except ValueError:
+            continue
+        normalized_path = relative_path.replace("\\", "/").removeprefix("./")
+        if _is_ignored_relative_path(normalized_path):
+            continue
+        count = counts.get(normalized_path, 0)
+        if count >= max_per_file:
+            continue
+        counts[normalized_path] = count + 1
+        json_lines.append(
+            json.dumps(
+                {
+                    "type": "match",
+                    "data": {
+                        "path": {"text": normalized_path},
+                        "line_number": line_number,
+                        "lines": {"text": f"{line_text}\n"},
+                    },
+                },
+                ensure_ascii=False,
+            )
+        )
+    return "\n".join(json_lines)
 
 
 def _rg_args(query: str) -> list[str]:

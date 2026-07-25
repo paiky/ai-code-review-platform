@@ -214,6 +214,32 @@ def _prepare_mirror(plan: _LocalRepoPlan) -> str:
 def _prepare_head_worktree(plan: _LocalRepoPlan, head_ref: str) -> None:
     _assert_within_root(plan.root, plan.worktree_path)
     plan.worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    _remove_head_worktree(plan)
+    try:
+        _add_head_worktree(plan, head_ref)
+    except LocalRepoGitError:
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", head_ref):
+            raise
+        _remove_head_worktree(plan)
+        _run_git(
+            [
+                "git",
+                "--git-dir",
+                str(plan.mirror_path),
+                "fetch",
+                "--no-tags",
+                "origin",
+                head_ref,
+            ],
+            token=plan.token,
+            timeout_seconds=plan.timeout_seconds,
+        )
+        _remove_head_worktree(plan)
+        _add_head_worktree(plan, head_ref)
+    _touch_path(plan.worktree_path.parent)
+
+
+def _remove_head_worktree(plan: _LocalRepoPlan) -> None:
     if plan.worktree_path.exists():
         try:
             _run_git(
@@ -233,6 +259,9 @@ def _prepare_head_worktree(plan: _LocalRepoPlan, head_ref: str) -> None:
             pass
         if plan.worktree_path.exists():
             _safe_rmtree(plan.root, plan.worktree_path)
+
+
+def _add_head_worktree(plan: _LocalRepoPlan, head_ref: str) -> None:
     _run_git(
         [
             "git",
@@ -248,7 +277,6 @@ def _prepare_head_worktree(plan: _LocalRepoPlan, head_ref: str) -> None:
         token=plan.token,
         timeout_seconds=plan.timeout_seconds,
     )
-    _touch_path(plan.worktree_path.parent)
 
 
 def _cleanup_workspace_best_effort(

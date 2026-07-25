@@ -1840,18 +1840,19 @@ def _local_reference_context(
         reason = ""
         if unavailable_contexts and isinstance(unavailable_contexts[0], dict):
             reason = str(unavailable_contexts[0].get("reason") or "")
-        summary["status"] = "UNAVAILABLE"
-        summary["worktreeStatus"] = "MISSING"
-        summary["failurePhase"] = "RETRIEVER_WORKTREE_VALIDATE"
-        source_workspace = summary.get("sourceWorkspaceSummary") if isinstance(summary.get("sourceWorkspaceSummary"), dict) else {}
-        source_workspace["status"] = "UNAVAILABLE"
-        source_workspace["failurePhase"] = "RETRIEVER_WORKTREE_VALIDATE"
-        worktree_summary = source_workspace.get("worktree") if isinstance(source_workspace.get("worktree"), dict) else {}
-        worktree_summary["exists"] = False
-        worktree_summary["status"] = "MISSING"
-        source_workspace["worktree"] = worktree_summary
-        summary["sourceWorkspaceSummary"] = source_workspace
-        if reason:
+        if "Task head worktree is unavailable" in reason:
+            summary["status"] = "UNAVAILABLE"
+            summary["worktreeStatus"] = "MISSING"
+            summary["failurePhase"] = "RETRIEVER_WORKTREE_VALIDATE"
+            source_workspace = summary.get("sourceWorkspaceSummary") if isinstance(summary.get("sourceWorkspaceSummary"), dict) else {}
+            source_workspace["status"] = "UNAVAILABLE"
+            source_workspace["failurePhase"] = "RETRIEVER_WORKTREE_VALIDATE"
+            worktree_summary = source_workspace.get("worktree") if isinstance(source_workspace.get("worktree"), dict) else {}
+            worktree_summary["exists"] = False
+            worktree_summary["status"] = "MISSING"
+            source_workspace["worktree"] = worktree_summary
+            summary["sourceWorkspaceSummary"] = source_workspace
+        if reason and "Task head worktree is unavailable" in reason:
             local_repository_context.setdefault("unavailableContexts", []).append(
                 {
                     "type": "LOCAL_REPOSITORY",

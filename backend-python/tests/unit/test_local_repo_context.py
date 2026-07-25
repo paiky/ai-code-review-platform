@@ -112,6 +112,50 @@ def test_local_repo_context_fetches_existing_mirror(
     assert commands[0] == ["git", "--git-dir", str(root / "mirrors" / "1.git"), "fetch", "--prune"]
 
 
+def test_local_repo_context_fetches_exact_sha_and_retries_worktree(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspaces"
+    mirror = root / "mirrors" / "1.git"
+    mirror.mkdir(parents=True)
+    head_ref = "2222222222222222222222222222222222222222"
+    commands: list[list[str]] = []
+    worktree_attempts = 0
+
+    def fake_run_git(args: list[str], *, token: str | None, timeout_seconds: int) -> None:
+        nonlocal worktree_attempts
+        commands.append(args)
+        if "worktree" in args and "add" in args:
+            worktree_attempts += 1
+            if worktree_attempts == 1:
+                raise local_repo.LocalRepoGitError("worktree", 128, "invalid reference", token)
+
+    monkeypatch.setenv("LOCAL_REPO_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("LOCAL_REPO_WORKSPACE_ROOT", str(root))
+    monkeypatch.setattr(local_repo, "_run_git", fake_run_git)
+
+    context = prepare_local_repository_context(
+        project_id=1,
+        task_id=102,
+        repository_url="https://gitlab.example.com/demo/service.git",
+        git_project_id="1001",
+        head_ref=head_ref,
+    )
+
+    assert context["summary"]["status"] == "PREPARED"
+    assert worktree_attempts == 2
+    assert [
+        "git",
+        "--git-dir",
+        str(mirror),
+        "fetch",
+        "--no-tags",
+        "origin",
+        head_ref,
+    ] in commands
+
+
 def test_local_repo_context_sanitizes_git_failure_without_raising(
     monkeypatch,
     tmp_path: Path,
