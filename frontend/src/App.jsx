@@ -100,7 +100,11 @@ import {
   validateAgentBudgets
 } from './agentReviewBudgets.js';
 import {
+  buildAgentQueueAlerts,
+  formatAgentQueueSummary,
+  formatQueueAge,
   formatWorkerActivity,
+  normalizeAgentQueueMetrics,
   normalizeAgentWorkerPool,
   workerStateColor,
   workerStateLabel
@@ -6371,6 +6375,14 @@ function TemplateConfig() {
     () => normalizeAgentWorkerPool(agentSettings),
     [agentSettings]
   );
+  const agentQueueMetrics = useMemo(
+    () => normalizeAgentQueueMetrics(agentSettings, agentWorkerPool),
+    [agentSettings, agentWorkerPool]
+  );
+  const agentQueueAlerts = useMemo(
+    () => agentSettings ? buildAgentQueueAlerts(agentSettings) : [],
+    [agentSettings]
+  );
   const agentWorkerColumns = [
     {
       title: 'Worker 节点',
@@ -6476,6 +6488,7 @@ function TemplateConfig() {
           <Text strong>Agent Review（Claude Code + DeepSeek）</Text>
           <Tag color={agentSettings?.enabled ? 'purple' : 'default'}>{agentSettings?.enabled ? '已启用' : '未启用'}</Tag>
           <Tag color={agentWorkerPool.status === 'ONLINE' ? 'green' : 'red'}>Worker Pool {agentWorkerPool.status}</Tag>
+          {agentQueueMetrics.queued > 0 && <Tag color="gold">排队 {agentQueueMetrics.queued}</Tag>}
         </Space>
       ),
       children: (
@@ -6485,21 +6498,54 @@ function TemplateConfig() {
               <Descriptions.Item label="Runner">Claude Code {agentSettings?.cliVersion || '2.1.112'}</Descriptions.Item>
               <Descriptions.Item label="模型">{agentSettings?.model || 'deepseek-v4-pro[1m]'}</Descriptions.Item>
               <Descriptions.Item label="Worker Pool">
-                {agentWorkerPool.onlineCount} 在线 / {agentWorkerPool.totalCapacity} 总容量
+                {agentWorkerPool.onlineCount} 在线 / {agentQueueMetrics.onlineCapacity} 可接单容量
               </Descriptions.Item>
-              <Descriptions.Item label="最近心跳">{formatDateTime(agentSettings?.lastWorkerHeartbeatAt)}</Descriptions.Item>
+              <Descriptions.Item label="最近心跳">{formatDateTime(agentQueueMetrics.lastWorkerHeartbeatAt)}</Descriptions.Item>
               <Descriptions.Item label="预算来源">{agentSettings?.budgetConfigSource === 'CUSTOM' ? '自定义' : '默认'}</Descriptions.Item>
               <Descriptions.Item label="当前预算" span={2}>
                 {formatAgentBudgetSummary(agentSettings?.budgets) || '12 turns / 40 tools / 200 KB source'}
               </Descriptions.Item>
             </Descriptions>
+            <Divider orientation="left">队列运行治理</Divider>
+            <div className="agent-queue-summary">
+              <div className="agent-queue-stats">
+                <div><Text type="secondary">排队</Text><Text strong>{agentQueueMetrics.queued}</Text></div>
+                <div><Text type="secondary">运行</Text><Text strong>{agentQueueMetrics.running}</Text></div>
+                <div><Text type="secondary">过期租约</Text><Text strong>{agentQueueMetrics.expiredLease}</Text></div>
+                <div><Text type="secondary">最老等待</Text><Text strong>{formatQueueAge(agentQueueMetrics.oldestQueuedSeconds)}</Text></div>
+                <div><Text type="secondary">在线容量</Text><Text strong>{agentQueueMetrics.onlineCapacity}</Text></div>
+                <div><Text type="secondary">忙碌容量</Text><Text strong>{agentQueueMetrics.busyCapacity}</Text></div>
+                <div><Text type="secondary">排空节点</Text><Text strong>{agentQueueMetrics.drainingWorkers}</Text></div>
+              </div>
+              <div className="agent-capacity-utilization">
+                <div>
+                  <Text strong>容量利用率</Text>
+                  <Text type="secondary">{formatAgentQueueSummary(agentQueueMetrics)}</Text>
+                </div>
+                <Progress
+                  percent={agentQueueMetrics.utilizationPercent}
+                  status={agentQueueMetrics.expiredLease > 0 ? 'exception' : 'normal'}
+                  size="small"
+                />
+              </div>
+            </div>
+            {agentQueueAlerts.map(alert => (
+              <Alert
+                key={alert.key}
+                type={alert.type}
+                showIcon
+                message={alert.message}
+                description={alert.description}
+              />
+            ))}
             <Divider orientation="left">Worker Pool</Divider>
             <div className="agent-worker-pool-toolbar">
               <div className="agent-worker-pool-stats">
                 <div><Text type="secondary">在线节点</Text><Text strong>{agentWorkerPool.onlineCount}</Text></div>
                 <div><Text type="secondary">空闲</Text><Text strong>{agentWorkerPool.idleCount}</Text></div>
                 <div><Text type="secondary">忙碌</Text><Text strong>{agentWorkerPool.busyCount}</Text></div>
-                <div><Text type="secondary">总容量</Text><Text strong>{agentWorkerPool.totalCapacity}</Text></div>
+                <div><Text type="secondary">排空</Text><Text strong>{agentWorkerPool.drainingCount}</Text></div>
+                <div><Text type="secondary">在线容量</Text><Text strong>{agentWorkerPool.onlineCapacity}</Text></div>
               </div>
               <Button
                 icon={<ReloadOutlined />}

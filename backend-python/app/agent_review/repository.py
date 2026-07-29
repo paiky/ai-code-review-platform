@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
+import logging
 from threading import Lock
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, inspect, or_, select, text
+from sqlalchemy import case, delete, func, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.agent_review.crypto import decrypt_api_key, encrypt_api_key, encryption_available, mask_fingerprint
@@ -66,6 +67,7 @@ AGENT_TRACE_TOOLS = {
 
 _SCHEMA_LOCK = Lock()
 _SCHEMA_ENGINES: set[int] = set()
+_LOGGER = logging.getLogger(__name__)
 
 
 def _supports_skip_locked(db: Session) -> bool:
@@ -129,6 +131,19 @@ def agent_settings_response(db: Session) -> dict[str, Any]:
         if has_registered_workers
         else _worker_online(record)
     )
+    try:
+        queue_metrics = agent_queue_metrics(
+            db,
+            worker_pool=worker_pool,
+            legacy_heartbeat=record.last_worker_heartbeat_at,
+        )
+    except Exception:
+        # 运行指标是旁路观测；聚合失败不得改变 Agent 可用性、任务状态或 fallback。
+        _LOGGER.warning("Agent queue metrics unavailable; returning safe fallback")
+        queue_metrics = _empty_agent_queue_metrics(
+            worker_pool,
+            legacy_heartbeat=record.last_worker_heartbeat_at,
+        )
     budgets, budget_source = effective_agent_budgets(record)
     return {
         "enabled": bool(record.enabled),
@@ -143,8 +158,12 @@ def agent_settings_response(db: Session) -> dict[str, Any]:
         "workerStatus": "ONLINE" if online else "OFFLINE",
         "workerId": record.worker_id,
         "workerVersion": record.worker_version,
-        "lastWorkerHeartbeatAt": format_datetime(record.last_worker_heartbeat_at),
+        "lastWorkerHeartbeatAt": (
+            worker_pool.get("lastHeartbeatAt")
+            or _safe_format_worker_time(record.last_worker_heartbeat_at)
+        ),
         "workerPool": worker_pool,
+        "queueMetrics": queue_metrics,
         "configurationTest": {
             "requestId": record.test_request_id,
             "status": record.test_status or "NOT_RUN",
@@ -274,6 +293,7 @@ def agent_worker_pool(db: Session) -> dict[str, Any]:
     idle_count = 0
     draining_count = 0
     total_capacity = 0
+    online_capacity = 0
     for worker in workers:
         state = (
             worker.state
@@ -281,18 +301,18 @@ def agent_worker_pool(db: Session) -> dict[str, Any]:
             else "IDLE"
         )
         capacity = 1
-        is_online = bool(
-            worker.last_heartbeat_at and worker.last_heartbeat_at >= cutoff
-        )
+        is_online = _worker_time_is_online(worker.last_heartbeat_at, cutoff)
         if is_online:
             online_count += 1
             total_capacity += capacity
             if state == "BUSY":
                 busy_count += 1
+                online_capacity += capacity
             elif state == "DRAINING":
                 draining_count += 1
             else:
                 idle_count += 1
+                online_capacity += capacity
         nodes.append(
             {
                 "workerId": worker.worker_id,
@@ -302,11 +322,14 @@ def agent_worker_pool(db: Session) -> dict[str, Any]:
                 "capacity": capacity,
                 "activeJobId": worker.active_job_id,
                 "activeRunId": worker.active_run_id,
-                "startedAt": format_datetime(worker.started_at),
-                "lastHeartbeatAt": format_datetime(worker.last_heartbeat_at),
+                "startedAt": _safe_format_worker_time(worker.started_at),
+                "lastHeartbeatAt": _safe_format_worker_time(
+                    worker.last_heartbeat_at
+                ),
                 "online": is_online,
             }
         )
+    busy_capacity = busy_count
     return {
         "status": "ONLINE" if online_count > 0 else "OFFLINE",
         "onlineCount": online_count,
@@ -314,7 +337,18 @@ def agent_worker_pool(db: Session) -> dict[str, Any]:
         "idleCount": idle_count,
         "drainingCount": draining_count,
         "totalCapacity": total_capacity,
+        "onlineCapacity": online_capacity,
+        "busyCapacity": busy_capacity,
+        "utilizationPercent": _utilization_percent(
+            busy_capacity,
+            online_capacity,
+        ),
         "totalCount": len(workers),
+        "lastHeartbeatAt": (
+            _safe_format_worker_time(workers[0].last_heartbeat_at)
+            if workers
+            else None
+        ),
         "nodes": nodes,
     }
 
@@ -337,7 +371,13 @@ def _legacy_worker_pool(record: AgentReviewSettings) -> dict[str, Any]:
         "idleCount": 1,
         "drainingCount": 0,
         "totalCapacity": 1,
+        "onlineCapacity": 1,
+        "busyCapacity": 0,
+        "utilizationPercent": 0,
         "totalCount": 1,
+        "lastHeartbeatAt": _safe_format_worker_time(
+            record.last_worker_heartbeat_at
+        ),
         "nodes": [
             {
                 "workerId": record.worker_id,
@@ -348,13 +388,88 @@ def _legacy_worker_pool(record: AgentReviewSettings) -> dict[str, Any]:
                 "activeJobId": None,
                 "activeRunId": None,
                 "startedAt": None,
-                "lastHeartbeatAt": format_datetime(
+                "lastHeartbeatAt": _safe_format_worker_time(
                     record.last_worker_heartbeat_at
                 ),
                 "online": True,
             }
         ],
     }
+
+
+def agent_queue_metrics(
+    db: Session,
+    *,
+    worker_pool: dict[str, Any],
+    legacy_heartbeat: object | None = None,
+    now=None,
+) -> dict[str, Any]:
+    ensure_agent_review_schema(db)
+    current = now or utc_now()
+    row = db.execute(
+        select(
+            func.sum(
+                case(
+                    (CodeQualitySchedulerJob.status == "QUEUED", 1),
+                    else_=0,
+                )
+            ).label("queued"),
+            func.sum(
+                case(
+                    (CodeQualitySchedulerJob.status == "RUNNING", 1),
+                    else_=0,
+                )
+            ).label("running"),
+            func.sum(
+                case(
+                    (
+                        (CodeQualitySchedulerJob.status == "RUNNING")
+                        & (CodeQualitySchedulerJob.lease_expires_at < current),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("expired_lease"),
+            func.min(
+                case(
+                    (
+                        CodeQualitySchedulerJob.status == "QUEUED",
+                        CodeQualitySchedulerJob.queued_at,
+                    ),
+                    else_=None,
+                )
+            ).label("oldest_queued_at"),
+        )
+        .where(CodeQualitySchedulerJob.job_type == "AGENT_REVIEW")
+        .where(CodeQualitySchedulerJob.status.in_(["QUEUED", "RUNNING"]))
+    ).one()
+    oldest_queued_seconds = 0
+    if row.oldest_queued_at is not None:
+        try:
+            oldest_queued_seconds = max(
+                int((current - row.oldest_queued_at).total_seconds()),
+                0,
+            )
+        except (AttributeError, OverflowError, TypeError, ValueError):
+            oldest_queued_seconds = 0
+    capacity = _queue_capacity_metrics(
+        worker_pool,
+        legacy_heartbeat=legacy_heartbeat,
+    )
+    return {
+        "queued": _non_negative(row.queued),
+        "running": _non_negative(row.running),
+        "expiredLease": _non_negative(row.expired_lease),
+        "oldestQueuedSeconds": oldest_queued_seconds,
+        **capacity,
+    }
+
+
+def worker_accepts_claim(db: Session, *, worker_id: str) -> bool:
+    """Reject a registered draining process while keeping legacy callers compatible."""
+    ensure_agent_review_schema(db)
+    worker = db.get(AgentReviewWorker, worker_id)
+    return worker is None or str(worker.state or "").upper() != "DRAINING"
 
 
 def assert_agent_available(db: Session, *, require_worker: bool = True) -> AgentReviewSettings:
@@ -1056,12 +1171,71 @@ def _add_column(db: Session, columns: set[str], table: str, column: str, definit
 
 
 def _worker_online(record: AgentReviewSettings) -> bool:
-    heartbeat = record.last_worker_heartbeat_at
-    return bool(
-        heartbeat
-        and heartbeat
-        >= utc_now() - timedelta(seconds=AGENT_WORKER_ONLINE_SECONDS)
+    return _worker_time_is_online(
+        record.last_worker_heartbeat_at,
+        utc_now() - timedelta(seconds=AGENT_WORKER_ONLINE_SECONDS),
     )
+
+
+def _worker_time_is_online(value: Any, cutoff: datetime) -> bool:
+    try:
+        return isinstance(value, datetime) and value >= cutoff
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
+def _safe_format_worker_time(value: Any) -> str | None:
+    return format_datetime(value) if isinstance(value, datetime) else None
+
+
+def _empty_agent_queue_metrics(
+    worker_pool: dict[str, Any],
+    *,
+    legacy_heartbeat: object | None,
+) -> dict[str, Any]:
+    return {
+        "queued": 0,
+        "running": 0,
+        "expiredLease": 0,
+        "oldestQueuedSeconds": 0,
+        **_queue_capacity_metrics(
+            worker_pool,
+            legacy_heartbeat=legacy_heartbeat,
+        ),
+    }
+
+
+def _queue_capacity_metrics(
+    worker_pool: dict[str, Any],
+    *,
+    legacy_heartbeat: object | None,
+) -> dict[str, Any]:
+    online_capacity = _non_negative(worker_pool.get("onlineCapacity"))
+    busy_capacity = min(
+        _non_negative(worker_pool.get("busyCapacity")),
+        online_capacity,
+    )
+    return {
+        "onlineCapacity": online_capacity,
+        "busyCapacity": busy_capacity,
+        "utilizationPercent": _utilization_percent(
+            busy_capacity,
+            online_capacity,
+        ),
+        "drainingWorkers": _non_negative(worker_pool.get("drainingCount")),
+        "lastWorkerHeartbeatAt": (
+            worker_pool.get("lastHeartbeatAt")
+            or _safe_format_worker_time(legacy_heartbeat)
+        ),
+    }
+
+
+def _utilization_percent(busy_capacity: Any, online_capacity: Any) -> int:
+    online = _non_negative(online_capacity)
+    if online <= 0:
+        return 0
+    busy = min(_non_negative(busy_capacity), online)
+    return min(max((busy * 100 + online // 2) // online, 0), 100)
 
 
 def _read_json(value: str | None, default: Any) -> Any:

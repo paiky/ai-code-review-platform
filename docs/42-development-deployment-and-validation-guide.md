@@ -283,6 +283,7 @@ TLS 或连接重置失败不会自动重试，请根据日志确认是临时网�
   docker-compose.yml
   .env.example
   load-images.sh
+  deploy-stage3.sh
 ```
 
 上传并加载：
@@ -293,10 +294,24 @@ cd /opt/ai-code-review-platform/{版本号}
 chmod +x load-images.sh
 ./load-images.sh
 cd ../runtime
-docker compose up -d
+./deploy-stage3.sh upgrade --workers 2
 ```
 
 `load-images.sh` 是每次离线部署和升级的必执行步骤：它会加载 backend、frontend、Agent Worker 和 Agent 出站代理镜像，并自动将当前版本的 `docker-compose.yml` 复制到 `runtime`，不需要手工替换。脚本只在首次部署创建 `runtime/.env`，升级时只更新 `APP_VERSION`，不覆盖已有连接和密钥。默认保留最近两个应用镜像版本；可用 `KEEP_IMAGE_VERSIONS=3 ./load-images.sh` 临时增加保留数。
+
+`deploy-stage3.sh upgrade` 会先更新 Backend，再通过现有 Agent Settings GET/PUT 等待零队列并自动短暂暂停
+Agent，随后更新指定数量的 Worker、等待容量恢复、更新 Frontend，最后仅在健康检查通过后恢复原启用状态。
+脚本不会读取或打印 Agent Key；失败时若已暂停 Agent，会保持禁用并要求人工检查。常用命令：
+
+```bash
+./deploy-stage3.sh status
+./deploy-stage3.sh preflight
+./deploy-stage3.sh upgrade --workers 2 --dry-run
+./deploy-stage3.sh scale --workers 3
+```
+
+首次从不支持 DRAINING 的旧 Worker 升级时必须使用默认安全模式，不要绕过队列闸门。`scale` 只执行用户
+明确指定的人工 Compose 副本变更，不会根据指标自动扩缩容。
 
 回滚时修改 `runtime/.env` 中的 `APP_VERSION`，再执行：
 

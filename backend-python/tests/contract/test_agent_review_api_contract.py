@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
+from app.agent_review import repository as agent_repository
 from app.agent_review.models import AgentReviewRun, AgentReviewSettings, AgentReviewWorker
 from app.agent_review.repository import (
     cleanup_stale_agent_workers,
@@ -541,6 +542,329 @@ def test_worker_pool_schema_contains_registration_columns_and_heartbeat_index(
         "updated_at",
     }
     assert "idx_code_quality_agent_workers_heartbeat" in indexes
+
+
+def test_agent_queue_metrics_empty_queue_and_zero_capacity(
+    client: TestClient,
+) -> None:
+    data = client.get("/api/code-quality-reviews/agent-settings").json()["data"]
+    metrics = data["queueMetrics"]
+
+    assert metrics == {
+        "queued": 0,
+        "running": 0,
+        "expiredLease": 0,
+        "oldestQueuedSeconds": 0,
+        "onlineCapacity": 0,
+        "busyCapacity": 0,
+        "utilizationPercent": 0,
+        "drainingWorkers": 0,
+        "lastWorkerHeartbeatAt": None,
+    }
+
+
+def test_agent_queue_metrics_aggregate_jobs_capacity_and_safe_whitelist(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    now = utc_now()
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "agent-worker-busy",
+            "state": "BUSY",
+            "capacity": 1,
+            "activeJobId": 81,
+            "activeRunId": 91,
+        },
+    )
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "agent-worker-draining",
+            "state": "DRAINING",
+            "capacity": 1,
+        },
+    )
+    db_session.add_all(
+        [
+            CodeQualitySchedulerJob(
+                job_type="AGENT_REVIEW",
+                task_id=701,
+                status="QUEUED",
+                priority=80,
+                queued_at=now - timedelta(seconds=125),
+            ),
+            CodeQualitySchedulerJob(
+                job_type="AGENT_REVIEW",
+                task_id=702,
+                status="QUEUED",
+                priority=80,
+                queued_at=now,
+            ),
+            CodeQualitySchedulerJob(
+                job_type="AGENT_REVIEW",
+                task_id=703,
+                status="RUNNING",
+                priority=80,
+                lease_expires_at=now + timedelta(seconds=30),
+                queued_at=now - timedelta(seconds=10),
+            ),
+            CodeQualitySchedulerJob(
+                job_type="AGENT_REVIEW",
+                task_id=704,
+                status="RUNNING",
+                priority=80,
+                lease_expires_at=now - timedelta(seconds=1),
+                queued_at=now - timedelta(seconds=20),
+            ),
+            CodeQualitySchedulerJob(
+                job_type="STANDARD_REVIEW",
+                task_id=705,
+                status="QUEUED",
+                priority=100,
+                queued_at=now - timedelta(hours=1),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    data = client.get("/api/code-quality-reviews/agent-settings").json()["data"]
+    metrics = data["queueMetrics"]
+
+    assert set(metrics) == {
+        "queued",
+        "running",
+        "expiredLease",
+        "oldestQueuedSeconds",
+        "onlineCapacity",
+        "busyCapacity",
+        "utilizationPercent",
+        "drainingWorkers",
+        "lastWorkerHeartbeatAt",
+    }
+    assert metrics["queued"] == 2
+    assert metrics["running"] == 2
+    assert metrics["expiredLease"] == 1
+    assert 125 <= metrics["oldestQueuedSeconds"] <= 130
+    assert metrics["onlineCapacity"] == 1
+    assert metrics["busyCapacity"] == 1
+    assert metrics["utilizationPercent"] == 100
+    assert metrics["drainingWorkers"] == 1
+    assert isinstance(metrics["lastWorkerHeartbeatAt"], str)
+    assert all(
+        type(metrics[key]) is int and metrics[key] >= 0
+        for key in set(metrics) - {"lastWorkerHeartbeatAt"}
+    )
+    assert data["workerPool"]["onlineCapacity"] == 1
+    assert data["workerPool"]["busyCapacity"] == 1
+    assert data["workerPool"]["utilizationPercent"] == 100
+    assert data["workerPool"]["lastHeartbeatAt"] == metrics["lastWorkerHeartbeatAt"]
+
+
+def test_agent_queue_metrics_historical_damage_and_observation_failure_are_safe(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    now = utc_now()
+    db_session.add(
+        CodeQualitySchedulerJob(
+            job_type="AGENT_REVIEW",
+            task_id=711,
+            status="QUEUED",
+            priority=80,
+            queued_at=None,
+        )
+    )
+    db_session.add(
+        AgentReviewWorker(
+            worker_id="historical-worker",
+            state="DAMAGED",
+            capacity=-9,
+            started_at=now,
+            last_heartbeat_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.commit()
+
+    historical = client.get("/api/code-quality-reviews/agent-settings").json()["data"]
+    assert historical["queueMetrics"]["queued"] == 1
+    assert historical["queueMetrics"]["oldestQueuedSeconds"] == 0
+    assert historical["queueMetrics"]["onlineCapacity"] == 1
+    assert historical["workerPool"]["nodes"][0]["state"] == "IDLE"
+    assert historical["workerPool"]["nodes"][0]["capacity"] == 1
+
+    monkeypatch.setattr(
+        agent_repository,
+        "agent_queue_metrics",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("unsafe raw detail")),
+    )
+    fallback = client.get("/api/code-quality-reviews/agent-settings")
+    assert fallback.status_code == 200
+    fallback_data = fallback.json()["data"]
+    assert fallback_data["workerStatus"] == "ONLINE"
+    assert fallback_data["queueMetrics"]["queued"] == 0
+    assert fallback_data["queueMetrics"]["onlineCapacity"] == 1
+    assert "unsafe raw detail" not in fallback.text
+
+
+def test_all_online_workers_busy_keep_old_agent_job_queued_without_fallback(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"enabled": True, "apiKey": "test-agent-key-queue-governance"},
+    )
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "agent-worker-busy",
+            "state": "BUSY",
+            "capacity": 1,
+            "activeJobId": 801,
+            "activeRunId": 901,
+        },
+    )
+    run = create_agent_job(
+        db_session,
+        task_id=712,
+        project_id=100,
+        input_payload={
+            "worktree": "worktrees/712/head",
+            "case": {"changedFiles": ["src/a.py"], "diff": "+safe()"},
+        },
+        completion_context={},
+        comparison_mode=False,
+    )
+    job = db_session.get(CodeQualitySchedulerJob, run.scheduler_job_id)
+    job.queued_at = utc_now() - timedelta(seconds=61)
+    db_session.commit()
+
+    assert agent_repository.assert_agent_available(
+        db_session,
+        require_worker=True,
+    ) is not None
+    assert expire_exhausted_agent_jobs(db_session) == []
+    db_session.commit()
+    db_session.refresh(job)
+    db_session.refresh(run)
+
+    assert job.status == "QUEUED"
+    assert run.status == "PENDING"
+    assert run.effective_engine is None
+    data = client.get("/api/code-quality-reviews/agent-settings").json()["data"]
+    assert data["workerStatus"] == "ONLINE"
+    assert data["queueMetrics"]["queued"] == 1
+    assert data["queueMetrics"]["onlineCapacity"] == 1
+    assert data["queueMetrics"]["busyCapacity"] == 1
+
+
+def test_draining_worker_cannot_claim_and_other_worker_can_take_job(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"enabled": True, "apiKey": "test-agent-key-queue-governance"},
+    )
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "agent-worker-draining",
+            "state": "DRAINING",
+            "capacity": 1,
+        },
+    )
+    run = create_agent_job(
+        db_session,
+        task_id=713,
+        project_id=100,
+        input_payload={
+            "worktree": "worktrees/713/head",
+            "case": {"changedFiles": ["src/a.py"], "diff": "+safe()"},
+        },
+        completion_context={},
+        comparison_mode=False,
+    )
+    db_session.commit()
+
+    rejected = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "agent-worker-draining"},
+    )
+    accepted = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "agent-worker-replacement"},
+    )
+
+    assert rejected.status_code == 200
+    assert rejected.json()["data"] is None
+    assert accepted.status_code == 200
+    assert accepted.json()["data"]["runId"] == run.id
+
+
+def test_agent_claim_order_remains_priority_desc_then_queued_at_asc(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    _configure(monkeypatch)
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"enabled": True, "apiKey": "test-agent-key-queue-governance"},
+    )
+    now = utc_now()
+    runs = [
+        create_agent_job(
+            db_session,
+            task_id=task_id,
+            project_id=100,
+            input_payload={
+                "worktree": f"worktrees/{task_id}/head",
+                "case": {"changedFiles": ["src/a.py"], "diff": "+safe()"},
+            },
+            completion_context={},
+            comparison_mode=False,
+        )
+        for task_id in (721, 722, 723)
+    ]
+    jobs = [
+        db_session.get(CodeQualitySchedulerJob, run.scheduler_job_id)
+        for run in runs
+    ]
+    jobs[0].priority = 70
+    jobs[0].queued_at = now - timedelta(seconds=10)
+    jobs[1].priority = 90
+    jobs[1].queued_at = now
+    jobs[2].priority = 90
+    jobs[2].queued_at = now - timedelta(seconds=1)
+    db_session.commit()
+
+    claimed_run_ids = [
+        client.post(
+            "/internal/agent-review/jobs/claim",
+            headers=_worker_headers("worker-token-for-agent-review-tests"),
+            json={"workerId": f"worker-{index}"},
+        ).json()["data"]["runId"]
+        for index in range(3)
+    ]
+
+    assert claimed_run_ids == [runs[2].id, runs[1].id, runs[0].id]
 
 
 def test_worker_auth_claim_and_heartbeat(

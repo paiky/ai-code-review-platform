@@ -197,6 +197,7 @@ try {
 
   Copy-TextFileAsLf (Join-Path $DeployDir "docker-compose.runtime.yml") (Join-Path $OutputDir "docker-compose.yml")
   Copy-TextFileAsLf (Join-Path $DeployDir ".env.example") (Join-Path $OutputDir ".env.example")
+  Copy-TextFileAsLf (Join-Path $DeployDir "deploy-stage3.sh") (Join-Path $OutputDir "deploy-stage3.sh")
 
   $EnvExamplePath = Join-Path $OutputDir ".env.example"
   $EnvExample = Get-Content -Raw -Encoding UTF8 -Path $EnvExamplePath
@@ -245,6 +246,8 @@ fi
 
 mkdir -p "`$DEPLOY_HOME"
 cp docker-compose.yml "`$DEPLOY_HOME/docker-compose.yml"
+cp "`$SCRIPT_DIR/deploy-stage3.sh" "`$DEPLOY_HOME/deploy-stage3.sh"
+chmod +x "`$DEPLOY_HOME/deploy-stage3.sh"
 
 ENV_FILE="`$DEPLOY_HOME/.env"
 if [ ! -f "`$ENV_FILE" ]; then
@@ -269,9 +272,11 @@ cleanup_old_images "ai-code-review-agent-worker" "`$KEEP_IMAGE_VERSIONS"
 cleanup_old_images "ai-code-review-agent-egress" "`$KEEP_IMAGE_VERSIONS"
 
 echo "Images loaded. Runtime files are in: `$DEPLOY_HOME"
-echo "Start or upgrade with:"
+echo "Safe Stage 3 upgrade:"
 echo "  cd `$DEPLOY_HOME"
-echo "  docker compose up -d"
+echo "  ./deploy-stage3.sh upgrade --workers 2"
+echo "Direct Compose remains available for recovery:"
+echo "  docker compose --env-file .env -f docker-compose.yml up -d"
 echo "Image retention:"
 echo "  KEEP_IMAGE_VERSIONS=`$KEEP_IMAGE_VERSIONS"
 "@
@@ -287,7 +292,7 @@ echo "  KEEP_IMAGE_VERSIONS=`$KEEP_IMAGE_VERSIONS"
   Write-Host "  ./load-images.sh"
   Write-Host "  vi ../runtime/.env"
   Write-Host "  cd ../runtime"
-  Write-Host "  docker compose up -d"
+  Write-Host "  ./deploy-stage3.sh upgrade --workers 2"
 } catch {
   $Failure = $_
   Write-Host ""

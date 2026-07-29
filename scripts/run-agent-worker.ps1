@@ -53,10 +53,14 @@ function Test-AgentWorkerOnline {
     $nodes = @($Settings.workerPool.nodes)
     if ($nodes.Count -gt 0) {
         if (-not [string]::IsNullOrWhiteSpace($WorkerId)) {
-            return $null -ne ($nodes | Where-Object { $_.online -eq $true -and $_.workerId -eq $WorkerId } | Select-Object -First 1)
+            return $null -ne ($nodes | Where-Object {
+                $_.online -eq $true -and $_.state -ne "DRAINING" -and $_.workerId -eq $WorkerId
+            } | Select-Object -First 1)
         }
         $prefix = "$WorkerPrefix-"
-        return $null -ne ($nodes | Where-Object { $_.online -eq $true -and $_.workerId.StartsWith($prefix) } | Select-Object -First 1)
+        return $null -ne ($nodes | Where-Object {
+            $_.online -eq $true -and $_.state -ne "DRAINING" -and $_.workerId.StartsWith($prefix)
+        } | Select-Object -First 1)
     }
     if (-not [string]::IsNullOrWhiteSpace($WorkerId)) {
         return $Settings.workerId -eq $WorkerId
@@ -223,8 +227,13 @@ switch ($Action) {
         Invoke-DockerCompose @("ps")
         $settings = Get-AgentSettings
         if ($null -eq $settings) { Write-Host "Local backend is unreachable at $backendBaseUrl." }
-        else { Write-Host "Backend reports Worker Pool $($settings.workerStatus); online=$($settings.workerPool.onlineCount); busy=$($settings.workerPool.busyCount); capacity=$($settings.workerPool.totalCapacity)" }
+        else {
+            Write-Host "Backend reports Worker Pool $($settings.workerStatus); online=$($settings.workerPool.onlineCount); acceptingCapacity=$($settings.queueMetrics.onlineCapacity); busyCapacity=$($settings.queueMetrics.busyCapacity); utilization=$($settings.queueMetrics.utilizationPercent)%; draining=$($settings.queueMetrics.drainingWorkers); queued=$($settings.queueMetrics.queued)"
+        }
     }
     "logs" { Invoke-DockerCompose @("logs", "--tail=100", "agent-worker", "agent-egress-proxy") }
-    "stop" { Invoke-DockerCompose @("down") }
+    "stop" {
+        Write-Host "Stopping Agent Worker with SIGTERM draining; an active task may use up to the fixed 930-second grace period."
+        Invoke-DockerCompose @("down")
+    }
 }

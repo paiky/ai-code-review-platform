@@ -303,6 +303,143 @@ def test_worker_activity_state_returns_to_idle() -> None:
     assert activity.snapshot() == {"state": "IDLE", "capacity": 1}
 
 
+def test_idle_sigterm_enters_draining_stops_claim_and_is_idempotent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    activity = worker._WorkerActivityState()
+    wake = Event()
+    drain = worker._DrainController(activity, wake)
+    claims = []
+    monkeypatch.setattr(
+        worker,
+        "_post",
+        lambda *_args, **_kwargs: claims.append(True) or {"data": None},
+    )
+
+    assert drain.request() is True
+    assert drain.request() is False
+    assert wake.is_set()
+    assert activity.snapshot() == {"state": "DRAINING", "capacity": 1}
+
+    result = worker._worker_loop(
+        "http://backend",
+        "token",
+        "worker-idle",
+        tmp_path,
+        1,
+        activity,
+        drain,
+    )
+
+    assert result == 0
+    assert claims == []
+
+
+def test_busy_sigterm_keeps_current_job_finishes_and_does_not_claim_again(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    activity = worker._WorkerActivityState()
+    drain = worker._DrainController(activity, Event())
+    claims = []
+    completed = []
+    job = {
+        "jobId": 51,
+        "runId": 61,
+        "claimAttempt": 1,
+        "idempotencyKey": "agent:51",
+    }
+
+    def fake_post(_url, _token, path, _payload):
+        claims.append(path)
+        return {"data": job}
+
+    def fake_run(*_args):
+        assert activity.snapshot() == {
+            "state": "BUSY",
+            "capacity": 1,
+            "activeJobId": 51,
+            "activeRunId": 61,
+        }
+        assert drain.request() is True
+        assert activity.snapshot()["state"] == "DRAINING"
+        completed.append(True)
+
+    monkeypatch.setattr(worker, "_post", fake_post)
+    monkeypatch.setattr(worker, "_run_job", fake_run)
+
+    result = worker._worker_loop(
+        "http://backend",
+        "token",
+        "worker-busy",
+        tmp_path,
+        1,
+        activity,
+        drain,
+    )
+
+    assert result == 0
+    assert completed == [True]
+    assert claims == ["/internal/agent-review/jobs/claim"]
+    assert activity.snapshot() == {"state": "DRAINING", "capacity": 1}
+
+
+def test_draining_worker_heartbeat_continues_with_safe_active_references(
+    monkeypatch,
+) -> None:
+    payloads = []
+    activity = worker._WorkerActivityState()
+    activity.begin({"jobId": 71, "runId": 81})
+    activity.drain()
+    monkeypatch.setattr(
+        worker,
+        "_post",
+        lambda _url, _token, path, payload: payloads.append((path, payload)) or {},
+    )
+
+    worker._worker_heartbeat_loop(
+        "http://backend",
+        "token",
+        "worker-draining",
+        _OneShotStop(),
+        activity,
+    )
+
+    assert len(payloads) == 2
+    assert all(
+        path == "/internal/agent-review/workers/heartbeat"
+        and payload == {
+            "workerId": "worker-draining",
+            "workerVersion": worker.WORKER_VERSION,
+            "cliVersion": worker.CLI_VERSION,
+            "state": "DRAINING",
+            "capacity": 1,
+            "activeJobId": 71,
+            "activeRunId": 81,
+        }
+        for path, payload in payloads
+    )
+
+
+def test_shutdown_watchdog_forces_exit_only_after_grace_is_exhausted() -> None:
+    activity = worker._WorkerActivityState()
+    drain = worker._DrainController(activity, Event())
+    process_stop = Event()
+    exits = []
+    drain.request()
+
+    worker._shutdown_watchdog(
+        drain,
+        process_stop,
+        grace_seconds=0,
+        force_exit=lambda code: exits.append(code),
+    )
+
+    assert exits == [0]
+    assert worker.AGENT_WORKER_SHUTDOWN_GRACE_SECONDS == 930
+
+
 def test_worker_healthcheck_uses_derived_worker_registration(monkeypatch):
     monkeypatch.setattr(
         worker,
@@ -372,6 +509,29 @@ def test_worker_compose_files_use_prefix_ids_and_registration_healthcheck() -> N
         assert "AGENT_REVIEW_WORKER_ID_PREFIX:" in worker_section
         assert "app.agent_review.worker" in worker_section
         assert "--healthcheck" in worker_section
+        assert "stop_grace_period: 930s" in worker_section
         assert "agent-worker-1" not in worker_section
         if "windows-agent" not in relative_path:
             assert "\n      AGENT_REVIEW_WORKER_ID:" not in worker_section
+
+
+def test_stage3_deploy_helper_is_safe_and_included_in_offline_package() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    deploy_script = (
+        repository_root / "deploy/deploy-stage3.sh"
+    ).read_text(encoding="utf-8")
+    package_script = (
+        repository_root / "scripts/package-docker-deploy.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "status|preflight|upgrade|scale" in deploy_script
+    assert "queueMetrics" in deploy_script
+    assert "set_agent_enabled false" in deploy_script
+    assert "AGENT_PAUSED_BY_SCRIPT=true" in deploy_script
+    assert 'compose up -d --no-deps --scale "agent-worker=$WORKERS"' in deploy_script
+    assert "onlineCapacity >= $target and drainingWorkers=0" in deploy_script
+    assert "--keep-agent-enabled" not in deploy_script
+    assert "apiKey" not in deploy_script
+    assert "deploy-stage3.sh" in package_script
+    assert 'chmod +x "`$DEPLOY_HOME/deploy-stage3.sh"' in package_script
+    assert "./deploy-stage3.sh upgrade --workers 2" in package_script

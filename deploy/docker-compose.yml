@@ -90,6 +90,7 @@ services:
       context: ..
       dockerfile: deploy/agent-review-worker.Dockerfile
     restart: unless-stopped
+    stop_grace_period: 930s
     environment:
       TZ: UTC
       AGENT_REVIEW_BACKEND_URL: http://backend:${BACKEND_PORT:-8090}

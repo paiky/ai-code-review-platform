@@ -151,6 +151,10 @@ docker version
 - 离线部署升级时，`runtime/.env` 会保留。修改新包里的 `.env.example` 不会自动影响线上配置，需要同步修改运行目录的 `.env`。
 - 离线升级会累积旧镜像和旧版本目录；清理前先确认当前 `APP_VERSION`、容器状态和回滚需求。
 - 离线包上传后必须在版本目录执行 `./load-images.sh`，不能只执行 `chmod` 后直接进入 `runtime`。加载脚本会加载本版本全部镜像、自动更新 `runtime/docker-compose.yml` 和 `APP_VERSION`，无需手工复制 Compose。
+- Windows 的 `bash.exe` 可能只是未安装 Linux 发行版的 WSL 启动器，执行 `bash -n` 会报
+  `CreateProcessCommon ... /bin/bash: No such file or directory`，不能据此判断部署脚本语法错误。若本机已有
+  `python:3.12-slim-bookworm` 等可信 Debian 镜像，可用禁网、只读挂载的临时容器执行
+  `bash -n /workspace/deploy/deploy-stage3.sh`；不要为语法检查联网拉取未知镜像，也不要把真实 `.env` 挂入容器。
 - 远程 Docker Compose 若提示 `services.backend.env_file.0 must be a string`，说明运行文件使用了当前 Compose 不支持的 `env_file.path/required` 长语法。当前 Compose 已逐项声明容器环境变量，并由运行目录 `.env` 完成插值，因此应移除该 `env_file` 块；不需要升级 Docker 或删除现有 `.env`。
 
 ## 端口与外链

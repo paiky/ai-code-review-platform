@@ -278,6 +278,8 @@ def worker_heartbeat(db: Session, request: dict[str, Any]) -> dict[str, Any]:
 
 def claim_job(db: Session, request: dict[str, Any]) -> dict[str, Any] | None:
     worker_id = _required_worker_id(request)
+    if not repository.worker_accepts_claim(db, worker_id=worker_id):
+        return None
     config_test = repository.claim_configuration_test(db, worker_id=worker_id)
     if config_test is not None:
         return config_test

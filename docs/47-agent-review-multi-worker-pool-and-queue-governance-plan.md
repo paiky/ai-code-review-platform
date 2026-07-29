@@ -3,7 +3,8 @@
 ## 1. 状态、目标与停止点
 
 - 文档状态：三阶段路线已确认；阶段一“安全并发领取与租约 fencing”已完成并推送；
-  阶段二“Worker 注册与两副本池化”代码与本地自动化已完成，当前停止并等待用户部署和小任务验收。
+  阶段二“Worker 注册与两副本池化”已完成、推送并由用户确认远程两节点与双小任务并发验收通过；
+  阶段三“队列运行治理”代码、本地自动化与一键部署助手已完成，当前停止并等待用户部署。
 - 当前基础：Agent Review 已使用 `code_quality_scheduler_jobs` 入队，具备优先级、数据库行锁、租约、
   心跳、重试次数、幂等完成和 Standard fallback。
 - 总体目标：保持一个 Worker 容器同时只执行一个 Agent Review，通过多个独立 Worker 副本并发处理不同任务。
@@ -160,16 +161,209 @@ docker compose ps
   Frontend production build、三个 Compose 配置解析和 PowerShell 语法检查通过。
 - 本机 `localhost:5173` 未运行，因此未做设置页运行时视觉检查；应在远程部署后与两节点注册一起确认。
 - 未部署远程环境、未调用真实 DeepSeek、未执行真实 Agent Review，未触发 Run 18，未进入阶段三。
+- 用户已确认远程环境中 `code_quality_agent_workers` 正常上线、两个 `capacity=1` Worker 正常注册，
+  且两个独立小任务并发验收成功；阶段二提交 `4c37ea2` 已推送至 `origin/main`。
 
 ## 6. 阶段三：队列运行治理
 
-- 在现有 Agent Settings 响应和设置页展示 queued、running、expired lease、最老排队时长、在线容量和利用率。
-- 在线 Worker 全部 BUSY 时任务继续排队，不得按“无 Worker”触发 fallback。
-- Worker 收到 SIGTERM 后进入 DRAINING、停止 Claim，并让当前任务在既有 timeout 内结束；超过停机宽限期退出，
-  由租约过期机制接管。
-- 增加队列积压和 Worker 离线告警文案。
-- 保持人工 Compose 扩缩容；自动扩缩容、项目级并发配额和单 Worker 多任务继续后置。
-- 本阶段只用小任务验证扩缩容和故障接管，不执行 Run 18。
+### 6.1 Agent Settings 队列运行指标
+
+继续使用 `GET/PUT /api/code-quality-reviews/agent-settings`，在响应中增加 `queueMetrics`，不新增公开路径、
+数据库表或字段。所有队列数字从 `code_quality_scheduler_jobs` 实时安全聚合，Worker 容量从
+`code_quality_agent_workers` 的白名单字段计算：
+
+| 字段 | 固定定义 |
+| --- | --- |
+| `queued` | 仅统计 `job_type=AGENT_REVIEW AND status=QUEUED` |
+| `running` | 仅统计 `job_type=AGENT_REVIEW AND status=RUNNING`，包含租约已过期但尚未接管的任务 |
+| `expiredLease` | 仅统计 `job_type=AGENT_REVIEW AND status=RUNNING AND lease_expires_at < 当前时间` |
+| `oldestQueuedSeconds` | 最早的有效 `queued_at` 到当前时间的整秒数；无队列、缺失、未来或损坏时间均安全返回 `0` |
+| `onlineCapacity` | 60 秒在线窗口内、状态为 `IDLE/BUSY` 的节点容量之和；每节点容量固定为 `1`，排除 `DRAINING` |
+| `busyCapacity` | 60 秒在线窗口内状态为 `BUSY` 的 capacity=1 节点容量之和 |
+| `utilizationPercent` | `onlineCapacity=0` 时为 `0`；否则为 `busyCapacity / onlineCapacity * 100` 四舍五入整数，并限制在 `0..100` |
+| `drainingWorkers` | 60 秒在线窗口内状态为 `DRAINING` 的 Worker 数量 |
+| `lastWorkerHeartbeatAt` | 注册表最近一次安全心跳时间；无注册历史时兼容旧单 Worker 心跳，均不存在时为 `null` |
+
+- `queueMetrics` 除心跳时间外只返回非负整数；损坏或历史数据回退为安全的 `0/null`。
+- `workerPool` 继续保留阶段二兼容字段，并增加 `onlineCapacity`、`busyCapacity`、`utilizationPercent` 和
+  `lastHeartbeatAt`；节点列表继续严格使用阶段二白名单，不增加基础设施、异常、Prompt、源码、diff、
+  查询、工具参数、文件路径、模型原文或推理。
+- 队列统计失败只影响设置页观测并安全回退，不得改变 Agent Review 的选择、执行、终态或 fallback 结果。
+
+### 6.2 调度与全部 BUSY 语义
+
+- Claim 顺序保持 `priority DESC + queued_at ASC`。
+- `BUSY` 是在线且占用 capacity=1，不是离线。全部在线容量都为 `BUSY` 时，新 Agent 任务保持 `QUEUED`；
+  不产生 `AGENT_REVIEW_UNAVAILABLE`，不触发 Standard fallback。
+- Backend 对已注册为 `DRAINING` 的 Worker 拒绝继续 Claim；旧单 Worker或尚无注册记录的历史调用保持兼容。
+- 不修改现有 `max_attempts=2`、租约续期、claimAttempt fencing、租约过期接管和 Standard fallback。
+
+### 6.3 SIGTERM 优雅排空状态机
+
+```text
+IDLE --SIGTERM--> DRAINING --立即停止 Claim/上报一次最新状态--> EXIT
+BUSY --SIGTERM--> DRAINING(active refs 保留)
+     --当前任务在既有 Agent timeout 内完成并上报终态--> DRAINING(idle) --> EXIT
+     --930 秒停机宽限期耗尽--> 强制退出 --> 现有租约过期 --> 其他 Worker 按 claimAttempt fencing 接管
+```
+
+- 首次 SIGTERM 原子设置排空状态和固定截止时间；重复信号幂等，不延长截止时间。
+- DRAINING 立即停止发起新 Claim；已在途 Claim 若已由 Backend 成功领取，视为当前任务完成后退出。
+- 进程心跳保持 15 秒周期并在状态切换时唤醒，持续上报 `DRAINING`；当前活动只保留数字 Job/Run 引用。
+- 当前任务不因 SIGTERM 设置取消标记，不改变既有 Agent timeout、预算、工具白名单或终态逻辑。
+- 固定停机宽限期为 `930` 秒：覆盖现有最大 `timeoutSeconds=900` 和最多 30 秒终态请求余量。
+  三个 Compose 文件的 `stop_grace_period` 同步固定为 `930s`；宽限期耗尽后由进程退出与现有租约机制处理，
+  不绕过 `max_attempts` 或 Standard fallback。
+- 空闲 Worker 收到 SIGTERM 后直接退出；进程心跳或 DRAINING 上报失败只影响观测，不改变当前任务结果。
+
+### 6.4 设置页固定告警阈值
+
+- Worker Pool 无在线节点：错误告警，提示 Agent 任务可能在既有 60 秒离线宽限后进入既有 fallback。
+- `drainingWorkers > 0`：警告正在排空，提示先补足容量再缩容。
+- `expiredLease > 0`：警告等待租约接管，不展示 Worker、异常或模型原文。
+- `queued > 0 AND busyCapacity >= onlineCapacity AND onlineCapacity > 0`：提示全部容量忙碌，任务会继续排队且
+  不会仅因忙碌触发 fallback。
+- 队列积压固定阈值：`queued >= 3` 或 `oldestQueuedSeconds >= 120` 时告警，提示使用人工命令
+  `docker compose up -d --scale agent-worker=N` 扩容。
+- 告警只由 GET 响应在前端派生，不落库、不调用通知、不改变 Agent Review 主结果。
+
+### 6.5 阶段三停止点
+
+- 保持人工 Compose 扩缩容；不实现自动扩缩容、项目级并发配额、单 Worker 多任务或动态资源预算。
+- 本地代码、定向测试、Frontend production build、三个 Compose 解析、PowerShell 语法和脱敏审计完成后，
+  回填本节实施结果并停止。
+- 未经用户再次确认，不提交、不推送、不远程部署、不执行真实 Agent Review、小任务、Run 18 或下一阶段。
+
+### 6.6 阶段三实施结果（2026-07-29）
+
+- Agent Settings 增加实时安全聚合的 `queueMetrics`；只扫描 `AGENT_REVIEW` 的 `QUEUED/RUNNING` 活跃任务，
+  返回排队、运行、过期租约、最老等待、在线/忙碌容量、整数利用率、排空节点数和最近心跳。
+- Worker Pool 保留阶段二字段并增加容量指标；节点字段白名单未扩张，任务详情代码未修改，继续只展示
+  `claimAttempt` 和脱敏 `AGENT_RECLAIMED`。
+- Backend 在内部 Claim 入口拒绝已注册为 `DRAINING` 的 Worker；全部在线 Worker 为 `BUSY` 时仍保持
+  ONLINE，新任务继续排队，既有离线宽限和 Standard fallback 未修改。
+- Worker 增加幂等 SIGTERM 排空控制器、DRAINING 心跳唤醒、停止 Claim、当前任务完成后退出和 930 秒看门狗；
+  三个 Compose 文件同步配置 `stop_grace_period: 930s`，Windows 操作脚本补充排空状态与队列摘要。
+- 设置页增加队列摘要、容量利用率、最近心跳以及离线、排空、过期租约、全忙和固定阈值积压告警；
+  旧 Backend 缺失 `queueMetrics` 时从现有 Worker Pool 安全兼容并把队列数字回退为 0。
+- Backend/Worker 定向测试通过：`72 passed`；Frontend 全部纯函数测试通过：`17 passed`；
+  Frontend production build 通过；三个 Compose 文件解析通过；PowerShell 脚本语法检查通过；
+  本次 Python 文件定向 Ruff 检查通过。
+- 仓库脚本的全量 lint 仍命中 5 个与本阶段无关的既有告警；按
+  `docs/11-agent-environment-pitfalls.md` 已改用同一虚拟环境完成本次文件定向检查，未改动无关文件。
+- 未新增数据库表、字段、公开 API、外部依赖或自动扩缩容；未修改模型、Endpoint、Thinking Mode、
+  reasoningEffort、预算安全上限、工具白名单、Review Card schema、Standard Review 或 Standard fallback。
+- 未提交、未推送、未远程部署、未执行真实 Agent Review、小任务或 Run 18。
+
+### 6.7 未解决风险与阶段三远程验收
+
+未解决风险：
+
+- 本地自动化覆盖了状态机和租约接管，但真实 Docker SIGTERM 时序、15 秒 DRAINING 心跳可见性和 930 秒
+  宽限仍需在远程小任务中确认。
+- 队列聚合只查询现有 `status` 索引可缩小的活跃任务且不新增索引；生产历史数据规模下的设置页查询耗时
+  尚未实测。指标查询失败会安全回退，不影响 Agent 主结果。
+- Compose 自动缩容不保证优先选择空闲副本；验收 BUSY 排空时应按设置页安全数字引用定位容器，并使用
+  定向 `docker stop`，不要用 Run 18 或大型任务。
+- 本机未启动设置页做运行时视觉检查；production build 已通过，远程部署后仍需检查窄屏布局和告警文案。
+
+建议部署顺序：
+
+1. 在设置页禁用 Agent，确认 `queued=0`、`running=0`、`expiredLease=0`；旧 Worker 代码不支持排空，因此
+   首次升级阶段三前必须等待现有任务结束。
+2. 更新 Backend，确认 Agent Settings 同时返回兼容 `workerPool` 和新增 `queueMetrics`。
+3. 停止旧 Worker，更新 Agent Worker 镜像，然后保持人工两副本：
+
+   ```bash
+   docker compose stop agent-worker
+   docker compose up -d backend
+   docker compose up -d --scale agent-worker=2 agent-egress-proxy agent-worker
+   docker compose ps
+   ```
+
+4. 确认两个节点均为 `IDLE`、`onlineCapacity=2`、`busyCapacity=0`、`drainingWorkers=0` 后更新 Frontend。
+5. 重新启用 Agent，只执行 1～5 文件的非敏感小任务；不得执行 Run 18。
+
+扩容、缩容和故障接管小任务验收：
+
+1. **扩容**：空队列时执行
+   `docker compose up -d --scale agent-worker=3 agent-worker`；确认三个 capacity=1 节点在线且
+   `onlineCapacity=3`。并发提交三个独立小任务，确认分别领取且利用率达到 100%。
+2. **全忙排队**：三个 Worker 均 BUSY 时再提交第四个小任务；确认 `queued=1`、`busyCapacity=3`、
+   `utilizationPercent=100`，任务没有 `AGENT_REVIEW_UNAVAILABLE` 或 Standard fallback；任一任务完成后第四个
+   任务按 `priority DESC + queuedAt ASC` 被领取。
+3. **空闲缩容**：确认待移除副本为空闲后执行
+   `docker compose up -d --scale agent-worker=2 agent-worker`；确认该节点直接退出，最终
+   `onlineCapacity=2`、`drainingWorkers=0` 且没有新增过期租约。
+4. **BUSY 优雅排空**：用一个小任务占用目标副本，对该容器执行
+   `docker stop --time 930 <agent-worker-container>`；确认节点变为 DRAINING、不再 Claim，当前任务在既有
+   timeout 内正常完成且不触发 fallback，随后节点退出。再用人工 scale 命令恢复两个副本。
+5. **故障接管**：用小任务占用一个副本后执行
+   `docker rm -f <agent-worker-container>` 模拟不可优雅恢复的进程故障；确认 `expiredLease` 短暂增加，
+   剩余 Worker 在租约过期后以递增 `claimAttempt` 接管，详情只出现脱敏 `AGENT_RECLAIMED`，最终仍遵守
+   `max_attempts=2`。完成后用人工 scale 命令恢复两个副本。
+6. 每个步骤完成后都先确认队列归零再继续；验收结束即停止，不执行大型任务、Run 18、自动扩缩容、
+   项目级并发配额或单 Worker 多任务。
+
+### 6.8 阶段三一键部署助手设计
+
+离线部署包增加 `deploy-stage3.sh`，由现有 `load-images.sh` 一并复制到远程 runtime 目录。脚本只编排现有
+Compose、Agent Settings GET/PUT 和 Worker Pool，不新增 API、数据库字段、依赖或自动扩缩容。
+
+固定命令：
+
+| 命令 | 行为 |
+| --- | --- |
+| `./deploy-stage3.sh status` | 只显示 enabled、queued、running、expiredLease、online/busy capacity、利用率与 draining 数量 |
+| `./deploy-stage3.sh preflight` | 解析 Compose、检查 Backend 和安全指标；存在活跃/过期任务或零容量时非零退出 |
+| `./deploy-stage3.sh upgrade --workers N` | 一键按 Backend → 队列闸门 → Worker N 副本 → Frontend → 恢复 Agent 执行 |
+| `./deploy-stage3.sh scale --workers N` | 调用人工 Compose scale 并等待目标容量与 DRAINING 收敛，不做策略判断或自动扩缩容 |
+| `--dry-run` | 只校验参数和 Compose，并打印将执行的变更，不修改容器或 Agent 设置 |
+
+`upgrade` 状态机：
+
+```text
+加载镜像/更新 APP_VERSION（仍由 load-images.sh 完成）
+  -> 更新 Backend 并等待 Agent Settings 可读
+  -> 读取并只在内存保存原 enabled
+  -> enabled=true 时等待 queued/running/expiredLease 全零
+  -> PUT enabled=false 封闭新 Agent 入队竞态
+  -> 再次确认队列全零；若竞态中出现新任务，恢复 enabled 并重新等待
+  -> 更新 egress proxy 和 capacity=1 Worker，等待 onlineCapacity >= N 且 drainingWorkers=0
+  -> 更新 Frontend
+  -> 仅在 Backend 健康且目标容量满足时恢复原 enabled=true
+  -> 输出最终安全数字
+```
+
+安全边界：
+
+- 脚本不读取、输出或写入 API Key；PUT 只发送 `{"enabled": true/false}`，沿用现有保存语义。
+- Agent Settings 响应只抽取固定布尔值和非负数字，不打印完整响应、节点、异常正文或模型内容。
+- 任一步失败立即停止；如果脚本已经自动暂停 Agent，则保持禁用并输出恢复前置条件，不盲目重新启用。
+- 使用进程锁阻止同一 runtime 的两个变更命令并发执行；`status/preflight` 保持只读。
+- Worker 数量只接受 `1..100` 的显式整数，等待超时只接受 `60..3600` 秒；默认 `N=2`、超时 `1200` 秒。
+- `scale` 仍是用户明确发起的人工扩缩容；脚本不根据指标自行改变副本数。
+- 首次阶段二到阶段三升级必须使用默认安全模式；不提供旧 Worker 无 DRAINING 保护下的
+  `--keep-agent-enabled` 冒险模式。
+
+### 6.9 一键部署助手实施结果（2026-07-29）
+
+- 新增 `deploy/deploy-stage3.sh`，实现 `status`、`preflight`、`upgrade`、`scale`、显式 Worker 数量、
+  有界等待和 `--dry-run`；所有输出只包含固定状态和非负数字。
+- `upgrade` 已实现 Backend 先行、零队列闸门、只修改 enabled 的暂停/恢复、Worker 目标容量等待、
+  Frontend 最后更新和失败保持禁用；未实现 `--keep-agent-enabled`、自动扩缩容或自动回滚数据库。
+- `scripts/package-docker-deploy.ps1` 会把助手写入离线包；`load-images.sh` 会复制到 runtime、设置可执行权限，
+  并把默认提示从直接 `docker compose up -d` 调整为
+  `./deploy-stage3.sh upgrade --workers 2`，保留直接 Compose 作为人工恢复手段。
+- `docs/42-development-deployment-and-validation-guide.md` 已更新离线包清单、默认升级命令和常用只读/扩缩容命令。
+- Bash `-n` 语法检查通过；禁网临时容器中的 `--dry-run` 通过；使用假 Compose 与固定安全数字的完整
+  `enabled=true -> 暂停 -> 容量恢复 -> enabled=true` 状态机模拟通过；PowerShell 打包脚本语法通过；
+  Backend/Worker 合并定向测试 `72 passed`，本次 Python 文件 Ruff 检查通过。
+- 未实际构建离线镜像包、未访问真实 `.env`、未调用远程 Agent Settings、未修改真实 enabled、
+  未部署、未运行真实 Agent Review 或 Run 18。
+- 首次远程使用前先在 runtime 执行 `./deploy-stage3.sh upgrade --workers 2 --dry-run`；确认输出后再去掉
+  `--dry-run`。如失败提示 Agent 保持禁用，必须先用 `status` 确认 Backend 和目标容量恢复，再由设置页
+  人工恢复，不要绕过安全闸门。
 
 ## 7. 测试与验收
 

@@ -5,9 +5,10 @@ import logging
 import os
 from pathlib import Path
 import re
+import signal
 import socket
 import sys
-from threading import Event, Lock, Thread
+from threading import Event, Lock, RLock, Thread
 import tempfile
 import time
 import traceback
@@ -24,6 +25,7 @@ from app.agent_review_spike.runner import RunnerConfig, run_agent_candidate
 
 WORKER_VERSION = "agent-worker-v1"
 CLI_VERSION = "2.1.112"
+AGENT_WORKER_SHUTDOWN_GRACE_SECONDS = 930
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -45,14 +47,15 @@ class _LatestAuditSnapshot:
 
 class _WorkerActivityState:
     def __init__(self) -> None:
-        self._lock = Lock()
+        self._lock = RLock()
         self._state = "IDLE"
         self._active_job_id: int | None = None
         self._active_run_id: int | None = None
 
     def begin(self, job: dict[str, Any]) -> None:
         with self._lock:
-            self._state = "BUSY"
+            if self._state != "DRAINING":
+                self._state = "BUSY"
             self._active_job_id = (
                 int(job["jobId"]) if job.get("jobId") is not None else None
             )
@@ -62,9 +65,14 @@ class _WorkerActivityState:
 
     def idle(self) -> None:
         with self._lock:
-            self._state = "IDLE"
+            if self._state != "DRAINING":
+                self._state = "IDLE"
             self._active_job_id = None
             self._active_run_id = None
+
+    def drain(self) -> None:
+        with self._lock:
+            self._state = "DRAINING"
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -79,6 +87,36 @@ class _WorkerActivityState:
             return result
 
 
+class _DrainController:
+    def __init__(
+        self,
+        activity: _WorkerActivityState,
+        heartbeat_wakeup: Event,
+    ) -> None:
+        self._lock = RLock()
+        self._requested = Event()
+        self._activity = activity
+        self._heartbeat_wakeup = heartbeat_wakeup
+
+    def request(self) -> bool:
+        with self._lock:
+            if self._requested.is_set():
+                return False
+            self._activity.drain()
+            self._requested.set()
+            self._heartbeat_wakeup.set()
+            return True
+
+    def handle_signal(self, _signum, _frame) -> None:
+        self.request()
+
+    def is_requested(self) -> bool:
+        return self._requested.is_set()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self._requested.wait(timeout)
+
+
 def main() -> int:
     backend_url = _required_env("AGENT_REVIEW_BACKEND_URL").rstrip("/")
     worker_id = _resolve_worker_id()
@@ -91,38 +129,91 @@ def main() -> int:
     workspace_root = Path(os.getenv("AGENT_REVIEW_WORKSPACE_ROOT", "/workspaces")).resolve(strict=True)
     poll_seconds = max(float(os.getenv("AGENT_REVIEW_WORKER_POLL_SECONDS", "3")), 1.0)
     process_stop = Event()
+    heartbeat_wakeup = Event()
     activity = _WorkerActivityState()
+    drain = _DrainController(activity, heartbeat_wakeup)
+    signal.signal(signal.SIGTERM, drain.handle_signal)
     process_heartbeat = Thread(
         target=_worker_heartbeat_loop,
-        args=(backend_url, token, worker_id, process_stop, activity),
+        args=(
+            backend_url,
+            token,
+            worker_id,
+            process_stop,
+            activity,
+            heartbeat_wakeup,
+        ),
+        daemon=True,
+    )
+    shutdown_watchdog = Thread(
+        target=_shutdown_watchdog,
+        args=(drain, process_stop),
         daemon=True,
     )
     process_heartbeat.start()
+    shutdown_watchdog.start()
     try:
-        while True:
-            try:
-                claimed = _post(
-                    backend_url,
-                    token,
-                    "/internal/agent-review/jobs/claim",
-                    {"workerId": worker_id},
-                )
-                job = claimed.get("data")
-                if job:
-                    activity.begin(job)
-                    try:
-                        _run_job(backend_url, token, worker_id, workspace_root, job)
-                    finally:
-                        activity.idle()
-                    continue
-            except (OSError, ValueError, HTTPError, URLError):
-                pass
-            time.sleep(poll_seconds)
+        return _worker_loop(
+            backend_url,
+            token,
+            worker_id,
+            workspace_root,
+            poll_seconds,
+            activity,
+            drain,
+        )
     except KeyboardInterrupt:
         return 0
     finally:
         process_stop.set()
+        heartbeat_wakeup.set()
         process_heartbeat.join(timeout=2)
+
+
+def _worker_loop(
+    backend_url: str,
+    token: str,
+    worker_id: str,
+    workspace_root: Path,
+    poll_seconds: float,
+    activity: _WorkerActivityState,
+    drain: _DrainController,
+) -> int:
+    while not drain.is_requested():
+        try:
+            claimed = _post(
+                backend_url,
+                token,
+                "/internal/agent-review/jobs/claim",
+                {"workerId": worker_id},
+            )
+            job = claimed.get("data")
+            if job:
+                activity.begin(job)
+                try:
+                    _run_job(backend_url, token, worker_id, workspace_root, job)
+                finally:
+                    activity.idle()
+                if drain.is_requested():
+                    return 0
+                continue
+        except (OSError, ValueError, HTTPError, URLError):
+            pass
+        if drain.wait(poll_seconds):
+            return 0
+    return 0
+
+
+def _shutdown_watchdog(
+    drain: _DrainController,
+    process_stop: Event,
+    grace_seconds: float = AGENT_WORKER_SHUTDOWN_GRACE_SECONDS,
+    force_exit=None,
+) -> None:
+    drain.wait()
+    if process_stop.wait(max(float(grace_seconds), 0.0)):
+        return
+    (force_exit or os._exit)(0)
 
 
 def _run_job(
@@ -264,6 +355,7 @@ def _worker_heartbeat_loop(
     worker_id: str,
     stop: Event,
     activity: _WorkerActivityState,
+    wake: Event | None = None,
 ) -> None:
     while True:
         try:
@@ -280,8 +372,14 @@ def _worker_heartbeat_loop(
             )
         except Exception:
             pass
-        if stop.wait(15):
-            return
+        if wake is None:
+            if stop.wait(15):
+                return
+        else:
+            wake.wait(15)
+            wake.clear()
+            if stop.is_set():
+                return
 
 
 def _heartbeat_loop(
