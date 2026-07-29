@@ -2229,6 +2229,7 @@ function phaseLabel(phase) {
     LOCAL_CONTEXT_RETRIEVE_FAILED: '本地引用检索不可用',
     AGENT_SENSITIVE_PATHS_EXCLUDED: '已排除敏感路径',
     AGENT_ALL_PATHS_EXCLUDED: '全部路径已安全跳过',
+    AGENT_RECLAIMED: 'Agent 重新领取',
     AGENT_ANALYZING: 'Agent 分析变更',
     AGENT_TOOL_ACTIVITY: 'Agent 补充证据',
     AGENT_CONVERGING: 'Agent 收敛结论',
@@ -2312,6 +2313,7 @@ const keyProgressPhases = new Set([
   'LOCAL_REPO_PREPARE_FAILED',
   'LOCAL_CONTEXT_RETRIEVED',
   'LOCAL_CONTEXT_RETRIEVE_FAILED',
+  'AGENT_RECLAIMED',
   'AGENT_ANALYZING',
   'AGENT_TOOL_ACTIVITY',
   'AGENT_CONVERGING',
@@ -2405,6 +2407,8 @@ function progressStepDescription(event) {
       return '敏感文件及其 diff 未发送给 Agent，其余文件继续使用高准确模式审查。';
     case 'AGENT_ALL_PATHS_EXCLUDED':
       return '全部变更文件均命中敏感路径策略，本次未向外部模型发送代码。';
+    case 'AGENT_RECLAIMED':
+      return '上一 Worker 的任务租约已经过期，本次由可用 Worker 重新领取。';
     case 'AGENT_ANALYZING':
       return 'Agent 正在基于 changedFiles 和 diff 形成有限风险假设。';
     case 'AGENT_TOOL_ACTIVITY':
@@ -3599,6 +3603,9 @@ function AgentTraceOverview({ summary }) {
       <div className="agent-trace-overview-head">
         <Space wrap>
           <Text strong>Run #{summary.runId}</Text>
+          {summary.claimAttempt > 1 && (
+            <Tag color="orange">第 {summary.claimAttempt} 次领取</Tag>
+          )}
           <Tag color={summary.terminal ? 'default' : 'processing'}>
             {budgetPhase || phaseLabel(summary.phase)}
           </Tag>

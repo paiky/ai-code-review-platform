@@ -4,6 +4,8 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
+import socket
 from threading import Event, Lock, Thread
 import tempfile
 import time
@@ -43,22 +45,37 @@ class _LatestAuditSnapshot:
 def main() -> int:
     backend_url = _required_env("AGENT_REVIEW_BACKEND_URL").rstrip("/")
     token = _required_env("AGENT_REVIEW_WORKER_TOKEN")
-    worker_id = os.getenv("AGENT_REVIEW_WORKER_ID", "agent-worker-1").strip()
+    worker_id = _resolve_worker_id()
     workspace_root = Path(os.getenv("AGENT_REVIEW_WORKSPACE_ROOT", "/workspaces")).resolve(strict=True)
     poll_seconds = max(float(os.getenv("AGENT_REVIEW_WORKER_POLL_SECONDS", "3")), 1.0)
-    while True:
-        try:
-            _post(backend_url, token, "/internal/agent-review/workers/heartbeat", {
-                "workerId": worker_id, "workerVersion": WORKER_VERSION, "cliVersion": CLI_VERSION,
-            })
-            claimed = _post(backend_url, token, "/internal/agent-review/jobs/claim", {"workerId": worker_id})
-            job = claimed.get("data")
-            if job:
-                _run_job(backend_url, token, worker_id, workspace_root, job)
-                continue
-        except (OSError, ValueError, HTTPError, URLError):
-            pass
-        time.sleep(poll_seconds)
+    process_stop = Event()
+    process_heartbeat = Thread(
+        target=_worker_heartbeat_loop,
+        args=(backend_url, token, worker_id, process_stop),
+        daemon=True,
+    )
+    process_heartbeat.start()
+    try:
+        while True:
+            try:
+                claimed = _post(
+                    backend_url,
+                    token,
+                    "/internal/agent-review/jobs/claim",
+                    {"workerId": worker_id},
+                )
+                job = claimed.get("data")
+                if job:
+                    _run_job(backend_url, token, worker_id, workspace_root, job)
+                    continue
+            except (OSError, ValueError, HTTPError, URLError):
+                pass
+            time.sleep(poll_seconds)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        process_stop.set()
+        process_heartbeat.join(timeout=2)
 
 
 def _run_job(
@@ -68,12 +85,22 @@ def _run_job(
         _run_configuration_test(backend_url, token, worker_id, job)
         return
     job_id = int(job["jobId"])
+    claim_attempt = int(job["claimAttempt"])
     stop = Event()
     cancelled = Event()
     latest_audit = _LatestAuditSnapshot()
     heartbeat = Thread(
         target=_heartbeat_loop,
-        args=(backend_url, token, worker_id, job_id, stop, cancelled, latest_audit),
+        args=(
+            backend_url,
+            token,
+            worker_id,
+            job_id,
+            claim_attempt,
+            stop,
+            cancelled,
+            latest_audit,
+        ),
         daemon=True,
     )
     heartbeat.start()
@@ -91,7 +118,12 @@ def _run_job(
         final_audit = latest_audit.snapshot()
         if final_audit:
             summary["audit"] = final_audit
-        base = {"workerId": worker_id, "idempotencyKey": job["idempotencyKey"], "runSummary": summary}
+        base = {
+            "workerId": worker_id,
+            "claimAttempt": claim_attempt,
+            "idempotencyKey": job["idempotencyKey"],
+            "runSummary": summary,
+        }
         if cancelled.is_set():
             _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/cancelled", base)
         elif summary.get("status") == "SUCCESS" and isinstance(summary.get("reviewCard"), dict):
@@ -117,6 +149,7 @@ def _run_job(
         )
         _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/fail", {
             "workerId": worker_id,
+            "claimAttempt": claim_attempt,
             "idempotencyKey": job["idempotencyKey"],
             "failureCode": error_code,
             "failureMessage": _failure_message(error_code),
@@ -131,13 +164,6 @@ def _run_configuration_test(
     backend_url: str, token: str, worker_id: str, job: dict[str, Any]
 ) -> None:
     started = time.perf_counter()
-    stop = Event()
-    heartbeat = Thread(
-        target=_worker_heartbeat_loop,
-        args=(backend_url, token, worker_id, stop),
-        daemon=True,
-    )
-    heartbeat.start()
     status = "FAILED"
     message = "Agent configuration test failed"
     try:
@@ -171,26 +197,22 @@ def _run_configuration_test(
         message = "Claude Code + DeepSeek + read-only MCP connectivity succeeded" if status == "SUCCESS" else str(summary.get("errorCode") or message)
     except Exception as exception:
         message = str(exception)[:500]
-    try:
-        _post(
-            backend_url,
-            token,
-            "/internal/agent-review/configuration-test/complete",
-            {
-                "workerId": worker_id,
-                "requestId": job["requestId"],
-                "status": status,
-                "message": message,
-                "durationMs": int((time.perf_counter() - started) * 1000),
-            },
-        )
-    finally:
-        stop.set()
-        heartbeat.join(timeout=2)
+    _post(
+        backend_url,
+        token,
+        "/internal/agent-review/configuration-test/complete",
+        {
+            "workerId": worker_id,
+            "requestId": job["requestId"],
+            "status": status,
+            "message": message,
+            "durationMs": int((time.perf_counter() - started) * 1000),
+        },
+    )
 
 
 def _worker_heartbeat_loop(backend_url: str, token: str, worker_id: str, stop: Event) -> None:
-    while not stop.wait(15):
+    while True:
         try:
             _post(
                 backend_url,
@@ -199,7 +221,9 @@ def _worker_heartbeat_loop(backend_url: str, token: str, worker_id: str, stop: E
                 {"workerId": worker_id, "workerVersion": WORKER_VERSION, "cliVersion": CLI_VERSION},
             )
         except Exception:
-            continue
+            pass
+        if stop.wait(15):
+            return
 
 
 def _heartbeat_loop(
@@ -207,6 +231,7 @@ def _heartbeat_loop(
     token: str,
     worker_id: str,
     job_id: int,
+    claim_attempt: int,
     stop: Event,
     cancelled: Event,
     latest_audit: _LatestAuditSnapshot,
@@ -216,6 +241,7 @@ def _heartbeat_loop(
         try:
             payload: dict[str, Any] = {
                 "workerId": worker_id,
+                "claimAttempt": claim_attempt,
                 "heartbeatSequence": heartbeat_sequence,
             }
             audit = latest_audit.snapshot()
@@ -263,6 +289,24 @@ def _required_env(name: str) -> str:
     if not value:
         raise ValueError(f"{name} is required")
     return value
+
+
+def _resolve_worker_id() -> str:
+    explicit = str(os.getenv("AGENT_REVIEW_WORKER_ID") or "").strip()
+    if explicit:
+        worker_id = explicit
+    else:
+        prefix = str(
+            os.getenv("AGENT_REVIEW_WORKER_ID_PREFIX") or "agent-worker"
+        ).strip() or "agent-worker"
+        hostname = socket.gethostname().strip()
+        worker_id = f"{prefix}-{hostname}"
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", worker_id):
+        raise ValueError(
+            "Agent Review Worker ID must contain only letters, numbers, dot, "
+            "underscore, or hyphen and be at most 128 characters"
+        )
+    return worker_id
 
 
 def _failure_message(error_code: str) -> str:

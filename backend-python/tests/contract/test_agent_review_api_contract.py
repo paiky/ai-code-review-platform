@@ -324,6 +324,13 @@ def test_agent_configuration_test_runs_through_worker_contract(
     assert job["kind"] == "CONFIG_TEST"
     assert job["apiKey"] == "sk-agent-secret-123456"
     assert job["budgets"]["maxTurns"] == 4
+    duplicate_claim = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-2"},
+    )
+    assert duplicate_claim.status_code == 200
+    assert duplicate_claim.json()["data"] is None
     completed = client.post(
         "/internal/agent-review/configuration-test/complete",
         headers=_worker_headers(token),
@@ -398,14 +405,26 @@ def test_worker_auth_claim_and_heartbeat(
     assert claim.status_code == 200
     job = claim.json()["data"]
     assert job["runId"] == run.id
+    assert job["claimAttempt"] == 1
     assert job["apiKey"] == "sk-agent-secret-123456"
     assert job["budgets"]["maxTurns"] == 12
     assert "apiKey" not in json.dumps(job["input"])
 
+    missing_attempt = client.post(
+        f"/internal/agent-review/jobs/{job['jobId']}/heartbeat",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-1"},
+    )
+    assert missing_attempt.status_code == 400
+
     job_heartbeat = client.post(
         f"/internal/agent-review/jobs/{job['jobId']}/heartbeat",
         headers=_worker_headers(token),
-        json={"workerId": "worker-1", "runSummary": {"toolCallCount": 3}},
+        json={
+            "workerId": "worker-1",
+            "claimAttempt": job["claimAttempt"],
+            "runSummary": {"toolCallCount": 3},
+        },
     )
     assert job_heartbeat.status_code == 200
     assert job_heartbeat.json()["data"]["cancelRequested"] is False
@@ -414,6 +433,193 @@ def test_worker_auth_claim_and_heartbeat(
     # the claim contract itself must never persist or echo the clear key outside this response.
     settings_record = db_session.get(AgentReviewSettings, 1)
     assert "sk-agent-secret-123456" not in settings_record.api_key_ciphertext
+
+
+def test_two_workers_claim_distinct_queued_jobs(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"enabled": True, "apiKey": "sk-agent-secret-123456"},
+    )
+    runs = [
+        create_agent_job(
+            db_session,
+            task_id=task_id,
+            project_id=100,
+            input_payload={
+                "worktree": f"worktrees/{task_id}/head",
+                "case": {"changedFiles": ["src/a.py"], "diff": "+safe()"},
+            },
+            completion_context={},
+            comparison_mode=True,
+        )
+        for task_id in (901, 902)
+    ]
+    db_session.commit()
+
+    first = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-a"},
+    ).json()["data"]
+    second = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-b"},
+    ).json()["data"]
+
+    assert {first["runId"], second["runId"]} == {run.id for run in runs}
+    assert first["jobId"] != second["jobId"]
+    assert first["claimAttempt"] == second["claimAttempt"] == 1
+
+
+def test_reclaimed_job_fences_stale_worker_and_isolates_safe_trace(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"enabled": True, "apiKey": "sk-agent-secret-123456"},
+    )
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-old"},
+    )
+    run = create_agent_job(
+        db_session,
+        task_id=903,
+        project_id=100,
+        input_payload={
+            "worktree": "worktrees/903/head",
+            "case": {"changedFiles": ["src/a.py"], "diff": "+safe()"},
+        },
+        completion_context={},
+        comparison_mode=True,
+    )
+    db_session.commit()
+    first = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-old"},
+    ).json()["data"]
+    scheduler_job = db_session.get(CodeQualitySchedulerJob, first["jobId"])
+    scheduler_job.lease_expires_at = utc_now() - timedelta(seconds=1)
+    db_session.commit()
+
+    second_response = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-new"},
+    )
+    assert second_response.status_code == 200
+    second = second_response.json()["data"]
+    assert second["jobId"] == first["jobId"]
+    assert second["claimAttempt"] == 2
+
+    stale_owner = client.post(
+        f"/internal/agent-review/jobs/{second['jobId']}/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-old",
+            "claimAttempt": first["claimAttempt"],
+        },
+    )
+    assert stale_owner.status_code == 409
+    assert stale_owner.json()["code"] == "AGENT_JOB_LEASE_LOST"
+
+    stale_attempt = client.post(
+        f"/internal/agent-review/jobs/{second['jobId']}/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-new",
+            "claimAttempt": first["claimAttempt"],
+        },
+    )
+    assert stale_attempt.status_code == 409
+    assert stale_attempt.json()["code"] == "AGENT_JOB_CLAIM_STALE"
+
+    stale_complete = client.post(
+        f"/internal/agent-review/jobs/{second['jobId']}/complete",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-old",
+            "claimAttempt": first["claimAttempt"],
+            "idempotencyKey": second["idempotencyKey"],
+            "reviewCard": {
+                "summary": "不应保存",
+                "overallLevel": "LOW",
+                "findings": [],
+            },
+        },
+    )
+    assert stale_complete.status_code == 409
+    assert stale_complete.json()["code"] == "AGENT_JOB_LEASE_LOST"
+
+    stale_fail = client.post(
+        f"/internal/agent-review/jobs/{second['jobId']}/fail",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-new",
+            "claimAttempt": first["claimAttempt"],
+            "idempotencyKey": second["idempotencyKey"],
+            "failureCode": "AGENT_WORKER_ERROR",
+        },
+    )
+    assert stale_fail.status_code == 409
+    assert stale_fail.json()["code"] == "AGENT_JOB_CLAIM_STALE"
+
+    stale_cancel = client.post(
+        f"/internal/agent-review/jobs/{second['jobId']}/cancelled",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-old",
+            "claimAttempt": first["claimAttempt"],
+            "idempotencyKey": second["idempotencyKey"],
+        },
+    )
+    assert stale_cancel.status_code == 409
+    assert stale_cancel.json()["code"] == "AGENT_JOB_LEASE_LOST"
+
+    accepted = client.post(
+        f"/internal/agent-review/jobs/{second['jobId']}/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-new",
+            "claimAttempt": second["claimAttempt"],
+            "heartbeatSequence": 0,
+            "runSummary": {"audit": _trace_audit([])},
+        },
+    )
+    assert accepted.status_code == 200
+    events = [
+        event
+        for event in list_progress(db_session, 903)
+        if event["phase"].startswith("AGENT_")
+    ]
+    reclaimed = next(event for event in events if event["phase"] == "AGENT_RECLAIMED")
+    reclaimed_detail = json.loads(reclaimed["detail"])
+    assert reclaimed_detail == {
+        "runId": run.id,
+        "claimAttempt": 2,
+        "reasonCode": "LEASE_EXPIRED",
+    }
+    analyzing_detail = json.loads(
+        next(event for event in events if event["phase"] == "AGENT_ANALYZING")[
+            "detail"
+        ]
+    )
+    assert analyzing_detail["claimAttempt"] == 2
+    heartbeat_detail = json.loads(
+        next(event for event in events if event["phase"] == "AGENT_HEARTBEAT")[
+            "detail"
+        ]
+    )
+    assert heartbeat_detail["claimAttempt"] == 2
+    assert "worker-old" not in json.dumps(events, ensure_ascii=False)
+    assert "worker-new" not in json.dumps(events, ensure_ascii=False)
 
 
 def test_worker_claim_uses_immutable_run_budget_snapshot(
@@ -501,6 +707,7 @@ def test_agent_trace_persistence_failure_does_not_lose_job_lease(
         headers=_worker_headers(token),
         json={
             "workerId": "worker-trace-failure",
+            "claimAttempt": job["claimAttempt"],
             "heartbeatSequence": 0,
             "runSummary": {"audit": _trace_audit([])},
         },
@@ -559,6 +766,7 @@ def test_worker_completion_is_idempotent_and_saves_engine_metadata(
     ).json()["data"]
     payload = {
         "workerId": "worker-1",
+        "claimAttempt": job["claimAttempt"],
         "idempotencyKey": job["idempotencyKey"],
         "reviewCard": {"summary": "未发现问题", "overallLevel": "LOW", "findings": []},
         "runSummary": {
@@ -584,11 +792,18 @@ def test_worker_completion_is_idempotent_and_saves_engine_metadata(
         headers=_worker_headers(token),
         json=payload,
     )
+    stale_attempt = client.post(
+        f"/internal/agent-review/jobs/{job['jobId']}/complete",
+        headers=_worker_headers(token),
+        json={**payload, "claimAttempt": job["claimAttempt"] + 1},
+    )
 
     assert first.status_code == 200
     assert first.json()["data"]["idempotent"] is False
     assert second.status_code == 200
     assert second.json()["data"]["idempotent"] is True
+    assert stale_attempt.status_code == 409
+    assert stale_attempt.json()["code"] == "AGENT_JOB_CLAIM_STALE"
     result = list_result_responses(db_session, 199)[0]
     assert result["requestedEngine"] == "AGENT"
     assert result["effectiveEngine"] == "AGENT"
@@ -719,6 +934,7 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
         headers=_worker_headers(token),
         json={
             "workerId": "worker-trace",
+            "claimAttempt": job["claimAttempt"],
             "heartbeatSequence": 0,
             "runSummary": {
                 "prompt": "SECRET_PROMPT",
@@ -732,6 +948,7 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
         headers=_worker_headers(token),
         json={
             "workerId": "worker-trace",
+            "claimAttempt": job["claimAttempt"],
             "heartbeatSequence": 0,
             "runSummary": {"audit": _trace_audit(events[:1])},
         },
@@ -741,6 +958,7 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
         headers=_worker_headers(token),
         json={
             "workerId": "worker-trace",
+            "claimAttempt": job["claimAttempt"],
             "heartbeatSequence": 1,
             "runSummary": {"audit": _trace_audit(events[:2])},
         },
@@ -750,6 +968,7 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
         headers=_worker_headers(token),
         json={
             "workerId": "worker-trace",
+            "claimAttempt": job["claimAttempt"],
             "idempotencyKey": job["idempotencyKey"],
             "reviewCard": {
                 "summary": "未发现问题",
@@ -792,6 +1011,7 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
     assert heartbeat_details[-1]["evidenceCallsUsed"] == 8
     assert set(heartbeat_details[-1]) == {
         "runId",
+        "claimAttempt",
         "heartbeatSequence",
         "activity",
         "status",
@@ -858,6 +1078,7 @@ def test_worker_failure_records_explicit_standard_fallback(
         headers=_worker_headers(token),
         json={
             "workerId": "worker-1",
+            "claimAttempt": job["claimAttempt"],
             "idempotencyKey": job["idempotencyKey"],
             "failureCode": "AGENT_TIMEOUT",
             "failureMessage": "timeout",
@@ -1030,13 +1251,20 @@ def test_running_agent_job_cancel_is_observed_by_worker_and_clears_input(
     heartbeat = client.post(
         f"/internal/agent-review/jobs/{job['jobId']}/heartbeat",
         headers=_worker_headers(token),
-        json={"workerId": "worker-cancel"},
+        json={
+            "workerId": "worker-cancel",
+            "claimAttempt": job["claimAttempt"],
+        },
     )
     assert heartbeat.json()["data"]["cancelRequested"] is True
     acknowledged = client.post(
         f"/internal/agent-review/jobs/{job['jobId']}/cancelled",
         headers=_worker_headers(token),
-        json={"workerId": "worker-cancel", "idempotencyKey": job["idempotencyKey"]},
+        json={
+            "workerId": "worker-cancel",
+            "claimAttempt": job["claimAttempt"],
+            "idempotencyKey": job["idempotencyKey"],
+        },
     )
     assert acknowledged.status_code == 200
     db_session.refresh(run)
@@ -1299,6 +1527,7 @@ def test_manual_agent_review_excludes_sensitive_file_and_reaches_worker_queue(
         headers=_worker_headers(token),
         json={
             "workerId": "worker-1",
+            "claimAttempt": job["claimAttempt"],
             "idempotencyKey": job["idempotencyKey"],
             "reviewCard": {"summary": "未发现问题", "overallLevel": "LOW", "findings": []},
             "runSummary": {"durationMs": 800, "numTurns": 2, "toolCallCount": 3},

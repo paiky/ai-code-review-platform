@@ -216,3 +216,56 @@ test('groups consecutive duplicate tool activities without exposing raw detail',
   assert.match(visible, /耗时：6 ms/);
   assert.doesNotMatch(visible, /secret-hash|SECRET_QUERY/);
 });
+
+
+test('shows only the latest claim attempt and safely formats lease recovery', () => {
+  const events = [
+    {
+      id: 1,
+      phase: 'AGENT_ANALYZING',
+      detail: '{"runId":10,"claimAttempt":1,"sequence":0,"activity":"ANALYZING"}'
+    },
+    {
+      id: 2,
+      phase: 'AGENT_TOOL_ACTIVITY',
+      detail: '{"runId":10,"claimAttempt":1,"sequence":1,"activity":"SEARCH_CODE"}'
+    },
+    {
+      id: 3,
+      phase: 'AGENT_RECLAIMED',
+      detail: JSON.stringify({
+        runId: 10,
+        claimAttempt: 2,
+        reasonCode: 'LEASE_EXPIRED',
+        workerId: 'SECRET_WORKER'
+      })
+    },
+    {
+      id: 4,
+      phase: 'AGENT_ANALYZING',
+      detail: '{"runId":10,"claimAttempt":2,"sequence":0,"activity":"ANALYZING"}'
+    },
+    {
+      id: 5,
+      phase: 'AGENT_HEARTBEAT',
+      createdAt: '2026-07-29T12:00:00+08:00',
+      detail: '{"runId":10,"claimAttempt":2,"heartbeatSequence":0}'
+    }
+  ];
+
+  const collected = collectAgentTraceEvents(events);
+  assert.deepEqual(
+    collected.map(event => event.phase),
+    ['AGENT_RECLAIMED', 'AGENT_ANALYZING']
+  );
+  const summary = summarizeAgentTrace(events);
+  assert.equal(summary.runId, 10);
+  assert.equal(summary.claimAttempt, 2);
+  const visible = formatAgentTraceDetail(
+    collected[0].detail,
+    collected[0].phase
+  );
+  assert.match(visible, /第 2 次/);
+  assert.match(visible, /上一租约已过期/);
+  assert.doesNotMatch(visible, /SECRET_WORKER/);
+});

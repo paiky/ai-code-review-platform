@@ -241,7 +241,15 @@ def request_configuration_test(db: Session) -> dict[str, Any]:
 
 
 def claim_configuration_test(db: Session, *, worker_id: str) -> dict[str, Any] | None:
-    record = assert_agent_available(db, require_worker=False)
+    available = assert_agent_available(db, require_worker=False)
+    record = db.scalars(
+        select(AgentReviewSettings)
+        .where(AgentReviewSettings.id == available.id)
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    ).first()
+    if record is None:
+        return None
     if record.test_status != "QUEUED" or not record.test_request_id:
         return None
     now = utc_now()
@@ -404,11 +412,17 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
         "apiKey": decrypt_api_key(settings_record.api_key_ciphertext),
         "budgets": budgets,
         "leaseSeconds": lease_seconds,
+        "claimAttempt": int(job.attempt or 0),
     }
 
 
 def heartbeat_agent_job(
-    db: Session, *, job_id: int, worker_id: str, run_summary: dict[str, Any] | None = None
+    db: Session,
+    *,
+    job_id: int,
+    worker_id: str,
+    claim_attempt: int,
+    run_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ensure_agent_review_schema(db)
     job = db.get(CodeQualitySchedulerJob, job_id)
@@ -416,6 +430,7 @@ def heartbeat_agent_job(
         raise AppError("RESOURCE_NOT_FOUND", f"Agent Review job not found: {job_id}", 404)
     if job.status != "RUNNING" or job.lease_owner != worker_id:
         raise AppError("AGENT_JOB_LEASE_LOST", "Agent Review job lease is no longer owned", 409)
+    _assert_claim_attempt(job, claim_attempt)
     now = utc_now()
     job.heartbeat_at = now
     job.lease_expires_at = now + timedelta(seconds=max(get_settings().agent_review_lease_seconds, 30))
@@ -477,7 +492,12 @@ def expire_exhausted_agent_jobs(db: Session) -> list[int]:
 
 
 def get_run_for_completion(
-    db: Session, *, job_id: int, worker_id: str, idempotency_key: str
+    db: Session,
+    *,
+    job_id: int,
+    worker_id: str,
+    idempotency_key: str,
+    claim_attempt: int,
 ) -> tuple[CodeQualitySchedulerJob, AgentReviewRun]:
     ensure_agent_review_schema(db)
     job = db.get(CodeQualitySchedulerJob, job_id)
@@ -486,10 +506,11 @@ def get_run_for_completion(
         raise AppError("RESOURCE_NOT_FOUND", f"Agent Review job not found: {job_id}", 404)
     if run.idempotency_key != idempotency_key:
         raise AppError("AGENT_IDEMPOTENCY_MISMATCH", "Agent Review idempotency key mismatch", 409)
-    if run.status in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"}:
-        return job, run
     if job.lease_owner != worker_id:
         raise AppError("AGENT_JOB_LEASE_LOST", "Agent Review job lease is no longer owned", 409)
+    _assert_claim_attempt(job, claim_attempt)
+    if run.status in {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"}:
+        return job, run
     return job, run
 
 
@@ -631,6 +652,7 @@ def agent_trace_sequences(
     task_id: int,
     review_key: str,
     run_id: int,
+    claim_attempt: int,
 ) -> set[int]:
     records = db.scalars(
         select(CodeQualityReviewProgressEvent)
@@ -644,6 +666,8 @@ def agent_trace_sequences(
         if not isinstance(detail, dict):
             continue
         if _non_negative(detail.get("runId")) != int(run_id):
+            continue
+        if _non_negative(detail.get("claimAttempt")) != int(claim_attempt):
             continue
         try:
             sequence = int(detail.get("sequence"))
@@ -660,6 +684,7 @@ def agent_heartbeat_sequences(
     task_id: int,
     review_key: str,
     run_id: int,
+    claim_attempt: int,
 ) -> set[int]:
     records = db.scalars(
         select(CodeQualityReviewProgressEvent)
@@ -673,6 +698,8 @@ def agent_heartbeat_sequences(
         if not isinstance(detail, dict):
             continue
         if _non_negative(detail.get("runId")) != int(run_id):
+            continue
+        if _non_negative(detail.get("claimAttempt")) != int(claim_attempt):
             continue
         try:
             sequence = int(detail.get("heartbeatSequence"))
@@ -792,6 +819,15 @@ def _safe_trace_sequence(value: Any, fallback: int) -> int | None:
     except (TypeError, ValueError):
         return None
     return sequence if 1 <= sequence <= ABSOLUTE_MAX_TOOL_CALLS else None
+
+
+def _assert_claim_attempt(job: CodeQualitySchedulerJob, claim_attempt: int) -> None:
+    if int(job.attempt or 0) != int(claim_attempt):
+        raise AppError(
+            "AGENT_JOB_CLAIM_STALE",
+            "Agent Review claim attempt is stale",
+            409,
+        )
 
 
 def _ensure_result_columns(db: Session, inspector) -> None:

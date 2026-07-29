@@ -301,10 +301,12 @@ def recover_unavailable_agent_jobs() -> int:
 def heartbeat_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any]:
     run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
     heartbeat_sequence = _safe_heartbeat_sequence(request.get("heartbeatSequence"))
+    claim_attempt = _required_claim_attempt(request)
     response = repository.heartbeat_agent_job(
         db,
         job_id=job_id,
         worker_id=_required(request, "workerId"),
+        claim_attempt=claim_attempt,
         run_summary=run_summary or None,
     )
     run = repository.find_agent_run_by_job(db, job_id)
@@ -314,17 +316,25 @@ def heartbeat_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str
             run,
             run_summary,
             heartbeat_sequence=heartbeat_sequence,
+            claim_attempt=claim_attempt,
         )
-        _persist_agent_trace_safely(db, run, run_summary)
+        _persist_agent_trace_safely(
+            db,
+            run,
+            run_summary,
+            claim_attempt=claim_attempt,
+        )
     return response
 
 
 def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any]:
+    claim_attempt = _required_claim_attempt(request)
     job, run = repository.get_run_for_completion(
         db,
         job_id=job_id,
         worker_id=_required(request, "workerId"),
         idempotency_key=_required(request, "idempotencyKey"),
+        claim_attempt=claim_attempt,
     )
     if run.status == "SUCCEEDED":
         return {"accepted": True, "idempotent": True, "run": repository.run_to_summary(run)}
@@ -335,7 +345,12 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
     except (ReviewSchemaError, ValueError, TypeError) as exception:
         raise AppError("AGENT_REVIEW_SCHEMA_INVALID", str(exception), 400) from exception
     run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
-    _persist_agent_trace_safely(db, run, run_summary)
+    _persist_agent_trace_safely(
+        db,
+        run,
+        run_summary,
+        claim_attempt=claim_attempt,
+    )
     run.cli_version = str(run_summary.get("cliVersion") or repository.AGENT_CLI_VERSION)
     result = {
         "status": "SUCCESS",
@@ -382,7 +397,13 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         "AGENT_FINISHED",
         "INFO",
         "Agent Review 已完成并保存正式结果",
-        json.dumps(result["agentRunSummary"], ensure_ascii=False),
+        json.dumps(
+            {
+                **result["agentRunSummary"],
+                "claimAttempt": claim_attempt,
+            },
+            ensure_ascii=False,
+        ),
         review_key=run.review_key,
     )
     _finish_existing_review_flow(db, run, result)
@@ -391,18 +412,25 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
 
 
 def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any]:
+    claim_attempt = _required_claim_attempt(request)
     job, run = repository.get_run_for_completion(
         db,
         job_id=job_id,
         worker_id=_required(request, "workerId"),
         idempotency_key=_required(request, "idempotencyKey"),
+        claim_attempt=claim_attempt,
     )
     if run.status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
         return {"accepted": True, "idempotent": True, "run": repository.run_to_summary(run)}
     failure_code = str(request.get("failureCode") or "AGENT_RUN_FAILED")[:64]
     failure_message = str(request.get("failureMessage") or "Agent Review failed")[:1024]
     run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
-    _persist_agent_trace_safely(db, run, run_summary)
+    _persist_agent_trace_safely(
+        db,
+        run,
+        run_summary,
+        claim_attempt=claim_attempt,
+    )
     cancelled = failure_code == "AGENT_CANCELLED"
     repository.finish_agent_records(
         db,
@@ -421,7 +449,13 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
         "AGENT_CANCELLED" if cancelled else "AGENT_FALLBACK",
         "WARN" if not cancelled else "INFO",
         "Agent Review 已取消" if cancelled else "Agent Review 失败，准备执行普通 Review 降级",
-        json.dumps(repository.run_to_summary(run), ensure_ascii=False),
+        json.dumps(
+            {
+                **repository.run_to_summary(run),
+                "claimAttempt": claim_attempt,
+            },
+            ensure_ascii=False,
+        ),
         review_key=run.review_key,
     )
     db.commit()
@@ -456,6 +490,8 @@ def _persist_agent_trace_safely(
     db: Session,
     run: Any,
     run_summary: dict[str, Any],
+    *,
+    claim_attempt: int,
 ) -> None:
     if "audit" not in run_summary or not isinstance(run_summary.get("audit"), dict):
         return
@@ -469,23 +505,13 @@ def _persist_agent_trace_safely(
             task_id=int(locked_run.task_id),
             review_key=str(locked_run.review_key),
             run_id=int(locked_run.id),
+            claim_attempt=claim_attempt,
         )
         if 0 not in existing:
-            append_progress(
+            _append_agent_attempt_start(
                 db,
-                int(locked_run.task_id),
-                "AGENT_ANALYZING",
-                "INFO",
-                "Agent 正在分析代码变更",
-                json.dumps(
-                    {
-                        "runId": int(locked_run.id),
-                        "sequence": 0,
-                        "activity": "ANALYZING",
-                    },
-                    ensure_ascii=False,
-                ),
-                review_key=locked_run.review_key,
+                locked_run,
+                claim_attempt=claim_attempt,
             )
             existing.add(0)
         for event in audit.get("events") or []:
@@ -495,6 +521,7 @@ def _persist_agent_trace_safely(
             phase, message = _agent_trace_phase_and_message(event)
             detail = {
                 "runId": int(locked_run.id),
+                "claimAttempt": claim_attempt,
                 "sequence": sequence,
                 "activity": _AGENT_ACTIVITY_NAMES[str(event["tool"])],
                 "status": event["status"],
@@ -532,6 +559,7 @@ def _persist_agent_heartbeat_safely(
     run_summary: dict[str, Any],
     *,
     heartbeat_sequence: int | None,
+    claim_attempt: int,
 ) -> None:
     if heartbeat_sequence is None:
         return
@@ -544,6 +572,7 @@ def _persist_agent_heartbeat_safely(
             task_id=int(locked_run.task_id),
             review_key=str(locked_run.review_key),
             run_id=int(locked_run.id),
+            claim_attempt=claim_attempt,
         )
         if heartbeat_sequence in heartbeat_sequences:
             return
@@ -552,23 +581,13 @@ def _persist_agent_heartbeat_safely(
             task_id=int(locked_run.task_id),
             review_key=str(locked_run.review_key),
             run_id=int(locked_run.id),
+            claim_attempt=claim_attempt,
         )
         if 0 not in trace_sequences:
-            append_progress(
+            _append_agent_attempt_start(
                 db,
-                int(locked_run.task_id),
-                "AGENT_ANALYZING",
-                "INFO",
-                "Agent 正在分析代码变更",
-                json.dumps(
-                    {
-                        "runId": int(locked_run.id),
-                        "sequence": 0,
-                        "activity": "ANALYZING",
-                    },
-                    ensure_ascii=False,
-                ),
-                review_key=locked_run.review_key,
+                locked_run,
+                claim_attempt=claim_attempt,
             )
         audit = repository.sanitize_agent_audit(run_summary.get("audit"))
         effective_budgets = repository.run_to_summary(locked_run).get(
@@ -576,6 +595,7 @@ def _persist_agent_heartbeat_safely(
         )
         detail = {
             "runId": int(locked_run.id),
+            "claimAttempt": claim_attempt,
             "heartbeatSequence": heartbeat_sequence,
             "activity": "HEARTBEAT",
             "status": "RUNNING",
@@ -605,6 +625,48 @@ def _persist_agent_heartbeat_safely(
             getattr(run, "id", None),
             type(exception).__name__,
         )
+
+
+def _append_agent_attempt_start(
+    db: Session,
+    run: Any,
+    *,
+    claim_attempt: int,
+) -> None:
+    if claim_attempt > 1:
+        append_progress(
+            db,
+            int(run.task_id),
+            "AGENT_RECLAIMED",
+            "WARN",
+            "Agent 任务租约过期，已由可用 Worker 重新领取",
+            json.dumps(
+                {
+                    "runId": int(run.id),
+                    "claimAttempt": claim_attempt,
+                    "reasonCode": "LEASE_EXPIRED",
+                },
+                ensure_ascii=False,
+            ),
+            review_key=run.review_key,
+        )
+    append_progress(
+        db,
+        int(run.task_id),
+        "AGENT_ANALYZING",
+        "INFO",
+        "Agent 正在分析代码变更",
+        json.dumps(
+            {
+                "runId": int(run.id),
+                "claimAttempt": claim_attempt,
+                "sequence": 0,
+                "activity": "ANALYZING",
+            },
+            ensure_ascii=False,
+        ),
+        review_key=run.review_key,
+    )
 
 
 def _safe_heartbeat_sequence(value: Any) -> int | None:
@@ -808,4 +870,15 @@ def _required(request: dict[str, Any], field: str) -> str:
     value = str(request.get(field) or "").strip()
     if not value:
         raise AppError("VALIDATION_ERROR", f"{field} is required", 400)
+    return value
+
+
+def _required_claim_attempt(request: dict[str, Any]) -> int:
+    value = request.get("claimAttempt")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise AppError(
+            "VALIDATION_ERROR",
+            "claimAttempt must be a positive integer",
+            400,
+        )
     return value

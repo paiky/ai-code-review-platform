@@ -1,5 +1,7 @@
 from threading import Event
 
+import pytest
+
 from app.agent_review import worker
 from app.agent_review_spike.budgets import default_agent_budgets
 
@@ -78,6 +80,7 @@ def test_job_heartbeat_starts_immediately_and_carries_sequence_and_safe_audit(mo
         "token",
         "worker-1",
         7,
+        2,
         _OneShotStop(),
         Event(),
         latest,
@@ -86,11 +89,13 @@ def test_job_heartbeat_starts_immediately_and_carries_sequence_and_safe_audit(mo
     assert payloads == [
         {
             "workerId": "worker-1",
+            "claimAttempt": 2,
             "heartbeatSequence": 0,
             "runSummary": {"audit": _safe_audit()},
         },
         {
             "workerId": "worker-1",
+            "claimAttempt": 2,
             "heartbeatSequence": 1,
             "runSummary": {"audit": _safe_audit()},
         },
@@ -127,6 +132,7 @@ def test_worker_completion_carries_final_callback_snapshot(tmp_path, monkeypatch
         tmp_path,
         {
             "jobId": 8,
+            "claimAttempt": 1,
             "idempotencyKey": "agent:8",
             "worktree": "worktrees/8/head",
             "input": {},
@@ -137,6 +143,7 @@ def test_worker_completion_carries_final_callback_snapshot(tmp_path, monkeypatch
 
     path, payload = requests[-1]
     assert path == "/internal/agent-review/jobs/8/complete"
+    assert payload["claimAttempt"] == 1
     assert payload["runSummary"]["audit"] == _safe_audit()
 
 
@@ -189,6 +196,7 @@ def test_worker_rejects_invalid_internal_budget_contract(tmp_path, monkeypatch):
         tmp_path,
         {
             "jobId": 18,
+            "claimAttempt": 1,
             "idempotencyKey": "agent:18",
             "worktree": "worktrees/18/head",
             "input": {},
@@ -227,6 +235,7 @@ def test_worker_unexpected_error_logs_only_safe_type_and_location(
         tmp_path,
         {
             "jobId": 9,
+            "claimAttempt": 1,
             "idempotencyKey": "agent:9",
             "worktree": "worktrees/9/head",
             "input": {},
@@ -241,3 +250,45 @@ def test_worker_unexpected_error_logs_only_safe_type_and_location(
     assert "RuntimeError" in caplog.text
     assert "test_agent_review_worker.py" in caplog.text
     assert "SECRET_PROMPT_AND_SOURCE" not in caplog.text
+
+
+def test_worker_process_heartbeat_starts_immediately(monkeypatch):
+    payloads = []
+    monkeypatch.setattr(
+        worker,
+        "_post",
+        lambda _url, _token, path, payload: payloads.append((path, payload)) or {},
+    )
+
+    worker._worker_heartbeat_loop(
+        "http://backend",
+        "token",
+        "worker-process-1",
+        _OneShotStop(),
+    )
+
+    assert [path for path, _payload in payloads] == [
+        "/internal/agent-review/workers/heartbeat",
+        "/internal/agent-review/workers/heartbeat",
+    ]
+    assert all(
+        payload["workerId"] == "worker-process-1"
+        for _path, payload in payloads
+    )
+
+
+def test_worker_id_supports_explicit_and_hostname_derived_values(monkeypatch):
+    monkeypatch.setenv("AGENT_REVIEW_WORKER_ID", "local-worker-1")
+    assert worker._resolve_worker_id() == "local-worker-1"
+
+    monkeypatch.delenv("AGENT_REVIEW_WORKER_ID")
+    monkeypatch.setenv("AGENT_REVIEW_WORKER_ID_PREFIX", "pool")
+    monkeypatch.setattr(worker.socket, "gethostname", lambda: "container-abc")
+    assert worker._resolve_worker_id() == "pool-container-abc"
+
+
+def test_worker_id_rejects_unsafe_values(monkeypatch):
+    monkeypatch.setenv("AGENT_REVIEW_WORKER_ID", "worker/../../unsafe")
+
+    with pytest.raises(ValueError, match="letters, numbers"):
+        worker._resolve_worker_id()
