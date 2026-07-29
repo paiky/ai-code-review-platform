@@ -31,7 +31,7 @@ export function isAgentHeartbeatProgressEvent(event) {
 
 export function collectAgentTraceEvents(events) {
   const source = Array.isArray(events) ? events : [];
-  const latestScope = latestAgentScope(source);
+  const latestScope = getLatestAgentTraceScope(source);
   if (!latestScope) return [];
   const byKey = new Map();
   source
@@ -102,7 +102,7 @@ export function groupAgentTraceEvents(events) {
 
 export function summarizeAgentTrace(events, now = Date.now()) {
   const source = Array.isArray(events) ? events : [];
-  const latestScope = latestAgentScope(source);
+  const latestScope = getLatestAgentTraceScope(source);
   if (!latestScope) return null;
   const scoped = source.filter(event => {
     if (!isAgentTraceProgressEvent(event) && !isAgentHeartbeatProgressEvent(event)) {
@@ -238,7 +238,7 @@ export function formatAgentTraceDetail(detail, eventPhase = '') {
   return lines.join('\n');
 }
 
-function latestAgentScope(events) {
+export function getLatestAgentTraceScope(events) {
   const details = (Array.isArray(events) ? events : [])
     .filter(event => isAgentTraceProgressEvent(event) || isAgentHeartbeatProgressEvent(event))
     .map(event => parseDetail(event?.detail))
@@ -251,6 +251,13 @@ function latestAgentScope(events) {
       .map(scopeAttempt)
   );
   return { runId, claimAttempt };
+}
+
+export function isEventInAgentTraceScope(event, scope) {
+  if (!scope || (!isAgentTraceProgressEvent(event) && !isAgentHeartbeatProgressEvent(event))) {
+    return false;
+  }
+  return matchesScope(parseDetail(event?.detail), scope);
 }
 
 function scopeAttempt(detail) {

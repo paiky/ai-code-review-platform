@@ -9,6 +9,7 @@ import {
   Collapse,
   Descriptions,
   Divider,
+  Drawer,
   Dropdown,
   Empty,
   Input,
@@ -16,6 +17,7 @@ import {
   Layout,
   message,
   Modal,
+  Popover,
   Progress,
   Row,
   Segmented,
@@ -90,6 +92,21 @@ import {
   isAgentTraceProgressEvent,
   summarizeAgentTrace
 } from './agentReviewTrace.js';
+import {
+  buildReviewJourneys,
+  resolveReviewSelectionKey,
+  selectReviewJourneyEvents
+} from './reviewJourney.js';
+import {
+  buildReviewHeroModel,
+  buildStageAlertModel,
+  isReviewJourneyDismissKey,
+  isReviewStageActivationKey,
+  resolveOpenReviewJourneyStage,
+  reviewTimelineMode,
+  shouldAnimateReview,
+  visibleReviewJourneyStages
+} from './reviewJourneyPresentation.js';
 import {
   agentBudgetLimits,
   bytesToKilobytes,
@@ -4204,9 +4221,463 @@ function CodeQualityViewSwitcher({ value, onChange }) {
   );
 }
 
+const agentReviewAnimationRegistry = Object.freeze({
+  BRAIN: BrainReviewAnimation
+});
+
+function usePrefersReducedMotion() {
+  const [reducedMotion, setReducedMotion] = useState(() => (
+    typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ));
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReducedMotion(media.matches);
+    update();
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
+  return reducedMotion;
+}
+
+function reviewHeroStateMark(state) {
+  if (state === 'SUCCESS') return '✓';
+  if (state === 'FALLBACK') return '→';
+  if (state === 'FAILED') return '!';
+  if (state === 'CANCELLED') return '×';
+  if (state === 'SKIPPED') return '–';
+  return '•';
+}
+
+function BrainReviewAnimation({ state, reducedMotion, ariaLabel }) {
+  const animated = shouldAnimateReview({ state, reducedMotion });
+  return (
+    <div
+      className={`review-animation review-brain-animation review-animation-${String(state || 'history').toLowerCase()}${animated ? ' is-animated' : ' is-static'}`}
+      role="img"
+      aria-label={ariaLabel}
+    >
+      <svg viewBox="0 0 220 160" aria-hidden="true" focusable="false">
+        <circle className="review-brain-orbit" cx="100" cy="80" r="66" />
+        <path
+          className="review-brain-outline"
+          d="M99 41c-9-11-28-8-32 6-12-2-23 9-20 22-10 7-9 25 2 31-2 14 12 26 25 21 7 11 24 9 29-2"
+        />
+        <path
+          className="review-brain-outline"
+          d="M101 41c9-11 28-8 32 6 12-2 23 9 20 22 10 7 9 25-2 31 2 14-12 26-25 21-7 11-24 9-29-2"
+        />
+        <path className="review-brain-link" d="M64 66 88 78 67 97M136 63l-23 18 23 18M88 78l26 3M82 112l18-16 19 18" />
+        <circle className="review-brain-node node-one" cx="64" cy="66" r="4" />
+        <circle className="review-brain-node node-two" cx="88" cy="78" r="4" />
+        <circle className="review-brain-node node-three" cx="67" cy="97" r="4" />
+        <circle className="review-brain-node node-four" cx="114" cy="81" r="4" />
+        <circle className="review-brain-node node-five" cx="136" cy="63" r="4" />
+        <circle className="review-brain-node node-six" cx="136" cy="99" r="4" />
+        <circle className="review-brain-node node-seven" cx="82" cy="112" r="4" />
+        <circle className="review-brain-node node-eight" cx="119" cy="114" r="4" />
+        <path className="review-brain-transfer" d="M158 80h34m-10-10 10 10-10 10" />
+      </svg>
+      <span className="review-animation-state-mark" aria-hidden="true">
+        {reviewHeroStateMark(state)}
+      </span>
+    </div>
+  );
+}
+
+function AgentReviewAnimation({
+  style = 'BRAIN',
+  state,
+  subStage,
+  reducedMotion,
+  ariaLabel
+}) {
+  const Animation = agentReviewAnimationRegistry[style] || agentReviewAnimationRegistry.BRAIN;
+  return (
+    <Animation
+      state={state}
+      subStage={subStage}
+      reducedMotion={reducedMotion}
+      ariaLabel={ariaLabel}
+    />
+  );
+}
+
+function StandardReviewAnimation({ state, reducedMotion, ariaLabel }) {
+  const animated = shouldAnimateReview({ state, reducedMotion });
+  return (
+    <div
+      className={`review-animation review-provider-animation review-animation-${String(state || 'history').toLowerCase()}${animated ? ' is-animated' : ' is-static'}`}
+      role="img"
+      aria-label={ariaLabel}
+    >
+      <div className="review-provider-node" aria-hidden="true">P</div>
+      <div className="review-provider-flow" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </div>
+      <div className="review-provider-result" aria-hidden="true">
+        {reviewHeroStateMark(state)}
+      </div>
+    </div>
+  );
+}
+
+function ReviewStatusHero({ journey }) {
+  const reducedMotion = usePrefersReducedMotion();
+  const hero = buildReviewHeroModel(journey);
+  const currentStage = journey?.stages?.find(stage => stage.id === journey.currentStageId);
+  return (
+    <section
+      className={`review-status-hero review-status-hero-${hero.kind.toLowerCase()} review-status-${hero.state.toLowerCase()}`}
+      aria-labelledby={`review-hero-title-${journey?.selectorKey || 'history'}`}
+    >
+      <div className="review-status-visual">
+        {hero.kind === 'BRAIN' ? (
+          <AgentReviewAnimation
+            style={hero.style}
+            state={hero.state}
+            subStage={journey?.agentSummary?.phase || null}
+            reducedMotion={reducedMotion}
+            ariaLabel={hero.ariaLabel}
+          />
+        ) : (
+          <StandardReviewAnimation
+            state={hero.state}
+            reducedMotion={reducedMotion}
+            ariaLabel={hero.ariaLabel}
+          />
+        )}
+      </div>
+      <div className="review-status-copy">
+        <div className="review-status-kicker">
+          <Tag color={reviewJourneyEngineColor(journey?.engineKind)}>{hero.identity}</Tag>
+          <Tag color={reviewJourneyStatusColor(journey?.status)}>{journey?.statusLabel}</Tag>
+          {currentStage && <Tag>{currentStage.title}</Tag>}
+        </div>
+        <Title level={3} id={`review-hero-title-${journey?.selectorKey || 'history'}`}>
+          {hero.title}
+        </Title>
+        <Paragraph>{hero.description}</Paragraph>
+        <Tooltip title={hero.provider}>
+          <Text type="secondary" className="review-status-provider">{hero.provider}</Text>
+        </Tooltip>
+        {journey?.agentSummary?.lastHeartbeatAt && (
+          <Text type="secondary">
+            最近心跳：{formatDateTime(journey.agentSummary.lastHeartbeatAt)}
+          </Text>
+        )}
+        {journey?.agentSummary?.progressMayBeDelayed && (
+          <Alert
+            type="warning"
+            showIcon
+            message="Agent 进度数据可能延迟"
+            description="超过 45 秒未收到安全心跳；这不等同于 Agent 卡死。"
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function reviewJourneyStageStatusLabel(status) {
+  const labels = {
+    WAITING: '等待中',
+    ACTIVE: '执行中',
+    SUCCESS: '已完成',
+    WARNING: '有警告',
+    FAILED: '失败',
+    SKIPPED: '已跳过',
+    CANCELLED: '已取消'
+  };
+  return labels[status] || '历史任务未记录';
+}
+
+function reviewJourneyStageStatusColor(status) {
+  if (status === 'ACTIVE') return 'processing';
+  if (status === 'SUCCESS') return 'green';
+  if (status === 'WARNING') return 'orange';
+  if (status === 'FAILED') return 'red';
+  if (status === 'SKIPPED') return 'gold';
+  return 'default';
+}
+
+function formatJourneyDuration(durationMs) {
+  if (durationMs === null || durationMs === undefined || durationMs === '') return '-';
+  const value = Number(durationMs);
+  return Number.isFinite(value) && value >= 0 ? formatDuration(value / 1000) : '-';
+}
+
+function safeProgressLevelLabel(level) {
+  if (level === 'ERROR') return '错误';
+  if (level === 'WARN' || level === 'WARNING') return '警告';
+  if (level === 'DEBUG') return '调试';
+  return '记录';
+}
+
+function safeReviewErrorCode(value) {
+  const code = String(value || '').trim().toUpperCase();
+  return /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : null;
+}
+
+function StageAlertPopoverContent({ stage }) {
+  const alert = buildStageAlertModel(stage);
+  if (!alert) return null;
+  return (
+    <div className="review-stage-alert-content">
+      <Text strong>{alert.title}</Text>
+      <Text>{alert.reason}</Text>
+      <Text type="secondary">建议：{alert.action}</Text>
+    </div>
+  );
+}
+
+function ReviewStageDrawerContent({ journey, stage }) {
+  const advancedEvents = (Array.isArray(stage?.events) ? stage.events : [])
+    .filter(event => !event.auxiliary);
+  return (
+    <Space orientation="vertical" size="large" className="full-width review-stage-drawer-content">
+      <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+        <Descriptions.Item label="阶段状态">
+          <Tag color={reviewJourneyStageStatusColor(stage.status)}>
+            {reviewJourneyStageStatusLabel(stage.status)}
+          </Tag>
+        </Descriptions.Item>
+        <Descriptions.Item label="Review">{journey?.engineLabel || '历史任务未记录'}</Descriptions.Item>
+        <Descriptions.Item label="开始时间">{formatDateTime(stage.startedAt)}</Descriptions.Item>
+        <Descriptions.Item label="结束时间">{formatDateTime(stage.finishedAt)}</Descriptions.Item>
+        <Descriptions.Item label="真实耗时">{formatJourneyDuration(stage.durationMs)}</Descriptions.Item>
+      </Descriptions>
+      <Alert
+        type={stage.status === 'FAILED' ? 'error' : stage.status === 'WARNING' ? 'warning' : 'info'}
+        showIcon
+        message={stage.summary}
+        description={
+          stage.status === 'FAILED' || stage.status === 'WARNING'
+            ? stage.warningSummary
+            : '仅展示当前接口中可可靠验证的安全阶段记录。'
+        }
+      />
+      {journey?.engineKind === 'FALLBACK' && stage.id === 'terminal' && (
+        <div className="review-fallback-transfer" aria-label="Agent 向 Standard fallback 显式转交">
+          <span>Agent</span>
+          <strong aria-hidden="true">→</strong>
+          <span>Standard fallback</span>
+        </div>
+      )}
+      {stage.subStages.length > 0 && (
+        <section>
+          <Title level={5}>Agent 子阶段</Title>
+          <div className="review-agent-substages">
+            {stage.subStages.map(item => (
+              <div className={`review-agent-substage is-${item.status.toLowerCase()}`} key={item.id}>
+                <span>{item.title}</span>
+                <Tag color={reviewJourneyStageStatusColor(item.status)}>
+                  {reviewJourneyStageStatusLabel(item.status)}
+                </Tag>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      {stage.safeMetrics.length > 0 && (
+        <section>
+          <Title level={5}>安全摘要</Title>
+          <div className="review-stage-metrics">
+            {stage.safeMetrics.map(metric => (
+              <div className="review-stage-metric" key={metric.label}>
+                <Text type="secondary">{metric.label}</Text>
+                <Text strong>{metric.label === '最近心跳' ? formatDateTime(metric.value) : metric.value}</Text>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      <Collapse
+        className="review-stage-advanced"
+        items={[{
+          key: 'advanced',
+          label: `高级执行记录 (${advancedEvents.length})`,
+          children: advancedEvents.length === 0 ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可安全展示的高级执行记录" />
+          ) : (
+            <div className="review-stage-event-list">
+              {advancedEvents.map((event, index) => (
+                <div className="review-stage-event" key={`${event.id ?? 'event'}-${index}`}>
+                  <div>
+                    <Text strong>{event.safeLabel}</Text>
+                    <Space size={4} wrap>
+                      <Tag>{safeProgressLevelLabel(event.level)}</Tag>
+                      {event.shared && <Tag color="blue">本次调度共享</Tag>}
+                    </Space>
+                  </div>
+                  <Text type="secondary">{formatDateTime(event.createdAt)}</Text>
+                  <Text>{event.detailAvailable ? event.safeSummary : '详情不可用'}</Text>
+                </div>
+              ))}
+            </div>
+          )
+        }]}
+      />
+    </Space>
+  );
+}
+
+function ReviewJourneyTimeline({ journey }) {
+  const mode = reviewTimelineMode(journey);
+  const stages = visibleReviewJourneyStages(journey);
+  const [openStageId, setOpenStageId] = useState(null);
+  const [openAlertStageId, setOpenAlertStageId] = useState(null);
+  const stageButtonRefs = useRef(new Map());
+  const focusReturnStageIdRef = useRef(null);
+  const journeyKeyRef = useRef(journey?.selectorKey);
+  const openStage = resolveOpenReviewJourneyStage(journey, openStageId);
+  const stageSignature = stages.map(stage => stage.id).join('\u001f');
+
+  const closeDrawer = () => {
+    focusReturnStageIdRef.current = openStageId;
+    setOpenStageId(null);
+  };
+  const openDrawer = stageId => {
+    setOpenAlertStageId(null);
+    setOpenStageId(stageId);
+  };
+  useEffect(() => {
+    if (journeyKeyRef.current !== journey?.selectorKey) {
+      journeyKeyRef.current = journey?.selectorKey;
+      setOpenStageId(null);
+      setOpenAlertStageId(null);
+      focusReturnStageIdRef.current = null;
+      return;
+    }
+    if (openStageId && !resolveOpenReviewJourneyStage(journey, openStageId)) {
+      setOpenStageId(null);
+      focusReturnStageIdRef.current = null;
+    }
+    if (
+      openAlertStageId
+      && !stages.some(stage => stage.id === openAlertStageId)
+    ) {
+      setOpenAlertStageId(null);
+    }
+  }, [journey?.selectorKey, openStageId, openAlertStageId, stageSignature]);
+  useEffect(() => {
+    if (!openStageId && !openAlertStageId) return undefined;
+    const dismiss = event => {
+      if (!isReviewJourneyDismissKey(event.key)) return;
+      if (openAlertStageId) {
+        setOpenAlertStageId(null);
+        return;
+      }
+      closeDrawer();
+    };
+    window.addEventListener('keydown', dismiss);
+    return () => window.removeEventListener('keydown', dismiss);
+  }, [openStageId, openAlertStageId]);
+
+  if (stages.length === 0) return null;
+
+  return (
+    <section className={`review-journey-timeline review-journey-${mode.toLowerCase()}`}>
+      <div className="review-journey-heading">
+        <div>
+          <Text strong>{mode === 'FULL' ? '统一 Review 进度' : 'Review 阶段回顾'}</Text>
+          <Text type="secondary">
+            {mode === 'FULL' ? '点击阶段查看当前安全详情' : '结果优先展示，阶段仍可点击回看'}
+          </Text>
+        </div>
+        <Tag>{mode === 'FULL' ? '完整时间轴' : '紧凑时间轴'}</Tag>
+      </div>
+      <ol className="review-journey-stages" aria-label="Review 六阶段进度">
+        {stages.map((stage, index) => {
+          const alert = buildStageAlertModel(stage);
+          return (
+            <li className={`review-journey-stage is-${stage.status.toLowerCase()}`} key={stage.id}>
+              <button
+                type="button"
+                className="review-journey-stage-trigger"
+                ref={node => {
+                  if (node) stageButtonRefs.current.set(stage.id, node);
+                  else stageButtonRefs.current.delete(stage.id);
+                }}
+                aria-current={stage.status === 'ACTIVE' ? 'step' : undefined}
+                aria-label={`${stage.title}，${reviewJourneyStageStatusLabel(stage.status)}`}
+                onClick={() => openDrawer(stage.id)}
+                onKeyDown={event => {
+                  if (!isReviewStageActivationKey(event.key)) return;
+                  event.preventDefault();
+                  openDrawer(stage.id);
+                }}
+              >
+                <span className="review-journey-stage-index" aria-hidden="true">{index + 1}</span>
+                <span className="review-journey-stage-copy">
+                  <strong>{stage.title}</strong>
+                  <small>{reviewJourneyStageStatusLabel(stage.status)}</small>
+                </span>
+              </button>
+              {alert && (
+                <Popover
+                  trigger="click"
+                  open={openAlertStageId === stage.id}
+                  onOpenChange={open => setOpenAlertStageId(open ? stage.id : null)}
+                  content={<StageAlertPopoverContent stage={stage} />}
+                  placement="bottom"
+                >
+                  <button
+                    type="button"
+                    className="review-stage-alert-trigger"
+                    aria-label={`查看${stage.title}告警摘要`}
+                    aria-expanded={openAlertStageId === stage.id}
+                    onClick={event => event.stopPropagation()}
+                  >
+                    !
+                  </button>
+                </Popover>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      <Drawer
+        className="review-stage-drawer"
+        rootClassName="review-stage-drawer-root"
+        title={openStage?.title || '阶段详情'}
+        size="min(880px, 100vw)"
+        open={Boolean(openStage)}
+        keyboard
+        onClose={closeDrawer}
+        afterOpenChange={open => {
+          if (open) return;
+          const stageId = focusReturnStageIdRef.current;
+          focusReturnStageIdRef.current = null;
+          window.requestAnimationFrame(() => stageButtonRefs.current.get(stageId)?.focus());
+        }}
+      >
+        {openStage && <ReviewStageDrawerContent journey={journey} stage={openStage} />}
+      </Drawer>
+    </section>
+  );
+}
+
+function ReviewJourneyExperience({ journey }) {
+  if (!journey) return null;
+  return (
+    <Space orientation="vertical" size="middle" className="full-width review-journey-experience">
+      <ReviewStatusHero journey={journey} />
+      <ReviewJourneyTimeline journey={journey} />
+    </Space>
+  );
+}
+
 function CodeQualityReviewView({
   taskId,
   review,
+  journey,
   progress,
   changedFilesSummary,
   diffContextCapabilities,
@@ -4325,16 +4796,16 @@ function CodeQualityReviewView({
   };
   const resultContent = (
     <Space direction="vertical" size="large" className="full-width">
+      {journey?.running && <ReviewJourneyExperience journey={journey} />}
       <Card>
         <Space direction="vertical" size="small" className="full-width">
           <div className="quality-result-head">
             <Space wrap>
-              <Tag color={statusColor(review.status)}>{review.status || '-'}</Tag>
+              <Tag color={reviewJourneyStatusColor(journey?.status)}>{journey?.statusLabel || '历史任务未记录'}</Tag>
               <Tag color="blue">{review.provider || '-'}</Tag>
               {review.model && <Tag>{review.model}</Tag>}
-              <Tag color={requestedEngine === 'AGENT' ? 'purple' : 'default'}>请求 {requestedEngine}</Tag>
-              <Tag color={effectiveEngine === 'AGENT' ? 'purple' : effectiveEngine === 'STANDARD_FALLBACK' ? 'orange' : 'default'}>
-                实际 {effectiveEngine}
+              <Tag color={reviewJourneyEngineColor(journey?.engineKind)}>
+                {journey?.engineLabel || '历史任务未记录'}
               </Tag>
               {review.overallLevel && <Tag color={riskColor(review.overallLevel)}>{severityLabel(review.overallLevel)}</Tag>}
               <Tag>{review.findingCount ?? findings.length} 个问题</Tag>
@@ -4368,19 +4839,35 @@ function CodeQualityReviewView({
               </Button>
             </Space>
           </div>
-          <Alert type={findings.length > 0 ? 'warning' : 'info'} showIcon message={summaryText} />
-          {review.status === 'RUNNING' && <Alert type="info" showIcon message="AI Review 正在执行" description="模型 Provider 正在分析代码变更，完成后结果会自动刷新。" />}
-          {review.errorMessage && review.status === 'SKIPPED' && <Alert type="warning" showIcon message="AI Review 未执行" description={review.errorMessage} />}
-          {review.errorMessage && review.status !== 'SKIPPED' && <Alert type="error" showIcon message="AI Review 执行失败" description={review.errorMessage} />}
+          <Alert
+            type={findings.length > 0 && !journey?.running ? 'warning' : 'info'}
+            showIcon
+            message={journey?.running ? 'Review 正在执行，正式结果尚未生成' : summaryText}
+          />
+          {journey?.status === 'QUEUED' && <Alert type="info" showIcon message="AI Review 正在排队" description="任务已进入调度队列，执行状态会自动刷新。" />}
+          {journey?.status === 'RUNNING' && <Alert type="info" showIcon message="AI Review 正在执行" description="模型 Provider 正在分析代码变更，完成后结果会自动刷新。" />}
+          {journey?.status === 'SKIPPED' && (
+            <Alert
+              type="warning"
+              showIcon
+              message="AI Review 未执行"
+              description="本次 Review 已跳过；历史记录不足时不会补造具体原因。"
+            />
+          )}
+          {journey?.status === 'FAILED' && (
+            <Alert
+              type="error"
+              showIcon
+              message="AI Review 执行失败"
+              description="本次 Review 没有成功完成，可查看统一时间轴中的固定安全摘要。"
+            />
+          )}
           {reviewCoverage && (
             <Alert
               type="warning"
               showIcon
               message={reviewCoverage.includedFileCount > 0 ? '部分敏感文件已隔离，其余文件继续 Agent Review' : '全部变更文件已按敏感路径策略安全跳过'}
-              description={[
-                `总文件 ${reviewCoverage.totalChangedFileCount}，Agent 审查 ${reviewCoverage.includedFileCount}，排除 ${reviewCoverage.excludedFileCount}`,
-                reviewCoverage.excludedPaths.length > 0 ? `排除路径：${reviewCoverage.excludedPaths.join('、')}` : null
-              ].filter(Boolean).join('；')}
+              description={`总文件 ${reviewCoverage.totalChangedFileCount}，Agent 审查 ${reviewCoverage.includedFileCount}，排除 ${reviewCoverage.excludedFileCount}`}
             />
           )}
           {effectiveEngine === 'STANDARD_FALLBACK' && (
@@ -4388,13 +4875,18 @@ function CodeQualityReviewView({
               type="warning"
               showIcon
               message="本次 Agent Review 已降级为普通 Review"
-              description={agentRunSummary?.failureMessage || agentRunSummary?.failureCode || 'Agent Worker 或执行链路不可用'}
+              description={[
+                'Agent 未形成有效终态，任务已按既有策略由 Standard Review 接管。',
+                safeReviewErrorCode(agentRunSummary?.failureCode)
+                  ? `错误码：${safeReviewErrorCode(agentRunSummary.failureCode)}`
+                  : null
+              ].filter(Boolean).join(' ')}
             />
           )}
           <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
             <Descriptions.Item label="Profile">{review.profileCode || '-'}</Descriptions.Item>
-            <Descriptions.Item label="请求引擎">{requestedEngine}</Descriptions.Item>
-            <Descriptions.Item label="实际引擎">{effectiveEngine}</Descriptions.Item>
+            <Descriptions.Item label="请求引擎">{journey?.requestedEngine || '历史任务未记录'}</Descriptions.Item>
+            <Descriptions.Item label="实际引擎">{journey?.effectiveEngine || '历史任务未记录'}</Descriptions.Item>
             <Descriptions.Item label="开始时间">{formatDateTime(review.startedAt)}</Descriptions.Item>
             <Descriptions.Item label="结束时间">{formatDateTime(review.finishedAt)}</Descriptions.Item>
             <Descriptions.Item label="Exit Code">{review.exitCode ?? '-'}</Descriptions.Item>
@@ -4405,7 +4897,8 @@ function CodeQualityReviewView({
           </Descriptions>
         </Space>
       </Card>
-      <Card title="质量问题">
+      {!journey?.running && <ReviewJourneyExperience journey={journey} />}
+      {!journey?.running && <Card title="质量问题">
         {findings.length === 0 ? (
           <Empty description="暂无结构化问题" />
         ) : (
@@ -4509,7 +5002,7 @@ function CodeQualityReviewView({
             })}
           />
         )}
-      </Card>
+      </Card>}
     </Space>
   );
 
@@ -4521,7 +5014,7 @@ function CodeQualityReviewView({
       {qualityView === 'progress' && (
         <CodeQualityProgressView
           progress={progress}
-          running={review.status === 'RUNNING'}
+          running={journey?.running ?? review.status === 'RUNNING'}
           reviewStartedAt={review.startedAt}
           reviewFinishedAt={review.finishedAt}
         />
@@ -4543,17 +5036,36 @@ function CodeQualityReviewView({
   );
 }
 
-function codeQualityReviewTabLabel(review) {
-  const requestedEngine = String(review?.requestedEngine || 'STANDARD').toUpperCase();
-  const effectiveEngine = String(review?.effectiveEngine || requestedEngine).toUpperCase();
-  const providerLabel = sourceLabel(review?.provider);
-  const standardLabel = providerLabel && providerLabel !== '-'
-    ? providerLabel
-    : review?.displayName || review?.model || '普通 Review';
-  if (requestedEngine === 'AGENT') {
-    return effectiveEngine === 'STANDARD_FALLBACK' ? `${standardLabel}（Agent 降级）` : 'Agent Review';
-  }
-  return standardLabel;
+function reviewJourneyStatusColor(status) {
+  if (status === 'QUEUED') return 'blue';
+  if (status === 'RUNNING') return 'processing';
+  if (status === 'SUCCESS') return 'green';
+  if (status === 'FAILED') return 'red';
+  if (status === 'CANCELLED') return 'default';
+  if (status === 'SKIPPED') return 'gold';
+  return 'default';
+}
+
+function reviewJourneyEngineColor(engineKind) {
+  if (engineKind === 'AGENT') return 'purple';
+  if (engineKind === 'FALLBACK') return 'orange';
+  if (engineKind === 'STANDARD') return 'blue';
+  return 'default';
+}
+
+function ReviewSelectorIdentity({ journey, compact = false }) {
+  if (!journey) return null;
+  return (
+    <div className={`review-selector-identity${compact ? ' review-selector-identity-compact' : ''}`}>
+      <div className="review-selector-identity-main">
+        <Tag color={reviewJourneyEngineColor(journey.engineKind)}>{journey.engineLabel}</Tag>
+        <Tag color={reviewJourneyStatusColor(journey.status)}>{journey.statusLabel}</Tag>
+      </div>
+      <Tooltip title={journey.providerModelLabel}>
+        <span className="review-selector-provider-model">{journey.providerModelLabel}</span>
+      </Tooltip>
+    </div>
+  );
 }
 
 function CodeQualityReviewsPanel({
@@ -4572,52 +5084,101 @@ function CodeQualityReviewsPanel({
   onCancelFixPreview
 }) {
   const reviewItems = Array.isArray(reviews) ? reviews : [];
-  const requestedReviewKey = reviewItems.some(review => review.reviewKey === selectedReviewKey)
-    ? selectedReviewKey
-    : undefined;
+  const journeys = buildReviewJourneys(reviewItems, progress);
+  const selectionKeys = journeys.map(item => item.selectorKey).join('\u001f');
+  const urlSelectionKey = journeys.find(item => item.reviewKey === selectedReviewKey)?.selectorKey || null;
+  const [activeReviewKey, setActiveReviewKey] = useState(() => (
+    resolveReviewSelectionKey(journeys, {
+      requestedReviewKey: selectedReviewKey,
+      preferRequested: true
+    })
+  ));
+  const reviewSelectionTaskRef = useRef(taskId);
+  useEffect(() => {
+    const taskChanged = reviewSelectionTaskRef.current !== taskId;
+    reviewSelectionTaskRef.current = taskId;
+    setActiveReviewKey(current => resolveReviewSelectionKey(journeys, {
+      requestedReviewKey: selectedReviewKey,
+      currentSelectionKey: taskChanged ? null : current,
+      preferRequested: Boolean(urlSelectionKey)
+    }));
+  }, [taskId, selectedReviewKey, urlSelectionKey]);
+  useEffect(() => {
+    setActiveReviewKey(current => resolveReviewSelectionKey(journeys, {
+      currentSelectionKey: current,
+      preferRequested: false
+    }));
+  }, [selectionKeys]);
+  const displayedActiveReviewKey = journeys.some(item => item.selectorKey === activeReviewKey)
+    ? activeReviewKey
+    : journeys[0]?.selectorKey;
   if (reviewItems.length <= 1) {
     const review = reviewItems[0] || null;
+    const journey = journeys[0] || null;
+    const scopedProgress = review
+      ? selectReviewJourneyEvents(review, progress)
+      : progress;
     return (
-      <CodeQualityReviewView
-        taskId={taskId}
-        review={review}
-        progress={progress}
-        changedFilesSummary={changedFilesSummary}
-        diffContextCapabilities={diffContextCapabilities}
-        initialFixPreviews={fixPreviews}
-        triggerType={triggerType}
-        onRefresh={onRefresh}
-        onRetry={onRetry}
-        retrying={retrying}
-        onCancelReview={onCancelReview}
-        onCancelFixPreview={onCancelFixPreview}
-      />
+      <Space direction="vertical" size="middle" className="full-width">
+        <ReviewSelectorIdentity journey={journey} />
+        <CodeQualityReviewView
+          taskId={taskId}
+          review={review}
+          journey={journey}
+          progress={scopedProgress}
+          changedFilesSummary={changedFilesSummary}
+          diffContextCapabilities={diffContextCapabilities}
+          initialFixPreviews={fixPreviews}
+          triggerType={triggerType}
+          onRefresh={onRefresh}
+          onRetry={onRetry}
+          retrying={retrying}
+          onCancelReview={onCancelReview}
+          onCancelFixPreview={onCancelFixPreview}
+        />
+      </Space>
     );
   }
   return (
-    <Tabs
-      defaultActiveKey={requestedReviewKey}
-      items={reviewItems.map((review, index) => ({
-        key: review.reviewKey || String(review.id || index),
-        label: codeQualityReviewTabLabel(review),
-        children: (
-          <CodeQualityReviewView
-            taskId={taskId}
-            review={review}
-            progress={(progress || []).filter(item => review.reviewKey ? item.reviewKey === review.reviewKey : !item.reviewKey)}
-            changedFilesSummary={changedFilesSummary}
-            diffContextCapabilities={diffContextCapabilities}
-            initialFixPreviews={(fixPreviews || []).filter(item => item.reviewKey === review.reviewKey)}
-            triggerType={triggerType}
-            onRefresh={onRefresh}
-            onRetry={onRetry}
-            retrying={retrying}
-            onCancelReview={onCancelReview}
-            onCancelFixPreview={onCancelFixPreview}
-          />
-        )
-      }))}
-    />
+    <Space direction="vertical" size="small" className="full-width">
+      <div className="review-selector-heading">
+        <Tag color="geekblue">多模型 Review</Tag>
+        <Text type="secondary">{reviewItems.length} 个独立结果，按 Review Key 隔离</Text>
+      </div>
+      <Tabs
+        className="review-selector-tabs"
+        activeKey={displayedActiveReviewKey}
+        onChange={setActiveReviewKey}
+        items={reviewItems.map((review, index) => {
+          const journey = journeys[index];
+          return {
+            key: journey.selectorKey,
+            label: <ReviewSelectorIdentity journey={journey} compact />,
+            children: (
+              <CodeQualityReviewView
+                taskId={taskId}
+                review={review}
+                journey={journey}
+                progress={selectReviewJourneyEvents(review, progress, {
+                  allowUnscopedCompatibility: false
+                })}
+                changedFilesSummary={changedFilesSummary}
+                diffContextCapabilities={diffContextCapabilities}
+                initialFixPreviews={review.reviewKey
+                  ? (fixPreviews || []).filter(item => item.reviewKey === review.reviewKey)
+                  : []}
+                triggerType={triggerType}
+                onRefresh={onRefresh}
+                onRetry={onRetry}
+                retrying={retrying}
+                onCancelReview={onCancelReview}
+                onCancelFixPreview={onCancelFixPreview}
+              />
+            )
+          };
+        })}
+      />
+    </Space>
   );
 }
 

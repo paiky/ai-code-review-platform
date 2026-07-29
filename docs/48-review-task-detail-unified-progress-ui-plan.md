@@ -2,7 +2,8 @@
 
 ## 1. 状态与目标
 
-- 文档状态：计划已确认，等待按阶段实施。
+- 文档状态：阶段一“统一 ReviewJourney 模型与 Review 身份”已由用户确认；阶段二
+  “进度 Hero、统一时间轴与动画”已完成本地实现、自动化和浏览器验收，等待用户确认；阶段三未开始。
 - 关联文档：
   - `docs/38-review-lifecycle-and-frontend-entrypoints.md`：当前 Review 生命周期与任务详情入口。
   - `docs/39-review-accuracy-and-material-ui-roadmap.md`：任务详情 MUI 外层框架和全站视觉原则。
@@ -126,14 +127,16 @@
 | 条件 | 页面名称 | 主色 |
 | --- | --- | --- |
 | `requestedEngine=AGENT` 且 `effectiveEngine=AGENT` | Agent Review | 紫蓝 |
-| `requestedEngine=AGENT` 且 `effectiveEngine=STANDARD_FALLBACK` | Agent → Standard fallback | 橙色 |
-| `requestedEngine=STANDARD` | 普通 Review | 蓝灰 |
-| 字段缺失的旧任务 | 普通 Review（历史） | 中性灰 |
+| `requestedEngine=AGENT` 且 `effectiveEngine=STANDARD_FALLBACK` | Agent -> Standard fallback | 橙色 |
+| `requestedEngine=STANDARD` 且 `effectiveEngine=STANDARD` | Standard Review | 蓝灰 |
+| 引擎字段缺失、未知或无法可靠配对的旧任务 | 历史任务未记录 | 中性灰 |
 
 - `requestedEngine` 表示用户或项目策略要求的引擎。
 - `effectiveEngine` 表示最终实际引擎，不允许用 Provider 名称反推 Agent。
 - Provider、model 和 displayName 只用于补充说明，不覆盖引擎身份。
 - fallback 结果不得显示为“Agent 成功”；时间轴必须保留 Agent 失败或不可用和 Standard 接管两个阶段。
+- 同一任务存在多个 Review 时，选择器组身份显示为“多模型 Review”；每个选项仍按自己的
+  `reviewKey` 展示上述单 Review 身份，不把多模型误当成新的执行引擎。
 
 ## 6. 前端内部 ReviewJourney 模型
 
@@ -537,9 +540,163 @@ assistant 原文、模型原文、模型推理、API Key、query hash 或 path h
 - 纯函数测试和 frontend production build 通过后停止；
 - 不继续阶段二，等待用户检查 Review 身份和选择器。
 
+#### 阶段一实施设计与数据边界（2026-07-29）
+
+实施状态：本地实现、纯函数测试、production build 和脱敏 diff 审计已完成，当前停止等待用户验收。
+
+前端内部固定生成六个 `ReviewJourneyStage`，未取得可靠证据的阶段保留在模型中但
+`visible=false`、`status=WAITING`，不得仅凭经验补造阶段：
+
+| 阶段 ID | 标题 | 可靠数据来源 |
+| --- | --- | --- |
+| `scheduling` | 排队与调度 | `QUEUED / AGENT_QUEUED / STARTED / REQUEST_BUILT / PROVIDER_SELECTED / REQUEST_VALIDATED` |
+| `preflight` | 确定性预检 | `DETERMINISTIC_PRECHECK_STARTED / COMPLETED / FAILED / REUSED` |
+| `context` | 上下文准备 | `CONTEXT_PACK_BUILT / LOCAL_REPO_PREPARED / LOCAL_REPO_PREPARE_FAILED / LOCAL_CONTEXT_RETRIEVED / LOCAL_CONTEXT_RETRIEVE_FAILED` |
+| `model-review` | 模型 Review | 最新 Agent `runId + claimAttempt` 轨迹，或 Standard Provider request / response / failed 事件 |
+| `parse-save` | 解析与保存 | 输出提取、JSON 解析、Provider parsed、保存开始 / 成功 / 失败事件 |
+| `terminal` | 成功、失败、取消或 fallback 终态 | Review 主状态与 `AGENT_FINISHED / AGENT_FALLBACK / AGENT_FALLBACK_QUEUED / AGENT_CANCELLED / FINISHED / FAILED / JOB_INTERRUPTED` |
+
+阶段状态只允许
+`WAITING / ACTIVE / SUCCESS / WARNING / FAILED / SKIPPED / CANCELLED`。Review 主状态与选择器状态标签
+按以下规则归一：
+
+| 后端证据 | Journey / 选择器状态 |
+| --- | --- |
+| 只有 `QUEUED / AGENT_QUEUED`，尚无执行事件 | `QUEUED / 排队中` |
+| `RUNNING` 且已有执行事件 | `RUNNING / 运行中` |
+| `SUCCESS / COMPLETED` | `SUCCESS / 已完成` |
+| `FAILED` | `FAILED / 失败` |
+| `CANCELLED / CANCELED`，或存在 `AGENT_CANCELLED / JOB_INTERRUPTED` | `CANCELLED / 已取消` |
+| `SKIPPED` 且没有取消证据 | `SKIPPED / 已跳过` |
+| 状态缺失或未知 | `UNKNOWN / 历史任务未记录` |
+
+事件与兼容边界：
+
+- 有 `reviewKey` 的 Review 只读取完全相同 key 的事件；另外只合并 task-level
+  `DETERMINISTIC_PRECHECK_STARTED / COMPLETED / FAILED`，并在内部标记为本次调度共享。
+- `DETERMINISTIC_PRECHECK_REUSED` 必须带当前 `reviewKey` 才能进入该 Journey；其它
+  `reviewKey=null` 事件不得混入有 key 的 Review。
+- 单个缺失 `reviewKey` 的历史 Review 只使用无 key 的兼容事件；同一响应出现多个缺失 key 的结果时，
+  不复用这些无法可靠归属的事件，避免不同结果互相污染。
+- Agent 阶段复用现有 `runId + claimAttempt` 规则，只采用最大 `runId` 下最大的
+  `claimAttempt`；接管前的旧 attempt 不进入当前 Journey。缺失 attempt 的旧事件按 `0` 兼容。
+- 事件数组乱序时按有效事件时间和稳定事件 ID 派生当前阶段；损坏 detail 不参与字段展示，也不能改变
+  Review 主状态。Journey 阶段事件只保留 `id / reviewKey / phase / level / createdAt / shared` 安全引用。
+- 时间缺失、无效或晚于当前时间时保持 `null`；只有一个有效时间点、结束早于开始或 Review 尚未结束时，
+  不计算耗时。不得生成百分比、预计剩余时间或模型思考过程。
+- `requestedEngine / effectiveEngine` 任一缺失、未知或组合不可靠时显示“历史任务未记录”，不从 Provider、
+  model、事件名称或 reviewKey 反推引擎；缺少阶段事件时所有阶段保持不可见，不用结果状态补造旧任务阶段。
+- Provider/model 仅作为选择器补充标识；缺失时显示“Provider/model 未记录”，不补造默认 Provider 或模型。
+- 选择器使用稳定内部 key；`?reviewKey=` 首次或参数变化时优先命中目标，轮询只更新数据。只要当前 key
+  仍存在就保持用户选择；当前 key 消失时才回退到第一项。
+- 本阶段保留现有高准确模式、确定性检查、Finding、Diff、Patch、补证据、反馈、评估样本、重试、
+  中断和轮询入口；不实现 Hero、动画、统一时间轴视觉、Drawer 或 Popover。
+
+#### 阶段一实施结果（2026-07-29）
+
+- 改了什么：
+  - 新增 `frontend/src/reviewJourney.js`，落地六阶段、七种阶段状态、Review 身份、主状态、时间、
+    安全事件引用和当前阶段纯函数模型。
+  - 复用 `agentReviewTrace.js` 的最新 `runId + claimAttempt` 作用域，租约接管后只把最新 attempt
+    纳入 Journey。
+  - 任务详情单 Review 增加紧凑身份栏；多 Review 选择器固定展示引擎身份、Provider/model 和状态，
+    组身份显示“多模型 Review”。
+  - 多 Review Tabs 改为受控选择：URL 参数首次命中或参数变化时直达；轮询、状态变化和列表重排保持
+    当前选择；当前 key 消失时才回退。切换到其它任务时不沿用上一任务选择。
+  - 现有 Review 子视图接收按 key 隔离后的 progress；只额外合并 task-level AUTO_PREFLIGHT 白名单事件。
+    多个缺失 key 的旧结果不共享无法归属的 progress 或 fix preview。
+- 为什么：把 Review 身份、状态和事件边界从页面条件分支中抽成可测试的统一数据层，为阶段二时间轴提供
+  唯一数据源，同时先解决多模型串线、历史任务误标和轮询重置选择的问题。
+- 实际测试：
+  - `node --test frontend/tests/*.test.mjs`：`26 passed, 0 failed`。
+  - 覆盖 Agent / Standard 的 queued、running、success、failed、cancelled、skipped，Agent fallback，
+    多 reviewKey 隔离、URL 直达、轮询选择保持、task-level AUTO_PREFLIGHT 合并、最新 attempt、历史字段、
+    缺失/未来时间、损坏 detail、乱序事件和多缺失 key 安全回退。
+  - `scripts\run-frontend.cmd build`：通过；Vite `3525 modules transformed`，只保留既有
+    `chunk larger than 500 kB` 提示。
+  - `git diff --check`：通过；阶段一安全禁显字段审计通过，阶段事件不保留 raw detail/message。
+- 遗留风险：
+  - 阶段一按计划未做浏览器截图或真实 Backend 数据验收；需要人工检查长 Provider/model、多结果横向滚动
+    和实际轮询期间的选择保持。
+  - Standard 手动中断由 `SKIPPED + JOB_INTERRUPTED` 识别为取消；旧任务若缺失中断事件，只能安全显示
+    “已跳过”，不会根据错误文案猜测取消。
+  - 同一响应若包含多个缺失 `reviewKey` 的旧结果，Journey 主动隐藏无法归属的 progress 和 fix preview；
+    这是防串线降级，历史执行过程可能因此少展示。
+  - 阶段状态和时间目前只作为内部模型及身份/选择器数据源，阶段二前不渲染统一时间轴。
+- 阶段二前置条件：
+  - 用户人工确认 Agent、Standard、fallback、历史和多模型身份文案符合预期。
+  - 用户确认 `?reviewKey=` 直达、手动切换后轮询保持、当前 key 消失回退三种选择行为。
+  - 用户明确回复“继续下一阶段”后，才允许实施阶段二 Hero、统一时间轴、动画、Drawer 和 Popover；
+    未确认前不得进入阶段二、部署、执行真实 Agent Review 或 Run 18。
+
 ### 阶段二：进度 Hero、统一时间轴与动画
 
 前置条件：用户确认阶段一。
+
+#### 阶段二实施设计、组件契约与兼容边界（2026-07-29）
+
+实施状态：本地实现、自动化、production build、三档响应式浏览器验收和脱敏 diff 审计已完成，
+当前停止等待用户确认；真实 Backend 和远程部署验证按用户要求延后。
+
+阶段二继续把 `ReviewJourney` 作为 Hero、时间轴、Popover 和 Drawer 的唯一阶段数据源。允许在
+Journey 内新增以下白名单派生展示字段，但不得把原始 `detail / message` 透传给新组件：
+
+```text
+ReviewJourney
+  hero
+    kind                 BRAIN | PROVIDER | HISTORICAL
+    state                QUEUED | ANALYZING | EVIDENCE | CONVERGING | SUBMITTING
+                         | SUCCESS | FALLBACK | FAILED | CANCELLED | SKIPPED | HISTORY
+    title
+    description
+    ariaLabel
+  agentSummary           最新 runId + claimAttempt 的心跳与预算白名单摘要，或 null
+  timelineMode           FULL | COMPACT
+
+ReviewJourneyStage
+  safeSummary
+  warningSummary
+  suggestedAction
+  safeMetrics[]
+  subStages[]
+  events[]
+    id / phase / level / createdAt / shared / auxiliary
+    safeLabel / safeSummary / detailAvailable
+```
+
+`AgentReviewAnimation` 组件契约固定接收
+`style / state / subStage / reducedMotion / ariaLabel`。阶段二注册表只包含 `BRAIN`，默认实现使用代码内
+SVG/CSS；布局组件不得直接依赖大脑 SVG 的内部节点。Standard 使用独立 Provider 数据流图形并复用相同
+Hero 外壳，不进入 Agent 动画注册表。任何未知风格、损坏数据或动画渲染降级都只回退为静态状态图形，
+不得改变 Journey 主状态。
+
+页面组合规则：
+
+- `QUEUED / RUNNING`：Hero 位于结果内容之前，随后渲染完整时间轴；运行中不再把“暂无结构化问题”
+  作为首屏结论。
+- `SUCCESS / FAILED / CANCELLED / SKIPPED`：继续先渲染原结果摘要和现有操作，再渲染紧凑可点击时间轴，
+  Finding、Diff、Patch、补证据、反馈和评估样本顺序与语义不变。
+- 阶段节点只渲染 `visible=true` 的 Journey 阶段；历史任务没有可靠事件时不补造节点。完整与紧凑模式
+  共享同一阶段数据和点击行为。
+- Drawer 的打开状态按当前 `reviewKey + stageId` 保存。轮询只更新内容；只要当前 Review 和阶段仍存在，
+  Drawer 保持打开。reviewKey 消失时沿用阶段一回退选择，阶段消失时安全关闭。
+- Drawer 关闭后把焦点返回触发它的阶段节点；Enter / Space 打开节点，Escape 关闭 Drawer 或 Popover。
+  WARNING / FAILED 感叹号使用独立按钮并阻止事件冒泡，节点主体仍只负责打开 Drawer。
+- 桌面时间轴横向展示；`390px` 窄屏切换为纵向。Drawer 桌面宽度为 `min(880px, 100vw)`，窄屏全屏。
+  `prefers-reduced-motion: reduce` 关闭位移、闪烁和循环脉冲。
+
+安全与临时兼容边界：
+
+- 新 Hero、时间轴、Popover 和 Drawer 只展示固定文案、枚举、合法时间、非负数字、Agent 最新
+  `runId / claimAttempt`、Backend 心跳时间和既有预算白名单；损坏 detail 只显示“详情不可用”。
+- 不展示 Prompt、查询、工具参数、源码、diff、路径、Worker ID、容器、网络地址、异常原文、assistant
+  原文、模型原文、模型推理、Key、query hash 或 path hash；不展示百分比或预计剩余时间。
+- fallback 使用 Journey 身份和固定阶段文案表达 Agent 向 Standard 的显式转交，不读取或显示
+  `failureMessage`、异常正文或基础设施描述。
+- Agent 子阶段与高级执行记录只使用 `agentReviewTrace.js` 的最新 attempt 白名单格式化结果；
+  `AGENT_HEARTBEAT` 只进入最新心跳和预算摘要，不作为独立时间轴节点。
+- 阶段二继续保留“AI Review 结果 / 高准确模式流转 / 执行过程”旧分段导航和顶层“确定性检查”Tab；
+  不把手动检查、高准确详情或旧调试内容正式迁入 Drawer。入口删除和信息架构收口只允许在阶段三实施。
 
 目标：
 
@@ -562,6 +719,62 @@ assistant 原文、模型原文、模型推理、API Key、query hash 或 path h
 
 - 纯函数测试、production build 和 1440 / 1024 / 390 浏览器检查通过后停止；
 - 等待用户确认动画、密度和交互，再进入阶段三。
+
+#### 阶段二实施结果（2026-07-29）
+
+- 改了什么：
+  - 扩展 `ReviewJourney` 白名单派生字段，增加最新 Agent 心跳与预算摘要、安全阶段指标、固定事件摘要、
+    Agent 四子阶段和 WARNING / FAILED 固定建议动作；原始 `detail / message` 不进入新组件。
+  - 新增 `reviewJourneyPresentation.js`，以纯函数固定 Hero 状态、完整/紧凑时间轴模式、阶段保持与消失
+    关闭规则、Popover 数据、键盘按键、响应式方向和 reduced-motion 动画开关。
+  - 任务详情运行态改为 Hero → 完整时间轴 → 运行摘要；终态继续结果摘要优先，再展示 Hero 与紧凑时间轴，
+    Finding / Diff / Patch / 补证据 / 反馈 / 评估样本保持原行为。
+  - 实现 `AgentReviewAnimation` 注册契约，本阶段只注册原生 SVG/CSS `BRAIN`；Standard 使用独立轻量
+    Provider 数据流，不显示 Agent 大脑，也没有 ENERGY、Lottie 或风格切换入口。
+  - 实现阶段 Drawer、Agent 子阶段、心跳/预算安全指标、高级执行记录和 fallback 显式转交；桌面 Drawer
+    稳定为 880px 上限，390px 为 100vw。WARNING / FAILED 使用独立感叹号 Popover，不触发阶段 Drawer。
+  - Drawer 按 `reviewKey + stageId` 保持：轮询和多结果重排时保持当前 Review、当前阶段和已打开 Drawer；
+    阶段消失时关闭。Enter / Space 打开，Escape 或关闭按钮关闭，动画结束后焦点返回原节点。
+  - fallback 和失败结果摘要不再展示异常正文或路径，只保留固定文案、计数和格式受限的稳定错误码。
+    阶段二按计划继续保留旧三段导航和顶层确定性检查 Tab。
+- 为什么：阶段一已经统一身份、状态和事件隔离，本阶段把同一个 Journey 转成可扫描、可回看的进度体验，
+  同时避免动画、轮询或损坏观测数据改变 Review 主结果或扩大 Agent 可见数据边界。
+- 实际自动化：
+  - `node --test frontend/tests/*.test.mjs`：`32 passed, 0 failed`。
+  - 覆盖 Agent / Standard queued、running、success、failed、cancelled、skipped，Agent fallback，
+    分析/取证/收敛/提交子阶段，完整/紧凑时间轴，阶段轮询保持与消失关闭，task-level AUTO_PREFLIGHT
+    共享、最新 `claimAttempt`、旧任务、损坏 detail、键盘、reduced-motion 和 390px 纵向规则。
+  - `scripts\run-frontend.cmd build`：通过；Vite `3526 modules transformed`，只保留既有
+    `chunk larger than 500 kB` 提示。
+  - `git diff --check`：通过；生产 UI 新增行和 ReviewJourney 新文件的禁显字段扫描通过。
+- 浏览器检查：
+  - 使用本地安全合成响应检查，未连接真实 Backend、未执行 Review；临时 fixture 和 5174/5175/8091
+    进程已在验收后清理，原有本地服务未修改。
+  - `1440px`：Agent BRAIN Hero、长 Provider/model 截断、横向完整时间轴和 880px Drawer 正常，
+    页面无横向溢出。
+  - `1024px`：Hero 和横向时间轴保持后台密度，时间轴容器可安全容纳/滚动，页面无横向溢出。
+  - `390px`：Hero 单列、时间轴纵向、Drawer 稳定为 `390px / 100vw`，页面无横向溢出。
+  - 实际点击确认感叹号只打开 Popover；Enter / Space 打开 Drawer；Escape 和关闭按钮关闭后焦点返回
+    原阶段节点。5 秒轮询中多 Review 顺序变化后，URL 指定的 Agent、受控取证子阶段和 Drawer 均保持。
+  - Standard 运行态实际 DOM 只有 Provider 动效，Agent 大脑节点数为 0；fallback 终态实际展示结果摘要
+    优先、六个紧凑阶段和显式转交。
+  - 浏览器默认 motion 偏好为非 reduced；已在浏览器样式表确认 reduced-motion 媒体规则会关闭动画与过渡，
+    并由纯函数测试确认 reduced-motion 时不启动动画。当前浏览器能力不支持切换系统 motion 偏好。
+  - 浏览器验收发现并修复“缺失阶段耗时被 `Number(null)` 误显示为 `<1 秒`”的问题；现在安全显示 `-`。
+- 遗留风险：
+  - 真实 Backend 数据、远程 Docker 部署和实际心跳刷新按用户要求延后；本阶段浏览器数据为安全合成响应。
+  - 当前浏览器不能实际模拟系统 reduced-motion，只完成浏览器 CSS 规则检查和纯函数分支验证；远程人工
+    验收可在操作系统开启“减少动态效果”后补看静态状态。
+  - 旧“AI Review 结果 / 高准确模式流转 / 执行过程”和顶层“确定性检查”仍与新时间轴并存，信息存在
+    阶段性重复；这是阶段二兼容边界，只能在阶段三迁移和删除。
+  - 现有页面仍有 Ant Design `Space direction`、`Alert message` 的历史弃用提示；阶段二新增 Drawer 已改用
+    `size`，没有继续新增 Drawer `width` 弃用提示。既有提示不影响本次交互或 production build。
+- 阶段三前置条件：
+  - 用户人工确认 BRAIN 动画强度、Hero 密度、完整/紧凑时间轴、Drawer 和 Popover 交互符合预期。
+  - 用户明确回复“继续下一阶段”后，才允许把高准确模式和确定性检查正式迁入 Drawer、删除旧分段导航和
+    顶层确定性检查 Tab，并更新 `docs/38`；未确认前不得进入阶段三。
+  - 阶段三仍不得修改 Backend、Review 行为、Provider、Prompt、预算、工具白名单或 Review Card schema；
+    不提交、不推送、不部署、不执行真实 Agent Review 或 Run 18。
 
 ### 阶段三：高准确模式和确定性检查信息架构收口
 
