@@ -131,13 +131,17 @@ EPERM: operation not permitted, open 'C:\Users\<user>\AppData\Local\npm-cache\_c
 docker version
 ```
 
-- 打包脚本会把完整输出保存到 `.local/docker-deploy/logs/`。优先双击或执行 `scripts/package-docker-deploy.cmd`，失败时窗口会暂停；若直接运行 `.ps1`，从资源管理器启动时会自动暂停，也可显式传入 `-PauseOnError`。自动化调用可设置 `NO_PAUSE=1` 避免等待输入。
+- 打包脚本会把完整输出保存到 `.local/docker-deploy/logs/`。Docker build 默认直接连接当前终端，
+  以保留 BuildKit 的蓝色 TTY 动态进度；不要为了同时打印和收集输出而把 build 命令接入
+  PowerShell 管道，否则 BuildKit 会退化成逐行 plain 输出。优先双击或执行
+  `scripts/package-docker-deploy.cmd`，失败时窗口会暂停；若直接运行 `.ps1`，从资源管理器启动时会
+  自动暂停，也可显式传入 `-PauseOnError`。自动化调用可设置 `NO_PAUSE=1` 避免等待输入。
 - Docker Engine 未启动、CLI 不在 PATH 或 Windows 终端未刷新 PATH 时，先修本机 Docker 环境，不要改项目打包脚本。
 - Codex Windows 沙箱内执行 `docker build` 若出现 `open C:\Users\<user>\.docker\buildx\.lock: Access is denied`，说明 buildx 需要写用户目录；在任务确实要求构建镜像时按权限规则授权重跑，不要改 Dockerfile 绕过。
 - `failed to fetch oauth token`、`auth.docker.io/token: EOF`、TLS timeout、DNS temporary failure 和
-  `ECONNRESET` 属于 Docker Hub / 构建依赖网络错误，不是 Dockerfile 语法错误。打包脚本只对这些可识别
-  网络错误做有限重试；普通编译失败不重试。PowerShell 或 `.local/gitlab.env` 中的 Agent/Provider 代理不能
-  代理 BuildKit 拉取 `FROM`，应在 Docker Desktop 中配置代理。
+  `ECONNRESET` 属于 Docker Hub / 构建依赖网络错误，不是 Dockerfile 语法错误。为保留 BuildKit 动态进度，
+  打包脚本不捕获构建输出，也不自动重试；失败详情从完整日志确认后手动重跑。PowerShell 或
+  `.local/gitlab.env` 中的 Agent/Provider 代理不能代理 BuildKit 拉取 `FROM`，应在 Docker Desktop 中配置代理。
 - 只修改 Agent Worker 时可使用
   `scripts/package-docker-deploy.cmd -AgentWorkerOnly -ReuseVersion <上一个完整版本>`。增量模式仍输出四个
   应用镜像的完整离线包，但 Backend、Frontend 和出站代理复用指定旧版本；不得用它掩盖这些组件本身的改动。

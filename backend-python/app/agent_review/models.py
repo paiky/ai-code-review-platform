@@ -14,6 +14,7 @@ class AgentReviewSettings(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     api_key_ciphertext: Mapped[str | None] = mapped_column(Text)
     api_key_fingerprint: Mapped[str | None] = mapped_column(String(32))
+    budget_config_json: Mapped[str | None] = mapped_column(Text)
     worker_id: Mapped[str | None] = mapped_column(String(128))
     worker_version: Mapped[str | None] = mapped_column(String(64))
     cli_version: Mapped[str | None] = mapped_column(String(64))

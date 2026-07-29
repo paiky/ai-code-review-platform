@@ -8,13 +8,14 @@ from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy.orm import Session
 
-from app.agent_review.models import AgentReviewSettings
+from app.agent_review.models import AgentReviewRun, AgentReviewSettings
 from app.agent_review.repository import (
     create_agent_job,
     expire_exhausted_agent_jobs,
     sanitize_agent_audit,
 )
 from app.agent_review.service import _ensure_worktree
+from app.agent_review_spike.budgets import default_agent_budgets
 from app.code_quality.models import CodeQualitySchedulerJob
 from app.code_quality.repository import list_progress, list_result_responses, save_result
 from app.code_quality.service import (
@@ -89,13 +90,13 @@ def test_backend_agent_audit_whitelist_caps_events_and_drops_raw_content() -> No
             "reasoning": "SECRET_REASONING",
             "path": "D:/private/source.py",
         }
-        for sequence in range(1, 42)
+        for sequence in range(1, 62)
     ]
 
     safe = sanitize_agent_audit(_trace_audit(events))
     text = json.dumps(safe, ensure_ascii=False)
 
-    assert len(safe["events"]) == 40
+    assert len(safe["events"]) == 60
     assert "SECRET_" not in text
     assert "D:/private" not in text
     assert '"query"' not in text
@@ -132,6 +133,133 @@ def test_agent_settings_encrypt_mask_replace_and_clear(
     assert cleared.status_code == 200
     assert cleared.json()["data"]["apiKeyConfigured"] is False
     assert cleared.json()["data"]["enabled"] is False
+
+
+def test_agent_settings_update_and_reset_runtime_budgets(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _configure(monkeypatch)
+
+    initial = client.get("/api/code-quality-reviews/agent-settings")
+    assert initial.status_code == 200
+    initial_data = initial.json()["data"]
+    assert initial_data["budgetConfigSource"] == "DEFAULT"
+    assert initial_data["budgets"]["maxEvidenceCalls"] == 10
+    assert initial_data["budgetDefaults"]["maxTurns"] == 12
+    assert initial_data["budgetLimits"]["maxTurns"] == {"min": 6, "max": 18}
+
+    updated = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "enabled": True,
+            "apiKey": "sk-agent-secret-123456",
+            "budgets": {"maxTurns": 14},
+        },
+    )
+    assert updated.status_code == 200
+    updated_data = updated.json()["data"]
+    assert updated_data["budgetConfigSource"] == "CUSTOM"
+    assert updated_data["budgets"]["maxTurns"] == 14
+    assert updated_data["budgets"]["maxEvidenceCalls"] == 10
+    assert "sk-agent-secret-123456" not in updated.text
+    db_session.expire_all()
+    stored = json.loads(db_session.get(AgentReviewSettings, 1).budget_config_json)
+    assert set(stored) == set(default_agent_budgets())
+
+    full_budgets = {
+        "maxTurns": 18,
+        "maxToolCalls": 60,
+        "maxSourceBytes": 300_000,
+        "timeoutSeconds": 900,
+        "inlineDiffBytes": 300_000,
+        "maxEvidenceCalls": 15,
+        "convergeAtCalls": 13,
+        "submitByTurn": 15,
+    }
+    full_update = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"budgets": full_budgets},
+    )
+    assert full_update.status_code == 200
+    assert {
+        key: full_update.json()["data"]["budgets"][key] for key in full_budgets
+    } == full_budgets
+    assert full_update.json()["data"]["apiKeyConfigured"] is True
+
+    reset = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"resetBudgets": True},
+    )
+    assert reset.status_code == 200
+    assert reset.json()["data"]["budgetConfigSource"] == "DEFAULT"
+    assert reset.json()["data"]["budgets"]["maxTurns"] == 12
+    db_session.expire_all()
+    assert db_session.get(AgentReviewSettings, 1).budget_config_json is None
+
+
+@pytest.mark.parametrize(
+    "budgets",
+    [
+        {"maxTurns": True},
+        {"maxTurns": "14"},
+        {"maxTurns": 14.0},
+        {"maxTurns": None},
+        {"unknown": 1},
+        {"maxTurns": 19},
+        {"maxEvidenceCalls": 10, "convergeAtCalls": 9},
+        {"maxTurns": 12, "submitByTurn": 10},
+        {"maxToolCalls": 10, "maxEvidenceCalls": 10},
+    ],
+)
+def test_agent_settings_reject_invalid_runtime_budgets(
+    client: TestClient, budgets: dict[str, object]
+) -> None:
+    response = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"budgets": budgets},
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_agent_settings_reject_budget_update_and_reset_together(
+    client: TestClient,
+) -> None:
+    response = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"budgets": {"maxTurns": 14}, "resetBudgets": True},
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+    false_conflict = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"budgets": {"maxTurns": 14}, "resetBudgets": False},
+    )
+    assert false_conflict.status_code == 400
+    invalid_type = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"resetBudgets": "true"},
+    )
+    assert invalid_type.status_code == 400
+
+
+def test_agent_settings_corrupt_stored_budget_falls_back_to_defaults(
+    client: TestClient, db_session: Session
+) -> None:
+    client.get("/api/code-quality-reviews/agent-settings")
+    record = db_session.get(AgentReviewSettings, 1)
+    record.budget_config_json = "not-json"
+    db_session.commit()
+
+    response = client.get("/api/code-quality-reviews/agent-settings")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["budgetConfigSource"] == "DEFAULT"
+    assert response.json()["data"]["budgets"]["maxTurns"] == 12
+    record.budget_config_json = '{"maxTurns": 18}'
+    db_session.commit()
+    partial = client.get("/api/code-quality-reviews/agent-settings")
+    assert partial.json()["data"]["budgetConfigSource"] == "DEFAULT"
 
 
 def test_agent_key_save_is_rejected_without_master_key(client: TestClient) -> None:
@@ -172,7 +300,11 @@ def test_agent_configuration_test_runs_through_worker_contract(
     _encryption_key, token = _configure(monkeypatch)
     client.put(
         "/api/code-quality-reviews/agent-settings",
-        json={"enabled": True, "apiKey": "sk-agent-secret-123456"},
+        json={
+            "enabled": True,
+            "apiKey": "sk-agent-secret-123456",
+            "budgets": {"maxTurns": 14},
+        },
     )
     client.post(
         "/internal/agent-review/workers/heartbeat",
@@ -284,6 +416,49 @@ def test_worker_auth_claim_and_heartbeat(
     assert "sk-agent-secret-123456" not in settings_record.api_key_ciphertext
 
 
+def test_worker_claim_uses_immutable_run_budget_snapshot(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "enabled": True,
+            "apiKey": "sk-agent-secret-123456",
+            "budgets": {"maxTurns": 14},
+        },
+    )
+    snapshot = default_agent_budgets()
+    snapshot["maxTurns"] = 14
+    run = create_agent_job(
+        db_session,
+        task_id=199,
+        project_id=100,
+        input_payload={
+            "worktree": "worktrees/199/head",
+            "case": {"changedFiles": ["src/a.py"], "diff": "+safe()"},
+            "budgets": snapshot,
+        },
+        completion_context={},
+        comparison_mode=False,
+    )
+    db_session.commit()
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"budgets": {"maxTurns": 16}},
+    )
+
+    claim = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-budget-snapshot"},
+    )
+
+    assert claim.status_code == 200
+    assert claim.json()["data"]["runId"] == run.id
+    assert claim.json()["data"]["budgets"]["maxTurns"] == 14
+
+
 def test_agent_trace_persistence_failure_does_not_lose_job_lease(
     client: TestClient, db_session: Session, monkeypatch
 ) -> None:
@@ -326,6 +501,7 @@ def test_agent_trace_persistence_failure_does_not_lose_job_lease(
         headers=_worker_headers(token),
         json={
             "workerId": "worker-trace-failure",
+            "heartbeatSequence": 0,
             "runSummary": {"audit": _trace_audit([])},
         },
     )
@@ -385,7 +561,17 @@ def test_worker_completion_is_idempotent_and_saves_engine_metadata(
         "workerId": "worker-1",
         "idempotencyKey": job["idempotencyKey"],
         "reviewCard": {"summary": "未发现问题", "overallLevel": "LOW", "findings": []},
-        "runSummary": {"durationMs": 1200, "numTurns": 2, "toolCallCount": 4},
+        "runSummary": {
+            "durationMs": 1200,
+            "numTurns": 2,
+            "toolCallCount": 4,
+            "effectiveBudgets": default_agent_budgets(),
+            "prompt": "SECRET_PROMPT",
+            "query": "SECRET_QUERY",
+            "source": "SECRET_SOURCE",
+            "assistant": "SECRET_ASSISTANT",
+            "reasoning": "SECRET_REASONING",
+        },
     }
 
     first = client.post(
@@ -407,6 +593,11 @@ def test_worker_completion_is_idempotent_and_saves_engine_metadata(
     assert result["requestedEngine"] == "AGENT"
     assert result["effectiveEngine"] == "AGENT"
     assert result["agentRunSummary"]["runId"] == run.id
+    assert result["agentRunSummary"]["effectiveBudgets"] == default_agent_budgets()
+    persisted = db_session.get(AgentReviewRun, run.id)
+    assert persisted is not None
+    persisted_text = persisted.tool_summary_json or ""
+    assert "SECRET_" not in persisted_text
 
 
 def test_agent_trace_is_incremental_idempotent_and_sanitized(
@@ -444,6 +635,7 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
         input_payload={
             "worktree": "worktrees/198/head",
             "case": {"id": "task-198", "changedFiles": ["src/a.py"], "diff": "+safe()"},
+            "budgets": default_agent_budgets(),
         },
         completion_context={},
         comparison_mode=True,
@@ -527,7 +719,12 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
         headers=_worker_headers(token),
         json={
             "workerId": "worker-trace",
-            "runSummary": {"audit": _trace_audit(events[:1])},
+            "heartbeatSequence": 0,
+            "runSummary": {
+                "prompt": "SECRET_PROMPT",
+                "source": "SECRET_SOURCE",
+                "reasoning": "SECRET_REASONING",
+            },
         },
     )
     repeated = client.post(
@@ -535,6 +732,7 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
         headers=_worker_headers(token),
         json={
             "workerId": "worker-trace",
+            "heartbeatSequence": 0,
             "runSummary": {"audit": _trace_audit(events[:1])},
         },
     )
@@ -543,6 +741,7 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
         headers=_worker_headers(token),
         json={
             "workerId": "worker-trace",
+            "heartbeatSequence": 1,
             "runSummary": {"audit": _trace_audit(events[:2])},
         },
     )
@@ -581,14 +780,43 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
         "AGENT_CONVERGING",
         "AGENT_SUBMITTING",
     ]
+    heartbeats = [
+        event
+        for event in list_progress(db_session, 198)
+        if event["phase"] == "AGENT_HEARTBEAT"
+    ]
+    assert len(heartbeats) == 2
+    heartbeat_details = [json.loads(event["detail"]) for event in heartbeats]
+    assert [detail["heartbeatSequence"] for detail in heartbeat_details] == [0, 1]
+    assert heartbeat_details[-1]["effectiveBudgets"] == default_agent_budgets()
+    assert heartbeat_details[-1]["evidenceCallsUsed"] == 8
+    assert set(heartbeat_details[-1]) == {
+        "runId",
+        "heartbeatSequence",
+        "activity",
+        "status",
+        "phase",
+        "toolCallCount",
+        "evidenceCallsUsed",
+        "sourceBytesReturned",
+        "diffBytesReturned",
+        "reviewBudget",
+        "effectiveBudgets",
+    }
     trace_text = json.dumps(trace, ensure_ascii=False)
+    heartbeat_text = json.dumps(heartbeats, ensure_ascii=False)
     assert "SECRET_" not in trace_text
+    assert "SECRET_" not in heartbeat_text
     assert "D:/private" not in trace_text
     assert '"query"' not in trace_text
+    assert "0123456789abcdef" not in trace_text
+    assert "fedcba9876543210" not in trace_text
     db_session.refresh(run)
     stored_audit = run.tool_summary_json or ""
     assert "SECRET_" not in stored_audit
     assert "D:/private" not in stored_audit
+    assert "0123456789abcdef" not in stored_audit
+    assert "fedcba9876543210" not in stored_audit
     assert '"message"' not in stored_audit
 
 
@@ -969,7 +1197,11 @@ def test_manual_agent_review_excludes_sensitive_file_and_reaches_worker_queue(
     monkeypatch.setattr("app.agent_review.service._ensure_worktree", lambda _task, _project: workspace)
     client.put(
         "/api/code-quality-reviews/agent-settings",
-        json={"enabled": True, "apiKey": "sk-agent-secret-123456"},
+        json={
+            "enabled": True,
+            "apiKey": "sk-agent-secret-123456",
+            "budgets": {"maxTurns": 14},
+        },
     )
     client.post(
         "/internal/agent-review/workers/heartbeat",
@@ -1046,6 +1278,8 @@ def test_manual_agent_review_excludes_sensitive_file_and_reaches_worker_queue(
     )
     assert claimed.status_code == 200
     job = claimed.json()["data"]
+    assert job["budgets"] == {**default_agent_budgets(), "maxTurns": 14}
+    assert job["input"]["diffMode"] == "INLINE"
     assert job["input"]["changedFiles"] == ["service.py"]
     assert "application-prod.properties" not in job["input"]["diff"]
     assert "must-not-leave-platform" not in job["input"]["diff"]

@@ -16,6 +16,7 @@ import {
   Layout,
   message,
   Modal,
+  Progress,
   Row,
   Segmented,
   Select,
@@ -83,10 +84,21 @@ import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-yaml';
 import { fetchApi, riskColor, statusColor } from './api.js';
 import {
-  collectAgentTraceEvents,
   formatAgentTraceDetail,
-  isAgentTraceProgressEvent
+  groupAgentTraceEvents,
+  isAgentHeartbeatProgressEvent,
+  isAgentTraceProgressEvent,
+  summarizeAgentTrace
 } from './agentReviewTrace.js';
+import {
+  agentBudgetLimits,
+  bytesToKilobytes,
+  formatAgentBudgetSummary,
+  hasRaisedAgentBudget,
+  kilobytesToBytes,
+  normalizeAgentBudgets,
+  validateAgentBudgets
+} from './agentReviewBudgets.js';
 import { releaseNotes } from './releaseNotes.js';
 
 const { Header, Content } = Layout;
@@ -2221,6 +2233,10 @@ function phaseLabel(phase) {
     AGENT_TOOL_ACTIVITY: 'Agent 补充证据',
     AGENT_CONVERGING: 'Agent 收敛结论',
     AGENT_SUBMITTING: 'Agent 提交结果',
+    AGENT_HEARTBEAT: 'Agent 运行心跳',
+    AGENT_FINISHED: 'Agent 审查完成',
+    AGENT_FALLBACK: 'Agent 失败降级',
+    AGENT_CANCELLED: 'Agent 审查取消',
     PROVIDER_START: '调用 Provider',
     PROVIDER_FAILED: 'Provider 调用失败',
     CODEX_REPOSITORY: '确认仓库（历史）',
@@ -2300,6 +2316,9 @@ const keyProgressPhases = new Set([
   'AGENT_TOOL_ACTIVITY',
   'AGENT_CONVERGING',
   'AGENT_SUBMITTING',
+  'AGENT_FINISHED',
+  'AGENT_FALLBACK',
+  'AGENT_CANCELLED',
   'PROVIDER_START',
   'PROVIDER_FAILED',
   'PROMPT_METADATA',
@@ -2394,6 +2413,12 @@ function progressStepDescription(event) {
       return 'Agent 已停止扩大检索范围，正在收敛 Review 结论。';
     case 'AGENT_SUBMITTING':
       return 'Agent 正在提交结构化 Review Card。';
+    case 'AGENT_FINISHED':
+      return 'Agent 已成功提交 Review Card，并保存正式审查结果。';
+    case 'AGENT_FALLBACK':
+      return 'Agent 未能提交有效结果，任务已进入普通 Review 降级流程。';
+    case 'AGENT_CANCELLED':
+      return 'Agent Review 已由用户取消。';
     case 'PROVIDER_START':
       return '开始调用代码质量 Review provider。';
     case 'PROVIDER_FAILED':
@@ -2507,7 +2532,7 @@ function progressDetailText(event) {
     return formatCodexOutputDetail(event.detail);
   }
   if (isAgentTraceProgressEvent(event)) {
-    return formatAgentTraceDetail(event.detail);
+    return formatAgentTraceDetail(event.detail, event.phase);
   }
   return event.detail;
 }
@@ -3138,6 +3163,9 @@ function HighAccuracyFlowView({ progress, review }) {
             <Descriptions.Item label="Diff 返回">{agentRunSummary?.diffBytesReturned == null ? '-' : `${agentRunSummary.diffBytesReturned} bytes`}</Descriptions.Item>
             <Descriptions.Item label="耗时">{agentRunSummary?.durationMs == null ? '-' : formatDuration(agentRunSummary.durationMs / 1000)}</Descriptions.Item>
             <Descriptions.Item label="降级原因">{agentRunSummary?.failureCode || '-'}</Descriptions.Item>
+            <Descriptions.Item label="生效预算" span={4}>
+              {formatAgentBudgetSummary(agentRunSummary?.effectiveBudgets) || '-'}
+            </Descriptions.Item>
           </Descriptions>
           {effectiveEngine === 'STANDARD_FALLBACK' && (
             <Alert
@@ -3522,11 +3550,106 @@ function FindingRefinementControl({ taskId, review, finding, findingIndex, onRef
   );
 }
 
+function AgentTraceOverview({ summary }) {
+  if (!summary) return null;
+  const budgets = summary.effectiveBudgets || {};
+  const budgetPhase = summary.reviewBudget?.phase || '';
+  const phaseReason = summary.phase === 'AGENT_FINISHED'
+    ? 'Review Card 已成功提交并保存。'
+    : summary.phase === 'AGENT_FALLBACK'
+      ? 'Agent 未能提交有效结果，已进入普通 Review 降级。'
+      : summary.phase === 'AGENT_CANCELLED'
+        ? 'Agent Review 已取消。'
+        : budgetPhase === 'SUBMIT' || summary.phase === 'AGENT_SUBMITTING'
+          ? '证据收集已经结束，当前只允许提交 Review Card。'
+          : budgetPhase === 'CONVERGE' || summary.phase === 'AGENT_CONVERGING'
+            ? '已达到收敛起点，不再扩大风险假设或检索范围。'
+            : '仍处于有限取证阶段，只围绕既有风险假设补充证据。';
+  const metrics = [
+    {
+      key: 'turns',
+      label: '模型回合',
+      used: summary.turnCount,
+      limit: budgets.maxTurns,
+      unavailable: !summary.terminal
+    },
+    {
+      key: 'tools',
+      label: '工具调用',
+      used: summary.toolCallCount,
+      limit: budgets.maxToolCalls
+    },
+    {
+      key: 'evidence',
+      label: '证据调用',
+      used: summary.evidenceCallsUsed,
+      limit: budgets.maxEvidenceCalls
+    },
+    {
+      key: 'source',
+      label: '源码返回',
+      used: summary.sourceBytesReturned,
+      limit: budgets.maxSourceBytes,
+      bytes: true
+    }
+  ];
+
+  return (
+    <div className="agent-trace-overview">
+      <div className="agent-trace-overview-head">
+        <Space wrap>
+          <Text strong>Run #{summary.runId}</Text>
+          <Tag color={summary.terminal ? 'default' : 'processing'}>
+            {budgetPhase || phaseLabel(summary.phase)}
+          </Tag>
+        </Space>
+        <Text type="secondary">
+          最近心跳：{summary.lastHeartbeatAt ? formatDateTime(summary.lastHeartbeatAt) : '历史任务未记录'}
+        </Text>
+      </div>
+      <Text type="secondary">{phaseReason}</Text>
+      <div className="agent-trace-budget-grid">
+        {metrics.map(metric => {
+          const used = Number(metric.used ?? 0);
+          const limit = Number(metric.limit ?? 0);
+          const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+          const valueText = metric.unavailable
+            ? `完成后可见 / ${limit || '-'}`
+            : metric.bytes
+              ? `${Math.round(used / 1000)} / ${limit ? Math.round(limit / 1000) : '-'} KB`
+              : `${used} / ${limit || '-'}`;
+          return (
+            <div className="agent-trace-budget-item" key={metric.key}>
+              <div>
+                <Text type="secondary">{metric.label}</Text>
+                <Text strong>{valueText}</Text>
+              </div>
+              {!metric.unavailable && limit > 0 && (
+                <Progress percent={percent} showInfo={false} size="small" />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {summary.progressMayBeDelayed && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Agent 进度数据可能延迟"
+          description="超过 45 秒未收到 Worker 心跳；这不等同于模型卡死，页面会继续等待后端终态。"
+        />
+      )}
+    </div>
+  );
+}
+
 function CodeQualityProgressView({ progress, running = false, reviewStartedAt, reviewFinishedAt }) {
   const events = Array.isArray(progress) ? progress : [];
   const reviewEvents = events.filter(event => !isFixPreviewProgressEvent(event));
-  const agentEvents = collectAgentTraceEvents(reviewEvents);
-  const regularEvents = reviewEvents.filter(event => !isAgentTraceProgressEvent(event));
+  const agentEvents = groupAgentTraceEvents(reviewEvents);
+  const regularEvents = reviewEvents.filter(
+    event => !isAgentTraceProgressEvent(event) && !isAgentHeartbeatProgressEvent(event)
+  );
   const keyEvents = regularEvents.filter(isKeyProgressEvent);
   const debugEvents = regularEvents.filter(isDebugProgressEvent);
   const hiddenEvents = regularEvents.filter(event => !isKeyProgressEvent(event) && !isDebugProgressEvent(event));
@@ -3537,6 +3660,7 @@ function CodeQualityProgressView({ progress, running = false, reviewStartedAt, r
     : formatDuration(totalProgressDuration(reviewEvents));
   const fallbackStartedAtRef = useRef(Date.now());
   const [elapsedTick, setElapsedTick] = useState(Date.now());
+  const agentSummary = summarizeAgentTrace(reviewEvents, elapsedTick);
   const latestEvent = reviewEvents.length > 0 ? reviewEvents[reviewEvents.length - 1] : null;
   const latestRunStartAt = latestReviewRunStartAt(reviewEvents);
   const runningStartedAt = (running ? latestRunStartAt : null) || startedAt || parseEventTime(reviewEvents[0]?.createdAt) || fallbackStartedAtRef.current;
@@ -3558,7 +3682,7 @@ function CodeQualityProgressView({ progress, running = false, reviewStartedAt, r
           {running && (
             <div className="quality-running-bar">
               <Text strong>AI Review 正在执行</Text>
-              <Tag color="processing">{phaseLabel(latestEvent?.phase)}</Tag>
+              <Tag color="processing">{phaseLabel(agentSummary?.phase || latestEvent?.phase)}</Tag>
               <Text type="secondary" className="quality-running-elapsed">
                 已执行 {runningSeconds} 秒 <LoadingOutlined />
               </Text>
@@ -3573,6 +3697,7 @@ function CodeQualityProgressView({ progress, running = false, reviewStartedAt, r
           {agentEvents.length > 0 && (
             <div>
               <Title level={5}>Agent 执行轨迹</Title>
+              <AgentTraceOverview summary={agentSummary} />
               <Timeline
                 items={agentEvents.map(event => ({
                   key: event.id,
@@ -4933,6 +5058,54 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 }
 
 
+function AgentBudgetFieldCard({
+  field,
+  value,
+  defaultValue,
+  limits,
+  onChange
+}) {
+  const toDisplayValue = rawValue => (
+    field.bytes ? bytesToKilobytes(rawValue) : rawValue
+  );
+  const displayDefault = toDisplayValue(defaultValue) ?? '-';
+  const displayMinimum = toDisplayValue(limits.min);
+  const displayMaximum = toDisplayValue(limits.max);
+
+  return (
+    <div className="agent-budget-field-card">
+      <div className="agent-budget-field-title">
+        <Text strong>{field.label}</Text>
+      </div>
+      <InputNumber
+        aria-label={field.label}
+        className="agent-budget-field-input"
+        size="large"
+        min={displayMinimum}
+        max={displayMaximum}
+        step={1}
+        precision={0}
+        addonAfter={field.unit}
+        value={toDisplayValue(value)}
+        onChange={nextValue => onChange(
+          field.key,
+          field.bytes ? kilobytesToBytes(nextValue) : nextValue
+        )}
+      />
+      <div className="agent-budget-field-meta">
+        <div>
+          <Text type="secondary">默认值</Text>
+          <Text strong>{displayDefault} {field.unit}</Text>
+        </div>
+        <div>
+          <Text type="secondary">允许范围</Text>
+          <Text strong>{displayMinimum}～{displayMaximum} {field.unit}</Text>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TemplateConfig() {
   const [groups, setGroups] = useState([]);
   const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, aiReviewModels: [], dingtalkWebhooks: [] });
@@ -4965,7 +5138,11 @@ function TemplateConfig() {
   const [aiSettings, setAiSettings] = useState(null);
   const [settingsDraft, setSettingsDraft] = useState(null);
   const [agentSettings, setAgentSettings] = useState(null);
-  const [agentSettingsDraft, setAgentSettingsDraft] = useState({ enabled: false, apiKey: '' });
+  const [agentSettingsDraft, setAgentSettingsDraft] = useState({
+    enabled: false,
+    apiKey: '',
+    budgets: normalizeAgentBudgets(null)
+  });
   const [agentSettingsSaving, setAgentSettingsSaving] = useState(false);
   const [agentSettingsTesting, setAgentSettingsTesting] = useState(false);
   const [agentSettingsTestResult, setAgentSettingsTestResult] = useState(null);
@@ -5022,7 +5199,11 @@ function TemplateConfig() {
         : null;
       setAiSettings(settingsData);
       setAgentSettings(agentSettingsData);
-      setAgentSettingsDraft({ enabled: agentSettingsData?.enabled ?? false, apiKey: '' });
+      setAgentSettingsDraft({
+        enabled: agentSettingsData?.enabled ?? false,
+        apiKey: '',
+        budgets: normalizeAgentBudgets(agentSettingsData)
+      });
       setAgentSettingsTestResult(agentSettingsData?.configurationTest || null);
       setAgentSettingsTesting(['QUEUED', 'RUNNING'].includes(agentSettingsData?.configurationTest?.status));
       setSettingsDraft({
@@ -5669,12 +5850,18 @@ function TemplateConfig() {
       messageApi.error('启用 Agent Review 前请填写独立 DeepSeek API Key');
       return;
     }
+    const budgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings);
+    if (!clearApiKey && budgetError) {
+      messageApi.error(budgetError);
+      return;
+    }
     setAgentSettingsSaving(true);
     try {
       const body = clearApiKey
         ? { clearApiKey: true, enabled: false }
         : {
             enabled: agentSettingsDraft.enabled,
+            budgets: agentSettingsDraft.budgets,
             ...(apiKey ? { apiKey } : {})
           };
       const settings = await fetchApi('/api/code-quality-reviews/agent-settings', {
@@ -5682,7 +5869,11 @@ function TemplateConfig() {
         body: JSON.stringify(body)
       });
       setAgentSettings(settings);
-      setAgentSettingsDraft({ enabled: settings?.enabled ?? false, apiKey: '' });
+      setAgentSettingsDraft({
+        enabled: settings?.enabled ?? false,
+        apiKey: '',
+        budgets: normalizeAgentBudgets(settings)
+      });
       setAgentSettingsTestResult(settings?.configurationTest || null);
       messageApi.success(clearApiKey ? 'Agent API Key 已清除' : 'Agent Review 设置已保存');
     } catch (err) {
@@ -5690,6 +5881,38 @@ function TemplateConfig() {
     } finally {
       setAgentSettingsSaving(false);
     }
+  };
+
+  const resetAgentBudgets = async () => {
+    if (agentSettingsSaving) return;
+    setAgentSettingsSaving(true);
+    try {
+      const settings = await fetchApi('/api/code-quality-reviews/agent-settings', {
+        method: 'PUT',
+        body: JSON.stringify({ resetBudgets: true })
+      });
+      setAgentSettings(settings);
+      setAgentSettingsDraft(current => ({
+        ...current,
+        budgets: normalizeAgentBudgets(settings)
+      }));
+      messageApi.success('Agent Review 运行参数已恢复默认');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setAgentSettingsSaving(false);
+    }
+  };
+
+  const updateAgentBudget = (field, value) => {
+    if (!Number.isInteger(Number(value))) return;
+    setAgentSettingsDraft(current => ({
+      ...current,
+      budgets: {
+        ...current.budgets,
+        [field]: Number(value)
+      }
+    }));
   };
 
   const testAgentSettings = async () => {
@@ -6113,6 +6336,19 @@ function TemplateConfig() {
   const agentSaveRequiresEncryption = Boolean(
     agentSettingsDraft.enabled || String(agentSettingsDraft.apiKey || '').trim()
   );
+  const currentAgentBudgetLimits = agentBudgetLimits(agentSettings);
+  const agentBudgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings);
+  const raisedAgentBudget = hasRaisedAgentBudget(agentSettingsDraft.budgets, agentSettings);
+  const agentBudgetFields = [
+    { key: 'maxTurns', label: '模型决策回合', unit: 'turns' },
+    { key: 'maxToolCalls', label: 'MCP 工具调用', unit: '次' },
+    { key: 'maxSourceBytes', label: '源码返回', unit: 'KB', bytes: true },
+    { key: 'timeoutSeconds', label: '整体超时', unit: '秒' },
+    { key: 'inlineDiffBytes', label: '内联 Diff', unit: 'KB', bytes: true },
+    { key: 'maxEvidenceCalls', label: '证据调用', unit: '次', advanced: true },
+    { key: 'convergeAtCalls', label: '收敛起点', unit: '次', advanced: true },
+    { key: 'submitByTurn', label: '最迟提交回合', unit: 'turn', advanced: true }
+  ];
 
   const collapseItems = [
     {
@@ -6181,8 +6417,10 @@ function TemplateConfig() {
               <Descriptions.Item label="模型">{agentSettings?.model || 'deepseek-v4-pro[1m]'}</Descriptions.Item>
               <Descriptions.Item label="Worker">{agentSettings?.workerId || '-'} / {agentSettings?.workerStatus || 'OFFLINE'}</Descriptions.Item>
               <Descriptions.Item label="最近心跳">{formatDateTime(agentSettings?.lastWorkerHeartbeatAt)}</Descriptions.Item>
-              <Descriptions.Item label="预算">12 turns / 40 tools / 200 KB source</Descriptions.Item>
-              <Descriptions.Item label="超时">600 秒</Descriptions.Item>
+              <Descriptions.Item label="预算来源">{agentSettings?.budgetConfigSource === 'CUSTOM' ? '自定义' : '默认'}</Descriptions.Item>
+              <Descriptions.Item label="当前预算" span={2}>
+                {formatAgentBudgetSummary(agentSettings?.budgets) || '12 turns / 40 tools / 200 KB source'}
+              </Descriptions.Item>
             </Descriptions>
             {!agentSettings?.encryptionAvailable && (
               <Alert
@@ -6218,7 +6456,7 @@ function TemplateConfig() {
                     type="primary"
                     loading={agentSettingsSaving}
                     onClick={() => saveAgentSettings()}
-                    disabled={!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption}
+                    disabled={Boolean(agentBudgetError) || (!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption)}
                     title={!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption ? '请先初始化加密主密钥并重启后端' : undefined}
                   >
                     保存
@@ -6228,6 +6466,61 @@ function TemplateConfig() {
                 </Space>
               </Col>
             </Row>
+            <Divider orientation="left">运行参数</Divider>
+            <div className="agent-budget-toolbar">
+              <Text type="secondary">
+                参数只影响保存后新建的 Agent 任务；已排队和运行中的任务继续使用入队快照。KB 按 1000 bytes 计算。
+              </Text>
+              <Button
+                loading={agentSettingsSaving}
+                onClick={resetAgentBudgets}
+              >
+                恢复默认运行参数
+              </Button>
+            </div>
+            <div className="agent-budget-grid agent-budget-grid-basic">
+              {agentBudgetFields.filter(item => !item.advanced).map(item => (
+                <AgentBudgetFieldCard
+                  key={item.key}
+                  field={item}
+                  value={agentSettingsDraft.budgets?.[item.key]}
+                  defaultValue={agentSettings?.budgetDefaults?.[item.key]}
+                  limits={currentAgentBudgetLimits[item.key]}
+                  onChange={updateAgentBudget}
+                />
+              ))}
+            </div>
+            <Collapse
+              size="small"
+              className="agent-budget-advanced"
+              items={[{
+                key: 'agent-budget-convergence',
+                label: '高级收敛参数',
+                children: (
+                  <div className="agent-budget-grid agent-budget-grid-advanced">
+                    {agentBudgetFields.filter(item => item.advanced).map(item => (
+                      <AgentBudgetFieldCard
+                        key={item.key}
+                        field={item}
+                        value={agentSettingsDraft.budgets?.[item.key]}
+                        defaultValue={agentSettings?.budgetDefaults?.[item.key]}
+                        limits={currentAgentBudgetLimits[item.key]}
+                        onChange={updateAgentBudget}
+                      />
+                    ))}
+                  </div>
+                )
+              }]}
+            />
+            {agentBudgetError && <Alert type="error" showIcon message="运行参数无效" description={agentBudgetError} />}
+            {raisedAgentBudget && !agentBudgetError && (
+              <Alert
+                type="warning"
+                showIcon
+                message="当前配置高于默认预算"
+                description="提高预算会增加执行时间、模型成本和允许返回给模型的源码量，请仅对受控任务使用。"
+              />
+            )}
             {agentSettingsTestResult && !['NOT_RUN', 'SUCCESS'].includes(agentTestStatus) && (
               <Alert
                 showIcon

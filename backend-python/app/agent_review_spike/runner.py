@@ -16,6 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from app.agent_review_spike.budgets import AGENT_BUDGET_LIMITS
 from app.agent_review_spike.metrics import (
     build_report_metrics,
     execution_summary,
@@ -50,6 +51,10 @@ class RunnerConfig:
     max_turns: int = 12
     max_tool_calls: int = 40
     max_source_bytes: int = 200_000
+    inline_diff_bytes: int = 200_000
+    max_evidence_calls: int = 10
+    converge_at_calls: int = 8
+    submit_by_turn: int = 9
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -241,6 +246,8 @@ def _run_candidate(
                 "REVIEW_AUDIT_PATH": str(audit_path),
                 "REVIEW_MAX_TOOL_CALLS": str(config.max_tool_calls),
                 "REVIEW_MAX_SOURCE_BYTES": str(config.max_source_bytes),
+                "REVIEW_MAX_EVIDENCE_CALLS": str(config.max_evidence_calls),
+                "REVIEW_CONVERGE_AT_CALLS": str(config.converge_at_calls),
                 "REVIEW_DIFF_MAP_PATH": str(diff_map_path),
             }
             mcp_config = {
@@ -402,7 +409,7 @@ def _claude_command(
         "--no-chrome",
         "--no-session-persistence",
         "--append-system-prompt",
-        agent_system_prompt(case),
+        agent_system_prompt(case, config.submit_by_turn),
     ]
 
 
@@ -415,15 +422,28 @@ def run_agent_candidate(
     cancel_event: Any = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    return _run_candidate(
+    effective_config = config or RunnerConfig()
+    effective_budgets = {
+        "maxTurns": effective_config.max_turns,
+        "maxToolCalls": effective_config.max_tool_calls,
+        "maxSourceBytes": effective_config.max_source_bytes,
+        "timeoutSeconds": effective_config.timeout_seconds,
+        "inlineDiffBytes": effective_config.inline_diff_bytes,
+        "maxEvidenceCalls": effective_config.max_evidence_calls,
+        "convergeAtCalls": effective_config.converge_at_calls,
+        "submitByTurn": effective_config.submit_by_turn,
+    }
+    summary = _run_candidate(
         case,
         worktree,
         api_key,
-        config or RunnerConfig(),
+        effective_config,
         include_card=True,
         cancel_event=cancel_event,
         progress_callback=progress_callback,
     )
+    summary["effectiveBudgets"] = effective_budgets
+    return summary
 
 
 def _split_diff_by_file(case: dict[str, Any]) -> dict[str, str]:
@@ -644,7 +664,9 @@ def _sanitize_audit_snapshot(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     events: list[dict[str, Any]] = []
     raw_events = source.get("events") if isinstance(source.get("events"), list) else []
-    for index, raw_event in enumerate(raw_events[:40], 1):
+    for index, raw_event in enumerate(
+        raw_events[: AGENT_BUDGET_LIMITS["maxToolCalls"]["max"]], 1
+    ):
         if not isinstance(raw_event, dict):
             continue
         tool = str(raw_event.get("tool") or "")
@@ -667,9 +689,15 @@ def _sanitize_audit_snapshot(value: Any) -> dict[str, Any]:
                 if str(raw_event.get("status") or "").upper() in {"SUCCESS", "FAILED"}
                 else "FAILED"
             ),
-            "durationMs": _bounded_non_negative(raw_event.get("durationMs"), 600_000),
+            "durationMs": _bounded_non_negative(
+                raw_event.get("durationMs"),
+                AGENT_BUDGET_LIMITS["timeoutSeconds"]["max"] * 1_000,
+            ),
             "itemCount": _bounded_non_negative(raw_event.get("itemCount"), 100_000),
-            "sourceBytes": _bounded_non_negative(raw_event.get("sourceBytes"), 200_000),
+            "sourceBytes": _bounded_non_negative(
+                raw_event.get("sourceBytes"),
+                AGENT_BUDGET_LIMITS["maxSourceBytes"]["max"],
+            ),
             "pathSummary": _safe_path_summaries(raw_event.get("pathSummary"), 5),
             "reviewBudget": _safe_review_budget(raw_event.get("reviewBudget")),
         }
@@ -686,13 +714,24 @@ def _sanitize_audit_snapshot(value: Any) -> dict[str, Any]:
     phase = _audit_phase(events, review_submitted, review_budget)
     return {
         "phase": phase,
-        "toolCallCount": _bounded_non_negative(source.get("toolCallCount"), 40),
-        "evidenceCallsUsed": _bounded_non_negative(source.get("evidenceCallsUsed"), 10),
-        "sourceBytesReturned": _bounded_non_negative(
-            source.get("sourceBytesReturned"), 200_000
+        "toolCallCount": _bounded_non_negative(
+            source.get("toolCallCount"), AGENT_BUDGET_LIMITS["maxToolCalls"]["max"]
         ),
-        "diffBytesReturned": _bounded_non_negative(source.get("diffBytesReturned"), 200_000),
-        "blockedAccessCount": _bounded_non_negative(source.get("blockedAccessCount"), 40),
+        "evidenceCallsUsed": _bounded_non_negative(
+            source.get("evidenceCallsUsed"),
+            AGENT_BUDGET_LIMITS["maxEvidenceCalls"]["max"],
+        ),
+        "sourceBytesReturned": _bounded_non_negative(
+            source.get("sourceBytesReturned"),
+            AGENT_BUDGET_LIMITS["maxSourceBytes"]["max"],
+        ),
+        "diffBytesReturned": _bounded_non_negative(
+            source.get("diffBytesReturned"),
+            AGENT_BUDGET_LIMITS["inlineDiffBytes"]["max"],
+        ),
+        "blockedAccessCount": _bounded_non_negative(
+            source.get("blockedAccessCount"), AGENT_BUDGET_LIMITS["maxToolCalls"]["max"]
+        ),
         "reviewSubmitted": review_submitted,
         "reviewBudget": review_budget,
         "topPathSummaries": _safe_path_summaries(source.get("topPathSummaries"), 20),
@@ -731,12 +770,17 @@ def _safe_review_budget(value: Any) -> dict[str, Any]:
         phase = "DISCOVERY"
     return {
         "phase": phase,
-        "evidenceCallsUsed": _bounded_non_negative(source.get("evidenceCallsUsed"), 10),
+        "evidenceCallsUsed": _bounded_non_negative(
+            source.get("evidenceCallsUsed"),
+            AGENT_BUDGET_LIMITS["maxEvidenceCalls"]["max"],
+        ),
         "evidenceCallsRemaining": _bounded_non_negative(
-            source.get("evidenceCallsRemaining"), 10
+            source.get("evidenceCallsRemaining"),
+            AGENT_BUDGET_LIMITS["maxEvidenceCalls"]["max"],
         ),
         "sourceBytesRemaining": _bounded_non_negative(
-            source.get("sourceBytesRemaining"), 200_000
+            source.get("sourceBytesRemaining"),
+            AGENT_BUDGET_LIMITS["maxSourceBytes"]["max"],
         ),
         "mustSubmit": bool(source.get("mustSubmit")) or phase == "SUBMIT",
     }
@@ -797,7 +841,11 @@ def _safe_sequence(value: Any, fallback: int) -> int | None:
         sequence = int(value if value is not None else fallback)
     except (TypeError, ValueError):
         return None
-    return sequence if 1 <= sequence <= 40 else None
+    return (
+        sequence
+        if 1 <= sequence <= AGENT_BUDGET_LIMITS["maxToolCalls"]["max"]
+        else None
+    )
 
 
 def _validation_report(
@@ -834,6 +882,10 @@ def _runner_summary(config: RunnerConfig) -> dict[str, Any]:
         "maxToolCalls": config.max_tool_calls,
         "maxSourceBytes": config.max_source_bytes,
         "timeoutSeconds": config.timeout_seconds,
+        "inlineDiffBytes": config.inline_diff_bytes,
+        "maxEvidenceCalls": config.max_evidence_calls,
+        "convergeAtCalls": config.converge_at_calls,
+        "submitByTurn": config.submit_by_turn,
         "reasoningEffort": "high",
         "builtInToolsEnabled": False,
         "allowedMcpTools": [

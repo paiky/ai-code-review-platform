@@ -11,6 +11,15 @@ from sqlalchemy.orm import Session
 
 from app.agent_review.crypto import decrypt_api_key, encrypt_api_key, encryption_available, mask_fingerprint
 from app.agent_review.models import AgentReviewRun, AgentReviewSettings
+from app.agent_review_spike.budgets import (
+    AGENT_BUDGET_KEYS,
+    AGENT_BUDGET_LIMITS,
+    DEFAULT_AGENT_BUDGETS,
+    AgentBudgetValidationError,
+    agent_budget_limits,
+    default_agent_budgets,
+    validate_agent_budgets,
+)
 from app.code_quality.models import (
     CodeQualityReviewProgressEvent,
     CodeQualitySchedulerJob,
@@ -26,12 +35,18 @@ AGENT_MODEL = "deepseek-v4-pro[1m]"
 AGENT_CLI_VERSION = "2.1.112"
 AGENT_RUNNER_VERSION = "agent-worker-v1"
 AGENT_ENDPOINT = "https://api.deepseek.com/anthropic"
-MAX_TURNS = 12
-MAX_TOOL_CALLS = 40
-MAX_SOURCE_BYTES = 200_000
+MAX_TURNS = DEFAULT_AGENT_BUDGETS["maxTurns"]
+MAX_TOOL_CALLS = DEFAULT_AGENT_BUDGETS["maxToolCalls"]
+MAX_SOURCE_BYTES = DEFAULT_AGENT_BUDGETS["maxSourceBytes"]
 MAX_DIFF_BYTES = 1_048_576
-INLINE_DIFF_BYTES = 200_000
-TIMEOUT_SECONDS = 600
+INLINE_DIFF_BYTES = DEFAULT_AGENT_BUDGETS["inlineDiffBytes"]
+TIMEOUT_SECONDS = DEFAULT_AGENT_BUDGETS["timeoutSeconds"]
+ABSOLUTE_MAX_TURNS = AGENT_BUDGET_LIMITS["maxTurns"]["max"]
+ABSOLUTE_MAX_TOOL_CALLS = AGENT_BUDGET_LIMITS["maxToolCalls"]["max"]
+ABSOLUTE_MAX_SOURCE_BYTES = AGENT_BUDGET_LIMITS["maxSourceBytes"]["max"]
+ABSOLUTE_MAX_INLINE_DIFF_BYTES = AGENT_BUDGET_LIMITS["inlineDiffBytes"]["max"]
+ABSOLUTE_MAX_TIMEOUT_SECONDS = AGENT_BUDGET_LIMITS["timeoutSeconds"]["max"]
+ABSOLUTE_MAX_EVIDENCE_CALLS = AGENT_BUDGET_LIMITS["maxEvidenceCalls"]["max"]
 AGENT_TRACE_PHASES = {
     "AGENT_ANALYZING",
     "AGENT_TOOL_ACTIVITY",
@@ -96,6 +111,7 @@ def get_agent_settings_record(db: Session) -> AgentReviewSettings:
 def agent_settings_response(db: Session) -> dict[str, Any]:
     record = get_agent_settings_record(db)
     online = _worker_online(record)
+    budgets, budget_source = effective_agent_budgets(record)
     return {
         "enabled": bool(record.enabled),
         "runner": "CLAUDE_CODE",
@@ -118,20 +134,43 @@ def agent_settings_response(db: Session) -> dict[str, Any]:
             "startedAt": format_datetime(record.test_started_at),
             "finishedAt": format_datetime(record.test_finished_at),
         },
-        "budgets": {
-            "maxTurns": MAX_TURNS,
-            "maxToolCalls": MAX_TOOL_CALLS,
-            "maxSourceBytes": MAX_SOURCE_BYTES,
-            "inlineDiffBytes": INLINE_DIFF_BYTES,
-            "maxDiffBytes": MAX_DIFF_BYTES,
-            "timeoutSeconds": TIMEOUT_SECONDS,
-        },
+        "budgets": {**budgets, "maxDiffBytes": MAX_DIFF_BYTES},
+        "budgetDefaults": default_agent_budgets(),
+        "budgetLimits": agent_budget_limits(),
+        "budgetConfigSource": budget_source,
         "updatedAt": format_datetime(record.updated_at),
     }
 
 
 def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any]:
     record = get_agent_settings_record(db)
+    if "resetBudgets" in request and not isinstance(request.get("resetBudgets"), bool):
+        raise AppError("VALIDATION_ERROR", "resetBudgets must be a boolean", 400)
+    reset_budgets = request.get("resetBudgets") is True
+    if "resetBudgets" in request and "budgets" in request:
+        raise AppError(
+            "VALIDATION_ERROR",
+            "budgets and resetBudgets cannot be submitted together",
+            400,
+        )
+    next_budget_json = record.budget_config_json
+    if reset_budgets:
+        next_budget_json = None
+    elif "budgets" in request:
+        current_budgets, _ = effective_agent_budgets(record)
+        try:
+            next_budgets = validate_agent_budgets(
+                request.get("budgets"),
+                base=current_budgets,
+            )
+        except AgentBudgetValidationError as exception:
+            raise AppError("VALIDATION_ERROR", str(exception), 400) from exception
+        next_budget_json = (
+            None
+            if next_budgets == DEFAULT_AGENT_BUDGETS
+            else json.dumps(next_budgets, ensure_ascii=False, sort_keys=True)
+        )
+
     if request.get("clearApiKey") is True:
         record.api_key_ciphertext = None
         record.api_key_fingerprint = None
@@ -145,9 +184,23 @@ def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any
         if enabled:
             decrypt_api_key(record.api_key_ciphertext)
         record.enabled = enabled
+    record.budget_config_json = next_budget_json
     record.updated_at = utc_now()
     db.commit()
     return agent_settings_response(db)
+
+
+def effective_agent_budgets(record: AgentReviewSettings) -> tuple[dict[str, int], str]:
+    if not record.budget_config_json:
+        return default_agent_budgets(), "DEFAULT"
+    stored = _read_json(record.budget_config_json, None)
+    if not isinstance(stored, dict) or set(stored) != AGENT_BUDGET_KEYS:
+        return default_agent_budgets(), "DEFAULT"
+    try:
+        budgets = validate_agent_budgets(stored)
+    except AgentBudgetValidationError:
+        return default_agent_budgets(), "DEFAULT"
+    return budgets, "CUSTOM"
 
 
 def record_worker_heartbeat(
@@ -329,6 +382,16 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
     run.heartbeat_at = now
     run.updated_at = now
     input_payload = _read_json(run.input_json, {})
+    raw_budgets = input_payload.get("budgets")
+    if raw_budgets is None:
+        # 兼容配置化上线前已排队的 Run；旧任务必须使用原默认值，而不是后来保存的全局配置。
+        budgets: dict[str, Any] = default_agent_budgets()
+    else:
+        try:
+            budgets = validate_agent_budgets(raw_budgets)
+        except AgentBudgetValidationError:
+            # 不把损坏的持久化原文返回给 Worker；安全哨兵会触发 Worker 的严格拒绝。
+            budgets = {"invalidBudgetContract": 1}
     db.commit()
     return {
         "jobId": job.id,
@@ -339,12 +402,7 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
         "worktree": input_payload.get("worktree"),
         "input": input_payload.get("case") or {},
         "apiKey": decrypt_api_key(settings_record.api_key_ciphertext),
-        "budgets": {
-            "maxTurns": MAX_TURNS,
-            "maxToolCalls": MAX_TOOL_CALLS,
-            "maxSourceBytes": MAX_SOURCE_BYTES,
-            "timeoutSeconds": TIMEOUT_SECONDS,
-        },
+        "budgets": budgets,
         "leaseSeconds": lease_seconds,
     }
 
@@ -466,7 +524,15 @@ def finish_agent_records(
 
 
 def run_to_summary(run: AgentReviewRun, *, fallback_triggered: bool | None = None) -> dict[str, Any]:
-    return {
+    tool_summary = _read_json(run.tool_summary_json, {})
+    effective_budgets = _safe_effective_budgets(
+        tool_summary.get("effectiveBudgets") if isinstance(tool_summary, dict) else None
+    )
+    if not effective_budgets:
+        input_payload = _read_json(run.input_json, {})
+        if isinstance(input_payload, dict):
+            effective_budgets = _safe_effective_budgets(input_payload.get("budgets"))
+    result = {
         "runId": run.id,
         "runnerVersion": run.runner_version,
         "cliVersion": run.cli_version or AGENT_CLI_VERSION,
@@ -480,13 +546,16 @@ def run_to_summary(run: AgentReviewRun, *, fallback_triggered: bool | None = Non
         "fallbackTriggered": bool(fallback_triggered) if fallback_triggered is not None else run.effective_engine == "STANDARD_FALLBACK",
         "failureCode": run.failure_code,
     }
+    if effective_budgets:
+        result["effectiveBudgets"] = effective_budgets
+    return result
 
 
 def sanitize_agent_audit(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     events: list[dict[str, Any]] = []
     raw_events = source.get("events") if isinstance(source.get("events"), list) else []
-    for index, raw_event in enumerate(raw_events[:MAX_TOOL_CALLS], 1):
+    for index, raw_event in enumerate(raw_events[:ABSOLUTE_MAX_TOOL_CALLS], 1):
         if not isinstance(raw_event, dict):
             continue
         tool = str(raw_event.get("tool") or "")
@@ -500,18 +569,19 @@ def sanitize_agent_audit(value: Any) -> dict[str, Any]:
             "sequence": sequence,
             "tool": tool,
             "status": status if status in {"SUCCESS", "FAILED"} else "FAILED",
-            "durationMs": _limited_non_negative(raw_event.get("durationMs"), TIMEOUT_SECONDS * 1000),
+            "durationMs": _limited_non_negative(
+                raw_event.get("durationMs"), ABSOLUTE_MAX_TIMEOUT_SECONDS * 1000
+            ),
             "itemCount": _limited_non_negative(raw_event.get("itemCount"), 100_000),
-            "sourceBytes": _limited_non_negative(raw_event.get("sourceBytes"), MAX_SOURCE_BYTES),
+            "sourceBytes": _limited_non_negative(
+                raw_event.get("sourceBytes"), ABSOLUTE_MAX_SOURCE_BYTES
+            ),
             "pathSummary": _safe_path_summaries(raw_event.get("pathSummary"), 5),
             "reviewBudget": _safe_review_budget(raw_event.get("reviewBudget")),
         }
         error_code = str(raw_event.get("errorCode") or "")
         if error_code and error_code.replace("_", "").isalnum():
             event["errorCode"] = error_code[:80]
-        query_hash = str(raw_event.get("queryHash") or "")
-        if _is_safe_hash(query_hash):
-            event["queryHash"] = query_hash
         events.append(event)
     events.sort(key=lambda item: item["sequence"])
     phase = str(source.get("phase") or "ANALYZING").upper()
@@ -519,16 +589,20 @@ def sanitize_agent_audit(value: Any) -> dict[str, Any]:
         phase = "ANALYZING"
     return {
         "phase": phase,
-        "toolCallCount": _limited_non_negative(source.get("toolCallCount"), MAX_TOOL_CALLS),
-        "evidenceCallsUsed": _limited_non_negative(source.get("evidenceCallsUsed"), 10),
+        "toolCallCount": _limited_non_negative(
+            source.get("toolCallCount"), ABSOLUTE_MAX_TOOL_CALLS
+        ),
+        "evidenceCallsUsed": _limited_non_negative(
+            source.get("evidenceCallsUsed"), ABSOLUTE_MAX_EVIDENCE_CALLS
+        ),
         "sourceBytesReturned": _limited_non_negative(
-            source.get("sourceBytesReturned"), MAX_SOURCE_BYTES
+            source.get("sourceBytesReturned"), ABSOLUTE_MAX_SOURCE_BYTES
         ),
         "diffBytesReturned": _limited_non_negative(
-            source.get("diffBytesReturned"), INLINE_DIFF_BYTES
+            source.get("diffBytesReturned"), ABSOLUTE_MAX_INLINE_DIFF_BYTES
         ),
         "blockedAccessCount": _limited_non_negative(
-            source.get("blockedAccessCount"), MAX_TOOL_CALLS
+            source.get("blockedAccessCount"), ABSOLUTE_MAX_TOOL_CALLS
         ),
         "reviewSubmitted": bool(source.get("reviewSubmitted")),
         "reviewBudget": _safe_review_budget(source.get("reviewBudget")),
@@ -575,7 +649,36 @@ def agent_trace_sequences(
             sequence = int(detail.get("sequence"))
         except (TypeError, ValueError):
             continue
-        if 0 <= sequence <= MAX_TOOL_CALLS:
+        if 0 <= sequence <= ABSOLUTE_MAX_TOOL_CALLS:
+            sequences.add(sequence)
+    return sequences
+
+
+def agent_heartbeat_sequences(
+    db: Session,
+    *,
+    task_id: int,
+    review_key: str,
+    run_id: int,
+) -> set[int]:
+    records = db.scalars(
+        select(CodeQualityReviewProgressEvent)
+        .where(CodeQualityReviewProgressEvent.task_id == task_id)
+        .where(CodeQualityReviewProgressEvent.review_key == review_key)
+        .where(CodeQualityReviewProgressEvent.phase == "AGENT_HEARTBEAT")
+    ).all()
+    sequences: set[int] = set()
+    for record in records:
+        detail = _read_json(record.detail, {})
+        if not isinstance(detail, dict):
+            continue
+        if _non_negative(detail.get("runId")) != int(run_id):
+            continue
+        try:
+            sequence = int(detail.get("heartbeatSequence"))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= sequence <= 1_000:
             sequences.add(sequence)
     return sequences
 
@@ -584,24 +687,30 @@ def _apply_safe_run_summary(run: AgentReviewRun, value: dict[str, Any]) -> None:
     run.cli_version = _bounded(value.get("cliVersion") or run.cli_version, 64)
     run.session_id = _bounded(value.get("sessionId") or run.session_id, 128)
     run.turn_count = _limited_non_negative(
-        value.get("turnCount") or value.get("numTurns"), MAX_TURNS + 1
+        value.get("turnCount") or value.get("numTurns"), ABSOLUTE_MAX_TURNS + 1
     )
     audit = sanitize_agent_audit(value.get("audit"))
     run.tool_call_count = _limited_non_negative(
-        value.get("toolCallCount") or audit.get("toolCallCount"), MAX_TOOL_CALLS
+        value.get("toolCallCount") or audit.get("toolCallCount"),
+        ABSOLUTE_MAX_TOOL_CALLS,
     )
     run.source_bytes_returned = _limited_non_negative(
         value.get("sourceBytesReturned") or audit.get("sourceBytesReturned"),
-        MAX_SOURCE_BYTES,
+        ABSOLUTE_MAX_SOURCE_BYTES,
     )
     run.diff_bytes_returned = _limited_non_negative(
         value.get("diffBytesReturned") or audit.get("diffBytesReturned"),
-        INLINE_DIFF_BYTES,
+        ABSOLUTE_MAX_INLINE_DIFF_BYTES,
     )
     run.duration_ms = (
-        _limited_non_negative(value.get("durationMs"), TIMEOUT_SECONDS * 1000)
+        _limited_non_negative(
+            value.get("durationMs"), ABSOLUTE_MAX_TIMEOUT_SECONDS * 1000
+        )
         or run.duration_ms
     )
+    effective_budgets = _safe_effective_budgets(value.get("effectiveBudgets"))
+    if effective_budgets:
+        audit["effectiveBudgets"] = effective_budgets
     run.usage_json = json.dumps(_safe_usage(value.get("usage")), ensure_ascii=False)
     run.tool_summary_json = json.dumps(audit, ensure_ascii=False)
 
@@ -624,6 +733,15 @@ def _safe_usage(value: Any) -> dict[str, int]:
     return result
 
 
+def _safe_effective_budgets(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict) or set(value) != AGENT_BUDGET_KEYS:
+        return {}
+    try:
+        return validate_agent_budgets(value)
+    except AgentBudgetValidationError:
+        return {}
+
+
 def _safe_review_budget(value: Any) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     phase = str(source.get("phase") or "DISCOVERY").upper()
@@ -631,12 +749,14 @@ def _safe_review_budget(value: Any) -> dict[str, Any]:
         phase = "DISCOVERY"
     return {
         "phase": phase,
-        "evidenceCallsUsed": _limited_non_negative(source.get("evidenceCallsUsed"), 10),
+        "evidenceCallsUsed": _limited_non_negative(
+            source.get("evidenceCallsUsed"), ABSOLUTE_MAX_EVIDENCE_CALLS
+        ),
         "evidenceCallsRemaining": _limited_non_negative(
-            source.get("evidenceCallsRemaining"), 10
+            source.get("evidenceCallsRemaining"), ABSOLUTE_MAX_EVIDENCE_CALLS
         ),
         "sourceBytesRemaining": _limited_non_negative(
-            source.get("sourceBytesRemaining"), MAX_SOURCE_BYTES
+            source.get("sourceBytesRemaining"), ABSOLUTE_MAX_SOURCE_BYTES
         ),
         "mustSubmit": bool(source.get("mustSubmit")) or phase == "SUBMIT",
     }
@@ -649,9 +769,6 @@ def _safe_path_summaries(value: Any, limit: int) -> list[dict[str, Any]]:
     for raw in value[:limit]:
         if not isinstance(raw, dict):
             continue
-        path_hash = str(raw.get("pathHash") or "")
-        if not _is_safe_hash(path_hash):
-            continue
         suffix = str(raw.get("suffix") or "").casefold()
         if len(suffix) > 20 or any(
             character not in ".abcdefghijklmnopqrstuvwxyz0123456789"
@@ -660,18 +777,11 @@ def _safe_path_summaries(value: Any, limit: int) -> list[dict[str, Any]]:
             suffix = ""
         result.append(
             {
-                "pathHash": path_hash,
                 "suffix": suffix,
                 "depth": _limited_non_negative(raw.get("depth"), 100),
             }
         )
     return result
-
-
-def _is_safe_hash(value: str) -> bool:
-    return len(value) == 16 and all(
-        character in "0123456789abcdef" for character in value
-    )
 
 
 def _safe_trace_sequence(value: Any, fallback: int) -> int | None:
@@ -681,7 +791,7 @@ def _safe_trace_sequence(value: Any, fallback: int) -> int | None:
         sequence = int(value if value is not None else fallback)
     except (TypeError, ValueError):
         return None
-    return sequence if 1 <= sequence <= MAX_TOOL_CALLS else None
+    return sequence if 1 <= sequence <= ABSOLUTE_MAX_TOOL_CALLS else None
 
 
 def _ensure_result_columns(db: Session, inspector) -> None:
@@ -695,6 +805,7 @@ def _ensure_result_columns(db: Session, inspector) -> None:
 def _ensure_settings_columns(db: Session, inspector) -> None:
     columns = {column["name"] for column in inspector.get_columns("code_quality_agent_settings")}
     definitions = {
+        "budget_config_json": "TEXT NULL",
         "test_request_id": "VARCHAR(128) NULL",
         "test_status": "VARCHAR(32) NULL",
         "test_message": "VARCHAR(512) NULL",

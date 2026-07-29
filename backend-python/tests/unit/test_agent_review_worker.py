@@ -1,6 +1,7 @@
 from threading import Event
 
 from app.agent_review import worker
+from app.agent_review_spike.budgets import default_agent_budgets
 
 
 def _safe_audit():
@@ -61,7 +62,7 @@ class _NoopThread:
         pass
 
 
-def test_job_heartbeat_carries_latest_safe_audit(monkeypatch):
+def test_job_heartbeat_starts_immediately_and_carries_sequence_and_safe_audit(monkeypatch):
     payloads = []
     latest = worker._LatestAuditSnapshot()
     latest.update(_safe_audit())
@@ -85,8 +86,14 @@ def test_job_heartbeat_carries_latest_safe_audit(monkeypatch):
     assert payloads == [
         {
             "workerId": "worker-1",
+            "heartbeatSequence": 0,
             "runSummary": {"audit": _safe_audit()},
-        }
+        },
+        {
+            "workerId": "worker-1",
+            "heartbeatSequence": 1,
+            "runSummary": {"audit": _safe_audit()},
+        },
     ]
 
 
@@ -124,18 +131,76 @@ def test_worker_completion_carries_final_callback_snapshot(tmp_path, monkeypatch
             "worktree": "worktrees/8/head",
             "input": {},
             "apiKey": "not-inspected",
-            "budgets": {
-                "timeoutSeconds": 600,
-                "maxTurns": 12,
-                "maxToolCalls": 40,
-                "maxSourceBytes": 200_000,
-            },
+            "budgets": default_agent_budgets(),
         },
     )
 
     path, payload = requests[-1]
     assert path == "/internal/agent-review/jobs/8/complete"
     assert payload["runSummary"]["audit"] == _safe_audit()
+
+
+def test_worker_maps_all_runtime_budgets_to_runner_config() -> None:
+    budgets = {
+        "maxTurns": 14,
+        "maxToolCalls": 50,
+        "maxSourceBytes": 250_000,
+        "timeoutSeconds": 700,
+        "inlineDiffBytes": 240_000,
+        "maxEvidenceCalls": 12,
+        "convergeAtCalls": 10,
+        "submitByTurn": 11,
+    }
+
+    config = worker._runner_config_from_budgets(budgets)
+
+    assert config.max_turns == 14
+    assert config.max_tool_calls == 50
+    assert config.max_source_bytes == 250_000
+    assert config.timeout_seconds == 700
+    assert config.inline_diff_bytes == 240_000
+    assert config.max_evidence_calls == 12
+    assert config.converge_at_calls == 10
+    assert config.submit_by_turn == 11
+
+
+def test_worker_rejects_invalid_internal_budget_contract(tmp_path, monkeypatch):
+    requests = []
+    runner_called = False
+
+    def unexpected_runner(*_args, **_kwargs):
+        nonlocal runner_called
+        runner_called = True
+        return {}
+
+    monkeypatch.setattr(worker, "Thread", _NoopThread)
+    monkeypatch.setattr(worker, "_resolve_worktree", lambda _root, _relative: tmp_path)
+    monkeypatch.setattr(worker, "run_agent_candidate", unexpected_runner)
+    monkeypatch.setattr(
+        worker,
+        "_post",
+        lambda _url, _token, path, payload: requests.append((path, payload)) or {},
+    )
+
+    worker._run_job(
+        "http://backend",
+        "token",
+        "worker-1",
+        tmp_path,
+        {
+            "jobId": 18,
+            "idempotencyKey": "agent:18",
+            "worktree": "worktrees/18/head",
+            "input": {},
+            "apiKey": "not-inspected",
+            "budgets": {"invalidBudgetContract": 1},
+        },
+    )
+
+    path, payload = requests[-1]
+    assert runner_called is False
+    assert path == "/internal/agent-review/jobs/18/fail"
+    assert payload["failureCode"] == "AGENT_INVALID_BUDGET_CONFIG"
 
 
 def test_worker_unexpected_error_logs_only_safe_type_and_location(

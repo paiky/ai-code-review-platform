@@ -205,6 +205,29 @@ def test_evidence_budget_converges_submits_and_reserves_submit_tool(tmp_path):
     assert audit["reviewSubmitted"] is True
 
 
+def test_custom_evidence_budget_changes_convergence_and_submit_boundary(tmp_path):
+    server = ReviewMcpServer(
+        ReviewWorkspace(tmp_path),
+        ["source.txt"],
+        tmp_path / "result.json",
+        tmp_path / "audit.json",
+        ToolBudget(
+            max_calls=20,
+            max_evidence_calls=12,
+            converge_at_evidence_calls=10,
+        ),
+    )
+
+    phases = [
+        _tool_value(server.call_tool("list_files", {}))["reviewBudget"]["phase"]
+        for _ in range(12)
+    ]
+
+    assert phases[:9] == ["DISCOVERY"] * 9
+    assert phases[9:11] == ["CONVERGE"] * 2
+    assert phases[11] == "SUBMIT"
+
+
 def test_invalid_evidence_arguments_consume_an_attempt(tmp_path):
     (tmp_path / "source.txt").write_text("value\n", encoding="utf-8")
     server = ReviewMcpServer(

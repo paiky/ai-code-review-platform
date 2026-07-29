@@ -90,7 +90,8 @@ def enqueue_agent_review(
     comparison_mode: bool = False,
     completion_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    repository.assert_agent_available(db, require_worker=False)
+    settings_record = repository.assert_agent_available(db, require_worker=False)
+    budgets, _ = repository.effective_agent_budgets(settings_record)
     requested_files = _changed_file_paths(request)
     if not requested_files:
         raise AppError("VALIDATION_ERROR", "Agent Review requires changedFiles", 400)
@@ -137,7 +138,7 @@ def enqueue_agent_review(
         "commitSha": request.get("commitSha") or task.after_sha or task.commit_sha,
         "changedFiles": changed_files,
         "diff": diff_text,
-        "diffMode": "INLINE" if diff_bytes <= repository.INLINE_DIFF_BYTES else "TOOL_PAGED",
+        "diffMode": "INLINE" if diff_bytes <= budgets["inlineDiffBytes"] else "TOOL_PAGED",
         "reviewInstructions": review_instructions,
         "baselineContext": _bounded_context(request),
         "reviewCoverage": {
@@ -160,7 +161,11 @@ def enqueue_agent_review(
         db,
         task_id=int(task.id),
         project_id=int(project.id),
-        input_payload={"worktree": worktree_relative, "case": input_case},
+        input_payload={
+            "worktree": worktree_relative,
+            "case": input_case,
+            "budgets": budgets,
+        },
         completion_context=completion_context,
         comparison_mode=comparison_mode,
     )
@@ -295,6 +300,7 @@ def recover_unavailable_agent_jobs() -> int:
 
 def heartbeat_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any]:
     run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
+    heartbeat_sequence = _safe_heartbeat_sequence(request.get("heartbeatSequence"))
     response = repository.heartbeat_agent_job(
         db,
         job_id=job_id,
@@ -303,6 +309,12 @@ def heartbeat_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str
     )
     run = repository.find_agent_run_by_job(db, job_id)
     if run is not None:
+        _persist_agent_heartbeat_safely(
+            db,
+            run,
+            run_summary,
+            heartbeat_sequence=heartbeat_sequence,
+        )
         _persist_agent_trace_safely(db, run, run_summary)
     return response
 
@@ -492,9 +504,8 @@ def _persist_agent_trace_safely(
                 "pathSummary": event.get("pathSummary") or [],
                 "reviewBudget": event.get("reviewBudget") or {},
             }
-            for field in ("errorCode", "queryHash"):
-                if event.get(field):
-                    detail[field] = event[field]
+            if event.get("errorCode"):
+                detail["errorCode"] = event["errorCode"]
             append_progress(
                 db,
                 int(locked_run.task_id),
@@ -513,6 +524,97 @@ def _persist_agent_trace_safely(
             getattr(run, "id", None),
             type(exception).__name__,
         )
+
+
+def _persist_agent_heartbeat_safely(
+    db: Session,
+    run: Any,
+    run_summary: dict[str, Any],
+    *,
+    heartbeat_sequence: int | None,
+) -> None:
+    if heartbeat_sequence is None:
+        return
+    try:
+        locked_run = repository.lock_agent_run_for_trace(db, int(run.id))
+        if locked_run is None:
+            return
+        heartbeat_sequences = repository.agent_heartbeat_sequences(
+            db,
+            task_id=int(locked_run.task_id),
+            review_key=str(locked_run.review_key),
+            run_id=int(locked_run.id),
+        )
+        if heartbeat_sequence in heartbeat_sequences:
+            return
+        trace_sequences = repository.agent_trace_sequences(
+            db,
+            task_id=int(locked_run.task_id),
+            review_key=str(locked_run.review_key),
+            run_id=int(locked_run.id),
+        )
+        if 0 not in trace_sequences:
+            append_progress(
+                db,
+                int(locked_run.task_id),
+                "AGENT_ANALYZING",
+                "INFO",
+                "Agent 正在分析代码变更",
+                json.dumps(
+                    {
+                        "runId": int(locked_run.id),
+                        "sequence": 0,
+                        "activity": "ANALYZING",
+                    },
+                    ensure_ascii=False,
+                ),
+                review_key=locked_run.review_key,
+            )
+        audit = repository.sanitize_agent_audit(run_summary.get("audit"))
+        effective_budgets = repository.run_to_summary(locked_run).get(
+            "effectiveBudgets"
+        )
+        detail = {
+            "runId": int(locked_run.id),
+            "heartbeatSequence": heartbeat_sequence,
+            "activity": "HEARTBEAT",
+            "status": "RUNNING",
+            "phase": (audit.get("reviewBudget") or {}).get("phase") or "DISCOVERY",
+            "toolCallCount": int(audit.get("toolCallCount") or 0),
+            "evidenceCallsUsed": int(audit.get("evidenceCallsUsed") or 0),
+            "sourceBytesReturned": int(audit.get("sourceBytesReturned") or 0),
+            "diffBytesReturned": int(audit.get("diffBytesReturned") or 0),
+            "reviewBudget": audit.get("reviewBudget") or {},
+        }
+        if effective_budgets:
+            detail["effectiveBudgets"] = effective_budgets
+        append_progress(
+            db,
+            int(locked_run.task_id),
+            "AGENT_HEARTBEAT",
+            "INFO",
+            "Agent Worker 运行心跳",
+            json.dumps(detail, ensure_ascii=False),
+            review_key=locked_run.review_key,
+        )
+        db.commit()
+    except Exception as exception:
+        db.rollback()
+        _LOGGER.warning(
+            "Agent Review heartbeat trace persistence failed runId=%s errorType=%s",
+            getattr(run, "id", None),
+            type(exception).__name__,
+        )
+
+
+def _safe_heartbeat_sequence(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        sequence = int(value)
+    except (TypeError, ValueError):
+        return None
+    return sequence if 0 <= sequence <= 1_000 else None
 
 
 def _agent_trace_phase_and_message(event: dict[str, Any]) -> tuple[str, str]:

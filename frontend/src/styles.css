@@ -455,6 +455,66 @@ body {
   min-width: 0;
 }
 
+.agent-trace-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 8px 0 20px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.agent-trace-overview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-trace-budget-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-trace-budget-item {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.agent-trace-budget-item > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.agent-trace-budget-item .ant-progress {
+  margin: 0;
+}
+
+@media (max-width: 980px) {
+  .agent-trace-budget-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .agent-trace-overview-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .agent-trace-budget-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .quality-running-bar {
   display: flex;
   align-items: center;
@@ -525,6 +585,142 @@ body {
 
 .prompt-field {
   margin-top: 8px;
+}
+
+.agent-budget-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-budget-toolbar .ant-typography {
+  min-width: 0;
+}
+
+.agent-budget-toolbar .ant-btn {
+  flex: 0 0 auto;
+}
+
+.agent-budget-grid {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+}
+
+.agent-budget-grid-basic {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.agent-budget-grid-advanced {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-budget-field-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 164px;
+  padding: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.agent-budget-field-title {
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+}
+
+.agent-budget-field-card .ant-space-compact {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.agent-budget-field-card .ant-input-number-addon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  min-width: 58px;
+  padding-inline: 8px;
+  text-align: center;
+}
+
+.agent-budget-field-input {
+  width: 100%;
+}
+
+.agent-budget-field-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 14px;
+}
+
+.agent-budget-field-meta > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.agent-budget-field-meta .ant-typography {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-budget-advanced {
+  width: 100%;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.agent-budget-advanced .ant-collapse-content,
+.agent-budget-advanced .ant-collapse-content-box {
+  min-width: 0;
+}
+
+.agent-budget-advanced > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
+  padding: 16px;
+  background: #f8fafc;
+}
+
+@media (max-width: 1280px) {
+  .agent-budget-grid-basic {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .agent-budget-grid-basic,
+  .agent-budget-grid-advanced {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .agent-budget-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .agent-budget-toolbar .ant-btn {
+    align-self: flex-start;
+  }
+
+  .agent-budget-grid-basic,
+  .agent-budget-grid-advanced {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .settings-subsection {

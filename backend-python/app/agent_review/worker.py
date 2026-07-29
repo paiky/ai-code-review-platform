@@ -12,6 +12,10 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from app.agent_review_spike.budgets import (
+    AgentBudgetValidationError,
+    validate_agent_budgets,
+)
 from app.agent_review_spike.runner import RunnerConfig, run_agent_candidate
 
 
@@ -74,18 +78,13 @@ def _run_job(
     )
     heartbeat.start()
     try:
+        runner_config = _runner_config_from_budgets(job.get("budgets"))
         worktree = _resolve_worktree(workspace_root, str(job.get("worktree") or ""))
-        budgets = job.get("budgets") or {}
         summary = run_agent_candidate(
             job.get("input") or {},
             worktree,
             str(job.get("apiKey") or ""),
-            RunnerConfig(
-                timeout_seconds=int(budgets.get("timeoutSeconds") or 600),
-                max_turns=int(budgets.get("maxTurns") or 12),
-                max_tool_calls=int(budgets.get("maxToolCalls") or 40),
-                max_source_bytes=int(budgets.get("maxSourceBytes") or 200_000),
-            ),
+            runner_config,
             cancel_event=cancelled,
             progress_callback=latest_audit.update,
         )
@@ -105,6 +104,11 @@ def _run_job(
                 "failureMessage": _failure_message(error_code),
             })
     except Exception as exception:
+        error_code = (
+            "AGENT_INVALID_BUDGET_CONFIG"
+            if isinstance(exception, AgentBudgetValidationError)
+            else "AGENT_WORKER_ERROR"
+        )
         _LOGGER.error(
             "Agent Worker job failed before terminal report: jobId=%s exceptionType=%s location=%s",
             job_id,
@@ -114,8 +118,8 @@ def _run_job(
         _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/fail", {
             "workerId": worker_id,
             "idempotencyKey": job["idempotencyKey"],
-            "failureCode": "AGENT_WORKER_ERROR",
-            "failureMessage": _failure_message("AGENT_WORKER_ERROR"),
+            "failureCode": error_code,
+            "failureMessage": _failure_message(error_code),
             "runSummary": {"audit": latest_audit.snapshot()},
         })
     finally:
@@ -207,9 +211,13 @@ def _heartbeat_loop(
     cancelled: Event,
     latest_audit: _LatestAuditSnapshot,
 ) -> None:
-    while not stop.wait(15):
+    heartbeat_sequence = 0
+    while True:
         try:
-            payload: dict[str, Any] = {"workerId": worker_id}
+            payload: dict[str, Any] = {
+                "workerId": worker_id,
+                "heartbeatSequence": heartbeat_sequence,
+            }
             audit = latest_audit.snapshot()
             if audit:
                 payload["runSummary"] = {"audit": audit}
@@ -222,7 +230,10 @@ def _heartbeat_loop(
             if bool((response.get("data") or {}).get("cancelRequested")):
                 cancelled.set()
         except Exception:
-            continue
+            pass
+        heartbeat_sequence += 1
+        if stop.wait(15):
+            return
 
 
 def _resolve_worktree(root: Path, relative: str) -> Path:
@@ -255,6 +266,8 @@ def _required_env(name: str) -> str:
 
 
 def _failure_message(error_code: str) -> str:
+    if error_code == "AGENT_INVALID_BUDGET_CONFIG":
+        return "Agent Review rejected an invalid runtime budget contract"
     if error_code == "AGENT_MAX_TURNS_EXCEEDED":
         return "Agent Review reached the turn budget before submitting a Review Card"
     if error_code == "AGENT_CLI_FAILED":
@@ -262,6 +275,20 @@ def _failure_message(error_code: str) -> str:
     if error_code == "AGENT_WORKER_ERROR":
         return "Agent Worker failed before a valid Review Card could be submitted"
     return "Agent Review did not produce a valid submitted Review Card"
+
+
+def _runner_config_from_budgets(value: Any) -> RunnerConfig:
+    budgets = validate_agent_budgets(value)
+    return RunnerConfig(
+        timeout_seconds=budgets["timeoutSeconds"],
+        max_turns=budgets["maxTurns"],
+        max_tool_calls=budgets["maxToolCalls"],
+        max_source_bytes=budgets["maxSourceBytes"],
+        inline_diff_bytes=budgets["inlineDiffBytes"],
+        max_evidence_calls=budgets["maxEvidenceCalls"],
+        converge_at_calls=budgets["convergeAtCalls"],
+        submit_by_turn=budgets["submitByTurn"],
+    )
 
 
 def _safe_exception_location(exception: Exception) -> str:

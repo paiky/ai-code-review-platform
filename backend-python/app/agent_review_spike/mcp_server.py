@@ -271,6 +271,12 @@ def main() -> int:
             budget=ToolBudget(
                 max_calls=int(os.getenv("REVIEW_MAX_TOOL_CALLS", "40")),
                 max_source_bytes=int(os.getenv("REVIEW_MAX_SOURCE_BYTES", "200000")),
+                max_evidence_calls=int(
+                    os.getenv("REVIEW_MAX_EVIDENCE_CALLS", "10")
+                ),
+                converge_at_evidence_calls=int(
+                    os.getenv("REVIEW_CONVERGE_AT_CALLS", "8")
+                ),
             ),
             diff_by_file=_load_diff_map(os.getenv("REVIEW_DIFF_MAP_PATH")),
         )

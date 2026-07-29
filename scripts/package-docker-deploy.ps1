@@ -3,8 +3,6 @@ param(
   [switch]$IncludeMysqlImage,
   [switch]$AgentWorkerOnly,
   [string]$ReuseVersion,
-  [ValidateRange(1, 5)]
-  [int]$DockerNetworkMaxAttempts = 3,
   [switch]$PauseOnError
 )
 
@@ -44,66 +42,6 @@ function Invoke-Docker {
   & docker @Arguments
   if ($LASTEXITCODE -ne 0) {
     throw "Docker command failed with exit code ${LASTEXITCODE}: docker $($Arguments -join ' ')"
-  }
-}
-
-function Test-DockerNetworkFailure {
-  param(
-    [string]$Output
-  )
-
-  return $Output -match (
-    "(?is)" +
-    "failed to fetch oauth token|" +
-    "auth\.docker\.io/token.*\bEOF\b|" +
-    "unexpected EOF|" +
-    "TLS handshake timeout|" +
-    "i/o timeout|" +
-    "connection (?:reset|aborted)(?: by peer)?|" +
-    "net/http: request canceled|" +
-    "context deadline exceeded|" +
-    "temporary failure (?:in name resolution|resolving)|" +
-    "no such host|" +
-    "dial tcp.*timeout|" +
-    "ECONNRESET|ETIMEDOUT|EAI_AGAIN"
-  )
-}
-
-function Invoke-DockerNetworkCommand {
-  param(
-    [string[]]$Arguments,
-    [int]$MaxAttempts
-  )
-
-  for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
-    $OutputLines = New-Object System.Collections.Generic.List[string]
-    $PreviousErrorActionPreference = $ErrorActionPreference
-    try {
-      $ErrorActionPreference = "Continue"
-      & docker @Arguments 2>&1 | ForEach-Object {
-        $Line = $_.ToString()
-        $OutputLines.Add($Line)
-        Write-Host $Line
-      }
-      $ExitCode = $LASTEXITCODE
-    } finally {
-      $ErrorActionPreference = $PreviousErrorActionPreference
-    }
-
-    if ($ExitCode -eq 0) {
-      return
-    }
-
-    $Output = [string]::Join([Environment]::NewLine, $OutputLines)
-    $CommandText = "docker $($Arguments -join ' ')"
-    $Retryable = Test-DockerNetworkFailure -Output $Output
-    if (-not $Retryable -or $Attempt -ge $MaxAttempts) {
-      throw "Docker command failed with exit code ${ExitCode}: $CommandText"
-    }
-
-    $DelaySeconds = [Math]::Min(5 * $Attempt, 15)
-    Write-Warning "Docker network failure detected. Retrying in $DelaySeconds seconds ($Attempt/$MaxAttempts): $CommandText"
-    Start-Sleep -Seconds $DelaySeconds
   }
 }
 
@@ -230,26 +168,18 @@ try {
       -TargetImage $AgentEgressImage
   } else {
     Write-Host "Building backend image: $BackendImage"
-    Invoke-DockerNetworkCommand `
-      -Arguments @("build", "-f", (Join-Path $DeployDir "backend.Dockerfile"), "-t", $BackendImage, $RepoRoot) `
-      -MaxAttempts $DockerNetworkMaxAttempts
+    Invoke-Docker build -f (Join-Path $DeployDir "backend.Dockerfile") -t $BackendImage $RepoRoot
 
     Write-Host "Building frontend image: $FrontendImage"
-    Invoke-DockerNetworkCommand `
-      -Arguments @("build", "-f", (Join-Path $DeployDir "frontend.Dockerfile"), "-t", $FrontendImage, $RepoRoot) `
-      -MaxAttempts $DockerNetworkMaxAttempts
+    Invoke-Docker build -f (Join-Path $DeployDir "frontend.Dockerfile") -t $FrontendImage $RepoRoot
   }
 
   Write-Host "Building Agent Worker image: $AgentWorkerImage"
-  Invoke-DockerNetworkCommand `
-    -Arguments @("build", "-f", (Join-Path $DeployDir "agent-review-worker.Dockerfile"), "-t", $AgentWorkerImage, $RepoRoot) `
-    -MaxAttempts $DockerNetworkMaxAttempts
+  Invoke-Docker build -f (Join-Path $DeployDir "agent-review-worker.Dockerfile") -t $AgentWorkerImage $RepoRoot
 
   if (-not $AgentWorkerOnly) {
     Write-Host "Building Agent egress proxy image: $AgentEgressImage"
-    Invoke-DockerNetworkCommand `
-      -Arguments @("build", "-f", (Join-Path $DeployDir "agent-egress-proxy.Dockerfile"), "-t", $AgentEgressImage, $RepoRoot) `
-      -MaxAttempts $DockerNetworkMaxAttempts
+    Invoke-Docker build -f (Join-Path $DeployDir "agent-egress-proxy.Dockerfile") -t $AgentEgressImage $RepoRoot
   }
 
   Write-Host "Saving application images"
@@ -261,9 +191,7 @@ try {
 
   if ($IncludeMysqlImage) {
     Write-Host "Pulling and saving MySQL image: $MysqlImage"
-    Invoke-DockerNetworkCommand `
-      -Arguments @("pull", $MysqlImage) `
-      -MaxAttempts $DockerNetworkMaxAttempts
+    Invoke-Docker pull $MysqlImage
     Invoke-Docker save -o (Join-Path $OutputDir "mysql-8.4.tar") $MysqlImage
   }
 

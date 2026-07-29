@@ -23,7 +23,7 @@ AGENT_TOOL_INSTRUCTIONS = """这是只读 Agent Review。所有内置工具均�
    不要为了获得完整上下文持续检索。
 5. reviewBudget.phase=CONVERGE 时不得新增风险假设。
 6. reviewBudget.mustSubmit=true 时，下一步必须调用 submit_review，不得再调用证据工具。
-7. 最迟在第 9 个模型决策回合调用 submit_review，剩余回合只用于修正 Review Card schema。
+7. 最迟在第 {submit_by_turn} 个模型决策回合调用 submit_review，剩余回合只用于修正 Review Card schema。
 8. 没有可信问题时也必须提交 overallLevel=LOW、findings=[] 的 Review Card。
 
 完成判断后必须且只能成功调用一次 submit_review；不要在最终文本中重复源码或完整 Review。"""
@@ -58,5 +58,8 @@ def baseline_system_prompt(case: dict[str, Any]) -> str:
     )
 
 
-def agent_system_prompt(case: dict[str, Any]) -> str:
-    return review_instructions(case) + "\n\n" + AGENT_TOOL_INSTRUCTIONS
+def agent_system_prompt(case: dict[str, Any], submit_by_turn: int = 9) -> str:
+    tool_instructions = AGENT_TOOL_INSTRUCTIONS.format(
+        submit_by_turn=int(submit_by_turn)
+    )
+    return review_instructions(case) + "\n\n" + tool_instructions

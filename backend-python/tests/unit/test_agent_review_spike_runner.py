@@ -83,6 +83,10 @@ def test_claude_command_disables_builtins_and_allows_only_review_mcp(tmp_path):
     assert RunnerConfig().max_tool_calls == 40
     assert RunnerConfig().max_source_bytes == 200_000
     assert RunnerConfig().timeout_seconds == 600
+    assert RunnerConfig().inline_diff_bytes == 200_000
+    assert RunnerConfig().max_evidence_calls == 10
+    assert RunnerConfig().converge_at_calls == 8
+    assert RunnerConfig().submit_by_turn == 9
     assert command[command.index("--tools") + 1] == ""
     assert command[command.index("--permission-mode") + 1] == "dontAsk"
     assert "--strict-mcp-config" in command
@@ -124,6 +128,10 @@ def test_agent_prompt_requires_bounded_hypotheses_and_timely_submission():
     assert "最迟在第 9 个模型决策回合调用 submit_review" in prompt
     assert "overallLevel=LOW、findings=[]" in prompt
     assert "禁止 Bash、Git、编辑、Web、其它 MCP 和子 Agent" in prompt
+
+    custom_prompt = agent_system_prompt(_manifest()["cases"][0], submit_by_turn=11)
+    assert "最迟在第 11 个模型决策回合调用 submit_review" in custom_prompt
+    assert "最迟在第 9 个模型决策回合" not in custom_prompt
 
 
 def test_claude_result_at_turn_budget_has_stable_failure_code():
@@ -227,9 +235,9 @@ def test_runner_sanitizes_and_deduplicates_progress_callbacks():
             **raw["events"][0],
             "sequence": sequence,
         }
-        for sequence in range(1, 42)
+        for sequence in range(1, 62)
     ]
-    assert len(_sanitize_audit_snapshot(raw)["events"]) == 40
+    assert len(_sanitize_audit_snapshot(raw)["events"]) == 60
 
 
 class _FakeClaudeProcess:
@@ -302,6 +310,43 @@ class _FakeClaudeProcess:
 
     def poll(self):
         return self.returncode
+
+
+def test_runner_passes_custom_evidence_budget_to_mcp(tmp_path, monkeypatch):
+    captured_environment = {}
+
+    def factory(command, **_kwargs):
+        process = _FakeClaudeProcess(command, mode="success")
+        mcp_path = Path(command[command.index("--mcp-config") + 1])
+        config = json.loads(mcp_path.read_text(encoding="utf-8"))
+        captured_environment.update(config["mcpServers"]["review"]["env"])
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", factory)
+    config = RunnerConfig(
+        max_turns=14,
+        max_tool_calls=50,
+        max_source_bytes=250_000,
+        timeout_seconds=700,
+        inline_diff_bytes=240_000,
+        max_evidence_calls=12,
+        converge_at_calls=10,
+        submit_by_turn=11,
+    )
+
+    summary = _run_candidate(
+        _manifest()["cases"][0],
+        tmp_path,
+        "fake-key",
+        config,
+        include_card=True,
+    )
+
+    assert summary["status"] == "SUCCESS"
+    assert captured_environment["REVIEW_MAX_TOOL_CALLS"] == "50"
+    assert captured_environment["REVIEW_MAX_SOURCE_BYTES"] == "250000"
+    assert captured_environment["REVIEW_MAX_EVIDENCE_CALLS"] == "12"
+    assert captured_environment["REVIEW_CONVERGE_AT_CALLS"] == "10"
 
 
 def _run_with_fake_process(tmp_path, monkeypatch, mode, callback=None, case=None):
