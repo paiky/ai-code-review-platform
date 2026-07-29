@@ -41,6 +41,7 @@ README 只提供项目入口和最短运行方式。详细配置、部署、验�
 - `docs/38-review-lifecycle-and-frontend-entrypoints.md`：Review 生命周期、任务、质量治理和前端入口。
 - `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`：确定性检查、Planner 多端感知和证据链专项。
 - `docs/41-server-side-readonly-agent-review-plan.md`：服务器侧只读 Agent Review、安全边界和生产验收。
+- `docs/47-agent-review-multi-worker-pool-and-queue-governance-plan.md`：Agent Worker 池化、并发领取、扩缩容和队列治理。
 
 ### 排障与历史
 
@@ -59,6 +60,7 @@ README 只提供项目入口和最短运行方式。详细配置、部署、验�
 - Review 生命周期和前端入口：在 `docs/38-review-lifecycle-and-frontend-entrypoints.md` 中搜索。
 - 证据链和多端能力：在 `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md` 中搜索。
 - 服务器侧只读 Agent Review：在 `docs/41-server-side-readonly-agent-review-plan.md` 中搜索。
+- Agent Worker 副本数、池化和队列治理：在 `docs/47-agent-review-multi-worker-pool-and-queue-governance-plan.md` 中搜索。
 - API、规则和 schema：通过 `rg` 定位对应专题文档。
 - 环境和工具问题：在 `docs/11-agent-environment-pitfalls.md` 中搜索具体症状。
 - 历史计划和归档：只有明确追溯历史决策时读取。
@@ -202,6 +204,41 @@ docker compose up -d --build
 docker compose ps
 curl http://127.0.0.1:8090/api/health
 ```
+
+### Agent Worker 副本数
+
+每个 `agent-worker` 容器同时只执行一个 Agent Review。生产首次池化推荐使用 2 个 Worker，
+Worker 数量由 Docker Compose 的 `--scale` 参数显式控制，不在设置页中配置：
+
+```bash
+WORKER_COUNT=2
+docker compose up -d --scale agent-worker=$WORKER_COUNT
+```
+
+升级时只重建 Worker 和受限出站代理：
+
+```bash
+WORKER_COUNT=2
+docker compose up -d --scale agent-worker=$WORKER_COUNT agent-egress-proxy agent-worker
+```
+
+Worker 相关配置：
+
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--scale agent-worker=N` | 未指定时单副本 | Worker 容器数量；当前远程验收值为 `2` |
+| `AGENT_REVIEW_WORKER_ID_PREFIX` | `agent-worker` | Worker ID 前缀；Linux 容器自动追加 hostname，通常无需修改 |
+| `AGENT_REVIEW_WORKER_TOKEN` | 无 | Backend 与 Worker 共用的内部鉴权密钥，必须配置且不得写入仓库 |
+| `LOCAL_REPO_WORKSPACE_HOST_DIR` | 部署配置决定 | 挂载到 Worker 的只读仓库工作区宿主机目录 |
+
+注意：
+
+- 普通 `docker compose up -d` 不应作为保持多副本数量的部署命令；升级、执行 `down` 后重建或调整数量时，
+  应重新显式传入 `--scale agent-worker=N`。
+- `docker compose restart` 和服务器基于 `restart: unless-stopped` 的重启通常会保留现有容器数量。
+- 当前只验收 2 个 Worker，不建议在完成容量与队列治理前扩大到更多副本。
+- 阶段三优雅排空落地前，缩容必须先禁用 Agent Review 并等待运行任务结束。
+- 生产多 Worker 要求 MySQL 8；MySQL 5.7 只保留串行领取兼容。
 
 GitLab webhook：
 

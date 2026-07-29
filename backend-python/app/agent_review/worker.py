@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import sys
 from threading import Event, Lock, Thread
 import tempfile
 import time
@@ -42,16 +43,58 @@ class _LatestAuditSnapshot:
             return json.loads(json.dumps(self._value, ensure_ascii=False))
 
 
+class _WorkerActivityState:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._state = "IDLE"
+        self._active_job_id: int | None = None
+        self._active_run_id: int | None = None
+
+    def begin(self, job: dict[str, Any]) -> None:
+        with self._lock:
+            self._state = "BUSY"
+            self._active_job_id = (
+                int(job["jobId"]) if job.get("jobId") is not None else None
+            )
+            self._active_run_id = (
+                int(job["runId"]) if job.get("runId") is not None else None
+            )
+
+    def idle(self) -> None:
+        with self._lock:
+            self._state = "IDLE"
+            self._active_job_id = None
+            self._active_run_id = None
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            result: dict[str, Any] = {
+                "state": self._state,
+                "capacity": 1,
+            }
+            if self._active_job_id is not None:
+                result["activeJobId"] = self._active_job_id
+            if self._active_run_id is not None:
+                result["activeRunId"] = self._active_run_id
+            return result
+
+
 def main() -> int:
     backend_url = _required_env("AGENT_REVIEW_BACKEND_URL").rstrip("/")
-    token = _required_env("AGENT_REVIEW_WORKER_TOKEN")
     worker_id = _resolve_worker_id()
+    arguments = sys.argv[1:]
+    if arguments:
+        if arguments != ["--healthcheck"]:
+            raise ValueError("Only --healthcheck is supported")
+        return _healthcheck(backend_url, worker_id)
+    token = _required_env("AGENT_REVIEW_WORKER_TOKEN")
     workspace_root = Path(os.getenv("AGENT_REVIEW_WORKSPACE_ROOT", "/workspaces")).resolve(strict=True)
     poll_seconds = max(float(os.getenv("AGENT_REVIEW_WORKER_POLL_SECONDS", "3")), 1.0)
     process_stop = Event()
+    activity = _WorkerActivityState()
     process_heartbeat = Thread(
         target=_worker_heartbeat_loop,
-        args=(backend_url, token, worker_id, process_stop),
+        args=(backend_url, token, worker_id, process_stop, activity),
         daemon=True,
     )
     process_heartbeat.start()
@@ -66,7 +109,11 @@ def main() -> int:
                 )
                 job = claimed.get("data")
                 if job:
-                    _run_job(backend_url, token, worker_id, workspace_root, job)
+                    activity.begin(job)
+                    try:
+                        _run_job(backend_url, token, worker_id, workspace_root, job)
+                    finally:
+                        activity.idle()
                     continue
             except (OSError, ValueError, HTTPError, URLError):
                 pass
@@ -211,14 +258,25 @@ def _run_configuration_test(
     )
 
 
-def _worker_heartbeat_loop(backend_url: str, token: str, worker_id: str, stop: Event) -> None:
+def _worker_heartbeat_loop(
+    backend_url: str,
+    token: str,
+    worker_id: str,
+    stop: Event,
+    activity: _WorkerActivityState,
+) -> None:
     while True:
         try:
             _post(
                 backend_url,
                 token,
                 "/internal/agent-review/workers/heartbeat",
-                {"workerId": worker_id, "workerVersion": WORKER_VERSION, "cliVersion": CLI_VERSION},
+                {
+                    "workerId": worker_id,
+                    "workerVersion": WORKER_VERSION,
+                    "cliVersion": CLI_VERSION,
+                    **activity.snapshot(),
+                },
             )
         except Exception:
             pass
@@ -282,6 +340,39 @@ def _post(base_url: str, token: str, path: str, payload: dict[str, Any]) -> dict
     with urlopen(request, timeout=30) as response:
         value = json.loads(response.read().decode("utf-8"))
     return value if isinstance(value, dict) else {}
+
+
+def _healthcheck(backend_url: str, worker_id: str) -> int:
+    try:
+        settings = _fetch_agent_settings(backend_url)
+        pool = settings.get("workerPool")
+        if not isinstance(pool, dict):
+            return 1
+        nodes = pool.get("nodes")
+        if not isinstance(nodes, list):
+            return 1
+        matched = next(
+            (
+                node
+                for node in nodes
+                if isinstance(node, dict) and node.get("workerId") == worker_id
+            ),
+            None,
+        )
+    except Exception:
+        return 1
+    return 0 if matched and matched.get("online") is True else 1
+
+
+def _fetch_agent_settings(backend_url: str) -> dict[str, Any]:
+    request = Request(
+        backend_url.rstrip("/") + "/api/code-quality-reviews/agent-settings",
+        method="GET",
+    )
+    with urlopen(request, timeout=5) as response:
+        value = json.loads(response.read().decode("utf-8"))
+    data = value.get("data") if isinstance(value, dict) else None
+    return data if isinstance(data, dict) else {}
 
 
 def _required_env(name: str) -> str:

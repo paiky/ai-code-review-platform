@@ -43,6 +43,27 @@ function Get-AgentSettings {
     catch { return $null }
 }
 
+function Test-AgentWorkerOnline {
+    param(
+        $Settings,
+        [string] $WorkerId,
+        [string] $WorkerPrefix
+    )
+    if ($null -eq $Settings -or $Settings.workerStatus -ne "ONLINE") { return $false }
+    $nodes = @($Settings.workerPool.nodes)
+    if ($nodes.Count -gt 0) {
+        if (-not [string]::IsNullOrWhiteSpace($WorkerId)) {
+            return $null -ne ($nodes | Where-Object { $_.online -eq $true -and $_.workerId -eq $WorkerId } | Select-Object -First 1)
+        }
+        $prefix = "$WorkerPrefix-"
+        return $null -ne ($nodes | Where-Object { $_.online -eq $true -and $_.workerId.StartsWith($prefix) } | Select-Object -First 1)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WorkerId)) {
+        return $Settings.workerId -eq $WorkerId
+    }
+    return -not [string]::IsNullOrWhiteSpace($Settings.workerId) -and $Settings.workerId.StartsWith("$WorkerPrefix-")
+}
+
 function Write-AgentEgressProxyConfig {
     param([string] $Path)
 
@@ -131,7 +152,9 @@ if ($Action -in @("start", "ensure") -and -not (Test-Path -LiteralPath $workspac
 $env:LOCAL_REPO_WORKSPACE_HOST_DIR = $workspacePath.Replace("\", "/")
 $env:AGENT_REVIEW_WINDOWS_PROXY_HOSTS_FILE = $proxyHostsFile.Replace("\", "/")
 $env:AGENT_REVIEW_WINDOWS_PROXY_CONFIG_FILE = $proxyConfigFile.Replace("\", "/")
-$expectedWorkerId = if ([string]::IsNullOrWhiteSpace($env:AGENT_REVIEW_WORKER_ID)) { "windows-agent-worker-1" } else { $env:AGENT_REVIEW_WORKER_ID.Trim() }
+$expectedWorkerId = if ([string]::IsNullOrWhiteSpace($env:AGENT_REVIEW_WORKER_ID)) { "" } else { $env:AGENT_REVIEW_WORKER_ID.Trim() }
+$expectedWorkerPrefix = if ([string]::IsNullOrWhiteSpace($env:AGENT_REVIEW_WORKER_ID_PREFIX)) { "windows-agent-worker" } else { $env:AGENT_REVIEW_WORKER_ID_PREFIX.Trim() }
+$env:AGENT_REVIEW_WORKER_ID_PREFIX = $expectedWorkerPrefix
 
 switch ($Action) {
     { $_ -in @("start", "ensure") } {
@@ -154,8 +177,7 @@ switch ($Action) {
             $workerRunning = $runningServices -contains "agent-worker"
             $proxyRunning = $runningServices -contains "agent-egress-proxy"
             if ($null -ne $existingSettings -and
-                $existingSettings.workerStatus -eq "ONLINE" -and
-                $existingSettings.workerId -eq $expectedWorkerId -and
+                (Test-AgentWorkerOnline -Settings $existingSettings -WorkerId $expectedWorkerId -WorkerPrefix $expectedWorkerPrefix) -and
                 $workerRunning -and
                 $proxyRunning) {
                 Write-Host "Agent Worker is already ONLINE."
@@ -188,8 +210,7 @@ switch ($Action) {
         for ($attempt = 0; $attempt -lt 30; $attempt++) {
             $settings = Get-AgentSettings
             if ($null -ne $settings -and
-                $settings.workerStatus -eq "ONLINE" -and
-                $settings.workerId -eq $expectedWorkerId) {
+                (Test-AgentWorkerOnline -Settings $settings -WorkerId $expectedWorkerId -WorkerPrefix $expectedWorkerPrefix)) {
                 Write-Host "Agent Worker is ONLINE. Workspace: $workspacePath"
                 exit 0
             }
@@ -202,7 +223,7 @@ switch ($Action) {
         Invoke-DockerCompose @("ps")
         $settings = Get-AgentSettings
         if ($null -eq $settings) { Write-Host "Local backend is unreachable at $backendBaseUrl." }
-        else { Write-Host "Backend reports Worker $($settings.workerStatus); id=$($settings.workerId); lastHeartbeat=$($settings.lastWorkerHeartbeatAt)" }
+        else { Write-Host "Backend reports Worker Pool $($settings.workerStatus); online=$($settings.workerPool.onlineCount); busy=$($settings.workerPool.busyCount); capacity=$($settings.workerPool.totalCapacity)" }
     }
     "logs" { Invoke-DockerCompose @("logs", "--tail=100", "agent-worker", "agent-egress-proxy") }
     "stop" { Invoke-DockerCompose @("down") }

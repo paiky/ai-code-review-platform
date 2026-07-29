@@ -1,3 +1,4 @@
+from pathlib import Path
 from threading import Event
 
 import pytest
@@ -254,6 +255,8 @@ def test_worker_unexpected_error_logs_only_safe_type_and_location(
 
 def test_worker_process_heartbeat_starts_immediately(monkeypatch):
     payloads = []
+    activity = worker._WorkerActivityState()
+    activity.begin({"jobId": 31, "runId": 41})
     monkeypatch.setattr(
         worker,
         "_post",
@@ -265,6 +268,7 @@ def test_worker_process_heartbeat_starts_immediately(monkeypatch):
         "token",
         "worker-process-1",
         _OneShotStop(),
+        activity,
     )
 
     assert [path for path, _payload in payloads] == [
@@ -275,6 +279,65 @@ def test_worker_process_heartbeat_starts_immediately(monkeypatch):
         payload["workerId"] == "worker-process-1"
         for _path, payload in payloads
     )
+    assert all(
+        payload["state"] == "BUSY"
+        and payload["capacity"] == 1
+        and payload["activeJobId"] == 31
+        and payload["activeRunId"] == 41
+        for _path, payload in payloads
+    )
+
+
+def test_worker_activity_state_returns_to_idle() -> None:
+    activity = worker._WorkerActivityState()
+
+    activity.begin({"jobId": 7, "runId": 9})
+    assert activity.snapshot() == {
+        "state": "BUSY",
+        "capacity": 1,
+        "activeJobId": 7,
+        "activeRunId": 9,
+    }
+
+    activity.idle()
+    assert activity.snapshot() == {"state": "IDLE", "capacity": 1}
+
+
+def test_worker_healthcheck_uses_derived_worker_registration(monkeypatch):
+    monkeypatch.setattr(
+        worker,
+        "_fetch_agent_settings",
+        lambda _url: {
+            "workerPool": {
+                "nodes": [
+                    {"workerId": "pool-container-a", "online": True},
+                    {"workerId": "pool-container-b", "online": False},
+                ]
+            }
+        },
+    )
+
+    assert worker._healthcheck("http://backend", "pool-container-a") == 0
+    assert worker._healthcheck("http://backend", "pool-container-b") == 1
+    assert worker._healthcheck("http://backend", "pool-container-c") == 1
+    monkeypatch.setattr(
+        worker,
+        "_fetch_agent_settings",
+        lambda _url: {"workerPool": "malformed"},
+    )
+    assert worker._healthcheck("http://backend", "pool-container-a") == 1
+
+
+def test_worker_healthcheck_mode_does_not_require_runtime_secret_or_workspace(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGENT_REVIEW_BACKEND_URL", "http://backend")
+    monkeypatch.setenv("AGENT_REVIEW_WORKER_ID", "local-worker-1")
+    monkeypatch.delenv("AGENT_REVIEW_WORKER_TOKEN", raising=False)
+    monkeypatch.setattr(worker.sys, "argv", ["worker.py", "--healthcheck"])
+    monkeypatch.setattr(worker, "_healthcheck", lambda _url, _worker_id: 0)
+
+    assert worker.main() == 0
 
 
 def test_worker_id_supports_explicit_and_hostname_derived_values(monkeypatch):
@@ -292,3 +355,23 @@ def test_worker_id_rejects_unsafe_values(monkeypatch):
 
     with pytest.raises(ValueError, match="letters, numbers"):
         worker._resolve_worker_id()
+
+
+def test_worker_compose_files_use_prefix_ids_and_registration_healthcheck() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    for relative_path in (
+        "deploy/docker-compose.yml",
+        "deploy/docker-compose.runtime.yml",
+        "deploy/docker-compose.windows-agent.yml",
+    ):
+        text = (repository_root / relative_path).read_text(encoding="utf-8")
+        worker_section = text.split("\n  agent-worker:", 1)[1].split(
+            "\n  agent-egress-proxy:", 1
+        )[0]
+
+        assert "AGENT_REVIEW_WORKER_ID_PREFIX:" in worker_section
+        assert "app.agent_review.worker" in worker_section
+        assert "--healthcheck" in worker_section
+        assert "agent-worker-1" not in worker_section
+        if "windows-agent" not in relative_path:
+            assert "\n      AGENT_REVIEW_WORKER_ID:" not in worker_section

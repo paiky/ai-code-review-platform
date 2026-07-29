@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -241,16 +242,42 @@ def enqueue_agent_review(
 
 
 def worker_heartbeat(db: Session, request: dict[str, Any]) -> dict[str, Any]:
+    worker_id = _required_worker_id(request)
+    raw_state = request.get("state", "IDLE")
+    if not isinstance(raw_state, str):
+        raise AppError("VALIDATION_ERROR", "state must be a string", 400)
+    state = raw_state.strip().upper()
+    if state not in {"IDLE", "BUSY", "DRAINING"}:
+        raise AppError(
+            "VALIDATION_ERROR",
+            "state must be IDLE, BUSY, or DRAINING",
+            400,
+        )
+    capacity = request.get("capacity", 1)
+    if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity != 1:
+        raise AppError("VALIDATION_ERROR", "capacity must be the integer 1", 400)
+    active_job_id = _optional_positive_integer(request.get("activeJobId"), "activeJobId")
+    active_run_id = _optional_positive_integer(request.get("activeRunId"), "activeRunId")
+    if state == "IDLE" and (active_job_id is not None or active_run_id is not None):
+        raise AppError(
+            "VALIDATION_ERROR",
+            "IDLE workers cannot report active job or run references",
+            400,
+        )
     return repository.record_worker_heartbeat(
         db,
-        worker_id=_required(request, "workerId"),
+        worker_id=worker_id,
         worker_version=str(request.get("workerVersion") or repository.AGENT_RUNNER_VERSION),
         cli_version=str(request.get("cliVersion") or repository.AGENT_CLI_VERSION),
+        state=state,
+        capacity=capacity,
+        active_job_id=active_job_id,
+        active_run_id=active_run_id,
     )
 
 
 def claim_job(db: Session, request: dict[str, Any]) -> dict[str, Any] | None:
-    worker_id = _required(request, "workerId")
+    worker_id = _required_worker_id(request)
     config_test = repository.claim_configuration_test(db, worker_id=worker_id)
     if config_test is not None:
         return config_test
@@ -870,6 +897,39 @@ def _required(request: dict[str, Any], field: str) -> str:
     value = str(request.get(field) or "").strip()
     if not value:
         raise AppError("VALIDATION_ERROR", f"{field} is required", 400)
+    return value
+
+
+def _required_worker_id(request: dict[str, Any]) -> str:
+    raw_value = request.get("workerId")
+    if not isinstance(raw_value, str):
+        raise AppError("VALIDATION_ERROR", "workerId must be a string", 400)
+    value = raw_value.strip()
+    if not value:
+        raise AppError("VALIDATION_ERROR", "workerId is required", 400)
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", value):
+        raise AppError(
+            "VALIDATION_ERROR",
+            "workerId contains unsupported characters or exceeds 128 characters",
+            400,
+        )
+    return value
+
+
+def _optional_positive_integer(value: Any, field: str) -> int | None:
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 1
+        or value > 9_223_372_036_854_775_807
+    ):
+        raise AppError(
+            "VALIDATION_ERROR",
+            f"{field} must be a positive integer or null",
+            400,
+        )
     return value
 
 

@@ -94,7 +94,7 @@ services:
       TZ: UTC
       AGENT_REVIEW_BACKEND_URL: http://backend:${BACKEND_PORT:-8090}
       AGENT_REVIEW_WORKER_TOKEN: ${AGENT_REVIEW_WORKER_TOKEN:-}
-      AGENT_REVIEW_WORKER_ID: ${AGENT_REVIEW_WORKER_ID:-agent-worker-1}
+      AGENT_REVIEW_WORKER_ID_PREFIX: ${AGENT_REVIEW_WORKER_ID_PREFIX:-agent-worker}
       AGENT_REVIEW_WORKSPACE_ROOT: /workspaces
       HTTPS_PROXY: http://agent-egress-proxy:3128
       NO_PROXY: backend,127.0.0.1,localhost
@@ -122,8 +122,9 @@ services:
         [
           "CMD",
           "python3",
-          "-c",
-          "import json,os,urllib.request; data=json.load(urllib.request.urlopen(os.environ['AGENT_REVIEW_BACKEND_URL'].rstrip('/') + '/api/code-quality-reviews/agent-settings', timeout=5))['data']; assert data['workerStatus'] == 'ONLINE' and data['workerId'] == os.environ['AGENT_REVIEW_WORKER_ID']",
+          "-m",
+          "app.agent_review.worker",
+          "--healthcheck",
         ]
       interval: 15s
       timeout: 8s

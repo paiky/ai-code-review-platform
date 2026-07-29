@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -27,6 +27,24 @@ class AgentReviewSettings(Base):
     test_finished_at: Mapped[object | None] = mapped_column(DateTime)
     created_at: Mapped[object | None] = mapped_column(DateTime)
     updated_at: Mapped[object | None] = mapped_column(DateTime)
+
+
+class AgentReviewWorker(Base):
+    __tablename__ = "code_quality_agent_workers"
+    __table_args__ = (
+        Index("idx_code_quality_agent_workers_heartbeat", "last_heartbeat_at"),
+    )
+
+    worker_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    worker_version: Mapped[str | None] = mapped_column(String(64))
+    cli_version: Mapped[str | None] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="IDLE")
+    capacity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    active_job_id: Mapped[int | None] = mapped_column(BigInteger)
+    active_run_id: Mapped[int | None] = mapped_column(BigInteger)
+    started_at: Mapped[object] = mapped_column(DateTime, nullable=False)
+    last_heartbeat_at: Mapped[object] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[object] = mapped_column(DateTime, nullable=False)
 
 
 class AgentReviewRun(Base):

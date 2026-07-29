@@ -587,6 +587,35 @@ body {
   margin-top: 8px;
 }
 
+.agent-worker-pool-toolbar {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-worker-pool-stats {
+  display: grid;
+  flex: 1;
+  grid-template-columns: repeat(4, minmax(100px, 1fr));
+  gap: 10px;
+}
+
+.agent-worker-pool-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.agent-worker-pool-table .ant-table-cell {
+  vertical-align: middle;
+}
+
 .agent-budget-toolbar {
   display: flex;
   align-items: center;
@@ -708,6 +737,18 @@ body {
 }
 
 @media (max-width: 760px) {
+  .agent-worker-pool-toolbar {
+    flex-direction: column;
+  }
+
+  .agent-worker-pool-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-worker-pool-toolbar .ant-btn {
+    align-self: flex-start;
+  }
+
   .agent-budget-toolbar {
     align-items: stretch;
     flex-direction: column;

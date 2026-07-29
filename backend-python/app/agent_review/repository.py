@@ -6,11 +6,11 @@ from threading import Lock
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import inspect, or_, select, text
+from sqlalchemy import delete, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.agent_review.crypto import decrypt_api_key, encrypt_api_key, encryption_available, mask_fingerprint
-from app.agent_review.models import AgentReviewRun, AgentReviewSettings
+from app.agent_review.models import AgentReviewRun, AgentReviewSettings, AgentReviewWorker
 from app.agent_review_spike.budgets import (
     AGENT_BUDGET_KEYS,
     AGENT_BUDGET_LIMITS,
@@ -35,6 +35,9 @@ AGENT_MODEL = "deepseek-v4-pro[1m]"
 AGENT_CLI_VERSION = "2.1.112"
 AGENT_RUNNER_VERSION = "agent-worker-v1"
 AGENT_ENDPOINT = "https://api.deepseek.com/anthropic"
+AGENT_WORKER_ONLINE_SECONDS = 60
+AGENT_WORKER_RETENTION_DAYS = 7
+AGENT_WORKER_NODE_LIMIT = 100
 MAX_TURNS = DEFAULT_AGENT_BUDGETS["maxTurns"]
 MAX_TOOL_CALLS = DEFAULT_AGENT_BUDGETS["maxToolCalls"]
 MAX_SOURCE_BYTES = DEFAULT_AGENT_BUDGETS["maxSourceBytes"]
@@ -88,8 +91,11 @@ def ensure_agent_review_schema(db: Session) -> None:
         connection = db.connection()
         inspector = inspect(connection)
         AgentReviewSettings.__table__.create(connection, checkfirst=True)
+        AgentReviewWorker.__table__.create(connection, checkfirst=True)
         AgentReviewRun.__table__.create(connection, checkfirst=True)
         _ensure_settings_columns(db, inspector)
+        _ensure_worker_columns(db, inspector)
+        _ensure_worker_indexes(db, inspector)
         ensure_result_schema(db)
         ensure_scheduler_job_schema(db)
         _ensure_result_columns(db, inspector)
@@ -110,7 +116,19 @@ def get_agent_settings_record(db: Session) -> AgentReviewSettings:
 
 def agent_settings_response(db: Session) -> dict[str, Any]:
     record = get_agent_settings_record(db)
-    online = _worker_online(record)
+    worker_pool = agent_worker_pool(db)
+    if (
+        worker_pool["totalCount"] == 0
+        and _worker_online(record)
+        and record.worker_id
+    ):
+        worker_pool = _legacy_worker_pool(record)
+    has_registered_workers = worker_pool["totalCount"] > 0
+    online = (
+        worker_pool["onlineCount"] > 0
+        if has_registered_workers
+        else _worker_online(record)
+    )
     budgets, budget_source = effective_agent_budgets(record)
     return {
         "enabled": bool(record.enabled),
@@ -126,6 +144,7 @@ def agent_settings_response(db: Session) -> dict[str, Any]:
         "workerId": record.worker_id,
         "workerVersion": record.worker_version,
         "lastWorkerHeartbeatAt": format_datetime(record.last_worker_heartbeat_at),
+        "workerPool": worker_pool,
         "configurationTest": {
             "requestId": record.test_request_id,
             "status": record.test_status or "NOT_RUN",
@@ -204,7 +223,15 @@ def effective_agent_budgets(record: AgentReviewSettings) -> tuple[dict[str, int]
 
 
 def record_worker_heartbeat(
-    db: Session, *, worker_id: str, worker_version: str, cli_version: str
+    db: Session,
+    *,
+    worker_id: str,
+    worker_version: str,
+    cli_version: str,
+    state: str,
+    capacity: int,
+    active_job_id: int | None,
+    active_run_id: int | None,
 ) -> dict[str, Any]:
     record = get_agent_settings_record(db)
     now = utc_now()
@@ -213,8 +240,121 @@ def record_worker_heartbeat(
     record.cli_version = _bounded(cli_version, 64)
     record.last_worker_heartbeat_at = now
     record.updated_at = now
+    worker = db.get(AgentReviewWorker, worker_id)
+    if worker is None:
+        worker = AgentReviewWorker(
+            worker_id=worker_id,
+            started_at=now,
+        )
+        db.add(worker)
+    worker.worker_version = _bounded(worker_version, 64)
+    worker.cli_version = _bounded(cli_version, 64)
+    worker.state = state
+    worker.capacity = capacity
+    worker.active_job_id = active_job_id
+    worker.active_run_id = active_run_id
+    worker.last_heartbeat_at = now
+    worker.updated_at = now
+    cleanup_stale_agent_workers(db, now=now)
     db.commit()
     return {"accepted": True, "serverTime": format_datetime(now)}
+
+
+def agent_worker_pool(db: Session) -> dict[str, Any]:
+    ensure_agent_review_schema(db)
+    cutoff = utc_now() - timedelta(seconds=AGENT_WORKER_ONLINE_SECONDS)
+    workers = db.scalars(
+        select(AgentReviewWorker)
+        .order_by(AgentReviewWorker.last_heartbeat_at.desc(), AgentReviewWorker.worker_id.asc())
+        .limit(AGENT_WORKER_NODE_LIMIT)
+    ).all()
+    nodes: list[dict[str, Any]] = []
+    online_count = 0
+    busy_count = 0
+    idle_count = 0
+    draining_count = 0
+    total_capacity = 0
+    for worker in workers:
+        state = (
+            worker.state
+            if worker.state in {"IDLE", "BUSY", "DRAINING"}
+            else "IDLE"
+        )
+        capacity = 1
+        is_online = bool(
+            worker.last_heartbeat_at and worker.last_heartbeat_at >= cutoff
+        )
+        if is_online:
+            online_count += 1
+            total_capacity += capacity
+            if state == "BUSY":
+                busy_count += 1
+            elif state == "DRAINING":
+                draining_count += 1
+            else:
+                idle_count += 1
+        nodes.append(
+            {
+                "workerId": worker.worker_id,
+                "workerVersion": worker.worker_version,
+                "cliVersion": worker.cli_version,
+                "state": state,
+                "capacity": capacity,
+                "activeJobId": worker.active_job_id,
+                "activeRunId": worker.active_run_id,
+                "startedAt": format_datetime(worker.started_at),
+                "lastHeartbeatAt": format_datetime(worker.last_heartbeat_at),
+                "online": is_online,
+            }
+        )
+    return {
+        "status": "ONLINE" if online_count > 0 else "OFFLINE",
+        "onlineCount": online_count,
+        "busyCount": busy_count,
+        "idleCount": idle_count,
+        "drainingCount": draining_count,
+        "totalCapacity": total_capacity,
+        "totalCount": len(workers),
+        "nodes": nodes,
+    }
+
+
+def cleanup_stale_agent_workers(db: Session, *, now=None) -> int:
+    cutoff = (now or utc_now()) - timedelta(days=AGENT_WORKER_RETENTION_DAYS)
+    result = db.execute(
+        delete(AgentReviewWorker).where(
+            AgentReviewWorker.last_heartbeat_at < cutoff
+        )
+    )
+    return max(int(result.rowcount or 0), 0)
+
+
+def _legacy_worker_pool(record: AgentReviewSettings) -> dict[str, Any]:
+    return {
+        "status": "ONLINE",
+        "onlineCount": 1,
+        "busyCount": 0,
+        "idleCount": 1,
+        "drainingCount": 0,
+        "totalCapacity": 1,
+        "totalCount": 1,
+        "nodes": [
+            {
+                "workerId": record.worker_id,
+                "workerVersion": record.worker_version,
+                "cliVersion": record.cli_version,
+                "state": "IDLE",
+                "capacity": 1,
+                "activeJobId": None,
+                "activeRunId": None,
+                "startedAt": None,
+                "lastHeartbeatAt": format_datetime(
+                    record.last_worker_heartbeat_at
+                ),
+                "online": True,
+            }
+        ],
+    }
 
 
 def assert_agent_available(db: Session, *, require_worker: bool = True) -> AgentReviewSettings:
@@ -222,7 +362,10 @@ def assert_agent_available(db: Session, *, require_worker: bool = True) -> Agent
     if not record.enabled:
         raise AppError("AGENT_REVIEW_UNAVAILABLE", "Agent Review is disabled", 409)
     decrypt_api_key(record.api_key_ciphertext)
-    if require_worker and not _worker_online(record):
+    worker_pool = agent_worker_pool(db)
+    registered_online = worker_pool["onlineCount"] > 0
+    legacy_online = worker_pool["totalCount"] == 0 and _worker_online(record)
+    if require_worker and not (registered_online or legacy_online):
         raise AppError("AGENT_REVIEW_UNAVAILABLE", "Agent Review Worker is offline", 409)
     return record
 
@@ -853,6 +996,42 @@ def _ensure_settings_columns(db: Session, inspector) -> None:
         _add_column(db, columns, "code_quality_agent_settings", name, definition)
 
 
+def _ensure_worker_columns(db: Session, inspector) -> None:
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("code_quality_agent_workers")
+    }
+    definitions = {
+        "worker_version": "VARCHAR(64) NULL",
+        "cli_version": "VARCHAR(64) NULL",
+        "state": "VARCHAR(16) NOT NULL DEFAULT 'IDLE'",
+        "capacity": "INT NOT NULL DEFAULT 1",
+        "active_job_id": "BIGINT NULL",
+        "active_run_id": "BIGINT NULL",
+        "started_at": "DATETIME NULL",
+        "last_heartbeat_at": "DATETIME NULL",
+        "updated_at": "DATETIME NULL",
+    }
+    for name, definition in definitions.items():
+        _add_column(db, columns, "code_quality_agent_workers", name, definition)
+
+
+def _ensure_worker_indexes(db: Session, inspector) -> None:
+    indexes = {
+        str(index.get("name") or "")
+        for index in inspector.get_indexes("code_quality_agent_workers")
+    }
+    index_name = "idx_code_quality_agent_workers_heartbeat"
+    if index_name not in indexes:
+        db.execute(
+            text(
+                f"CREATE INDEX {index_name} "
+                "ON code_quality_agent_workers (last_heartbeat_at)"
+            )
+        )
+        db.flush()
+
+
 def _ensure_scheduler_columns(db: Session, inspector) -> None:
     columns = {column["name"] for column in inspector.get_columns("code_quality_scheduler_jobs")}
     definitions = {
@@ -878,7 +1057,11 @@ def _add_column(db: Session, columns: set[str], table: str, column: str, definit
 
 def _worker_online(record: AgentReviewSettings) -> bool:
     heartbeat = record.last_worker_heartbeat_at
-    return bool(heartbeat and heartbeat >= utc_now() - timedelta(seconds=60))
+    return bool(
+        heartbeat
+        and heartbeat
+        >= utc_now() - timedelta(seconds=AGENT_WORKER_ONLINE_SECONDS)
+    )
 
 
 def _read_json(value: str | None, default: Any) -> Any:

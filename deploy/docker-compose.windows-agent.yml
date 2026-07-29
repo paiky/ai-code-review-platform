@@ -10,7 +10,8 @@ services:
       TZ: UTC
       AGENT_REVIEW_BACKEND_URL: http://host.docker.internal:8090
       AGENT_REVIEW_WORKER_TOKEN: ${AGENT_REVIEW_WORKER_TOKEN:?AGENT_REVIEW_WORKER_TOKEN is required}
-      AGENT_REVIEW_WORKER_ID: ${AGENT_REVIEW_WORKER_ID:-windows-agent-worker-1}
+      AGENT_REVIEW_WORKER_ID: ${AGENT_REVIEW_WORKER_ID:-}
+      AGENT_REVIEW_WORKER_ID_PREFIX: ${AGENT_REVIEW_WORKER_ID_PREFIX:-windows-agent-worker}
       AGENT_REVIEW_WORKSPACE_ROOT: /workspaces
       HTTP_PROXY: http://agent-egress-proxy:3128
       HTTPS_PROXY: http://agent-egress-proxy:3128
@@ -40,8 +41,9 @@ services:
         [
           "CMD",
           "python3",
-          "-c",
-          "import json,os,urllib.request; data=json.load(urllib.request.urlopen(os.environ['AGENT_REVIEW_BACKEND_URL'].rstrip('/') + '/api/code-quality-reviews/agent-settings', timeout=5))['data']; assert data['workerStatus'] == 'ONLINE' and data['workerId'] == os.environ['AGENT_REVIEW_WORKER_ID']",
+          "-m",
+          "app.agent_review.worker",
+          "--healthcheck",
         ]
       interval: 15s
       timeout: 8s

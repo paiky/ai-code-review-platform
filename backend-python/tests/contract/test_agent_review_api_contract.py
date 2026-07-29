@@ -6,10 +6,12 @@ import json
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 import pytest
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
-from app.agent_review.models import AgentReviewRun, AgentReviewSettings
+from app.agent_review.models import AgentReviewRun, AgentReviewSettings, AgentReviewWorker
 from app.agent_review.repository import (
+    cleanup_stale_agent_workers,
     create_agent_job,
     expire_exhausted_agent_jobs,
     sanitize_agent_audit,
@@ -346,6 +348,199 @@ def test_agent_configuration_test_runs_through_worker_contract(
     assert completed.json()["data"]["status"] == "SUCCESS"
     settings = client.get("/api/code-quality-reviews/agent-settings").json()["data"]
     assert settings["configurationTest"]["status"] == "SUCCESS"
+
+
+def test_worker_pool_registers_state_capacity_and_safe_activity(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+
+    first = client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "agent-worker-a",
+            "workerVersion": "worker-v2",
+            "cliVersion": "2.1.112",
+            "state": "IDLE",
+            "capacity": 1,
+            "rawSource": "SECRET_SOURCE",
+        },
+    )
+    second = client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "agent-worker-b",
+            "workerVersion": "worker-v2",
+            "cliVersion": "2.1.112",
+            "state": "BUSY",
+            "capacity": 1,
+            "activeJobId": 81,
+            "activeRunId": 91,
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    settings = client.get("/api/code-quality-reviews/agent-settings").json()["data"]
+    pool = settings["workerPool"]
+    assert settings["workerStatus"] == "ONLINE"
+    assert settings["workerId"] == "agent-worker-b"
+    assert pool["status"] == "ONLINE"
+    assert pool["onlineCount"] == 2
+    assert pool["busyCount"] == 1
+    assert pool["idleCount"] == 1
+    assert pool["totalCapacity"] == 2
+    nodes = {node["workerId"]: node for node in pool["nodes"]}
+    assert nodes["agent-worker-a"]["state"] == "IDLE"
+    assert nodes["agent-worker-b"]["activeJobId"] == 81
+    assert nodes["agent-worker-b"]["activeRunId"] == 91
+    assert set(nodes["agent-worker-b"]) == {
+        "workerId",
+        "workerVersion",
+        "cliVersion",
+        "state",
+        "capacity",
+        "activeJobId",
+        "activeRunId",
+        "startedAt",
+        "lastHeartbeatAt",
+        "online",
+    }
+    assert "SECRET_SOURCE" not in json.dumps(pool, ensure_ascii=False)
+    assert db_session.get(AgentReviewWorker, "agent-worker-b").capacity == 1
+
+
+def test_worker_pool_tracks_state_transitions_offline_and_retention_cleanup(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "agent-worker-state",
+            "state": "BUSY",
+            "capacity": 1,
+            "activeJobId": 17,
+            "activeRunId": 27,
+        },
+    )
+    busy_settings = client.get(
+        "/api/code-quality-reviews/agent-settings"
+    ).json()["data"]
+    assert busy_settings["workerStatus"] == "ONLINE"
+    assert busy_settings["workerPool"]["busyCount"] == 1
+    assert busy_settings["workerPool"]["idleCount"] == 0
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "agent-worker-state",
+            "state": "IDLE",
+            "capacity": 1,
+        },
+    )
+    worker_record = db_session.get(AgentReviewWorker, "agent-worker-state")
+    assert worker_record.state == "IDLE"
+    assert worker_record.active_job_id is None
+    assert worker_record.active_run_id is None
+
+    worker_record.last_heartbeat_at = utc_now() - timedelta(seconds=61)
+    db_session.commit()
+    offline_pool = client.get(
+        "/api/code-quality-reviews/agent-settings"
+    ).json()["data"]["workerPool"]
+    assert offline_pool["onlineCount"] == 0
+    assert offline_pool["nodes"][0]["online"] is False
+
+    worker_record.last_heartbeat_at = utc_now() - timedelta(days=8)
+    db_session.commit()
+    assert cleanup_stale_agent_workers(db_session) == 1
+    db_session.commit()
+    assert db_session.get(AgentReviewWorker, "agent-worker-state") is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"workerId": "worker/unsafe"},
+        {"workerId": 123},
+        {"workerId": "worker-1", "state": "UNKNOWN"},
+        {"workerId": "worker-1", "state": False},
+        {"workerId": "worker-1", "capacity": True},
+        {"workerId": "worker-1", "capacity": 2},
+        {"workerId": "worker-1", "activeJobId": "1", "state": "BUSY"},
+        {
+            "workerId": "worker-1",
+            "activeJobId": 9_223_372_036_854_775_808,
+            "state": "BUSY",
+        },
+        {"workerId": "worker-1", "activeRunId": False, "state": "BUSY"},
+        {"workerId": "worker-1", "activeJobId": 1, "state": "IDLE"},
+    ],
+)
+def test_worker_pool_rejects_invalid_registration_payloads(
+    client: TestClient, monkeypatch, payload
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+
+    response = client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json=payload,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_worker_pool_keeps_legacy_singleton_status_compatible(
+    client: TestClient, db_session: Session
+) -> None:
+    client.get("/api/code-quality-reviews/agent-settings")
+    settings_record = db_session.get(AgentReviewSettings, 1)
+    settings_record.worker_id = "legacy-worker-1"
+    settings_record.worker_version = "legacy"
+    settings_record.last_worker_heartbeat_at = utc_now()
+    db_session.commit()
+
+    data = client.get("/api/code-quality-reviews/agent-settings").json()["data"]
+
+    assert data["workerStatus"] == "ONLINE"
+    assert data["workerId"] == "legacy-worker-1"
+    assert data["workerPool"]["onlineCount"] == 1
+    assert data["workerPool"]["totalCapacity"] == 1
+    assert data["workerPool"]["nodes"][0]["workerId"] == "legacy-worker-1"
+
+
+def test_worker_pool_schema_contains_registration_columns_and_heartbeat_index(
+    db_session: Session,
+) -> None:
+    inspector = inspect(db_session.get_bind())
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("code_quality_agent_workers")
+    }
+    indexes = {
+        index["name"]
+        for index in inspector.get_indexes("code_quality_agent_workers")
+    }
+
+    assert columns == {
+        "worker_id",
+        "worker_version",
+        "cli_version",
+        "state",
+        "capacity",
+        "active_job_id",
+        "active_run_id",
+        "started_at",
+        "last_heartbeat_at",
+        "updated_at",
+    }
+    assert "idx_code_quality_agent_workers_heartbeat" in indexes
 
 
 def test_worker_auth_claim_and_heartbeat(

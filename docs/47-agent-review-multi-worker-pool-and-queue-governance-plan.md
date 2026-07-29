@@ -2,8 +2,8 @@
 
 ## 1. 状态、目标与停止点
 
-- 文档状态：三阶段路线已确认；阶段一“安全并发领取与租约 fencing”代码与本地自动化已完成，
-  当前停止并等待用户确认是否进入阶段二。
+- 文档状态：三阶段路线已确认；阶段一“安全并发领取与租约 fencing”已完成并推送；
+  阶段二“Worker 注册与两副本池化”代码与本地自动化已完成，当前停止并等待用户部署和小任务验收。
 - 当前基础：Agent Review 已使用 `code_quality_scheduler_jobs` 入队，具备优先级、数据库行锁、租约、
   心跳、重试次数、幂等完成和 Standard fallback。
 - 总体目标：保持一个 Worker 容器同时只执行一个 Agent Review，通过多个独立 Worker 副本并发处理不同任务。
@@ -133,6 +133,33 @@ Review trigger
 - 部署顺序：Backend/Schema → 两个 Agent Worker → Frontend → 重新启用 Agent。
 - 使用 `docker compose up -d --scale agent-worker=2` 启动两个 capacity=1 的副本。
 - 用户用两个独立的 1～5 文件小任务验证并发领取后停止；不得执行 Run 18。
+
+建议在远程 runtime 目录按以下顺序操作；执行前先在设置页禁用 Agent 并确认队列为空：
+
+```bash
+docker compose stop agent-worker
+docker compose up -d backend
+curl -fsS http://127.0.0.1:8090/api/code-quality-reviews/agent-settings >/dev/null
+docker compose up -d --scale agent-worker=2 agent-egress-proxy agent-worker
+docker compose up -d frontend
+docker compose ps
+```
+
+确认设置页 Worker Pool 显示 2 个在线空闲节点后再重新启用 Agent。不得在两个 Worker 都未注册成功时提交验收任务。
+
+### 5.4 阶段二实施结果（2026-07-29）
+
+- 新增 `code_quality_agent_workers`、心跳索引、干净数据库 SQL 和运行时 schema 补齐；离线记录在后续心跳
+  时清理 7 天前数据。
+- Worker 心跳上报固定容量、IDLE/BUSY 状态和数字活动引用；Agent Settings 返回池级统计和安全节点白名单，
+  同时保留原单例 Worker 字段兼容旧前端与历史数据。
+- Worker 增加 `--healthcheck`，按自身派生 ID 检查注册记录；Linux Compose 只传 ID 前缀并使用容器
+  hostname，避免旧环境中的显式 ID 破坏扩容唯一性；Windows 本地单实例仍允许可选显式 ID。
+- 设置页增加 Worker Pool 汇总、节点状态、活动引用、版本和最近心跳；任务详情继续只显示领取尝试与接管事件。
+- Backend 定向测试通过：`114 passed, 1 skipped`；Frontend 纯函数测试通过：`14 passed`；
+  Frontend production build、三个 Compose 配置解析和 PowerShell 语法检查通过。
+- 本机 `localhost:5173` 未运行，因此未做设置页运行时视觉检查；应在远程部署后与两节点注册一起确认。
+- 未部署远程环境、未调用真实 DeepSeek、未执行真实 Agent Review，未触发 Run 18，未进入阶段三。
 
 ## 6. 阶段三：队列运行治理
 

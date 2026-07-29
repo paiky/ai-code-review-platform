@@ -99,6 +99,12 @@ import {
   normalizeAgentBudgets,
   validateAgentBudgets
 } from './agentReviewBudgets.js';
+import {
+  formatWorkerActivity,
+  normalizeAgentWorkerPool,
+  workerStateColor,
+  workerStateLabel
+} from './agentWorkerPool.js';
 import { releaseNotes } from './releaseNotes.js';
 
 const { Header, Content } = Layout;
@@ -5152,6 +5158,7 @@ function TemplateConfig() {
   });
   const [agentSettingsSaving, setAgentSettingsSaving] = useState(false);
   const [agentSettingsTesting, setAgentSettingsTesting] = useState(false);
+  const [agentWorkerPoolRefreshing, setAgentWorkerPoolRefreshing] = useState(false);
   const [agentSettingsTestResult, setAgentSettingsTestResult] = useState(null);
   const [providerApiKeyDraft, setProviderApiKeyDraft] = useState('');
   const [loading, setLoading] = useState(false);
@@ -5922,6 +5929,20 @@ function TemplateConfig() {
     }));
   };
 
+  const refreshAgentWorkerPool = async () => {
+    if (agentWorkerPoolRefreshing) return;
+    setAgentWorkerPoolRefreshing(true);
+    try {
+      const settings = await fetchApi('/api/code-quality-reviews/agent-settings');
+      setAgentSettings(settings);
+      setAgentSettingsTestResult(settings?.configurationTest || null);
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setAgentWorkerPoolRefreshing(false);
+    }
+  };
+
   const testAgentSettings = async () => {
     if (agentSettingsTesting) return;
     if (!agentSettings?.enabled || !agentSettings?.apiKeyConfigured) {
@@ -6346,6 +6367,47 @@ function TemplateConfig() {
   const currentAgentBudgetLimits = agentBudgetLimits(agentSettings);
   const agentBudgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings);
   const raisedAgentBudget = hasRaisedAgentBudget(agentSettingsDraft.budgets, agentSettings);
+  const agentWorkerPool = useMemo(
+    () => normalizeAgentWorkerPool(agentSettings),
+    [agentSettings]
+  );
+  const agentWorkerColumns = [
+    {
+      title: 'Worker 节点',
+      dataIndex: 'workerId',
+      render: value => <Text code>{value}</Text>
+    },
+    {
+      title: '状态',
+      width: 110,
+      render: (_, node) => (
+        <Tag color={workerStateColor(node.state, node.online)}>
+          {node.online ? workerStateLabel(node.state) : '离线'}
+        </Tag>
+      )
+    },
+    {
+      title: '容量',
+      dataIndex: 'capacity',
+      width: 80
+    },
+    {
+      title: '当前活动',
+      width: 190,
+      render: (_, node) => formatWorkerActivity(node)
+    },
+    {
+      title: '版本',
+      width: 190,
+      render: (_, node) => `${node.workerVersion || '-'} / CLI ${node.cliVersion || '-'}`
+    },
+    {
+      title: '最近心跳',
+      dataIndex: 'lastHeartbeatAt',
+      width: 190,
+      render: value => formatDateTime(value)
+    }
+  ];
   const agentBudgetFields = [
     { key: 'maxTurns', label: '模型决策回合', unit: 'turns' },
     { key: 'maxToolCalls', label: 'MCP 工具调用', unit: '次' },
@@ -6413,7 +6475,7 @@ function TemplateConfig() {
         <Space wrap>
           <Text strong>Agent Review（Claude Code + DeepSeek）</Text>
           <Tag color={agentSettings?.enabled ? 'purple' : 'default'}>{agentSettings?.enabled ? '已启用' : '未启用'}</Tag>
-          <Tag color={agentSettings?.workerStatus === 'ONLINE' ? 'green' : 'red'}>Worker {agentSettings?.workerStatus || 'OFFLINE'}</Tag>
+          <Tag color={agentWorkerPool.status === 'ONLINE' ? 'green' : 'red'}>Worker Pool {agentWorkerPool.status}</Tag>
         </Space>
       ),
       children: (
@@ -6422,13 +6484,44 @@ function TemplateConfig() {
             <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
               <Descriptions.Item label="Runner">Claude Code {agentSettings?.cliVersion || '2.1.112'}</Descriptions.Item>
               <Descriptions.Item label="模型">{agentSettings?.model || 'deepseek-v4-pro[1m]'}</Descriptions.Item>
-              <Descriptions.Item label="Worker">{agentSettings?.workerId || '-'} / {agentSettings?.workerStatus || 'OFFLINE'}</Descriptions.Item>
+              <Descriptions.Item label="Worker Pool">
+                {agentWorkerPool.onlineCount} 在线 / {agentWorkerPool.totalCapacity} 总容量
+              </Descriptions.Item>
               <Descriptions.Item label="最近心跳">{formatDateTime(agentSettings?.lastWorkerHeartbeatAt)}</Descriptions.Item>
               <Descriptions.Item label="预算来源">{agentSettings?.budgetConfigSource === 'CUSTOM' ? '自定义' : '默认'}</Descriptions.Item>
               <Descriptions.Item label="当前预算" span={2}>
                 {formatAgentBudgetSummary(agentSettings?.budgets) || '12 turns / 40 tools / 200 KB source'}
               </Descriptions.Item>
             </Descriptions>
+            <Divider orientation="left">Worker Pool</Divider>
+            <div className="agent-worker-pool-toolbar">
+              <div className="agent-worker-pool-stats">
+                <div><Text type="secondary">在线节点</Text><Text strong>{agentWorkerPool.onlineCount}</Text></div>
+                <div><Text type="secondary">空闲</Text><Text strong>{agentWorkerPool.idleCount}</Text></div>
+                <div><Text type="secondary">忙碌</Text><Text strong>{agentWorkerPool.busyCount}</Text></div>
+                <div><Text type="secondary">总容量</Text><Text strong>{agentWorkerPool.totalCapacity}</Text></div>
+              </div>
+              <Button
+                icon={<ReloadOutlined />}
+                loading={agentWorkerPoolRefreshing}
+                onClick={refreshAgentWorkerPool}
+              >
+                刷新节点
+              </Button>
+            </div>
+            {agentWorkerPool.nodes.length > 0 ? (
+              <Table
+                className="agent-worker-pool-table"
+                size="small"
+                rowKey="workerId"
+                columns={agentWorkerColumns}
+                dataSource={agentWorkerPool.nodes}
+                pagination={false}
+                scroll={{ x: 860 }}
+              />
+            ) : (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无 Worker 注册记录" />
+            )}
             {!agentSettings?.encryptionAvailable && (
               <Alert
                 type="error"
