@@ -4,7 +4,6 @@
 
 - 当前状态：前端页面入口与 Review 生命周期的使用说明。
 - 关联文档：
-  - `docs/36-review-platform-current-roadmap.md`：近期阶段推进总控。
   - `docs/37-review-platform-target-product-roadmap.md`：完整产品目标路线。
   - `docs/39-review-accuracy-and-material-ui-roadmap.md`：源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 / MUI 前端重构专项路线。
   - `docs/03-api-contract.md`：HTTP API 契约。

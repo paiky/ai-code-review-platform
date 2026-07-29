@@ -36,18 +36,20 @@ README 只提供项目入口和最短运行方式。详细配置、部署、验�
 ### 产品与路线
 
 - `docs/43-project-phase-acceptance-report.md`：平台能力规划与一期至四期分期验收标准。
-- `docs/36-review-platform-current-roadmap.md`：当前推进总控、阶段状态和下一阶段顺序。
-- `docs/37-review-platform-target-product-roadmap.md`：长期产品目标和完整验收标准。
+- `docs/37-review-platform-target-product-roadmap.md`：长期产品目标和完整验收标准；仅在目标或验收标准变化时更新。
 - `docs/38-review-lifecycle-and-frontend-entrypoints.md`：Review 生命周期、任务、质量治理和前端入口。
 - `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`：确定性检查、Planner 多端感知和证据链专项。
 - `docs/41-server-side-readonly-agent-review-plan.md`：服务器侧只读 Agent Review、安全边界和生产验收。
 - `docs/47-agent-review-multi-worker-pool-and-queue-governance-plan.md`：Agent Worker 池化、并发领取、扩缩容和队列治理。
+- `docs/48-review-task-detail-unified-progress-ui-plan.md`：任务详情统一 Review 进度 UI 专项。
+- `docs/49-review-progress-animation-style-extension-plan.md`：Review 进度动画风格扩展专项；在 `docs/48` 完成后实施。
 
 ### 排障与历史
 
 - `docs/11-agent-environment-pitfalls.md`：环境、脚本、部署、Codex、检索和工具链避坑；遇到问题时按关键词检索。
 - `docs/24-bug-log.md`：业务缺陷和修复记录。
 - `docs/10-local-dev-pitfalls.md`：历史避坑归档，仅追溯旧问题时读取。
+- `docs/36-review-platform-current-roadmap.md`：2026 年 7 月 Review 路线与阶段记录归档，不再作为当前总控或继续更新。
 - `docs/19-python-backend-refactor-plan.md`：已完成的 Python 迁移历史。
 - `docs/39-review-accuracy-and-material-ui-roadmap.md`：已完成的准确率与前端体验专项记录。
 
@@ -56,7 +58,7 @@ README 只提供项目入口和最短运行方式。详细配置、部署、验�
 新对话默认只读取 `AGENTS.md`。不要完整通读 README 或批量加载 `docs/`，先根据任务使用 `rg` 搜索关键词，再局部读取命中章节。
 
 - 启动、配置、部署、迁移和验证：在 `docs/42-development-deployment-and-validation-guide.md` 中搜索。
-- 当前阶段和推进顺序：在 `docs/36-review-platform-current-roadmap.md` 中搜索。
+- 当前阶段和推进顺序：以用户明确指定的专题文档及其中的停止点为准，不再维护全局阶段登记表。
 - Review 生命周期和前端入口：在 `docs/38-review-lifecycle-and-frontend-entrypoints.md` 中搜索。
 - 证据链和多端能力：在 `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md` 中搜索。
 - 服务器侧只读 Agent Review：在 `docs/41-server-side-readonly-agent-review-plan.md` 中搜索。

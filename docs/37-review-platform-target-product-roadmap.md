@@ -2,9 +2,10 @@
 
 ## 状态
 
-- 当前状态：完整产品目标文档。用于回答“最终要做成什么产品、用户如何使用、从当前状态到完整产品分几步走”；`M10` 和 `docs/39` 已落地，下一轮近期专项见 `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`。
+- 当前状态：完整产品目标文档。用于回答“最终要做成什么产品、用户如何使用、从当前状态到完整产品分几步走”；不负责决定当前实施阶段。
 - 编写时间：2026-07-01
-- 当前阶段总控：`docs/36-review-platform-current-roadmap.md`
+- 当前阶段：以用户明确指定的专题文档及其中的停止点为准。
+- 历史路线归档：`docs/36-review-platform-current-roadmap.md`，已于 2026-07-24 冻结，不再维护。
 - 历史与细节文档：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`
   - `docs/33-review-learning-capability-roadmap.md`
@@ -13,7 +14,8 @@
   - `docs/39-review-accuracy-and-material-ui-roadmap.md`
   - `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`
 
-说明：`docs/36` 负责近期阶段推进；本文件负责完整产品目标和长期路线。后续如果阶段方向发生变化，先更新 `docs/36`；如果产品目标、里程碑或验收标准变化，再更新本文件。
+说明：本文只在产品目标、长期里程碑或验收标准发生变化时更新。本文后续章节中把 `docs/36`
+称为近期总控的内容属于历史路线记录，不再构成当前实施约束。
 
 ## 一、产品最终形态
 

@@ -473,7 +473,7 @@ Prompt 优先级固定为：平台安全/工具约束 > Review Card 契约 > Pro
 - 明确下一步直接建设受控生产验证闭环。
 - 30 条样本不再阻塞生产链路实现，只阻塞扩大使用范围。
 - 固化项目组选择、正式结果+降级、独立加密 Key、独立 Worker、混合 diff、同任务追加对照六项决策。
-- 本阶段只修改 README、`docs/36` 和本文，不实现阶段 2 代码。
+- 本阶段只修改本文；只有文档路由变化时才修改 README，不实现阶段 2 代码。
 
 ### 7.3 阶段 2：受控生产验证闭环（工程实现完成，待用户生产验收）
 
@@ -496,13 +496,13 @@ Prompt 优先级固定为：平台安全/工具约束 > Review Card 契约 > Pro
 
 ```text
 只执行 docs/41 的阶段 2：受控生产验证闭环。
-先阅读 AGENTS.md，并按需局部读取 docs/36、docs/41、docs/42 中的 Agent 部署章节、现有 agent_review_spike、Python Review 主链路、scheduler、项目组配置和前端设置/任务详情代码。
+先阅读 AGENTS.md，并按需局部读取 docs/41、docs/42 中的 Agent 部署章节、现有 agent_review_spike、Python Review 主链路、scheduler、项目组配置和前端设置/任务详情代码。
 
 先更新本文的设计状态和接口约束，再实现数据迁移和 DTO/API；之后实现 Agent 设置、Fernet Key 加密、项目组引擎选择、Manual/Retry 覆盖、持久化 Job/Run、独立 Worker、read_diff_range、正式结果落库、显式 STANDARD_FALLBACK、任务详情和同任务对照执行。部署或验证步骤变化时更新 docs/42。
 
 固定 Claude Code 2.1.112 + DeepSeek deepseek-v4-pro[1m]，不得建设可扩展 Provider。STANDARD 保持默认；Agent 只能访问当前任务的受控只读 MCP；未授权项目不得外发源码。对照执行不发重复通知。
 
-补齐异常恢复、取消、幂等、加密、安全、接口和完整链路测试；运行相关 Python 测试、前端 build、容器安全验证和一条 manual 端到端链路。更新 docs/36、docs/41 和必要的 docs/42 后，输出改了什么、为什么、如何验证、评估指标和遗留风险，然后停止等待确认。不得进入阶段 3。
+补齐异常恢复、取消、幂等、加密、安全、接口和完整链路测试；运行相关 Python 测试、前端 build、容器安全验证和一条 manual 端到端链路。更新 docs/41 和必要的 docs/42 后，输出改了什么、为什么、如何验证、评估指标和遗留风险，然后停止等待确认。不得进入阶段 3。
 ```
 
 阶段 2 落地记录（2026-07-18）：
@@ -538,7 +538,7 @@ Prompt 优先级固定为：平台安全/工具约束 > Review Card 契约 > Pro
 
 样本不足 30 条时固定返回 INSUFFICIENT_SAMPLE，不计算扩大范围结论。不得配置或读取真实 DeepSeek Key，不调用模型，不发送源码，不改 Review 配置、Prompt、规则、finding 等级或人工 verdict。
 
-补契约、指标、权限/脱敏测试并运行前端 production build。更新 docs/36、docs/41 和必要的 docs/42 后停止，等待用户明确回复“继续阶段 3B”。
+补契约、指标、权限/脱敏测试并运行前端 production build。更新 docs/41 和必要的 docs/42 后停止，等待用户明确回复“继续阶段 3B”。
 ```
 
 阶段 3A 落地记录（2026-07-18）：
@@ -580,7 +580,7 @@ Prompt 优先级固定为：平台安全/工具约束 > Review Card 契约 > Pro
 
 样本不足时只输出趋势；门禁未通过时保持受控项目可选，不扩大范围。不得自动修改 Prompt、规则、finding 等级、项目配置或默认引擎。
 
-更新 docs/36、docs/41 和必要的 docs/42，输出评估结论和遗留风险后停止等待用户确认。
+更新 docs/41 和必要的 docs/42，输出评估结论和遗留风险后停止等待用户确认。
 ```
 
 ## 八、测试与验收矩阵
@@ -670,7 +670,7 @@ docker build -f deploy/agent-egress-proxy.Dockerfile -t ai-code-review-agent-egr
 ```text
 按 docs/41-server-side-readonly-agent-review-plan.md 推进 Claude Code + DeepSeek 服务器侧只读 Agent Review，每次只允许执行一个阶段。
 
-先阅读 AGENTS.md，并按当前阶段使用 rg 局部读取 docs/36、docs/41、必要的 docs/42 和相关代码。只有项目入口或文档路由变化时才读取并更新 README。已落地能力不得重复实现。
+先阅读 AGENTS.md，并按当前阶段使用 rg 局部读取 docs/41、必要的 docs/42 和相关代码。只有项目入口或文档路由变化时才读取并更新 README。已落地能力不得重复实现。
 
 每阶段先更新本文的设计状态，再补数据结构与接口，之后实现业务逻辑、测试和示例数据；部署或验证步骤变化时更新 docs/42。STANDARD 始终保持默认；Agent 只能访问当前任务的受控只读 MCP；不得执行命令、编辑文件、访问其它项目、自动修改规则或 Prompt、降低 finding 等级或自动忽略 finding。
 
@@ -678,13 +678,13 @@ docker build -f deploy/agent-egress-proxy.Dockerfile -t ai-code-review-agent-egr
 
 阶段 3A 只建设生产观察、脱敏导出和合成验证，不做真实准确性结论。阶段 3B 才基于至少 30 条去重人工标注样本和充分的 STANDARD / AGENT 配对覆盖，判断是否具备扩大使用范围的候选条件。样本不足或门禁未通过时不得把 AGENT 设为默认，也不得扩大授权范围。
 
-每阶段完成后必须输出“改了什么、为什么、如何验证、评估指标、遗留风险、下一阶段”，更新 docs/36、docs/41 和必要的 docs/42，然后停止。只有项目入口或文档路由变化时才更新 README。只有用户验证并明确回复“继续下一阶段”后才能继续。
+每阶段完成后必须输出“改了什么、为什么、如何验证、评估指标、遗留风险、下一阶段”，更新 docs/41 和必要的 docs/42，然后停止。只有项目入口或文档路由变化时才更新 README。只有用户验证并明确回复“继续下一阶段”后才能继续。
 ```
 
 ## 十二、当前验收起手式
 
 ```text
-请阅读 AGENTS.md，并局部读取 docs/36-review-platform-current-roadmap.md、docs/41-server-side-readonly-agent-review-plan.md、docs/42-development-deployment-and-validation-guide.md 中的 Agent 部署与验证章节，以及现有 agent_review_spike。
+请阅读 AGENTS.md，并局部读取 docs/41-server-side-readonly-agent-review-plan.md、docs/42-development-deployment-and-validation-guide.md 中的 Agent 部署与验证章节，以及现有 agent_review_spike。
 
 阶段 3A 完成后，先在无真实 DeepSeek Key 的环境使用合成 demo 验证质量看板、筛选、聚合、脱敏导出与 `INSUFFICIENT_SAMPLE`。不得把合成数据用于准确性结论。
 

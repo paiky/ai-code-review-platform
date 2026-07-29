@@ -1,9 +1,12 @@
-# Review 平台当前路线总览：准确率、必备能力与后续推进
+# Review 平台路线总览归档：准确率、必备能力与阶段推进
+
+> 状态：历史归档，冻结于 2026-07-24。本文保留当时的路线判断、阶段 Prompt 和实施记录，仅用于追溯，
+> 不再代表当前状态，不再登记新专项或后续实施结果。当前阶段以用户明确指定的专题文档及其中的停止点为准。
 
 ## 状态
 
-- 当前状态：作为 2026-07-01 起后续推进的唯一总控入口；`M10`、`docs/39` 全阶段和 `docs/40` 阶段 1、阶段 2 已落地。`docs/41` 阶段 1、阶段 2 工程实现和阶段 3A 生产观察能力准备已落地，当前等待用户验证 3A；只有用户明确回复“继续阶段 3B”后才进入真实样本准确性验收与扩大门禁。
-- 完整产品目标：`docs/37-review-platform-target-product-roadmap.md`。本文件负责近期阶段推进，`docs/37` 负责最终产品形态和长期路线。
+- 归档快照：记录 2026-07-01 至 2026-07-24 期间的近期路线与阶段落地情况；文中的“当前”“下一步”和待验证状态均以冻结日期为准。
+- 完整产品目标：`docs/37-review-platform-target-product-roadmap.md`；仅在产品目标或长期验收标准变化时维护。
 - 关联历史文档：
   - `docs/32-review-feedback-v2-mainline-roadmap.md`：V2 反馈学习、项目策略、Context Pack 和高准确模式阶段记录。
   - `docs/33-review-learning-capability-roadmap.md`：长期学习能力愿景。
@@ -12,7 +15,7 @@
   - `docs/39-review-accuracy-and-material-ui-roadmap.md`：源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 / MUI 前端重构专项路线。
   - `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`：首次 Review 前确定性检查、Planner 多端感知、评估驱动的多端 Planner / Retriever 配对扩展和 finding 二次复评专项路线。
   - `docs/41-server-side-readonly-agent-review-plan.md`：服务器侧只读 Agent Review 可选模式，负责阶段 1 Spike、阶段 2 受控生产验证、阶段 3A 生产观察准备和阶段 3B 真实样本准确性验收/扩大范围门禁。
-- 本文件用途：回答“近期哪些能力必须先补、当前缺什么、下一步先做什么”。完整产品目标和长期阶段路线见 `docs/37-review-platform-target-product-roadmap.md`。后续阶段推进优先更新本文件，再按需更新细节文档。
+- 本文件用途：追溯当时“哪些能力必须先补、当时缺什么、阶段如何推进”的判断。新工作不再更新本文。
 
 ## 一、通俗结论
 

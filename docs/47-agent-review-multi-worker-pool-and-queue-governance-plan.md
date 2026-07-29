@@ -365,6 +365,16 @@ Compose、Agent Settings GET/PUT 和 Worker Pool，不新增 API、数据库字�
   `--dry-run`。如失败提示 Agent 保持禁用，必须先用 `status` 确认 Backend 和目标容量恢复，再由设置页
   人工恢复，不要绕过安全闸门。
 
+### 6.10 v1.2.0 版本更新页口径
+
+- 版本更新页以“安全并发领取与租约 fencing、两副本 Worker Pool、队列运行治理和安全顺序部署”概括
+  三个阶段，不把单项底层实现拆成独立版本。
+- 对外明确：全部在线容量忙碌时任务继续按既有优先级和入队时间排队，不因 BUSY 误判离线或触发
+  Standard fallback；DRAINING、租约接管、`max_attempts=2` 和脱敏边界保持不变。
+- 运维能力只描述 `status`、`preflight`、`upgrade` 和显式人工 `scale`，不宣称自动扩缩容、项目级配额、
+  单 Worker 并行任务、动态预算或尚未执行的 Run 18。
+- 版本号固定为 `v1.2.0`，发布日期为 `2026-07-29`，并作为版本更新页最新条目展示。
+
 ## 7. 测试与验收
 
 阶段一：

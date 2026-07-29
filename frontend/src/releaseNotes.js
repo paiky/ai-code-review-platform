@@ -1,5 +1,22 @@
 export const releaseNotes = [
   {
+    id: '2026-07-29-agent-review-worker-pool-queue-governance-1-2-0',
+    version: 'v1.2.0',
+    releaseDate: '2026-07-29',
+    title: 'Agent Review 多 Worker 池与队列运行治理',
+    summary: '平台升级至 1.2.0：Agent Review 从单 Worker 执行升级为具备安全并发领取、两副本 Worker Pool、实时队列与容量治理、SIGTERM 优雅排空和一键顺序升级的运行体系；全部容量忙碌时任务继续排队，既有租约 fencing、最大尝试次数与 Standard fallback 边界保持不变。',
+    highlights: [
+      '并发领取增加 claimAttempt fencing：Worker 心跳、完成、失败和取消都会校验领取者与尝试次数；租约过期后可由其它 Worker 安全接管，旧 Worker 的迟到请求不会覆盖新结果。',
+      '新增 Worker 注册池和安全节点白名单，生产环境使用两个 capacity=1 的独立 Worker；设置页可查看在线、空闲、忙碌、排空和最近心跳，旧单 Worker 与历史数据继续兼容。',
+      '调度顺序保持 priority DESC + queuedAt ASC；全部在线 Worker 为 BUSY 时，新任务保持 QUEUED，不会被误判为 Worker 离线，也不会仅因容量忙碌触发 Standard fallback。',
+      'Agent Settings 和设置页新增排队、运行、过期租约、最老等待、在线与忙碌容量、利用率及 DRAINING 数量，并提供离线、全忙、积压和租约接管安全告警。',
+      'Worker 支持 SIGTERM 优雅排空：进入 DRAINING 后立即停止领取新任务，继续心跳并完成当前任务；固定宽限期耗尽后仍由既有租约和 claimAttempt fencing 接管。',
+      '任务详情继续只展示脱敏领取尝试和 AGENT_RECLAIMED 接管事件，不暴露 Worker 基础设施、异常原文、Prompt、源码、模型内容或推理。',
+      '新增 deploy-stage3.sh，支持 status、preflight、upgrade 和显式人工 scale；升级按 Backend、队列闸门、Worker Pool、Frontend 的安全顺序执行，不引入自动扩缩容。'
+    ],
+    tags: ['1.2.0', 'Agent Review', 'Worker Pool', '安全并发', '队列治理', '优雅排空', '部署升级']
+  },
+  {
     id: '2026-07-24-agent-review-observability-1-1-0',
     version: 'v1.1.0',
     releaseDate: '2026-07-24',
