@@ -176,3 +176,177 @@
 
 - 配置 `CODE_QUALITY_REVIEW_PROXY=http://代理地址:端口` 并重启 backend。
 - 在设置页测试 DeepSeek Provider，再重试普通 Review，确认不再出现本机 DNS 的 `Errno -2`。
+
+## BUG-20260727-001 Agent 入队前误读 worktree 准备结果并直接降级
+
+状态：已修复
+
+发现时间：2026-07-27
+
+现象：
+
+- 任务 `1026`、`1027`、`1028` 请求 `AGENT` 后均直接降级为 `STANDARD_FALLBACK`，结果只记录
+  `AGENT_WORKTREE_UNAVAILABLE`，没有 Agent Run。
+- 同一任务进入普通 Review 后又能成功 fetch mirror 并按同一精确 SHA 检出 worktree，说明 Worker、模型和
+  事件提交并非持续不可用。
+- Agent 入队前的具体 Git / 路径错误没有写入进度事件，任务详情无法继续区分瞬时检出失败、路径校验失败和
+  持续不可达提交。
+- 增加重试和失败详情后，任务 `1030`、`1035` 仍显示 `failurePhase=UNKNOWN, attempts=2`；同任务普通 Review
+  随后立即记录 `LOCAL_REPO_PREPARED`。
+
+根因：
+
+- `prepare_local_repository_context()` 返回 `{"summary": {"status": ...}, "unavailableContexts": ...}`，
+  Agent `_ensure_worktree()` 却从顶层读取 `status / reason / failurePhase`。新任务首次没有现成 worktree 时，
+  即使两次准备都成功，顶层 `status` 仍为空，因此被误判为 `AGENT_WORKTREE_UNAVAILABLE`。
+- 原回归测试把准备结果错误模拟为顶层 `status`，没有复现生产返回契约，因此未能阻止该问题。
+- 自动调度捕获 `AppError` 后只保存 `exception.code`，丢失了经过脱敏的失败消息和准备阶段，无法从任务记录
+  还原低层原因。
+
+修复：
+
+- Agent 入队统一从 `outcome.summary` 读取准备状态和失败阶段，从 `unavailableContexts` 读取脱敏失败原因，并兼容
+  测试或旧调用返回的扁平结构。
+- 仅在真实 `UNAVAILABLE` 或准备成功但目录不可见时执行一次有界重试；不改变精确 SHA，不回退到分支最新提交。
+- 两次准备仍失败时，在任务进度中保存 `AGENT_PREFLIGHT_FAILED`，记录脱敏后的错误码、错误消息和重试次数。
+- fallback 的 `agentRunSummary` 同时保留 `failureCode` 和脱敏后的 `failureMessage`，前端与通知可展示真实原因。
+
+回归验证：
+
+- 单元测试使用生产一致的嵌套 `summary`，覆盖首次准备成功、第一次真实失败后第二次成功，以及两次真实失败。
+- 契约测试覆盖两次准备均失败时仍安全降级，并可从结果摘要和进度事件读取脱敏失败原因。
+- 运行 `scripts/run-backend.cmd test tests/unit/test_local_repo_context.py tests/contract/test_agent_review_api_contract.py`。
+
+## BUG-20260727-002 Agent 租约跨时区误过期且降级任务未创建
+
+状态：已修复
+
+发现时间：2026-07-27
+
+现象：
+
+- 任务 `1042` 刚进入 `AGENT_QUEUED`，执行过程便显示已执行约 `28852` 秒，恰好多出约 8 小时。
+- Agent 调度任务 `1267` 只产生一次领取心跳，`turnCount / toolCallCount / sourceBytesReturned` 均为 0，
+  随后被标记为 `AGENT_LEASE_EXHAUSTED`。
+- 调度任务已经 `FAILED`，但正式结果仍为 `RUNNING`、Agent Run 仍显示 `PENDING`，页面持续停留在“审查中”。
+
+根因：
+
+- Agent 心跳、租约和恢复扫描使用无时区的 `datetime.now()`。连接同一数据库的 Linux UTC Backend 与
+  Windows / 东八区 Backend 会把同一个 `DATETIME` 按不同本地时区解释，东八区恢复线程会把刚由 UTC
+  Backend 创建的租约误判为已经过期 8 小时。
+- API 返回的时间字符串没有 `Z` 或明确偏移，前端 `new Date()` 将 UTC 时间误当成本地时间，运行计时因此多出
+  8 小时。
+- 恢复扫描准备创建 Standard fallback 时读取不存在的 `AgentReviewRun.project_id`；项目 ID 实际保存在
+  `ReviewTask` 和 Agent 调度任务中，异常导致 fallback Job 没有落库，正式结果也无法继续推进。
+
+修复设计：
+
+- Agent 心跳、租约、恢复扫描及 Agent 结果时间统一使用 UTC，无论 Backend 运行在 Windows 还是 Linux，
+  数据库比较语义保持一致。
+- API 时间序列化统一携带明确时区；前端所有只读时间统一转换为 `Asia/Shanghai`（UTC+8）展示，运行时长基于
+  绝对时间戳计算，不再依赖浏览器所在时区。
+- Standard fallback 从 `ReviewTask.project_id` 解析项目，不再访问不存在的 Agent Run 字段；增加真实创建
+  fallback 调度记录的契约测试，避免只 mock 调度函数而漏掉字段错误。
+- 生产环境同一数据库只保留一套 Backend 调度 / 恢复进程；多实例部署时所有实例仍必须遵循同一 UTC 存储约定。
+
+回归验证：
+
+- 覆盖 Agent Worker 心跳与租约时间为 UTC，跨系统时区不会立即过期。
+- 覆盖过期 Agent Run 能创建带正确 `projectId` 的 Standard fallback Job。
+- 覆盖无时区 UTC、`Z`、显式偏移三类时间输入均按东八区展示，且运行秒数不再多出 8 小时。
+
+## BUG-20260727-003 单个敏感路径导致整个 Agent Review 降级
+
+状态：已修复
+
+发现时间：2026-07-27
+
+现象：
+
+- MR 只要包含一个 `application-prod.properties`、`.env`、证书或密钥类路径，即使其余文件均为普通业务代码，
+  整次 Agent Review 仍会在入队前返回 `SENSITIVE_PATH_DENIED`。
+- 普通业务文件因此失去 Agent 的源码检索和多轮审查能力，页面也无法区分“全部不可审查”与“仅排除了少量文件”。
+
+根因：
+
+- Agent 入队对 `changedFiles` 使用 fail-fast 列表校验；任意路径命中拒绝策略都会抛出异常，未建立允许文件与排除
+  文件的安全分区。
+- 即使只过滤 `changedFiles`，原始多文件 diff 仍可能包含敏感文件内容，因此不能仅删除文件名，必须同步过滤 diff
+  section。
+
+修复设计：
+
+- 入队前将变更路径分为 `included` 与 `excluded`。`SENSITIVE_PATH_DENIED` 只排除当前文件；越界路径等结构性错误
+  仍拒绝整次请求。
+- 发送给 Agent 的 `changedFiles` 与 diff 必须来自同一允许集合；优先按标准 unified diff 的 `diff --git`
+  section 过滤，无法拆分时只使用允许文件自己的 `diffText` 重建 diff，禁止回退到未过滤原文。
+- 仍有允许文件时继续 Agent Review，并记录 `AGENT_SENSITIVE_PATHS_EXCLUDED` 进度事件，页面展示总文件数、审查
+  文件数、排除文件数和排除路径。
+- 所有文件均被排除时不创建 Agent Run，也不把敏感 diff 发送给外部模型；保存明确的 `SKIPPED` 结果并完成任务
+  状态同步。
+
+回归验证：
+
+- 覆盖一个普通 Java 文件加一个 `application-prod.properties` 时，Agent Job 正常创建，输入中只包含 Java 文件，
+  diff 中不出现敏感路径或内容。
+- 覆盖所有文件均为敏感路径时不创建 Agent Job、不进入普通 Provider，并产生可见的安全跳过结果。
+- 覆盖路径越界等非敏感路径错误仍拒绝整次 Agent 入队。
+
+## BUG-20260728-004 Agent 达到 turn 上限后被笼统记录为 AGENT_CLI_FAILED
+
+状态：已修复
+
+发现时间：2026-07-28
+
+现象：
+
+- 任务 `1062` 的 Agent Run 实际执行约 150 秒，完成 17 次工具调用并返回约 40 KB 源码，但最终降级为
+  `STANDARD_FALLBACK`，失败码只有 `AGENT_CLI_FAILED`。
+- Run 记录的 `turnCount=9`，超过当前 `maxTurns=8`；Claude CLI 在提交 Review Card 前以非零状态退出。
+- Worker 丢弃 CLI stderr，失败回传统一使用“未产生有效 Review Card”，页面无法区分 turn 预算耗尽与其它 CLI
+  异常。
+
+根因与修复设计：
+
+- 首版固定 8 turns 对 20 个以上文件、需要多次检索调用链的真实 MR 偏紧；模型完成上下文读取后没有剩余 turn
+  调用 `submit_review`。
+- Runner 应读取 Claude stream-json 的安全结果元数据；当 result subtype 表示 max turns，或非零退出时
+  `numTurns` 已达到预算，将失败稳定分类为 `AGENT_MAX_TURNS_EXCEEDED`，不保存 stderr、模型原文或源码。
+- 受控生产预算从 8 提升为 12 turns，保持 40 次工具调用、200 KB 源码返回和 600 秒超时不变；Prompt 明确要求
+  在核心证据足够后立即提交，不为穷尽检索消耗最终提交预算。
+- Worker 根据稳定错误码回传明确但不含敏感内容的失败消息；其它非零退出继续使用 `AGENT_CLI_FAILED`。
+
+回归验证：
+
+- 单元测试覆盖 Claude result subtype / turn 统计解析、达到预算时的稳定错误码和普通非零退出兼容。
+- 校验设置接口与 Worker claim 均返回 `maxTurns=12`，配置测试仍维持独立的 4 turns 小预算。
+- 运行 Agent Runner 单元测试与 Agent Review 契约测试最小集。
+
+## BUG-20260729-005 真实 Agent 成功提交后被标记为 AGENT_WORKER_ERROR
+
+状态：已修复
+
+发现时间：2026-07-29
+
+现象：
+
+- 任务 `1107` 的 Run 31 已完成 7 次证据调用并成功调用一次 `submit_review`，随后仍被标记为
+  `AGENT_WORKER_ERROR` 并进入普通 Review 降级。
+- 安全审计保留了 8 次工具事件和约 14 KB 源码返回，但 `turnCount=0`、`durationMs=null`。
+
+根因与修复设计：
+
+- 生产任务不包含离线评测专用的 `targetFinding`；Runner 在成功结果统计阶段无条件读取该字段，
+  触发未分类 `KeyError`。
+- `targetFinding` 保持为可选评测字段。真实任务缺少该字段时跳过目标命中率计算，不影响 Review Card 成功。
+- Worker 未分类异常日志只记录异常类型和代码位置，禁止记录异常消息、Prompt、源码、查询和模型原文。
+- 增加无 `targetFinding` 的真实成功路径和脱敏异常日志回归测试。
+
+回归验证：
+
+- Runner 在生产输入不含 `targetFinding`、Review Card 为合法空结果时返回 `SUCCESS`。
+- Worker 收到成功摘要后调用完成接口，不再回传 `AGENT_WORKER_ERROR`。
+- 未分类异常日志可定位异常类型和代码位置，且不包含异常消息中的敏感哨兵。
+- Agent Review 定向测试结果为 `51 passed, 1 skipped`；相关 Python Ruff 与 `git diff --check`
+  均通过。

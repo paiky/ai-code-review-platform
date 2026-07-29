@@ -131,8 +131,16 @@ EPERM: operation not permitted, open 'C:\Users\<user>\AppData\Local\npm-cache\_c
 docker version
 ```
 
+- 打包脚本会把完整输出保存到 `.local/docker-deploy/logs/`。优先双击或执行 `scripts/package-docker-deploy.cmd`，失败时窗口会暂停；若直接运行 `.ps1`，从资源管理器启动时会自动暂停，也可显式传入 `-PauseOnError`。自动化调用可设置 `NO_PAUSE=1` 避免等待输入。
 - Docker Engine 未启动、CLI 不在 PATH 或 Windows 终端未刷新 PATH 时，先修本机 Docker 环境，不要改项目打包脚本。
 - Codex Windows 沙箱内执行 `docker build` 若出现 `open C:\Users\<user>\.docker\buildx\.lock: Access is denied`，说明 buildx 需要写用户目录；在任务确实要求构建镜像时按权限规则授权重跑，不要改 Dockerfile 绕过。
+- `failed to fetch oauth token`、`auth.docker.io/token: EOF`、TLS timeout、DNS temporary failure 和
+  `ECONNRESET` 属于 Docker Hub / 构建依赖网络错误，不是 Dockerfile 语法错误。打包脚本只对这些可识别
+  网络错误做有限重试；普通编译失败不重试。PowerShell 或 `.local/gitlab.env` 中的 Agent/Provider 代理不能
+  代理 BuildKit 拉取 `FROM`，应在 Docker Desktop 中配置代理。
+- 只修改 Agent Worker 时可使用
+  `scripts/package-docker-deploy.cmd -AgentWorkerOnly -ReuseVersion <上一个完整版本>`。增量模式仍输出四个
+  应用镜像的完整离线包，但 Backend、Frontend 和出站代理复用指定旧版本；不得用它掩盖这些组件本身的改动。
 - 非 root Squid 容器若启动后立即退出，先检查是否仍尝试写默认 PID 文件；只读代理镜像可配置 `pid_filename none`，并关闭 cache/access log，再用 `squid -k parse -f /etc/squid/squid.conf` 验证。仅设置 `read_only` 不能限制外网，必须结合 internal network 与域名白名单代理或等效防火墙。
 - Docker 前端镜像构建使用 `npm ci`，要求 `frontend/package.json` 和 `frontend/package-lock.json` 同步。不要使用 `latest` 或浮动顶层依赖；更新依赖后同步 lock。
 - 如果本机 npm 与 Dockerfile 的 Node / npm 版本差异导致 lock 不一致，用与 Dockerfile 一致的 Node 镜像更新 lock。
@@ -168,6 +176,12 @@ BACKEND_PORT = 容器内后端监听端口，只在 Docker 网络内使用
 - Linux 生产不使用 Windows 专用 Compose。生产 Worker 通过 internal 网络访问 Compose backend，并与 backend 只读挂载同一个 `LOCAL_REPO_WORKSPACE_HOST_DIR`。
 - Windows 的 `run-backend.cmd dev` 会异步启动 Worker，不能在 uvicorn 启动前同步等待 Worker 心跳，否则会形成启动死锁。失败详情查看 `.local/agent-worker-startup.*.log`；设置 `AGENT_REVIEW_AUTO_START_WORKER=false` 可排除 Docker 启动因素。
 - 自动启动只作用于 Windows `dev`，不得影响 `test`、`lint`、`migrate` 或 Linux runtime。远程离线包继续使用 `docker-compose.runtime.yml`，不要把 `docker-compose.windows-agent.yml` 上传叠加到生产环境。
+- 不要让 Windows 本地 Backend 与 Linux 生产 Backend 同时连接同一生产数据库。旧版本使用无时区 `DATETIME` 和
+  `datetime.now()` 判断 Worker 心跳、租约，UTC 与东八区进程并存会把刚领取的任务误判为超时 8 小时。修复后
+  Agent 租约统一存 UTC，Compose 也显式设置 `TZ=UTC`；页面统一转换为 `UTC+8` 展示。
+- Worker `healthy` 必须同时满足 `workerStatus=ONLINE` 和设置页返回的 `workerId` 等于容器自己的
+  `AGENT_REVIEW_WORKER_ID`。只检查全局 ONLINE 会被另一台 Worker 的心跳误导，出现“Linux 容器健康，但实际由
+  Windows Worker 领取任务”的假健康状态。
 
 ## 数据库与迁移
 

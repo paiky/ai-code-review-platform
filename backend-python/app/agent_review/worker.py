@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 import tempfile
 import time
+import traceback
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -15,6 +17,23 @@ from app.agent_review_spike.runner import RunnerConfig, run_agent_candidate
 
 WORKER_VERSION = "agent-worker-v1"
 CLI_VERSION = "2.1.112"
+_LOGGER = logging.getLogger(__name__)
+
+
+class _LatestAuditSnapshot:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._value: dict[str, Any] = {}
+
+    def update(self, value: dict[str, Any]) -> None:
+        if not isinstance(value, dict):
+            return
+        with self._lock:
+            self._value = json.loads(json.dumps(value, ensure_ascii=False))
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return json.loads(json.dumps(self._value, ensure_ascii=False))
 
 
 def main() -> int:
@@ -47,9 +66,10 @@ def _run_job(
     job_id = int(job["jobId"])
     stop = Event()
     cancelled = Event()
+    latest_audit = _LatestAuditSnapshot()
     heartbeat = Thread(
         target=_heartbeat_loop,
-        args=(backend_url, token, worker_id, job_id, stop, cancelled),
+        args=(backend_url, token, worker_id, job_id, stop, cancelled, latest_audit),
         daemon=True,
     )
     heartbeat.start()
@@ -62,30 +82,41 @@ def _run_job(
             str(job.get("apiKey") or ""),
             RunnerConfig(
                 timeout_seconds=int(budgets.get("timeoutSeconds") or 600),
-                max_turns=int(budgets.get("maxTurns") or 8),
+                max_turns=int(budgets.get("maxTurns") or 12),
                 max_tool_calls=int(budgets.get("maxToolCalls") or 40),
                 max_source_bytes=int(budgets.get("maxSourceBytes") or 200_000),
             ),
             cancel_event=cancelled,
+            progress_callback=latest_audit.update,
         )
+        final_audit = latest_audit.snapshot()
+        if final_audit:
+            summary["audit"] = final_audit
         base = {"workerId": worker_id, "idempotencyKey": job["idempotencyKey"], "runSummary": summary}
         if cancelled.is_set():
             _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/cancelled", base)
         elif summary.get("status") == "SUCCESS" and isinstance(summary.get("reviewCard"), dict):
             _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/complete", {**base, "reviewCard": summary["reviewCard"]})
         else:
+            error_code = summary.get("errorCode") or "AGENT_RUN_FAILED"
             _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/fail", {
                 **base,
-                "failureCode": summary.get("errorCode") or "AGENT_RUN_FAILED",
-                "failureMessage": "Agent Review did not produce a valid submitted Review Card",
+                "failureCode": error_code,
+                "failureMessage": _failure_message(error_code),
             })
     except Exception as exception:
+        _LOGGER.error(
+            "Agent Worker job failed before terminal report: jobId=%s exceptionType=%s location=%s",
+            job_id,
+            type(exception).__name__,
+            _safe_exception_location(exception),
+        )
         _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/fail", {
             "workerId": worker_id,
             "idempotencyKey": job["idempotencyKey"],
             "failureCode": "AGENT_WORKER_ERROR",
-            "failureMessage": str(exception)[:500],
-            "runSummary": {},
+            "failureMessage": _failure_message("AGENT_WORKER_ERROR"),
+            "runSummary": {"audit": latest_audit.snapshot()},
         })
     finally:
         stop.set()
@@ -168,11 +199,26 @@ def _worker_heartbeat_loop(backend_url: str, token: str, worker_id: str, stop: E
 
 
 def _heartbeat_loop(
-    backend_url: str, token: str, worker_id: str, job_id: int, stop: Event, cancelled: Event
+    backend_url: str,
+    token: str,
+    worker_id: str,
+    job_id: int,
+    stop: Event,
+    cancelled: Event,
+    latest_audit: _LatestAuditSnapshot,
 ) -> None:
     while not stop.wait(15):
         try:
-            response = _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/heartbeat", {"workerId": worker_id})
+            payload: dict[str, Any] = {"workerId": worker_id}
+            audit = latest_audit.snapshot()
+            if audit:
+                payload["runSummary"] = {"audit": audit}
+            response = _post(
+                backend_url,
+                token,
+                f"/internal/agent-review/jobs/{job_id}/heartbeat",
+                payload,
+            )
             if bool((response.get("data") or {}).get("cancelRequested")):
                 cancelled.set()
         except Exception:
@@ -206,6 +252,24 @@ def _required_env(name: str) -> str:
     if not value:
         raise ValueError(f"{name} is required")
     return value
+
+
+def _failure_message(error_code: str) -> str:
+    if error_code == "AGENT_MAX_TURNS_EXCEEDED":
+        return "Agent Review reached the turn budget before submitting a Review Card"
+    if error_code == "AGENT_CLI_FAILED":
+        return "Claude CLI exited with a non-zero status before submitting a Review Card"
+    if error_code == "AGENT_WORKER_ERROR":
+        return "Agent Worker failed before a valid Review Card could be submitted"
+    return "Agent Review did not produce a valid submitted Review Card"
+
+
+def _safe_exception_location(exception: Exception) -> str:
+    frames = traceback.extract_tb(exception.__traceback__)
+    if not frames:
+        return "unknown"
+    frame = frames[-1]
+    return f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}"
 
 
 if __name__ == "__main__":

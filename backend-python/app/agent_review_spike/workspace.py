@@ -57,6 +57,21 @@ DENIED_SUFFIXES = {
     ".jks",
     ".keystore",
 }
+EVIDENCE_TOOLS = {
+    "list_files",
+    "search_code",
+    "read_file_range",
+    "read_diff_range",
+}
+REVIEW_BUDGET_MESSAGES = {
+    "DISCOVERY": (
+        "Only investigate an existing risk hypothesis; submit as soon as evidence is sufficient."
+    ),
+    "CONVERGE": (
+        "Stop expanding scope or adding risk hypotheses; converge and submit the Review Card."
+    ),
+    "SUBMIT": "Evidence collection is complete. Call submit_review now.",
+}
 
 
 class ReviewToolError(ValueError):
@@ -69,7 +84,11 @@ class ReviewToolError(ValueError):
 class ToolBudget:
     max_calls: int = 40
     max_source_bytes: int = 200_000
+    # 证据工具预算独立于 40 次 MCP 硬上限，避免模型耗尽提交机会。
+    max_evidence_calls: int = 10
+    converge_at_evidence_calls: int = 8
     calls: int = 0
+    evidence_calls: int = 0
     source_bytes: int = 0
     diff_bytes: int = 0
     blocked_access_count: int = 0
@@ -80,7 +99,23 @@ class ToolBudget:
         if self.calls >= self.max_calls:
             raise ReviewToolError("TOOL_CALL_BUDGET_EXCEEDED", "tool call budget exhausted")
         self.calls += 1
-        return perf_counter()
+        started = perf_counter()
+        if tool not in EVIDENCE_TOOLS:
+            return started
+        if self.evidence_calls >= self.max_evidence_calls:
+            # 拒绝发生在 worktree 访问前；拒绝本身仍属于总 MCP 调用审计。
+            self.finish(
+                tool,
+                started,
+                status="FAILED",
+                error_code="EVIDENCE_COLLECTION_COMPLETE",
+            )
+            raise ReviewToolError(
+                "EVIDENCE_COLLECTION_COMPLETE",
+                REVIEW_BUDGET_MESSAGES["SUBMIT"],
+            )
+        self.evidence_calls += 1
+        return started
 
     def finish(
         self,
@@ -108,12 +143,14 @@ class ToolBudget:
                     self.top_path_summaries.append(summary)
                 safe_paths.append(summary)
         event = {
+            "sequence": len(self.events) + 1,
             "tool": tool,
             "status": status,
             "durationMs": max(int((perf_counter() - started) * 1000), 0),
             "itemCount": max(int(item_count), 0),
             "sourceBytes": max(int(source_bytes), 0),
             "pathSummary": safe_paths[:5],
+            "reviewBudget": self.review_budget(),
         }
         if error_code:
             event["errorCode"] = error_code[:80]
@@ -124,15 +161,36 @@ class ToolBudget:
     def blocked(self) -> None:
         self.blocked_access_count += 1
 
+    def review_budget(self) -> dict[str, Any]:
+        used = min(max(int(self.evidence_calls), 0), max(int(self.max_evidence_calls), 0))
+        if used >= self.max_evidence_calls:
+            phase = "SUBMIT"
+        elif used >= self.converge_at_evidence_calls:
+            phase = "CONVERGE"
+        else:
+            phase = "DISCOVERY"
+        return {
+            "phase": phase,
+            "evidenceCallsUsed": used,
+            "evidenceCallsRemaining": max(self.max_evidence_calls - used, 0),
+            "sourceBytesRemaining": max(self.max_source_bytes - self.source_bytes, 0),
+            "mustSubmit": phase == "SUBMIT",
+            "message": REVIEW_BUDGET_MESSAGES[phase],
+        }
+
     def summary(self) -> dict[str, Any]:
         return {
             "toolCallCount": self.calls,
+            "evidenceCallsUsed": self.evidence_calls,
             "sourceBytesReturned": self.source_bytes,
             "diffBytesReturned": self.diff_bytes,
             "maxToolCalls": self.max_calls,
+            "maxEvidenceCalls": self.max_evidence_calls,
+            "convergeAtEvidenceCalls": self.converge_at_evidence_calls,
             "maxSourceBytes": self.max_source_bytes,
             "blockedAccessCount": self.blocked_access_count,
             "topPathSummaries": self.top_path_summaries[:20],
+            "reviewBudget": self.review_budget(),
             "events": list(self.events),
         }
 

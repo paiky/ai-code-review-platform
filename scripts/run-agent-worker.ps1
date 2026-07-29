@@ -131,6 +131,7 @@ if ($Action -in @("start", "ensure") -and -not (Test-Path -LiteralPath $workspac
 $env:LOCAL_REPO_WORKSPACE_HOST_DIR = $workspacePath.Replace("\", "/")
 $env:AGENT_REVIEW_WINDOWS_PROXY_HOSTS_FILE = $proxyHostsFile.Replace("\", "/")
 $env:AGENT_REVIEW_WINDOWS_PROXY_CONFIG_FILE = $proxyConfigFile.Replace("\", "/")
+$expectedWorkerId = if ([string]::IsNullOrWhiteSpace($env:AGENT_REVIEW_WORKER_ID)) { "windows-agent-worker-1" } else { $env:AGENT_REVIEW_WORKER_ID.Trim() }
 
 switch ($Action) {
     { $_ -in @("start", "ensure") } {
@@ -152,7 +153,11 @@ switch ($Action) {
             $runningServices = @(& docker compose --project-name ai-code-review-windows-agent --env-file $envFile -f $composeFile ps --status running --services 2>$null)
             $workerRunning = $runningServices -contains "agent-worker"
             $proxyRunning = $runningServices -contains "agent-egress-proxy"
-            if ($null -ne $existingSettings -and $existingSettings.workerStatus -eq "ONLINE" -and $workerRunning -and $proxyRunning) {
+            if ($null -ne $existingSettings -and
+                $existingSettings.workerStatus -eq "ONLINE" -and
+                $existingSettings.workerId -eq $expectedWorkerId -and
+                $workerRunning -and
+                $proxyRunning) {
                 Write-Host "Agent Worker is already ONLINE."
                 exit 0
             }
@@ -182,7 +187,9 @@ switch ($Action) {
         Write-Host "Waiting for Agent Worker heartbeat..."
         for ($attempt = 0; $attempt -lt 30; $attempt++) {
             $settings = Get-AgentSettings
-            if ($null -ne $settings -and $settings.workerStatus -eq "ONLINE") {
+            if ($null -ne $settings -and
+                $settings.workerStatus -eq "ONLINE" -and
+                $settings.workerId -eq $expectedWorkerId) {
                 Write-Host "Agent Worker is ONLINE. Workspace: $workspacePath"
                 exit 0
             }

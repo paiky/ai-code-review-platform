@@ -1,5 +1,14 @@
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+
+UTC_PLUS_EIGHT = timezone(timedelta(hours=8))
+
+
+def utc_now() -> datetime:
+    """Return a timezone-neutral UTC value for storage in legacy DATETIME columns."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def read_json(value: Any, default: Any = None) -> Any:
@@ -23,8 +32,11 @@ def read_json_array(value: Any) -> list[Any]:
 def format_datetime(value: Any) -> str | None:
     if value is None:
         return None
+    if isinstance(value, datetime):
+        aware = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+        return aware.astimezone(UTC_PLUS_EIGHT).isoformat(timespec="milliseconds")
     if hasattr(value, "isoformat"):
-        return value.isoformat(timespec="milliseconds")
+        return value.isoformat()
     return str(value)
 
 

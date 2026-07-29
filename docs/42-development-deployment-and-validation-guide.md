@@ -255,6 +255,27 @@ docker compose up -d --build
 .\scripts\package-docker-deploy.cmd -IncludeMysqlImage
 ```
 
+打包脚本对 Docker Hub 鉴权、基础镜像元数据、DNS、TLS 和连接重置类网络失败默认最多尝试
+`3` 次；源码编译、测试或 Dockerfile 语法错误不会重试。可在临时网络较慢时显式调整为
+`1～5` 次：
+
+```powershell
+.\scripts\package-docker-deploy.cmd -DockerNetworkMaxAttempts 5
+```
+
+若本次只修改 Agent Worker，可复用一个已经完整打包成功、且仍存在于本机 Docker 中的旧版本镜像，
+只重新构建 Worker：
+
+```powershell
+.\scripts\package-docker-deploy.cmd `
+  -AgentWorkerOnly `
+  -ReuseVersion 20260728183000
+```
+
+`-ReuseVersion` 必须显式指定且不能等于新版本。脚本会校验旧版 Backend、Frontend 和 Agent 出站代理
+镜像均存在，将它们重新标记为本次新版本，再和新 Worker 一起生成结构不变的完整离线包；缺少任一旧镜像
+立即失败，不会静默改用其它版本。该模式不能用于同时包含 Backend、Frontend、Compose 或出站代理改动的发布。
+
 产物目录：
 
 ```text

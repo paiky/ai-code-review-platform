@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 import json
 from threading import Lock
 from typing import Any
@@ -11,10 +11,14 @@ from sqlalchemy.orm import Session
 
 from app.agent_review.crypto import decrypt_api_key, encrypt_api_key, encryption_available, mask_fingerprint
 from app.agent_review.models import AgentReviewRun, AgentReviewSettings
-from app.code_quality.models import CodeQualitySchedulerJob
+from app.code_quality.models import (
+    CodeQualityReviewProgressEvent,
+    CodeQualitySchedulerJob,
+)
 from app.code_quality.repository import ensure_result_schema, ensure_scheduler_job_schema, format_datetime
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.core.json_utils import utc_now
 
 
 AGENT_REVIEW_KEY = "agent-claude-code-deepseek-v4-pro"
@@ -22,12 +26,25 @@ AGENT_MODEL = "deepseek-v4-pro[1m]"
 AGENT_CLI_VERSION = "2.1.112"
 AGENT_RUNNER_VERSION = "agent-worker-v1"
 AGENT_ENDPOINT = "https://api.deepseek.com/anthropic"
-MAX_TURNS = 8
+MAX_TURNS = 12
 MAX_TOOL_CALLS = 40
 MAX_SOURCE_BYTES = 200_000
 MAX_DIFF_BYTES = 1_048_576
 INLINE_DIFF_BYTES = 200_000
 TIMEOUT_SECONDS = 600
+AGENT_TRACE_PHASES = {
+    "AGENT_ANALYZING",
+    "AGENT_TOOL_ACTIVITY",
+    "AGENT_CONVERGING",
+    "AGENT_SUBMITTING",
+}
+AGENT_TRACE_TOOLS = {
+    "list_files",
+    "search_code",
+    "read_file_range",
+    "read_diff_range",
+    "submit_review",
+}
 
 _SCHEMA_LOCK = Lock()
 _SCHEMA_ENGINES: set[int] = set()
@@ -69,7 +86,7 @@ def get_agent_settings_record(db: Session) -> AgentReviewSettings:
     ensure_agent_review_schema(db)
     record = db.get(AgentReviewSettings, 1)
     if record is None:
-        now = datetime.now()
+        now = utc_now()
         record = AgentReviewSettings(id=1, enabled=False, created_at=now, updated_at=now)
         db.add(record)
         db.flush()
@@ -128,7 +145,7 @@ def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any
         if enabled:
             decrypt_api_key(record.api_key_ciphertext)
         record.enabled = enabled
-    record.updated_at = datetime.now()
+    record.updated_at = utc_now()
     db.commit()
     return agent_settings_response(db)
 
@@ -137,7 +154,7 @@ def record_worker_heartbeat(
     db: Session, *, worker_id: str, worker_version: str, cli_version: str
 ) -> dict[str, Any]:
     record = get_agent_settings_record(db)
-    now = datetime.now()
+    now = utc_now()
     record.worker_id = _bounded(worker_id, 128)
     record.worker_version = _bounded(worker_version, 64)
     record.cli_version = _bounded(cli_version, 64)
@@ -165,7 +182,7 @@ def request_configuration_test(db: Session) -> dict[str, Any]:
     record.test_duration_ms = None
     record.test_started_at = None
     record.test_finished_at = None
-    record.updated_at = datetime.now()
+    record.updated_at = utc_now()
     db.commit()
     return agent_settings_response(db)["configurationTest"]
 
@@ -174,7 +191,7 @@ def claim_configuration_test(db: Session, *, worker_id: str) -> dict[str, Any] |
     record = assert_agent_available(db, require_worker=False)
     if record.test_status != "QUEUED" or not record.test_request_id:
         return None
-    now = datetime.now()
+    now = utc_now()
     record.test_status = "RUNNING"
     record.test_started_at = now
     record.test_finished_at = None
@@ -201,8 +218,8 @@ def complete_configuration_test(
     record.test_status = "SUCCESS" if normalized == "SUCCESS" else "FAILED"
     record.test_message = _bounded(message, 512)
     record.test_duration_ms = _non_negative(duration_ms)
-    record.test_finished_at = datetime.now()
-    record.updated_at = datetime.now()
+    record.test_finished_at = utc_now()
+    record.updated_at = utc_now()
     db.commit()
     return agent_settings_response(db)["configurationTest"]
 
@@ -217,7 +234,7 @@ def create_agent_job(
     comparison_mode: bool,
 ) -> AgentReviewRun:
     ensure_agent_review_schema(db)
-    now = datetime.now()
+    now = utc_now()
     idempotency_key = f"agent:{task_id}:{uuid4().hex}"
     job = CodeQualitySchedulerJob(
         job_type="AGENT_REVIEW",
@@ -267,7 +284,7 @@ def create_agent_job(
 def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
     settings_record = assert_agent_available(db, require_worker=False)
     ensure_agent_review_schema(db)
-    now = datetime.now()
+    now = utc_now()
     stmt = (
         select(CodeQualitySchedulerJob)
         .where(CodeQualitySchedulerJob.job_type == "AGENT_REVIEW")
@@ -341,7 +358,7 @@ def heartbeat_agent_job(
         raise AppError("RESOURCE_NOT_FOUND", f"Agent Review job not found: {job_id}", 404)
     if job.status != "RUNNING" or job.lease_owner != worker_id:
         raise AppError("AGENT_JOB_LEASE_LOST", "Agent Review job lease is no longer owned", 409)
-    now = datetime.now()
+    now = utc_now()
     job.heartbeat_at = now
     job.lease_expires_at = now + timedelta(seconds=max(get_settings().agent_review_lease_seconds, 30))
     job.updated_at = now
@@ -359,7 +376,7 @@ def heartbeat_agent_job(
 def expire_exhausted_agent_jobs(db: Session) -> list[int]:
     """Fail stale jobs that cannot currently be recovered, allowing explicit fallback."""
     ensure_agent_review_schema(db)
-    now = datetime.now()
+    now = utc_now()
     settings_record = get_agent_settings_record(db)
     worker_online = _worker_online(settings_record)
     jobs = db.scalars(
@@ -430,7 +447,7 @@ def finish_agent_records(
     failure_message: str | None = None,
     clear_input: bool = True,
 ) -> None:
-    now = datetime.now()
+    now = utc_now()
     run.status = status
     run.effective_engine = effective_engine
     run.failure_code = _bounded(failure_code, 64)
@@ -465,17 +482,206 @@ def run_to_summary(run: AgentReviewRun, *, fallback_triggered: bool | None = Non
     }
 
 
+def sanitize_agent_audit(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    events: list[dict[str, Any]] = []
+    raw_events = source.get("events") if isinstance(source.get("events"), list) else []
+    for index, raw_event in enumerate(raw_events[:MAX_TOOL_CALLS], 1):
+        if not isinstance(raw_event, dict):
+            continue
+        tool = str(raw_event.get("tool") or "")
+        if tool not in AGENT_TRACE_TOOLS:
+            continue
+        sequence = _safe_trace_sequence(raw_event.get("sequence"), index)
+        if sequence is None:
+            continue
+        status = str(raw_event.get("status") or "FAILED").upper()
+        event: dict[str, Any] = {
+            "sequence": sequence,
+            "tool": tool,
+            "status": status if status in {"SUCCESS", "FAILED"} else "FAILED",
+            "durationMs": _limited_non_negative(raw_event.get("durationMs"), TIMEOUT_SECONDS * 1000),
+            "itemCount": _limited_non_negative(raw_event.get("itemCount"), 100_000),
+            "sourceBytes": _limited_non_negative(raw_event.get("sourceBytes"), MAX_SOURCE_BYTES),
+            "pathSummary": _safe_path_summaries(raw_event.get("pathSummary"), 5),
+            "reviewBudget": _safe_review_budget(raw_event.get("reviewBudget")),
+        }
+        error_code = str(raw_event.get("errorCode") or "")
+        if error_code and error_code.replace("_", "").isalnum():
+            event["errorCode"] = error_code[:80]
+        query_hash = str(raw_event.get("queryHash") or "")
+        if _is_safe_hash(query_hash):
+            event["queryHash"] = query_hash
+        events.append(event)
+    events.sort(key=lambda item: item["sequence"])
+    phase = str(source.get("phase") or "ANALYZING").upper()
+    if phase not in {"ANALYZING", "TOOL_ACTIVITY", "CONVERGING", "SUBMITTING"}:
+        phase = "ANALYZING"
+    return {
+        "phase": phase,
+        "toolCallCount": _limited_non_negative(source.get("toolCallCount"), MAX_TOOL_CALLS),
+        "evidenceCallsUsed": _limited_non_negative(source.get("evidenceCallsUsed"), 10),
+        "sourceBytesReturned": _limited_non_negative(
+            source.get("sourceBytesReturned"), MAX_SOURCE_BYTES
+        ),
+        "diffBytesReturned": _limited_non_negative(
+            source.get("diffBytesReturned"), INLINE_DIFF_BYTES
+        ),
+        "blockedAccessCount": _limited_non_negative(
+            source.get("blockedAccessCount"), MAX_TOOL_CALLS
+        ),
+        "reviewSubmitted": bool(source.get("reviewSubmitted")),
+        "reviewBudget": _safe_review_budget(source.get("reviewBudget")),
+        "topPathSummaries": _safe_path_summaries(source.get("topPathSummaries"), 20),
+        "events": events,
+    }
+
+
+def lock_agent_run_for_trace(db: Session, run_id: int) -> AgentReviewRun | None:
+    return db.scalars(
+        select(AgentReviewRun)
+        .where(AgentReviewRun.id == run_id)
+        .with_for_update()
+    ).first()
+
+
+def find_agent_run_by_job(db: Session, job_id: int) -> AgentReviewRun | None:
+    return db.scalars(
+        select(AgentReviewRun).where(AgentReviewRun.scheduler_job_id == job_id)
+    ).first()
+
+
+def agent_trace_sequences(
+    db: Session,
+    *,
+    task_id: int,
+    review_key: str,
+    run_id: int,
+) -> set[int]:
+    records = db.scalars(
+        select(CodeQualityReviewProgressEvent)
+        .where(CodeQualityReviewProgressEvent.task_id == task_id)
+        .where(CodeQualityReviewProgressEvent.review_key == review_key)
+        .where(CodeQualityReviewProgressEvent.phase.in_(AGENT_TRACE_PHASES))
+    ).all()
+    sequences: set[int] = set()
+    for record in records:
+        detail = _read_json(record.detail, {})
+        if not isinstance(detail, dict):
+            continue
+        if _non_negative(detail.get("runId")) != int(run_id):
+            continue
+        try:
+            sequence = int(detail.get("sequence"))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= sequence <= MAX_TOOL_CALLS:
+            sequences.add(sequence)
+    return sequences
+
+
 def _apply_safe_run_summary(run: AgentReviewRun, value: dict[str, Any]) -> None:
     run.cli_version = _bounded(value.get("cliVersion") or run.cli_version, 64)
     run.session_id = _bounded(value.get("sessionId") or run.session_id, 128)
-    run.turn_count = _non_negative(value.get("turnCount") or value.get("numTurns"))
-    audit = value.get("audit") if isinstance(value.get("audit"), dict) else {}
-    run.tool_call_count = _non_negative(value.get("toolCallCount") or audit.get("toolCallCount"))
-    run.source_bytes_returned = _non_negative(value.get("sourceBytesReturned") or audit.get("sourceBytesReturned"))
-    run.diff_bytes_returned = _non_negative(value.get("diffBytesReturned") or audit.get("diffBytesReturned"))
-    run.duration_ms = _non_negative(value.get("durationMs")) or run.duration_ms
-    run.usage_json = json.dumps(value.get("usage") or {}, ensure_ascii=False)
+    run.turn_count = _limited_non_negative(
+        value.get("turnCount") or value.get("numTurns"), MAX_TURNS + 1
+    )
+    audit = sanitize_agent_audit(value.get("audit"))
+    run.tool_call_count = _limited_non_negative(
+        value.get("toolCallCount") or audit.get("toolCallCount"), MAX_TOOL_CALLS
+    )
+    run.source_bytes_returned = _limited_non_negative(
+        value.get("sourceBytesReturned") or audit.get("sourceBytesReturned"),
+        MAX_SOURCE_BYTES,
+    )
+    run.diff_bytes_returned = _limited_non_negative(
+        value.get("diffBytesReturned") or audit.get("diffBytesReturned"),
+        INLINE_DIFF_BYTES,
+    )
+    run.duration_ms = (
+        _limited_non_negative(value.get("durationMs"), TIMEOUT_SECONDS * 1000)
+        or run.duration_ms
+    )
+    run.usage_json = json.dumps(_safe_usage(value.get("usage")), ensure_ascii=False)
     run.tool_summary_json = json.dumps(audit, ensure_ascii=False)
+
+
+def _safe_usage(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, int] = {}
+    for key in (
+        "input_tokens",
+        "output_tokens",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    ):
+        if key in value:
+            result[key] = _limited_non_negative(value.get(key), 10_000_000_000)
+    return result
+
+
+def _safe_review_budget(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    phase = str(source.get("phase") or "DISCOVERY").upper()
+    if phase not in {"DISCOVERY", "CONVERGE", "SUBMIT"}:
+        phase = "DISCOVERY"
+    return {
+        "phase": phase,
+        "evidenceCallsUsed": _limited_non_negative(source.get("evidenceCallsUsed"), 10),
+        "evidenceCallsRemaining": _limited_non_negative(
+            source.get("evidenceCallsRemaining"), 10
+        ),
+        "sourceBytesRemaining": _limited_non_negative(
+            source.get("sourceBytesRemaining"), MAX_SOURCE_BYTES
+        ),
+        "mustSubmit": bool(source.get("mustSubmit")) or phase == "SUBMIT",
+    }
+
+
+def _safe_path_summaries(value: Any, limit: int) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for raw in value[:limit]:
+        if not isinstance(raw, dict):
+            continue
+        path_hash = str(raw.get("pathHash") or "")
+        if not _is_safe_hash(path_hash):
+            continue
+        suffix = str(raw.get("suffix") or "").casefold()
+        if len(suffix) > 20 or any(
+            character not in ".abcdefghijklmnopqrstuvwxyz0123456789"
+            for character in suffix
+        ):
+            suffix = ""
+        result.append(
+            {
+                "pathHash": path_hash,
+                "suffix": suffix,
+                "depth": _limited_non_negative(raw.get("depth"), 100),
+            }
+        )
+    return result
+
+
+def _is_safe_hash(value: str) -> bool:
+    return len(value) == 16 and all(
+        character in "0123456789abcdef" for character in value
+    )
+
+
+def _safe_trace_sequence(value: Any, fallback: int) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        sequence = int(value if value is not None else fallback)
+    except (TypeError, ValueError):
+        return None
+    return sequence if 1 <= sequence <= MAX_TOOL_CALLS else None
 
 
 def _ensure_result_columns(db: Session, inspector) -> None:
@@ -525,7 +731,7 @@ def _add_column(db: Session, columns: set[str], table: str, column: str, definit
 
 def _worker_online(record: AgentReviewSettings) -> bool:
     heartbeat = record.last_worker_heartbeat_at
-    return bool(heartbeat and heartbeat >= datetime.now() - timedelta(seconds=60))
+    return bool(heartbeat and heartbeat >= utc_now() - timedelta(seconds=60))
 
 
 def _read_json(value: str | None, default: Any) -> Any:
@@ -546,3 +752,7 @@ def _non_negative(value: Any) -> int:
         return max(int(value or 0), 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _limited_non_negative(value: Any, maximum: int) -> int:
+    return min(_non_negative(value), max(int(maximum), 0))

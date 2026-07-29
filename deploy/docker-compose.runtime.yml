@@ -26,6 +26,7 @@ services:
     image: ai-code-review-backend:${APP_VERSION:-local}
     restart: unless-stopped
     environment:
+      TZ: UTC
       SERVER_PORT: ${BACKEND_PORT:-8090}
       DATABASE_URL: ${DATABASE_URL:-}
       PLATFORM_BASE_URL: ${PLATFORM_BASE_URL:-http://localhost:8090}
@@ -86,6 +87,7 @@ services:
     image: ai-code-review-agent-worker:${APP_VERSION:-local}
     restart: unless-stopped
     environment:
+      TZ: UTC
       AGENT_REVIEW_BACKEND_URL: http://backend:${BACKEND_PORT:-8090}
       AGENT_REVIEW_WORKER_TOKEN: ${AGENT_REVIEW_WORKER_TOKEN:-}
       AGENT_REVIEW_WORKER_ID: ${AGENT_REVIEW_WORKER_ID:-agent-worker-1}
@@ -117,7 +119,7 @@ services:
           "CMD",
           "python3",
           "-c",
-          "import json,os,urllib.request; data=json.load(urllib.request.urlopen(os.environ['AGENT_REVIEW_BACKEND_URL'].rstrip('/') + '/api/code-quality-reviews/agent-settings', timeout=5)); assert data['data']['workerStatus'] == 'ONLINE'",
+          "import json,os,urllib.request; data=json.load(urllib.request.urlopen(os.environ['AGENT_REVIEW_BACKEND_URL'].rstrip('/') + '/api/code-quality-reviews/agent-settings', timeout=5))['data']; assert data['workerStatus'] == 'ONLINE' and data['workerId'] == os.environ['AGENT_REVIEW_WORKER_ID']",
         ]
       interval: 15s
       timeout: 8s

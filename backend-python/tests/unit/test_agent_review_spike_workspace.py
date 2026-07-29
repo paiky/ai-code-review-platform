@@ -1,5 +1,6 @@
 import json
 import os
+from unittest.mock import Mock
 
 import pytest
 
@@ -14,6 +15,10 @@ def _card():
         "overallLevel": "LOW",
         "findings": [],
     }
+
+
+def _tool_value(response):
+    return json.loads(response["content"][0]["text"])
 
 
 def test_workspace_lists_searches_and_reads_only_safe_files(tmp_path):
@@ -160,6 +165,65 @@ def test_mcp_source_budget_counts_utf8_bytes(tmp_path):
 
     assert response["isError"] is True
     assert "SOURCE_BUDGET_EXCEEDED" in response["content"][0]["text"]
+
+
+def test_evidence_budget_converges_submits_and_reserves_submit_tool(tmp_path):
+    result_path = tmp_path / "result.json"
+    audit_path = tmp_path / "audit.json"
+    workspace = ReviewWorkspace(tmp_path)
+    workspace.list_files = Mock(wraps=workspace.list_files)
+    server = ReviewMcpServer(
+        workspace,
+        ["source.txt"],
+        result_path,
+        audit_path,
+        ToolBudget(),
+    )
+
+    phases = []
+    for _ in range(10):
+        response = server.call_tool("list_files", {})
+        assert response["isError"] is False
+        phases.append(_tool_value(response)["reviewBudget"])
+
+    refused = server.call_tool("list_files", {})
+    submitted = server.call_tool("submit_review", _card())
+    submitted_again = server.call_tool("submit_review", _card())
+
+    assert [item["phase"] for item in phases[:7]] == ["DISCOVERY"] * 7
+    assert [item["phase"] for item in phases[7:9]] == ["CONVERGE"] * 2
+    assert phases[9]["phase"] == "SUBMIT"
+    assert phases[9]["mustSubmit"] is True
+    assert _tool_value(refused)["errorCode"] == "EVIDENCE_COLLECTION_COMPLETE"
+    assert _tool_value(refused)["reviewBudget"]["evidenceCallsUsed"] == 10
+    assert workspace.list_files.call_count == 10
+    assert submitted["isError"] is False
+    assert submitted_again["isError"] is True
+    assert _tool_value(submitted_again)["errorCode"] == "REVIEW_ALREADY_SUBMITTED"
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert audit["evidenceCallsUsed"] == 10
+    assert audit["reviewSubmitted"] is True
+
+
+def test_invalid_evidence_arguments_consume_an_attempt(tmp_path):
+    (tmp_path / "source.txt").write_text("value\n", encoding="utf-8")
+    server = ReviewMcpServer(
+        ReviewWorkspace(tmp_path),
+        ["source.txt"],
+        tmp_path / "result.json",
+        tmp_path / "audit.json",
+        ToolBudget(),
+    )
+
+    response = server.call_tool(
+        "read_file_range",
+        {"path": "source.txt", "startLine": 0, "endLine": 1},
+    )
+
+    assert response["isError"] is True
+    budget = _tool_value(response)["reviewBudget"]
+    assert budget["evidenceCallsUsed"] == 1
+    assert budget["evidenceCallsRemaining"] == 9
 
 
 def test_read_diff_range_only_allows_changed_file_and_counts_budget(tmp_path):

@@ -177,7 +177,7 @@ GET 响应示例：
   "workerStatus": "OFFLINE",
   "lastWorkerHeartbeatAt": null,
   "budgets": {
-    "maxTurns": 8,
+    "maxTurns": 12,
     "maxToolCalls": 40,
     "maxSourceBytes": 200000,
     "timeoutSeconds": 600
@@ -407,7 +407,7 @@ Prompt 优先级固定为：平台安全/工具约束 > Review Card 契约 > Pro
 
 | 预算 | 默认值 |
 | --- | ---: |
-| Agent turn | 8 |
+| Agent turn | 12 |
 | MCP 工具调用 | 40 |
 | 累计返回源码 | 200,000 UTF-8 bytes |
 | 单文件 | 1 MiB |

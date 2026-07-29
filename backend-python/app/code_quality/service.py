@@ -53,6 +53,7 @@ from app.code_quality.repository import (
     save_fix_preview,
     save_push_gate_decision,
     save_result,
+    scrub_sensitive,
     set_default_provider,
     settings_to_dict,
     update_profile,
@@ -61,9 +62,13 @@ from app.code_quality.repository import (
 )
 from app.core.database import SessionLocal
 from app.core.errors import AppError
-from app.core.json_utils import read_json
+from app.core.json_utils import read_json, utc_now
 from app.deterministic_checks.service import ensure_deterministic_preflight
-from app.code_quality.models import CodeQualityModelProvider, CodeQualityReviewResult
+from app.code_quality.models import (
+    CodeQualityModelProvider,
+    CodeQualityReviewResult,
+    CodeQualitySchedulerJob,
+)
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.project_integration.repository import (
     find_project_by_id,
@@ -237,15 +242,40 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any]
         task = db.get(ReviewTask, task_id)
         project = find_project_by_id(db, int(response["projectId"]))
         profile = _resolve_profile(db, response["profileCode"], project)
-        agent_response = enqueue_agent_review(
-            db,
-            task=task,
-            project=project,
-            profile=profile,
-            request=_build_review_request(profile, request),
-            comparison_mode=bool(request.get("comparisonMode")),
-        )
-        return {**agent_response, "reviews": list_result_responses(db, task_id)}
+        try:
+            agent_response = enqueue_agent_review(
+                db,
+                task=task,
+                project=project,
+                profile=profile,
+                request=_build_review_request(profile, request),
+                comparison_mode=bool(request.get("comparisonMode")),
+            )
+            return {**agent_response, "reviews": list_result_responses(db, task_id)}
+        except AppError as exception:
+            if exception.code not in {"AGENT_NO_REVIEWABLE_FILES", "AGENT_SAFE_DIFF_UNAVAILABLE"}:
+                raise
+            _save_agent_sensitive_path_skip(
+                db,
+                task=task,
+                project=project,
+                profile=profile,
+                changed_files=_changed_file_paths(request.get("changedFiles") or []),
+                failure_code=exception.code,
+            )
+            return {
+                "taskId": task.id,
+                "projectId": project.id,
+                "status": "SKIPPED",
+                "profileCode": profile.profile_code,
+                "provider": "DEEPSEEK",
+                "reviewKey": "agent-claude-code-deepseek-v4-pro",
+                "requestedEngine": "AGENT",
+                "effectiveEngine": "AGENT",
+                "overallLevel": None,
+                "findingCount": 0,
+                "reviews": list_result_responses(db, task_id),
+            }
     if _inline_enabled():
         result = run_manual_review_now(db, task_id, request)
         db.commit()
@@ -724,6 +754,102 @@ def run_retry_review_now(
     return _aggregate_review_results(results)
 
 
+def _agent_preflight_fallback_metadata(
+    db: Session,
+    *,
+    task_id: int,
+    exception: AppError,
+) -> dict[str, Any]:
+    failure_code = str(exception.code or "AGENT_UNAVAILABLE")[:64]
+    failure_message = (
+        scrub_sensitive(str(exception.message or "Agent Review preflight failed"))
+        or "Agent Review preflight failed"
+    )[:1000]
+    summary = {
+        "status": "UNAVAILABLE",
+        "fallbackTriggered": True,
+        "failureCode": failure_code,
+        "failureMessage": failure_message,
+    }
+    append_progress(
+        db,
+        task_id,
+        "AGENT_PREFLIGHT_FAILED",
+        "WARN",
+        "Agent Review 入队前检查失败，准备执行普通 Review 降级",
+        json.dumps(summary, ensure_ascii=False),
+    )
+    return {
+        "requestedEngine": "AGENT",
+        "effectiveEngine": "STANDARD_FALLBACK",
+        "agentRunSummary": summary,
+    }
+
+
+def _save_agent_sensitive_path_skip(
+    db: Session,
+    *,
+    task: ReviewTask,
+    project: Project,
+    profile: Any,
+    changed_files: list[str],
+    failure_code: str,
+) -> None:
+    from app.agent_review.repository import AGENT_MODEL, AGENT_REVIEW_KEY
+
+    excluded_paths = [
+        str(path or "").strip().replace("\\", "/")
+        for path in changed_files
+        if str(path or "").strip()
+    ]
+    summary = {
+        "status": "SKIPPED",
+        "fallbackTriggered": False,
+        "failureCode": failure_code,
+        "failureMessage": "没有可安全发送给 Agent 的变更文件，已停止外部模型审查",
+        "totalChangedFileCount": len(excluded_paths),
+        "includedFileCount": 0,
+        "excludedFileCount": len(excluded_paths),
+        "excludedPaths": excluded_paths,
+    }
+    save_result(
+        db,
+        task_id=task.id,
+        review_key=AGENT_REVIEW_KEY,
+        project_id=project.id,
+        profile_code=profile.profile_code,
+        provider="DEEPSEEK",
+        model=AGENT_MODEL,
+        display_name="Agent · 安全跳过",
+        sort_order=5,
+        result={
+            "status": "SKIPPED",
+            "overallLevel": None,
+            "summary": summary["failureMessage"],
+            "findings": [],
+            "rawOutput": None,
+            "exitCode": None,
+            "errorMessage": summary["failureMessage"],
+            "startedAt": utc_now(),
+            "finishedAt": utc_now(),
+            "requestedEngine": "AGENT",
+            "effectiveEngine": "AGENT",
+            "agentRunSummary": summary,
+        },
+    )
+    append_progress(
+        db,
+        task.id,
+        "AGENT_ALL_PATHS_EXCLUDED",
+        "WARN",
+        "全部变更文件均被敏感路径策略排除，未发送给外部模型",
+        json.dumps(summary, ensure_ascii=False),
+        review_key=AGENT_REVIEW_KEY,
+    )
+    refresh_review_status(db, task.id)
+    db.commit()
+
+
 def trigger_auto_review(
     db: Session,
     *,
@@ -793,7 +919,7 @@ def trigger_auto_review(
     from app.agent_review.service import enqueue_agent_review, resolve_review_engine
 
     selected_engine = resolve_review_engine(db, project, explicit=False)
-    agent_failure_code = "AGENT_UNAVAILABLE"
+    fallback_metadata: dict[str, Any] = {}
     if selected_engine == "AGENT":
         agent_request = _build_review_request(profile, base_request)
         agent_request["_deterministicPreflightSummary"] = preflight_summary
@@ -816,17 +942,21 @@ def trigger_auto_review(
             )
             return True
         except AppError as exception:
-            selected_engine = "AGENT_UNAVAILABLE"
-            agent_failure_code = exception.code
-    fallback_metadata = (
-        {
-            "requestedEngine": "AGENT",
-            "effectiveEngine": "STANDARD_FALLBACK",
-            "agentRunSummary": {"status": "UNAVAILABLE", "fallbackTriggered": True, "failureCode": agent_failure_code},
-        }
-        if selected_engine == "AGENT_UNAVAILABLE"
-        else {}
-    )
+            if exception.code in {"AGENT_NO_REVIEWABLE_FILES", "AGENT_SAFE_DIFF_UNAVAILABLE"}:
+                _save_agent_sensitive_path_skip(
+                    db,
+                    task=task,
+                    project=project,
+                    profile=profile,
+                    changed_files=base_request["changedFiles"],
+                    failure_code=exception.code,
+                )
+                return True
+            fallback_metadata = _agent_preflight_fallback_metadata(
+                db,
+                task_id=task.id,
+                exception=exception,
+            )
     for target in targets:
         provider = target["provider"]
         request = _build_review_request(profile, {**base_request, "model": target["model"]})
@@ -962,7 +1092,7 @@ def _trigger_push_auto_review(
     from app.agent_review.service import enqueue_agent_review, resolve_review_engine
 
     selected_engine = resolve_review_engine(db, project, explicit=False)
-    agent_failure_code = "AGENT_UNAVAILABLE"
+    fallback_metadata: dict[str, Any] = {}
     if selected_engine == "AGENT":
         agent_request = _build_review_request(profile, base_request)
         agent_request["_deterministicPreflightSummary"] = preflight_summary
@@ -985,17 +1115,21 @@ def _trigger_push_auto_review(
             )
             return True
         except AppError as exception:
-            selected_engine = "AGENT_UNAVAILABLE"
-            agent_failure_code = exception.code
-    fallback_metadata = (
-        {
-            "requestedEngine": "AGENT",
-            "effectiveEngine": "STANDARD_FALLBACK",
-            "agentRunSummary": {"status": "UNAVAILABLE", "fallbackTriggered": True, "failureCode": agent_failure_code},
-        }
-        if selected_engine == "AGENT_UNAVAILABLE"
-        else {}
-    )
+            if exception.code in {"AGENT_NO_REVIEWABLE_FILES", "AGENT_SAFE_DIFF_UNAVAILABLE"}:
+                _save_agent_sensitive_path_skip(
+                    db,
+                    task=task,
+                    project=project,
+                    profile=profile,
+                    changed_files=base_request["changedFiles"],
+                    failure_code=exception.code,
+                )
+                return True
+            fallback_metadata = _agent_preflight_fallback_metadata(
+                db,
+                task_id=task.id,
+                exception=exception,
+            )
     for target in targets:
         provider = target["provider"]
         request = _build_review_request(profile, {**base_request, "model": target["model"]})
@@ -1120,18 +1254,66 @@ def schedule_agent_standard_fallback(db: Session, run_id: int) -> None:
     run = db.get(AgentReviewRun, run_id)
     if run is None or run.status == "CANCELLED":
         return
+    task = db.get(ReviewTask, run.task_id)
+    if task is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Agent fallback task not found: {run.task_id}", 404)
+    existing_job_id = db.scalar(
+        select(CodeQualitySchedulerJob.id)
+        .where(CodeQualitySchedulerJob.job_type == "AI_REVIEW")
+        .where(CodeQualitySchedulerJob.task_id == run.task_id)
+        .where(CodeQualitySchedulerJob.review_key == run.review_key)
+        .where(CodeQualitySchedulerJob.label == "Agent Review 降级 - Standard")
+        .limit(1)
+    )
+    if existing_job_id is not None:
+        return
     _submit_provider_job(
         db,
         run_agent_standard_fallback_job,
         run_id,
         job_type="AI_REVIEW",
         task_id=run.task_id,
-        project_id=run.project_id,
+        project_id=task.project_id,
         priority=REVIEW_JOB_PRIORITY,
         label="Agent Review 降级 - Standard",
         review_key=run.review_key,
     )
+    append_progress(
+        db,
+        run.task_id,
+        "AGENT_FALLBACK_QUEUED",
+        "WARN",
+        "Agent Review 租约或执行失败，已进入普通 Review 降级队列",
+        json.dumps({"runId": run.id, "failureCode": run.failure_code}, ensure_ascii=False),
+        review_key=run.review_key,
+    )
     db.commit()
+
+
+def list_unscheduled_agent_standard_fallback_run_ids(db: Session) -> list[int]:
+    """Find terminal Agent runs whose persisted STANDARD fallback job was never created."""
+    from app.agent_review.models import AgentReviewRun
+
+    runs = db.scalars(
+        select(AgentReviewRun)
+        .where(AgentReviewRun.status.in_(["FAILED", "TIMED_OUT"]))
+        .where(AgentReviewRun.effective_engine == "STANDARD_FALLBACK")
+        .where(AgentReviewRun.input_json.is_not(None))
+        .order_by(AgentReviewRun.id.asc())
+    ).all()
+    pending: list[int] = []
+    for run in runs:
+        existing_job_id = db.scalar(
+            select(CodeQualitySchedulerJob.id)
+            .where(CodeQualitySchedulerJob.job_type == "AI_REVIEW")
+            .where(CodeQualitySchedulerJob.task_id == run.task_id)
+            .where(CodeQualitySchedulerJob.review_key == run.review_key)
+            .where(CodeQualitySchedulerJob.label == "Agent Review 降级 - Standard")
+            .limit(1)
+        )
+        if existing_job_id is None:
+            pending.append(int(run.id))
+    return pending
 
 
 def run_agent_standard_fallback_job(run_id: int) -> dict[str, Any]:
@@ -1144,8 +1326,10 @@ def run_agent_standard_fallback_job(run_id: int) -> dict[str, Any]:
         if run is None:
             raise AppError("RESOURCE_NOT_FOUND", f"Agent Review run not found: {run_id}", 404)
         task = db.get(ReviewTask, run.task_id)
-        project = find_project_by_id(db, run.project_id)
-        if task is None or project is None:
+        if task is None:
+            raise AppError("RESOURCE_NOT_FOUND", "Agent fallback task or project no longer exists", 404)
+        project = find_project_by_id(db, task.project_id)
+        if project is None:
             raise AppError("RESOURCE_NOT_FOUND", "Agent fallback task or project no longer exists", 404)
         profile = _resolve_profile(db, task.code_quality_profile_code, project)
         target = _resolve_review_targets(db, project, profile, task.target_type)[0]

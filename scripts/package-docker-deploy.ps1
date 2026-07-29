@@ -1,6 +1,11 @@
 param(
   [string]$Version = (Get-Date -Format "yyyyMMddHHmmss"),
-  [switch]$IncludeMysqlImage
+  [switch]$IncludeMysqlImage,
+  [switch]$AgentWorkerOnly,
+  [string]$ReuseVersion,
+  [ValidateRange(1, 5)]
+  [int]$DockerNetworkMaxAttempts = 3,
+  [switch]$PauseOnError
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,6 +14,10 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $ScriptDir
 $DeployDir = Join-Path $RepoRoot "deploy"
 $OutputDir = Join-Path $RepoRoot ".local\docker-deploy\$Version"
+$LogDir = Join-Path $RepoRoot ".local\docker-deploy\logs"
+$SafeLogVersion = $Version -replace '[^0-9A-Za-z._-]', '_'
+$LogTimestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$LogPath = Join-Path $LogDir "package-$SafeLogVersion-$LogTimestamp-$PID.log"
 
 $BackendImage = "ai-code-review-backend:$Version"
 $FrontendImage = "ai-code-review-frontend:$Version"
@@ -16,8 +25,18 @@ $AgentWorkerImage = "ai-code-review-agent-worker:$Version"
 $AgentEgressImage = "ai-code-review-agent-egress:$Version"
 $MysqlImage = "mysql:8.4"
 
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-  throw "Docker command was not found. Install Docker Desktop, start it, then reopen PowerShell or Cursor before running this script."
+function Test-StartedFromExplorer {
+  try {
+    $CurrentProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $PID"
+    if ($null -eq $CurrentProcess) {
+      return $false
+    }
+
+    $ParentProcess = Get-Process -Id $CurrentProcess.ParentProcessId -ErrorAction Stop
+    return $ParentProcess.ProcessName -eq "explorer"
+  } catch {
+    return $false
+  }
 }
 
 function Invoke-Docker {
@@ -25,6 +44,66 @@ function Invoke-Docker {
   & docker @Arguments
   if ($LASTEXITCODE -ne 0) {
     throw "Docker command failed with exit code ${LASTEXITCODE}: docker $($Arguments -join ' ')"
+  }
+}
+
+function Test-DockerNetworkFailure {
+  param(
+    [string]$Output
+  )
+
+  return $Output -match (
+    "(?is)" +
+    "failed to fetch oauth token|" +
+    "auth\.docker\.io/token.*\bEOF\b|" +
+    "unexpected EOF|" +
+    "TLS handshake timeout|" +
+    "i/o timeout|" +
+    "connection (?:reset|aborted)(?: by peer)?|" +
+    "net/http: request canceled|" +
+    "context deadline exceeded|" +
+    "temporary failure (?:in name resolution|resolving)|" +
+    "no such host|" +
+    "dial tcp.*timeout|" +
+    "ECONNRESET|ETIMEDOUT|EAI_AGAIN"
+  )
+}
+
+function Invoke-DockerNetworkCommand {
+  param(
+    [string[]]$Arguments,
+    [int]$MaxAttempts
+  )
+
+  for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
+    $OutputLines = New-Object System.Collections.Generic.List[string]
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = "Continue"
+      & docker @Arguments 2>&1 | ForEach-Object {
+        $Line = $_.ToString()
+        $OutputLines.Add($Line)
+        Write-Host $Line
+      }
+      $ExitCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+
+    if ($ExitCode -eq 0) {
+      return
+    }
+
+    $Output = [string]::Join([Environment]::NewLine, $OutputLines)
+    $CommandText = "docker $($Arguments -join ' ')"
+    $Retryable = Test-DockerNetworkFailure -Output $Output
+    if (-not $Retryable -or $Attempt -ge $MaxAttempts) {
+      throw "Docker command failed with exit code ${ExitCode}: $CommandText"
+    }
+
+    $DelaySeconds = [Math]::Min(5 * $Attempt, 15)
+    Write-Warning "Docker network failure detected. Retrying in $DelaySeconds seconds ($Attempt/$MaxAttempts): $CommandText"
+    Start-Sleep -Seconds $DelaySeconds
   }
 }
 
@@ -46,6 +125,28 @@ function Invoke-DockerProbe {
     ExitCode = $ExitCode
     Output = (($Output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine).Trim()
   }
+}
+
+function Use-ReusedDockerImage {
+  param(
+    [string]$Component,
+    [string]$SourceImage,
+    [string]$TargetImage
+  )
+
+  $Probe = Invoke-DockerProbe -Arguments @(
+    "image",
+    "inspect",
+    "--format",
+    "{{.Id}}",
+    $SourceImage
+  )
+  if ($Probe.ExitCode -ne 0) {
+    throw "Agent Worker incremental package requires local $Component image '$SourceImage'. Build or load that complete version first."
+  }
+
+  Write-Host "Reusing $Component image: $SourceImage -> $TargetImage"
+  Invoke-Docker tag $SourceImage $TargetImage
 }
 
 function Write-Utf8NoBomFile {
@@ -70,50 +171,111 @@ function Copy-TextFileAsLf {
   Write-Utf8NoBomFile -Path $TargetPath -Content $Content
 }
 
-$DockerVersionProbe = Invoke-DockerProbe version
-if ($DockerVersionProbe.ExitCode -ne 0) {
-  throw "Docker is installed but the Docker Engine is not available. Start or restart Docker Desktop, wait until it is running, then retry. Docker output: $($DockerVersionProbe.Output)"
-}
+$TranscriptStarted = $false
+$Failure = $null
+$ShouldPauseOnError = -not $env:NO_PAUSE -and ($PauseOnError -or (Test-StartedFromExplorer))
 
-$DockerInfoProbe = Invoke-DockerProbe info
-if ($DockerInfoProbe.ExitCode -ne 0) {
-  throw "Docker Engine did not respond correctly. Restart Docker Desktop or switch to Linux containers, then retry. Docker output: $($DockerInfoProbe.Output)"
-}
+try {
+  New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+  Start-Transcript -Path $LogPath -Force | Out-Null
+  $TranscriptStarted = $true
 
-Write-Host "Building backend image: $BackendImage"
-Invoke-Docker build -f (Join-Path $DeployDir "backend.Dockerfile") -t $BackendImage $RepoRoot
+  Write-Host "Docker deploy package log:"
+  Write-Host $LogPath
+  Write-Host ""
 
-Write-Host "Building frontend image: $FrontendImage"
-Invoke-Docker build -f (Join-Path $DeployDir "frontend.Dockerfile") -t $FrontendImage $RepoRoot
+  if ($Version -notmatch '^[0-9A-Za-z._-]+$') {
+    throw "Version may only contain letters, numbers, dot, underscore, and hyphen."
+  }
+  if ($AgentWorkerOnly) {
+    if ([string]::IsNullOrWhiteSpace($ReuseVersion)) {
+      throw "-AgentWorkerOnly requires -ReuseVersion with a previously completed local image version."
+    }
+    if ($ReuseVersion -notmatch '^[0-9A-Za-z._-]+$') {
+      throw "ReuseVersion may only contain letters, numbers, dot, underscore, and hyphen."
+    }
+    if ($ReuseVersion -eq $Version) {
+      throw "ReuseVersion must differ from the new Version."
+    }
+  } elseif (-not [string]::IsNullOrWhiteSpace($ReuseVersion)) {
+    throw "-ReuseVersion is only valid together with -AgentWorkerOnly."
+  }
 
-Write-Host "Building Agent Worker image: $AgentWorkerImage"
-Invoke-Docker build -f (Join-Path $DeployDir "agent-review-worker.Dockerfile") -t $AgentWorkerImage $RepoRoot
+  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    throw "Docker command was not found. Install Docker Desktop, start it, then reopen PowerShell or Cursor before running this script."
+  }
 
-Write-Host "Building Agent egress proxy image: $AgentEgressImage"
-Invoke-Docker build -f (Join-Path $DeployDir "agent-egress-proxy.Dockerfile") -t $AgentEgressImage $RepoRoot
+  $DockerVersionProbe = Invoke-DockerProbe version
+  if ($DockerVersionProbe.ExitCode -ne 0) {
+    throw "Docker is installed but the Docker Engine is not available. Start or restart Docker Desktop, wait until it is running, then retry. Docker output: $($DockerVersionProbe.Output)"
+  }
 
-Write-Host "Saving application images"
-New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-backend-$Version.tar") $BackendImage
-Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-frontend-$Version.tar") $FrontendImage
-Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-agent-worker-$Version.tar") $AgentWorkerImage
-Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-agent-egress-$Version.tar") $AgentEgressImage
+  $DockerInfoProbe = Invoke-DockerProbe info
+  if ($DockerInfoProbe.ExitCode -ne 0) {
+    throw "Docker Engine did not respond correctly. Restart Docker Desktop or switch to Linux containers, then retry. Docker output: $($DockerInfoProbe.Output)"
+  }
 
-if ($IncludeMysqlImage) {
-  Write-Host "Pulling and saving MySQL image: $MysqlImage"
-  Invoke-Docker pull $MysqlImage
-  Invoke-Docker save -o (Join-Path $OutputDir "mysql-8.4.tar") $MysqlImage
-}
+  if ($AgentWorkerOnly) {
+    Use-ReusedDockerImage `
+      -Component "backend" `
+      -SourceImage "ai-code-review-backend:$ReuseVersion" `
+      -TargetImage $BackendImage
+    Use-ReusedDockerImage `
+      -Component "frontend" `
+      -SourceImage "ai-code-review-frontend:$ReuseVersion" `
+      -TargetImage $FrontendImage
+    Use-ReusedDockerImage `
+      -Component "Agent egress proxy" `
+      -SourceImage "ai-code-review-agent-egress:$ReuseVersion" `
+      -TargetImage $AgentEgressImage
+  } else {
+    Write-Host "Building backend image: $BackendImage"
+    Invoke-DockerNetworkCommand `
+      -Arguments @("build", "-f", (Join-Path $DeployDir "backend.Dockerfile"), "-t", $BackendImage, $RepoRoot) `
+      -MaxAttempts $DockerNetworkMaxAttempts
 
-Copy-TextFileAsLf (Join-Path $DeployDir "docker-compose.runtime.yml") (Join-Path $OutputDir "docker-compose.yml")
-Copy-TextFileAsLf (Join-Path $DeployDir ".env.example") (Join-Path $OutputDir ".env.example")
+    Write-Host "Building frontend image: $FrontendImage"
+    Invoke-DockerNetworkCommand `
+      -Arguments @("build", "-f", (Join-Path $DeployDir "frontend.Dockerfile"), "-t", $FrontendImage, $RepoRoot) `
+      -MaxAttempts $DockerNetworkMaxAttempts
+  }
 
-$EnvExamplePath = Join-Path $OutputDir ".env.example"
-$EnvExample = Get-Content -Raw -Encoding UTF8 -Path $EnvExamplePath
-$EnvExample = $EnvExample -replace "APP_VERSION=local", "APP_VERSION=$Version"
-Write-Utf8NoBomFile -Path $EnvExamplePath -Content $EnvExample
+  Write-Host "Building Agent Worker image: $AgentWorkerImage"
+  Invoke-DockerNetworkCommand `
+    -Arguments @("build", "-f", (Join-Path $DeployDir "agent-review-worker.Dockerfile"), "-t", $AgentWorkerImage, $RepoRoot) `
+    -MaxAttempts $DockerNetworkMaxAttempts
 
-$LoadScript = @"
+  if (-not $AgentWorkerOnly) {
+    Write-Host "Building Agent egress proxy image: $AgentEgressImage"
+    Invoke-DockerNetworkCommand `
+      -Arguments @("build", "-f", (Join-Path $DeployDir "agent-egress-proxy.Dockerfile"), "-t", $AgentEgressImage, $RepoRoot) `
+      -MaxAttempts $DockerNetworkMaxAttempts
+  }
+
+  Write-Host "Saving application images"
+  New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+  Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-backend-$Version.tar") $BackendImage
+  Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-frontend-$Version.tar") $FrontendImage
+  Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-agent-worker-$Version.tar") $AgentWorkerImage
+  Invoke-Docker save -o (Join-Path $OutputDir "ai-code-review-agent-egress-$Version.tar") $AgentEgressImage
+
+  if ($IncludeMysqlImage) {
+    Write-Host "Pulling and saving MySQL image: $MysqlImage"
+    Invoke-DockerNetworkCommand `
+      -Arguments @("pull", $MysqlImage) `
+      -MaxAttempts $DockerNetworkMaxAttempts
+    Invoke-Docker save -o (Join-Path $OutputDir "mysql-8.4.tar") $MysqlImage
+  }
+
+  Copy-TextFileAsLf (Join-Path $DeployDir "docker-compose.runtime.yml") (Join-Path $OutputDir "docker-compose.yml")
+  Copy-TextFileAsLf (Join-Path $DeployDir ".env.example") (Join-Path $OutputDir ".env.example")
+
+  $EnvExamplePath = Join-Path $OutputDir ".env.example"
+  $EnvExample = Get-Content -Raw -Encoding UTF8 -Path $EnvExamplePath
+  $EnvExample = $EnvExample -replace "APP_VERSION=local", "APP_VERSION=$Version"
+  Write-Utf8NoBomFile -Path $EnvExamplePath -Content $EnvExample
+
+  $LoadScript = @"
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -186,15 +348,45 @@ echo "Image retention:"
 echo "  KEEP_IMAGE_VERSIONS=`$KEEP_IMAGE_VERSIONS"
 "@
 
-Write-Utf8NoBomFile -Path (Join-Path $OutputDir "load-images.sh") -Content $LoadScript
+  Write-Utf8NoBomFile -Path (Join-Path $OutputDir "load-images.sh") -Content $LoadScript
+
+  Write-Host ""
+  Write-Host "Docker deploy package created:"
+  Write-Host $OutputDir
+  Write-Host ""
+  Write-Host "Upload this directory to the Linux server, then run:"
+  Write-Host "  chmod +x load-images.sh"
+  Write-Host "  ./load-images.sh"
+  Write-Host "  vi ../runtime/.env"
+  Write-Host "  cd ../runtime"
+  Write-Host "  docker compose up -d"
+} catch {
+  $Failure = $_
+  Write-Host ""
+  Write-Host "Docker deploy package failed." -ForegroundColor Red
+  Write-Host $_.Exception.Message -ForegroundColor Red
+  Write-Host ""
+  Write-Host "PowerShell error details:"
+  Write-Host ($_ | Format-List * -Force | Out-String)
+} finally {
+  if ($TranscriptStarted) {
+    try {
+      Stop-Transcript | Out-Null
+    } catch {
+      Write-Warning "Could not close Docker deploy package log: $($_.Exception.Message)"
+    }
+  }
+}
+
+if ($null -ne $Failure) {
+  Write-Host "Full build log:"
+  Write-Host $LogPath
+  if ($ShouldPauseOnError) {
+    Read-Host "Press Enter to close this window" | Out-Null
+  }
+  exit 1
+}
 
 Write-Host ""
-Write-Host "Docker deploy package created:"
-Write-Host $OutputDir
-Write-Host ""
-Write-Host "Upload this directory to the Linux server, then run:"
-Write-Host "  chmod +x load-images.sh"
-Write-Host "  ./load-images.sh"
-Write-Host "  vi ../runtime/.env"
-Write-Host "  cd ../runtime"
-Write-Host "  docker compose up -d"
+Write-Host "Full build log:"
+Write-Host $LogPath

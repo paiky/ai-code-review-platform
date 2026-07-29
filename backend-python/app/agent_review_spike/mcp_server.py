@@ -12,7 +12,12 @@ from app.agent_review_spike.schema import (
     review_card_input_schema,
     validate_review_card,
 )
-from app.agent_review_spike.workspace import ReviewToolError, ReviewWorkspace, ToolBudget
+from app.agent_review_spike.workspace import (
+    EVIDENCE_TOOLS,
+    ReviewToolError,
+    ReviewWorkspace,
+    ToolBudget,
+)
 
 
 def tool_definitions() -> list[dict[str, Any]]:
@@ -187,7 +192,7 @@ class ReviewMcpServer:
             else:
                 raise ReviewToolError("TOOL_NOT_ALLOWED", "tool is not available")
             self._write_audit()
-            return _tool_content(value, is_error=False)
+            return _tool_content(self._with_review_budget(tool, value), is_error=False)
         except (ReviewToolError, ReviewSchemaError) as exception:
             if isinstance(exception, ReviewToolError):
                 error_code = exception.code
@@ -211,7 +216,13 @@ class ReviewMcpServer:
                 except ReviewToolError:
                     pass
             self._write_audit()
-            return _tool_content({"errorCode": error_code, "message": str(exception)}, is_error=True)
+            return _tool_content(
+                self._with_review_budget(
+                    tool,
+                    {"errorCode": error_code, "message": str(exception)},
+                ),
+                is_error=True,
+            )
         except Exception:
             if started is not None:
                 try:
@@ -225,9 +236,20 @@ class ReviewMcpServer:
                     pass
             self._write_audit()
             return _tool_content(
-                {"errorCode": "INTERNAL_TOOL_ERROR", "message": "tool execution failed"},
+                self._with_review_budget(
+                    tool,
+                    {
+                        "errorCode": "INTERNAL_TOOL_ERROR",
+                        "message": "tool execution failed",
+                    },
+                ),
                 is_error=True,
             )
+
+    def _with_review_budget(self, tool: str, value: dict[str, Any]) -> dict[str, Any]:
+        if tool not in EVIDENCE_TOOLS:
+            return value
+        return {**value, "reviewBudget": self.budget.review_budget()}
 
     def _write_audit(self) -> None:
         summary = self.budget.summary()

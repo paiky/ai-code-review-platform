@@ -70,9 +70,13 @@ def execution_summary(
     }
     if card is not None:
         findings = card.get("findings") or []
+        target = case.get("targetFinding")
         result.update(
             {
-                "targetReported": target_is_reported(card, case["targetFinding"]),
+                # targetFinding 只属于离线准确率样本；真实生产任务没有预设目标问题。
+                "targetReported": (
+                    target_is_reported(card, target) if isinstance(target, dict) else False
+                ),
                 "findingCount": len(findings),
                 "contextMissingCount": sum(
                     1

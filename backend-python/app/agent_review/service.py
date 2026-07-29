@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -14,11 +14,22 @@ from app.agent_review_spike.workspace import ReviewToolError, validate_review_pa
 from app.code_quality.repository import append_progress, save_result
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.core.json_utils import utc_now
 from app.project_integration.models import Project
 from app.project_integration.repository import get_project_group_ai_review_policy
 from app.project_review_policy.service import build_project_review_policy_prompt_context
 from app.review_context.local_repo import prepare_local_repository_context, task_head_worktree_path
 from app.review_record.models import ReviewTask
+
+
+_LOGGER = logging.getLogger(__name__)
+_AGENT_ACTIVITY_NAMES = {
+    "list_files": "LIST_FILES",
+    "search_code": "SEARCH_CODE",
+    "read_file_range": "READ_FILE_RANGE",
+    "read_diff_range": "READ_DIFF_RANGE",
+    "submit_review": "SUBMIT_REVIEW",
+}
 
 
 def get_settings_response(db: Session) -> dict[str, Any]:
@@ -80,7 +91,28 @@ def enqueue_agent_review(
     completion_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     repository.assert_agent_available(db, require_worker=False)
+    requested_files = _changed_file_paths(request)
+    if not requested_files:
+        raise AppError("VALIDATION_ERROR", "Agent Review requires changedFiles", 400)
+    changed_files, excluded_files = _partition_review_paths(
+        requested_files,
+        forced_excluded=_changed_files_with_sensitive_aliases(request),
+    )
+    if not changed_files:
+        raise AppError(
+            "AGENT_NO_REVIEWABLE_FILES",
+            f"All {len(requested_files)} changed files are excluded by the Agent Review path policy",
+            409,
+        )
     diff_text = str(request.get("diffText") or "")
+    if excluded_files:
+        diff_text = _filter_review_diff(request, changed_files)
+        if not diff_text.strip():
+            raise AppError(
+                "AGENT_SAFE_DIFF_UNAVAILABLE",
+                "Allowed changed files could not be separated from excluded sensitive diff content",
+                409,
+            )
     diff_bytes = len(diff_text.encode("utf-8"))
     if diff_bytes > repository.MAX_DIFF_BYTES:
         raise AppError(
@@ -88,13 +120,6 @@ def enqueue_agent_review(
             f"Agent Review diff exceeds {repository.MAX_DIFF_BYTES} bytes",
             409,
         )
-    changed_files = _changed_file_paths(request)
-    if not changed_files:
-        raise AppError("VALIDATION_ERROR", "Agent Review requires changedFiles", 400)
-    try:
-        changed_files = [validate_review_path(path) for path in changed_files]
-    except ReviewToolError as exception:
-        raise AppError(exception.code, str(exception), 409) from exception
     worktree = _ensure_worktree(task, project)
     policy_context = build_project_review_policy_prompt_context(db, int(project.id))
     review_instructions = "\n\n".join(
@@ -115,6 +140,12 @@ def enqueue_agent_review(
         "diffMode": "INLINE" if diff_bytes <= repository.INLINE_DIFF_BYTES else "TOOL_PAGED",
         "reviewInstructions": review_instructions,
         "baselineContext": _bounded_context(request),
+        "reviewCoverage": {
+            "totalChangedFileCount": len(requested_files),
+            "includedFileCount": len(changed_files),
+            "excludedFileCount": len(excluded_files),
+            "excludedPaths": excluded_files,
+        },
     }
     workspace_root = Path(get_settings().local_repo_workspace_root).expanduser().resolve(strict=False)
     try:
@@ -141,7 +172,7 @@ def enqueue_agent_review(
         "rawOutput": None,
         "exitCode": None,
         "errorMessage": None,
-        "startedAt": datetime.now(),
+        "startedAt": utc_now(),
         "finishedAt": None,
         "requestedEngine": "AGENT",
         "effectiveEngine": "AGENT",
@@ -160,6 +191,16 @@ def enqueue_agent_review(
         sort_order=5,
         result=result_payload,
     )
+    if excluded_files:
+        append_progress(
+            db,
+            int(task.id),
+            "AGENT_SENSITIVE_PATHS_EXCLUDED",
+            "WARN",
+            "Agent Review 已排除敏感路径，其余文件继续审查",
+            json.dumps(input_case["reviewCoverage"], ensure_ascii=False),
+            review_key=AGENT_REVIEW_KEY,
+        )
     append_progress(
         db,
         int(task.id),
@@ -167,7 +208,12 @@ def enqueue_agent_review(
         "INFO",
         "Agent Review 已进入独立 Worker 队列",
         json.dumps(
-            {"runId": run.id, "diffMode": input_case["diffMode"], "diffBytes": diff_bytes},
+            {
+                "runId": run.id,
+                "diffMode": input_case["diffMode"],
+                "diffBytes": diff_bytes,
+                **input_case["reviewCoverage"],
+            },
             ensure_ascii=False,
         ),
         review_key=AGENT_REVIEW_KEY,
@@ -230,25 +276,35 @@ def recover_unavailable_agent_jobs() -> int:
 
     db = SessionLocal()
     try:
-        run_ids = repository.expire_exhausted_agent_jobs(db)
+        expired_run_ids = repository.expire_exhausted_agent_jobs(db)
         db.commit()
-        if run_ids:
-            from app.code_quality.service import schedule_agent_standard_fallback
+        from app.code_quality.service import (
+            list_unscheduled_agent_standard_fallback_run_ids,
+            schedule_agent_standard_fallback,
+        )
 
-            for run_id in run_ids:
-                schedule_agent_standard_fallback(db, run_id)
+        run_ids = sorted(
+            set(expired_run_ids) | set(list_unscheduled_agent_standard_fallback_run_ids(db))
+        )
+        for run_id in run_ids:
+            schedule_agent_standard_fallback(db, run_id)
         return len(run_ids)
     finally:
         db.close()
 
 
 def heartbeat_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any]:
-    return repository.heartbeat_agent_job(
+    run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
+    response = repository.heartbeat_agent_job(
         db,
         job_id=job_id,
         worker_id=_required(request, "workerId"),
-        run_summary=request.get("runSummary") if isinstance(request.get("runSummary"), dict) else None,
+        run_summary=run_summary or None,
     )
+    run = repository.find_agent_run_by_job(db, job_id)
+    if run is not None:
+        _persist_agent_trace_safely(db, run, run_summary)
+    return response
 
 
 def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any]:
@@ -267,6 +323,7 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
     except (ReviewSchemaError, ValueError, TypeError) as exception:
         raise AppError("AGENT_REVIEW_SCHEMA_INVALID", str(exception), 400) from exception
     run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
+    _persist_agent_trace_safely(db, run, run_summary)
     run.cli_version = str(run_summary.get("cliVersion") or repository.AGENT_CLI_VERSION)
     result = {
         "status": "SUCCESS",
@@ -277,7 +334,7 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         "exitCode": 0,
         "errorMessage": None,
         "startedAt": run.started_at,
-        "finishedAt": datetime.now(),
+        "finishedAt": utc_now(),
         "requestedEngine": "AGENT",
         "effectiveEngine": "AGENT",
         "agentRunId": run.id,
@@ -333,6 +390,7 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
     failure_code = str(request.get("failureCode") or "AGENT_RUN_FAILED")[:64]
     failure_message = str(request.get("failureMessage") or "Agent Review failed")[:1024]
     run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
+    _persist_agent_trace_safely(db, run, run_summary)
     cancelled = failure_code == "AGENT_CANCELLED"
     repository.finish_agent_records(
         db,
@@ -382,24 +440,128 @@ def _finish_existing_review_flow(db: Session, run: Any, result: dict[str, Any]) 
     )
 
 
+def _persist_agent_trace_safely(
+    db: Session,
+    run: Any,
+    run_summary: dict[str, Any],
+) -> None:
+    if "audit" not in run_summary or not isinstance(run_summary.get("audit"), dict):
+        return
+    try:
+        locked_run = repository.lock_agent_run_for_trace(db, int(run.id))
+        if locked_run is None:
+            return
+        audit = repository.sanitize_agent_audit(run_summary.get("audit"))
+        existing = repository.agent_trace_sequences(
+            db,
+            task_id=int(locked_run.task_id),
+            review_key=str(locked_run.review_key),
+            run_id=int(locked_run.id),
+        )
+        if 0 not in existing:
+            append_progress(
+                db,
+                int(locked_run.task_id),
+                "AGENT_ANALYZING",
+                "INFO",
+                "Agent 正在分析代码变更",
+                json.dumps(
+                    {
+                        "runId": int(locked_run.id),
+                        "sequence": 0,
+                        "activity": "ANALYZING",
+                    },
+                    ensure_ascii=False,
+                ),
+                review_key=locked_run.review_key,
+            )
+            existing.add(0)
+        for event in audit.get("events") or []:
+            sequence = int(event.get("sequence") or 0)
+            if sequence < 1 or sequence in existing:
+                continue
+            phase, message = _agent_trace_phase_and_message(event)
+            detail = {
+                "runId": int(locked_run.id),
+                "sequence": sequence,
+                "activity": _AGENT_ACTIVITY_NAMES[str(event["tool"])],
+                "status": event["status"],
+                "durationMs": event["durationMs"],
+                "itemCount": event["itemCount"],
+                "sourceBytes": event["sourceBytes"],
+                "pathSummary": event.get("pathSummary") or [],
+                "reviewBudget": event.get("reviewBudget") or {},
+            }
+            for field in ("errorCode", "queryHash"):
+                if event.get(field):
+                    detail[field] = event[field]
+            append_progress(
+                db,
+                int(locked_run.task_id),
+                phase,
+                "WARN" if event["status"] == "FAILED" else "INFO",
+                message,
+                json.dumps(detail, ensure_ascii=False),
+                review_key=locked_run.review_key,
+            )
+            existing.add(sequence)
+        db.commit()
+    except Exception as exception:
+        db.rollback()
+        _LOGGER.warning(
+            "Agent Review trace persistence failed runId=%s errorType=%s",
+            getattr(run, "id", None),
+            type(exception).__name__,
+        )
+
+
+def _agent_trace_phase_and_message(event: dict[str, Any]) -> tuple[str, str]:
+    tool = str(event.get("tool") or "")
+    budget_phase = str((event.get("reviewBudget") or {}).get("phase") or "")
+    if tool == "submit_review" or budget_phase == "SUBMIT":
+        return "AGENT_SUBMITTING", "Agent 正在提交 Review Card"
+    if budget_phase == "CONVERGE":
+        return "AGENT_CONVERGING", "Agent 已停止扩大范围，正在收敛结论"
+    return "AGENT_TOOL_ACTIVITY", "Agent 正在补充审查证据"
+
+
 def _ensure_worktree(task: ReviewTask, project: Project) -> Path:
     path = task_head_worktree_path(task.id)
     if path.is_dir():
         return path
-    outcome = prepare_local_repository_context(
-        project_id=project.id,
-        task_id=task.id,
-        repository_url=project.repository_url,
-        git_project_id=project.git_project_id,
-        head_ref=task.after_sha or task.commit_sha,
-    )
-    if str(outcome.get("status") or "").upper() != "PREPARED" or not path.is_dir():
-        raise AppError(
-            "AGENT_WORKTREE_UNAVAILABLE",
-            str(outcome.get("reason") or "Agent Review task worktree is unavailable")[:500],
-            409,
+    summaries: list[dict[str, Any]] = []
+    for _attempt in range(2):
+        outcome = prepare_local_repository_context(
+            project_id=project.id,
+            task_id=task.id,
+            repository_url=project.repository_url,
+            git_project_id=project.git_project_id,
+            head_ref=task.after_sha or task.commit_sha,
         )
-    return path
+        nested_summary = outcome.get("summary") if isinstance(outcome, dict) else None
+        summary = nested_summary if isinstance(nested_summary, dict) else outcome
+        summary = dict(summary) if isinstance(summary, dict) else {}
+        unavailable_contexts = (
+            outcome.get("unavailableContexts") if isinstance(outcome, dict) else None
+        )
+        if (
+            not summary.get("reason")
+            and isinstance(unavailable_contexts, list)
+            and unavailable_contexts
+            and isinstance(unavailable_contexts[0], dict)
+        ):
+            summary["reason"] = unavailable_contexts[0].get("reason")
+        summaries.append(summary)
+        if str(summary.get("status") or "").upper() == "PREPARED" and path.is_dir():
+            return path
+    last_summary = summaries[-1] if summaries else {}
+    reason = str(last_summary.get("reason") or "Agent Review task worktree is unavailable")
+    failure_phase = str(last_summary.get("failurePhase") or "UNKNOWN")
+    raise AppError(
+        "AGENT_WORKTREE_UNAVAILABLE",
+        f"{reason} (failurePhase={failure_phase}, attempts={len(summaries)})"[:500],
+        409,
+    )
 
 
 def _changed_file_paths(request: dict[str, Any]) -> list[str]:
@@ -411,6 +573,117 @@ def _changed_file_paths(request: dict[str, Any]) -> list[str]:
         if text and text not in paths:
             paths.append(text)
     return paths
+
+
+def _partition_review_paths(
+    paths: list[str],
+    *,
+    forced_excluded: set[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    included: list[str] = []
+    excluded: list[str] = []
+    forced = forced_excluded or set()
+    for path in paths:
+        normalized = str(path or "").strip().replace("\\", "/")
+        if normalized in forced:
+            excluded.append(normalized)
+            continue
+        try:
+            included.append(validate_review_path(path))
+        except ReviewToolError as exception:
+            if exception.code != "SENSITIVE_PATH_DENIED":
+                raise AppError(exception.code, str(exception), 409) from exception
+            if normalized and normalized not in excluded:
+                excluded.append(normalized)
+    return included, excluded
+
+
+def _changed_files_with_sensitive_aliases(request: dict[str, Any]) -> set[str]:
+    forced_excluded: set[str] = set()
+    values: list[Any] = []
+    for field in ("changedFiles", "changedFileDetails"):
+        field_values = request.get(field) or []
+        if isinstance(field_values, list):
+            values.extend(field_values)
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        primary = str(
+            item.get("path") or item.get("newPath") or item.get("oldPath") or ""
+        ).strip().replace("\\", "/")
+        candidates = [
+            str(item.get(field) or "").strip().replace("\\", "/")
+            for field in ("path", "newPath", "oldPath")
+            if str(item.get(field) or "").strip()
+        ]
+        for candidate in candidates:
+            try:
+                validate_review_path(candidate)
+            except ReviewToolError as exception:
+                if exception.code == "SENSITIVE_PATH_DENIED":
+                    if primary:
+                        forced_excluded.add(primary)
+                    break
+                raise AppError(exception.code, str(exception), 409) from exception
+    return forced_excluded
+
+
+def _filter_review_diff(request: dict[str, Any], included_paths: list[str]) -> str:
+    included = set(included_paths)
+    sections = _split_unified_diff(str(request.get("diffText") or ""))
+    selected: list[str] = []
+    covered: set[str] = set()
+    for path, section in sections:
+        if path in included:
+            selected.append(section)
+            covered.add(path)
+    details = request.get("changedFileDetails") or []
+    if isinstance(details, list):
+        for item in details:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or item.get("newPath") or item.get("oldPath") or "").strip().replace("\\", "/")
+            diff = str(item.get("diffText") or "")
+            if path not in included or path in covered or not diff.strip():
+                continue
+            selected.append(_ensure_file_diff_header(path, diff))
+            covered.add(path)
+    return "\n".join(section.rstrip("\n") for section in selected if section.strip())
+
+
+def _split_unified_diff(diff_text: str) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    current_path: str | None = None
+    current_lines: list[str] = []
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            if current_path and current_lines:
+                sections.append((current_path, "\n".join(current_lines)))
+            current_path = _path_from_diff_header(line)
+            current_lines = [line]
+        elif current_path:
+            current_lines.append(line)
+    if current_path and current_lines:
+        sections.append((current_path, "\n".join(current_lines)))
+    return sections
+
+
+def _path_from_diff_header(line: str) -> str | None:
+    parts = line.split()
+    if len(parts) < 4:
+        return None
+    candidate = parts[3]
+    if candidate.startswith("b/"):
+        candidate = candidate[2:]
+    if candidate == "/dev/null" and parts[2].startswith("a/"):
+        candidate = parts[2][2:]
+    return candidate.strip().replace("\\", "/") or None
+
+
+def _ensure_file_diff_header(path: str, diff_text: str) -> str:
+    if diff_text.lstrip().startswith("diff --git "):
+        return diff_text
+    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n{diff_text}"
 
 
 def _bounded_context(request: dict[str, Any]) -> str:

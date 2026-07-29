@@ -5,12 +5,24 @@ import json
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+import pytest
 from sqlalchemy.orm import Session
 
 from app.agent_review.models import AgentReviewSettings
-from app.agent_review.repository import create_agent_job, expire_exhausted_agent_jobs
+from app.agent_review.repository import (
+    create_agent_job,
+    expire_exhausted_agent_jobs,
+    sanitize_agent_audit,
+)
+from app.agent_review.service import _ensure_worktree
 from app.code_quality.models import CodeQualitySchedulerJob
-from app.code_quality.repository import list_result_responses, save_result
+from app.code_quality.repository import list_progress, list_result_responses, save_result
+from app.code_quality.service import (
+    _agent_preflight_fallback_metadata,
+    schedule_agent_standard_fallback,
+)
+from app.core.errors import AppError
+from app.core.json_utils import utc_now
 from app.project_integration.models import Project, ProjectGroup
 from app.review_record.models import ReviewTask
 
@@ -27,6 +39,68 @@ def _worker_headers(token: str) -> dict[str, str]:
     return {"X-Agent-Worker-Token": token}
 
 
+def _trace_audit(events):
+    last_budget = (
+        events[-1].get("reviewBudget")
+        if events and isinstance(events[-1], dict)
+        else {
+            "phase": "DISCOVERY",
+            "evidenceCallsUsed": 0,
+            "evidenceCallsRemaining": 10,
+            "sourceBytesRemaining": 200_000,
+            "mustSubmit": False,
+        }
+    )
+    return {
+        "phase": "SUBMITTING" if last_budget.get("phase") == "SUBMIT" else "TOOL_ACTIVITY",
+        "toolCallCount": len(events),
+        "evidenceCallsUsed": last_budget.get("evidenceCallsUsed", 0),
+        "sourceBytesReturned": sum(int(item.get("sourceBytes") or 0) for item in events),
+        "diffBytesReturned": 0,
+        "blockedAccessCount": 0,
+        "reviewSubmitted": bool(events and events[-1].get("tool") == "submit_review"),
+        "reviewBudget": last_budget,
+        "topPathSummaries": [],
+        "events": events,
+    }
+
+
+def test_backend_agent_audit_whitelist_caps_events_and_drops_raw_content() -> None:
+    budget = {
+        "phase": "DISCOVERY",
+        "evidenceCallsUsed": 1,
+        "evidenceCallsRemaining": 9,
+        "sourceBytesRemaining": 199_900,
+        "mustSubmit": False,
+    }
+    events = [
+        {
+            "sequence": sequence,
+            "tool": "search_code",
+            "status": "SUCCESS",
+            "durationMs": 1,
+            "itemCount": 1,
+            "sourceBytes": 1,
+            "pathSummary": [],
+            "reviewBudget": budget,
+            "query": "SECRET_QUERY",
+            "source": "SECRET_SOURCE",
+            "assistant": "SECRET_ASSISTANT",
+            "reasoning": "SECRET_REASONING",
+            "path": "D:/private/source.py",
+        }
+        for sequence in range(1, 42)
+    ]
+
+    safe = sanitize_agent_audit(_trace_audit(events))
+    text = json.dumps(safe, ensure_ascii=False)
+
+    assert len(safe["events"]) == 40
+    assert "SECRET_" not in text
+    assert "D:/private" not in text
+    assert '"query"' not in text
+
+
 def test_agent_settings_encrypt_mask_replace_and_clear(
     client: TestClient, db_session: Session, monkeypatch
 ) -> None:
@@ -41,6 +115,7 @@ def test_agent_settings_encrypt_mask_replace_and_clear(
     data = saved.json()["data"]
     assert data["apiKeyConfigured"] is True
     assert data["apiKeyMasked"].startswith("configured:")
+    assert data["budgets"]["maxTurns"] == 12
     assert "sk-agent-secret-123456" not in saved.text
     record = db_session.get(AgentReviewSettings, 1)
     assert record.api_key_ciphertext != "sk-agent-secret-123456"
@@ -116,6 +191,7 @@ def test_agent_configuration_test_runs_through_worker_contract(
     job = claimed.json()["data"]
     assert job["kind"] == "CONFIG_TEST"
     assert job["apiKey"] == "sk-agent-secret-123456"
+    assert job["budgets"]["maxTurns"] == 4
     completed = client.post(
         "/internal/agent-review/configuration-test/complete",
         headers=_worker_headers(token),
@@ -191,6 +267,7 @@ def test_worker_auth_claim_and_heartbeat(
     job = claim.json()["data"]
     assert job["runId"] == run.id
     assert job["apiKey"] == "sk-agent-secret-123456"
+    assert job["budgets"]["maxTurns"] == 12
     assert "apiKey" not in json.dumps(job["input"])
 
     job_heartbeat = client.post(
@@ -205,6 +282,58 @@ def test_worker_auth_claim_and_heartbeat(
     # the claim contract itself must never persist or echo the clear key outside this response.
     settings_record = db_session.get(AgentReviewSettings, 1)
     assert "sk-agent-secret-123456" not in settings_record.api_key_ciphertext
+
+
+def test_agent_trace_persistence_failure_does_not_lose_job_lease(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"enabled": True, "apiKey": "sk-agent-secret-123456"},
+    )
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-trace-failure"},
+    )
+    run = create_agent_job(
+        db_session,
+        task_id=197,
+        project_id=100,
+        input_payload={
+            "worktree": "worktrees/197/head",
+            "case": {"changedFiles": ["src/a.py"], "diff": "+safe()"},
+        },
+        completion_context={},
+        comparison_mode=True,
+    )
+    db_session.commit()
+    job = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-trace-failure"},
+    ).json()["data"]
+    monkeypatch.setattr(
+        "app.agent_review.service.append_progress",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("trace unavailable")
+        ),
+    )
+
+    heartbeat = client.post(
+        f"/internal/agent-review/jobs/{job['jobId']}/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-trace-failure",
+            "runSummary": {"audit": _trace_audit([])},
+        },
+    )
+
+    assert heartbeat.status_code == 200
+    scheduler_job = db_session.get(CodeQualitySchedulerJob, run.scheduler_job_id)
+    assert scheduler_job.status == "RUNNING"
+    assert scheduler_job.lease_owner == "worker-trace-failure"
 
 
 def test_worker_completion_is_idempotent_and_saves_engine_metadata(
@@ -280,6 +409,189 @@ def test_worker_completion_is_idempotent_and_saves_engine_metadata(
     assert result["agentRunSummary"]["runId"] == run.id
 
 
+def test_agent_trace_is_incremental_idempotent_and_sanitized(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"enabled": True, "apiKey": "sk-agent-secret-123456"},
+    )
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-trace"},
+    )
+    now = datetime.now()
+    db_session.add(
+        ReviewTask(
+            id=198,
+            project_id=100,
+            trigger_type="CODE_QUALITY_MANUAL",
+            template_code="backend-default",
+            target_type="BACKEND",
+            code_quality_profile_code="backend-default-ai-review",
+            status="SUCCESS",
+            review_status="RUNNING",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    run = create_agent_job(
+        db_session,
+        task_id=198,
+        project_id=100,
+        input_payload={
+            "worktree": "worktrees/198/head",
+            "case": {"id": "task-198", "changedFiles": ["src/a.py"], "diff": "+safe()"},
+        },
+        completion_context={},
+        comparison_mode=True,
+    )
+    db_session.commit()
+    job = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-trace"},
+    ).json()["data"]
+    discovery = {
+        "phase": "DISCOVERY",
+        "evidenceCallsUsed": 1,
+        "evidenceCallsRemaining": 9,
+        "sourceBytesRemaining": 199_980,
+        "mustSubmit": False,
+        "message": "must not be persisted",
+    }
+    converge = {
+        "phase": "CONVERGE",
+        "evidenceCallsUsed": 8,
+        "evidenceCallsRemaining": 2,
+        "sourceBytesRemaining": 199_960,
+        "mustSubmit": False,
+    }
+    submit = {
+        "phase": "SUBMIT",
+        "evidenceCallsUsed": 10,
+        "evidenceCallsRemaining": 0,
+        "sourceBytesRemaining": 199_940,
+        "mustSubmit": True,
+    }
+    events = [
+        {
+            "sequence": 1,
+            "tool": "search_code",
+            "status": "SUCCESS",
+            "durationMs": 2,
+            "itemCount": 1,
+            "sourceBytes": 20,
+            "query": "SECRET_QUERY",
+            "queryHash": "0123456789abcdef",
+            "path": "D:/private/src/a.py",
+            "source": "SECRET_SOURCE",
+            "assistant": "SECRET_ASSISTANT",
+            "reasoning": "SECRET_REASONING",
+            "pathSummary": [
+                {
+                    "pathHash": "fedcba9876543210",
+                    "suffix": ".py",
+                    "depth": 3,
+                    "path": "src/a.py",
+                }
+            ],
+            "reviewBudget": discovery,
+        },
+        {
+            "sequence": 2,
+            "tool": "read_file_range",
+            "status": "SUCCESS",
+            "durationMs": 3,
+            "itemCount": 4,
+            "sourceBytes": 20,
+            "pathSummary": [],
+            "reviewBudget": converge,
+        },
+        {
+            "sequence": 3,
+            "tool": "submit_review",
+            "status": "SUCCESS",
+            "durationMs": 1,
+            "itemCount": 0,
+            "sourceBytes": 0,
+            "pathSummary": [],
+            "reviewBudget": submit,
+        },
+    ]
+
+    first = client.post(
+        f"/internal/agent-review/jobs/{job['jobId']}/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-trace",
+            "runSummary": {"audit": _trace_audit(events[:1])},
+        },
+    )
+    repeated = client.post(
+        f"/internal/agent-review/jobs/{job['jobId']}/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-trace",
+            "runSummary": {"audit": _trace_audit(events[:1])},
+        },
+    )
+    converging = client.post(
+        f"/internal/agent-review/jobs/{job['jobId']}/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-trace",
+            "runSummary": {"audit": _trace_audit(events[:2])},
+        },
+    )
+    completed = client.post(
+        f"/internal/agent-review/jobs/{job['jobId']}/complete",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-trace",
+            "idempotencyKey": job["idempotencyKey"],
+            "reviewCard": {
+                "summary": "未发现问题",
+                "overallLevel": "LOW",
+                "findings": [],
+            },
+            "runSummary": {"audit": _trace_audit(events)},
+        },
+    )
+
+    assert first.status_code == repeated.status_code == converging.status_code == 200
+    assert completed.status_code == 200
+    trace = [
+        event
+        for event in list_progress(db_session, 198)
+        if event["phase"].startswith("AGENT_")
+        and event["phase"]
+        in {
+            "AGENT_ANALYZING",
+            "AGENT_TOOL_ACTIVITY",
+            "AGENT_CONVERGING",
+            "AGENT_SUBMITTING",
+        }
+    ]
+    assert [event["phase"] for event in trace] == [
+        "AGENT_ANALYZING",
+        "AGENT_TOOL_ACTIVITY",
+        "AGENT_CONVERGING",
+        "AGENT_SUBMITTING",
+    ]
+    trace_text = json.dumps(trace, ensure_ascii=False)
+    assert "SECRET_" not in trace_text
+    assert "D:/private" not in trace_text
+    assert '"query"' not in trace_text
+    db_session.refresh(run)
+    stored_audit = run.tool_summary_json or ""
+    assert "SECRET_" not in stored_audit
+    assert "D:/private" not in stored_audit
+    assert '"message"' not in stored_audit
+
+
 def test_worker_failure_records_explicit_standard_fallback(
     client: TestClient, db_session: Session, monkeypatch
 ) -> None:
@@ -321,7 +633,29 @@ def test_worker_failure_records_explicit_standard_fallback(
             "idempotencyKey": job["idempotencyKey"],
             "failureCode": "AGENT_TIMEOUT",
             "failureMessage": "timeout",
-            "runSummary": {"durationMs": 600000},
+            "runSummary": {
+                "durationMs": 600000,
+                "audit": _trace_audit(
+                    [
+                        {
+                            "sequence": 1,
+                            "tool": "read_diff_range",
+                            "status": "SUCCESS",
+                            "durationMs": 2,
+                            "itemCount": 2,
+                            "sourceBytes": 12,
+                            "pathSummary": [],
+                            "reviewBudget": {
+                                "phase": "DISCOVERY",
+                                "evidenceCallsUsed": 1,
+                                "evidenceCallsRemaining": 9,
+                                "sourceBytesRemaining": 199_988,
+                                "mustSubmit": False,
+                            },
+                        }
+                    ]
+                ),
+            },
         },
     )
 
@@ -331,6 +665,11 @@ def test_worker_failure_records_explicit_standard_fallback(
     assert run.effective_engine == "STANDARD_FALLBACK"
     assert scheduled == [run.id]
     assert run.input_json is not None
+    assert [
+        event["phase"]
+        for event in list_progress(db_session, 299)
+        if event["phase"] in {"AGENT_ANALYZING", "AGENT_TOOL_ACTIVITY"}
+    ] == ["AGENT_ANALYZING", "AGENT_TOOL_ACTIVITY"]
 
 
 def test_offline_worker_queue_grace_expires_to_explicit_fallback(db_session: Session) -> None:
@@ -344,7 +683,7 @@ def test_offline_worker_queue_grace_expires_to_explicit_fallback(db_session: Ses
     )
     job = db_session.get(CodeQualitySchedulerJob, run.scheduler_job_id)
     assert job is not None
-    job.queued_at = datetime.now() - timedelta(seconds=61)
+    job.queued_at = utc_now() - timedelta(seconds=61)
     db_session.commit()
 
     expired = expire_exhausted_agent_jobs(db_session)
@@ -355,6 +694,54 @@ def test_offline_worker_queue_grace_expires_to_explicit_fallback(db_session: Ses
     assert run.status == "FAILED"
     assert run.effective_engine == "STANDARD_FALLBACK"
     assert run.failure_code == "AGENT_LEASE_EXHAUSTED"
+
+
+def test_expired_agent_run_schedules_standard_fallback_with_task_project(
+    db_session: Session, monkeypatch
+) -> None:
+    now = datetime.now()
+    db_session.add(
+        ReviewTask(
+            id=305,
+            project_id=105,
+            trigger_type="GITLAB_MR_WEBHOOK",
+            template_code="backend-default",
+            target_type="BACKEND",
+            code_quality_profile_code="backend-default-ai-review",
+            status="SUCCESS",
+            review_status="RUNNING",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.flush()
+    run = create_agent_job(
+        db_session,
+        task_id=305,
+        project_id=105,
+        input_payload={"worktree": "worktrees/305/head", "case": {"changedFiles": ["src/a.py"]}},
+        completion_context={},
+        comparison_mode=False,
+    )
+    run.status = "FAILED"
+    run.effective_engine = "STANDARD_FALLBACK"
+    db_session.commit()
+    monkeypatch.setattr("app.code_quality.service._executor.submit", lambda *args, **kwargs: None)
+
+    schedule_agent_standard_fallback(db_session, run.id)
+    schedule_agent_standard_fallback(db_session, run.id)
+
+    fallback_job = (
+        db_session.query(CodeQualitySchedulerJob)
+        .filter(
+            CodeQualitySchedulerJob.task_id == 305,
+            CodeQualitySchedulerJob.label == "Agent Review 降级 - Standard",
+        )
+        .one()
+    )
+    assert fallback_job.project_id == 105
+    assert fallback_job.status == "QUEUED"
+    assert fallback_job.review_key == run.review_key
 
 
 def test_running_agent_job_cancel_is_observed_by_worker_and_clears_input(
@@ -430,7 +817,147 @@ def test_running_agent_job_cancel_is_observed_by_worker_and_clears_input(
     assert run.input_json is None
 
 
-def test_manual_agent_review_reaches_persistent_worker_queue(
+def test_agent_worktree_preflight_retries_once_after_transient_failure(
+    monkeypatch, tmp_path
+) -> None:
+    workspace = tmp_path / "worktrees" / "501" / "head"
+    task = ReviewTask(id=501, after_sha="a" * 40, commit_sha="a" * 40)
+    project = Project(
+        id=501,
+        name="retry-demo",
+        git_provider="GITLAB",
+        git_project_id="501",
+        repository_url="https://gitlab.example.com/demo/retry.git",
+        default_template_code="backend-default",
+        status="ENABLED",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    outcomes = [
+        {
+            "summary": {
+                "status": "UNAVAILABLE",
+                "failurePhase": "WORKTREE",
+            },
+            "unavailableContexts": [{"reason": "transient checkout failure"}],
+        },
+        {
+            "summary": {"status": "PREPARED", "failurePhase": None},
+            "unavailableContexts": [],
+        },
+    ]
+    calls: list[int] = []
+
+    def prepare(**_kwargs):
+        calls.append(len(calls) + 1)
+        outcome = outcomes[len(calls) - 1]
+        if outcome["summary"]["status"] == "PREPARED":
+            workspace.mkdir(parents=True)
+        return outcome
+
+    monkeypatch.setattr("app.agent_review.service.task_head_worktree_path", lambda _task_id: workspace)
+    monkeypatch.setattr("app.agent_review.service.prepare_local_repository_context", prepare)
+
+    assert _ensure_worktree(task, project) == workspace
+    assert calls == [1, 2]
+
+
+def test_agent_worktree_preflight_accepts_nested_prepared_result(
+    monkeypatch, tmp_path
+) -> None:
+    workspace = tmp_path / "worktrees" / "503" / "head"
+    task = ReviewTask(id=503, after_sha="b" * 40, commit_sha="b" * 40)
+    project = Project(
+        id=503,
+        name="prepared-demo",
+        git_provider="GITLAB",
+        git_project_id="503",
+        repository_url="https://gitlab.example.com/demo/prepared.git",
+        default_template_code="backend-default",
+        status="ENABLED",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    calls: list[int] = []
+
+    def prepare(**_kwargs):
+        calls.append(len(calls) + 1)
+        workspace.mkdir(parents=True)
+        return {
+            "summary": {
+                "status": "PREPARED",
+                "failurePhase": None,
+                "worktreeStatus": "CHECKED_OUT",
+            },
+            "unavailableContexts": [],
+        }
+
+    monkeypatch.setattr("app.agent_review.service.task_head_worktree_path", lambda _task_id: workspace)
+    monkeypatch.setattr("app.agent_review.service.prepare_local_repository_context", prepare)
+
+    assert _ensure_worktree(task, project) == workspace
+    assert calls == [1]
+
+
+def test_agent_worktree_preflight_preserves_nested_failure_detail(
+    monkeypatch, tmp_path
+) -> None:
+    workspace = tmp_path / "worktrees" / "504" / "head"
+    task = ReviewTask(id=504, after_sha="c" * 40, commit_sha="c" * 40)
+    project = Project(
+        id=504,
+        name="failed-demo",
+        git_provider="GITLAB",
+        git_project_id="504",
+        repository_url="https://gitlab.example.com/demo/failed.git",
+        default_template_code="backend-default",
+        status="ENABLED",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+
+    monkeypatch.setattr("app.agent_review.service.task_head_worktree_path", lambda _task_id: workspace)
+    monkeypatch.setattr(
+        "app.agent_review.service.prepare_local_repository_context",
+        lambda **_kwargs: {
+            "summary": {
+                "status": "UNAVAILABLE",
+                "failurePhase": "WORKTREE",
+                "worktreeStatus": "UNAVAILABLE",
+            },
+            "unavailableContexts": [{"reason": "git worktree add failed"}],
+        },
+    )
+
+    with pytest.raises(AppError) as captured:
+        _ensure_worktree(task, project)
+
+    assert captured.value.code == "AGENT_WORKTREE_UNAVAILABLE"
+    assert captured.value.message == "git worktree add failed (failurePhase=WORKTREE, attempts=2)"
+
+
+def test_agent_preflight_fallback_persists_failure_detail(
+    db_session: Session,
+) -> None:
+    metadata = _agent_preflight_fallback_metadata(
+        db_session,
+        task_id=502,
+        exception=AppError(
+            "AGENT_WORKTREE_UNAVAILABLE",
+            "git worktree add failed (failurePhase=WORKTREE, attempts=2)",
+            409,
+        ),
+    )
+    db_session.commit()
+
+    assert metadata["agentRunSummary"]["failureCode"] == "AGENT_WORKTREE_UNAVAILABLE"
+    assert metadata["agentRunSummary"]["failureMessage"].endswith("attempts=2)")
+    events = list_progress(db_session, 502)
+    assert events[-1]["phase"] == "AGENT_PREFLIGHT_FAILED"
+    assert "failureMessage" in events[-1]["detail"]
+
+
+def test_manual_agent_review_excludes_sensitive_file_and_reaches_worker_queue(
     client: TestClient, db_session: Session, monkeypatch, tmp_path
 ) -> None:
     _encryption_key, token = _configure(monkeypatch)
@@ -488,8 +1015,23 @@ def test_manual_agent_review_reaches_persistent_worker_queue(
             "mode": "DIFF_TEXT",
             "commitSha": "a" * 40,
             "title": "Agent manual validation",
-            "diffText": "diff --git a/service.py b/service.py\n+++ b/service.py\n+value = None",
-            "changedFiles": ["service.py"],
+            "diffText": (
+                "diff --git a/service.py b/service.py\n"
+                "--- a/service.py\n"
+                "+++ b/service.py\n"
+                "@@ -1 +1 @@\n"
+                "+value = None\n"
+                "diff --git a/src/main/resources/application-prod.properties "
+                "b/src/main/resources/application-prod.properties\n"
+                "--- a/src/main/resources/application-prod.properties\n"
+                "+++ b/src/main/resources/application-prod.properties\n"
+                "@@ -1 +1 @@\n"
+                "+private.password=must-not-leave-platform"
+            ),
+            "changedFiles": [
+                "service.py",
+                "src/main/resources/application-prod.properties",
+            ],
         },
     )
 
@@ -505,6 +1047,19 @@ def test_manual_agent_review_reaches_persistent_worker_queue(
     assert claimed.status_code == 200
     job = claimed.json()["data"]
     assert job["input"]["changedFiles"] == ["service.py"]
+    assert "application-prod.properties" not in job["input"]["diff"]
+    assert "must-not-leave-platform" not in job["input"]["diff"]
+    assert job["input"]["reviewCoverage"] == {
+        "totalChangedFileCount": 2,
+        "includedFileCount": 1,
+        "excludedFileCount": 1,
+        "excludedPaths": ["src/main/resources/application-prod.properties"],
+    }
+    progress = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-progress")
+    assert any(
+        event["phase"] == "AGENT_SENSITIVE_PATHS_EXCLUDED"
+        for event in progress.json()["data"]
+    )
     completed = client.post(
         f"/internal/agent-review/jobs/{job['jobId']}/complete",
         headers=_worker_headers(token),
@@ -521,6 +1076,91 @@ def test_manual_agent_review_reaches_persistent_worker_queue(
     saved = results.json()["data"][0]
     assert saved["status"] == "SUCCESS"
     assert saved["effectiveEngine"] == "AGENT"
+
+
+def test_manual_agent_review_skips_when_all_files_are_sensitive(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"enabled": True, "apiKey": "sk-agent-secret-123456"},
+    )
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-sensitive"},
+    )
+    now = datetime.now()
+    group = ProjectGroup(
+        id=31,
+        group_name="Agent 敏感路径项目组",
+        group_code="agent-sensitive",
+        default_code_quality_profile_code="backend-default-ai-review",
+        review_engine="AGENT",
+        agent_source_export_allowed=True,
+        ai_review_enabled=True,
+        trigger_on_manual=True,
+        status="ENABLED",
+        created_at=now,
+        updated_at=now,
+    )
+    project = Project(
+        id=306,
+        group_id=31,
+        name="agent-sensitive-demo",
+        git_provider="GITLAB",
+        git_project_id="306",
+        repository_url="https://gitlab.example.com/demo/agent-sensitive",
+        default_template_code="backend-default",
+        default_code_quality_profile_code="backend-default-ai-review",
+        status="ENABLED",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add_all([group, project])
+    db_session.commit()
+
+    response = client.post(
+        "/api/code-quality-reviews/manual",
+        json={
+            "projectId": 306,
+            "profileCode": "backend-default-ai-review",
+            "reviewEngine": "AGENT",
+            "mode": "DIFF_TEXT",
+            "commitSha": "d" * 40,
+            "title": "All sensitive files",
+            "diffText": (
+                "diff --git a/src/main/resources/application-prod.properties "
+                "b/src/main/resources/application-prod.properties\n"
+                "--- a/src/main/resources/application-prod.properties\n"
+                "+++ b/src/main/resources/application-prod.properties\n"
+                "@@ -1 +1 @@\n"
+                "+private.password=must-not-leave-platform"
+            ),
+            "changedFiles": ["src/main/resources/application-prod.properties"],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["status"] == "SKIPPED"
+    assert data["reviews"][0]["status"] == "SKIPPED"
+    agent_jobs = (
+        db_session.query(CodeQualitySchedulerJob)
+        .filter(
+            CodeQualitySchedulerJob.task_id == data["taskId"],
+            CodeQualitySchedulerJob.job_type == "AGENT_REVIEW",
+        )
+        .all()
+    )
+    assert agent_jobs == []
+    progress = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-progress")
+    assert any(
+        event["phase"] == "AGENT_ALL_PATHS_EXCLUDED"
+        for event in progress.json()["data"]
+    )
 
 
 def test_webhook_task_can_append_agent_comparison_without_overwriting_standard(

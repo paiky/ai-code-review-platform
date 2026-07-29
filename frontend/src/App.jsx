@@ -82,6 +82,11 @@ import 'prismjs/components/prism-tsx';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-yaml';
 import { fetchApi, riskColor, statusColor } from './api.js';
+import {
+  collectAgentTraceEvents,
+  formatAgentTraceDetail,
+  isAgentTraceProgressEvent
+} from './agentReviewTrace.js';
 import { releaseNotes } from './releaseNotes.js';
 
 const { Header, Content } = Layout;
@@ -1302,8 +1307,8 @@ function JobQueueModal({ open, queue, onClose, onOpenTask, onCancelJob }) {
     { title: 'Model', dataIndex: 'model', width: 180, ellipsis: true, render: value => value || '-' },
     { title: 'Review Key', dataIndex: 'reviewKey', width: 150, ellipsis: true, render: value => value || '-' },
     { title: '状态', dataIndex: 'status', width: 100, render: value => <Tag color={schedulerStatusColor(value)}>{schedulerStatusLabel(value)}</Tag> },
-    { title: '排队时间', dataIndex: 'queuedAt', width: 170, render: value => value || '-' },
-    { title: '开始时间', dataIndex: 'startedAt', width: 170, render: value => value || '-' },
+    { title: '排队时间', dataIndex: 'queuedAt', width: 190, render: formatDateTime },
+    { title: '开始时间', dataIndex: 'startedAt', width: 190, render: formatDateTime },
     { title: '耗时', width: 90, render: (_, row) => jobDurationText(row) },
     { title: '错误', dataIndex: 'errorMessage', ellipsis: true, render: value => value || '-' },
     {
@@ -1323,8 +1328,8 @@ function JobQueueModal({ open, queue, onClose, onOpenTask, onCancelJob }) {
     { title: '风险点', dataIndex: 'findingIndex', width: 90, render: value => value == null ? '-' : `#${value}` },
     { title: '文件', dataIndex: 'filePath', ellipsis: true, render: value => value || '-' },
     { title: '状态', dataIndex: 'status', width: 100, render: value => <Tag color={schedulerStatusColor(value)}>{schedulerStatusLabel(value)}</Tag> },
-    { title: '排队时间', dataIndex: 'queuedAt', width: 170, render: value => value || '-' },
-    { title: '开始时间', dataIndex: 'startedAt', width: 170, render: value => value || '-' },
+    { title: '排队时间', dataIndex: 'queuedAt', width: 190, render: formatDateTime },
+    { title: '开始时间', dataIndex: 'startedAt', width: 190, render: formatDateTime },
     { title: '耗时', width: 90, render: (_, row) => jobDurationText(row) },
     { title: '错误', dataIndex: 'errorMessage', ellipsis: true, render: value => value || '-' },
     {
@@ -1429,7 +1434,7 @@ function FailureNotificationsModal({ open, notifications, onClose, onOpenTask })
       render: value => value ? sourceLabel(value) : '-'
     },
     { title: '失败原因', dataIndex: 'errorMessage', width: 260, ellipsis: true, render: value => value || '-' },
-    { title: '失败时间', dataIndex: 'createdAt', width: 170, render: value => value || '-' },
+    { title: '失败时间', dataIndex: 'createdAt', width: 190, render: formatDateTime },
     {
       title: '操作',
       width: 90,
@@ -1711,7 +1716,7 @@ function TaskList({ onOpen }) {
     { title: '分支', width: 175, ellipsis: true, render: (_, row) => <Text ellipsis>{taskListBranchText(row)}</Text> },
     { title: '状态', dataIndex: 'reviewStatus', width: 95, render: value => <Tag color={taskReviewStatusColor(value)}>{taskReviewStatusLabel(value)}</Tag> },
     { title: '风险点', dataIndex: 'riskItemCount', width: 72, render: value => value ?? 0 },
-    { title: '创建时间', dataIndex: 'createdAt', width: 125, ellipsis: true },
+    { title: '创建时间', dataIndex: 'createdAt', width: 190, ellipsis: true, render: formatDateTime },
     { title: '操作', width: 70, render: (_, row) => <Button type="link" onClick={() => onOpen(row.id)}>详情</Button> }
   ];
 
@@ -2210,6 +2215,12 @@ function phaseLabel(phase) {
     LOCAL_REPO_PREPARE_FAILED: '本地仓库不可用',
     LOCAL_CONTEXT_RETRIEVED: '本地引用检索完成',
     LOCAL_CONTEXT_RETRIEVE_FAILED: '本地引用检索不可用',
+    AGENT_SENSITIVE_PATHS_EXCLUDED: '已排除敏感路径',
+    AGENT_ALL_PATHS_EXCLUDED: '全部路径已安全跳过',
+    AGENT_ANALYZING: 'Agent 分析变更',
+    AGENT_TOOL_ACTIVITY: 'Agent 补充证据',
+    AGENT_CONVERGING: 'Agent 收敛结论',
+    AGENT_SUBMITTING: 'Agent 提交结果',
     PROVIDER_START: '调用 Provider',
     PROVIDER_FAILED: 'Provider 调用失败',
     CODEX_REPOSITORY: '确认仓库（历史）',
@@ -2285,6 +2296,10 @@ const keyProgressPhases = new Set([
   'LOCAL_REPO_PREPARE_FAILED',
   'LOCAL_CONTEXT_RETRIEVED',
   'LOCAL_CONTEXT_RETRIEVE_FAILED',
+  'AGENT_ANALYZING',
+  'AGENT_TOOL_ACTIVITY',
+  'AGENT_CONVERGING',
+  'AGENT_SUBMITTING',
   'PROVIDER_START',
   'PROVIDER_FAILED',
   'PROMPT_METADATA',
@@ -2367,6 +2382,18 @@ function progressStepDescription(event) {
       return '本地仓库上下文检索已完成，摘要见上方高准确模式卡片。';
     case 'LOCAL_CONTEXT_RETRIEVE_FAILED':
       return '本地仓库引用检索不可用，本次 Review 不会把检索失败解释为无风险。';
+    case 'AGENT_SENSITIVE_PATHS_EXCLUDED':
+      return '敏感文件及其 diff 未发送给 Agent，其余文件继续使用高准确模式审查。';
+    case 'AGENT_ALL_PATHS_EXCLUDED':
+      return '全部变更文件均命中敏感路径策略，本次未向外部模型发送代码。';
+    case 'AGENT_ANALYZING':
+      return 'Agent 正在基于 changedFiles 和 diff 形成有限风险假设。';
+    case 'AGENT_TOOL_ACTIVITY':
+      return 'Agent 正在围绕已有风险假设补充受控只读证据。';
+    case 'AGENT_CONVERGING':
+      return 'Agent 已停止扩大检索范围，正在收敛 Review 结论。';
+    case 'AGENT_SUBMITTING':
+      return 'Agent 正在提交结构化 Review Card。';
     case 'PROVIDER_START':
       return '开始调用代码质量 Review provider。';
     case 'PROVIDER_FAILED':
@@ -2479,14 +2506,40 @@ function progressDetailText(event) {
   if (event.phase === 'CODEX_OUTPUT') {
     return formatCodexOutputDetail(event.detail);
   }
+  if (isAgentTraceProgressEvent(event)) {
+    return formatAgentTraceDetail(event.detail);
+  }
   return event.detail;
 }
 
 function parseEventTime(value) {
   if (!value) return null;
   const normalized = String(value).includes('T') ? value : String(value).replace(' ', 'T');
-  const timestamp = new Date(normalized).getTime();
+  const hasExplicitTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(normalized);
+  const timestamp = new Date(hasExplicitTimezone ? normalized : `${normalized}Z`).getTime();
   return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+const EAST_EIGHT_TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23'
+});
+
+function formatDateTime(value) {
+  const timestamp = parseEventTime(value);
+  if (timestamp == null) return '-';
+  const parts = Object.fromEntries(
+    EAST_EIGHT_TIME_FORMATTER.formatToParts(new Date(timestamp))
+      .filter(part => part.type !== 'literal')
+      .map(part => [part.type, part.value])
+  );
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} UTC+8`;
 }
 
 function formatDuration(seconds) {
@@ -2521,6 +2574,24 @@ function latestProgressEvent(events, phases) {
     if (phaseSet.has(events[index]?.phase)) return events[index];
   }
   return null;
+}
+
+function agentReviewCoverage(progress, agentRunSummary) {
+  const events = Array.isArray(progress) ? progress : [];
+  const event = latestProgressEvent(events, [
+    'AGENT_ALL_PATHS_EXCLUDED',
+    'AGENT_SENSITIVE_PATHS_EXCLUDED',
+    'AGENT_QUEUED'
+  ]);
+  const detail = parseProgressDetailJson(event?.detail) || agentRunSummary || {};
+  const excludedFileCount = Number(detail.excludedFileCount || 0);
+  if (!Number.isFinite(excludedFileCount) || excludedFileCount <= 0) return null;
+  return {
+    totalChangedFileCount: Number(detail.totalChangedFileCount || 0),
+    includedFileCount: Number(detail.includedFileCount || 0),
+    excludedFileCount,
+    excludedPaths: Array.isArray(detail.excludedPaths) ? detail.excludedPaths : []
+  };
 }
 
 function countValue(value) {
@@ -2755,10 +2826,10 @@ function HighAccuracyContextSummary({ progress }) {
               <Descriptions.Item label="失败阶段">{workspace.failurePhase || summary.localRepository?.failurePhase || '-'}</Descriptions.Item>
               <Descriptions.Item label="Mirror 存在">{boolText(mirror.exists)}</Descriptions.Item>
               <Descriptions.Item label="Mirror 状态">{mirror.status || summary.localRepository?.mirrorStatus || '-'}</Descriptions.Item>
-              <Descriptions.Item label="Mirror 最近拉取">{mirror.lastFetchedAt || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Mirror 最近拉取">{formatDateTime(mirror.lastFetchedAt)}</Descriptions.Item>
               <Descriptions.Item label="Worktree 存在">{boolText(worktree.exists)}</Descriptions.Item>
               <Descriptions.Item label="Worktree 状态">{worktree.status || summary.localRepository?.worktreeStatus || '-'}</Descriptions.Item>
-              <Descriptions.Item label="Worktree 最近检出">{worktree.lastCheckedOutAt || '-'}</Descriptions.Item>
+              <Descriptions.Item label="Worktree 最近检出">{formatDateTime(worktree.lastCheckedOutAt)}</Descriptions.Item>
               <Descriptions.Item label="清理策略">
                 {cleanupPolicy.enabled === false
                   ? '未启用'
@@ -3074,7 +3145,7 @@ function HighAccuracyFlowView({ progress, review }) {
               type="warning"
               showIcon
               message="Agent Review 已显式降级为普通 Review"
-              description={agentRunSummary?.failureCode || 'Agent Worker 或执行链路不可用'}
+              description={agentRunSummary?.failureMessage || agentRunSummary?.failureCode || 'Agent Worker 或执行链路不可用'}
             />
           )}
         </Card>
@@ -3236,7 +3307,7 @@ function ProgressEventView({ event, showStepDescription = false }) {
       <Space wrap size="small">
         <Tag color={progressColor(event.level)}>{event.level || 'INFO'}</Tag>
         <Tag>{phaseLabel(event.phase)}</Tag>
-        <Text type="secondary">{event.createdAt || '-'}</Text>
+        <Text type="secondary">{formatDateTime(event.createdAt)}</Text>
       </Space>
       <div className="progress-message">{description}</div>
       {showStepDescription && event.message && event.message !== description && (
@@ -3354,8 +3425,8 @@ function FindingRefinementPanel({ overlay }) {
           <Descriptions.Item label="Context Pack">{sanitizeRefinementText(retrievalPlan.contextPackVersion || '-')}</Descriptions.Item>
           <Descriptions.Item label="Planner Signal">{countText(retrievalPlan.plannerSignalCount)}</Descriptions.Item>
           <Descriptions.Item label="Requested Context">{countText(retrievalPlan.requestedContextCount)}</Descriptions.Item>
-          <Descriptions.Item label="开始时间">{overlay.startedAt || '-'}</Descriptions.Item>
-          <Descriptions.Item label="结束时间">{overlay.finishedAt || '-'}</Descriptions.Item>
+          <Descriptions.Item label="开始时间">{formatDateTime(overlay.startedAt)}</Descriptions.Item>
+          <Descriptions.Item label="结束时间">{formatDateTime(overlay.finishedAt)}</Descriptions.Item>
         </Descriptions>
         <RefinementStatDescriptions
           title="本地仓库摘要"
@@ -3454,9 +3525,11 @@ function FindingRefinementControl({ taskId, review, finding, findingIndex, onRef
 function CodeQualityProgressView({ progress, running = false, reviewStartedAt, reviewFinishedAt }) {
   const events = Array.isArray(progress) ? progress : [];
   const reviewEvents = events.filter(event => !isFixPreviewProgressEvent(event));
-  const keyEvents = reviewEvents.filter(isKeyProgressEvent);
-  const debugEvents = events.filter(isDebugProgressEvent);
-  const hiddenEvents = events.filter(event => !isKeyProgressEvent(event) && !isDebugProgressEvent(event));
+  const agentEvents = collectAgentTraceEvents(reviewEvents);
+  const regularEvents = reviewEvents.filter(event => !isAgentTraceProgressEvent(event));
+  const keyEvents = regularEvents.filter(isKeyProgressEvent);
+  const debugEvents = regularEvents.filter(isDebugProgressEvent);
+  const hiddenEvents = regularEvents.filter(event => !isKeyProgressEvent(event) && !isDebugProgressEvent(event));
   const startedAt = parseEventTime(reviewStartedAt);
   const finishedAt = parseEventTime(reviewFinishedAt);
   const totalDurationText = startedAt && finishedAt
@@ -3497,6 +3570,18 @@ function CodeQualityProgressView({ progress, running = false, reviewStartedAt, r
             message={totalDurationText ? `总计耗时 ${totalDurationText}` : '默认只展示关键阶段'}
             description={`已折叠 ${debugEvents.length} 条 stdout/stderr 调试输出${hiddenEvents.length > 0 ? `，以及 ${hiddenEvents.length} 条辅助事件` : ''}。`}
           />
+          {agentEvents.length > 0 && (
+            <div>
+              <Title level={5}>Agent 执行轨迹</Title>
+              <Timeline
+                items={agentEvents.map(event => ({
+                  key: event.id,
+                  color: progressColor(event.level),
+                  children: <ProgressEventView event={event} showStepDescription />
+                }))}
+              />
+            </div>
+          )}
           <Timeline
             items={keyEvents.map(event => ({
               key: event.id,
@@ -3662,7 +3747,7 @@ function CodeQualityGateView({ gate, detail }) {
             <Descriptions.Item label="Profile">{gate.profileCode || '-'}</Descriptions.Item>
             <Descriptions.Item label="Provider">{gate.provider || '-'}</Descriptions.Item>
             <Descriptions.Item label="推送分支">{gate.branchName || '-'}</Descriptions.Item>
-            <Descriptions.Item label="审核时间">{gate.createdAt || '-'}</Descriptions.Item>
+            <Descriptions.Item label="审核时间">{formatDateTime(gate.createdAt)}</Descriptions.Item>
           </Descriptions>
         </Space>
       </Card>
@@ -4035,6 +4120,7 @@ function CodeQualityReviewView({
   const requestedEngine = String(review.requestedEngine || 'STANDARD').toUpperCase();
   const effectiveEngine = String(review.effectiveEngine || requestedEngine).toUpperCase();
   const agentRunSummary = review.agentRunSummary || null;
+  const reviewCoverage = agentReviewCoverage(progress, agentRunSummary);
   const isGitLabTask = ['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(triggerType);
   const alternateEngine = requestedEngine === 'AGENT' ? 'STANDARD' : 'AGENT';
   const summaryText = codeQualitySummary(review, findings);
@@ -4144,20 +4230,31 @@ function CodeQualityReviewView({
           {review.status === 'RUNNING' && <Alert type="info" showIcon message="AI Review 正在执行" description="模型 Provider 正在分析代码变更，完成后结果会自动刷新。" />}
           {review.errorMessage && review.status === 'SKIPPED' && <Alert type="warning" showIcon message="AI Review 未执行" description={review.errorMessage} />}
           {review.errorMessage && review.status !== 'SKIPPED' && <Alert type="error" showIcon message="AI Review 执行失败" description={review.errorMessage} />}
+          {reviewCoverage && (
+            <Alert
+              type="warning"
+              showIcon
+              message={reviewCoverage.includedFileCount > 0 ? '部分敏感文件已隔离，其余文件继续 Agent Review' : '全部变更文件已按敏感路径策略安全跳过'}
+              description={[
+                `总文件 ${reviewCoverage.totalChangedFileCount}，Agent 审查 ${reviewCoverage.includedFileCount}，排除 ${reviewCoverage.excludedFileCount}`,
+                reviewCoverage.excludedPaths.length > 0 ? `排除路径：${reviewCoverage.excludedPaths.join('、')}` : null
+              ].filter(Boolean).join('；')}
+            />
+          )}
           {effectiveEngine === 'STANDARD_FALLBACK' && (
             <Alert
               type="warning"
               showIcon
               message="本次 Agent Review 已降级为普通 Review"
-              description={agentRunSummary?.failureCode || 'Agent Worker 或执行链路不可用'}
+              description={agentRunSummary?.failureMessage || agentRunSummary?.failureCode || 'Agent Worker 或执行链路不可用'}
             />
           )}
           <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
             <Descriptions.Item label="Profile">{review.profileCode || '-'}</Descriptions.Item>
             <Descriptions.Item label="请求引擎">{requestedEngine}</Descriptions.Item>
             <Descriptions.Item label="实际引擎">{effectiveEngine}</Descriptions.Item>
-            <Descriptions.Item label="开始时间">{review.startedAt || '-'}</Descriptions.Item>
-            <Descriptions.Item label="结束时间">{review.finishedAt || '-'}</Descriptions.Item>
+            <Descriptions.Item label="开始时间">{formatDateTime(review.startedAt)}</Descriptions.Item>
+            <Descriptions.Item label="结束时间">{formatDateTime(review.finishedAt)}</Descriptions.Item>
             <Descriptions.Item label="Exit Code">{review.exitCode ?? '-'}</Descriptions.Item>
             {requestedEngine === 'AGENT' && <Descriptions.Item label="Agent Run">{agentRunSummary?.runId ?? review.agentRunId ?? '-'}</Descriptions.Item>}
             {requestedEngine === 'AGENT' && <Descriptions.Item label="Agent turns / 工具">{agentRunSummary ? `${agentRunSummary.turnCount ?? 0} / ${agentRunSummary.toolCallCount ?? 0}` : '-'}</Descriptions.Item>}
@@ -4451,7 +4548,7 @@ function DeterministicChecksPanel({ checks, running, onRun }) {
             </Descriptions.Item>
             <Descriptions.Item label="配置来源">{config.configSource || '-'}</Descriptions.Item>
             <Descriptions.Item label="最大命中数">{config.maxFindings ?? '-'}</Descriptions.Item>
-            <Descriptions.Item label="完成时间">{latest?.finishedAt || '-'}</Descriptions.Item>
+            <Descriptions.Item label="完成时间">{formatDateTime(latest?.finishedAt)}</Descriptions.Item>
           </Descriptions>
           {latest?.failureReason && (
             <Alert type="warning" showIcon message="失败原因" description={latest.failureReason} />
@@ -4819,7 +4916,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
                 <Descriptions.Item label="端类型">{targetTypeLabel(detail.targetType)}</Descriptions.Item>
                 <Descriptions.Item label="Profile">{detail.codeQualityProfileCode || '-'}</Descriptions.Item>
                 <Descriptions.Item label="底层任务状态">{detail.status || '-'}</Descriptions.Item>
-                <Descriptions.Item label="事件时间">{detail.eventTime || '-'}</Descriptions.Item>
+                <Descriptions.Item label="事件时间">{formatDateTime(detail.eventTime)}</Descriptions.Item>
               </Descriptions>
               {detail.errorMessage && (
                 <Alert className="section-gap" type="error" showIcon message="任务执行失败" description={detail.errorMessage} />
@@ -6083,8 +6180,8 @@ function TemplateConfig() {
               <Descriptions.Item label="Runner">Claude Code {agentSettings?.cliVersion || '2.1.112'}</Descriptions.Item>
               <Descriptions.Item label="模型">{agentSettings?.model || 'deepseek-v4-pro[1m]'}</Descriptions.Item>
               <Descriptions.Item label="Worker">{agentSettings?.workerId || '-'} / {agentSettings?.workerStatus || 'OFFLINE'}</Descriptions.Item>
-              <Descriptions.Item label="最近心跳">{agentSettings?.lastWorkerHeartbeatAt || '-'}</Descriptions.Item>
-              <Descriptions.Item label="预算">8 turns / 40 tools / 200 KB source</Descriptions.Item>
+              <Descriptions.Item label="最近心跳">{formatDateTime(agentSettings?.lastWorkerHeartbeatAt)}</Descriptions.Item>
+              <Descriptions.Item label="预算">12 turns / 40 tools / 200 KB source</Descriptions.Item>
               <Descriptions.Item label="超时">600 秒</Descriptions.Item>
             </Descriptions>
             {!agentSettings?.encryptionAvailable && (
@@ -7100,7 +7197,7 @@ function RuleGapDashboardPage() {
         </Space>
       )
     },
-    { title: '最近出现时间', dataIndex: 'recentOccurredAt', width: 190, render: value => value || '-' },
+    { title: '最近出现时间', dataIndex: 'recentOccurredAt', width: 210, render: formatDateTime },
     {
       title: '最近任务样例',
       dataIndex: 'recentTasks',
@@ -7685,7 +7782,7 @@ function RiskFeedbackPage() {
     },
     { title: '说明', dataIndex: 'reasonText', ellipsis: true, render: value => value || '-' },
     { title: '状态', dataIndex: 'status', width: 110, render: value => <Tag color={reviewFeedbackStatusColor(value)}>{reviewFeedbackStatusLabel(value)}</Tag> },
-    { title: '创建时间', dataIndex: 'createdAt', width: 180, render: value => value || '-' },
+    { title: '创建时间', dataIndex: 'createdAt', width: 210, render: formatDateTime },
     {
       title: '操作',
       width: 320,
@@ -7736,7 +7833,7 @@ function RiskFeedbackPage() {
     { title: '来源反馈', dataIndex: 'sourceFeedbackId', width: 100, render: value => value ? `#${value}` : '-' },
     { title: '状态', dataIndex: 'enabled', width: 90, render: value => <Tag color={value ? 'green' : 'default'}>{value ? '启用' : '停用'}</Tag> },
     { title: '版本', dataIndex: 'version', width: 70, render: value => value ?? '-' },
-    { title: '更新时间', dataIndex: 'updatedAt', width: 180, render: value => value || '-' },
+    { title: '更新时间', dataIndex: 'updatedAt', width: 210, render: formatDateTime },
     {
       title: '操作',
       width: 150,
@@ -8927,7 +9024,7 @@ function EvaluationCasesPage() {
       render: (value, row) => value?.title || row.findingId || row.fingerprint || '-'
     },
     { title: '人工说明', dataIndex: 'humanComment', ellipsis: true, render: value => value || '-' },
-    { title: '创建时间', dataIndex: 'createdAt', width: 180, render: value => value || '-' },
+    { title: '创建时间', dataIndex: 'createdAt', width: 210, render: formatDateTime },
     {
       title: '操作',
       width: 120,
@@ -9351,7 +9448,7 @@ function AcceptanceGatesPage() {
         </Space>
       )
     },
-    { title: '更新时间', dataIndex: 'updatedAt', width: 180, render: value => value || '-' },
+    { title: '更新时间', dataIndex: 'updatedAt', width: 210, render: formatDateTime },
     { title: '操作', width: 100, fixed: 'right', render: (_, row) => <Button size="small" onClick={() => openEdit(row)}>编辑</Button> }
   ];
 
@@ -9570,7 +9667,7 @@ function AcceptanceGateDetailPage() {
                   <Descriptions.Item label="Provider">{gate.provider || '-'}</Descriptions.Item>
                   <Descriptions.Item label="Profile">{gate.profile || '-'}</Descriptions.Item>
                   <Descriptions.Item label="风险类型">{gate.riskType || '-'}</Descriptions.Item>
-                  <Descriptions.Item label="更新时间">{gate.updatedAt || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="更新时间">{formatDateTime(gate.updatedAt)}</Descriptions.Item>
                 </Descriptions>
               </Card>
               <Row gutter={[16, 16]}>
@@ -9582,7 +9679,7 @@ function AcceptanceGateDetailPage() {
                       <Descriptions.Item label="风险评估">{gate.admission?.riskAssessment || '-'}</Descriptions.Item>
                       <Descriptions.Item label="成本估算">{gate.admission?.costEstimate || '-'}</Descriptions.Item>
                       <Descriptions.Item label="决策人">{gate.admission?.decisionBy || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="决策时间">{gate.admission?.decisionAt || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="决策时间">{formatDateTime(gate.admission?.decisionAt)}</Descriptions.Item>
                     </Descriptions>
                   </Card>
                 </Col>
@@ -9598,7 +9695,7 @@ function AcceptanceGateDetailPage() {
                       <Descriptions.Item label="Token 成本 Delta">{gate.exit?.tokenCostDelta ?? '-'}</Descriptions.Item>
                       <Descriptions.Item label="说明">{gate.exit?.notes || '-'}</Descriptions.Item>
                       <Descriptions.Item label="决策人">{gate.exit?.decidedBy || '-'}</Descriptions.Item>
-                      <Descriptions.Item label="决策时间">{gate.exit?.decidedAt || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="决策时间">{formatDateTime(gate.exit?.decidedAt)}</Descriptions.Item>
                     </Descriptions>
                   </Card>
                 </Col>
@@ -9800,7 +9897,7 @@ function EvaluationRunsPage() {
     { title: 'Baseline', dataIndex: 'baseline', width: 150, ellipsis: true, render: value => value?.label || value?.promptHash || '-' },
     { title: 'Candidate', dataIndex: 'candidate', width: 150, ellipsis: true, render: value => value?.label || value?.promptHash || '-' },
     { title: '耗时', dataIndex: 'durationMs', width: 100, render: value => value == null ? '-' : `${value} ms` },
-    { title: '创建时间', dataIndex: 'createdAt', width: 180, render: value => value || '-' }
+    { title: '创建时间', dataIndex: 'createdAt', width: 210, render: formatDateTime }
   ];
 
   return (
@@ -9960,7 +10057,7 @@ function EvaluationRunDetailPage() {
                   <Descriptions.Item label="样本数">{run.totalCount ?? 0}</Descriptions.Item>
                   <Descriptions.Item label="完成 / 失败">{run.completedCount ?? 0} / {run.failedCount ?? 0}</Descriptions.Item>
                   <Descriptions.Item label="耗时">{run.durationMs == null ? '-' : `${run.durationMs} ms`}</Descriptions.Item>
-                  <Descriptions.Item label="创建时间">{run.createdAt || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="创建时间">{formatDateTime(run.createdAt)}</Descriptions.Item>
                   <Descriptions.Item label="说明" span={2}>{run.notes || '-'}</Descriptions.Item>
                 </Descriptions>
               </Card>

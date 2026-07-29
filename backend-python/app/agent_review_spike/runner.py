@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -47,7 +47,7 @@ class SpikeRunError(RuntimeError):
 @dataclass(frozen=True)
 class RunnerConfig:
     timeout_seconds: int = 600
-    max_turns: int = 8
+    max_turns: int = 12
     max_tool_calls: int = 40
     max_source_bytes: int = 200_000
 
@@ -212,7 +212,14 @@ def _run_baseline(
 
 
 def _run_candidate(
-    case: dict[str, Any], worktree: Path, api_key: str, config: RunnerConfig, *, include_card: bool = False, cancel_event: Any = None
+    case: dict[str, Any],
+    worktree: Path,
+    api_key: str,
+    config: RunnerConfig,
+    *,
+    include_card: bool = False,
+    cancel_event: Any = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     started = perf_counter()
     try:
@@ -249,6 +256,12 @@ def _run_candidate(
             mcp_path.write_text(json.dumps(mcp_config), encoding="utf-8")
             command = _claude_command(case, mcp_path, config)
             environment = _candidate_environment(api_key, home)
+            progress_state: dict[str, Any] = {"sequence": -1, "phase": None}
+            _notify_progress_callback(
+                progress_callback,
+                _sanitize_audit_snapshot({}),
+                progress_state,
+            )
             process = subprocess.Popen(
                 command,
                 cwd=worktree,
@@ -266,22 +279,26 @@ def _run_candidate(
             while True:
                 if cancel_event is not None and cancel_event.is_set():
                     _terminate_process_group(process)
+                    audit = _load_safe_audit_snapshot(audit_path)
+                    _notify_progress_callback(progress_callback, audit, progress_state)
                     return execution_summary(
                         case,
                         status="FAILED",
                         duration_ms=_duration_ms(started),
                         error_code="AGENT_CANCELLED",
-                        audit=_load_optional_object(audit_path),
+                        audit=audit,
                     )
                 remaining = deadline - perf_counter()
                 if remaining <= 0:
                     _terminate_process_group(process)
+                    audit = _load_safe_audit_snapshot(audit_path)
+                    _notify_progress_callback(progress_callback, audit, progress_state)
                     return execution_summary(
                         case,
                         status="FAILED",
                         duration_ms=_duration_ms(started),
                         error_code="AGENT_TIMEOUT",
-                        audit=_load_optional_object(audit_path),
+                        audit=audit,
                     )
                 try:
                     stdout, _stderr = process.communicate(
@@ -290,14 +307,20 @@ def _run_candidate(
                     break
                 except subprocess.TimeoutExpired:
                     prompt_input = None
-            audit = _load_optional_object(audit_path)
+                    _notify_progress_callback(
+                        progress_callback,
+                        _load_safe_audit_snapshot(audit_path),
+                        progress_state,
+                    )
+            audit = _load_safe_audit_snapshot(audit_path)
+            _notify_progress_callback(progress_callback, audit, progress_state)
             session = _parse_claude_session(stdout)
             if process.returncode != 0:
                 return execution_summary(
                     case,
                     status="FAILED",
                     duration_ms=_duration_ms(started),
-                    error_code="AGENT_CLI_FAILED",
+                    error_code=_candidate_cli_failure_code(session, config.max_turns),
                     audit=audit,
                     session=session,
                 )
@@ -384,10 +407,22 @@ def _claude_command(
 
 
 def run_agent_candidate(
-    case: dict[str, Any], worktree: Path, api_key: str, config: RunnerConfig | None = None, *, cancel_event: Any = None
+    case: dict[str, Any],
+    worktree: Path,
+    api_key: str,
+    config: RunnerConfig | None = None,
+    *,
+    cancel_event: Any = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     return _run_candidate(
-        case, worktree, api_key, config or RunnerConfig(), include_card=True, cancel_event=cancel_event
+        case,
+        worktree,
+        api_key,
+        config or RunnerConfig(),
+        include_card=True,
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
     )
 
 
@@ -419,7 +454,8 @@ def _candidate_environment(api_key: str, home: Path) -> dict[str, str]:
         "ANTHROPIC_DEFAULT_OPUS_MODEL": AGENT_MODEL,
         "ANTHROPIC_DEFAULT_SONNET_MODEL": AGENT_MODEL,
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
-        "CLAUDE_CODE_EFFORT_LEVEL": "max",
+        # DeepSeek 会把 Claude Code 类请求自动识别为 max，标准 Agent Review 必须显式固定 high。
+        "CLAUDE_CODE_EFFORT_LEVEL": "high",
         "DISABLE_AUTOUPDATER": "1",
         "DISABLE_TELEMETRY": "1",
         "DISABLE_ERROR_REPORTING": "1",
@@ -541,8 +577,23 @@ def _parse_claude_session(stdout: str) -> dict[str, Any]:
             "sessionId": event.get("session_id"),
             "numTurns": event.get("num_turns"),
             "usage": _safe_usage(event.get("usage") or {}),
+            "resultSubtype": str(event.get("subtype") or "")[:80],
+            "isError": bool(event.get("is_error")),
         }
     return result
+
+
+def _candidate_cli_failure_code(session: dict[str, Any], max_turns: int) -> str:
+    subtype = str(session.get("resultSubtype") or "").strip().upper().replace("-", "_")
+    if subtype in {"ERROR_MAX_TURNS", "MAX_TURNS", "MAX_TURNS_EXCEEDED"}:
+        return "AGENT_MAX_TURNS_EXCEEDED"
+    try:
+        turns = int(session.get("numTurns") or 0)
+    except (TypeError, ValueError):
+        turns = 0
+    if turns >= max(int(max_turns), 1):
+        return "AGENT_MAX_TURNS_EXCEEDED"
+    return "AGENT_CLI_FAILED"
 
 
 def _parse_json_object(value: Any) -> dict[str, Any]:
@@ -582,6 +633,173 @@ def _load_optional_object(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _load_safe_audit_snapshot(path: Path) -> dict[str, Any]:
+    try:
+        return _sanitize_audit_snapshot(_load_optional_object(path))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return _sanitize_audit_snapshot({})
+
+
+def _sanitize_audit_snapshot(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    events: list[dict[str, Any]] = []
+    raw_events = source.get("events") if isinstance(source.get("events"), list) else []
+    for index, raw_event in enumerate(raw_events[:40], 1):
+        if not isinstance(raw_event, dict):
+            continue
+        tool = str(raw_event.get("tool") or "")
+        if tool not in {
+            "list_files",
+            "search_code",
+            "read_file_range",
+            "read_diff_range",
+            "submit_review",
+        }:
+            continue
+        sequence = _safe_sequence(raw_event.get("sequence"), index)
+        if sequence is None:
+            continue
+        event = {
+            "sequence": sequence,
+            "tool": tool,
+            "status": (
+                str(raw_event.get("status") or "FAILED").upper()
+                if str(raw_event.get("status") or "").upper() in {"SUCCESS", "FAILED"}
+                else "FAILED"
+            ),
+            "durationMs": _bounded_non_negative(raw_event.get("durationMs"), 600_000),
+            "itemCount": _bounded_non_negative(raw_event.get("itemCount"), 100_000),
+            "sourceBytes": _bounded_non_negative(raw_event.get("sourceBytes"), 200_000),
+            "pathSummary": _safe_path_summaries(raw_event.get("pathSummary"), 5),
+            "reviewBudget": _safe_review_budget(raw_event.get("reviewBudget")),
+        }
+        error_code = str(raw_event.get("errorCode") or "")
+        if error_code and error_code.replace("_", "").isalnum():
+            event["errorCode"] = error_code[:80]
+        query_hash = str(raw_event.get("queryHash") or "")
+        if len(query_hash) == 16 and all(character in "0123456789abcdef" for character in query_hash):
+            event["queryHash"] = query_hash
+        events.append(event)
+    events.sort(key=lambda item: item["sequence"])
+    review_submitted = bool(source.get("reviewSubmitted"))
+    review_budget = _safe_review_budget(source.get("reviewBudget"))
+    phase = _audit_phase(events, review_submitted, review_budget)
+    return {
+        "phase": phase,
+        "toolCallCount": _bounded_non_negative(source.get("toolCallCount"), 40),
+        "evidenceCallsUsed": _bounded_non_negative(source.get("evidenceCallsUsed"), 10),
+        "sourceBytesReturned": _bounded_non_negative(
+            source.get("sourceBytesReturned"), 200_000
+        ),
+        "diffBytesReturned": _bounded_non_negative(source.get("diffBytesReturned"), 200_000),
+        "blockedAccessCount": _bounded_non_negative(source.get("blockedAccessCount"), 40),
+        "reviewSubmitted": review_submitted,
+        "reviewBudget": review_budget,
+        "topPathSummaries": _safe_path_summaries(source.get("topPathSummaries"), 20),
+        "events": events,
+    }
+
+
+def _notify_progress_callback(
+    callback: Callable[[dict[str, Any]], None] | None,
+    snapshot: dict[str, Any],
+    state: dict[str, Any],
+) -> None:
+    if callback is None:
+        return
+    events = snapshot.get("events") if isinstance(snapshot.get("events"), list) else []
+    sequence = max(
+        (int(event.get("sequence") or 0) for event in events if isinstance(event, dict)),
+        default=0,
+    )
+    phase = str(snapshot.get("phase") or "ANALYZING")
+    if sequence <= int(state.get("sequence") or 0) and phase == state.get("phase"):
+        return
+    state["sequence"] = sequence
+    state["phase"] = phase
+    try:
+        callback(snapshot)
+    except Exception:
+        # 可观测性回调不能改变 Claude CLI 的主结果。
+        return
+
+
+def _safe_review_budget(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    phase = str(source.get("phase") or "DISCOVERY").upper()
+    if phase not in {"DISCOVERY", "CONVERGE", "SUBMIT"}:
+        phase = "DISCOVERY"
+    return {
+        "phase": phase,
+        "evidenceCallsUsed": _bounded_non_negative(source.get("evidenceCallsUsed"), 10),
+        "evidenceCallsRemaining": _bounded_non_negative(
+            source.get("evidenceCallsRemaining"), 10
+        ),
+        "sourceBytesRemaining": _bounded_non_negative(
+            source.get("sourceBytesRemaining"), 200_000
+        ),
+        "mustSubmit": bool(source.get("mustSubmit")) or phase == "SUBMIT",
+    }
+
+
+def _safe_path_summaries(value: Any, limit: int) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    summaries: list[dict[str, Any]] = []
+    for raw in value[:limit]:
+        if not isinstance(raw, dict):
+            continue
+        path_hash = str(raw.get("pathHash") or "")
+        suffix = str(raw.get("suffix") or "").casefold()
+        if len(path_hash) != 16 or not all(
+            character in "0123456789abcdef" for character in path_hash
+        ):
+            continue
+        if len(suffix) > 20 or any(character not in ".abcdefghijklmnopqrstuvwxyz0123456789" for character in suffix):
+            suffix = ""
+        summaries.append(
+            {
+                "pathHash": path_hash,
+                "suffix": suffix,
+                "depth": _bounded_non_negative(raw.get("depth"), 100),
+            }
+        )
+    return summaries
+
+
+def _audit_phase(
+    events: list[dict[str, Any]],
+    review_submitted: bool,
+    review_budget: dict[str, Any],
+) -> str:
+    if review_submitted or (events and events[-1].get("tool") == "submit_review"):
+        return "SUBMITTING"
+    if review_budget.get("phase") == "SUBMIT":
+        return "SUBMITTING"
+    if review_budget.get("phase") == "CONVERGE":
+        return "CONVERGING"
+    return "TOOL_ACTIVITY" if events else "ANALYZING"
+
+
+def _bounded_non_negative(value: Any, maximum: int) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return min(max(int(value or 0), 0), maximum)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_sequence(value: Any, fallback: int) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        sequence = int(value if value is not None else fallback)
+    except (TypeError, ValueError):
+        return None
+    return sequence if 1 <= sequence <= 40 else None
+
+
 def _validation_report(
     manifest: dict[str, Any],
     cases: list[dict[str, Any]],
@@ -616,11 +834,13 @@ def _runner_summary(config: RunnerConfig) -> dict[str, Any]:
         "maxToolCalls": config.max_tool_calls,
         "maxSourceBytes": config.max_source_bytes,
         "timeoutSeconds": config.timeout_seconds,
+        "reasoningEffort": "high",
         "builtInToolsEnabled": False,
         "allowedMcpTools": [
             "list_files",
             "search_code",
             "read_file_range",
+            "read_diff_range",
             "submit_review",
         ],
     }
@@ -694,7 +914,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--case-id")
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--timeout-seconds", type=int, choices=range(1, 601), default=600)
-    parser.add_argument("--max-turns", type=int, choices=range(1, 9), default=8)
+    parser.add_argument("--max-turns", type=int, choices=range(1, 13), default=12)
     parser.add_argument("--max-tool-calls", type=int, choices=range(1, 41), default=40)
     parser.add_argument(
         "--max-source-bytes", type=int, choices=range(1, 200_001), default=200_000
