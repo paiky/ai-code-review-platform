@@ -7,6 +7,8 @@
   - `docs/37-review-platform-target-product-roadmap.md`：完整产品目标路线。
   - `docs/39-review-accuracy-and-material-ui-roadmap.md`：源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 / MUI 前端重构专项路线。
   - `docs/48-review-task-detail-unified-progress-ui-plan.md`：任务详情统一 ReviewJourney、阶段时间轴与阶段 Drawer。
+  - `docs/50-review-running-immersive-workspace-plan.md`：queued / running Review 的路由级沉浸工作台与
+    terminal 结果布局恢复。
   - `docs/03-api-contract.md`：HTTP API 契约。
 - 本文用途：说明开发者、Reviewer、管理员在一次 Review 从配置、执行、查看、反馈、评估到治理闭环中，分别应该使用哪些前端入口。
 
@@ -27,7 +29,7 @@ Review 前配置
 对应前端入口已收敛为：
 
 ```text
-任务 -> 任务详情 / 代码质量 Review / 统一阶段时间轴与 Drawer
+任务 -> 任务详情 / 运行态沉浸工作台 / 结果优先 Review / 统一阶段时间轴与 Drawer
 质量治理 -> 质量看板 / 评估样本 / 规则缺口 / 验收记录 / 回放记录
 设置 -> Review 配置 / Provider / 项目组 / 通知 / Push 策略
 版本更新 / 接入帮助 -> 发布说明和接入说明
@@ -118,7 +120,8 @@ Review 前配置
 - 任务基础信息。
 - Agent、Standard、Agent -> Standard fallback 和历史 Review 结果。
 - 按 `reviewKey` 隔离的多模型 Review 子结果和 URL 直达。
-- queued / running 的状态 Hero、完整六阶段时间轴和安全阶段详情。
+- 当前选中 Review 为 queued / running 时的路由级沉浸工作台：极简顶栏、纵向六阶段、中央 BRAIN /
+  Provider 舞台、右侧安全摘要、真实时间底栏和任务信息 Drawer。
 - terminal 的结果摘要、紧凑可点击时间轴、Finding、Diff 和 Patch。
 - “上下文准备”Drawer 中的 Context Pack、本地仓库、Planner / Retriever、Requested Context、
   预算裁剪、Finding 补证据汇总和规则缺口诊断入口。
@@ -130,9 +133,13 @@ Review 前配置
 
 任务详情里的关键子能力：
 
-- `代码质量 Review`：任务基础信息下方默认直接展示，不再包裹顶层 Tab；统一展示 Review 身份、Hero、
-  阶段时间轴、结果、finding、severity、category、confidence、contextStatus、evidence 和建议。
+- `代码质量 Review`：当前 `reviewKey` 为 queued / running 时由 TaskDetail 直接切换到路由级沉浸工作台；
+  terminal、历史任务和安全回退继续在任务基础信息下方展示结果优先布局，不再包裹顶层 Tab。两种布局
+  复用同一 Review 身份、ReviewJourney、阶段 Drawer、finding、severity、category、confidence、
+  contextStatus、evidence 和建议。
 - `多模型选择`：只有多个 Review 结果时显示选择器；单 Review 不再显示重复的身份横条。
+- `沉浸顶栏`：保留返回、任务安全标识、Review 身份、Provider / model、状态、多 Review 选择、
+  当前 Review 中断和任务信息 Drawer；普通品牌导航与全局操作区仅在当前运行态任务详情路由隐藏。
 - `Push 审核`：仅 Push 任务在 Review 内容下方提供独立折叠区，不占用默认首屏。
 - `上下文准备`：点击时间轴阶段，在 Drawer 查看 Context Planner、Local Retriever、Context Pack、
   Requested Context、预算裁剪和补证据安全摘要；没有可靠事件时不显示空阶段入口。
@@ -148,6 +155,11 @@ Review 前配置
 - 任务详情展示 AI Review 原结果，不静默覆盖 finding。
 - finding 级补证据只作为显式覆盖层，不自动降级、不自动忽略 finding。
 - 多 Review 只读取当前 `reviewKey` 的事件；仅 AUTO_PREFLIGHT 的 task-level 白名单事件允许共享。
+- 页面模式只由当前选中的 `reviewKey` 决定；轮询、状态变化和列表重排不改写用户选择，当前 Review
+  进入 terminal 后无刷新恢复结果页，其他 running Review 不得抢占。
+- 沉浸工作台只消费 ReviewJourney、阶段白名单与显式任务安全摘要，不读取或渲染原始 progress detail；
+  不展示 Prompt、查询、工具参数、源码、diff、路径、基础设施标识、异常 / 模型原文、百分比、预计时间
+  或模型思考过程。
 - 手动确定性检查是任务级最新记录，不伪装为当前 Review 的 AUTO_PREFLIGHT 事件。
 - 旧任务缺少可靠事件时显示“历史任务未记录”，不补造阶段、百分比、时间或耗时。
 - “提醒卡片 / 分析结果 / 原始事件摘要”不再作为任务详情可见 Tab；底层数据和 Backend 接口未删除。
@@ -530,7 +542,7 @@ evaluation case 表达的是人工质量判断，例如：
 ```text
 设置项目和 Provider
   -> GitLab MR / Push 触发任务
-  -> 任务详情直接查看 Review Hero、统一时间轴和结果
+  -> queued / running 在任务详情查看沉浸工作台，terminal 自动恢复结果优先页面
   -> 必要时在阶段 Drawer 查看上下文、运行任务级确定性检查或对 finding 补证据
   -> 钉钉通知团队
 ```

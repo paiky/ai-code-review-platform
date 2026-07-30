@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import {
   Alert,
   Badge,
@@ -108,6 +116,11 @@ import {
   visibleReviewJourneyStages
 } from './reviewJourneyPresentation.js';
 import {
+  buildReviewImmersivePresentation,
+  normalizeReviewWorkspaceMode,
+  resolveReviewWorkspaceFrame
+} from './reviewImmersivePresentation.js';
+import {
   agentBudgetLimits,
   bytesToKilobytes,
   formatAgentBudgetSummary,
@@ -130,6 +143,15 @@ import { releaseNotes } from './releaseNotes.js';
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
+
+const ReviewWorkspaceModeContext = createContext({
+  mode: 'RESULT',
+  reportMode: () => {}
+});
+
+function useReviewWorkspaceMode() {
+  return useContext(ReviewWorkspaceModeContext);
+}
 
 const fineChangeTypes = new Set([
   'DB_SCHEMA',
@@ -4820,7 +4842,12 @@ function OtherReviewJourneyEvents({ events }) {
   );
 }
 
-function ReviewJourneyTimeline({ journey, taskCheckRunning, onRunTaskCheck }) {
+function ReviewJourneyTimeline({
+  journey,
+  taskCheckRunning,
+  onRunTaskCheck,
+  variant = 'default'
+}) {
   const mode = reviewTimelineMode(journey);
   const stages = visibleReviewJourneyStages(journey);
   const [openStageId, setOpenStageId] = useState(null);
@@ -4895,7 +4922,7 @@ function ReviewJourneyTimeline({ journey, taskCheckRunning, onRunTaskCheck }) {
   }, [openStageId, openAlertStageId]);
 
   return (
-    <section className={`review-journey-timeline review-journey-${mode.toLowerCase()}`}>
+    <section className={`review-journey-timeline review-journey-${mode.toLowerCase()} review-journey-${variant}`}>
       <div className="review-journey-heading">
         <div>
           <Text strong>{mode === 'FULL' ? '统一 Review 进度' : 'Review 阶段回顾'}</Text>
@@ -5014,6 +5041,253 @@ function ReviewJourneyExperience({ journey, taskCheckRunning, onRunTaskCheck }) 
         onRunTaskCheck={onRunTaskCheck}
       />
     </Space>
+  );
+}
+
+function ReviewImmersiveMetricList({ metrics, emptyText }) {
+  const items = Array.isArray(metrics) ? metrics : [];
+  if (items.length === 0) {
+    return <Text className="review-immersive-empty">{emptyText}</Text>;
+  }
+  return (
+    <dl className="review-immersive-metrics">
+      {items.map(item => (
+        <div key={item.id}>
+          <dt>{item.label}</dt>
+          <dd>{item.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function ReviewImmersiveWorkspace({
+  presentation,
+  journey,
+  review,
+  journeys,
+  activeReviewKey,
+  onSelectReview,
+  onBack,
+  onCancelReview,
+  taskCheckRunning,
+  onRunTaskCheck
+}) {
+  const reducedMotion = usePrefersReducedMotion();
+  const [taskInfoOpen, setTaskInfoOpen] = useState(false);
+  const [canceling, setCanceling] = useState(false);
+  const taskInfoTriggerRef = useRef(null);
+  const task = presentation.taskSummary;
+  const reviewOptions = (Array.isArray(journeys) ? journeys : []).map(item => ({
+    value: item.selectorKey,
+    label: `${item.engineLabel} · ${item.providerModelLabel}`
+  }));
+
+  const cancelCurrentReview = async () => {
+    if (!journey?.running || canceling) return;
+    setCanceling(true);
+    try {
+      await onCancelReview?.({
+        jobType: journey.requestedEngine === 'AGENT' ? 'AGENT_REVIEW' : 'AI_REVIEW',
+        reviewKey: review?.reviewKey
+      });
+      message.success('AI Review 已中断');
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setCanceling(false);
+    }
+  };
+
+  return (
+    <div className="review-immersive-workspace">
+      <header className="review-immersive-header">
+        <Button
+          className="review-immersive-back"
+          type="text"
+          icon={<ArrowLeftOutlined />}
+          onClick={onBack}
+        >
+          返回上一层
+        </Button>
+        <div className="review-immersive-task">
+          <strong>{task?.title || `Review 任务 #${task?.id ?? '-'}`}</strong>
+          <span>任务 #{task?.id ?? '-'}</span>
+        </div>
+        <div className="review-immersive-identity" aria-label="当前 Review 身份与状态">
+          <Tag color={reviewJourneyEngineColor(journey?.engineKind)}>
+            {presentation.identityLabel}
+          </Tag>
+          <Tooltip title={presentation.providerModelLabel}>
+            <span>{presentation.providerModelLabel}</span>
+          </Tooltip>
+          <Tag color={reviewJourneyStatusColor(presentation.status)}>
+            {presentation.statusLabel}
+          </Tag>
+        </div>
+        {reviewOptions.length > 1 && (
+          <Select
+            className="review-immersive-selector"
+            aria-label="选择当前 Review"
+            value={activeReviewKey}
+            options={reviewOptions}
+            onChange={onSelectReview}
+          />
+        )}
+        <div className="review-immersive-actions">
+          {journey?.running && (
+            <Button
+              danger
+              ghost
+              icon={<CloseOutlined />}
+              loading={canceling}
+              onClick={cancelCurrentReview}
+            >
+              中断当前 Review
+            </Button>
+          )}
+          <Button
+            ref={taskInfoTriggerRef}
+            ghost
+            icon={<FileSearchOutlined />}
+            onClick={() => setTaskInfoOpen(true)}
+          >
+            任务信息
+          </Button>
+        </div>
+      </header>
+
+      <main className="review-immersive-main">
+        <section
+          className={`review-immersive-stage review-immersive-stage-${presentation.engineVisual.toLowerCase()}`}
+          aria-labelledby={`review-immersive-title-${presentation.selectedReviewKey || 'history'}`}
+        >
+          <div className="review-immersive-stage-glow" aria-hidden="true" />
+          <div className="review-immersive-visual">
+            {presentation.engineVisual === 'STANDARD_FLOW' ? (
+              <StandardReviewAnimation
+                state={presentation.heroState}
+                reducedMotion={reducedMotion}
+                ariaLabel={presentation.ariaLabel}
+              />
+            ) : (
+              <AgentReviewAnimation
+                style="BRAIN"
+                state={presentation.heroState}
+                subStage={journey?.agentSummary?.phase || null}
+                reducedMotion={reducedMotion}
+                ariaLabel={presentation.ariaLabel}
+              />
+            )}
+          </div>
+          <div className="review-immersive-current-stage">
+            <span>当前阶段</span>
+            <h1 id={`review-immersive-title-${presentation.selectedReviewKey || 'history'}`}>
+              {presentation.currentStageTitle}
+            </h1>
+            <h2>{presentation.headline}</h2>
+            <p>{presentation.description}</p>
+          </div>
+          {presentation.fallbackTransfer && (
+            <div className="review-immersive-transfer" role="status">
+              <strong>{presentation.fallbackTransfer.title}</strong>
+              <span>{presentation.fallbackTransfer.description}</span>
+            </div>
+          )}
+        </section>
+
+        <nav className="review-immersive-timeline" aria-label="Review 阶段导航">
+          <ReviewJourneyTimeline
+            journey={journey}
+            taskCheckRunning={taskCheckRunning}
+            onRunTaskCheck={onRunTaskCheck}
+            variant="immersive"
+          />
+        </nav>
+
+        <aside className="review-immersive-aside" aria-label="Review 安全摘要">
+          <section>
+            <div className="review-immersive-panel-title">
+              <span>上下文概览</span>
+              <Tag>安全摘要</Tag>
+            </div>
+            <ReviewImmersiveMetricList
+              metrics={presentation.contextMetrics}
+              emptyText="暂无可靠上下文记录"
+            />
+          </section>
+          <section>
+            <div className="review-immersive-panel-title">
+              <span>安全活动摘要</span>
+              <Tag color="blue">{presentation.currentStageTitle}</Tag>
+            </div>
+            <ReviewImmersiveMetricList
+              metrics={presentation.activityMetrics}
+              emptyText="等待可靠活动记录"
+            />
+            {presentation.heartbeat.delayed && (
+              <div className="review-immersive-delay">
+                进度数据可能延迟；这不等同于 Review 已停止。
+              </div>
+            )}
+          </section>
+        </aside>
+      </main>
+
+      <footer className="review-immersive-footer">
+        <span>
+          真实开始时间：
+          <strong>{presentation.startedAt ? formatDateTime(presentation.startedAt) : '历史任务未记录'}</strong>
+        </span>
+        <span>
+          已运行时长：
+          <strong>{presentation.elapsedMs === null ? '历史任务未记录' : formatJourneyDuration(presentation.elapsedMs)}</strong>
+        </span>
+        <span>
+          心跳状态：
+          <strong>
+            {presentation.heartbeat.lastHeartbeatAt
+              ? `${formatDateTime(presentation.heartbeat.lastHeartbeatAt)}${presentation.heartbeat.delayed ? ' · 可能延迟' : ''}`
+              : presentation.engineVisual === 'STANDARD_FLOW'
+                ? '通过任务轮询同步'
+                : '历史任务未记录'}
+          </strong>
+        </span>
+      </footer>
+
+      <Drawer
+        className="review-immersive-task-drawer"
+        rootClassName="review-immersive-task-drawer-root"
+        title="任务信息"
+        size="min(480px, 100vw)"
+        open={taskInfoOpen}
+        keyboard
+        onClose={() => setTaskInfoOpen(false)}
+        afterOpenChange={open => {
+          if (!open) {
+            window.requestAnimationFrame(() => taskInfoTriggerRef.current?.focus());
+          }
+        }}
+      >
+        {task ? (
+          <Descriptions column={1} size="small">
+            <Descriptions.Item label="任务 ID">{task.id ?? '历史任务未记录'}</Descriptions.Item>
+            <Descriptions.Item label="任务标题">{task.title}</Descriptions.Item>
+            <Descriptions.Item label="触发类型">{task.triggerLabel}</Descriptions.Item>
+            <Descriptions.Item label="端类型">{task.targetLabel}</Descriptions.Item>
+            <Descriptions.Item label="任务状态">{task.taskStatusLabel}</Descriptions.Item>
+            <Descriptions.Item label="事件时间">
+              {task.eventAt ? formatDateTime(task.eventAt) : '历史任务未记录'}
+            </Descriptions.Item>
+            <Descriptions.Item label="变更文件">
+              {task.changedFileCount ?? '历史任务未记录'}
+            </Descriptions.Item>
+          </Descriptions>
+        ) : (
+          <Empty description="历史任务未记录安全概要" />
+        )}
+      </Drawer>
+    </div>
   );
 }
 
@@ -5418,12 +5692,14 @@ function ReviewSelectorIdentity({ journey, compact = false }) {
 function CodeQualityReviewsPanel({
   taskId,
   reviews,
+  journeys: providedJourneys,
   progress,
   changedFilesSummary,
   diffContextCapabilities,
   fixPreviews,
   triggerType,
-  selectedReviewKey,
+  activeReviewKey,
+  onActiveReviewKeyChange,
   onRefresh,
   onRetry,
   retrying,
@@ -5434,31 +5710,9 @@ function CodeQualityReviewsPanel({
   onRunDeterministicCheck
 }) {
   const reviewItems = Array.isArray(reviews) ? reviews : [];
-  const journeys = buildReviewJourneys(reviewItems, progress, { deterministicChecks });
-  const selectionKeys = journeys.map(item => item.selectorKey).join('\u001f');
-  const urlSelectionKey = journeys.find(item => item.reviewKey === selectedReviewKey)?.selectorKey || null;
-  const [activeReviewKey, setActiveReviewKey] = useState(() => (
-    resolveReviewSelectionKey(journeys, {
-      requestedReviewKey: selectedReviewKey,
-      preferRequested: true
-    })
-  ));
-  const reviewSelectionTaskRef = useRef(taskId);
-  useEffect(() => {
-    const taskChanged = reviewSelectionTaskRef.current !== taskId;
-    reviewSelectionTaskRef.current = taskId;
-    setActiveReviewKey(current => resolveReviewSelectionKey(journeys, {
-      requestedReviewKey: selectedReviewKey,
-      currentSelectionKey: taskChanged ? null : current,
-      preferRequested: Boolean(urlSelectionKey)
-    }));
-  }, [taskId, selectedReviewKey, urlSelectionKey]);
-  useEffect(() => {
-    setActiveReviewKey(current => resolveReviewSelectionKey(journeys, {
-      currentSelectionKey: current,
-      preferRequested: false
-    }));
-  }, [selectionKeys]);
+  const journeys = Array.isArray(providedJourneys)
+    ? providedJourneys
+    : buildReviewJourneys(reviewItems, progress, { deterministicChecks });
   const displayedActiveReviewKey = journeys.some(item => item.selectorKey === activeReviewKey)
     ? activeReviewKey
     : journeys[0]?.selectorKey;
@@ -5500,7 +5754,7 @@ function CodeQualityReviewsPanel({
       <Tabs
         className="review-selector-tabs"
         activeKey={displayedActiveReviewKey}
-        onChange={setActiveReviewKey}
+        onChange={onActiveReviewKeyChange}
         items={reviewItems.map((review, index) => {
           const journey = journeys[index];
           return {
@@ -5559,6 +5813,8 @@ function deterministicCheckStatusText(status) {
 
 function TaskDetail({ taskId, onBack, onOpen }) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { reportMode } = useReviewWorkspaceMode();
   const selectedReviewKey = new URLSearchParams(location.search).get('reviewKey');
   const [detail, setDetail] = useState(null);
   const [codeQualityResult, setCodeQualityResult] = useState(null);
@@ -5568,10 +5824,125 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   const [fixPreviews, setFixPreviews] = useState([]);
   const [deterministicChecks, setDeterministicChecks] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [detailLoaded, setDetailLoaded] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   const [runningDeterministicCheck, setRunningDeterministicCheck] = useState(false);
   const [error, setError] = useState(null);
+  const [activeReviewKey, setActiveReviewKey] = useState(null);
+  const [presentationNow, setPresentationNow] = useState(() => Date.now());
+  const reviewSelectionTaskRef = useRef(taskId);
+  const journeys = useMemo(() => buildReviewJourneys(
+    codeQualityResults,
+    codeQualityProgress,
+    { deterministicChecks }
+  ), [codeQualityResults, codeQualityProgress, deterministicChecks]);
+  const selectionKeys = journeys.map(item => item.selectorKey).join('\u001f');
+  const urlSelectionKey = journeys
+    .find(item => item.reviewKey === selectedReviewKey)
+    ?.selectorKey || null;
+  const displayedActiveReviewKey = journeys.some(item => item.selectorKey === activeReviewKey)
+    ? activeReviewKey
+    : resolveReviewSelectionKey(journeys, {
+        requestedReviewKey: selectedReviewKey,
+        currentSelectionKey: activeReviewKey,
+        preferRequested: Boolean(urlSelectionKey)
+      });
+  const activeReviewIndex = journeys.findIndex(
+    item => item.selectorKey === displayedActiveReviewKey
+  );
+  const activeJourney = activeReviewIndex >= 0 ? journeys[activeReviewIndex] : null;
+  const activeReview = activeReviewIndex >= 0 ? codeQualityResults[activeReviewIndex] : null;
+  const changedFileCount = Array.isArray(detail?.changedFilesSummary?.files)
+    ? detail.changedFilesSummary.files.length
+    : Number.isFinite(Number(detail?.changedFilesSummary?.count))
+      ? Number(detail.changedFilesSummary.count)
+      : null;
+  const taskSafeSummary = detail ? {
+    id: detail.id,
+    title: `${detail.projectName || '代码审查'} · ${taskTypeLabel(detail.triggerType)}`,
+    triggerLabel: taskTypeLabel(detail.triggerType),
+    targetLabel: targetTypeLabel(detail.targetType),
+    taskStatusLabel: taskReviewStatusLabel(detail.reviewStatus),
+    eventAt: detail.eventTime,
+    changedFileCount
+  } : null;
+  const immersivePresentation = useMemo(() => buildReviewImmersivePresentation({
+    loaded: detailLoaded,
+    journey: activeJourney,
+    taskSummary: taskSafeSummary,
+    changedFilesSummary: { changedFileCount },
+    now: presentationNow,
+    safeFallback: Boolean(error)
+  }), [
+    detailLoaded,
+    activeJourney,
+    taskSafeSummary?.id,
+    taskSafeSummary?.title,
+    taskSafeSummary?.triggerLabel,
+    taskSafeSummary?.targetLabel,
+    taskSafeSummary?.taskStatusLabel,
+    taskSafeSummary?.eventAt,
+    changedFileCount,
+    presentationNow,
+    error
+  ]);
+
+  useEffect(() => {
+    const taskChanged = reviewSelectionTaskRef.current !== taskId;
+    reviewSelectionTaskRef.current = taskId;
+    setActiveReviewKey(current => resolveReviewSelectionKey(journeys, {
+      requestedReviewKey: selectedReviewKey,
+      currentSelectionKey: taskChanged ? null : current,
+      preferRequested: Boolean(urlSelectionKey)
+    }));
+  }, [taskId, selectedReviewKey, urlSelectionKey]);
+
+  useEffect(() => {
+    setActiveReviewKey(current => resolveReviewSelectionKey(journeys, {
+      currentSelectionKey: current,
+      preferRequested: false
+    }));
+  }, [selectionKeys]);
+
+  useEffect(() => {
+    reportMode(immersivePresentation.mode);
+    return () => reportMode('RESULT');
+  }, [immersivePresentation.mode, reportMode]);
+
+  useEffect(() => {
+    if (immersivePresentation.mode !== 'IMMERSIVE' || !immersivePresentation.startedAt) {
+      return undefined;
+    }
+    setPresentationNow(Date.now());
+    const timer = window.setInterval(() => setPresentationNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [
+    immersivePresentation.mode,
+    immersivePresentation.selectedReviewKey,
+    immersivePresentation.startedAt
+  ]);
+
+  const selectActiveReview = useCallback(nextSelectionKey => {
+    const nextJourney = journeys.find(item => item.selectorKey === nextSelectionKey);
+    if (!nextJourney) return;
+    setActiveReviewKey(nextSelectionKey);
+    const search = new URLSearchParams(location.search);
+    if (nextJourney.reviewKey) {
+      search.set('reviewKey', nextJourney.reviewKey);
+    } else {
+      search.delete('reviewKey');
+    }
+    const query = search.toString();
+    navigate({
+      pathname: location.pathname,
+      search: query ? `?${query}` : '',
+      hash: location.hash
+    }, {
+      replace: true,
+      state: location.state
+    });
+  }, [journeys, location.pathname, location.search, location.hash, location.state, navigate]);
 
   const load = async ({ silent = false } = {}) => {
     if (!silent) {
@@ -5620,23 +5991,32 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       } catch {
         setDeterministicChecks(null);
       }
+      setError(null);
     } catch (err) {
       setError(err.message);
     } finally {
       if (!silent) {
         setLoading(false);
+        setDetailLoaded(true);
       }
     }
   };
 
   useEffect(() => {
+    setDetailLoaded(false);
     load();
   }, [taskId]);
 
   useEffect(() => {
     const hasRunningFixPreview = fixPreviews.some(item => ['QUEUED', 'RUNNING'].includes(item?.status));
-    const hasRunningReview = codeQualityResults.some(item => item?.status === 'RUNNING');
-    if (!hasRunningReview && codeQualityResult?.status !== 'RUNNING' && !hasRunningFixPreview) return undefined;
+    const hasRunningReview = codeQualityResults.some(
+      item => ['PENDING', 'QUEUED', 'RUNNING'].includes(item?.status)
+    );
+    if (
+      !hasRunningReview
+      && !['PENDING', 'QUEUED', 'RUNNING'].includes(codeQualityResult?.status)
+      && !hasRunningFixPreview
+    ) return undefined;
     const timer = window.setInterval(() => load({ silent: true }), 5000);
     return () => window.clearInterval(timer);
   }, [taskId, codeQualityResult?.status, codeQualityResults, fixPreviews]);
@@ -5784,12 +6164,14 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     <CodeQualityReviewsPanel
       taskId={taskId}
       reviews={codeQualityResults}
+      journeys={journeys}
       progress={codeQualityProgress}
       changedFilesSummary={detail?.changedFilesSummary}
       diffContextCapabilities={detail?.diffContextCapabilities}
       fixPreviews={fixPreviews}
       triggerType={detail?.triggerType}
-      selectedReviewKey={selectedReviewKey}
+      activeReviewKey={displayedActiveReviewKey}
+      onActiveReviewKeyChange={selectActiveReview}
       onRefresh={() => load({ silent: true })}
       onRetry={retryCodeQualityReview}
       retrying={retrying}
@@ -5800,6 +6182,27 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       onRunDeterministicCheck={runDeterministicCheck}
     />
   );
+
+  if (
+    immersivePresentation.mode === 'IMMERSIVE'
+    && detail
+    && activeJourney
+  ) {
+    return (
+      <ReviewImmersiveWorkspace
+        presentation={immersivePresentation}
+        journey={activeJourney}
+        review={activeReview}
+        journeys={journeys}
+        activeReviewKey={displayedActiveReviewKey}
+        onSelectReview={selectActiveReview}
+        onBack={onBack}
+        onCancelReview={cancelCodeQualityJob}
+        taskCheckRunning={runningDeterministicCheck}
+        onRunTaskCheck={runDeterministicCheck}
+      />
+    );
+  }
 
   const canRerunTask = Boolean(detail && ['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(detail.triggerType));
   const taskHeaderTitle = detail ? taskTitle(detail) : `任务 #${taskId}`;
@@ -11386,6 +11789,7 @@ function AppFrame() {
   const navigate = useNavigate();
   const route = currentRoute(location);
   const isTaskRoute = location.pathname === HOME_ROUTE || location.pathname.startsWith(TASK_LIST_ROUTE);
+  const isTaskDetailRoute = /^\/tasks\/[^/]+\/?$/.test(location.pathname);
   const isRuleGapRoute = location.pathname.startsWith(RULE_GAPS_ROUTE);
   const isFeedbackRoute = location.pathname.startsWith(FEEDBACK_ROUTE);
   const isReviewQualityRoute = location.pathname.startsWith(REVIEW_QUALITY_ROUTE);
@@ -11407,6 +11811,18 @@ function AppFrame() {
   const [jobQueueOpen, setJobQueueOpen] = useState(false);
   const [failureNotifications, setFailureNotifications] = useState({ failureCount: 0, items: [] });
   const [failureNotificationsOpen, setFailureNotificationsOpen] = useState(false);
+  const [reviewWorkspaceMode, setReviewWorkspaceMode] = useState('RESULT');
+  const reportReviewWorkspaceMode = useCallback(mode => {
+    setReviewWorkspaceMode(normalizeReviewWorkspaceMode(mode));
+  }, []);
+  const reviewWorkspaceFrame = resolveReviewWorkspaceFrame(
+    reviewWorkspaceMode,
+    isTaskDetailRoute
+  );
+  const reviewWorkspaceContextValue = useMemo(() => ({
+    mode: reviewWorkspaceFrame.mode,
+    reportMode: reportReviewWorkspaceMode
+  }), [reviewWorkspaceFrame.mode, reportReviewWorkspaceMode]);
   const governanceSelectedKey = isReviewQualityRoute
     ? REVIEW_QUALITY_ROUTE
     : isEvaluationCasesRoute
@@ -11505,6 +11921,12 @@ function AppFrame() {
   }, []);
 
   useEffect(() => {
+    if (!isTaskDetailRoute) {
+      setReviewWorkspaceMode('RESULT');
+    }
+  }, [isTaskDetailRoute, location.pathname]);
+
+  useEffect(() => {
     const refreshIfVisible = () => {
       if (document.visibilityState === 'visible') {
         loadJobQueue();
@@ -11527,8 +11949,10 @@ function AppFrame() {
   }, []);
 
   return (
-    <Layout className="app-layout">
-      <Header className="app-header">
+    <ReviewWorkspaceModeContext.Provider value={reviewWorkspaceContextValue}>
+      <Layout className={`app-layout${reviewWorkspaceFrame.immersive ? ' app-layout-review-immersive' : ''}`}>
+        {!reviewWorkspaceFrame.immersive && (
+          <Header className="app-header">
         <button className="brand" type="button" onClick={() => navigate(TASK_LIST_ROUTE)}>
           AI代码质量审查平台
         </button>
@@ -11602,8 +12026,9 @@ function AppFrame() {
             </Badge>
           </Tooltip>
         </div>
-      </Header>
-      <Content>
+          </Header>
+        )}
+        <Content className={reviewWorkspaceFrame.immersive ? 'app-content-review-immersive' : undefined}>
         <Routes>
           <Route path={HOME_ROUTE} element={<HomePage />} />
           <Route path={TASK_LIST_ROUTE} element={<TaskListPage />} />
@@ -11624,21 +12049,22 @@ function AppFrame() {
           <Route path={HELP_ROUTE} element={<HelpPage />} />
           <Route path="*" element={<Navigate to={HOME_ROUTE} replace />} />
         </Routes>
-      </Content>
-      <JobQueueModal
+        </Content>
+        <JobQueueModal
         open={jobQueueOpen}
         queue={jobQueue}
         onClose={() => setJobQueueOpen(false)}
         onOpenTask={openTaskFromQueue}
         onCancelJob={cancelJobFromQueue}
       />
-      <FailureNotificationsModal
+        <FailureNotificationsModal
         open={failureNotificationsOpen}
         notifications={failureNotifications}
         onClose={() => setFailureNotificationsOpen(false)}
         onOpenTask={openTaskFromQueue}
-      />
-    </Layout>
+        />
+      </Layout>
+    </ReviewWorkspaceModeContext.Provider>
   );
 }
 

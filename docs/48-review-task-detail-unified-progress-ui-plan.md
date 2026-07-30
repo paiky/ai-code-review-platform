@@ -10,7 +10,8 @@
   - `docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`：确定性 Preflight、Context Pack 和 Planner / Retriever。
   - `docs/46-agent-review-runtime-observability-plan.md`：Agent 心跳、预算和安全执行轨迹。
   - `docs/47-agent-review-multi-worker-pool-and-queue-governance-plan.md`：多 Worker、租约接管和队列治理。
-  - `docs/49-review-progress-animation-style-extension-plan.md`：第一版大脑动画稳定后的能量球和本地 Lottie 风格扩展。
+  - `docs/49-review-progress-animation-style-extension-plan.md`：已暂停的局部 Hero 动画风格扩展计划。
+  - `docs/50-review-running-immersive-workspace-plan.md`：queued / running Review 的路由级沉浸工作台后续专项。
 - 本文目标：把任务详情中的 Agent Review、普通 Review、高准确模式、确定性检查和执行过程收敛为一套
   可一眼识别 Review 类型、可跟踪当前阶段、可回看阶段详情的统一体验。
 - 本文只定义前端 UI、内部派生模型、兼容规则和分阶段实施方式；不在计划阶段直接修改前端代码。
@@ -930,6 +931,18 @@ ReviewJourneyStage(preflight)
   ReviewJourney、Finding、Diff、Patch、补证据、反馈、评估、重试和中断行为。
 - 验证结果：`node --test frontend/tests/*.test.mjs` 共 42 项通过；`scripts\run-frontend.cmd build`
   通过，仍仅有既有单 chunk 超过 500 kB 的非阻塞提示。
+
+#### 后续沉浸工作台专项边界（2026-07-30）
+
+- 本文已经落地的 ReviewJourney 六阶段、七种阶段状态、Review 身份、`reviewKey` 隔离、URL 直达、
+  轮询选择保持、阶段 Drawer、告警 Popover、焦点恢复和结果优先终态布局，继续作为后续 UI 的数据与
+  交互基线，不在新专项中重复实现或推翻。
+- 用户后续确认将 queued / running 的局部 Hero + 完整时间轴布局升级为路由级沉浸工作台，具体范围、
+  分阶段实施和停止点转由 `docs/50-review-running-immersive-workspace-plan.md` 管理。
+- 本文第 11 节“不做占据整屏的大型营销式插画”的约束继续适用于 terminal 结果页和普通后台页面；
+  queued / running 的受控沉浸布局由 `docs/50` 作为显式后续决策覆盖。
+- `docs/49` 的 ENERGY、Lottie、动画切换和浏览器偏好已经暂停，不属于沉浸工作台的隐含交付项；
+  不得因实施 `docs/50` 自动恢复。
 
 ## 15. 验收矩阵
 

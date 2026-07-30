@@ -102,6 +102,42 @@ backend-python\.venv\Scripts\python.exe
 - 启动本地服务前先检查目标端口是否已被监听，避免误停用户已有进程；烟测结束只停止本次启动的进程。
 - Codex 沙箱映射路径可能导致 Vite / Rolldown 误判 HTML 输出路径，报错中出现真实工作区和 `.codex/.sandbox/cwd/...` 混用时，先在用户批准后用真实工作区路径重跑同一 build。只有沙箱外仍失败，才排查前端源码或 Vite 配置。
 
+### 长驻 dev / mock 服务被误当作一次性命令
+
+症状：
+
+- 运行 Vite dev server、HTTP mock server、uvicorn、watcher 或 Worker 启动命令后，工具长期显示 Running，
+  Agent 一直等待命令完成，无法进入端口检查或浏览器验收。
+- 日志可能已经出现 ready，页面也可能可以访问，但启动工具仍不返回。
+
+原因：
+
+- 一次性命令以“进程退出并返回 exit code”为完成条件；dev server 和 mock server 依靠事件循环持续监听端口，
+  正常运行时本来就不会退出。
+- 直接调用 `scripts/run-frontend.cmd` 的 dev 模式或 `node mock-server.mjs` 会把服务作为前台子进程附着在
+  当前 shell。仅做日志重定向并不会自动分离进程，shell / Codex 工具仍会等待子进程退出。
+- 如果看到工具仍为 Running 就再次执行启动命令，可能产生端口冲突或多个服务实例；如果直接按进程名结束，
+  又可能误伤用户原有服务。
+
+正确处理：
+
+1. 启动前先检查目标端口和 HTTP endpoint；已经 ready 时直接复用。
+2. 未 ready 时用后台 / 分离方式启动，记录 PID，并把 stdout / stderr 写入工作区临时日志。
+3. 使用有界循环分别核对进程、端口和 HTTP 响应；三者形成 ready 证据后立即进入下一步，不等待服务退出。
+4. 若误以前台方式启动，先终止当前工具的等待，再重新检查端口与 HTTP。服务已经 ready 时不要重启；
+   没有 ready 才按后台方式重启。
+5. 浏览器验收前优先确认前端和依赖的 mock / Backend 都已 ready。验收结束只停止本次记录的 PID，或明确
+   保留服务供用户继续人工检查。
+
+这类命令的状态模型应固定理解为：
+
+```text
+一次性命令：STARTING -> EXITED(success/failure)
+长驻服务：STARTING -> READY -> SERVING -> STOPPED
+```
+
+长驻服务进入 `READY / SERVING` 就可以继续 Agent 流程；`STOPPED` 不是启动步骤需要等待的成功状态。
+
 ## 搜索与 CodeGraph
 
 - 已知接口路径、字段名、错误文案、日志内容或前端请求路径时，优先使用 `rg`。
