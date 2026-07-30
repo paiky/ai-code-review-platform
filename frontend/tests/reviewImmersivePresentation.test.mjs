@@ -102,6 +102,7 @@ test('maps Agent and Standard queued running success failed cancelled and skippe
       presentation(running).engineVisual,
       engine === 'AGENT' ? 'AGENT_PARTICLE' : 'STANDARD_FLOW'
     );
+    assert.equal(presentation(running).engineIdentity, engine);
 
     for (const status of ['SUCCESS', 'FAILED', 'CANCELLED', 'SKIPPED']) {
       const key = `${engine.toLowerCase()}-${status.toLowerCase()}`;
@@ -130,6 +131,7 @@ test('uses Standard visual and fixed transfer copy while Agent fallback is runni
 
   assert.equal(model.mode, 'IMMERSIVE');
   assert.equal(model.engineVisual, 'STANDARD_FLOW');
+  assert.equal(model.engineIdentity, 'FALLBACK');
   assert.match(model.fallbackTransfer.title, /Agent.*Standard/);
   assert.doesNotMatch(JSON.stringify(model), /SECRET_EXCEPTION/);
 });

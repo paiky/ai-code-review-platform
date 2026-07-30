@@ -3058,14 +3058,36 @@ body {
 
 .review-immersive-visual {
   display: grid;
+  width: min(100%, 560px);
   min-height: 260px;
   place-items: center;
 }
 
-.review-immersive-visual .review-animation {
+.review-immersive-visual .review-animation,
+.review-immersive-canvas-shell,
+.review-immersive-canvas-fallback {
   width: clamp(260px, 30vw, 450px);
   height: clamp(220px, 31vh, 340px);
   color: var(--immersive-accent);
+}
+
+.review-immersive-canvas-shell,
+.review-immersive-canvas-fallback {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.review-immersive-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.review-immersive-canvas-fallback .review-animation {
+  width: 100%;
+  height: 100%;
 }
 
 .review-immersive-stage-standard_flow .review-animation {
@@ -3377,7 +3399,9 @@ body {
     padding: 18px;
   }
 
-  .review-immersive-visual .review-animation {
+  .review-immersive-visual .review-animation,
+  .review-immersive-canvas-shell,
+  .review-immersive-canvas-fallback {
     width: clamp(220px, 27vw, 330px);
     height: clamp(190px, 27vh, 280px);
   }
@@ -3477,7 +3501,9 @@ body {
     min-height: 190px;
   }
 
-  .review-immersive-visual .review-animation {
+  .review-immersive-visual .review-animation,
+  .review-immersive-canvas-shell,
+  .review-immersive-canvas-fallback {
     width: min(76vw, 300px);
     height: min(54vw, 220px);
   }

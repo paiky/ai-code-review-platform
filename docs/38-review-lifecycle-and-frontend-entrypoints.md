@@ -121,7 +121,8 @@ Review 前配置
 - Agent、Standard、Agent -> Standard fallback 和历史 Review 结果。
 - 按 `reviewKey` 隔离的多模型 Review 子结果和 URL 直达。
 - 当前选中 Review 为 queued / running 时的路由级沉浸工作台：极简顶栏、纵向六阶段、中央 BRAIN /
-  Provider 舞台、右侧安全摘要、真实时间底栏和任务信息 Drawer。
+  Provider 失败回退、原生 Canvas Agent 粒子核心 / Standard 数据流、右侧安全摘要、真实时间底栏和
+  任务信息 Drawer。
 - terminal 的结果摘要、紧凑可点击时间轴、Finding、Diff 和 Patch。
 - “上下文准备”Drawer 中的 Context Pack、本地仓库、Planner / Retriever、Requested Context、
   预算裁剪、Finding 补证据汇总和规则缺口诊断入口。
@@ -140,6 +141,9 @@ Review 前配置
 - `多模型选择`：只有多个 Review 结果时显示选择器；单 Review 不再显示重复的身份横条。
 - `沉浸顶栏`：保留返回、任务安全标识、Review 身份、Provider / model、状态、多 Review 选择、
   当前 Review 中断和任务信息 Drawer；普通品牌导航与全局操作区仅在当前运行态任务详情路由隐藏。
+- `中央 Canvas 舞台`：Agent 使用固定种子的原生 Canvas 2D 粒子核心，Standard 与 fallback 使用克制
+  Provider 数据流；阶段变化和轮询只更新渲染参数。Canvas 不可用时回退静态 BRAIN / Provider，
+  reduced-motion 使用静态构图，两者都不改变 Review 主状态或轮询。
 - `Push 审核`：仅 Push 任务在 Review 内容下方提供独立折叠区，不占用默认首屏。
 - `上下文准备`：点击时间轴阶段，在 Drawer 查看 Context Planner、Local Retriever、Context Pack、
   Requested Context、预算裁剪和补证据安全摘要；没有可靠事件时不显示空阶段入口。
@@ -164,6 +168,23 @@ Review 前配置
 - 旧任务缺少可靠事件时显示“历史任务未记录”，不补造阶段、百分比、时间或耗时。
 - “提醒卡片 / 分析结果 / 原始事件摘要”不再作为任务详情可见 Tab；底层数据和 Backend 接口未删除。
 - 任务重新触发用于调试和对比，不代表 GitLab 上真实 MR 被重新提交。
+
+本地 docs/50 安全验收入口：
+
+```text
+scripts\run-docs50-acceptance.cmd
+```
+
+- 默认尝试 frontend `5173` 与安全 mock `8080`，也可显式指定独立 `FrontendPort / MockPort`，避免干扰
+  用户已运行的真实 Backend 或 Vite。
+- ready 必须同时满足端口 owner、frontend 根页面、mock 直连 `docs50-safe-mock` health 和 frontend
+  代理后的同一 health；只看到端口监听不算 ready。
+- 启动器只为安全合成响应服务，不连接真实 Review 数据，不触发 Review。Windows detached process 的
+  command-exit 复验当前仍暂停，不得把工具 Running 当成服务未 ready 而重复启动。
+- launcher 暂不可用时，可由用户或独立 service owner 人工启动 frontend 与 docs/50 mock；Agent 只复用
+  已有服务并检查 frontend 页面、API proxy 和安全合成任务标识，不接管或停止用户进程。2026-07-30 的
+  阶段二浏览器验收即使用人工准备的 `5173 -> 8080` 环境完成，service ready 与 command lifecycle
+  分别记录。
 
 ## 四、评估样本：把人工判断沉淀为质量样本
 

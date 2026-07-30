@@ -98,7 +98,9 @@ backend-python\.venv\Scripts\python.exe
 ## Codex 沙箱
 
 - 普通沙箱内 `git push` 可能因为 Git Credential Manager 需要启动 Git Bash / 凭据提示而失败。若用户授权，可在沙箱外重跑 `git push`；仍失败时，只完成 commit，并把 push 命令和 commit hash 告知用户。
-- `Start-Process` 在 Codex / PowerShell 环境里可能因 `Path` / `PATH` 环境键冲突失败。临时启动服务可改用 `.NET System.Diagnostics.ProcessStartInfo`，并设置 `UseShellExecute = $false`、`CreateNoWindow = $true`。
+- `Start-Process` 在 Codex / PowerShell 环境里可能因 `Path` / `PATH` 环境键冲突失败。
+  `.NET System.Diagnostics.ProcessStartInfo` 配合 `UseShellExecute = $false`、`CreateNoWindow = $true`
+  可以绕过部分启动或窗口问题，但不能据此认定长驻服务已经脱离 Codex 的进程树、Job Object 或继承句柄。
 - 启动本地服务前先检查目标端口是否已被监听，避免误停用户已有进程；烟测结束只停止本次启动的进程。
 - Codex 沙箱映射路径可能导致 Vite / Rolldown 误判 HTML 输出路径，报错中出现真实工作区和 `.codex/.sandbox/cwd/...` 混用时，先在用户批准后用真实工作区路径重跑同一 build。只有沙箱外仍失败，才排查前端源码或 Vite 配置。
 
@@ -137,6 +139,66 @@ backend-python\.venv\Scripts\python.exe
 ```
 
 长驻服务进入 `READY / SERVING` 就可以继续 Agent 流程；`STOPPED` 不是启动步骤需要等待的成功状态。
+
+### docs/50 acceptance launcher ready 后仍显示 Running
+
+问题记录：
+
+- docs/50 阶段二验收需要自动启动 Vite 和本地安全 mock。实际运行中，frontend 与 mock 已取得 PID，
+  目标端口已经监听，mock 直连 health 与 Vite 代理 health 均返回 `docs50-safe-mock`，但调用
+  `run-docs50-acceptance.cmd` 的 Codex tool 仍长时间显示 Running。
+- 直接前台运行 Vite 或 mock 不退出属于长驻服务的正常行为。异常点不在服务没有 ready，而在启动器的
+  command lifecycle 没有与 service lifecycle 可靠分离。
+- 本次先后尝试过 `Start-Process`、`.NET ProcessStartInfo`、隐藏窗口、stdout / stderr 文件重定向，
+  以及 Node `child_process.spawn()` 的 `detached + unref`。最小 Node helper 可以快速返回，但完整
+  launcher 在 Codex 执行链中仍可能不返回。
+
+根因边界：
+
+- `unref()` 只把子进程从 Node 父进程的事件循环引用计数中移除；`windowsHide` 和 `CreateNoWindow`
+  只控制窗口；日志重定向只解决标准流管道。这些机制都不保证进程逃离外部宿主的 Job Object 或后代进程跟踪。
+- Windows 中，进程处于 Job Object 时，其通过普通 `CreateProcess` 创建的后代默认仍进入同一 Job。
+  即使中间的 `cmd`、PowerShell 或 Node helper 已经退出，Codex 执行器仍可能因为后代进程或继承句柄而
+  继续把整次 tool 调用视为 Running。
+- 当前证据不能确认 Codex 内部具体使用的是 Job Object、句柄 EOF 等待还是额外的后代进程跟踪，因此
+  “Job Object”属于符合 Windows 行为的高可信解释，而不是已经通过宿主源码或句柄审计证明的唯一原因。
+- 原有最小测试在 helper 返回后、测试进程退出前主动终止了子进程。它只证明 helper 可以返回，没有证明
+  “最外层 Codex command 已退出，同时长驻服务继续存活”，因此不能作为完整 launcher 验收。
+- 多加一层 `cmd -> PowerShell -> Node -> PowerShell -> npm`、重复调用 `Start-Process` 或继续调整
+  `unref`，都不能消除外部宿主仍持有整棵进程树的可能性。
+
+固定状态模型：
+
+```text
+service lifecycle: STARTING -> READY -> SERVING -> STOPPED
+command lifecycle: STARTED -> RETURNED(success/failure)
+```
+
+- `READY` 不代表 command 已返回；command 返回也不代表服务 ready。
+- 自动启动器需要两个独立断言：最外层命令在有界时间内返回 exit code 0；命令返回后服务仍通过
+  PID / port owner / HTTP identity 检查。
+
+推荐解决架构：
+
+1. 启动器只做有限生命周期的 `start / status / stop` 请求、状态记录和有界 ready 检查，不直接持有
+   Vite 或 mock 的长期生命周期。
+2. 长驻服务由独立于当前 Codex 命令进程树的 owner 持有。Windows 可选择用户终端、预先运行的 supervisor、
+   `Win32_Process.Create` / Task Scheduler，或已经存在的 Docker 等外部守护进程。
+3. stdout / stderr 写入工作区 `.local/` 日志，stdin 与 Codex tool 断开；状态文件记录 owner、launcher PID、
+   实际端口 owner、端口、health identity 和日志路径。
+4. 状态文件只是所有权记录，不是 ready 事实来源。每次复用和停止前仍须重新检查 PID、端口 owner 与 HTTP。
+5. 对真实自动启动链做集成验证：最外层 command 返回后至少继续观察一段有界时间，确认服务仍存活且 health
+   正常；随后只按状态文件精确清理由本次启动的 PID。
+
+推荐规避方案：
+
+- 若当前 Codex 环境无法可靠建立外部 owner，不再继续叠加 detached wrapper。由用户或独立 runner 启动
+  Vite 与安全 mock，Agent 仅核对端口、页面、直连 health 和代理 health，ready 后继续浏览器验收。
+- 工具仍显示 Running 时，不以此判断服务失败，也不重复启动；先终止当前等待包装命令，再检查实际服务状态。
+- 端口已被占用时，只有页面和专用 health identity 都符合预期才允许复用。未知服务或真实 Backend 不得用于
+  安全合成验收，也不得由 Agent 擅自停止。
+- 浏览器验收与环境生命周期分开管理：环境任务负责 `START -> READY -> SERVING -> STOP`，验收任务只负责
+  `CHECK_READY -> ACCEPTANCE -> REPORT`。
 
 ## 搜索与 CodeGraph
 

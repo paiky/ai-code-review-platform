@@ -84,12 +84,24 @@ AI代码质量审查平台
 - 执行命令前先判断其完成条件。`build`、`test`、`lint`、`migrate` 等是一次性命令，应等待进程退出并检查
   exit code；Vite dev server、FastAPI / uvicorn、watcher、Worker、mock server、文件监听器等依靠事件循环
   持续提供服务，属于长期运行进程，其成功条件是“服务 ready”，不是“进程退出”。
+- 长驻服务必须同时区分两套互不替代的状态：
+
+  1. service lifecycle：`STARTING -> READY -> SERVING -> STOPPED`；
+  2. command lifecycle：`STARTED -> RETURNED(success/failure)`。
+
+  服务已经 `READY` 不代表启动命令已经返回；启动命令已经返回也不代表服务已经 `READY`。自动启动器必须分别
+  验证两套状态，不能用其中一项代替另一项。
 - 启动长期运行进程前，先检查目标端口和已知 health / 页面 URL。若端口已监听且 HTTP 检查通过，直接复用
   现有服务，不重复启动，也不得误停用户已有进程。
 - 仅在服务未 ready 时启动。必须使用真正的后台 / 分离方式，让启动命令本身尽快返回；stdout / stderr 写入
-  `.local/` 等工作区临时日志，并记录本次启动的 PID。Windows 优先使用隐藏窗口的后台进程；若
-  `Start-Process` 受 Codex 环境变量冲突影响，按 `docs/11-agent-environment-pitfalls.md` 中的
-  `System.Diagnostics.ProcessStartInfo` 方案处理。
+  `.local/` 等工作区临时日志，并记录本次启动的 PID。Windows 下的 `Start-Process`、
+  `System.Diagnostics.ProcessStartInfo`、`CreateNoWindow`、`windowsHide`、Node `detached / unref`
+  和文件重定向都只是启动机制，不能单独证明服务已经脱离 Codex 的进程树、Job Object 或继承句柄。
+- Windows / Codex 下需要自动启动且普通后台方式无法让 command lifecycle 有界返回时，必须把 service
+  lifecycle 交给独立于当前 Codex 命令进程树的 owner，例如用户终端、预先运行的 supervisor、
+  `Win32_Process.Create` / Task Scheduler 或已有容器守护进程。Codex 只执行有限生命周期的
+  start/status/stop 请求和 ready 检查。无法建立该边界时，停止继续叠加 `cmd -> PowerShell -> Node`
+  包装，改为请用户或独立 runner 启动环境，Agent 只做 health check 和后续验收。
 - 长驻服务启动后使用有界 ready 检查，不等待服务进程退出。ready 至少同时核对：
 
   1. 启动进程仍存活或目标端口已有明确 owner；
@@ -99,11 +111,15 @@ AI代码质量审查平台
   PID 存活、日志出现启动文案或端口监听中的任一单项都不能单独证明业务已 ready。
 - ready 检查必须设置明确超时并短间隔轮询；超时后读取日志、核对 PID / 端口 owner 并报告启动失败，不得用
   一个无限等待的 shell 调用占住 Agent。不得等待 dev server、watcher、Worker 或 mock server 自行退出。
+- 自动启动器还必须设置 command return 超时，并通过集成验证证明：最外层启动命令已返回 exit code 0 后，
+  服务仍保持 ready。只证明 detached helper 返回、随后在同一测试进程内终止子进程，不足以证明真实 Codex
+  启动链路已经分离。
 - 如果误以前台方式启动并导致工具持续显示 Running，应终止的是当前等待包装命令，并立即重新检查 PID、端口
   和 HTTP 状态：服务若已 ready 则直接继续；未 ready 再按后台方式重启。不要因为工具调用仍在等待就重复
   启动第二个实例，也不要按进程名批量结束可能属于用户的服务。
-- 浏览器验收前必须先完成端口与 HTTP ready 检查；验收过程中以浏览器可访问状态为准，不把启动命令是否退出
-  当作前置条件。前端与 mock API 需要同时运行时，应分别记录 PID、端口、日志和 ready 结果。
+- 浏览器验收前必须先完成端口与 HTTP ready 检查；验收过程中以浏览器可访问状态为准。启动命令是否按期返回
+  属于独立的 launcher 验收项，不能替代 service ready，也不能因工具仍显示 Running 而重复启动。前端与
+  mock API 需要同时运行时，应分别记录 owner、PID、端口、日志和 ready 结果。
 - 验收结束后只处理本次 Agent 明确启动的 PID。需要保留服务供用户继续人工验收时应明确说明；需要停止时，
   先核对 PID 仍拥有目标端口，再停止该 PID，不使用按名称批量 kill。
 

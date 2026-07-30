@@ -1,5 +1,9 @@
 param(
     [string] $Script = "dev",
+    [string] $ApiProxyTarget = "",
+    [string] $HostAddress = "",
+    [Nullable[int]] $Port = $null,
+    [switch] $StrictPort,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]] $NpmArgs
 )
@@ -67,7 +71,10 @@ Import-DotEnvIfPresent $localGitLabEnv
 
 Push-Location $frontendDir
 try {
-    if ([string]::IsNullOrWhiteSpace($env:VITE_API_PROXY_TARGET)) {
+    if (-not [string]::IsNullOrWhiteSpace($ApiProxyTarget)) {
+        $env:VITE_API_PROXY_TARGET = $ApiProxyTarget
+    }
+    elseif ([string]::IsNullOrWhiteSpace($env:VITE_API_PROXY_TARGET)) {
         $env:VITE_API_PROXY_TARGET = "http://localhost:8090"
     }
     Write-Host "Using API proxy target: $env:VITE_API_PROXY_TARGET"
@@ -80,8 +87,19 @@ try {
         }
     }
 
+    $effectiveNpmArgs = @($NpmArgs)
+    if (-not [string]::IsNullOrWhiteSpace($HostAddress)) {
+        $effectiveNpmArgs += @("--host", $HostAddress)
+    }
+    if ($null -ne $Port) {
+        $effectiveNpmArgs += @("--port", [string] $Port)
+    }
+    if ($StrictPort) {
+        $effectiveNpmArgs += "--strictPort"
+    }
+
     Write-Host "Running npm script: $Script"
-    & npm.cmd run $Script -- @NpmArgs
+    & npm.cmd run $Script -- @effectiveNpmArgs
     exit $LASTEXITCODE
 }
 finally {

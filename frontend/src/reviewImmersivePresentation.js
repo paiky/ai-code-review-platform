@@ -104,6 +104,11 @@ export function buildReviewImmersivePresentation(input = {}) {
       engineVisual: journey.engineKind === 'STANDARD' || journey.engineKind === 'FALLBACK'
         ? 'STANDARD_FLOW'
         : 'AGENT_PARTICLE',
+      engineIdentity: journey.engineKind === 'FALLBACK'
+        ? 'FALLBACK'
+        : journey.engineKind === 'STANDARD'
+          ? 'STANDARD'
+          : 'AGENT',
       identityLabel: safeText(journey.engineLabel, '历史任务未记录'),
       providerModelLabel: safeText(journey.providerModelLabel, 'Provider/model 未记录'),
       status,
@@ -251,6 +256,7 @@ function emptyPresentation(mode) {
     mode: normalizeReviewWorkspaceMode(mode),
     selectedReviewKey: null,
     engineVisual: 'STANDARD_FLOW',
+    engineIdentity: 'STANDARD',
     identityLabel: '历史任务未记录',
     providerModelLabel: 'Provider/model 未记录',
     status: 'UNKNOWN',

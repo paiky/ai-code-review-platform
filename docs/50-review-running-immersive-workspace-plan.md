@@ -2,8 +2,10 @@
 
 ## 1. 状态与结论
 
-- 文档状态：方案已由用户确认；阶段一“沉浸布局与状态切换”已实施并完成本地验证，等待用户验收；
-  阶段二未开始。
+- 文档状态：方案已由用户确认；阶段一“沉浸布局与状态切换”已实施、提交并通过用户人工验收；
+  阶段二“原生 Canvas 粒子核心”已完成代码、自动化测试、构建和 1440 / 1024 / 390px 安全合成浏览器
+  验收。Windows detached launcher 的 command-exit 复验继续按用户要求暂停，不影响本次人工准备环境下的
+  浏览器结论。
 - 前置基线：
   - `docs/38-review-lifecycle-and-frontend-entrypoints.md`：当前实际任务详情入口与 Review 生命周期。
   - `docs/48-review-task-detail-unified-progress-ui-plan.md`：ReviewJourney、六阶段、身份、时间轴、
@@ -576,6 +578,66 @@ AppFrame
 - 完成 reduced-motion 静态构图和 Canvas 不可用 / 绘制失败的静态 BRAIN / Provider 回退。
 - 不安装新动画依赖，不添加远程资源、风格菜单或偏好。
 
+#### 16.2.1 Canvas 生命周期契约
+
+- 中央舞台只挂载一个 Canvas 展示组件；实例稳定边界为当前
+  `selectedReviewKey + engineVisual`。同一 Review 的阶段变化、5 秒轮询和 Presentation 文案更新只调用
+  `setRenderParameters`，不得替换 Canvas DOM、重复创建 `ResizeObserver`、重复注册
+  `visibilitychange` 或启动第二个 `requestAnimationFrame`。
+- Canvas 控制器初始化时只获取一次 2D context、注册一个 `ResizeObserver` 和一个页面可见性监听器；
+  卸载时取消待执行 RAF、断开 Observer、移除监听器并清空引用。切换 RESULT、离开任务路由或切换到
+  其它 `reviewKey + engineVisual` 时均通过 React 卸载走同一清理路径。
+- `ResizeObserver` 是尺寸变化的唯一绘制缓冲区入口。容器宽或高小于等于零时取消 RAF、不调整为伪造
+  尺寸、不持续空绘；收到下一次合法尺寸后再同步 backing store 并按页面可见性恢复。
+- 页面隐藏时立即取消 RAF；恢复可见时先绘制当前参数帧，再在非 reduced-motion 且尺寸合法时恢复唯一
+  循环。reduced-motion 只在初始化、合法 resize 或渲染参数变化时绘制静态帧，不启动持续循环。
+- Canvas 组件只接收 `ReviewImmersivePresentation` 中的 `selectedReviewKey / engineVisual /
+  engineIdentity / heroState / currentStageId / ariaLabel`、reduced-motion、合法容器尺寸和 DPR；
+  不接收 Review、原始 progress detail、Provider 响应或业务回调。
+
+#### 16.2.2 性能预算
+
+- 固定种子为代码常量；粒子拓扑使用归一化坐标确定性生成，不按文件、Finding、工具调用或其它业务数量
+  改变。宽度 `<= 480px` 上限 48 个、`<= 1180px` 上限 80 个、更宽视口上限 120 个；
+  Standard 数据流最多消费同一上限中的 24 个装饰数据点。
+- DPR 最低按 1 处理、最高限制为 2；Canvas backing store 只在合法尺寸或 DPR 实际变化时调整。
+  1440、1024、390px 均以单 Canvas、单 RAF 为硬约束，目标平均绘制耗时不超过 8ms/帧，
+  长时间安全合成轮询不得出现 RAF、Observer、监听器或 Canvas 实例累积。
+- 绘制只使用 Canvas 2D 基础路径、渐变和固定颜色；CSS 负责舞台背景，不使用阴影滤镜堆叠、
+  像素读取、离屏大图、WebGL、图片、视频、字体或远程资源。标签页隐藏和零尺寸期间绘制次数必须为零。
+- 性能观测只记录本地测试中的帧数、绘制耗时、实例和监听器计数，不采集 Review 数据，不向 Backend
+  上报，也不改变页面状态。
+- Canvas shell 只通过只读 `data-review-canvas-*` 属性暴露当前控制器的帧数、平均 / 最大绘制耗时、
+  粒子数、DPR、RAF 运行态及 Observer / visibility listener 状态，供本地浏览器验收读取；属性不包含
+  Review、阶段 detail、源码或其它业务数据，不提供控制方法。
+
+#### 16.2.3 失败回退契约
+
+- `canvas.getContext('2d')` 不可用、初始化抛错、resize 同步失败或任一帧绘制抛错时，控制器只触发一次
+  本地失败信号并立即停止 RAF、断开 Observer、移除监听器；异常正文和能力信息不进入 DOM。
+- Agent 失败时恢复阶段一现有静态 `BRAIN`；Standard 与 fallback 失败时恢复阶段一现有静态 Provider
+  视觉。fallback 的固定“Agent 已转交 Standard Review”提示继续由 Presentation 展示。
+- 失败回退只替换中央视觉，不写 Review 状态、不暂停或重启任务轮询、不改变当前 `reviewKey`、页面模式、
+  Drawer、结果数据或操作能力。切换到新的稳定实例边界时允许重新尝试 Canvas，失败实例本身不自动重试。
+- reduced-motion 不是失败：Canvas 可用时显示静态 Canvas 构图；只有 Canvas 不可用或绘制失败才使用
+  阶段一静态 BRAIN / Provider。
+
+#### 16.2.4 本地安全验收启动契约
+
+- 阶段二浏览器验收使用仓库脚本统一启动 Vite 与可识别的 docs/50 安全 mock，不再由 Agent 直接以前台
+  命令等待长驻进程退出。启动器必须在创建进程后立即记录 launcher PID，并在 ready 后记录实际端口 owner
+  PID；stdout / stderr 写入 `.local/`。
+- 启动前分别检查 frontend 与 mock 端口。端口已监听时，只有 HTTP 页面、mock 专用 health 标识和
+  frontend 代理后的同一 health 标识全部匹配才允许复用；端口被真实 Backend、其它 Vite 或未知服务占用时
+  必须停止并提示改用其它验收端口，不得把“端口存在”误判为 docs/50 验收环境 ready。
+- mock 暴露固定的本地 health 响应，不读取 Backend、数据库或真实 Review。Vite 启动时通过显式
+  `ApiProxyTarget` 覆盖本机通用 `.local/gitlab.env`，该覆盖只作用于验收子进程，不修改用户环境文件。
+- ready 使用有界轮询同时核对：launcher / service 仍存活或端口已有明确 owner、端口处于 LISTENING、
+  frontend 根页面返回 200、mock 直连 health 返回固定标识、frontend 代理 health 返回相同固定标识。
+  任一条件超时即报告日志并只清理由本次启动器创建的 PID。
+- 默认端口仍为 frontend `5173`、mock `8080`；端口被用户已有服务占用且身份不匹配时可显式传入独立端口
+  完成安全验收。浏览器验收结束只允许停止状态文件记录且仍拥有对应端口的本次 service PID。
+
 ### 16.3 测试
 
 - 固定种子和状态映射纯函数；
@@ -593,6 +655,77 @@ AppFrame
 
 完成本文阶段二结果、实际测试、性能数据、浏览器检查和部署前置条件回填后停止。等待用户确认部署验证；
 不得自动恢复 `docs/49`、提交、推送、部署或执行真实 Agent Review。
+
+### 16.5 阶段二实施结果
+
+- 新增 `frontend/src/reviewCanvasRenderer.js`，以固定种子 `0x50c0de` 生成归一化确定性粒子拓扑；
+  Canvas 容器宽度 `<= 480px`、`<= 1180px` 和更宽时对应硬上限 48 / 80 / 120，Standard 数据流最多
+  消费 24 个装饰点，DPR 上限为 2。
+- 新增 `ReviewImmersiveCanvas`，中央舞台只渲染一个 Canvas。组件稳定边界为
+  `selectedReviewKey + engineVisual`；同一 Review 的 `heroState / currentStageId / reducedMotion`
+  变化只调用控制器参数更新，不替换 Canvas DOM。
+- Agent 使用原生 Canvas 2D 粒子核心、三层轨道和柔和光晕；Standard 使用输入、Provider、结果三节点的
+  克制数据流。Presentation 新增固定 `AGENT / STANDARD / FALLBACK` 安全身份，fallback 保持
+  Standard 数据流与阶段一固定转交提示，不显示 Agent 大脑。
+- 控制器只创建一个 2D context、一个 `ResizeObserver`、一个 `visibilitychange` 监听器和最多一个待执行
+  RAF。零尺寸取消循环并等待合法 resize；页面隐藏暂停、恢复可见后按当前参数继续；卸载统一取消 RAF、
+  断开 Observer 并移除监听器。
+- reduced-motion 使用静态 Canvas 构图，不启动持续 RAF。context 不可用、初始化失败、resize / 绘制抛错
+  时只触发一次局部失败信号并清理控制器；Agent 回退阶段一静态 BRAIN，Standard / fallback 回退阶段一
+  静态 Provider，不改变 Review 状态、轮询、当前 `reviewKey`、Drawer 或结果数据。
+- Canvas 不接收 Review、原始 progress detail、Prompt、查询、工具参数、源码、diff、路径、异常或模型原文；
+  只消费 Presentation 白名单状态、当前阶段、安全身份、reduced-motion、合法尺寸和 DPR。
+- 为安全浏览器验收新增 tracked `scripts/docs50-mock-server.mjs`、`run-docs50-acceptance.cmd/.ps1` 和显式
+  frontend `ApiProxyTarget / HostAddress / Port / StrictPort` 参数。启动器能识别 mock 专用 health、
+  区分真实 Backend / 未知端口占用、记录 launcher / service PID、端口和日志，并支持按状态文件精确停止。
+
+### 16.6 自动化验证与构建
+
+- `node --test frontend/tests/*.test.mjs`：最终 61 / 61 通过，0 失败；其中包含阶段一全部回归、
+  Canvas 专项测试和 4 项验收启动脚本契约 / 最小 detached helper 返回测试。
+- `scripts\run-frontend.cmd build`：通过；Vite 成功生成产物。保留既有单 JS chunk 超过 500kB 的非阻塞
+  提示，本阶段未增加 frontend 依赖。
+- Canvas 专项测试覆盖固定种子、粒子上限、六种运行态确定性映射、Agent / Standard / fallback、
+  ResizeObserver、零尺寸、DPR 上限、resize、初始化 / 绘制失败、标签页隐藏 / 恢复、reduced-motion、
+  单 Canvas、单 RAF、轮询参数更新不累积监听器和卸载清理。
+- Presentation / 阶段一回归测试继续覆盖当前 `reviewKey` 模式来源、多 Review 选择保持、URL 直达、
+  AppFrame 恢复、Drawer / Popover / 键盘契约，以及 Finding、Diff、Patch 等既有结果能力源码契约。
+- 启动环境契约测试覆盖显式代理覆盖顺序、mock 固定 health、PID / 端口 / HTTP ready、无
+  `WaitForExit` 和最小 detached helper 快速返回。15173 / 18080 曾实际达到 frontend、mock 直连 health
+  与 frontend 代理 health 全部 ready；Windows 下完整 `run-docs50-acceptance.cmd` 的 command-exit
+  复验仍按用户要求暂停，不作为已通过项。
+
+### 16.7 浏览器验收、性能数据与遗留风险
+
+- 浏览器通过人工准备的 frontend `127.0.0.1:5173` 和安全 mock `127.0.0.1:8080` 完成验收。先核对
+  frontend 页面和代理后的任务响应，确认任务 42 返回“安全合成项目”，未连接真实 Review 数据。
+- 1440px 验证 Agent running、Standard running、Agent -> Standard fallback、terminal 结果页和同一任务
+  多 `reviewKey` 切换：三种运行身份均只有一个 Canvas；Standard 不显示 Agent 大脑或受控取证语义；
+  fallback 明确显示“Agent 已转交 Standard Review”并切换为 Provider 数据流；切换到
+  `standard-terminal` 后 URL 与当前选择保持，其他 running Review 未抢占页面。
+- 1024px 验证 Agent 与 fallback 三栏压缩布局，390px 验证 Agent、Standard 单列布局和 terminal 结果页；
+  三档均未出现文档级横向溢出。terminal 页面、任务列表路由均不保留 Canvas 或沉浸工作台节点。
+- 阶段 Drawer 和告警 Popover 可打开，Escape 关闭后焦点恢复到触发按钮；Finding 展开、Diff 和 Patch
+  入口继续存在。验收时运行中的旧 mock 仍返回历史 `diff` 字段，Diff 弹窗因此显示“未保存该文件 diff”；
+  tracked fixture 已改为前端契约字段 `diffText` 并补测试，但因不得重启用户服务，本轮未用新进程复验内容。
+- Canvas shell 的只读诊断显示：1440px 中央容器宽度落入 48 粒子档，DPR 为 1；Agent 5 秒观察的平均绘制
+  耗时约 `0.188ms`、最大约 `0.6ms`，Standard 约 `0.150ms` / `0.5ms`，fallback 约
+  `0.159ms` / `0.5ms`，均低于 `8ms/帧` 预算。观察期间始终为一个 Canvas，RAF 持续推进，
+  `ResizeObserver` 与 visibility listener 各保持一个活动实例，没有实例或监听器累积。
+- 安全合成运行态额外持续观察 10 秒，Canvas 身份、实例数和监听器计数保持稳定；切换 terminal 和离开任务
+  路由后 Canvas 数归零。当前运行中的旧 mock 不包含最新 reset / complete 控制端点，因此未在浏览器中
+  强制完成 running -> terminal 的同一响应轮询跃迁；参数更新不重建和终态清理由自动化测试覆盖。
+- 受控浏览器当前不能模拟 `prefers-reduced-motion`、不能可靠把被测页切换为隐藏标签页，也不开放
+  Canvas context / draw 异常注入。这三项未冒充浏览器实测通过；静态构图、隐藏暂停 / 恢复以及初始化 /
+  绘制失败回退由控制器测试覆盖，仍建议部署验证时使用可控制媒体特性和页面可见性的浏览器再抽查一次。
+- 页面可见 DOM 资源只有本地 Vite client 和入口模块，未发现远程 URL；禁显 Prompt、Worker、异常合成串
+  未进入页面。控制台没有 Canvas 运行异常，仅观察到既有 Ant Design `Space.direction`、
+  `Alert.message` 和 `Descriptions span` 弃用 / 布局告警。
+- Windows Codex 环境中长驻子进程的 detached / Job Object 边界仍存在 command-exit 复验风险。
+  service ready 与 launcher command-exit 必须继续作为两项独立契约；不得因工具仍 Running 重复启动实例。
+- 未修改 Backend、数据库、公开 API、ReviewJourney、Review 结果 schema、Provider、Prompt、预算、
+  工具白名单、调度、队列、租约、Worker、通知、`docs/36` 或 `docs/49`；未提交、推送、部署、执行真实
+  Agent Review 或 Run 18。
 
 ## 17. 验收矩阵
 

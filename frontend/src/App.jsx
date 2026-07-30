@@ -120,6 +120,7 @@ import {
   normalizeReviewWorkspaceMode,
   resolveReviewWorkspaceFrame
 } from './reviewImmersivePresentation.js';
+import ReviewImmersiveCanvas from './ReviewImmersiveCanvas.jsx';
 import {
   agentBudgetLimits,
   bytesToKilobytes,
@@ -5164,21 +5165,26 @@ function ReviewImmersiveWorkspace({
         >
           <div className="review-immersive-stage-glow" aria-hidden="true" />
           <div className="review-immersive-visual">
-            {presentation.engineVisual === 'STANDARD_FLOW' ? (
-              <StandardReviewAnimation
-                state={presentation.heroState}
-                reducedMotion={reducedMotion}
-                ariaLabel={presentation.ariaLabel}
-              />
-            ) : (
-              <AgentReviewAnimation
-                style="BRAIN"
-                state={presentation.heroState}
-                subStage={journey?.agentSummary?.phase || null}
-                reducedMotion={reducedMotion}
-                ariaLabel={presentation.ariaLabel}
-              />
-            )}
+            <ReviewImmersiveCanvas
+              key={`${presentation.selectedReviewKey || 'history'}:${presentation.engineVisual}`}
+              presentation={presentation}
+              reducedMotion={reducedMotion}
+              fallback={presentation.engineVisual === 'STANDARD_FLOW' ? (
+                <StandardReviewAnimation
+                  state={presentation.heroState}
+                  reducedMotion
+                  ariaLabel={presentation.ariaLabel}
+                />
+              ) : (
+                <AgentReviewAnimation
+                  style="BRAIN"
+                  state={presentation.heroState}
+                  subStage={null}
+                  reducedMotion
+                  ariaLabel={presentation.ariaLabel}
+                />
+              )}
+            />
           </div>
           <div className="review-immersive-current-stage">
             <span>当前阶段</span>
