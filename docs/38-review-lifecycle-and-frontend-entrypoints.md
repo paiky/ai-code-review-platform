@@ -6,6 +6,7 @@
 - 关联文档：
   - `docs/37-review-platform-target-product-roadmap.md`：完整产品目标路线。
   - `docs/39-review-accuracy-and-material-ui-roadmap.md`：源码检索、Context Pack 裁剪、质量治理入口收敛和 Material 3 / MUI 前端重构专项路线。
+  - `docs/48-review-task-detail-unified-progress-ui-plan.md`：任务详情统一 ReviewJourney、阶段时间轴与阶段 Drawer。
   - `docs/03-api-contract.md`：HTTP API 契约。
 - 本文用途：说明开发者、Reviewer、管理员在一次 Review 从配置、执行、查看、反馈、评估到治理闭环中，分别应该使用哪些前端入口。
 
@@ -26,7 +27,7 @@ Review 前配置
 对应前端入口已收敛为：
 
 ```text
-任务 -> 任务详情 / 高准确模式流转 / 确定性检查
+任务 -> 任务详情 / 代码质量 Review / 统一阶段时间轴与 Drawer
 质量治理 -> 质量看板 / 评估样本 / 规则缺口 / 验收记录 / 回放记录
 设置 -> Review 配置 / Provider / 项目组 / 通知 / Push 策略
 版本更新 / 接入帮助 -> 发布说明和接入说明
@@ -114,25 +115,31 @@ Review 前配置
 
 任务详情用于查看：
 
-- 任务基础信息和原始事件摘要。
-- changed files / diff。
-- 规则提醒卡片。
-- 变更分析结果。
-- AI Review 结果。
-- 多模型 Review 子结果。
-- AI Review 执行过程。
-- 高准确模式流转。
-- 确定性检查结果。
+- 任务基础信息。
+- Agent、Standard、Agent -> Standard fallback 和历史 Review 结果。
+- 按 `reviewKey` 隔离的多模型 Review 子结果和 URL 直达。
+- queued / running 的状态 Hero、完整六阶段时间轴和安全阶段详情。
+- terminal 的结果摘要、紧凑可点击时间轴、Finding、Diff 和 Patch。
+- “上下文准备”Drawer 中的 Context Pack、本地仓库、Planner / Retriever、Requested Context、
+  预算裁剪、Finding 补证据汇总和规则缺口诊断入口。
+- “确定性预检”Drawer 中的 AUTO_PREFLIGHT、共享 / 复用、fail-open、任务级最新检查记录及手动运行 /
+  重新运行操作。
 - 钉钉通知记录。
 - Diff 完整上下文或紧凑 diff。
 - AI 修复 Patch 预览。
 
 任务详情里的关键子能力：
 
-- `提醒卡片`：按 DB、缓存、MQ、配置等重点变更展示结构化提醒。
-- `代码质量 Review`：展示 AI finding、severity、category、confidence、contextStatus、evidence 和建议。
-- `高准确模式流转`：展示 Context Planner、Local Retriever、Context Pack、预算裁剪、Provider 调用和结果解析。
-- `确定性检查`：展示敏感信息扫描等确定性证据。
+- `代码质量 Review`：任务基础信息下方默认直接展示，不再包裹顶层 Tab；统一展示 Review 身份、Hero、
+  阶段时间轴、结果、finding、severity、category、confidence、contextStatus、evidence 和建议。
+- `多模型选择`：只有多个 Review 结果时显示选择器；单 Review 不再显示重复的身份横条。
+- `Push 审核`：仅 Push 任务在 Review 内容下方提供独立折叠区，不占用默认首屏。
+- `上下文准备`：点击时间轴阶段，在 Drawer 查看 Context Planner、Local Retriever、Context Pack、
+  Requested Context、预算裁剪和补证据安全摘要；没有可靠事件时不显示空阶段入口。
+- `确定性预检`：点击时间轴阶段查看当前 Review 的 AUTO_PREFLIGHT；时间轴区域的“任务级确定性检查”
+  辅助入口负责手动运行 / 重新运行，任务级最新记录不会改写已完成 Review 阶段。
+- `执行记录`：已归类的安全记录位于对应阶段 Drawer；少量允许展示但无法归类的记录位于时间轴后的
+  “其它执行记录”折叠区，不显示原始 detail、模型原文或基础设施信息。
 - `补证据`：对高影响且上下文不足的 finding 触发 finding 级 refinement。
 - `标注评估样本`：把 finding 沉淀为 evaluation case。
 
@@ -140,6 +147,10 @@ Review 前配置
 
 - 任务详情展示 AI Review 原结果，不静默覆盖 finding。
 - finding 级补证据只作为显式覆盖层，不自动降级、不自动忽略 finding。
+- 多 Review 只读取当前 `reviewKey` 的事件；仅 AUTO_PREFLIGHT 的 task-level 白名单事件允许共享。
+- 手动确定性检查是任务级最新记录，不伪装为当前 Review 的 AUTO_PREFLIGHT 事件。
+- 旧任务缺少可靠事件时显示“历史任务未记录”，不补造阶段、百分比、时间或耗时。
+- “提醒卡片 / 分析结果 / 原始事件摘要”不再作为任务详情可见 Tab；底层数据和 Backend 接口未删除。
 - 任务重新触发用于调试和对比，不代表 GitLab 上真实 MR 被重新提交。
 
 ## 四、评估样本：把人工判断沉淀为质量样本
@@ -202,7 +213,7 @@ evaluation case 表达的是人工质量判断，例如：
 生命周期位置：
 
 ```text
-任务详情 / 高准确模式流转
+任务详情 / 代码质量 Review / 上下文准备 Drawer
   -> 规则缺口聚合
   -> 质量治理诊断
 ```
@@ -500,7 +511,8 @@ evaluation case 表达的是人工质量判断，例如：
 
 主要使用：
 
-- `任务详情 / 高准确模式流转`
+- `任务详情 / 代码质量 Review / 上下文准备 Drawer`
+- `任务详情 / 代码质量 Review / 确定性预检 Drawer`
 - `质量治理 -> 质量看板`
 - `质量治理 -> 评估样本`
 - `质量治理 -> 规则缺口 / 验收记录 / 回放记录`
@@ -518,8 +530,8 @@ evaluation case 表达的是人工质量判断，例如：
 ```text
 设置项目和 Provider
   -> GitLab MR / Push 触发任务
-  -> 任务详情查看提醒卡片和 AI Review
-  -> 必要时补证据或查看确定性检查
+  -> 任务详情直接查看 Review Hero、统一时间轴和结果
+  -> 必要时在阶段 Drawer 查看上下文、运行任务级确定性检查或对 finding 补证据
   -> 钉钉通知团队
 ```
 
@@ -567,7 +579,7 @@ evaluation case 表达的是人工质量判断，例如：
 M11 的正确使用顺序是：
 
 ```text
-任务详情 / 规则缺口
+任务详情 / 代码质量 Review / 上下文准备 Drawer / 规则缺口诊断
   -> 标注评估样本
   -> 编辑规则缺口归因
   -> 质量看板确认样本证明

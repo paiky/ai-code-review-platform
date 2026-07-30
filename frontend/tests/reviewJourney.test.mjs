@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildReviewJourney,
   buildReviewJourneys,
+  buildTaskDeterministicCheckSummary,
   resolveReviewSelectionKey,
   REVIEW_JOURNEY_STAGE_DEFINITIONS,
   REVIEW_JOURNEY_STAGE_STATUSES
@@ -312,4 +313,246 @@ test('does not share unscoped legacy events across multiple results missing revi
   assert.equal(journeys.every(item => item.engineLabel === '历史任务未记录'), true);
   assert.equal(journeys.every(item => item.stages.every(value => value.events.length === 0)), true);
   assert.equal(journeys.every(item => item.stages.every(value => value.visible === false)), true);
+});
+
+test('derives the complete high-accuracy context summary from strict safe fields', () => {
+  const reviewKey = 'context-complete';
+  const contextDetail = {
+    summary: {
+      changedFileCount: 3,
+      diffBytes: 2048,
+      plannerSignalCount: 4,
+      plannerTargetType: 'BACKEND',
+      detectedLanguages: ['Java', 'Kotlin'],
+      plannerSignalTypeCounts: [
+        { type: 'DTO_FIELD_CHANGED', count: 2 },
+        { type: 'CACHE_KEY_CHANGED', count: 2 }
+      ],
+      retrieverSupportedSignalTypes: ['DTO_FIELD_CHANGED'],
+      retrieverUnsupportedSignalTypeCounts: [{ type: 'CACHE_KEY_CHANGED', count: 2 }],
+      localRepository: { enabled: true, status: 'PREPARED', ignored: 'DO_NOT_RENDER' },
+      localReferenceSearch: {
+        status: 'COMPLETED',
+        queryCount: 2,
+        matchedFileCount: 3,
+        includedSnippetCount: 4,
+        ignored: 'DO_NOT_RENDER'
+      },
+      requestedContextAvailability: {
+        available: 1,
+        unavailable: 1,
+        items: [
+          { type: 'DTO_USAGE_CONTEXT', available: true, signalCount: 2, priority: 'HIGH' },
+          { type: 'CACHE_USAGE_CONTEXT', available: false, signalCount: 2, reasonCode: 'UNSUPPORTED_SIGNAL' }
+        ]
+      },
+      budgetCutSummary: {
+        truncated: true,
+        changedFilesExcluded: 1,
+        sameFileSourceSnippetsRemoved: 2,
+        localReferenceSnippetsRemoved: 3,
+        protectedSignalTypes: ['DTO_FIELD_CHANGED'],
+        notInjectedEvidence: [
+          { matchedFileCount: 2, cutSnippetCount: 3, ignored: 'DO_NOT_RENDER' }
+        ]
+      },
+      ruleGapSummary: { total: 2 },
+      ruleGapItems: [
+        { gapType: 'UNSUPPORTED_PLANNER_SIGNAL', ignored: 'DO_NOT_RENDER' },
+        { gapType: 'BUDGET_CUT', ignored: 'DO_NOT_RENDER' }
+      ]
+    },
+    meta: { truncated: true }
+  };
+  const journey = buildReviewJourney({
+    ...review('STANDARD', 'SUCCESS', reviewKey),
+    findings: [
+      { refinementOverlay: { status: 'COMPLETED', ignored: 'DO_NOT_RENDER' } },
+      { refinementOverlay: { status: 'FAILED', ignored: 'DO_NOT_RENDER' } }
+    ]
+  }, [
+    progress(1, reviewKey, 'CONTEXT_PACK_BUILT', '2026-07-29T08:00:00Z', JSON.stringify(contextDetail)),
+    progress(2, reviewKey, 'LOCAL_REPO_PREPARED', '2026-07-29T08:01:00Z', '{"status":"PREPARED"}'),
+    progress(3, reviewKey, 'LOCAL_CONTEXT_RETRIEVED', '2026-07-29T08:02:00Z', '{"status":"COMPLETED","queryCount":2,"matchedFileCount":3,"includedSnippetCount":4}')
+  ], { now: NOW });
+  const contextStage = stage(journey, 'context');
+  const details = contextStage.details.context;
+
+  assert.equal(contextStage.visible, true);
+  assert.equal(contextStage.status, 'SUCCESS');
+  assert.equal(details.detailState, 'AVAILABLE');
+  assert.deepEqual(details.contextPack, {
+    built: true,
+    changedFileCount: 3,
+    truncated: true
+  });
+  assert.equal('diffBytes' in details.contextPack, false);
+  assert.deepEqual(details.repository, { status: 'PREPARED', enabled: true });
+  assert.equal(details.retriever.status, 'COMPLETED');
+  assert.equal(details.retriever.requestCount, 2);
+  assert.equal(details.requestedContext.items.length, 2);
+  assert.equal(details.budgetCuts.notInjectedEvidenceCount, 1);
+  assert.equal(details.budgetCuts.cutSnippetCount, 3);
+  assert.deepEqual(details.refinement, { total: 2, completed: 1, failed: 1 });
+  assert.deepEqual(details.ruleGaps.typeCounts, [
+    { type: 'UNSUPPORTED_PLANNER_SIGNAL', count: 1 },
+    { type: 'BUDGET_CUT', count: 1 }
+  ]);
+  assert.equal(JSON.stringify(details).includes('DO_NOT_RENDER'), false);
+});
+
+test('keeps repository and retriever failures as context warnings and safely handles damaged detail', () => {
+  const failed = buildReviewJourney(
+    review('STANDARD', 'SUCCESS', 'context-failed'),
+    [
+      progress(1, 'context-failed', 'LOCAL_REPO_PREPARE_FAILED', '2026-07-29T08:00:00Z', '{damaged'),
+      progress(2, 'context-failed', 'LOCAL_CONTEXT_RETRIEVE_FAILED', '2026-07-29T08:01:00Z', '{damaged')
+    ],
+    { now: NOW }
+  );
+  const failedStage = stage(failed, 'context');
+
+  assert.equal(failedStage.status, 'WARNING');
+  assert.equal(failedStage.details.context.detailState, 'UNAVAILABLE');
+  assert.equal(failedStage.details.context.repository.status, 'UNAVAILABLE');
+  assert.equal(failedStage.details.context.retriever.status, 'UNAVAILABLE');
+  assert.equal(JSON.stringify(failed).includes('{damaged'), false);
+
+  const absent = buildReviewJourney(
+    review('STANDARD', 'SUCCESS', 'context-absent'),
+    [],
+    { now: NOW }
+  );
+  assert.equal(stage(absent, 'context').visible, false);
+  assert.equal(stage(absent, 'context').details.context, null);
+});
+
+test('separates AUTO_PREFLIGHT from the task-level latest record and preserves reuse isolation', () => {
+  const checks = {
+    latestRun: {
+      id: 91,
+      checkType: 'SECRET_SCAN',
+      status: 'COMPLETED',
+      configSnapshot: {
+        trigger: 'MANUAL',
+        freshness: 'CURRENT_TASK_INPUT',
+        scope: 'DIFF_ADDED_LINES'
+      },
+      resultSummary: {
+        scannedFileCount: 5,
+        addedLineCount: 12,
+        findingCount: 1,
+        truncated: false,
+        ruleTypeCounts: { CREDENTIAL_PATTERN: 1 }
+      },
+      findings: [{ ignored: 'DO_NOT_RENDER' }],
+      failureReason: 'DO_NOT_RENDER',
+      durationMs: 42,
+      startedAt: '2026-07-29T08:10:00Z',
+      finishedAt: '2026-07-29T08:10:01Z'
+    }
+  };
+  const journeys = buildReviewJourneys([
+    review('STANDARD', 'SUCCESS', 'preflight-a'),
+    review('STANDARD', 'SUCCESS', 'preflight-b')
+  ], [
+    progress(1, null, 'DETERMINISTIC_PRECHECK_STARTED', '2026-07-29T08:00:00Z', '{"runId":7,"checkType":"SECRET_SCAN","trigger":"AUTO_PREFLIGHT"}'),
+    progress(2, null, 'DETERMINISTIC_PRECHECK_COMPLETED', '2026-07-29T08:01:00Z', '{"runId":7,"checkType":"SECRET_SCAN","trigger":"AUTO_PREFLIGHT","findingCount":2}'),
+    progress(3, 'preflight-a', 'DETERMINISTIC_PRECHECK_REUSED', '2026-07-29T08:02:00Z', '{"runId":7,"status":"COMPLETED","freshness":"CURRENT_TASK_INPUT"}')
+  ], { now: NOW, deterministicChecks: checks });
+  const first = stage(journeys[0], 'preflight').details.preflight;
+  const second = stage(journeys[1], 'preflight').details.preflight;
+
+  assert.equal(first.auto.shared, true);
+  assert.equal(first.auto.reused, true);
+  assert.equal(first.auto.runId, 7);
+  assert.equal(first.auto.findingCount, 2);
+  assert.equal(second.auto.shared, true);
+  assert.equal(second.auto.reused, false);
+  assert.equal(first.taskLatest.trigger, 'MANUAL');
+  assert.equal(first.taskLatest.findingCount, 1);
+  assert.deepEqual(first.taskLatest.ruleTypeCounts, [{ type: 'CREDENTIAL_PATTERN', count: 1 }]);
+  assert.equal(JSON.stringify(first).includes('DO_NOT_RENDER'), false);
+});
+
+test('keeps preflight failure fail-open and never lets manual history create a Review stage', () => {
+  const failed = buildReviewJourney(
+    review('STANDARD', 'SUCCESS', 'preflight-failed'),
+    [
+      progress(
+        1,
+        null,
+        'DETERMINISTIC_PRECHECK_FAILED',
+        '2026-07-29T08:00:00Z',
+        '{"runId":8,"checkType":"SECRET_SCAN","trigger":"AUTO_PREFLIGHT","status":"FAILED","failureReason":"DO_NOT_RENDER"}',
+        'WARN'
+      )
+    ],
+    { now: NOW }
+  );
+  const auto = stage(failed, 'preflight').details.preflight.auto;
+  assert.equal(stage(failed, 'preflight').status, 'WARNING');
+  assert.equal(auto.status, 'FAILED');
+  assert.equal(auto.failOpen, true);
+  assert.equal(JSON.stringify(auto).includes('DO_NOT_RENDER'), false);
+
+  const manualOnly = buildReviewJourney(
+    review('STANDARD', 'SUCCESS', 'manual-only'),
+    [],
+    {
+      now: NOW,
+      deterministicChecks: {
+        latestRun: {
+          id: 9,
+          checkType: 'SECRET_SCAN',
+          status: 'COMPLETED',
+          configSnapshot: { trigger: 'MANUAL' },
+          resultSummary: { findingCount: 0 }
+        }
+      }
+    }
+  );
+  const manualStage = stage(manualOnly, 'preflight');
+  assert.equal(manualStage.visible, false);
+  assert.equal(manualStage.status, 'WAITING');
+  assert.equal(manualStage.startedAt, null);
+  assert.equal(manualStage.finishedAt, null);
+  assert.equal(manualStage.durationMs, null);
+  assert.equal(manualStage.details.preflight.auto, null);
+  assert.equal(manualStage.details.preflight.taskLatest.trigger, 'MANUAL');
+});
+
+test('publishes only allowlisted fixed other execution records', () => {
+  const journey = buildReviewJourney(
+    review('AGENT', 'RUNNING', 'other-events'),
+    [
+      progress(1, 'other-events', 'AGENT_SENSITIVE_PATHS_EXCLUDED', '2026-07-29T08:00:00Z', '{"ignored":"DO_NOT_RENDER"}'),
+      progress(2, 'other-events', 'PROMPT_METADATA', '2026-07-29T08:01:00Z', '{"ignored":"DO_NOT_RENDER"}'),
+      progress(3, 'other-events', 'CODEX_OUTPUT', '2026-07-29T08:02:00Z', 'DO_NOT_RENDER')
+    ],
+    { now: NOW }
+  );
+
+  assert.deepEqual(journey.otherEvents.map(item => item.phase), ['AGENT_SENSITIVE_PATHS_EXCLUDED']);
+  assert.equal(JSON.stringify(journey.otherEvents).includes('DO_NOT_RENDER'), false);
+});
+
+test('sanitizes standalone task-level deterministic summaries', () => {
+  assert.equal(buildTaskDeterministicCheckSummary(null, NOW), null);
+  const summary = buildTaskDeterministicCheckSummary({
+    latestRun: {
+      id: -1,
+      checkType: 'SECRET_SCAN',
+      status: 'COMPLETED',
+      configSnapshot: { trigger: 'UNKNOWN_TRIGGER', scope: 'DIFF_ADDED_LINES' },
+      resultSummary: { findingCount: 2, ruleTypeCounts: { SAFE_ENUM: 2, 'not safe': 4 } },
+      finishedAt: '2099-01-01T00:00:00Z'
+    }
+  }, NOW);
+
+  assert.equal(summary.runId, null);
+  assert.equal(summary.trigger, null);
+  assert.equal(summary.findingCount, 2);
+  assert.deepEqual(summary.ruleTypeCounts, [{ type: 'SAFE_ENUM', count: 2 }]);
+  assert.equal(summary.finishedAt, null);
 });

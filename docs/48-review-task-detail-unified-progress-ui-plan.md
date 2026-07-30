@@ -2,8 +2,8 @@
 
 ## 1. 状态与目标
 
-- 文档状态：阶段一“统一 ReviewJourney 模型与 Review 身份”已由用户确认；阶段二
-  “进度 Hero、统一时间轴与动画”已完成本地实现、自动化和浏览器验收，等待用户确认；阶段三未开始。
+- 文档状态：阶段一、阶段二已由用户确认并提交推送；阶段三
+  “高准确模式和确定性检查信息架构收口”已完成本地实施与验证，当前停止等待用户确认部署验证。
 - 关联文档：
   - `docs/38-review-lifecycle-and-frontend-entrypoints.md`：当前 Review 生命周期与任务详情入口。
   - `docs/39-review-accuracy-and-material-ui-roadmap.md`：任务详情 MUI 外层框架和全站视觉原则。
@@ -87,14 +87,13 @@
        ├─ 紧凑可点击时间轴
        └─ Finding / Diff / Patch / 反馈与评估能力
 
-其它顶层 Tabs
-  ├─ Push 审核（仅 Push 任务）
-  ├─ 提醒卡片（按任务配置）
-  ├─ 分析结果
-  └─ 原始事件摘要
+任务详情主内容
+  ├─ 代码质量 Review（默认直接展示，不再包裹顶层 Tab）
+  └─ Push 审核折叠区（仅 Push 任务）
 ```
 
-顶层“确定性检查”Tab 删除；“结果 / 高准确模式流转 / 执行过程”分段选择器删除。
+顶层“提醒卡片 / 分析结果 / 原始事件摘要 / 确定性检查”Tab 删除；“结果 / 高准确模式流转 /
+执行过程”分段选择器删除。
 
 ### 4.2 默认首屏规则
 
@@ -780,6 +779,75 @@ Hero 外壳，不进入 Agent 动画注册表。任何未知风格、损坏数�
 
 前置条件：用户确认阶段二。
 
+#### 阶段三实施设计、迁移映射与兼容边界（2026-07-30）
+
+实施状态：用户已确认阶段二；Git 基线已核对为 `main == origin/main == b9f024c`，且 `1b07ee7`
+仍是当前 `HEAD` 的祖先。阶段三已完成本地实现、自动化、production build、三档响应式浏览器验收和
+安全 diff 审计，当前停止等待用户确认部署验证。
+
+阶段三继续以 `ReviewJourney` 为唯一 Review 阶段数据源。阶段详情只允许新增以下白名单派生结构，
+原始 progress `detail / message`、确定性检查 finding 和失败正文不得进入 Drawer：
+
+```text
+ReviewJourney
+  otherEvents[]                 无法归类但在固定白名单中的安全执行记录
+
+ReviewJourneyStage(context)
+  details.context
+    hasReliableRecord
+    detailAvailable
+    contextPack                 变更文件数、是否裁剪等安全摘要
+    repository                  固定准备状态，不含路径、远程地址或工作区标识
+    planner                     端类型、语言、Signal 类型与数量
+    retriever                   固定成功/失败/跳过状态和安全数量
+    requestedContext            可用/不可用数量与固定类型/原因码
+    budgetCuts                  裁剪数量、未注入证据数量，不含查询、路径或源码
+    refinement                  Finding 级补证据总数、完成数、失败数
+    ruleGaps                    缺口总数与固定类型计数
+
+ReviewJourneyStage(preflight)
+  details.preflight
+    auto                        当前 reviewKey 的 AUTO_PREFLIGHT 与 task-level 共享/复用摘要
+    taskLatest                  任务级最新检查记录，仅供查看和手动重跑
+```
+
+迁移映射：
+
+| 旧入口 / 内容 | 阶段三入口 | 迁移规则 |
+| --- | --- | --- |
+| 高准确模式 Context Pack、本地仓库、Planner / Retriever | “上下文准备”阶段 Drawer | 只有可靠 context progress 时出现；损坏 detail 只显示固定“详情不可用” |
+| Requested Context、预算裁剪、未注入证据 | “上下文准备”阶段 Drawer | 只显示类型枚举、状态和非负数字；删除查询、相对路径和任意原因正文 |
+| Finding 级补证据汇总 | “上下文准备”阶段 Drawer | 只显示总数 / 完成 / 失败；finding 内原覆盖层与操作继续保留 |
+| 本任务规则缺口 | “上下文准备”阶段 Drawer | 只显示安全计数，并保留前往规则缺口诊断页的按钮 |
+| AUTO_PREFLIGHT | “确定性预检”阶段 Drawer | 状态、共享/复用、检查类型、触发方式、freshness 和安全数字来自当前 Journey 事件 |
+| 手动敏感信息扫描 | “确定性预检”阶段 Drawer | 使用任务级最新记录与原 POST 操作；明确不属于当前 Review 阶段事件 |
+| 已归类执行过程 | 对应阶段 Drawer 的高级执行记录 | 继续使用固定阶段文案和 Agent 严格白名单 |
+| 无法归类但允许展示的记录 | 时间轴后的“其它执行记录”折叠区 | 仅接受固定 phase 白名单，不显示原始 detail / message |
+
+兼容与状态边界：
+
+- context 阶段的 `visible / status / startedAt / finishedAt / durationMs` 仍只由当前 `reviewKey` 的可靠
+  context progress 决定。Finding 补证据、任务级检查或 Provider 字段不得制造 context 阶段和时间。
+- AUTO_PREFLIGHT 继续只合并 task-level
+  `STARTED / COMPLETED / FAILED` 白名单；`REUSED` 必须属于当前 `reviewKey`。多模型 Journey 各自显示
+  当前复用关系，不共享其它 Review 的 scoped 事件。
+- `taskLatest` 是独立任务级记录，只为保留手动运行 / 重新运行入口；轮询更新它不得改变历史 Review 的
+  preflight 状态、时间、耗时或事件列表。没有 AUTO_PREFLIGHT 时不得把手动记录显示成 Review 阶段成功。
+- 旧任务缺少 context 或 preflight 事件时，不显示对应时间轴节点；任务级确定性检查操作通过时间轴区域的
+  明确辅助入口打开同一预检 Drawer，并固定说明“当前 Review 未记录 AUTO_PREFLIGHT”，不创建伪事件。
+- context 没有可靠事件时不提供辅助入口，不渲染高准确空态。损坏 detail 不从 Provider、错误正文、
+  finding 或任务级记录反推阶段结果。
+- queued / running 与 terminal 的 Hero、完整 / 紧凑时间轴、Drawer 保持、焦点恢复、Popover、
+  Finding / Diff / Patch / 补证据 / 反馈 / 评估样本 / 重试 / 中断顺序不变。
+
+删除条件：
+
+- 只有当 Context Pack、预检摘要、手动检查操作、规则缺口入口和安全执行记录都有上述新入口后，才删除
+  “AI Review 结果 / 高准确模式流转 / 执行过程”分段导航与顶层“确定性检查”Tab。
+- 删除只限前端信息架构；不删除现有轮询、API 请求、状态、结果操作和诊断路由，不修改 Backend 契约。
+- 旧高准确渲染中的远程仓库、路径、查询、失败正文、确定性 finding / 脱敏证据列表不迁移到新 Drawer；
+  阶段三展示范围以本文严格白名单为准。
+
 目标：
 
 - 将高准确模式完整内容移入“上下文准备”Drawer。
@@ -801,6 +869,67 @@ Hero 外壳，不进入 Agent 动画注册表。任何未知风格、损坏数�
 
 - 完成文档回填后停止，等待用户部署验证；
 - 不远程部署、不执行真实 Agent Review、不执行 Run 18。
+
+#### 阶段三实施结果（2026-07-30）
+
+- 信息架构收口：
+  - `ReviewJourney` 继续作为唯一阶段数据源；“上下文准备”Drawer 新增 Context Pack、本地仓库、
+    Planner / Retriever、Requested Context、预算裁剪、未注入证据、Finding 补证据与规则缺口的
+    严格白名单摘要。
+  - “确定性预检”Drawer 分离当前 Review 的 `AUTO_PREFLIGHT` 与任务级最新检查记录，保留原手动运行 /
+    重新运行操作；任务级记录不会制造或改写任何 Review 阶段、时间和耗时。
+  - 无法归类但允许展示的执行事件只通过固定 phase 白名单进入“其它执行记录”，原始
+    `detail / message` 不进入展示模型。
+  - 已删除代码质量 Review 内“AI Review 结果 / 高准确模式流转 / 执行过程”旧分段导航和任务详情顶层
+    “确定性检查”Tab；结果区、Finding、Diff、Patch、补证据、反馈、评估样本、重试和中断顺序保持不变。
+- 兼容结果：
+  - 没有可靠高准确事件时不显示上下文入口或空 Drawer；损坏 detail 只显示固定“部分详情不可用 /
+    详情不可用”。
+  - task-level `AUTO_PREFLIGHT` 只按既有白名单共享，`REUSED` 保持当前 `reviewKey` 隔离；多模型轮询重排
+    后仍保持当前 Review 和已打开阶段。
+  - 旧任务、缺失字段和非法时间继续显示“历史任务未记录”，未从 Provider、错误正文或其它字段反推阶段。
+- 自动化：
+  - `node --test frontend/tests/*.test.mjs`：41 项通过，0 失败。
+  - 覆盖完整 / 失败 / 损坏 / 无记录的高准确摘要，AUTO_PREFLIGHT 成功 / 失败 / fail-open / 共享 /
+    `REUSED` / 手动记录隔离，多模型与旧任务，以及旧入口删除后的新入口映射。
+  - `scripts\run-frontend.cmd build`：通过；Vite 8.0.8 共转换 3526 个模块。保留既有单 chunk 超过
+    500 kB 的非阻塞提示，本阶段未引入动画或其它新依赖。
+- 浏览器检查（仅使用安全本地合成响应，不连接真实 Backend）：
+  - 1440×1000：Agent 运行态保持 BRAIN Hero + 完整时间轴；Standard / fallback 终态保持结果优先 +
+    紧凑时间轴；桌面 Drawer 内容宽 880px，无页面横向溢出。
+  - 1024×900：时间轴与操作入口可用，Drawer 内容宽 880px，无页面横向溢出。
+  - 390×844：时间轴切换纵向，Drawer 为 390px 全屏；修复多 Review 标签和结果操作组导致的横向溢出，
+    页面最终 `scrollWidth == clientWidth`。
+  - 验证上下文和预检 Drawer、Popover 点击隔离基线、Enter / Space 打开、Escape 关闭、阶段节点和
+    任务级入口焦点恢复；`reviewKey` URL 直达后跨轮询保持当前选择，打开的 Drawer 跨轮询保持。
+  - 浏览器运行环境不能切换操作系统 reduced-motion 偏好；已通过现有纯函数测试和
+    `@media (prefers-reduced-motion: reduce)` 样式规则核对其降级契约。
+- 安全审计：
+  - 新 Drawer 与纯数据派生只保留固定枚举、合法时间和非负数字；未迁移 Prompt、查询、工具参数、
+    源码、diff、路径、Worker / 容器 / 网络信息、异常原文、模型原文、推理、Key 或 hash。
+  - 损坏详情和检查失败均使用固定安全文案；手动检查请求失败不再直接展示异常原文。
+- 遗留风险：
+  - 本轮未连接真实 Backend；真实历史数据中 event phase / detail 的稀有组合仍需远程环境验证。
+  - 前端仍存在既有 Ant Design `Space direction`、`Alert message` 弃用告警和 bundle 体积提示；
+    不影响阶段三行为，且本阶段新增 Alert 已使用当前 `title` 属性。
+- 部署验证前置条件：
+  - 用户确认后再提交、推送和部署本阶段改动；部署环境必须包含阶段一、阶段二基线。
+  - 远程验证至少覆盖 Agent、Standard、fallback、多 `reviewKey`、task-level 共享 / `REUSED`、
+    手动确定性检查、损坏 detail 与历史任务；同时复核 Drawer 不展示禁显数据。
+  - 未经用户再次确认，不执行真实 Agent Review 或 Run 18。
+
+#### 阶段三使用反馈收口（2026-07-30）
+
+- 经过实际使用，任务详情的主要工作流已稳定集中在代码质量 Review；“提醒卡片 / 分析结果 /
+  原始事件摘要”不再作为任务详情可见 Tab。
+- 任务基础信息下方直接渲染代码质量 Review，进入任务详情无需再进行一次 Tab 选择。
+- 单 Review 不再显示独立的 Review 身份横条；引擎、Provider / model 和状态继续由结果摘要与 Hero
+  展示。多 Review 仍保留选择器，确保 `reviewKey` 隔离、URL 直达和模型切换能力不受影响。
+- Push 任务的 Push 审核能力不删除，迁移为代码质量 Review 下方的独立折叠区，默认 Review 内容优先。
+- 本次只调整前端信息架构，不删除规则分析数据、原始任务数据或 Backend 接口，也不改变轮询、
+  ReviewJourney、Finding、Diff、Patch、补证据、反馈、评估、重试和中断行为。
+- 验证结果：`node --test frontend/tests/*.test.mjs` 共 42 项通过；`scripts\run-frontend.cmd build`
+  通过，仍仅有既有单 chunk 超过 500 kB 的非阻塞提示。
 
 ## 15. 验收矩阵
 

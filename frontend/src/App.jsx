@@ -20,7 +20,6 @@ import {
   Popover,
   Progress,
   Row,
-  Segmented,
   Select,
   Space,
   Spin,
@@ -93,6 +92,7 @@ import {
   summarizeAgentTrace
 } from './agentReviewTrace.js';
 import {
+  buildReviewJourney,
   buildReviewJourneys,
   resolveReviewSelectionKey,
   selectReviewJourneyEvents
@@ -4202,25 +4202,6 @@ function fixPreviewActionClass(status) {
   return 'fix-preview-action-idle';
 }
 
-const codeQualityViewOptions = [
-  { label: 'AI Review 结果', value: 'result' },
-  { label: '高准确模式流转', value: 'accuracy-flow' },
-  { label: '执行过程', value: 'progress' },
-];
-
-function CodeQualityViewSwitcher({ value, onChange }) {
-  return (
-    <div className="quality-subnav">
-      <Segmented
-        size="middle"
-        value={value}
-        options={codeQualityViewOptions}
-        onChange={next => onChange(String(next))}
-      />
-    </div>
-  );
-}
-
 const agentReviewAnimationRegistry = Object.freeze({
   BRAIN: BrainReviewAnimation
 });
@@ -4437,15 +4418,286 @@ function StageAlertPopoverContent({ stage }) {
   );
 }
 
-function ReviewStageDrawerContent({ journey, stage }) {
+function contextRepositoryStatusLabel(status) {
+  const labels = {
+    PREPARED: '已准备',
+    WORKTREE_MISSING: '工作区不可用',
+    UNAVAILABLE: '不可用',
+    DISABLED: '未启用',
+    FAILED: '不可用'
+  };
+  return labels[status] || '历史任务未记录';
+}
+
+function contextRetrieverStatusLabel(status) {
+  const labels = {
+    COMPLETED: '已完成',
+    SUCCESS: '已完成',
+    UNAVAILABLE: '不可用',
+    FAILED: '不可用',
+    SKIPPED: '已跳过',
+    DISABLED: '未启用'
+  };
+  return labels[status] || '历史任务未记录';
+}
+
+function safeCountTags(items, emptyText = '历史任务未记录') {
+  const source = Array.isArray(items) ? items : [];
+  if (source.length === 0) return <Text type="secondary">{emptyText}</Text>;
+  return (
+    <Space size={4} wrap>
+      {source.map(item => (
+        <Tag key={item.type}>{item.type} · {item.count}</Tag>
+      ))}
+    </Space>
+  );
+}
+
+function ContextStageDrawerDetails({ details }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  if (!details?.hasReliableRecord) return null;
+  const contextPack = details.contextPack || {};
+  const repository = details.repository || {};
+  const planner = details.planner || {};
+  const retriever = details.retriever || {};
+  const requestedContext = details.requestedContext || {};
+  const budgetCuts = details.budgetCuts || {};
+  const refinement = details.refinement || {};
+  const ruleGaps = details.ruleGaps || {};
+  return (
+    <Space orientation="vertical" size="large" className="full-width review-stage-domain-details">
+      {details.detailState !== 'AVAILABLE' && (
+        <Alert
+          type="warning"
+          showIcon
+          title={details.detailState === 'PARTIAL' ? '部分详情不可用' : '详情不可用'}
+          description="仅保留可由阶段事件可靠确认的固定状态；未补造上下文、时间或执行结果。"
+        />
+      )}
+      <section>
+        <Title level={5}>Context Pack 摘要</Title>
+        <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+          <Descriptions.Item label="构建记录">
+            {contextPack.built ? <Tag color="green">已记录</Tag> : <Tag>历史任务未记录</Tag>}
+          </Descriptions.Item>
+          <Descriptions.Item label="预算状态">
+            {contextPack.truncated === null
+              ? '历史任务未记录'
+              : contextPack.truncated
+                ? <Tag color="orange">发生裁剪</Tag>
+                : <Tag>未裁剪</Tag>}
+          </Descriptions.Item>
+          <Descriptions.Item label="变更文件">{countText(contextPack.changedFileCount)}</Descriptions.Item>
+        </Descriptions>
+      </section>
+      <section>
+        <Title level={5}>本地仓库与 Planner / Retriever</Title>
+        <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+          <Descriptions.Item label="本地仓库">
+            <Tag color={repository.status === 'PREPARED' ? 'green' : repository.status ? 'orange' : 'default'}>
+              {contextRepositoryStatusLabel(repository.status)}
+            </Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="本地能力">
+            {repository.enabled === null ? '历史任务未记录' : repository.enabled ? '已启用' : '未启用'}
+          </Descriptions.Item>
+          <Descriptions.Item label="Planner 端类型">{planner.targetType || '历史任务未记录'}</Descriptions.Item>
+          <Descriptions.Item label="检测语言">
+            {(planner.detectedLanguages || []).join('、') || '历史任务未记录'}
+          </Descriptions.Item>
+          <Descriptions.Item label="Planner Signal">{countText(planner.signalCount)}</Descriptions.Item>
+          <Descriptions.Item label="Retriever">
+            <Tag color={retriever.status === 'COMPLETED' || retriever.status === 'SUCCESS' ? 'green' : retriever.status ? 'orange' : 'default'}>
+              {contextRetrieverStatusLabel(retriever.status)}
+            </Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="检索请求">{countText(retriever.requestCount)}</Descriptions.Item>
+          <Descriptions.Item label="命中文件">{countText(retriever.matchedFileCount)}</Descriptions.Item>
+          <Descriptions.Item label="注入片段">{countText(retriever.includedSnippetCount)}</Descriptions.Item>
+          <Descriptions.Item label="Signal 类型" span={{ xs: 1, md: 2 }}>
+            {safeCountTags(planner.signalTypeCounts)}
+          </Descriptions.Item>
+          <Descriptions.Item label="暂不支持 Signal" span={{ xs: 1, md: 2 }}>
+            {safeCountTags(planner.unsupportedSignalTypeCounts, '无可靠缺口记录')}
+          </Descriptions.Item>
+        </Descriptions>
+      </section>
+      <section>
+        <Title level={5}>Requested Context 可用性</Title>
+        <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+          <Descriptions.Item label="可用">{countText(requestedContext.available)}</Descriptions.Item>
+          <Descriptions.Item label="不可用">{countText(requestedContext.unavailable)}</Descriptions.Item>
+        </Descriptions>
+        {(requestedContext.items || []).length > 0 && (
+          <div className="review-stage-safe-list">
+            {requestedContext.items.map(item => (
+              <div className="review-stage-safe-row" key={item.type}>
+                <Text strong>{item.type}</Text>
+                <Space size={4} wrap>
+                  <Tag color={item.available ? 'green' : 'orange'}>
+                    {item.available ? '可用' : '不可用'}
+                  </Tag>
+                  {item.signalCount !== null && <Tag>Signal {item.signalCount}</Tag>}
+                  {item.priority && <Tag>{item.priority}</Tag>}
+                  {item.reasonCode && <Tag>{item.reasonCode}</Tag>}
+                </Space>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      <section>
+        <Title level={5}>预算裁剪和未注入证据</Title>
+        <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+          <Descriptions.Item label="裁剪状态">
+            {budgetCuts.truncated === null
+              ? '历史任务未记录'
+              : budgetCuts.truncated
+                ? <Tag color="orange">发生裁剪</Tag>
+                : <Tag>未裁剪</Tag>}
+          </Descriptions.Item>
+          <Descriptions.Item label="变更文件排除">{countText(budgetCuts.changedFilesExcluded)}</Descriptions.Item>
+          <Descriptions.Item label="同文件片段裁剪">{countText(budgetCuts.sameFileSourceSnippetsRemoved)}</Descriptions.Item>
+          <Descriptions.Item label="引用片段裁剪">{countText(budgetCuts.localReferenceSnippetsRemoved)}</Descriptions.Item>
+          <Descriptions.Item label="未注入证据">{countText(budgetCuts.notInjectedEvidenceCount)}</Descriptions.Item>
+          <Descriptions.Item label="涉及命中文件">{countText(budgetCuts.matchedFileCount)}</Descriptions.Item>
+          <Descriptions.Item label="裁剪片段合计">{countText(budgetCuts.cutSnippetCount)}</Descriptions.Item>
+          <Descriptions.Item label="受保护 Signal" span={{ xs: 1, md: 2 }}>
+            {(budgetCuts.protectedSignalTypes || []).join('、') || '历史任务未记录'}
+          </Descriptions.Item>
+        </Descriptions>
+      </section>
+      <section>
+        <Title level={5}>Finding 级补证据摘要</Title>
+        <Descriptions size="small" column={{ xs: 1, md: 3 }}>
+          <Descriptions.Item label="记录">{countText(refinement.total)}</Descriptions.Item>
+          <Descriptions.Item label="完成">{countText(refinement.completed)}</Descriptions.Item>
+          <Descriptions.Item label="失败">{countText(refinement.failed)}</Descriptions.Item>
+        </Descriptions>
+        <Text type="secondary">具体补证据结果与操作继续位于对应 Finding 内，不覆盖原 Review 结果。</Text>
+      </section>
+      <section>
+        <div className="review-stage-section-heading">
+          <div>
+            <Title level={5}>规则缺口诊断</Title>
+            <Text type="secondary">当前安全缺口计数 {countText(ruleGaps.total)}</Text>
+          </div>
+          <Button
+            size="small"
+            icon={<FileSearchOutlined />}
+            onClick={() => navigate(RULE_GAPS_ROUTE, { state: { from: currentRoute(location) } })}
+          >
+            打开规则缺口诊断
+          </Button>
+        </div>
+        {safeCountTags(ruleGaps.typeCounts, '本次未记录规则缺口类型')}
+      </section>
+    </Space>
+  );
+}
+
+function PreflightStageDrawerDetails({ details, running, onRun }) {
+  const auto = details?.auto || null;
+  const taskLatest = details?.taskLatest || null;
+  return (
+    <Space orientation="vertical" size="large" className="full-width review-stage-domain-details">
+      <section>
+        <Title level={5}>当前 Review · AUTO_PREFLIGHT</Title>
+        {!auto ? (
+          <Alert
+            type="info"
+            showIcon
+            title="当前 Review 未记录 AUTO_PREFLIGHT"
+            description="不会使用任务级手动记录补造当前 Review 的阶段、时间、耗时或执行结果。"
+          />
+        ) : (
+          <Space orientation="vertical" size="middle" className="full-width">
+            <Space wrap>
+              <Tag color={deterministicCheckStatusColor(auto.status)}>
+                {deterministicCheckStatusText(auto.status)}
+              </Tag>
+              {auto.shared && <Tag color="blue">本次调度共享</Tag>}
+              {auto.reused && <Tag color="geekblue">当前 reviewKey 复用</Tag>}
+              {auto.failOpen && <Tag color="orange">fail-open</Tag>}
+            </Space>
+            <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+              <Descriptions.Item label="检查类型">{auto.checkType || '历史任务未记录'}</Descriptions.Item>
+              <Descriptions.Item label="触发方式">{auto.trigger || '历史任务未记录'}</Descriptions.Item>
+              <Descriptions.Item label="输入新鲜度">{auto.freshness || '历史任务未记录'}</Descriptions.Item>
+              <Descriptions.Item label="Run">{auto.runId == null ? '历史任务未记录' : `#${auto.runId}`}</Descriptions.Item>
+              <Descriptions.Item label="扫描文件">{countText(auto.scannedFileCount)}</Descriptions.Item>
+              <Descriptions.Item label="新增行">{countText(auto.addedLineCount)}</Descriptions.Item>
+              <Descriptions.Item label="命中">{countText(auto.findingCount)}</Descriptions.Item>
+              <Descriptions.Item label="耗时">{formatJourneyDuration(auto.durationMs)}</Descriptions.Item>
+            </Descriptions>
+            {auto.detailState !== 'AVAILABLE' && (
+              <Text type="secondary">{auto.detailState === 'PARTIAL' ? '部分详情不可用' : '详情不可用'}</Text>
+            )}
+            {auto.failOpen && (
+              <Alert
+                type="warning"
+                showIcon
+                title="确定性预检不可用，Review 已按 fail-open 继续"
+                description="该记录不会改写 Review 主状态，也不会被解释为未发现风险。"
+              />
+            )}
+          </Space>
+        )}
+      </section>
+      <section>
+        <div className="review-stage-section-heading">
+          <div>
+            <Title level={5}>任务级最新确定性检查</Title>
+            <Text type="secondary">独立任务记录，不改写任何已完成 Review 的 AUTO_PREFLIGHT 阶段。</Text>
+          </div>
+          <Button icon={<ReloadOutlined />} loading={running} onClick={onRun}>
+            {taskLatest ? '重新运行敏感信息扫描' : '运行敏感信息扫描'}
+          </Button>
+        </div>
+        {!taskLatest ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前任务暂无手动或自动检查记录" />
+        ) : (
+          <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+            <Descriptions.Item label="状态">
+              <Tag color={deterministicCheckStatusColor(taskLatest.status)}>
+                {deterministicCheckStatusText(taskLatest.status)}
+              </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="检查类型">{taskLatest.checkType || '历史任务未记录'}</Descriptions.Item>
+            <Descriptions.Item label="记录来源">{taskLatest.trigger || '历史任务未记录'}</Descriptions.Item>
+            <Descriptions.Item label="输入新鲜度">{taskLatest.freshness || '历史任务未记录'}</Descriptions.Item>
+            <Descriptions.Item label="扫描范围">{taskLatest.scope || '历史任务未记录'}</Descriptions.Item>
+            <Descriptions.Item label="扫描文件">{countText(taskLatest.scannedFileCount)}</Descriptions.Item>
+            <Descriptions.Item label="新增行">{countText(taskLatest.addedLineCount)}</Descriptions.Item>
+            <Descriptions.Item label="命中">{countText(taskLatest.findingCount)}</Descriptions.Item>
+            <Descriptions.Item label="耗时">{formatJourneyDuration(taskLatest.durationMs)}</Descriptions.Item>
+            <Descriptions.Item label="完成时间">{formatDateTime(taskLatest.finishedAt)}</Descriptions.Item>
+            <Descriptions.Item label="规则命中摘要" span={{ xs: 1, md: 2 }}>
+              {safeCountTags(taskLatest.ruleTypeCounts, '无命中或历史任务未记录')}
+            </Descriptions.Item>
+          </Descriptions>
+        )}
+      </section>
+    </Space>
+  );
+}
+
+function ReviewStageDrawerContent({
+  journey,
+  stage,
+  taskCheckRunning,
+  onRunTaskCheck
+}) {
   const advancedEvents = (Array.isArray(stage?.events) ? stage.events : [])
     .filter(event => !event.auxiliary);
+  const hasReviewStageRecord = stage.visible !== false;
   return (
     <Space orientation="vertical" size="large" className="full-width review-stage-drawer-content">
       <Descriptions size="small" column={{ xs: 1, md: 2 }}>
         <Descriptions.Item label="阶段状态">
-          <Tag color={reviewJourneyStageStatusColor(stage.status)}>
-            {reviewJourneyStageStatusLabel(stage.status)}
+          <Tag color={hasReviewStageRecord ? reviewJourneyStageStatusColor(stage.status) : 'default'}>
+            {hasReviewStageRecord ? reviewJourneyStageStatusLabel(stage.status) : '历史任务未记录'}
           </Tag>
         </Descriptions.Item>
         <Descriptions.Item label="Review">{journey?.engineLabel || '历史任务未记录'}</Descriptions.Item>
@@ -4454,11 +4706,13 @@ function ReviewStageDrawerContent({ journey, stage }) {
         <Descriptions.Item label="真实耗时">{formatJourneyDuration(stage.durationMs)}</Descriptions.Item>
       </Descriptions>
       <Alert
-        type={stage.status === 'FAILED' ? 'error' : stage.status === 'WARNING' ? 'warning' : 'info'}
+        type={hasReviewStageRecord && stage.status === 'FAILED' ? 'error' : hasReviewStageRecord && stage.status === 'WARNING' ? 'warning' : 'info'}
         showIcon
-        message={stage.summary}
+        message={hasReviewStageRecord ? stage.summary : '当前 Review 未记录确定性预检阶段'}
         description={
-          stage.status === 'FAILED' || stage.status === 'WARNING'
+          !hasReviewStageRecord
+            ? '任务级检查操作独立保留，不会补造当前 Review 的阶段、时间、耗时或执行结果。'
+            : stage.status === 'FAILED' || stage.status === 'WARNING'
             ? stage.warningSummary
             : '仅展示当前接口中可可靠验证的安全阶段记录。'
         }
@@ -4498,6 +4752,16 @@ function ReviewStageDrawerContent({ journey, stage }) {
           </div>
         </section>
       )}
+      {stage.id === 'context' && (
+        <ContextStageDrawerDetails details={stage.details?.context} />
+      )}
+      {stage.id === 'preflight' && (
+        <PreflightStageDrawerDetails
+          details={stage.details?.preflight}
+          running={taskCheckRunning}
+          onRun={onRunTaskCheck}
+        />
+      )}
       <Collapse
         className="review-stage-advanced"
         items={[{
@@ -4528,34 +4792,78 @@ function ReviewStageDrawerContent({ journey, stage }) {
   );
 }
 
-function ReviewJourneyTimeline({ journey }) {
+function OtherReviewJourneyEvents({ events }) {
+  const source = Array.isArray(events) ? events : [];
+  if (source.length === 0) return null;
+  return (
+    <Collapse
+      className="review-other-events"
+      items={[{
+        key: 'other-events',
+        label: `其它执行记录 (${source.length})`,
+        children: (
+          <div className="review-stage-event-list">
+            {source.map((event, index) => (
+              <div className="review-stage-event" key={`${event.id ?? 'other'}-${index}`}>
+                <div>
+                  <Text strong>{event.safeLabel}</Text>
+                  <Tag>{safeProgressLevelLabel(event.level)}</Tag>
+                </div>
+                <Text type="secondary">{formatDateTime(event.createdAt)}</Text>
+                <Text>{event.safeSummary}</Text>
+              </div>
+            ))}
+          </div>
+        )
+      }]}
+    />
+  );
+}
+
+function ReviewJourneyTimeline({ journey, taskCheckRunning, onRunTaskCheck }) {
   const mode = reviewTimelineMode(journey);
   const stages = visibleReviewJourneyStages(journey);
   const [openStageId, setOpenStageId] = useState(null);
+  const [allowHiddenPreflight, setAllowHiddenPreflight] = useState(false);
   const [openAlertStageId, setOpenAlertStageId] = useState(null);
   const stageButtonRefs = useRef(new Map());
   const focusReturnStageIdRef = useRef(null);
   const journeyKeyRef = useRef(journey?.selectorKey);
-  const openStage = resolveOpenReviewJourneyStage(journey, openStageId);
+  const openStage = allowHiddenPreflight && openStageId === 'preflight'
+    ? journey?.stages?.find(stage => stage.id === 'preflight') || null
+    : resolveOpenReviewJourneyStage(journey, openStageId);
   const stageSignature = stages.map(stage => stage.id).join('\u001f');
 
   const closeDrawer = () => {
-    focusReturnStageIdRef.current = openStageId;
     setOpenStageId(null);
+    setAllowHiddenPreflight(false);
   };
   const openDrawer = stageId => {
     setOpenAlertStageId(null);
+    setAllowHiddenPreflight(false);
+    focusReturnStageIdRef.current = stageId;
     setOpenStageId(stageId);
+  };
+  const openTaskPreflightDrawer = () => {
+    setOpenAlertStageId(null);
+    setAllowHiddenPreflight(true);
+    focusReturnStageIdRef.current = 'task-preflight';
+    setOpenStageId('preflight');
   };
   useEffect(() => {
     if (journeyKeyRef.current !== journey?.selectorKey) {
       journeyKeyRef.current = journey?.selectorKey;
       setOpenStageId(null);
+      setAllowHiddenPreflight(false);
       setOpenAlertStageId(null);
       focusReturnStageIdRef.current = null;
       return;
     }
-    if (openStageId && !resolveOpenReviewJourneyStage(journey, openStageId)) {
+    if (
+      openStageId
+      && !allowHiddenPreflight
+      && !resolveOpenReviewJourneyStage(journey, openStageId)
+    ) {
       setOpenStageId(null);
       focusReturnStageIdRef.current = null;
     }
@@ -4565,7 +4873,13 @@ function ReviewJourneyTimeline({ journey }) {
     ) {
       setOpenAlertStageId(null);
     }
-  }, [journey?.selectorKey, openStageId, openAlertStageId, stageSignature]);
+  }, [
+    journey?.selectorKey,
+    openStageId,
+    allowHiddenPreflight,
+    openAlertStageId,
+    stageSignature
+  ]);
   useEffect(() => {
     if (!openStageId && !openAlertStageId) return undefined;
     const dismiss = event => {
@@ -4580,69 +4894,87 @@ function ReviewJourneyTimeline({ journey }) {
     return () => window.removeEventListener('keydown', dismiss);
   }, [openStageId, openAlertStageId]);
 
-  if (stages.length === 0) return null;
-
   return (
     <section className={`review-journey-timeline review-journey-${mode.toLowerCase()}`}>
       <div className="review-journey-heading">
         <div>
           <Text strong>{mode === 'FULL' ? '统一 Review 进度' : 'Review 阶段回顾'}</Text>
           <Text type="secondary">
-            {mode === 'FULL' ? '点击阶段查看当前安全详情' : '结果优先展示，阶段仍可点击回看'}
+            {stages.length === 0
+              ? '历史任务未记录可可靠回看的阶段'
+              : mode === 'FULL'
+                ? '点击阶段查看当前安全详情'
+                : '结果优先展示，阶段仍可点击回看'}
           </Text>
         </div>
-        <Tag>{mode === 'FULL' ? '完整时间轴' : '紧凑时间轴'}</Tag>
+        <div className="review-journey-heading-actions">
+          <Tag>{mode === 'FULL' ? '完整时间轴' : '紧凑时间轴'}</Tag>
+          <Button
+            size="small"
+            icon={<ReloadOutlined />}
+            ref={node => {
+              if (node) stageButtonRefs.current.set('task-preflight', node);
+              else stageButtonRefs.current.delete('task-preflight');
+            }}
+            onClick={openTaskPreflightDrawer}
+          >
+            任务级确定性检查
+          </Button>
+        </div>
       </div>
-      <ol className="review-journey-stages" aria-label="Review 六阶段进度">
-        {stages.map((stage, index) => {
-          const alert = buildStageAlertModel(stage);
-          return (
-            <li className={`review-journey-stage is-${stage.status.toLowerCase()}`} key={stage.id}>
-              <button
-                type="button"
-                className="review-journey-stage-trigger"
-                ref={node => {
-                  if (node) stageButtonRefs.current.set(stage.id, node);
-                  else stageButtonRefs.current.delete(stage.id);
-                }}
-                aria-current={stage.status === 'ACTIVE' ? 'step' : undefined}
-                aria-label={`${stage.title}，${reviewJourneyStageStatusLabel(stage.status)}`}
-                onClick={() => openDrawer(stage.id)}
-                onKeyDown={event => {
-                  if (!isReviewStageActivationKey(event.key)) return;
-                  event.preventDefault();
-                  openDrawer(stage.id);
-                }}
-              >
-                <span className="review-journey-stage-index" aria-hidden="true">{index + 1}</span>
-                <span className="review-journey-stage-copy">
-                  <strong>{stage.title}</strong>
-                  <small>{reviewJourneyStageStatusLabel(stage.status)}</small>
-                </span>
-              </button>
-              {alert && (
-                <Popover
-                  trigger="click"
-                  open={openAlertStageId === stage.id}
-                  onOpenChange={open => setOpenAlertStageId(open ? stage.id : null)}
-                  content={<StageAlertPopoverContent stage={stage} />}
-                  placement="bottom"
+      {stages.length > 0 && (
+        <ol className="review-journey-stages" aria-label="Review 六阶段进度">
+          {stages.map((stage, index) => {
+            const alert = buildStageAlertModel(stage);
+            return (
+              <li className={`review-journey-stage is-${stage.status.toLowerCase()}`} key={stage.id}>
+                <button
+                  type="button"
+                  className="review-journey-stage-trigger"
+                  ref={node => {
+                    if (node) stageButtonRefs.current.set(stage.id, node);
+                    else stageButtonRefs.current.delete(stage.id);
+                  }}
+                  aria-current={stage.status === 'ACTIVE' ? 'step' : undefined}
+                  aria-label={`${stage.title}，${reviewJourneyStageStatusLabel(stage.status)}`}
+                  onClick={() => openDrawer(stage.id)}
+                  onKeyDown={event => {
+                    if (!isReviewStageActivationKey(event.key)) return;
+                    event.preventDefault();
+                    openDrawer(stage.id);
+                  }}
                 >
-                  <button
-                    type="button"
-                    className="review-stage-alert-trigger"
-                    aria-label={`查看${stage.title}告警摘要`}
-                    aria-expanded={openAlertStageId === stage.id}
-                    onClick={event => event.stopPropagation()}
+                  <span className="review-journey-stage-index" aria-hidden="true">{index + 1}</span>
+                  <span className="review-journey-stage-copy">
+                    <strong>{stage.title}</strong>
+                    <small>{reviewJourneyStageStatusLabel(stage.status)}</small>
+                  </span>
+                </button>
+                {alert && (
+                  <Popover
+                    trigger="click"
+                    open={openAlertStageId === stage.id}
+                    onOpenChange={open => setOpenAlertStageId(open ? stage.id : null)}
+                    content={<StageAlertPopoverContent stage={stage} />}
+                    placement="bottom"
                   >
-                    !
-                  </button>
-                </Popover>
-              )}
-            </li>
-          );
-        })}
-      </ol>
+                    <button
+                      type="button"
+                      className="review-stage-alert-trigger"
+                      aria-label={`查看${stage.title}告警摘要`}
+                      aria-expanded={openAlertStageId === stage.id}
+                      onClick={event => event.stopPropagation()}
+                    >
+                      !
+                    </button>
+                  </Popover>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      <OtherReviewJourneyEvents events={journey?.otherEvents} />
       <Drawer
         className="review-stage-drawer"
         rootClassName="review-stage-drawer-root"
@@ -4658,18 +4990,29 @@ function ReviewJourneyTimeline({ journey }) {
           window.requestAnimationFrame(() => stageButtonRefs.current.get(stageId)?.focus());
         }}
       >
-        {openStage && <ReviewStageDrawerContent journey={journey} stage={openStage} />}
+        {openStage && (
+          <ReviewStageDrawerContent
+            journey={journey}
+            stage={openStage}
+            taskCheckRunning={taskCheckRunning}
+            onRunTaskCheck={onRunTaskCheck}
+          />
+        )}
       </Drawer>
     </section>
   );
 }
 
-function ReviewJourneyExperience({ journey }) {
+function ReviewJourneyExperience({ journey, taskCheckRunning, onRunTaskCheck }) {
   if (!journey) return null;
   return (
     <Space orientation="vertical" size="middle" className="full-width review-journey-experience">
       <ReviewStatusHero journey={journey} />
-      <ReviewJourneyTimeline journey={journey} />
+      <ReviewJourneyTimeline
+        journey={journey}
+        taskCheckRunning={taskCheckRunning}
+        onRunTaskCheck={onRunTaskCheck}
+      />
     </Space>
   );
 }
@@ -4687,7 +5030,9 @@ function CodeQualityReviewView({
   onRetry,
   retrying,
   onCancelReview,
-  onCancelFixPreview
+  onCancelFixPreview,
+  taskCheckRunning,
+  onRunTaskCheck
 }) {
   const location = useLocation();
   const [diffTarget, setDiffTarget] = useState(null);
@@ -4696,7 +5041,6 @@ function CodeQualityReviewView({
   const [fixPreviewLoadingIndex, setFixPreviewLoadingIndex] = useState(null);
   const [cancelingAction, setCancelingAction] = useState(null);
   const [activeFindingKeys, setActiveFindingKeys] = useState([]);
-  const [qualityView, setQualityView] = useState('result');
   useEffect(() => {
     const previews = Array.isArray(initialFixPreviews) ? initialFixPreviews : [];
     setFixPreviewByIndex(Object.fromEntries(previews.map(item => [item.findingIndex, item])));
@@ -4711,20 +5055,21 @@ function CodeQualityReviewView({
     }, 180);
   }, [location.hash, review?.id]);
   if (!review) {
-    const emptyResultContent = (
-      <Card>
-        <Empty description="暂无代码质量 Review 结果" />
-        <div className="empty-action-row">
-          <Button type="primary" loading={retrying} onClick={() => onRetry?.()}>重试 AI Review</Button>
-        </div>
-      </Card>
-    );
     return (
-      <Space direction="vertical" size="large" className="full-width">
-        <CodeQualityViewSwitcher value={qualityView} onChange={setQualityView} />
-        {qualityView === 'result' && emptyResultContent}
-        {qualityView === 'accuracy-flow' && <HighAccuracyFlowView progress={progress} review={review} />}
-        {qualityView === 'progress' && <CodeQualityProgressView progress={progress} />}
+      <Space orientation="vertical" size="large" className="full-width">
+        <Card>
+          <Empty description="暂无代码质量 Review 结果" />
+          <div className="empty-action-row">
+            <Button type="primary" loading={retrying} onClick={() => onRetry?.()}>重试 AI Review</Button>
+          </div>
+        </Card>
+        {journey && (
+          <ReviewJourneyTimeline
+            journey={journey}
+            taskCheckRunning={taskCheckRunning}
+            onRunTaskCheck={onRunTaskCheck}
+          />
+        )}
       </Space>
     );
   }
@@ -4796,7 +5141,13 @@ function CodeQualityReviewView({
   };
   const resultContent = (
     <Space direction="vertical" size="large" className="full-width">
-      {journey?.running && <ReviewJourneyExperience journey={journey} />}
+      {journey?.running && (
+        <ReviewJourneyExperience
+          journey={journey}
+          taskCheckRunning={taskCheckRunning}
+          onRunTaskCheck={onRunTaskCheck}
+        />
+      )}
       <Card>
         <Space direction="vertical" size="small" className="full-width">
           <div className="quality-result-head">
@@ -4897,7 +5248,13 @@ function CodeQualityReviewView({
           </Descriptions>
         </Space>
       </Card>
-      {!journey?.running && <ReviewJourneyExperience journey={journey} />}
+      {!journey?.running && (
+        <ReviewJourneyExperience
+          journey={journey}
+          taskCheckRunning={taskCheckRunning}
+          onRunTaskCheck={onRunTaskCheck}
+        />
+      )}
       {!journey?.running && <Card title="质量问题">
         {findings.length === 0 ? (
           <Empty description="暂无结构化问题" />
@@ -5008,17 +5365,7 @@ function CodeQualityReviewView({
 
   return (
     <Space direction="vertical" size="large" className="full-width">
-      <CodeQualityViewSwitcher value={qualityView} onChange={setQualityView} />
-      {qualityView === 'result' && resultContent}
-      {qualityView === 'accuracy-flow' && <HighAccuracyFlowView progress={progress} review={review} />}
-      {qualityView === 'progress' && (
-        <CodeQualityProgressView
-          progress={progress}
-          running={journey?.running ?? review.status === 'RUNNING'}
-          reviewStartedAt={review.startedAt}
-          reviewFinishedAt={review.finishedAt}
-        />
-      )}
+      {resultContent}
       <DiffViewerModal
         open={Boolean(diffTarget)}
         taskId={taskId}
@@ -5081,10 +5428,13 @@ function CodeQualityReviewsPanel({
   onRetry,
   retrying,
   onCancelReview,
-  onCancelFixPreview
+  onCancelFixPreview,
+  deterministicChecks,
+  runningDeterministicCheck,
+  onRunDeterministicCheck
 }) {
   const reviewItems = Array.isArray(reviews) ? reviews : [];
-  const journeys = buildReviewJourneys(reviewItems, progress);
+  const journeys = buildReviewJourneys(reviewItems, progress, { deterministicChecks });
   const selectionKeys = journeys.map(item => item.selectorKey).join('\u001f');
   const urlSelectionKey = journeys.find(item => item.reviewKey === selectedReviewKey)?.selectorKey || null;
   const [activeReviewKey, setActiveReviewKey] = useState(() => (
@@ -5114,29 +5464,31 @@ function CodeQualityReviewsPanel({
     : journeys[0]?.selectorKey;
   if (reviewItems.length <= 1) {
     const review = reviewItems[0] || null;
-    const journey = journeys[0] || null;
+    const journey = journeys[0] || buildReviewJourney({}, progress, {
+      deterministicChecks,
+      allowUnscopedCompatibility: true
+    });
     const scopedProgress = review
       ? selectReviewJourneyEvents(review, progress)
       : progress;
     return (
-      <Space direction="vertical" size="middle" className="full-width">
-        <ReviewSelectorIdentity journey={journey} />
-        <CodeQualityReviewView
-          taskId={taskId}
-          review={review}
-          journey={journey}
-          progress={scopedProgress}
-          changedFilesSummary={changedFilesSummary}
-          diffContextCapabilities={diffContextCapabilities}
-          initialFixPreviews={fixPreviews}
-          triggerType={triggerType}
-          onRefresh={onRefresh}
-          onRetry={onRetry}
-          retrying={retrying}
-          onCancelReview={onCancelReview}
-          onCancelFixPreview={onCancelFixPreview}
-        />
-      </Space>
+      <CodeQualityReviewView
+        taskId={taskId}
+        review={review}
+        journey={journey}
+        progress={scopedProgress}
+        changedFilesSummary={changedFilesSummary}
+        diffContextCapabilities={diffContextCapabilities}
+        initialFixPreviews={fixPreviews}
+        triggerType={triggerType}
+        onRefresh={onRefresh}
+        onRetry={onRetry}
+        retrying={retrying}
+        onCancelReview={onCancelReview}
+        onCancelFixPreview={onCancelFixPreview}
+        taskCheckRunning={runningDeterministicCheck}
+        onRunTaskCheck={onRunDeterministicCheck}
+      />
     );
   }
   return (
@@ -5173,6 +5525,8 @@ function CodeQualityReviewsPanel({
                 retrying={retrying}
                 onCancelReview={onCancelReview}
                 onCancelFixPreview={onCancelFixPreview}
+                taskCheckRunning={runningDeterministicCheck}
+                onRunTaskCheck={onRunDeterministicCheck}
               />
             )
           };
@@ -5199,99 +5553,14 @@ function deterministicCheckStatusText(status) {
     NOT_APPLICABLE: '不适用',
     NOT_RUN: '未运行',
     RUNNING: '运行中',
-  }[normalized] || (status || '未运行');
-}
-
-function DeterministicChecksPanel({ checks, running, onRun }) {
-  const latest = checks?.latestRun || null;
-  const status = latest?.status || checks?.status || 'NOT_RUN';
-  const summary = latest?.resultSummary || {};
-  const config = latest?.configSnapshot || {};
-  const findings = safeArray(latest?.findings);
-  const ruleTypeCounts = summary.ruleTypeCounts || {};
-  const findingColumns = [
-    { title: '规则类型', dataIndex: 'ruleType', width: 220, render: value => <Tag color="orange">{value || '-'}</Tag> },
-    { title: '文件', dataIndex: 'filePath', ellipsis: true, render: value => value || '-' },
-    { title: '行号', dataIndex: 'lineNumber', width: 90, render: value => value || '-' },
-    { title: 'Hunk 位置', dataIndex: 'hunkPosition', width: 110, render: value => value || '-' },
-    { title: '脱敏证据', dataIndex: 'evidence', ellipsis: true, render: value => <Text code>{value || '-'}</Text> },
-  ];
-  return (
-    <Space direction="vertical" size="middle" className="full-width">
-      <Card
-        title="确定性检查 · 敏感信息扫描"
-        extra={(
-          <Button icon={<ReloadOutlined />} loading={running} onClick={onRun}>
-            {latest ? '重新运行敏感信息扫描' : '运行敏感信息扫描'}
-          </Button>
-        )}
-      >
-        <Space direction="vertical" size="middle" className="full-width">
-          <Alert
-            type={status === 'FAILED' ? 'error' : 'info'}
-            showIcon
-            message={latest ? '检查结果仅作为结构化证据' : '当前任务暂无确定性检查记录'}
-            description={latest
-              ? '敏感信息扫描只检查当前任务 diff 新增行，命中项已脱敏；结果不会自动阻塞合并、修改 AI Review 或生成项目策略。'
-              : (checks?.explanation || '点击运行后，会扫描当前任务 changed files / diff 的新增行。')}
-          />
-          <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }}>
-            <Descriptions.Item label="状态">
-              <Tag color={deterministicCheckStatusColor(status)}>{deterministicCheckStatusText(status)}</Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="检查类型">{latest?.checkType || 'SECRET_SCAN'}</Descriptions.Item>
-            <Descriptions.Item label="规则集">{config.rulesetVersion || '-'}</Descriptions.Item>
-            <Descriptions.Item label="扫描范围">{config.scope || 'DIFF_ADDED_LINES'}</Descriptions.Item>
-            <Descriptions.Item label="扫描文件数"><Text strong>{countText(summary.scannedFileCount)}</Text></Descriptions.Item>
-            <Descriptions.Item label="新增行数"><Text strong>{countText(summary.addedLineCount)}</Text></Descriptions.Item>
-            <Descriptions.Item label="命中数"><Text strong>{countText(summary.findingCount)}</Text></Descriptions.Item>
-            <Descriptions.Item label="耗时">{latest?.durationMs != null ? `${latest.durationMs} ms` : '-'}</Descriptions.Item>
-            <Descriptions.Item label="结果截断">
-              {summary.truncated ? <Tag color="orange">已截断</Tag> : <Tag>未截断</Tag>}
-            </Descriptions.Item>
-            <Descriptions.Item label="配置来源">{config.configSource || '-'}</Descriptions.Item>
-            <Descriptions.Item label="最大命中数">{config.maxFindings ?? '-'}</Descriptions.Item>
-            <Descriptions.Item label="完成时间">{formatDateTime(latest?.finishedAt)}</Descriptions.Item>
-          </Descriptions>
-          {latest?.failureReason && (
-            <Alert type="warning" showIcon message="失败原因" description={latest.failureReason} />
-          )}
-          <Card size="small" title="规则命中摘要">
-            {Object.keys(ruleTypeCounts).length === 0 ? (
-              <Empty description="暂无规则命中" />
-            ) : (
-              <Space wrap>
-                {Object.entries(ruleTypeCounts).map(([ruleType, count]) => (
-                  <Tag key={ruleType} color="orange">{ruleType}: {countText(count)}</Tag>
-                ))}
-              </Space>
-            )}
-          </Card>
-          <Card size="small" title="命中项">
-            {findings.length === 0 ? (
-              <Empty description="暂无命中项" />
-            ) : (
-              <Table
-                rowKey={(row, index) => `${row.ruleType}-${row.filePath}-${row.lineNumber || row.hunkPosition}-${index}`}
-                size="small"
-                columns={findingColumns}
-                dataSource={findings}
-                pagination={false}
-                scroll={{ x: 900 }}
-              />
-            )}
-          </Card>
-        </Space>
-      </Card>
-    </Space>
-  );
+    REUSED: '已复用',
+  }[normalized] || (status || '历史任务未记录');
 }
 
 function TaskDetail({ taskId, onBack, onOpen }) {
   const location = useLocation();
   const selectedReviewKey = new URLSearchParams(location.search).get('reviewKey');
   const [detail, setDetail] = useState(null);
-  const [result, setResult] = useState(null);
   const [codeQualityResult, setCodeQualityResult] = useState(null);
   const [codeQualityResults, setCodeQualityResults] = useState([]);
   const [codeQualityProgress, setCodeQualityProgress] = useState([]);
@@ -5303,7 +5572,6 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   const [rerunning, setRerunning] = useState(false);
   const [runningDeterministicCheck, setRunningDeterministicCheck] = useState(false);
   const [error, setError] = useState(null);
-  const [activeTabKey, setActiveTabKey] = useState('quality');
 
   const load = async ({ silent = false } = {}) => {
     if (!silent) {
@@ -5313,12 +5581,6 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     try {
       const taskDetail = await fetchApi(`/api/review-tasks/${taskId}`);
       setDetail(taskDetail);
-      try {
-        const taskResult = await fetchApi(`/api/review-tasks/${taskId}/result`);
-        setResult(taskResult);
-      } catch {
-        setResult(null);
-      }
       try {
         const qualityResults = await fetchApi(`/api/review-tasks/${taskId}/code-quality-results`);
         const normalizedResults = Array.isArray(qualityResults) ? qualityResults : [];
@@ -5370,16 +5632,6 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   useEffect(() => {
     load();
   }, [taskId]);
-
-  useEffect(() => {
-    if (/^#risk-item-/.test(location.hash || '')) {
-      setActiveTabKey('risk');
-      return;
-    }
-    if (/^#fix-preview-/.test(location.hash || '')) {
-      setActiveTabKey('quality');
-    }
-  }, [location.hash, taskId]);
 
   useEffect(() => {
     const hasRunningFixPreview = fixPreviews.some(item => ['QUEUED', 'RUNNING'].includes(item?.status));
@@ -5485,8 +5737,9 @@ function TaskDetail({ taskId, onBack, onOpen }) {
         explanation: null,
       }));
       message.success('敏感信息扫描已完成');
-    } catch (err) {
-      setError(err.message);
+    } catch {
+      setError('确定性检查暂不可用，请稍后重试。');
+      message.error('确定性检查暂不可用');
     } finally {
       setRunningDeterministicCheck(false);
     }
@@ -5527,27 +5780,32 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     }
   };
 
-  const tabItems = useMemo(() => [
-    { key: 'quality', label: '代码质量 Review', children: <CodeQualityReviewsPanel taskId={taskId} reviews={codeQualityResults} progress={codeQualityProgress} changedFilesSummary={detail?.changedFilesSummary} diffContextCapabilities={detail?.diffContextCapabilities} fixPreviews={fixPreviews} triggerType={detail?.triggerType} selectedReviewKey={selectedReviewKey} onRefresh={() => load({ silent: true })} onRetry={retryCodeQualityReview} retrying={retrying} onCancelReview={cancelCodeQualityJob} onCancelFixPreview={cancelCodeQualityJob} /> },
-    { key: 'deterministic', label: '确定性检查', children: <DeterministicChecksPanel checks={deterministicChecks} running={runningDeterministicCheck} onRun={runDeterministicCheck} /> },
-    ...(detail?.triggerType === 'GITLAB_PUSH_WEBHOOK'
-      ? [{ key: 'gate', label: 'Push 审核', children: <CodeQualityGateView gate={codeQualityGate} detail={detail} /> }]
-      : []),
-    ...(result?.reminderCardEnabled !== false
-      ? [{ key: 'risk', label: '提醒卡片', children: <RiskCardView taskId={taskId} riskCard={result?.riskCard} changedFilesSummary={detail?.changedFilesSummary} /> }]
-      : []),
-    { key: 'analysis', label: '分析结果', children: <AnalysisView changeAnalysis={result?.changeAnalysis} /> },
-    { key: 'event', label: '原始事件摘要', children: <Row gutter={[16, 16]}><Col xs={24} lg={12}><Card title="changedFiles 摘要"><JsonBlock value={detail?.changedFilesSummary} /></Card></Col><Col xs={24} lg={12}><Card title="raw payload"><JsonBlock value={detail?.rawPayload} /></Card></Col></Row> }
-  ], [taskId, detail, result, codeQualityResults, codeQualityProgress, codeQualityGate, fixPreviews, deterministicChecks, selectedReviewKey, retrying, runningDeterministicCheck]);
-  const displayedActiveTabKey = tabItems.some(item => item.key === activeTabKey)
-    ? activeTabKey
-    : tabItems[0]?.key;
+  const qualityReviewContent = (
+    <CodeQualityReviewsPanel
+      taskId={taskId}
+      reviews={codeQualityResults}
+      progress={codeQualityProgress}
+      changedFilesSummary={detail?.changedFilesSummary}
+      diffContextCapabilities={detail?.diffContextCapabilities}
+      fixPreviews={fixPreviews}
+      triggerType={detail?.triggerType}
+      selectedReviewKey={selectedReviewKey}
+      onRefresh={() => load({ silent: true })}
+      onRetry={retryCodeQualityReview}
+      retrying={retrying}
+      onCancelReview={cancelCodeQualityJob}
+      onCancelFixPreview={cancelCodeQualityJob}
+      deterministicChecks={deterministicChecks}
+      runningDeterministicCheck={runningDeterministicCheck}
+      onRunDeterministicCheck={runDeterministicCheck}
+    />
+  );
 
   const canRerunTask = Boolean(detail && ['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(detail.triggerType));
   const taskHeaderTitle = detail ? taskTitle(detail) : `任务 #${taskId}`;
   const taskHeaderDescription = detail
     ? branchSummary(detail)
-    : '查看任务提醒卡片、AI Review 结果、高准确模式流转和确定性检查。';
+    : '查看统一 Review 进度、结果和阶段详情。';
   const detailActions = (
     <>
       <MuiButton
@@ -5626,7 +5884,19 @@ function TaskDetail({ taskId, onBack, onOpen }) {
               )}
             </Paper>
             <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 2 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
-              <Tabs activeKey={displayedActiveTabKey} onChange={setActiveTabKey} items={tabItems} />
+              <Space direction="vertical" size="large" className="full-width">
+                {qualityReviewContent}
+                {detail.triggerType === 'GITLAB_PUSH_WEBHOOK' && (
+                  <Collapse
+                    className="task-push-gate-collapse"
+                    items={[{
+                      key: 'push-gate',
+                      label: 'Push 审核',
+                      children: <CodeQualityGateView gate={codeQualityGate} detail={detail} />
+                    }]}
+                  />
+                )}
+              </Space>
             </Paper>
           </Space>
         ) : !loading ? <Empty description="任务不存在" /> : null}
@@ -10267,7 +10537,7 @@ function EvaluationCasesPage() {
                     scroll={{ x: 760 }}
                   />
                 ) : (
-                  <Empty description="暂无 rule gap 摘要；可先从有高准确模式流转的 AI finding 创建样本" />
+                  <Empty description="暂无 rule gap 摘要；可先从有上下文准备阶段记录的 AI finding 创建样本" />
                 )}
               </Paper>
             </Stack>

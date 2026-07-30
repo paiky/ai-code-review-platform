@@ -158,8 +158,8 @@ const stageFailureSummaries = Object.freeze({
 });
 const stageSuggestedActions = Object.freeze({
   scheduling: '等待页面轮询更新；若任务已终止，可使用现有重试入口。',
-  preflight: '继续以最终 Review 状态为准；需要时使用现有确定性检查入口复核。',
-  context: '继续以正式 Review 结果为准；需要时使用现有高准确模式入口复核。',
+  preflight: '继续以最终 Review 状态为准；需要时在本阶段运行任务级确定性检查。',
+  context: '继续以正式 Review 结果为准；需要时前往规则缺口诊断。',
   'model-review': '查看本阶段安全执行记录，并按现有操作决定是否重试。',
   'parse-save': '查看本阶段安全执行记录，并按现有操作决定是否重试。',
   terminal: '以正式结果和 Review 身份为准；需要时使用现有重试入口。'
@@ -200,8 +200,50 @@ const safePhaseLabels = Object.freeze({
   AGENT_CANCELLED: 'Agent Review 已取消',
   FINISHED: 'Review 已完成',
   FAILED: 'Review 执行失败',
-  JOB_INTERRUPTED: 'Review 已中断'
+  JOB_INTERRUPTED: 'Review 已中断',
+  AGENT_SENSITIVE_PATHS_EXCLUDED: 'Agent 已应用敏感路径隔离',
+  AGENT_ALL_PATHS_EXCLUDED: 'Agent 已安全跳过全部敏感路径',
+  HTTP_RESPONSE_HEADERS: 'Provider 响应已到达',
+  HTTP_RESPONSE_BODY_PREVIEW: 'Provider 响应已进入安全解析',
+  CODEX_REPOSITORY: '历史执行已完成仓库准备',
+  CODEX_PROCESS_STARTED: '历史执行已启动',
+  CODEX_PROCESS_EXIT: '历史执行已结束',
+  CODEX_PARSED: '历史执行结果已解析',
+  CODEX_TIMEOUT: '历史执行已超时',
+  CODEX_FAILED: '历史执行失败',
+  CODEX_IO_ERROR: '历史执行不可用',
+  CODEX_INTERRUPTED: '历史执行已中断'
 });
+const otherSafePhaseSet = new Set([
+  'AGENT_SENSITIVE_PATHS_EXCLUDED',
+  'AGENT_ALL_PATHS_EXCLUDED',
+  'HTTP_RESPONSE_HEADERS',
+  'HTTP_RESPONSE_BODY_PREVIEW',
+  'CODEX_REPOSITORY',
+  'CODEX_PROCESS_STARTED',
+  'CODEX_PROCESS_EXIT',
+  'CODEX_PARSED',
+  'CODEX_TIMEOUT',
+  'CODEX_FAILED',
+  'CODEX_IO_ERROR',
+  'CODEX_INTERRUPTED'
+]);
+const preflightEventPhases = new Set([
+  'DETERMINISTIC_PRECHECK_STARTED',
+  'DETERMINISTIC_PRECHECK_COMPLETED',
+  'DETERMINISTIC_PRECHECK_FAILED',
+  'DETERMINISTIC_PRECHECK_REUSED'
+]);
+const safeCheckStatuses = new Set([
+  'COMPLETED',
+  'FAILED',
+  'NOT_APPLICABLE',
+  'NOT_RUN',
+  'RUNNING',
+  'REUSED'
+]);
+const safeCheckTriggers = new Set(['AUTO_PREFLIGHT', 'MANUAL']);
+const safeFreshnessValues = new Set(['CURRENT_TASK_INPUT', 'STALE', 'UNKNOWN']);
 const agentSubStageDefinitions = Object.freeze([
   Object.freeze({ id: 'analyzing', title: '分析变更', phase: 'AGENT_ANALYZING' }),
   Object.freeze({ id: 'evidence', title: '受控只读取证', phase: 'AGENT_TOOL_ACTIVITY' }),
@@ -252,6 +294,7 @@ export function buildReviewJourney(review, events, options = {}) {
       } : null;
     })
     .filter(Boolean);
+  const otherEvents = buildOtherReviewJourneyEvents(attemptScopedEvents, nowMs);
   const currentStageId = deriveCurrentStageId(status, mappedEvents, identity.historical);
   const stages = REVIEW_JOURNEY_STAGE_DEFINITIONS.map(definition => {
     const stageEvents = mappedEvents.filter(item => item.stageId === definition.id);
@@ -291,7 +334,9 @@ export function buildReviewJourney(review, events, options = {}) {
         identity,
         review: sourceReview,
         reviewStatus: status,
-        allEvents: attemptScopedEvents
+        allEvents: attemptScopedEvents,
+        deterministicChecks: options.deterministicChecks,
+        nowMs
       }
     );
   });
@@ -324,7 +369,8 @@ export function buildReviewJourney(review, events, options = {}) {
     finishedAt: reviewTimes.finishedAt,
     durationMs: reviewTimes.durationMs,
     agentSummary,
-    stages
+    stages,
+    otherEvents
   };
 }
 
@@ -538,8 +584,8 @@ function buildStage(definition, mappedEvents, status, visible, context) {
     && Number.isFinite(finishedTimestamp)
     && finishedTimestamp >= startedTimestamp
   ) ? finishedTimestamp - startedTimestamp : null;
-  const safeEvents = [...mappedEvents]
-    .sort(compareMappedEventRecency)
+  const orderedEvents = [...mappedEvents].sort(compareMappedEventRecency);
+  const safeEvents = orderedEvents
     .map(item => safeJourneyEvent(item.event, item.timestamp));
   return {
     id: definition.id,
@@ -561,6 +607,11 @@ function buildStage(definition, mappedEvents, status, visible, context) {
     safeMetrics: buildStageSafeMetrics(definition.id, safeEvents, context),
     events: safeEvents,
     detailKind: definition.detailKind,
+    details: buildStageDetails(
+      definition.id,
+      orderedEvents.map(item => item.event),
+      context
+    ),
     subStages: definition.id === 'model-review'
       ? buildAgentSubStages(context?.allEvents, context?.agentSummary, context?.reviewStatus)
       : []
@@ -648,6 +699,397 @@ function buildStageSafeMetrics(stageId, events, context = {}) {
     ].filter(Boolean);
   }
   return events.length > 0 ? [safeMetric('安全阶段记录', events.length)] : [];
+}
+
+function buildStageDetails(stageId, stageEvents, context = {}) {
+  if (stageId === 'context') {
+    return {
+      context: buildReviewJourneyContextDetails(
+        context.allEvents,
+        context.review,
+        context.nowMs
+      )
+    };
+  }
+  if (stageId === 'preflight') {
+    return {
+      preflight: buildReviewJourneyPreflightDetails(
+        stageEvents,
+        context.allEvents,
+        context.deterministicChecks,
+        context.nowMs
+      )
+    };
+  }
+  return null;
+}
+
+export function buildReviewJourneyContextDetails(events, review, now = Date.now()) {
+  const source = Array.isArray(events) ? events : [];
+  const nowMs = normalizeNow(now);
+  const contextEvent = latestJourneyEvent(source, ['CONTEXT_PACK_BUILT'], nowMs);
+  const repositoryEvent = latestJourneyEvent(
+    source,
+    ['LOCAL_REPO_PREPARED', 'LOCAL_REPO_PREPARE_FAILED'],
+    nowMs
+  );
+  const retrieverEvent = latestJourneyEvent(
+    source,
+    ['LOCAL_CONTEXT_RETRIEVED', 'LOCAL_CONTEXT_RETRIEVE_FAILED'],
+    nowMs
+  );
+  const reliableEvents = [contextEvent, repositoryEvent, retrieverEvent].filter(Boolean);
+  if (reliableEvents.length === 0) return null;
+
+  const contextPayload = parseDetailObject(contextEvent?.detail);
+  const repositoryPayload = parseDetailObject(repositoryEvent?.detail);
+  const retrieverPayload = parseDetailObject(retrieverEvent?.detail);
+  const contextSummary = objectRecord(contextPayload?.summary);
+  const contextMeta = objectRecord(contextPayload?.meta);
+  const localRepository = {
+    ...objectRecord(contextSummary.localRepository),
+    ...objectRecord(repositoryPayload)
+  };
+  const localReferenceSearch = {
+    ...objectRecord(contextSummary.localReferenceSearch),
+    ...objectRecord(retrieverPayload)
+  };
+  const requestedAvailability = objectRecord(contextSummary.requestedContextAvailability);
+  const budgetCutSummary = objectRecord(
+    contextSummary.budgetCutSummary || contextMeta.budgetCutSummary
+  );
+  const budgetCutItems = arrayValue(
+    arrayValue(budgetCutSummary.localReferenceCutDetails).length > 0
+      ? budgetCutSummary.localReferenceCutDetails
+      : budgetCutSummary.notInjectedEvidence
+  );
+  const ruleGapItems = arrayValue(contextSummary.ruleGapItems);
+  const hasBudgetCutSummary = Object.keys(budgetCutSummary).length > 0;
+  const ruleGapSummary = objectRecord(contextSummary.ruleGapSummary);
+  const hasRuleGapSummary = Object.keys(ruleGapSummary).length > 0
+    || Array.isArray(contextSummary.ruleGapItems);
+  const refinement = safeRefinementSummary(review);
+  const enabled = booleanValue(
+    localRepository.enabled !== undefined
+      ? localRepository.enabled
+      : contextMeta.localRepositoryEnabled
+  );
+  const repositoryStatus = deriveRepositoryStatus(repositoryEvent, localRepository, enabled);
+  const retrieverStatus = deriveRetrieverStatus(retrieverEvent, localReferenceSearch);
+  const parsedDetailCount = [
+    contextEvent ? contextPayload : undefined,
+    repositoryEvent ? repositoryPayload : undefined,
+    retrieverEvent ? retrieverPayload : undefined
+  ].filter(value => value !== undefined && value !== null).length;
+
+  return {
+    hasReliableRecord: true,
+    detailState: detailState(parsedDetailCount, reliableEvents.length),
+    contextPack: {
+      built: Boolean(contextEvent),
+      changedFileCount: nonNegativeNumber(contextSummary.changedFileCount),
+      truncated: booleanValue(
+        contextSummary.truncated !== undefined
+          ? contextSummary.truncated
+          : contextMeta.truncated
+      )
+    },
+    repository: {
+      status: repositoryStatus,
+      enabled
+    },
+    planner: {
+      targetType: safeEnumToken(contextSummary.plannerTargetType),
+      detectedLanguages: safeDisplayTokenList(contextSummary.detectedLanguages),
+      signalCount: nonNegativeNumber(
+        contextSummary.plannerSignalCount ?? contextMeta.plannerSignalCount
+      ),
+      signalTypeCounts: safeCountItems(contextSummary.plannerSignalTypeCounts),
+      supportedSignalTypes: safeEnumList(contextSummary.retrieverSupportedSignalTypes),
+      unsupportedSignalTypeCounts: safeCountItems(
+        contextSummary.retrieverUnsupportedSignalTypeCounts
+      )
+    },
+    retriever: {
+      status: retrieverStatus,
+      requestCount: nonNegativeNumber(
+        localReferenceSearch.queryCount ?? contextMeta.localReferenceQueryCount
+      ),
+      matchedFileCount: nonNegativeNumber(
+        localReferenceSearch.matchedFileCount ?? contextMeta.localReferenceMatchedFileCount
+      ),
+      includedSnippetCount: nonNegativeNumber(
+        localReferenceSearch.includedSnippetCount ?? contextMeta.localReferenceSnippetCount
+      )
+    },
+    requestedContext: {
+      available: nonNegativeNumber(requestedAvailability.available),
+      unavailable: nonNegativeNumber(requestedAvailability.unavailable),
+      items: arrayValue(requestedAvailability.items)
+        .slice(0, 16)
+        .map(item => {
+          const sourceItem = objectRecord(item);
+          const type = safeEnumToken(sourceItem.type);
+          if (!type) return null;
+          return {
+            type,
+            available: booleanValue(sourceItem.available),
+            signalCount: nonNegativeNumber(sourceItem.signalCount),
+            priority: safeEnumToken(sourceItem.priority),
+            reasonCode: safeEnumToken(sourceItem.reasonCode)
+          };
+        })
+        .filter(Boolean)
+    },
+    budgetCuts: {
+      truncated: booleanValue(budgetCutSummary.truncated),
+      changedFilesExcluded: nonNegativeNumber(budgetCutSummary.changedFilesExcluded),
+      sameFileSourceSnippetsRemoved: nonNegativeNumber(
+        budgetCutSummary.sameFileSourceSnippetsRemoved
+      ),
+      localReferenceSnippetsRemoved: nonNegativeNumber(
+        budgetCutSummary.localReferenceSnippetsRemoved
+      ),
+      notInjectedEvidenceCount: hasBudgetCutSummary ? budgetCutItems.length : null,
+      matchedFileCount: hasBudgetCutSummary
+        ? sumNonNegativeField(budgetCutItems, 'matchedFileCount')
+        : null,
+      cutSnippetCount: hasBudgetCutSummary
+        ? sumNonNegativeField(budgetCutItems, 'cutSnippetCount')
+        : null,
+      protectedSignalTypes: safeEnumList(budgetCutSummary.protectedSignalTypes)
+    },
+    refinement,
+    ruleGaps: {
+      total: hasRuleGapSummary
+        ? nonNegativeNumber(ruleGapSummary.total) ?? ruleGapItems.length
+        : null,
+      typeCounts: countEnumValues(ruleGapItems, 'gapType')
+    }
+  };
+}
+
+export function buildReviewJourneyPreflightDetails(
+  stageEvents,
+  allEvents,
+  deterministicChecks,
+  now = Date.now()
+) {
+  const source = (Array.isArray(stageEvents) ? stageEvents : [])
+    .filter(event => preflightEventPhases.has(normalizeEnum(event?.phase)));
+  const nowMs = normalizeNow(now);
+  const contextEvent = latestJourneyEvent(
+    Array.isArray(allEvents) ? allEvents : [],
+    ['CONTEXT_PACK_BUILT'],
+    nowMs
+  );
+  const contextPayload = parseDetailObject(contextEvent?.detail);
+  const contextSecurity = objectRecord(
+    objectRecord(objectRecord(contextPayload?.summary).deterministicChecks).securitySummary
+  );
+  const parsedEventDetails = source
+    .map(event => parseDetailObject(event?.detail))
+    .filter(Boolean);
+  const merged = Object.assign({}, contextSecurity, ...parsedEventDetails);
+  const phases = new Set(source.map(event => normalizeEnum(event?.phase)));
+  let status = null;
+  if (phases.has('DETERMINISTIC_PRECHECK_FAILED')) status = 'FAILED';
+  else if (phases.has('DETERMINISTIC_PRECHECK_COMPLETED')) status = 'COMPLETED';
+  else if (phases.has('DETERMINISTIC_PRECHECK_REUSED')) {
+    status = normalizeCheckStatus(merged.status) || 'REUSED';
+  } else if (phases.has('DETERMINISTIC_PRECHECK_STARTED')) status = 'RUNNING';
+  const auto = source.length === 0 ? null : {
+    status,
+    checkType: safeEnumToken(merged.checkType),
+    trigger: normalizeCheckTrigger(merged.trigger),
+    freshness: normalizeFreshness(merged.freshness),
+    runId: nonNegativeNumber(merged.runId),
+    findingCount: nonNegativeNumber(merged.findingCount),
+    scannedFileCount: nonNegativeNumber(merged.scannedFileCount),
+    addedLineCount: nonNegativeNumber(merged.addedLineCount),
+    durationMs: nonNegativeNumber(merged.durationMs),
+    truncated: booleanValue(merged.truncated),
+    shared: source.some(event => Boolean(event?.journeyShared)),
+    reused: phases.has('DETERMINISTIC_PRECHECK_REUSED'),
+    failOpen: status === 'FAILED',
+    detailState: detailState(parsedEventDetails.length, source.length)
+  };
+  return {
+    auto,
+    taskLatest: buildTaskDeterministicCheckSummary(deterministicChecks, nowMs)
+  };
+}
+
+export function buildTaskDeterministicCheckSummary(checks, now = Date.now()) {
+  const latest = objectRecord(checks?.latestRun);
+  if (Object.keys(latest).length === 0) return null;
+  const config = objectRecord(latest.configSnapshot);
+  const result = objectRecord(latest.resultSummary);
+  const nowMs = normalizeNow(now);
+  return {
+    runId: nonNegativeNumber(latest.id),
+    status: normalizeCheckStatus(latest.status),
+    checkType: safeEnumToken(latest.checkType),
+    trigger: normalizeCheckTrigger(config.trigger),
+    freshness: normalizeFreshness(config.freshness),
+    scope: safeEnumToken(config.scope),
+    scannedFileCount: nonNegativeNumber(result.scannedFileCount),
+    addedLineCount: nonNegativeNumber(result.addedLineCount),
+    findingCount: nonNegativeNumber(result.findingCount),
+    durationMs: nonNegativeNumber(latest.durationMs),
+    truncated: booleanValue(result.truncated),
+    ruleTypeCounts: safeCountMap(result.ruleTypeCounts),
+    startedAt: toIsoString(parseJourneyTimestamp(latest.startedAt, nowMs)),
+    finishedAt: toIsoString(parseJourneyTimestamp(latest.finishedAt, nowMs))
+  };
+}
+
+export function buildOtherReviewJourneyEvents(events, now = Date.now()) {
+  const nowMs = normalizeNow(now);
+  return (Array.isArray(events) ? events : [])
+    .filter(event => otherSafePhaseSet.has(normalizeEnum(event?.phase)))
+    .map(event => ({
+      event,
+      timestamp: parseJourneyTimestamp(event?.createdAt, nowMs)
+    }))
+    .sort(compareMappedEventRecency)
+    .map(item => safeJourneyEvent(item.event, item.timestamp));
+}
+
+function latestJourneyEvent(events, phases, nowMs) {
+  const phaseSet = new Set(phases);
+  return (Array.isArray(events) ? events : [])
+    .filter(event => phaseSet.has(normalizeEnum(event?.phase)))
+    .map(event => ({
+      event,
+      timestamp: parseJourneyTimestamp(event?.createdAt, nowMs)
+    }))
+    .sort(compareMappedEventRecency)
+    .at(-1)?.event || null;
+}
+
+function detailState(parsedCount, recordCount) {
+  if (recordCount <= 0 || parsedCount <= 0) return 'UNAVAILABLE';
+  return parsedCount >= recordCount ? 'AVAILABLE' : 'PARTIAL';
+}
+
+function objectRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function arrayValue(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function booleanValue(value) {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function safeEnumToken(value) {
+  const token = normalizeEnum(value);
+  return /^[A-Z][A-Z0-9_]{0,79}$/.test(token) ? token : null;
+}
+
+function safeDisplayToken(value) {
+  const token = cleanLabel(value);
+  return token && /^[A-Za-z0-9][A-Za-z0-9+.#_-]{0,39}$/.test(token)
+    ? token
+    : null;
+}
+
+function safeEnumList(value) {
+  return arrayValue(value).slice(0, 16).map(safeEnumToken).filter(Boolean);
+}
+
+function safeDisplayTokenList(value) {
+  return arrayValue(value).slice(0, 12).map(safeDisplayToken).filter(Boolean);
+}
+
+function safeCountItems(value) {
+  return arrayValue(value)
+    .slice(0, 16)
+    .map(item => {
+      const source = objectRecord(item);
+      const type = safeEnumToken(source.type);
+      const count = nonNegativeNumber(source.count);
+      return type && count !== null ? { type, count } : null;
+    })
+    .filter(Boolean);
+}
+
+function safeCountMap(value) {
+  return Object.entries(objectRecord(value))
+    .slice(0, 16)
+    .map(([key, count]) => {
+      const type = safeEnumToken(key);
+      const number = nonNegativeNumber(count);
+      return type && number !== null ? { type, count: number } : null;
+    })
+    .filter(Boolean);
+}
+
+function sumNonNegativeField(items, field) {
+  return arrayValue(items).reduce((sum, item) => (
+    sum + (nonNegativeNumber(objectRecord(item)[field]) ?? 0)
+  ), 0);
+}
+
+function countEnumValues(items, field) {
+  const counts = new Map();
+  arrayValue(items).slice(0, 32).forEach(item => {
+    const token = safeEnumToken(objectRecord(item)[field]);
+    if (!token) return;
+    counts.set(token, (counts.get(token) || 0) + 1);
+  });
+  return [...counts.entries()].map(([type, count]) => ({ type, count }));
+}
+
+function safeRefinementSummary(review) {
+  const overlays = arrayValue(review?.findings)
+    .map(finding => objectRecord(finding).refinementOverlay)
+    .filter(value => value && typeof value === 'object' && !Array.isArray(value));
+  return {
+    total: overlays.length,
+    completed: overlays.filter(item => normalizeEnum(item.status) === 'COMPLETED').length,
+    failed: overlays.filter(item => normalizeEnum(item.status) === 'FAILED').length
+  };
+}
+
+function deriveRepositoryStatus(event, detail, enabled) {
+  const phase = normalizeEnum(event?.phase);
+  if (phase === 'LOCAL_REPO_PREPARED') return 'PREPARED';
+  if (phase === 'LOCAL_REPO_PREPARE_FAILED') return 'UNAVAILABLE';
+  const status = safeEnumToken(detail?.status);
+  if (['PREPARED', 'WORKTREE_MISSING', 'UNAVAILABLE', 'DISABLED', 'FAILED'].includes(status)) {
+    return status;
+  }
+  if (enabled === false) return 'DISABLED';
+  return null;
+}
+
+function deriveRetrieverStatus(event, detail) {
+  const phase = normalizeEnum(event?.phase);
+  if (phase === 'LOCAL_CONTEXT_RETRIEVED') return 'COMPLETED';
+  if (phase === 'LOCAL_CONTEXT_RETRIEVE_FAILED') return 'UNAVAILABLE';
+  const status = safeEnumToken(detail?.status);
+  return ['COMPLETED', 'SUCCESS', 'UNAVAILABLE', 'FAILED', 'SKIPPED', 'DISABLED'].includes(status)
+    ? status
+    : null;
+}
+
+function normalizeCheckStatus(value) {
+  const status = safeEnumToken(value);
+  return safeCheckStatuses.has(status) ? status : null;
+}
+
+function normalizeCheckTrigger(value) {
+  const trigger = safeEnumToken(value);
+  return safeCheckTriggers.has(trigger) ? trigger : null;
+}
+
+function normalizeFreshness(value) {
+  const freshness = safeEnumToken(value);
+  return safeFreshnessValues.has(freshness) ? freshness : null;
 }
 
 function buildAgentSubStages(events, agentSummary, reviewStatus) {
