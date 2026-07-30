@@ -456,9 +456,19 @@ def test_worker_pool_tracks_state_transitions_offline_and_retention_cleanup(
     assert offline_pool["onlineCount"] == 0
     assert offline_pool["nodes"][0]["online"] is False
 
-    worker_record.last_heartbeat_at = utc_now() - timedelta(days=8)
+    cleanup_now = utc_now()
+    worker_record.last_heartbeat_at = cleanup_now - timedelta(
+        hours=47, minutes=59
+    )
     db_session.commit()
-    assert cleanup_stale_agent_workers(db_session) == 1
+    assert cleanup_stale_agent_workers(db_session, now=cleanup_now) == 0
+    assert db_session.get(AgentReviewWorker, "agent-worker-state") is not None
+
+    worker_record.last_heartbeat_at = cleanup_now - timedelta(
+        hours=48, seconds=1
+    )
+    db_session.commit()
+    assert cleanup_stale_agent_workers(db_session, now=cleanup_now) == 1
     db_session.commit()
     assert db_session.get(AgentReviewWorker, "agent-worker-state") is None
 

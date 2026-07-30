@@ -37,7 +37,7 @@ AGENT_CLI_VERSION = "2.1.112"
 AGENT_RUNNER_VERSION = "agent-worker-v1"
 AGENT_ENDPOINT = "https://api.deepseek.com/anthropic"
 AGENT_WORKER_ONLINE_SECONDS = 60
-AGENT_WORKER_RETENTION_DAYS = 7
+AGENT_WORKER_RETENTION_HOURS = 48
 AGENT_WORKER_NODE_LIMIT = 100
 MAX_TURNS = DEFAULT_AGENT_BUDGETS["maxTurns"]
 MAX_TOOL_CALLS = DEFAULT_AGENT_BUDGETS["maxToolCalls"]
@@ -354,7 +354,7 @@ def agent_worker_pool(db: Session) -> dict[str, Any]:
 
 
 def cleanup_stale_agent_workers(db: Session, *, now=None) -> int:
-    cutoff = (now or utc_now()) - timedelta(days=AGENT_WORKER_RETENTION_DAYS)
+    cutoff = (now or utc_now()) - timedelta(hours=AGENT_WORKER_RETENTION_HOURS)
     result = db.execute(
         delete(AgentReviewWorker).where(
             AgentReviewWorker.last_heartbeat_at < cutoff

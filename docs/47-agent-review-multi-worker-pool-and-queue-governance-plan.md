@@ -114,7 +114,7 @@ Review trigger
 | `last_heartbeat_at` / `updated_at` | 心跳和更新时间 |
 
 - 补充干净数据库 SQL、现有数据库运行时 schema 补齐和 `last_heartbeat_at` 索引。
-- 在线状态按 60 秒窗口计算；离线记录保留 7 天后清理。
+- 在线状态按 60 秒窗口计算；离线记录在最后心跳超过 48 小时后清理。
 - 现有 Agent Settings Worker 字段不删除，作为旧版本兼容字段。
 
 ### 5.2 接口与前端
@@ -151,7 +151,7 @@ docker compose ps
 ### 5.4 阶段二实施结果（2026-07-29）
 
 - 新增 `code_quality_agent_workers`、心跳索引、干净数据库 SQL 和运行时 schema 补齐；离线记录在后续心跳
-  时清理 7 天前数据。
+  时清理最后心跳超过 48 小时的数据。
 - Worker 心跳上报固定容量、IDLE/BUSY 状态和数字活动引用；Agent Settings 返回池级统计和安全节点白名单，
   同时保留原单例 Worker 字段兼容旧前端与历史数据。
 - Worker 增加 `--healthcheck`，按自身派生 ID 检查注册记录；Linux Compose 只传 ID 前缀并使用容器
@@ -388,6 +388,13 @@ Compose、Agent Settings GET/PUT 和 Worker Pool，不新增 API、数据库字�
 - 清理范围和失败策略遵守 6.8 固定安全边界，不引入定时任务、全局 prune、镜像或 Volume 清理，也不改变
   Worker 排空、租约接管、`max_attempts` 和 Standard fallback。
 
+### 6.12 离线 Worker 节点保留窗口调整（2026-07-30）
+
+- `code_quality_agent_workers` 的离线历史从最后心跳后 7 天缩短为 48 小时；60 秒在线判定窗口保持不变。
+- 清理仍复用任意 Worker 心跳，不新增定时任务、数据库字段或公开 API；存在在线 Worker 时，超过 48 小时的
+  记录会在下一轮约 15 秒心跳内删除。全部 Worker 离线时，清理延后到下一次 Worker 启动并上报心跳。
+- 设置页节点字段白名单、在线容量统计、调度、租约、fallback 和 Agent Review 主结果均不受影响。
+
 ## 7. 测试与验收
 
 阶段一：
@@ -403,7 +410,7 @@ Compose、Agent Settings GET/PUT 和 Worker Pool，不新增 API、数据库字�
 
 阶段二：
 
-- Worker 注册、状态切换、60 秒离线判断和 7 天清理；
+- Worker 注册、状态切换、60 秒离线判断和 48 小时清理；
 - 池级兼容字段、单 Worker 和无注册表历史数据；
 - 两副本健康检查、设置页 Worker Pool 和任务 attempt 展示；
 - MySQL 8 `SKIP LOCKED` 并发领取集成测试。
