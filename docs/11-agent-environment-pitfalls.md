@@ -150,6 +150,11 @@ docker version
 - 如果本机 npm 与 Dockerfile 的 Node / npm 版本差异导致 lock 不一致，用与 Dockerfile 一致的 Node 镜像更新 lock。
 - 离线部署升级时，`runtime/.env` 会保留。修改新包里的 `.env.example` 不会自动影响线上配置，需要同步修改运行目录的 `.env`。
 - 离线升级会累积旧镜像和旧版本目录；清理前先确认当前 `APP_VERSION`、容器状态和回滚需求。
+- `deploy-stage3.sh upgrade/scale` 只在最终健康检查通过后清理当前 Compose 项目的
+  `created / exited / dead` 容器，使用运行中 Backend 的 `com.docker.compose.project` 标签限定范围且
+  不强制删除。不同版本目录或不同 `COMPOSE_PROJECT_NAME` 留下的容器不会自动跨项目清理；先用
+  `docker ps -a` 核对 Compose project/service 标签，再人工处理，禁止直接使用无项目过滤的
+  `docker system prune`。
 - 离线包上传后必须在版本目录执行 `./load-images.sh`，不能只执行 `chmod` 后直接进入 `runtime`。加载脚本会加载本版本全部镜像、自动更新 `runtime/docker-compose.yml` 和 `APP_VERSION`，无需手工复制 Compose。
 - Windows 的 `bash.exe` 可能只是未安装 Linux 发行版的 WSL 启动器，执行 `bash -n` 会报
   `CreateProcessCommon ... /bin/bash: No such file or directory`，不能据此判断部署脚本语法错误。若本机已有

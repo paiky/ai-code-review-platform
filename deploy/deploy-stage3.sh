@@ -30,12 +30,19 @@ Safety:
   upgrade updates Backend first, waits for a zero Agent queue, temporarily
   disables Agent, replaces Worker replicas, updates Frontend, and restores the
   original Agent enabled state only after the target capacity is healthy.
+  Successful upgrade and scale operations then remove only stopped containers
+  labeled with the current Compose project; running containers and volumes are
+  never removed.
 EOF
 }
 
 fail() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+warn() {
+  echo "WARNING: $*" >&2
 }
 
 is_positive_integer() {
@@ -96,6 +103,74 @@ compose() {
 }
 
 compose config --quiet
+
+cleanup_stopped_project_containers() {
+  local backend_id
+  local project_name
+  local state
+  local ids
+  local container_id
+  local container_name
+  local -a stopped_ids=()
+
+  if ! backend_id="$(compose ps -q backend 2>/dev/null)"; then
+    warn "Could not resolve the current Compose project; stopped container cleanup was skipped."
+    return 0
+  fi
+  backend_id="${backend_id%%$'\n'*}"
+  if [ -z "$backend_id" ]; then
+    warn "No running Backend container was found; stopped container cleanup was skipped."
+    return 0
+  fi
+
+  if ! project_name="$(
+    docker inspect \
+      --format '{{ index .Config.Labels "com.docker.compose.project" }}' \
+      "$backend_id" 2>/dev/null
+  )"; then
+    warn "Could not read the current Compose project label; stopped container cleanup was skipped."
+    return 0
+  fi
+  if ! [[ "$project_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+    warn "The current Compose project label is invalid; stopped container cleanup was skipped."
+    return 0
+  fi
+
+  for state in created exited dead; do
+    if ! ids="$(
+      docker ps -aq \
+        --filter "label=com.docker.compose.project=$project_name" \
+        --filter "status=$state"
+    )"; then
+      warn "Could not list stopped containers for Compose project '$project_name'; cleanup was skipped."
+      return 0
+    fi
+    while IFS= read -r container_id; do
+      if [ -n "$container_id" ]; then
+        stopped_ids+=("$container_id")
+      fi
+    done <<<"$ids"
+  done
+
+  if [ "${#stopped_ids[@]}" -eq 0 ]; then
+    echo "No stopped containers to remove for Compose project '$project_name'."
+    return 0
+  fi
+
+  echo "Removing stopped containers for Compose project '$project_name'..."
+  for container_id in "${stopped_ids[@]}"; do
+    container_name="$(
+      docker inspect --format '{{.Name}}' "$container_id" 2>/dev/null \
+        || printf '%s' "$container_id"
+    )"
+    container_name="${container_name#/}"
+    if docker rm "$container_id" >/dev/null 2>&1; then
+      echo "Removed stopped container: $container_name"
+    else
+      warn "Skipped container '$container_name'; it may have restarted or changed state."
+    fi
+  done
+}
 
 acquire_change_lock() {
   if command -v flock >/dev/null 2>&1; then
@@ -309,6 +384,7 @@ show_dry_run_upgrade() {
   echo "DRY RUN: wait for onlineCapacity >= $WORKERS and drainingWorkers=0"
   echo "DRY RUN: docker compose up -d --no-deps frontend"
   echo "DRY RUN: restore the original enabled state only after healthy capacity"
+  echo "DRY RUN: remove only created/exited/dead containers from the current Compose project"
 }
 
 case "$COMMAND" in
@@ -346,21 +422,24 @@ case "$COMMAND" in
       load_snapshot || fail "Could not verify restored Agent settings"
       [ "$AGENT_ENABLED" = true ] || fail "Agent enabled state was not restored"
     fi
-    echo "Stage 3 deployment completed."
     load_snapshot || fail "Could not read final Agent status"
     print_snapshot
+    cleanup_stopped_project_containers
+    echo "Stage 3 deployment completed."
     ;;
   scale)
     if [ "$DRY_RUN" = true ]; then
       echo "DRY RUN: docker compose up -d --no-deps --scale agent-worker=$WORKERS agent-worker"
       echo "DRY RUN: wait for onlineCapacity >= $WORKERS and drainingWorkers=0"
+      echo "DRY RUN: remove only created/exited/dead containers from the current Compose project"
       exit 0
     fi
     acquire_change_lock
     compose up -d --no-deps --scale "agent-worker=$WORKERS" agent-worker
     wait_for_worker_capacity "$WORKERS"
-    echo "Worker scale operation completed."
     load_snapshot || fail "Could not read final Agent status"
     print_snapshot
+    cleanup_stopped_project_containers
+    echo "Worker scale operation completed."
     ;;
 esac

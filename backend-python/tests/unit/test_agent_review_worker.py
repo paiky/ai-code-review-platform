@@ -530,6 +530,25 @@ def test_stage3_deploy_helper_is_safe_and_included_in_offline_package() -> None:
     assert "AGENT_PAUSED_BY_SCRIPT=true" in deploy_script
     assert 'compose up -d --no-deps --scale "agent-worker=$WORKERS"' in deploy_script
     assert "onlineCapacity >= $target and drainingWorkers=0" in deploy_script
+    assert "cleanup_stopped_project_containers()" in deploy_script
+    assert 'com.docker.compose.project' in deploy_script
+    assert "for state in created exited dead" in deploy_script
+    assert '--filter "status=$state"' in deploy_script
+    assert 'docker rm "$container_id"' in deploy_script
+    assert deploy_script.count("cleanup_stopped_project_containers") == 3
+    assert "docker rm -f" not in deploy_script
+    assert "docker system prune" not in deploy_script
+    assert "docker volume prune" not in deploy_script
+    upgrade_section = deploy_script.split("\n  upgrade)", 1)[1].split(
+        "\n  scale)", 1
+    )[0]
+    scale_section = deploy_script.split("\n  scale)", 1)[1]
+    for command_section in (upgrade_section, scale_section):
+        final_status_index = command_section.index(
+            'load_snapshot || fail "Could not read final Agent status"'
+        )
+        cleanup_index = command_section.index("cleanup_stopped_project_containers")
+        assert final_status_index < cleanup_index
     assert "--keep-agent-enabled" not in deploy_script
     assert "apiKey" not in deploy_script
     assert "deploy-stage3.sh" in package_script

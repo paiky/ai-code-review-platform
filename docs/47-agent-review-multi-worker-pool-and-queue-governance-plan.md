@@ -333,6 +333,7 @@ Compose、Agent Settings GET/PUT 和 Worker Pool，不新增 API、数据库字�
   -> 更新 Frontend
   -> 仅在 Backend 健康且目标容量满足时恢复原 enabled=true
   -> 输出最终安全数字
+  -> 清理当前 Compose 项目的 stopped 容器（包括 stopped orphan）
 ```
 
 安全边界：
@@ -345,6 +346,10 @@ Compose、Agent Settings GET/PUT 和 Worker Pool，不新增 API、数据库字�
 - `scale` 仍是用户明确发起的人工扩缩容；脚本不根据指标自行改变副本数。
 - 首次阶段二到阶段三升级必须使用默认安全模式；不提供旧 Worker 无 DRAINING 保护下的
   `--keep-agent-enabled` 冒险模式。
+- 容器清理只在升级或人工 scale 健康完成后运行；project 名从当前运行 Backend 的
+  `com.docker.compose.project` 标签读取，只删除同项目 `created / exited / dead` 容器。
+- 删除不使用 `--force`，不处理运行中容器、其它 Compose 项目、镜像、网络或 Volume；竞态、标签读取或
+  单容器删除失败只输出告警。部署失败不清理，保留现场用于诊断。
 
 ### 6.9 一键部署助手实施结果（2026-07-29）
 
@@ -374,6 +379,14 @@ Compose、Agent Settings GET/PUT 和 Worker Pool，不新增 API、数据库字�
 - 运维能力只描述 `status`、`preflight`、`upgrade` 和显式人工 `scale`，不宣称自动扩缩容、项目级配额、
   单 Worker 并行任务、动态预算或尚未执行的 Run 18。
 - 版本号固定为 `v1.2.0`，发布日期为 `2026-07-29`，并作为版本更新页最新条目展示。
+
+### 6.11 成功部署后的旧容器清理补充（2026-07-30）
+
+- `upgrade` 最终健康检查和原 enabled 状态恢复成功后，自动删除当前 Compose 项目中已停止的旧容器，
+  包括同项目已经停止且不在当前 Compose 文件内的 orphan。
+- `scale` 等待目标容量且 `drainingWorkers=0` 后执行相同清理，避免频繁人工扩缩容累积停止副本。
+- 清理范围和失败策略遵守 6.8 固定安全边界，不引入定时任务、全局 prune、镜像或 Volume 清理，也不改变
+  Worker 排空、租约接管、`max_attempts` 和 Standard fallback。
 
 ## 7. 测试与验收
 

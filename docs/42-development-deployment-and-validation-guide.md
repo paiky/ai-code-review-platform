@@ -301,6 +301,11 @@ cd ../runtime
 
 `deploy-stage3.sh upgrade` 会先更新 Backend，再通过现有 Agent Settings GET/PUT 等待零队列并自动短暂暂停
 Agent，随后更新指定数量的 Worker、等待容量恢复、更新 Frontend，最后仅在健康检查通过后恢复原启用状态。
+完整升级成功后，脚本会清理当前 Compose 项目中处于 `created / exited / dead` 状态的旧容器，其中包括
+同项目已经停止的 orphan。清理通过运行中 Backend 的 Compose project 标签限定范围，逐个使用
+非强制删除；不会删除运行中容器、其它 Compose 项目、镜像、网络、Volume 或数据库数据。部署失败时不执行
+清理，以保留故障现场；清理自身失败只输出告警，不改变已经通过的部署结果。
+
 脚本不会读取或打印 Agent Key；失败时若已暂停 Agent，会保持禁用并要求人工检查。常用命令：
 
 ```bash
@@ -311,7 +316,9 @@ Agent，随后更新指定数量的 Worker、等待容量恢复、更新 Fronten
 ```
 
 首次从不支持 DRAINING 的旧 Worker 升级时必须使用默认安全模式，不要绕过队列闸门。`scale` 只执行用户
-明确指定的人工 Compose 副本变更，不会根据指标自动扩缩容。
+明确指定的人工 Compose 副本变更，不会根据指标自动扩缩容；容量收敛后同样清理当前项目的已停止旧容器。
+如果历史容器来自其它目录或其它 `COMPOSE_PROJECT_NAME`，脚本会按安全边界保留，需先核对标签后人工处理，
+不要使用无项目过滤的 `docker system prune`。
 
 回滚时修改 `runtime/.env` 中的 `APP_VERSION`，再执行：
 
