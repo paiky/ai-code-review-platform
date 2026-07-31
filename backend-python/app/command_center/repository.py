@@ -34,6 +34,7 @@ FAILED_AGENT_STATUSES = ("FAILED", "TIMED_OUT")
 TERMINAL_FAILURE_STATUSES = ("FAILED",)
 FINDING_SCAN_LIMIT = 2000
 WORKER_LIMIT = 100
+MYSQL_ALERT_UNION_COLLATION = "utf8mb4_unicode_ci"
 
 
 @dataclass(frozen=True)
@@ -818,9 +819,11 @@ def _load_recent_alerts(
         select(
             literal("JOB_FAILED").label("alert_type"),
             CodeQualitySchedulerJob.id.label("source_id"),
-            CodeQualitySchedulerJob.status.label("status"),
+            _alert_union_text(db, CodeQualitySchedulerJob.status).label("status"),
             CodeQualitySchedulerJob.task_id.label("task_id"),
-            CodeQualitySchedulerJob.review_key.label("review_key"),
+            _alert_union_text(db, CodeQualitySchedulerJob.review_key).label(
+                "review_key"
+            ),
             CodeQualitySchedulerJob.project_id.label("project_id"),
             Project.name.label("project_name"),
             CodeQualitySchedulerJob.updated_at.label("occurred_at"),
@@ -843,9 +846,9 @@ def _load_recent_alerts(
         select(
             literal("AGENT_RUN_FAILED").label("alert_type"),
             AgentReviewRun.id.label("source_id"),
-            AgentReviewRun.status.label("status"),
+            _alert_union_text(db, AgentReviewRun.status).label("status"),
             AgentReviewRun.task_id.label("task_id"),
-            AgentReviewRun.review_key.label("review_key"),
+            _alert_union_text(db, AgentReviewRun.review_key).label("review_key"),
             ReviewTask.project_id.label("project_id"),
             Project.name.label("project_name"),
             AgentReviewRun.updated_at.label("occurred_at"),
@@ -868,7 +871,7 @@ def _load_recent_alerts(
         select(
             literal("NOTIFICATION_FAILED").label("alert_type"),
             NotificationRecord.id.label("source_id"),
-            NotificationRecord.status.label("status"),
+            _alert_union_text(db, NotificationRecord.status).label("status"),
             NotificationRecord.task_id.label("task_id"),
             literal(None).label("review_key"),
             ReviewTask.project_id.label("project_id"),
@@ -893,9 +896,9 @@ def _load_recent_alerts(
         select(
             literal("FALLBACK").label("alert_type"),
             AiReviewResult.id.label("source_id"),
-            AiReviewResult.status.label("status"),
+            _alert_union_text(db, AiReviewResult.status).label("status"),
             AiReviewResult.task_id.label("task_id"),
-            AiReviewResult.review_key.label("review_key"),
+            _alert_union_text(db, AiReviewResult.review_key).label("review_key"),
             AiReviewResult.project_id.label("project_id"),
             Project.name.label("project_name"),
             AiReviewResult.updated_at.label("occurred_at"),
@@ -918,9 +921,9 @@ def _load_recent_alerts(
         select(
             literal("CRITICAL_FINDING").label("alert_type"),
             AiReviewResult.id.label("source_id"),
-            AiReviewResult.status.label("status"),
+            _alert_union_text(db, AiReviewResult.status).label("status"),
             AiReviewResult.task_id.label("task_id"),
-            AiReviewResult.review_key.label("review_key"),
+            _alert_union_text(db, AiReviewResult.review_key).label("review_key"),
             AiReviewResult.project_id.label("project_id"),
             Project.name.label("project_name"),
             AiReviewResult.updated_at.label("occurred_at"),
@@ -960,6 +963,13 @@ def _load_recent_alerts(
         .order_by(combined.c.occurred_at.desc())
         .limit(alert_limit),
     )
+
+
+def _alert_union_text(db: Session, expression):
+    bind = db.get_bind()
+    if bind.dialect.name == "mysql":
+        return expression.collate(MYSQL_ALERT_UNION_COLLATION)
+    return expression
 
 
 def _select_active_task_ids(

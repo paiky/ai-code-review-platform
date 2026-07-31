@@ -5,7 +5,7 @@
 ## 当前执行状态
 
 - 当前阶段：`Phase 2D`
-- 阶段状态：`PHASE 2D IMPLEMENTED — BROWSER QA BLOCKED`
+- 阶段状态：`PHASE 2D BROWSER QA RESUMED — BACKEND RESTART REQUIRED`
 - Phase 0 基线 Commit：`2005b8f`
 - Phase 1 基线 Commit：`0cbb148`
 - Phase 2 拆分确认时间：2026-07-31
@@ -16,10 +16,11 @@
 - Phase 2C 授权时间：2026-07-31
 - Phase 2C 完成时间：2026-07-31
 - Phase 2D 授权时间：2026-07-31
+- Phase 2D MySQL 兼容性热修复授权时间：2026-07-31
 - 计划更新时间：2026-07-31
-- 当前目标：Phase 2D 实现和自动化验证已完成；待稳定的独立服务 owner 可用后，补齐三档视口、长时间动态状态、真实绘制耗时和视觉对齐浏览器验收。
-- 当前明确不做：不修改后端、Runtime/Governance API、Command Center 轮询策略、任务聚焦、节点交互、AppFrame 轮询去重、MySQL 优化或其他 Phase 3 能力；不使用定时器模拟 Provider/Agent 工作；不进入 Phase 3。
-- 停止点：当前 Codex/Windows 环境无法建立可复用的 5173/8090 长驻服务，按恢复约束停止环境重试。保留已通过的自动化与构建结果、明确登记未完成浏览器项并提交；Phase 2D 和 Phase 2 不标记 Completed，不进入 Phase 3。
+- 当前目标：MySQL 告警 UNION 兼容性热修复已通过专项测试和同库直接调用；等待用户重启当前多实例 8090 后端并只保留一个实例，再验证 HTTP 200 并继续 Phase 2D 浏览器验收。
+- 当前明确不做：除本次用户明确授权的 Command Center MySQL 查询兼容性热修复外，不修改 Runtime/Governance API 契约、Command Center 轮询策略、数据库结构或业务数据；不增加任务聚焦、节点交互、AppFrame 轮询去重、MySQL 优化或其他 Phase 3 能力；不进入 Phase 3。
+- 停止点：兼容性热修复提交后停止；不擅自结束用户启动的 8090 多实例。等待用户在原终端完成后端重启，再继续 HTTP 和浏览器验收。Phase 2D 和 Phase 2 不标记 Completed，不进入 Phase 3。
 
 本计划同时作为分阶段实施总控和验收记录。每个阶段开始前更新状态，完成后回写验证结果并停止。
 
@@ -2621,3 +2622,20 @@ Phase 2C 到此立即停止。不得自动开始 Phase 2D，不得提前加入�
 `PHASE 2D IMPLEMENTED — BROWSER QA BLOCKED`
 
 Phase 2D 在此停止，不进入 Phase 3。待用户提供已 ready 的 5173/8090 环境或独立 runner 后，只补做上述浏览器验收并更新完成状态。
+
+### 8.10.7 MySQL 告警 UNION 兼容性热修复
+
+- 现象：当前本地 8090 和 5173 代理访问 `/api/command-center/runtime` 均返回 500；`/api/command-center/governance` 与 `/api/health` 返回 200。
+- 根因：`_load_recent_alerts()` 将 Scheduler Job、Agent Run、Notification、Fallback 和 Critical Finding 五类告警执行 `UNION ALL`。当前 MySQL 中 `agent_review_runs.status/review_key` 为 `utf8mb4_general_ci`，其余参与 UNION 的对应文本列为 `utf8mb4_unicode_ci`，MySQL 抛出 `1271 Illegal mix of collations for operation 'UNION'`。
+- 授权边界：只在 MySQL 查询生成阶段显式统一 UNION 文本输出的排序规则，SQLite 和其他方言保持原查询；补充 SQL 编译和 Command Center API 回归测试。不执行 `ALTER TABLE`，不修改数据库数据或接口契约。
+- 验收：Command Center 后端专项测试通过；当前 MySQL 的 8090 runtime 直连和 5173 代理均恢复 200，governance/health 保持 200。
+- 实施结果：
+  - `backend-python/app/command_center/repository.py` 仅在 MySQL 方言下将告警 UNION 的 `status` 和 `review_key` 输出统一为 `utf8mb4_unicode_ci`；未修改 schema 或数据。
+  - 新增 `backend-python/tests/unit/test_command_center_repository.py`，验证 MySQL SQL 含显式 COLLATE，非 MySQL 保持原表达式。
+  - Command Center 专项 pytest 27 项通过，0 失败；本次两个文件的 ruff 专项检查通过。
+  - 全仓库 lint 脚本仍因 5 个既有无关文件的 unused import/local variable 报错，本次不扩展修改。
+  - 使用当前 `.local/gitlab.env` 和同一 MySQL 直接调用 `get_runtime_snapshot()` 成功，返回 `activeTasks=0`、`activeFlows=0`、`alerts=7`。
+- 当前运行态：
+  - 当前旧 8090 HTTP 实例仍返回 500，说明运行进程未加载新代码。
+  - `netstat` 显示 8090 同时由 PID `55452`、`61348`、`44664` 监听；归属命令行在当前权限下不可见，因此不由 Agent 擅自停止。
+  - 用户需在原启动终端结束现有后端实例，并通过 `scripts\run-backend.cmd dev` 只启动一个 8090 实例。重启后再完成 8090 直连、5173 代理和浏览器验收。
