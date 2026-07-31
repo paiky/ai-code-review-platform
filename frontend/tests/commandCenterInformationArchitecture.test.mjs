@@ -70,7 +70,7 @@ test('task list and task detail routes remain explicit and separate from home', 
 
 
 test('phase two D Canvas stays read-only and uses only snapshot-driven animation', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="PHASE_2B"'), true);
+  assert.equal(pageSource.includes('data-command-center-phase="PHASE_2D"'), true);
   assert.equal(pageSource.includes('READ-ONLY CONTROL PLANE'), true);
   assert.equal(pageSource.includes('<canvas'), false);
   assert.equal(pageSource.includes('<CommandCenterCanvas'), true);
@@ -84,6 +84,8 @@ test('phase two D Canvas stays read-only and uses only snapshot-driven animation
   assert.equal(canvasSource.includes('max-width: 700px'), true);
   assert.equal(canvasSource.includes('data-command-center-canvas-fallback'), false);
   assert.equal(topologySource.includes('data-command-center-canvas-fallback'), true);
+  assert.equal(topologySource.includes('PHASE 2D · LIVE CANVAS'), true);
+  assert.equal(topologySource.includes('PHASE 2D · DOM FALLBACK'), true);
   assert.equal(rendererSource.includes('isAnimationEnabled: () => this.shouldAnimate()'), true);
   assert.equal(rendererSource.includes('reconcileCommandCenterScenes'), true);
   assert.equal(rendererSource.includes('COMMAND_CENTER_INDEPENDENT_FLOW_LIMIT = 20'), true);

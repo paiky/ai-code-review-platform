@@ -1,7 +1,7 @@
 import { fetchApi } from '../api.js';
 
 
-export function loadRuntimeSnapshot({ signal, windowHours = 24, activeLimit = 20, alertLimit = 20 } = {}) {
+export function loadRuntimeSnapshot({ signal, windowHours = 24, activeLimit = 50, alertLimit = 20 } = {}) {
   const params = new URLSearchParams({
     windowHours: String(windowHours),
     activeLimit: String(activeLimit),

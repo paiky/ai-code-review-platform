@@ -312,6 +312,13 @@ test('animates live state and stops after a one-time terminal transition', () =>
   assert.equal(controller.getSnapshot().transitionCount, 1);
   assert.equal(harness.pendingFrames(), 1);
 
+  controller.setScene(buildScene(
+    '2026-07-31T02:00:10Z',
+    [flow(1, 'main', 'FAILED', 'FAILED')]
+  ));
+  assert.equal(controller.getSnapshot().transitionCount, 1);
+  assert.equal(harness.pendingFrames(), 1);
+
   harness.flushFrame(1_200);
   assert.equal(controller.getSnapshot().transitionCount, 0);
   assert.equal(controller.getSnapshot().running, false);

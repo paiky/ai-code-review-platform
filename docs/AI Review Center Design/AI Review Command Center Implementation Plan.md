@@ -5,7 +5,7 @@
 ## 当前执行状态
 
 - 当前阶段：`Phase 2D`
-- 阶段状态：`PHASE 2D IMPLEMENTED — BROWSER QA PARTIAL`
+- 阶段状态：`PHASE 2D IMPLEMENTED — BROWSER QA PARTIAL (VISIBILITY ONLY)`
 - Phase 0 基线 Commit：`2005b8f`
 - Phase 1 基线 Commit：`0cbb148`
 - Phase 2 拆分确认时间：2026-07-31
@@ -18,9 +18,9 @@
 - Phase 2D 授权时间：2026-07-31
 - Phase 2D MySQL 兼容性热修复授权时间：2026-07-31
 - 计划更新时间：2026-07-31
-- 当前目标：三档响应式、Idle 长时运行和真实 HTTP 链路已完成浏览器验收；待具备真实 Active Flow/超限 Flow 数据和可仿真 reduced-motion/visibility/failure 的浏览器环境后，补齐动态状态、真实绘制耗时与生命周期回退验收。
+- 当前目标：严格收口已补齐 Active Flow、超限 Flow、reduced-motion、失败回退、资源清理和长期性能门禁；仅原生页面隐藏/恢复信号受当前唯一浏览器后端限制，保留为未完成项。
 - 当前明确不做：除本次用户明确授权的 Command Center MySQL 查询兼容性热修复外，不修改 Runtime/Governance API 契约、Command Center 轮询策略、数据库结构或业务数据；不增加任务聚焦、节点交互、AppFrame 轮询去重、MySQL 优化或其他 Phase 3 能力；不进入 Phase 3。
-- 停止点：回写当前可完成的真实浏览器结果并提交文档后立即停止；不制造 Provider/Agent 工作、不修改业务数据、不重复前端测试或生产构建、不停止用户新启动的 5173/8090 服务，不进入 Phase 3。
+- 停止点：提交本次最小修复和严格收口结果后立即停止；Phase 2 不标记 Completed，不停止用户新启动的 5173/8090 服务，不进入 Phase 3。
 
 本计划同时作为分阶段实施总控和验收记录。每个阶段开始前更新状态，完成后回写验证结果并停止。
 
@@ -2672,3 +2672,70 @@ Phase 2D 在此停止，不进入 Phase 3。待用户提供已 ready 的 5173/80
 `PHASE 2D IMPLEMENTED — BROWSER QA PARTIAL`
 
 Phase 2D 和 Phase 2 不标记 Completed。当前验收到此停止，不进入 Phase 3。
+
+### 8.10.9 Phase 2D 严格收口设计
+
+- 用户确认使用隔离 QA 数据与临时验收产物补齐剩余门禁；不得连接或修改现有业务数据库，不得停止现有 5173/8090 服务。
+- 收口检查发现 `loadRuntimeSnapshot()` 默认请求 `activeLimit=20`，与 Canvas 独立 Flow 上限 20 相同。后端虽已允许最多 50 条，但生产页面无法取得第 21 条 Flow，因此超限聚合在真实页面不可达。
+- 最小修复只将 Command Center Runtime 请求默认上限提升到既有契约允许的 50，不修改 Runtime API 契约、查询上限或其他轮询行为；补充 API 请求参数回归测试。
+- 1440 浏览器视觉检查发现页面阶段属性与拓扑角标仍保留 `PHASE 2B · STATIC CANVAS`；收口时同步改为 `PHASE_2D` 与 `PHASE 2D · LIVE CANVAS / DOM FALLBACK`，只修正已过期的可见阶段语义。
+- 动态浏览器检查发现 Runtime 与 Governance 并发刷新时，Governance 完成会以同一 Runtime `snapshotKey` 再次下发等价 Scene，提前清除刚建立的状态过渡；Controller 对同一 `snapshotKey` 的等价重复更新直接忽略，避免非 Runtime 更新取消 900ms 事实过渡。
+- 代码变更后重新执行 Phase 2D 专项测试、前端全量测试和生产构建；浏览器通过隔离动态快照验证状态矩阵、超限聚合、媒体偏好、页面生命周期、失败回退和资源稳定性。
+- 若任一门禁无法取得真实证据，保持 `BROWSER QA PARTIAL` 并停止；只有全部通过才更新为 `PHASE 2 COMPLETED — WAITING FOR PHASE 3 CONFIRMATION`。
+
+### 8.10.10 Phase 2D 严格收口结果
+
+#### 验收发现与最小修复
+
+- Runtime 请求默认 `activeLimit` 从 20 调整为既有后端契约允许的 50；隔离 API 的全部真实页面请求均确认携带 `activeLimit=50`，27 条 Flow 可进入前端并触发 20 条独立 Flow + 7 条聚合表达。
+- 页面阶段属性从 `PHASE_2B` 更新为 `PHASE_2D`；Canvas/DOM 角标分别更新为 `PHASE 2D · LIVE CANVAS` 和 `PHASE 2D · DOM FALLBACK`。
+- Controller 忽略同一 Runtime `snapshotKey` 的等价重复 Scene，避免随后完成的 Governance 请求取消刚建立的 900ms 状态过渡；浏览器复验在过渡中读取到 `transitionCount=1`，完成后回到 0。
+- 新增 `commandCenterApi.test.mjs` 固定 Runtime 请求上限；Renderer 测试新增等价 Scene 不取消在途过渡回归。
+
+#### 隔离环境与数据边界
+
+- 使用内存生成的只读 Runtime/Governance QA 快照，不连接、不写入现有业务数据库，不触发 Provider、Agent Worker 或通知。
+- 受控 QA API/Vite 分别监听 8091/5174，由同一 owner PID `42700` 持有；启动调用有界返回，两个 HTTP 入口均为 200，stdout/stderr 分离记录且 stderr 为 0 字节。
+- 验收完成后通过持有句柄关闭两个服务，确认 5174/8091 不再监听并删除 `.local/phase2d-closeout/`；用户现有 5173 PID `28396`、8090 PID `53452` 保持运行。
+
+#### 动态状态与聚合
+
+- Standard Running、Agent Analyzing、Explicit Fallback、Failed 和 Stale 均在真实 React 页面展示正确引擎、阶段、告警和 lane 计数。
+- Stale 页面 `allowAnimation=false`、`activeRafCount=0`；Fallback/Failed 的连续动画停止。
+- 27 条运行 Flow 在 1440/1024 页面均为 `independent=20`、`aggregated=7`、`aggregateGroupCount=1`、`renderFlowCount=21`，Canvas 可见 `+7` 聚合标记。
+
+#### 响应式、失败回退与视觉
+
+- `1440 × 900`：页面 `clientWidth=1425`、`scrollWidth=1425`，粒子上限 120；阶段角标和聚合标记对齐 Phase 2D 语义。
+- `1024 × 800`：页面 `clientWidth=1009`、`scrollWidth=1009`，主区单列，粒子上限 80，Canvas 宽 907。
+- `390 × 844`：页面 `clientWidth/scrollWidth=375/375`，Canvas 不挂载，`SMALL_SCREEN` DOM fallback、五个单列节点和 Phase 2D fallback 角标正确。
+- controlled `matchMedia` 场景触发 `REDUCED_MOTION`，Canvas/RAF/Observer 均为 0，DOM topology 完整保留。
+- Canvas 初始化失败和绘制失败均触发 `CANVAS_FAILURE`；五个生命周期节点与 Flow 卡片保留，Canvas/RAF/Observer 均为 0，Canvas 自有 visibility listener 被移除。
+- 390 下全局 AppFrame 导航仍有内部横向滚动和裁切；该页面外框风险不在 Phase 2D 允许修改范围内，保留给 Phase 3 移动端静态降级。
+
+#### 真实浏览器性能
+
+- 1440 Standard：平均绘制 `0.16ms`、最大 `0.70ms`、超预算帧 0。
+- 1440 的 27 Flow 聚合：平均 `0.26ms`、最大 `6.20ms`、超预算帧 0、粒子 105/120。
+- 1024 的 27 Flow 聚合：平均 `0.36ms`、最大 `6.20ms`、超预算帧 0、粒子 63/80。
+- 60 秒 1024 超限场景：DOM 元素始终 355、Canvas 始终 1；平均绘制最终 `0.33ms`、最大 `1.00ms`、超预算帧 0，单 RAF/Observer/listener 注册始终为 1。
+- JS heap 为 `80,952,171 -> 97,113,706 -> 84,360,686` 字节，中点升高后回落，没有单调增长；浏览器控制台无 error/warn。
+
+#### 测试与构建
+
+- Phase 2D 专项测试：首轮 39/39；最终修复相关回归 18/18。
+- 前端全量 Node 测试：93/93。
+- `scripts\\run-frontend.cmd build`：通过；CSS `67.02 kB`（gzip `13.71 kB`），JS `1,724.12 kB`（gzip `536.08 kB`）。
+- 保留既有主 Bundle 大于 500 kB 警告；路由拆包属于后续阶段。
+
+#### 唯一未完成门禁
+
+- 当前仅提供 Codex In-app Browser。该浏览器保持受控页面 `document.visibilityState=visible`，打开其他标签也不产生 hidden；`visibilityState`/`hidden` 属性为不可重定义，隔离 QA 无法仿真原生 hidden 信号。
+- 页面隐藏暂停、恢复只刷新一轮、不重放隐藏期间状态的行为仍由 polling、Canvas Runtime 和 Renderer 自动化测试覆盖，但没有取得真实浏览器 hidden/visible 证据。
+- 严格遵守“无法取得真实证据则保持 Partial”的门禁，Phase 2D 与 Phase 2 不标记 Completed。
+
+当前状态：
+
+`PHASE 2D IMPLEMENTED — BROWSER QA PARTIAL (VISIBILITY ONLY)`
+
+当前收口到此停止，不进入 Phase 3。

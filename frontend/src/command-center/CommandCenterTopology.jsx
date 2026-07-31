@@ -22,7 +22,7 @@ export default function CommandCenterTopology({
           <h2 id="execution-map-title">Review 生命周期</h2>
         </div>
         <span className="command-center-phase-badge">
-          {canvasActive ? 'PHASE 2B · STATIC CANVAS' : 'PHASE 2B · DOM TOPOLOGY'}
+          {canvasActive ? 'PHASE 2D · LIVE CANVAS' : 'PHASE 2D · DOM FALLBACK'}
         </span>
       </div>
 

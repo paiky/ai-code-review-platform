@@ -445,6 +445,7 @@ class CommandCenterCanvasController {
   setScene(scene) {
     if (this.disposed || this.failed) return;
     const nextScene = normalizeCommandCenterScene(scene);
+    if (nextScene.snapshotKey === this.scene.snapshotKey) return;
     this.transitions = this.isDocumentHidden()
       ? Object.freeze([])
       : reconcileCommandCenterScenes(this.scene, nextScene);
