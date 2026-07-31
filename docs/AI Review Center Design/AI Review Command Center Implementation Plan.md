@@ -5,7 +5,7 @@
 ## 当前执行状态
 
 - 当前阶段：`Phase 2D`
-- 阶段状态：`PHASE 2D BROWSER QA RESUMED — BACKEND RESTART REQUIRED`
+- 阶段状态：`PHASE 2D IMPLEMENTED — BROWSER QA PARTIAL`
 - Phase 0 基线 Commit：`2005b8f`
 - Phase 1 基线 Commit：`0cbb148`
 - Phase 2 拆分确认时间：2026-07-31
@@ -18,9 +18,9 @@
 - Phase 2D 授权时间：2026-07-31
 - Phase 2D MySQL 兼容性热修复授权时间：2026-07-31
 - 计划更新时间：2026-07-31
-- 当前目标：MySQL 告警 UNION 兼容性热修复已通过专项测试和同库直接调用；等待用户重启当前多实例 8090 后端并只保留一个实例，再验证 HTTP 200 并继续 Phase 2D 浏览器验收。
+- 当前目标：三档响应式、Idle 长时运行和真实 HTTP 链路已完成浏览器验收；待具备真实 Active Flow/超限 Flow 数据和可仿真 reduced-motion/visibility/failure 的浏览器环境后，补齐动态状态、真实绘制耗时与生命周期回退验收。
 - 当前明确不做：除本次用户明确授权的 Command Center MySQL 查询兼容性热修复外，不修改 Runtime/Governance API 契约、Command Center 轮询策略、数据库结构或业务数据；不增加任务聚焦、节点交互、AppFrame 轮询去重、MySQL 优化或其他 Phase 3 能力；不进入 Phase 3。
-- 停止点：兼容性热修复提交后停止；不擅自结束用户启动的 8090 多实例。等待用户在原终端完成后端重启，再继续 HTTP 和浏览器验收。Phase 2D 和 Phase 2 不标记 Completed，不进入 Phase 3。
+- 停止点：回写当前可完成的真实浏览器结果并提交文档后立即停止；不制造 Provider/Agent 工作、不修改业务数据、不重复前端测试或生产构建、不停止用户新启动的 5173/8090 服务，不进入 Phase 3。
 
 本计划同时作为分阶段实施总控和验收记录。每个阶段开始前更新状态，完成后回写验证结果并停止。
 
@@ -2636,6 +2636,39 @@ Phase 2D 在此停止，不进入 Phase 3。待用户提供已 ready 的 5173/80
   - 全仓库 lint 脚本仍因 5 个既有无关文件的 unused import/local variable 报错，本次不扩展修改。
   - 使用当前 `.local/gitlab.env` 和同一 MySQL 直接调用 `get_runtime_snapshot()` 成功，返回 `activeTasks=0`、`activeFlows=0`、`alerts=7`。
 - 当前运行态：
-  - 当前旧 8090 HTTP 实例仍返回 500，说明运行进程未加载新代码。
-  - `netstat` 显示 8090 同时由 PID `55452`、`61348`、`44664` 监听；归属命令行在当前权限下不可见，因此不由 Agent 擅自停止。
-  - 用户需在原启动终端结束现有后端实例，并通过 `scripts\run-backend.cmd dev` 只启动一个 8090 实例。重启后再完成 8090 直连、5173 代理和浏览器验收。
+  - 用户重启后，5173 新实例为 PID `28396`；8090 新 reload 树为 `41364 -> 53452 -> 26144`。
+  - 两棵旧实例 `44664 -> 37060`、`55452 -> 21092` 的创建时间与此前 Phase 2D QA 失败启动一致，命令行确认是 uvicorn multiprocessing worker；按既定“确认归属后才停止”的约束精确清理。
+  - 清理后 8090 只剩 PID `53452` 监听。8090 runtime 直连、5173 runtime 代理、governance 和 health 均返回 200；runtime 返回 `success=true`、`activeTasks=0`、`activeFlows=0`、`alerts=7`。
+
+### 8.10.8 Phase 2D 浏览器验收结果
+
+- 服务与控制台：
+  - 5173 PID `28396`、8090 PID `53452` 保持 ready；runtime 直连与代理、governance、health 均为 200。
+  - 浏览器控制台在本次验收期间无 error/warn。
+- `1440 × 900`：
+  - 页面 `clientWidth=1425`、`scrollWidth=1425`，无页面级横向溢出。
+  - 单个 Command Center Canvas 处于 `active`，阶段 `PHASE_2D`，健康状态 `ready`，粒子上限 `120`。
+  - 当前真实数据为 Idle，独立/聚合 Flow 均为 0；桌面首屏的信息层级、暗色面板、拓扑和 Live Ops 对齐目标风格。
+  - 当前 7 条真实告警使 Live Ops 高于左侧拓扑，左列内容结束后出现较大空区；属于最终视觉对齐的剩余风险。
+- `1024 × 800`：
+  - 页面 `clientWidth=1009`、`scrollWidth=1009`，无页面级横向溢出。
+  - 单 Canvas `active`、`PHASE_2D`、`ready`，粒子上限 `80`；主区切为单列，Live Ops 位于拓扑之后。
+- `390 × 844`：
+  - 页面 `clientWidth=375`、`scrollWidth=375`，无页面级横向溢出。
+  - Canvas 不挂载，完整 DOM topology 以 `SMALL_SCREEN` fallback 呈现；生命周期节点为单列。
+  - Command Center 内容本身适配正常；全局 AppFrame 导航保留内部横向滚动条且有导航项裁切，属于页面外框既有移动端风险。
+- 60 秒真实轮询稳定性：
+  - DOM 元素数始终为 `338`，Canvas 始终为 1 个，backing size 始终为 `907 × 227`。
+  - Canvas `ready`、粒子上限 `80`、独立/聚合 Flow `0/0` 均保持稳定；Runtime 快照时间持续更新。
+  - 当前 Idle 场景没有持续粒子动画；未观察到 DOM/Canvas 重建或控制台错误。
+- 当前浏览器无法完成的项目：
+  - runtime 当前为 `activeTasks=0`、`activeFlows=0`；在不创建业务数据、不模拟 Provider/Agent 工作的边界下，无法验收 Standard Running、Agent Running、Explicit Fallback、Failed、Stale 和 >20 Flow 聚合的真实浏览器表现。
+  - 内置浏览器不提供 reduced-motion 仿真；新建标签时原页面 `document.visibilityState` 仍为 `visible`，不能形成真实隐藏/恢复信号。
+  - 初始化/绘制失败没有只读注入入口，不能在真实页面触发；对应行为仅有 Renderer/Controller 自动化测试覆盖。
+  - 浏览器隔离执行上下文可读取 Canvas 数据属性，但无法读取主页面挂载的 JS expando 诊断函数；因此没有取得真实平均/最大绘制耗时，8ms 门禁仍以确定性 Runtime 测试为证据。
+
+当前状态：
+
+`PHASE 2D IMPLEMENTED — BROWSER QA PARTIAL`
+
+Phase 2D 和 Phase 2 不标记 Completed。当前验收到此停止，不进入 Phase 3。
