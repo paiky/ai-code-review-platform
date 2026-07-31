@@ -152,11 +152,20 @@ test('keeps one observer, one visibility listener and one RAF across polling upd
   harness.flushFrame(32);
   assert.equal(harness.pendingFrames(), 1);
 
+  const beforeDispose = controller.getSnapshot();
   controller.dispose();
+  const afterDispose = controller.getSnapshot();
   assert.equal(harness.pendingFrames(), 0);
   assert.equal(harness.observerInstances[0].disconnectCount, 1);
   assert.equal(harness.documentTarget.removeCount, 1);
   assert.equal(harness.documentTarget.listenerCount(), 0);
+  assert.equal(afterDispose.disposed, true);
+  assert.equal(afterDispose.running, false);
+  assert.equal(afterDispose.observerActive, false);
+  assert.equal(afterDispose.listenerActive, false);
+  assert.equal(afterDispose.frameCount, beforeDispose.frameCount);
+  assert.equal(afterDispose.width, beforeDispose.width);
+  assert.equal(afterDispose.dpr, beforeDispose.dpr);
 });
 
 test('pauses while hidden, resumes when visible and reduced motion stays static', () => {

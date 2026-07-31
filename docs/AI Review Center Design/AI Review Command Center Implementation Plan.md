@@ -4,14 +4,17 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Phase 1`
-- 阶段状态：`PHASE 1 COMPLETED — WAITING FOR PHASE 2 CONFIRMATION`
+- 当前阶段：`Phase 2A`
+- 阶段状态：`PHASE 2A COMPLETED — WAITING FOR PHASE 2B CONFIRMATION`
 - Phase 0 基线 Commit：`2005b8f`
-- 用户授权时间：2026-07-31
-- 阶段完成时间：2026-07-31
-- 本阶段目标：在 Phase 0 只读接口和页面骨架之上，接入有界的真实运行态与治理态聚合，并完成静态拓扑的数据驱动展示。
-- 本阶段明确不做：修改既有 Review 业务逻辑、新增业务表、Canvas、粒子动画、任务聚焦、AppFrame 轮询去重，以及任何 Phase 2/3 能力。
-- 停止点：Phase 1 已完成并通过验证。立即停止，等待用户验证及 Phase 2 明确确认。
+- Phase 1 基线 Commit：`0cbb148`
+- Phase 2 拆分确认时间：2026-07-31
+- Phase 2A 授权时间：2026-07-31
+- Phase 2A 完成时间：2026-07-31
+- 计划更新时间：2026-07-31
+- 当前目标：Phase 2A 已完成通用 `canvasRuntime.js` 抽取，现有 `reviewCanvasRenderer.js` 已通过兼容适配器复用 Canvas 生命周期，调用方、视觉行为和测试契约保持不变。
+- 当前明确不做：不开始 Phase 2B；不创建 Command Center Canvas、Renderer、Scene 或粒子；不修改 Command Center Model、Presentation、页面、轮询和 CSS；不进入 Phase 2C/2D 或 Phase 3。
+- 停止点：Phase 2A 已完成并通过验证。立即停止，等待用户验证及 Phase 2B 明确确认。
 
 本计划同时作为分阶段实施总控和验收记录。每个阶段开始前更新状态，完成后回写验证结果并停止。
 
@@ -1020,35 +1023,52 @@ POLICY
 - 390/1024/1440 静态布局可用。
 - 完成后停止，等待确认 Phase 2。
 
-## Phase 2：Canvas 粒子动画
+## Phase 2：Canvas 粒子动画（拆分为 2A～2D）
 
 ### 目标
 
-在 Phase 1 真实数据和语义拓扑之上增加粒子视觉，不改变业务含义。
+在 Phase 1 真实数据和语义拓扑之上，以可回归、可停止的小阶段增加粒子视觉，不改变业务含义，不把现有 Review Canvas 重构、新 Renderer、状态动画和性能验收压入同一次改动。
 
-### 修改范围
+### 子阶段
 
-- 抽取 `canvasRuntime.js`
-- 保持 Review Canvas API 兼容
-- 新增 Command Center Renderer
-- 实现粒子 Scene
-- 实现 Queued/Running/Failed/Fallback/Agent 状态动画
-- reduced-motion
-- Canvas failure fallback
-- 性能诊断
+#### Phase 2A：Canvas Runtime 抽取
+
+- 新增通用 `canvasRuntime.js`。
+- 让现有 `reviewCanvasRenderer.js` 复用通用 Runtime。
+- 保持 `ReviewImmersiveCanvas.jsx`、Controller API、视觉行为和现有测试契约不变。
+- 不创建任何 Command Center Canvas、Renderer、Scene 或粒子实现。
+- 完成后停止，等待用户验证并确认继续 Phase 2B。
+
+#### Phase 2B：Command Center 静态 Canvas
+
+- 新增 `CommandCenterCanvas.jsx` 和 `commandCenterCanvasRenderer.js`。
+- 建立由 Phase 1 Presentation 生成的静态 Scene、节点、边和稳定坐标。
+- 接入 Canvas 初始化失败、reduced-motion、小屏和 DOM 拓扑回退。
+- 只绘制真实静态拓扑，不生成粒子、不播放状态动画。
+- 完成后停止，等待用户验证并确认继续 Phase 2C。
+
+#### Phase 2C：真实状态粒子与过渡
+
+- 只根据真实 Runtime Snapshot 生成 Queued、Running、Failed、Fallback 和 Agent 阶段粒子。
+- 使用稳定 ID、固定 seed 和 Previous/Next Snapshot 对账。
+- Failed/Fallback 只在真实状态变化时播放一次，历史状态不重放。
+- 无真实活动、Stale、页面隐藏或 reduced-motion 时不持续播放。
+- 完成后停止，等待用户验证并确认继续 Phase 2D。
+
+#### Phase 2D：性能、响应式与浏览器验收
+
+- 验证单 Canvas、单 RAF、单 ResizeObserver 和单 visibility listener。
+- 完成粒子上限、DPR、绘制耗时、失败清理和长时间运行稳定性验证。
+- 验收 1440/1024/390、隐藏/恢复、reduced-motion、初始化失败和 Stale。
+- 回归现有 Review Canvas 与 Command Center DOM fallback。
+- 完成后停止，等待用户确认是否进入 Phase 3。
 
 ### 验收标准
 
-- 现有 `reviewCanvasRenderer` 全部测试继续通过。
-- `ReviewImmersiveCanvas.jsx` 无需修改。
-- 一个 Canvas、一个 RAF、一个 Observer、一个 visibility listener。
-- 轮询更新不重建 Canvas。
-- 无真实活动时无粒子流动。
-- Failed/Fallback 历史状态不重复回放。
-- Stale 时停止动画。
-- 平均绘制耗时不超过 8ms/帧。
-- 1440/1024/390 均无溢出。
-- 完成后停止，等待确认 Phase 3。
+- 每个子阶段只达到自身验收标准，不以前置实现预埋后续阶段能力。
+- 每个子阶段完成后更新本计划的状态、实际修改文件、验证结果和遗留风险。
+- 每个子阶段完成后必须立即停止；只有用户明确确认“继续 Phase 2B/2C/2D”后才能推进。
+- Phase 2D 完成前，原 Phase 2 的整体完成状态不得标记为 Completed。
 
 ## Phase 3：交互与性能优化
 
@@ -1926,8 +1946,387 @@ Phase 1 仅验收静态真实数据界面：
 
 ### 7.13.5 Phase 1 停止确认
 
-当前状态：
+Phase 1 完成时状态：
 
 `PHASE 1 COMPLETED — WAITING FOR PHASE 2 CONFIRMATION`
 
 本阶段到此立即停止。不得自动开始 Phase 2，不得创建 Canvas、Renderer、粒子或动画实现。
+
+2026-07-31，用户确认将 Phase 2 拆分为 2A～2D。本次确认只授权更新分阶段计划，不视为 Phase 2A 实现授权。
+
+------
+
+# 八、Phase 2 分阶段实施总控
+
+## 8.1 总控 Prompt
+
+后续每次推进 Phase 2 子阶段时，使用以下总控约束：
+
+```text
+继续推进 AI Review Command Center。
+
+先读取：
+1. AI Code Review Platform Current Architecture Overview.md
+2. AI Review Command Center Design Proposal.md
+3. AI Review Command Center Implementation Plan.md
+
+以 Implementation Plan 顶部“当前执行状态”为唯一阶段入口。
+本轮只允许执行用户明确确认的一个 Phase 2 子阶段，不得预做下一子阶段。
+
+开始实现前：
+1. 检查 HEAD、git status、git diff 和 git diff --check。
+2. 核对上一阶段 commit、停止状态和无关未跟踪文件。
+3. 将当前子阶段状态更新为 IN PROGRESS。
+
+实现期间：
+1. 只修改该子阶段列明的文件和职责。
+2. 不修改 Review、Agent、Provider、Notification、Feedback、Evaluation 业务逻辑。
+3. 不新增业务表、迁移、索引、依赖或写接口。
+4. Canvas 和粒子只能表达真实 Snapshot，不得模拟业务进度。
+5. 保持无关未跟踪文件不动。
+
+完成后：
+1. 执行该子阶段规定的测试、构建和验收。
+2. 将实际修改文件、验证结果、遗留风险和停止点回写 Implementation Plan。
+3. 将状态更新为该子阶段 COMPLETED — WAITING FOR NEXT PHASE CONFIRMATION。
+4. 立即停止，不开始下一子阶段，不自动提交，除非用户明确要求。
+```
+
+## 8.2 Agent 自主推进授权边界
+
+用户明确确认某个子阶段后，Agent 可在该子阶段内自主执行：
+
+- 读取相关前端源码、测试和本计划列明的局部文档。
+- 修改该子阶段明确列出的 Canvas Runtime、Renderer、Presentation、组件、样式和测试。
+- 运行前端 Node 测试、生产构建和该子阶段规定的浏览器验收。
+- 在 `.local/` 创建有界、可清理的临时日志或 QA 产物，并在阶段结束前删除本阶段临时脚本和数据库。
+- 根据测试或验收暴露的同范围问题做最小修复。
+
+以下事项必须停止并另行取得用户确认：
+
+- 开始下一个 Phase 2 子阶段或进入 Phase 3。
+- 修改后端 Runtime/Governance 契约、查询口径或业务数据。
+- 修改 Review、Scheduler、Agent、Provider、Notification、Feedback、Evaluation 或 Policy 业务逻辑。
+- 新增数据库表、迁移、索引、缓存、物化视图、WebSocket/SSE 或第三方动画依赖。
+- 改变现有 `ReviewImmersiveCanvas` 的产品语义、交互或对外组件契约。
+- 将任务聚焦、节点钻取、AppFrame 轮询去重或 MySQL 查询计划优化提前并入 Phase 2。
+- 扩大文件范围以处理与当前子阶段无关的既有问题。
+
+## 8.3 Phase 2A：Canvas Runtime 抽取
+
+### 目标
+
+先隔离最高回归风险：只抽取通用 Canvas 生命周期，让现有 Review Canvas 通过适配器复用，证明行为兼容后再创建 Command Center Canvas。
+
+### 允许修改
+
+- 新增 `frontend/src/canvas/canvasRuntime.js`
+- 修改 `frontend/src/reviewCanvasRenderer.js`
+- 修改 `frontend/tests/reviewCanvasRenderer.test.mjs`
+- 按必要性新增 `frontend/tests/canvasRuntime.test.mjs`
+- 更新本 Implementation Plan
+
+### 禁止修改或创建
+
+- 不修改 `frontend/src/ReviewImmersiveCanvas.jsx`
+- 不创建 `CommandCenterCanvas.jsx`
+- 不创建 `commandCenterCanvasRenderer.js`
+- 不修改 Command Center Model、Presentation、页面、轮询和 CSS
+- 不实现节点、边、Scene、粒子或状态动画
+
+### 实现约束
+
+- `createReviewCanvasController(options)` 的函数签名、返回 Controller 和调用方保持兼容。
+- Runtime 只抽取 Canvas/Context 初始化、DPR 同步、ResizeObserver、RAF、visibility、reduced-motion、错误清理、dispose 和性能诊断。
+- 现有固定 seed、粒子上限、状态映射和 Review 业务绘制仍留在 `reviewCanvasRenderer.js`。
+- 不以“后续可能复用”为由提前加入 Command Center Scene API。
+
+### 验证
+
+- `node --test frontend/tests/reviewCanvasRenderer.test.mjs`
+- 如新增 Runtime 测试，执行 `node --test frontend/tests/canvasRuntime.test.mjs`
+- `node --test frontend/tests/*.test.mjs`
+- `scripts/run-frontend.cmd build`
+- 核对 `ReviewImmersiveCanvas.jsx` 无差异
+- 核对无 Command Center Canvas/Renderer 新文件
+- `git diff --check`
+
+### 落地 Prompt
+
+```text
+开始 Phase 2A。只抽取通用 canvasRuntime，并让现有 reviewCanvasRenderer 通过兼容适配器复用。
+不得创建 Command Center Canvas、Renderer、Scene 或粒子，不得修改 ReviewImmersiveCanvas.jsx。
+完成全部 Review Canvas 回归、前端全量测试和生产构建后，回写实施结果并停止，等待 Phase 2B 确认。
+```
+
+### 停止点
+
+状态更新为：
+
+`PHASE 2A COMPLETED — WAITING FOR PHASE 2B CONFIRMATION`
+
+随后立即停止。
+
+## 8.4 Phase 2B：Command Center 静态 Canvas
+
+### 目标
+
+在已验证的 Canvas Runtime 上建立 Command Center 独立 Renderer 和静态 Scene，先证明 Canvas、DOM fallback 和真实数据边界正确，不引入任何运动语义。
+
+### 允许修改
+
+- 新增 `frontend/src/command-center/CommandCenterCanvas.jsx`
+- 新增 `frontend/src/command-center/commandCenterCanvasRenderer.js`
+- 新增 `frontend/tests/commandCenterCanvasRenderer.test.mjs`
+- 修改 `frontend/src/command-center/CommandCenterPage.jsx`
+- 修改 `frontend/src/command-center/CommandCenterTopology.jsx`
+- 修改 `frontend/src/command-center/commandCenterPresentation.js`
+- 修改 `frontend/src/command-center/commandCenter.css`
+- 修改 Command Center 信息架构和 Presentation 测试
+- 按必要性修复 `frontend/src/canvas/canvasRuntime.js` 的同范围缺陷
+- 更新本 Implementation Plan
+
+### 禁止实现
+
+- 不生成动态粒子。
+- 不播放 Queued、Running、Failed、Fallback 或 Agent 状态动画。
+- 不实现 Previous/Next Snapshot 过渡事件。
+- 不实现任务聚焦、节点选择、Drawer 联动或新增业务导航。
+- 不修改 Runtime/Governance API、Model 业务字段或轮询策略。
+
+### 实现约束
+
+- Scene 节点和边全部来自 Phase 1 Presentation，不接收原始 API 响应。
+- Canvas 只负责静态图形；文字、链接、可访问语义和交互区域仍由 DOM 提供。
+- reduced-motion、390px 小屏和初始化失败时完整使用 `CommandCenterTopology`。
+- 无数据时只显示静态生命周期，不创建模拟 Flow。
+- Phase 2B 的 `allowAnimation` 必须保持 `false`。
+
+### 验证
+
+- Command Center Renderer、Presentation 和信息架构测试
+- `frontend/tests/reviewCanvasRenderer.test.mjs`
+- 前端全量 Node 测试
+- 前端生产构建
+- 1440/1024/390 静态 Canvas 与 DOM fallback 验收
+- reduced-motion、Canvas 初始化失败和空数据验收
+- `git diff --check`
+
+### 落地 Prompt
+
+```text
+开始 Phase 2B。只建立由 Phase 1 Presentation 驱动的 Command Center 静态 Canvas、独立 Renderer 和 DOM fallback。
+不得创建粒子、状态动画或 Snapshot 过渡，不得修改后端、轮询和 Phase 3 交互。
+完成静态 Canvas、三档响应式、reduced-motion 和失败回退验收后，回写实施结果并停止，等待 Phase 2C 确认。
+```
+
+### 停止点
+
+状态更新为：
+
+`PHASE 2B COMPLETED — WAITING FOR PHASE 2C CONFIRMATION`
+
+随后立即停止。
+
+## 8.5 Phase 2C：真实状态粒子与过渡
+
+### 目标
+
+在静态 Scene 已验证的前提下，将 Phase 1 ActiveFlow 和状态事实映射为有限粒子及一次性过渡，确保动画只表达真实 Snapshot。
+
+### 允许修改
+
+- `frontend/src/command-center/commandCenterModel.js`
+- `frontend/src/command-center/commandCenterPresentation.js`
+- `frontend/src/command-center/CommandCenterCanvas.jsx`
+- `frontend/src/command-center/commandCenterCanvasRenderer.js`
+- `frontend/src/command-center/commandCenter.css`
+- 对应 Model、Presentation、Renderer 和信息架构测试
+- 按必要性修复 `frontend/src/canvas/canvasRuntime.js` 的同范围缺陷
+- 更新本 Implementation Plan
+
+### 状态范围
+
+- `QUEUED`
+- `RUNNING`
+- `FAILED`
+- `FALLBACK`
+- `AGENT_ANALYZING`
+- `AGENT_TOOL_ACTIVITY`
+- `AGENT_CONVERGING`
+- `AGENT_SUBMITTING`
+- `COMPLETED`
+- `STALE`
+
+### 实现约束
+
+- 粒子稳定 ID 和 seed 由 `taskId + reviewKey` 派生。
+- 首次加载的历史 Failed/Fallback 只显示静态状态，不回放一次性动画。
+- 只有 Previous Snapshot → Next Snapshot 的真实状态变化可以触发一次性过渡。
+- 无 ActiveFlow、数据 Stale、页面隐藏、reduced-motion 或 Canvas 失败时不持续流动。
+- 未识别状态只能安全降级为静态通用运行态，不猜测 Thinking。
+- 不在本地推进阶段，不用定时器模拟 Provider 或 Agent 工作。
+
+### 验证
+
+- 固定 seed、稳定 ID、粒子硬上限和 Snapshot 对账测试
+- Standard/Agent/Fallback/Failed/空闲/Stale 状态测试
+- 历史 Failed/Fallback 不重放测试
+- 页面隐藏、恢复和 reduced-motion 测试
+- Review Canvas 回归测试、前端全量 Node 测试和生产构建
+- `git diff --check`
+
+### 落地 Prompt
+
+```text
+开始 Phase 2C。只根据真实 Runtime Snapshot 为 Command Center 增加有限粒子和状态过渡。
+必须使用稳定 ID、固定 seed 和前后快照对账；历史 Failed/Fallback 不得重放，Stale/隐藏/reduced-motion 时不得持续动画。
+不得模拟业务阶段，不得进入任务聚焦、轮询去重或其他 Phase 3 能力。
+完成状态矩阵和回归验证后，回写实施结果并停止，等待 Phase 2D 确认。
+```
+
+### 停止点
+
+状态更新为：
+
+`PHASE 2C COMPLETED — WAITING FOR PHASE 2D CONFIRMATION`
+
+随后立即停止。
+
+## 8.6 Phase 2D：性能、响应式与浏览器验收
+
+### 目标
+
+不增加新产品能力，只收紧 Canvas 生命周期、性能预算、响应式、失败恢复和长时间运行稳定性，形成 Phase 2 整体验收结论。
+
+### 允许修改
+
+- `frontend/src/canvas/canvasRuntime.js`
+- `frontend/src/reviewCanvasRenderer.js`
+- `frontend/src/command-center/CommandCenterCanvas.jsx`
+- `frontend/src/command-center/commandCenterCanvasRenderer.js`
+- `frontend/src/command-center/commandCenter.css`
+- 对应 Canvas、Renderer、信息架构和性能测试
+- 本阶段浏览器 QA 所需的 `.local/` 临时产物，验收后必须清理
+- 更新本 Implementation Plan
+
+### 性能与生命周期门禁
+
+- 单页面一个 Command Center Canvas。
+- 单 Controller 一个 RAF、一个 ResizeObserver、一个 visibility listener。
+- 轮询更新只更新 Scene，不重建 Canvas 或 Controller。
+- DPR 最大 2。
+- 390px/1024px/1440px 粒子上限分别为 48/80/120。
+- 独立活跃 Flow 最多 20，其余聚合。
+- 平均绘制耗时目标不超过 8ms/帧。
+- 零尺寸、隐藏页面、Stale 和 reduced-motion 不持续绘制。
+- 初始化或绘制异常必须清理资源并回退 DOM 拓扑。
+
+### 验证
+
+- 现有 Review Canvas 与 Command Center Canvas 全部测试
+- 前端全量 Node 测试和生产构建
+- 1440 × 900、1024 × 800、390 × 844
+- Idle、Standard Running、Agent Running、Explicit Fallback、Failed、Stale
+- 页面隐藏/恢复、reduced-motion、初始化失败和绘制失败
+- 长时间轮询下 Timer、RAF、Observer、Listener 不累积
+- 本阶段启动的服务、端口 owner、临时脚本、日志和 QA 数据库精确清理
+- `git diff --check`
+
+### 落地 Prompt
+
+```text
+开始 Phase 2D。只做 Command Center Canvas 的性能、生命周期、响应式、失败回退和浏览器验收收口。
+不得增加任务聚焦、节点交互、AppFrame 轮询去重、MySQL 优化或其他 Phase 3 能力。
+达到单 RAF/Observer/listener、粒子上限、8ms 绘制预算、三档视口和失败回退门禁后，清理本阶段 QA 产物，回写 Phase 2 整体验收并停止。
+```
+
+### 停止点
+
+Phase 2D 和 Phase 2 整体通过后，状态更新为：
+
+`PHASE 2 COMPLETED — WAITING FOR PHASE 3 CONFIRMATION`
+
+随后立即停止。
+
+## 8.7 Phase 2A 实施结果
+
+实施完成时间：2026-07-31
+
+### 8.7.1 通用 Canvas Runtime
+
+已新增：
+
+- `frontend/src/canvas/canvasRuntime.js`
+
+Runtime 已统一负责：
+
+- Canvas/2D Context 初始化与目标校验。
+- DPR 归一化和像素尺寸同步。
+- 单 ResizeObserver、单 RAF 和单 visibility listener 生命周期。
+- 零尺寸等待、页面隐藏暂停与恢复刷新。
+- 动态/静态绘制切换和显式 `refresh()`。
+- 初始化/绘制失败的本地清理与单次失败回调。
+- dispose、帧数、平均/最大绘制耗时和资源状态诊断。
+
+Runtime 不包含 Review 状态、粒子布局、颜色、Scene、节点、边或 Command Center 业务语义。
+
+### 8.7.2 Review Canvas 兼容适配
+
+已修改：
+
+- `frontend/src/reviewCanvasRenderer.js`
+
+兼容结果：
+
+- `createReviewCanvasController(options)` 函数签名和返回 Controller 保持不变。
+- `setRenderParameters()`、`dispose()` 和 `getSnapshot()` 对外调用方式保持不变。
+- 固定 seed、宽度分档粒子上限、Review 状态映射和全部业务绘制仍保留在 Review Renderer。
+- Review Adapter 只通过 Runtime 的 resize、draw、animation-enabled 和 failure 回调接入生命周期。
+- `ReviewImmersiveCanvas.jsx` 未修改。
+- dispose 后诊断仍保留最终尺寸、DPR、帧数和清理后的资源状态。
+
+### 8.7.3 测试
+
+已新增：
+
+- `frontend/tests/canvasRuntime.test.mjs`
+
+覆盖：
+
+- 通用 Runtime 的尺寸、DPR、Observer、RAF、visibility、刷新和诊断。
+- 初始化失败、绘制失败、资源清理和失败回调单次触发。
+- 现有 Review Canvas 的确定性粒子、状态映射、单实例生命周期、隐藏恢复、reduced-motion、失败 fallback 和组件边界回归。
+
+验证结果：
+
+- Canvas Runtime + Review Canvas 专项测试：`9 passed`
+- 前端全量 Node 测试：`76 passed`
+- 前端生产构建：通过
+- `ReviewImmersiveCanvas.jsx`：无差异
+- `CommandCenterCanvas.jsx`：不存在
+- `commandCenterCanvasRenderer.js`：不存在
+- `git diff --check`：通过，仅有仓库现有 Windows LF/CRLF 提示
+- Vite 仍报告既有主 Bundle 大于 500 kB 的提示；路由拆包不属于 Phase 2A。
+
+### 8.7.4 实际修改文件
+
+- `docs/AI Review Center Design/AI Review Command Center Implementation Plan.md`
+- `frontend/src/canvas/canvasRuntime.js`
+- `frontend/src/reviewCanvasRenderer.js`
+- `frontend/tests/canvasRuntime.test.mjs`
+- `frontend/tests/reviewCanvasRenderer.test.mjs`
+
+未修改：
+
+- `frontend/src/ReviewImmersiveCanvas.jsx`
+- 全部 Command Center Model、Presentation、页面、轮询和 CSS
+- 后端、业务逻辑、数据库、迁移和依赖
+
+### 8.7.5 Phase 2A 停止确认
+
+当前状态：
+
+`PHASE 2A COMPLETED — WAITING FOR PHASE 2B CONFIRMATION`
+
+Phase 2A 到此立即停止。不得自动开始 Phase 2B，不得创建 Command Center Canvas、Renderer、Scene、节点、边、粒子或状态动画。

@@ -1,3 +1,9 @@
+import {
+  createCanvasRuntime,
+  normalizeCanvasDpr
+} from './canvas/canvasRuntime.js';
+
+
 export const REVIEW_CANVAS_SEED = 0x50c0de;
 export const REVIEW_CANVAS_MAX_DPR = 2;
 export const REVIEW_CANVAS_PARTICLE_LIMITS = Object.freeze({
@@ -87,10 +93,7 @@ export function resolveReviewCanvasParticleLimit(width) {
 }
 
 export function normalizeReviewCanvasDpr(value) {
-  return Math.min(
-    REVIEW_CANVAS_MAX_DPR,
-    Math.max(1, finiteNumber(value, 1))
-  );
+  return normalizeCanvasDpr(value, { maxDpr: REVIEW_CANVAS_MAX_DPR });
 }
 
 export function resolveReviewCanvasRenderParameters(input = {}) {
@@ -125,7 +128,10 @@ export function createReviewCanvasController(options = {}) {
   let controller = null;
   try {
     controller = new ReviewCanvasController(options);
-    controller.initialize();
+    if (!controller.initialize()) {
+      controller.dispose();
+      return null;
+    }
     return controller;
   } catch {
     controller?.dispose();
@@ -181,230 +187,88 @@ class ReviewCanvasController {
     this.canvas = options.canvas;
     this.container = options.container;
     this.onFailure = options.onFailure;
-    this.environment = normalizeEnvironment(options.environment);
-    this.context = null;
-    this.observer = null;
-    this.rafId = null;
+    this.environment = options.environment;
+    this.runtime = null;
+    this.lastRuntimeSnapshot = null;
     this.parameters = resolveReviewCanvasRenderParameters(options.parameters);
     this.particles = [];
-    this.width = 0;
-    this.height = 0;
-    this.dpr = 1;
-    this.frameCount = 0;
-    this.totalDrawMs = 0;
-    this.maxDrawMs = 0;
     this.failed = false;
     this.disposed = false;
-    this.listenerActive = false;
-    this.handleVisibilityChange = this.handleVisibilityChange.bind(this);
-    this.handleResize = this.handleResize.bind(this);
-    this.handleAnimationFrame = this.handleAnimationFrame.bind(this);
+    this.handleRuntimeFailure = this.handleRuntimeFailure.bind(this);
   }
 
   initialize() {
-    if (!this.canvas || !this.container) {
-      throw new Error('canvas target unavailable');
-    }
-    this.context = this.canvas.getContext?.('2d', { alpha: true });
-    if (!this.context) throw new Error('canvas context unavailable');
-    if (!this.environment.ResizeObserverCtor) {
-      throw new Error('resize observer unavailable');
-    }
-    if (!this.environment.requestFrame || !this.environment.cancelFrame) {
-      throw new Error('animation frame unavailable');
-    }
-
-    this.observer = new this.environment.ResizeObserverCtor(this.handleResize);
-    this.observer.observe(this.container);
-    this.environment.documentTarget?.addEventListener?.(
-      'visibilitychange',
-      this.handleVisibilityChange
-    );
-    this.listenerActive = Boolean(
-      this.environment.documentTarget?.addEventListener
-    );
-    this.applySize(this.container.getBoundingClientRect?.());
+    this.runtime = createCanvasRuntime({
+      canvas: this.canvas,
+      container: this.container,
+      environment: this.environment,
+      maxDpr: REVIEW_CANVAS_MAX_DPR,
+      onResize: ({ width }) => {
+        if (width <= 0) {
+          this.particles = [];
+          return;
+        }
+        const particleLimit = resolveReviewCanvasParticleLimit(width);
+        if (this.particles.length !== particleLimit) {
+          this.particles = createDeterministicParticleLayout({
+            seed: REVIEW_CANVAS_SEED,
+            count: particleLimit
+          });
+        }
+      },
+      onDraw: ({ context, width, height, dpr, timestamp }) => {
+        drawReviewCanvasFrame({
+          context,
+          width,
+          height,
+          dpr,
+          particles: this.particles,
+          parameters: this.parameters,
+          timestamp
+        });
+      },
+      isAnimationEnabled: () => this.parameters.animated,
+      onFailure: this.handleRuntimeFailure
+    });
+    return Boolean(this.runtime);
   }
 
   setRenderParameters(parameters) {
     if (this.disposed || this.failed) return;
     this.parameters = resolveReviewCanvasRenderParameters(parameters);
-    if (!this.hasValidSize() || this.isDocumentHidden()) {
-      this.stopLoop();
-      return;
-    }
-    this.drawCurrentFrame(this.environment.now());
-    this.syncLoop();
+    this.runtime?.refresh();
   }
 
-  handleResize(entries = []) {
-    if (this.disposed || this.failed) return;
-    const matchingEntry = entries.find(entry => entry?.target === this.container);
-    this.applySize(
-      matchingEntry?.contentRect || this.container.getBoundingClientRect?.()
-    );
-  }
-
-  handleVisibilityChange() {
-    if (this.disposed || this.failed) return;
-    if (this.isDocumentHidden()) {
-      this.stopLoop();
-      return;
-    }
-    if (this.hasValidSize()) {
-      this.drawCurrentFrame(this.environment.now());
-      this.syncLoop();
-    }
-  }
-
-  handleAnimationFrame(timestamp) {
-    this.rafId = null;
-    if (this.disposed || this.failed || !this.shouldAnimate()) return;
-    this.drawCurrentFrame(timestamp);
-    this.scheduleFrame();
-  }
-
-  applySize(rect) {
-    if (this.disposed || this.failed) return;
-    const width = finiteNumber(rect?.width, 0);
-    const height = finiteNumber(rect?.height, 0);
-    if (width <= 0 || height <= 0) {
-      this.width = 0;
-      this.height = 0;
-      this.particles = [];
-      this.stopLoop();
-      return;
-    }
-
-    try {
-      const dpr = normalizeReviewCanvasDpr(this.environment.getDevicePixelRatio());
-      const nextWidth = Math.max(1, Math.round(width * dpr));
-      const nextHeight = Math.max(1, Math.round(height * dpr));
-      const particleLimit = resolveReviewCanvasParticleLimit(width);
-      if (this.canvas.width !== nextWidth) this.canvas.width = nextWidth;
-      if (this.canvas.height !== nextHeight) this.canvas.height = nextHeight;
-      this.width = width;
-      this.height = height;
-      this.dpr = dpr;
-      if (this.particles.length !== particleLimit) {
-        this.particles = createDeterministicParticleLayout({
-          seed: REVIEW_CANVAS_SEED,
-          count: particleLimit
-        });
-      }
-      if (!this.isDocumentHidden()) {
-        this.drawCurrentFrame(this.environment.now());
-      }
-      this.syncLoop();
-    } catch {
-      this.fail();
-    }
-  }
-
-  drawCurrentFrame(timestamp) {
-    if (this.disposed || this.failed || !this.hasValidSize()) return;
-    const startedAt = this.environment.now();
-    try {
-      drawReviewCanvasFrame({
-        context: this.context,
-        width: this.width,
-        height: this.height,
-        dpr: this.dpr,
-        particles: this.particles,
-        parameters: this.parameters,
-        timestamp
-      });
-      const drawMs = Math.max(0, this.environment.now() - startedAt);
-      this.frameCount += 1;
-      this.totalDrawMs += drawMs;
-      this.maxDrawMs = Math.max(this.maxDrawMs, drawMs);
-    } catch {
-      this.fail();
-    }
-  }
-
-  syncLoop() {
-    if (this.shouldAnimate()) {
-      this.scheduleFrame();
-    } else {
-      this.stopLoop();
-    }
-  }
-
-  shouldAnimate() {
-    return (
-      !this.disposed
-      && !this.failed
-      && this.hasValidSize()
-      && !this.isDocumentHidden()
-      && this.parameters.animated
-    );
-  }
-
-  scheduleFrame() {
-    if (this.rafId !== null || !this.shouldAnimate()) return;
-    this.rafId = this.environment.requestFrame(this.handleAnimationFrame);
-  }
-
-  stopLoop() {
-    if (this.rafId === null) return;
-    this.environment.cancelFrame(this.rafId);
-    this.rafId = null;
-  }
-
-  hasValidSize() {
-    return this.width > 0 && this.height > 0;
-  }
-
-  isDocumentHidden() {
-    const target = this.environment.documentTarget;
-    return target?.hidden === true || target?.visibilityState === 'hidden';
-  }
-
-  fail() {
+  handleRuntimeFailure() {
     if (this.failed || this.disposed) return;
     this.failed = true;
-    this.cleanupRuntime();
     safelyNotifyFailure(this.onFailure);
-  }
-
-  cleanupRuntime() {
-    this.stopLoop();
-    this.observer?.disconnect?.();
-    this.observer = null;
-    if (this.listenerActive) {
-      this.environment.documentTarget?.removeEventListener?.(
-        'visibilitychange',
-        this.handleVisibilityChange
-      );
-      this.listenerActive = false;
-    }
   }
 
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    this.cleanupRuntime();
-    this.context = null;
+    const runtime = this.runtime;
+    runtime?.dispose();
+    this.lastRuntimeSnapshot = runtime?.getSnapshot() || this.lastRuntimeSnapshot;
+    this.runtime = null;
     this.canvas = null;
     this.container = null;
     this.particles = [];
   }
 
   getSnapshot() {
+    const runtimeSnapshot = this.runtime?.getSnapshot() || this.lastRuntimeSnapshot || {};
     return {
-      disposed: this.disposed,
-      failed: this.failed,
-      running: this.rafId !== null,
-      width: this.width,
-      height: this.height,
-      dpr: this.dpr,
+      ...runtimeSnapshot,
+      disposed: this.disposed || Boolean(runtimeSnapshot.disposed),
+      failed: this.failed || Boolean(runtimeSnapshot.failed),
       particleCount: this.particles.length,
-      frameCount: this.frameCount,
-      averageDrawMs: this.frameCount > 0 ? this.totalDrawMs / this.frameCount : 0,
-      maxDrawMs: this.maxDrawMs,
-      observerActive: Boolean(this.observer),
-      listenerActive: this.listenerActive
+      frameCount: runtimeSnapshot.frameCount || 0,
+      averageDrawMs: runtimeSnapshot.averageDrawMs || 0,
+      maxDrawMs: runtimeSnapshot.maxDrawMs || 0,
+      observerActive: Boolean(runtimeSnapshot.observerActive),
+      listenerActive: Boolean(runtimeSnapshot.listenerActive)
     };
   }
 }
@@ -569,24 +433,6 @@ function drawFlowNode(context, x, y, radius, rgb) {
   context.fillStyle = `rgba(${rgb}, 0.78)`;
   context.arc(x, y, radius, 0, TAU);
   context.fill();
-}
-
-function normalizeEnvironment(environment = {}) {
-  const root = typeof window === 'undefined' ? globalThis : window;
-  const documentTarget = environment.documentTarget
-    || (typeof document === 'undefined' ? null : document);
-  const requestFrame = environment.requestFrame
-    || root.requestAnimationFrame?.bind(root);
-  const cancelFrame = environment.cancelFrame
-    || root.cancelAnimationFrame?.bind(root);
-  return {
-    documentTarget,
-    ResizeObserverCtor: environment.ResizeObserverCtor || root.ResizeObserver,
-    requestFrame,
-    cancelFrame,
-    getDevicePixelRatio: environment.getDevicePixelRatio || (() => root.devicePixelRatio || 1),
-    now: environment.now || (() => root.performance?.now?.() ?? Date.now())
-  };
 }
 
 function createSeededRandom(seed) {
