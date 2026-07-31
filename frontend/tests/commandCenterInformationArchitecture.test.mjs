@@ -12,6 +12,18 @@ const apiSource = await readFile(
   new URL('../src/command-center/commandCenterApi.js', import.meta.url),
   'utf8'
 );
+const hookSource = await readFile(
+  new URL('../src/command-center/useCommandCenterSnapshots.js', import.meta.url),
+  'utf8'
+);
+const topologySource = await readFile(
+  new URL('../src/command-center/CommandCenterTopology.jsx', import.meta.url),
+  'utf8'
+);
+const presentationSource = await readFile(
+  new URL('../src/command-center/commandCenterPresentation.js', import.meta.url),
+  'utf8'
+);
 
 
 function sourceBetween(start, end) {
@@ -49,20 +61,35 @@ test('task list and task detail routes remain explicit and separate from home', 
 });
 
 
-test('phase zero page is read-only and does not create Canvas behavior', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="PHASE_0"'), true);
+test('phase one page is read-only and does not create Canvas behavior', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="PHASE_1"'), true);
   assert.equal(pageSource.includes('READ-ONLY CONTROL PLANE'), true);
   assert.equal(pageSource.includes('<canvas'), false);
-  assert.equal(pageSource.includes('setInterval'), false);
   assert.equal(pageSource.includes('WebSocket'), false);
   assert.equal(pageSource.includes('EventSource'), false);
+  assert.equal(topologySource.includes('<canvas'), false);
+  assert.equal(topologySource.includes('requestAnimationFrame'), false);
+  assert.equal(presentationSource.includes('allowAnimation: false'), true);
 });
 
 
-test('phase zero data layer calls only the two read snapshot endpoints', () => {
-  assert.equal(apiSource.includes("fetchApi('/api/command-center/runtime'"), true);
-  assert.equal(apiSource.includes("fetchApi('/api/command-center/governance'"), true);
+test('phase one data layer calls only the two read snapshot endpoints', () => {
+  assert.equal(apiSource.includes('/api/command-center/runtime?'), true);
+  assert.equal(apiSource.includes('/api/command-center/governance?'), true);
   assert.equal(apiSource.includes("method: 'POST'"), false);
   assert.equal(apiSource.includes("method: 'PUT'"), false);
   assert.equal(apiSource.includes("method: 'DELETE'"), false);
+});
+
+
+test('runtime and governance polling are independent, pausable, and cleaned up', () => {
+  assert.equal(hookSource.includes('RUNTIME_INTERVAL_MS = 5_000'), true);
+  assert.equal(hookSource.includes('GOVERNANCE_INTERVAL_MS = 60_000'), true);
+  assert.equal(hookSource.includes("document.visibilityState === 'hidden'"), true);
+  assert.equal(hookSource.includes("document.addEventListener('visibilitychange'"), true);
+  assert.equal(hookSource.includes("window.addEventListener('focus'"), true);
+  assert.equal(hookSource.includes('AbortController'), true);
+  assert.equal(hookSource.includes('window.clearTimeout'), true);
+  assert.equal(hookSource.includes('window.setTimeout'), true);
+  assert.equal(hookSource.includes('setInterval'), false);
 });

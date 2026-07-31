@@ -16,12 +16,16 @@ function PulseMetric({ label, value, state = 'neutral' }) {
 }
 
 
-export default function SystemPulse({ runtime, governance, loading, error }) {
-  const activeJobs = runtime?.scheduler?.activeJobCount;
-  const activeTasks = runtime?.intake?.activeTaskCount;
-  const pendingFeedback = governance?.feedback?.pendingCount;
-  const evaluationCases = governance?.evaluation?.caseCount;
-  const dataState = error ? 'error' : loading ? 'loading' : runtime ? 'ready' : 'empty';
+export default function SystemPulse({ pulse, runtimeLoading, runtimeError }) {
+  const dataState = runtimeError
+    ? 'error'
+    : runtimeLoading
+      ? 'loading'
+      : pulse.runtimeFreshness === 'STALE'
+        ? 'stale'
+        : pulse.runtimeFreshness === 'FRESH'
+          ? 'ready'
+          : 'empty';
 
   return (
     <section className="command-center-pulse" aria-labelledby="system-pulse-title">
@@ -32,19 +36,25 @@ export default function SystemPulse({ runtime, governance, loading, error }) {
         </div>
         <div className={`command-center-data-state is-${dataState}`}>
           <span aria-hidden="true" />
-          {error ? '数据不可用' : loading ? '正在连接' : runtime ? '基础数据可用' : '暂无快照'}
+          {runtimeError
+            ? 'Runtime 暂不可用'
+            : runtimeLoading
+              ? '正在连接'
+              : pulse.runtimeFreshness === 'STALE'
+                ? 'Runtime 快照已过期'
+                : pulse.runtimeFreshness === 'FRESH'
+                  ? 'Runtime 快照新鲜'
+                  : '暂无快照'}
         </div>
       </div>
       <div className="command-center-pulse-grid">
-        <PulseMetric label="活跃 Task" value={activeTasks} state={activeTasks ? 'active' : 'neutral'} />
-        <PulseMetric label="活跃 Review Job" value={activeJobs} state={activeJobs ? 'active' : 'neutral'} />
-        <PulseMetric label="Pending Feedback" value={pendingFeedback} />
-        <PulseMetric label="Evaluation Case" value={evaluationCases} />
-        <PulseMetric
-          label="快照时间"
-          value={formatGeneratedAt(runtime?.generatedAt)}
-          state={error ? 'error' : 'neutral'}
-        />
+        <PulseMetric label="活跃 Task" value={pulse.activeTasks} state={pulse.activeTasks ? 'active' : 'neutral'} />
+        <PulseMetric label="活跃 Review Job" value={pulse.activeJobs} state={pulse.activeJobs ? 'active' : 'neutral'} />
+        <PulseMetric label="Agent Queue" value={pulse.queueDepth} state={pulse.queueDepth ? 'queued' : 'neutral'} />
+        <PulseMetric label="Online Worker" value={pulse.onlineWorkers} state={pulse.onlineWorkers ? 'success' : 'neutral'} />
+        <PulseMetric label="Active Provider" value={pulse.activeProviders} state={pulse.activeProviders ? 'active' : 'neutral'} />
+        <PulseMetric label="Critical Finding" value={pulse.criticalFindings} state={pulse.criticalFindings ? 'error' : 'neutral'} />
+        <PulseMetric label="快照时间" value={formatGeneratedAt(pulse.generatedAt)} />
       </div>
     </section>
   );

@@ -4,13 +4,14 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Phase 0`
-- 阶段状态：`COMPLETED — WAITING FOR PHASE 1 CONFIRMATION`
+- 当前阶段：`Phase 1`
+- 阶段状态：`PHASE 1 COMPLETED — WAITING FOR PHASE 2 CONFIRMATION`
+- Phase 0 基线 Commit：`2005b8f`
 - 用户授权时间：2026-07-31
 - 阶段完成时间：2026-07-31
-- 本阶段目标：只落地只读基础接口、固定响应契约、首页骨架和根路由切换。
-- 本阶段明确不做：真实全量聚合、轮询、Canvas、粒子动画、任务聚焦、AppFrame 轮询去重。
-- 停止点：已到达。等待用户确认进入 Phase 1。
+- 本阶段目标：在 Phase 0 只读接口和页面骨架之上，接入有界的真实运行态与治理态聚合，并完成静态拓扑的数据驱动展示。
+- 本阶段明确不做：修改既有 Review 业务逻辑、新增业务表、Canvas、粒子动画、任务聚焦、AppFrame 轮询去重，以及任何 Phase 2/3 能力。
+- 停止点：Phase 1 已完成并通过验证。立即停止，等待用户验证及 Phase 2 明确确认。
 
 本计划同时作为分阶段实施总控和验收记录。每个阶段开始前更新状态，完成后回写验证结果并停止。
 
@@ -1211,3 +1212,722 @@ Phase 2/3 浏览器验收：
 - Stale/接口失败
 - reduced-motion
 - Canvas 初始化失败回退
+
+------
+
+# 七、Phase 1 实施准备分析
+
+## 7.1 准备结论与实施边界
+
+Phase 0 已完成并形成可追溯基线：
+
+- Phase 0 基线 Commit：`2005b8f`
+- 后端已有独立、只读的 `command_center` API、Repository、Service 和 Schema 边界。
+- 前端根路由已切换到 `CommandCenterPage`，任务列表、任务详情和历史 Query 跳转保持兼容。
+- 首页已有 System Pulse、静态生命周期拓扑、Live Operations Rail 和 Governance Loop 骨架。
+- Phase 0 未引入轮询、Canvas、粒子动画、模拟运行数据、数据库表或业务写入。
+
+Phase 1 只完成两件事：
+
+1. 将 Runtime 与 Governance 接口从 Phase 0 的基础计数扩展为有界、只读的真实聚合。
+2. 用真实快照驱动现有静态页面骨架，建立稳定的 Model、Presentation 和轮询边界。
+
+Phase 1 必须继续遵守：
+
+- 不修改现有 Review、Scheduler、Agent、Notification、Feedback、Evaluation 的业务流程和状态机。
+- 不新增业务表、迁移、缓存、物化视图或索引。
+- 不实现 Canvas、粒子、连线流光和状态动画。
+- 不进入任务聚焦、全局轮询收敛、路由级拆包等 Phase 3 工作。
+- 不将数据库中不存在的状态推断成“Thinking”“Provider Healthy”等产品语义。
+
+当前计划状态固定为：
+
+`PHASE 1 READY — WAITING FOR IMPLEMENTATION CONFIRMATION`
+
+在收到明确实现确认前，不修改任何业务代码、配置或测试。
+
+## 7.2 Phase 1 文件修改范围
+
+### 7.2.1 后端计划修改
+
+| 文件 | Phase 1 职责 |
+| ---- | ------------ |
+| `backend-python/app/command_center/schemas.py` | 扩展 Runtime、ActiveTask、ActiveFlow、Worker、Provider、Alert 和 Governance 的只读响应契约 |
+| `backend-python/app/command_center/repository.py` | 增加显式字段、有界范围、无副作用的数据读取方法 |
+| `backend-python/app/command_center/service.py` | 实现 Runtime/Governance 聚合、阶段映射、字段脱敏和 coverage 计算 |
+| `backend-python/tests/contract/test_command_center_api_contract.py` | 扩展接口契约、只读性、查询数、敏感字段和场景测试 |
+| `backend-python/tests/unit/test_command_center_service.py` | 覆盖阶段映射、Fallback、Worker、Provider、Alert、Governance 口径和异常数据 |
+
+`backend-python/app/command_center/api.py` 原则上保持不变。只有既有接口响应类型或现有参数透传确有必要时，才允许做最小契约调整；不得增加计划外接口。
+
+`backend-python/app/main.py` 保持不变，不重复注册 Router。
+
+### 7.2.2 前端计划新增
+
+| 文件 | Phase 1 职责 |
+| ---- | ------------ |
+| `frontend/src/command-center/commandCenterModel.js` | 负责响应 Schema、默认值、枚举容错、稳定 ID、上限和新鲜度模型 |
+| `frontend/src/command-center/commandCenterPresentation.js` | 将纯数据快照转换为页面节点、Flow、Alert 和治理展示模型 |
+| `frontend/tests/commandCenterModel.test.mjs` | 验证模型归一化、版本、缺省、过期和未知枚举处理 |
+| `frontend/tests/commandCenterPresentation.test.mjs` | 验证静态生命周期、分支、Fallback、Alert 和治理展示转换 |
+
+### 7.2.3 前端计划修改
+
+| 文件 | Phase 1 职责 |
+| ---- | ------------ |
+| `frontend/src/command-center/CommandCenterPage.jsx` | 组合真实 Runtime/Governance 快照及独立错误、过期状态 |
+| `frontend/src/command-center/CommandCenterTopology.jsx` | 用真实 ActiveTask/ActiveFlow 驱动静态拓扑，不引入 Canvas |
+| `frontend/src/command-center/SystemPulse.jsx` | 展示真实任务、队列、Worker、Provider 和风险脉冲 |
+| `frontend/src/command-center/LiveOperationsRail.jsx` | 展示有界的活跃 Flow 和 Alert 列表及任务导航 |
+| `frontend/src/command-center/GovernanceLoop.jsx` | 展示带 scope/coverage 的规则、质量、反馈和评估指标 |
+| `frontend/src/command-center/useCommandCenterSnapshots.js` | 增加 Runtime/Governance 独立轮询、可见性、竞态与 stale 管理 |
+| `frontend/src/command-center/commandCenterApi.js` | 完善两个只读接口的参数和中止信号透传 |
+| `frontend/src/command-center/commandCenter.css` | 适配真实数据、空态、错误态和响应式布局；不得加入运动效果 |
+| `frontend/tests/commandCenterInformationArchitecture.test.mjs` | 扩展首页生命周期、禁止项和只读导航的架构约束 |
+
+### 7.2.4 明确保留不动
+
+- `frontend/src/App.jsx`
+- `frontend/src/styles.css`
+- `frontend/src/review-canvas/ReviewImmersiveCanvas.jsx`
+- `frontend/src/review-canvas/reviewCanvasRenderer.js`
+- `frontend/src/review-journey/reviewJourney.js`
+- 现有 Review、Scheduler、Agent、Notification、Feedback、Evaluation 业务 Service、Repository 和 Model
+- 现有数据库迁移
+- `frontend/package.json`
+
+Phase 1 不创建：
+
+- `frontend/src/command-center/CommandCenterCanvas.jsx`
+- `frontend/src/command-center/commandCenterCanvasRenderer.js`
+- `frontend/src/canvas/canvasRuntime.js`
+
+## 7.3 后端 Runtime 聚合设计
+
+### 7.3.1 读取原则
+
+Command Center Repository 只能执行显式列名的 `SELECT`，不得调用可能产生以下副作用的既有聚合方法：
+
+- `ensure_*_schema`
+- 创建默认 Provider/Profile/Settings
+- `flush`
+- 清理过期 Worker 或 Lease
+- 回写 Overlay、状态或统计
+
+不得直接复用以下带有领域副作用或超出首页字段边界的现有聚合入口：
+
+- `agent_settings_response`
+- `agent_worker_pool`
+- `agent_queue_metrics`
+- `list_provider_responses`
+- `list_scheduler_queue_snapshot`
+- `list_result_responses`
+- `get_review_quality_dashboard`
+- `get_agent_observation`
+- 现有 Policy、Evaluation、Acceptance 写侧或复合 Repository
+
+可以复用纯函数、枚举和只读 Model 定义，但不能复用会改变数据库状态的调用链。
+
+### 7.3.2 Runtime 聚合顺序
+
+Runtime Service 按固定顺序聚合：
+
+1. 查询 `QUEUED/RUNNING` Review Scheduler Job。
+2. 查询 `ReviewTask.status=RUNNING` 或 `ReviewTask.review_status=REVIEWING` 的任务候选。
+3. 查询 `CodeQualityReviewResult.status=RUNNING` 且当前没有 Active Job 的补充候选。
+4. 按最近活动时间合并、去重并排序 Active Task ID。
+5. 应用 `activeLimit` 后确定本次允许展开的任务集合。
+6. 按选定 Task ID 批量加载 Task/Project/Group、RuleReviewResult、AiReviewResult、ProgressEvent、AgentReviewRun、DeterministicCheckRun 和 NotificationRecord。
+7. 在 Python 内按 `(taskId, reviewKey)` 归组，生成 ActiveTask 和 ActiveFlow。
+8. 独立读取 Worker Pool、Agent Queue 和 Provider 最近观察数据。
+9. 以独立上限查询近期 Failed、Fallback、Critical、Worker/Lease 和 Notification Failure Alert 候选。
+
+该顺序确保先限流、再展开，查询数量不随 Active Task 数量线性增长，不允许逐任务补查形成 N+1。
+
+## 7.4 ActiveTask 与 ActiveFlow 契约
+
+### 7.4.1 ActiveTask
+
+ActiveTask 只返回首页运行态所需字段：
+
+```text
+taskId
+projectId
+projectName
+groupId
+triggerType
+technicalStatus
+reviewStatus
+riskLevel
+ruleRiskItemCount
+flowCount
+stage
+stageSource
+createdAt
+updatedAt
+```
+
+ActiveTask 不返回分支、作者、外部 URL、Diff、原始事件、错误详情或其他详情页字段。
+
+### 7.4.2 ActiveFlow
+
+ActiveFlow 稳定 ID 为：
+
+```text
+{taskId}:{reviewKey}
+```
+
+字段为：
+
+```text
+taskId
+reviewKey
+displayName
+jobType
+requestedEngine
+effectiveEngine
+fallback
+status
+stage
+stageSource
+providerCode
+model
+findingCount
+highestRisk
+contextStatusCounts
+queuedAt
+startedAt
+updatedAt
+durationSeconds
+```
+
+归组规则：
+
+- 同一 Task 的不同 `reviewKey` 必须生成不同 ActiveFlow。
+- Task 仍活跃时，已完成的兄弟 Flow 仍保留在该 Task 的运行上下文中。
+- Flow 的 Provider、Model、Finding 和 Context 指标仅取该 `(taskId, reviewKey)` 的数据。
+- 不以数组位置或数据库主键临时拼接前端 ID。
+
+## 7.5 Review 阶段映射与 stageSource
+
+`stage` 表示 Command Center 的稳定展示阶段，`stageSource` 表示该阶段来自直接事实还是有限推断。
+
+| 真实数据条件 | stage | stageSource |
+| ------------ | ----- | ----------- |
+| Task 运行中且不存在 RuleResult | `RULE_ANALYSIS` | `INFERRED` |
+| RuleResult 已存在 | `RULE_COMPLETED` | `RULE_RESULT` |
+| Progress 进入 deterministic/precheck 阶段 | `PREFLIGHT` | `PROGRESS` |
+| Scheduler Job 为 `QUEUED` | `QUEUED` | `SCHEDULER_JOB` |
+| Progress 进入 Context Pack、本地仓库或 Retriever 阶段 | `CONTEXT_BUILDING` | `PROGRESS` |
+| Progress 进入 Provider、HTTP、解析或结果保存阶段 | `MODEL_CALLING` | `PROGRESS` |
+| Agent Run/Progress 明确处于分析 | `AGENT_ANALYZING` | `AGENT_RUN` 或 `PROGRESS` |
+| Agent 工具调用阶段 | `AGENT_TOOL_ACTIVITY` | `AGENT_RUN` 或 `PROGRESS` |
+| Agent 收敛阶段 | `AGENT_CONVERGING` | `AGENT_RUN` 或 `PROGRESS` |
+| Agent 提交阶段 | `AGENT_SUBMITTING` | `AGENT_RUN` 或 `PROGRESS` |
+| AI Result 成功保存 | `FINDING_READY` | `AI_RESULT` |
+| Result 成功但尚无通知处理事实 | `NOTIFYING` | `INFERRED` |
+| Notification 已处理或任务整体完成 | `COMPLETED` | `TASK` 或对应直接来源 |
+| Job、Result 或 Agent Run 失败 | `FAILED` | 对应直接来源 |
+| Job/Result 被取消或跳过 | `SKIPPED` | 对应直接来源 |
+| Agent 明确切换到 Standard Fallback | `FALLBACK` | `AGENT_RUN` 或 `AI_RESULT` |
+
+合法 `stageSource` 至少包括：
+
+```text
+INFERRED
+RULE_RESULT
+PROGRESS
+SCHEDULER_JOB
+AGENT_RUN
+AI_RESULT
+TASK
+```
+
+映射约束：
+
+- 同一 Flow 选择时间上最新且业务优先级最高的直接状态。
+- 未识别的 Progress phase 只能降级为安全的通用运行阶段。
+- 不将未知 phase 翻译为 `THINKING`，也不在服务端模拟阶段推进。
+- 新增真实 Progress phase 时，必须同步更新映射单元测试。
+
+## 7.6 Fallback 严格判断规则
+
+`fallback=true` 只能由以下任一直接事实产生：
+
+1. AI Review Result 同时满足 `requestedEngine=AGENT` 且 `effectiveEngine=STANDARD_FALLBACK`。
+2. AgentReviewRun 明确记录 `effectiveEngine=STANDARD_FALLBACK`。
+
+严禁通过以下组合推断 Fallback：
+
+- Agent Run 失败，同时存在 Standard Result。
+- Agent Job 失败，随后出现另一个成功 Job。
+- Provider 或 Model 字段发生变化。
+- Progress 文案、错误文本或时间顺序看起来像降级。
+
+如果没有明确 `STANDARD_FALLBACK` 事实，Flow 必须保持 `fallback=false`；失败事实按 `FAILED` 展示。
+
+## 7.7 Worker、Provider 与 Alert 聚合规则
+
+### 7.7.1 Worker 与 Agent Queue
+
+数据直接来自 `AgentReviewWorker`、`AgentReviewSettings` 和 `SchedulerJob` 的显式字段查询。
+
+规则：
+
+- Worker 心跳新鲜窗口为 60 秒。
+- Worker 展示状态仅允许 `IDLE`、`BUSY`、`DRAINING`。
+- 首页最多返回 100 个 Worker 节点。
+- 没有注册 Worker 时，保留对既有 Legacy Heartbeat 的兼容观察。
+- Runtime 只读取状态，不清理过期 Worker、不回收 Lease、不写入 Heartbeat。
+
+Agent Queue 汇总字段：
+
+```text
+queued
+running
+expiredLease
+oldestQueuedSeconds
+onlineCapacity
+busyCapacity
+utilizationPercent
+drainingWorkers
+```
+
+### 7.7.2 Provider
+
+Provider 使用显式字段直接查询，不得读取或返回 API Key、Endpoint、Header 或其他连接密钥。
+
+Provider 展示字段：
+
+```text
+providerCode
+providerName
+providerType
+modelName
+enabled
+defaultProvider
+status
+activeFlowCount
+recentSuccessCount
+recentFailureCount
+lastObservedAt
+```
+
+Provider 状态只允许：
+
+```text
+DISABLED
+ACTIVE
+RECENT_SUCCESS
+RECENT_FAILURE
+NO_RECENT_DATA
+```
+
+状态语义：
+
+- `DISABLED`：配置已禁用。
+- `ACTIVE`：当前有 ActiveFlow 使用该 Provider。
+- `RECENT_SUCCESS`：观察窗口内有成功调用且当前无活跃 Flow。
+- `RECENT_FAILURE`：观察窗口内有失败调用且当前无活跃 Flow。
+- `NO_RECENT_DATA`：已启用但窗口内无可确认调用结果。
+
+不得使用 `HEALTHY`、`UNHEALTHY`、`UP`、`DOWN`，因为当前数据只支持“配置 + 最近观察”，不支持主动健康检查。
+
+Agent Result 中的 `provider=AGENT` 不得冒充已配置的 Model Provider；Agent 使用的模型只保留在对应 Agent Flow 节点中。
+
+### 7.7.3 Alert
+
+首页 Alert 仅聚合：
+
+- Scheduler Job Failed
+- Agent Run Failed/Timed Out
+- 明确的 Standard Fallback
+- Worker Offline/Draining
+- Expired Lease
+- Notification Failed
+- Critical Review Result
+
+Alert 只返回固定类型、状态、`taskId`、`reviewKey`、项目、时间和安全的站内导航目标。不得返回数据库错误文本、异常堆栈、Provider 响应体、Notification Response Body 或其他敏感原文。
+
+## 7.8 Governance 指标口径与 scope
+
+每个 Governance 区块必须返回明确 `scope`，时间窗口型指标使用请求的 `windowHours`，全量治理存量使用 `ALL_TIME`。
+
+| 区块 | 指标口径 | scope |
+| ---- | -------- | ----- |
+| Rule Analysis | RuleResult 数、风险项数、风险分布 | `WINDOW` |
+| Preflight | DeterministicCheckRun 数、状态分布、Finding 数 | `WINDOW` |
+| Context Quality | `SUFFICIENT/PARTIAL/INSUFFICIENT` 分布 | `WINDOW` |
+| Finding Risk | `CRITICAL/MAJOR/MINOR`、最高风险、受影响 Task 数 | `WINDOW` |
+| Notification | `SUCCESS/FAILED/SKIPPED` 分布 | `WINDOW` |
+| Feedback | 状态、类型、Context Missing、Policy Candidate | `ALL_TIME` |
+| Evaluation | Verdict、Rule Gap、Run Status | `ALL_TIME` |
+| Policy | 总数、Enabled、Candidate | `ALL_TIME` |
+| Acceptance | 状态分布、最近状态 | `ALL_TIME` |
+| Agent Sample Gate | 已标注样本数和 30 条阈值 | `ALL_TIME` |
+
+Governance 聚合约束：
+
+- Context Quality 与 Finding Risk 只解析 `findings_json` 中的 `severity` 和 `contextStatus`。
+- 不返回 Finding body、evidence、suggestion、path 或完整 JSON。
+- 单次最多扫描 2000 条 AI Review Result；超过时返回准确的 coverage/truncated 信息。
+- 后端实现中明确区分 `RuleReviewResult` 与 `AiReviewResult` 别名，避免同名 Result 混淆。
+- `scope=WINDOW` 的区块必须携带窗口边界或 `windowHours`；`scope=ALL_TIME` 不伪装为 24H 实时指标。
+- Agent Sample Gate 的完成阈值固定为 30 条已标注样本，除非现有配置已有明确事实来源。
+
+## 7.9 前端 Model、Presentation 与轮询设计
+
+### 7.9.1 Model
+
+`commandCenterModel.js` 是 API 契约与 UI 之间的稳定适配层，负责：
+
+- 校验并归一化 Runtime/Governance Schema Version。
+- 为缺失数组、计数、状态和 coverage 提供安全默认值。
+- 根据 `{taskId}:{reviewKey}` 生成并校验稳定 Flow ID。
+- 应用 ActiveTask、Flow、Worker、Provider、Alert 的前端安全上限。
+- 使用服务端 `generatedAt` 判断 `FRESH/STALE`。
+- 对损坏响应、未知枚举和未来版本字段做安全降级，不抛出页面级异常。
+
+### 7.9.2 Presentation
+
+`commandCenterPresentation.js` 只做纯展示转换：
+
+- 生成 System Pulse 展示值。
+- 生成静态生命周期节点和 Standard/Agent 分支。
+- 生成 Flow Row、Alert Row 和治理指标展示模型。
+- 统一状态 Token、文案和颜色语义。
+- 固定 `allowAnimation=false`，Phase 1 不产生任何动画意图。
+
+Presentation 不发请求、不持有 Timer、不推断业务阶段，也不修改 Model。
+
+### 7.9.3 轮询
+
+`useCommandCenterSnapshots.js` 采用两条独立轮询链：
+
+- Runtime：每 5 秒。
+- Governance：每 60 秒。
+
+行为约束：
+
+- 页面不可见时清理 Timer，且不发起新请求。
+- 页面重新可见或窗口重新 Focus 时立即刷新。
+- Runtime 与 Governance 的成功、失败和 stale 状态互相独立。
+- 单个接口失败时保留其最后一次成功快照。
+- 使用请求序号和 `AbortController` 取消同类型旧请求，防止旧响应覆盖新响应。
+- Unmount 时清理 Timer、Controller 和所有事件监听器。
+- Runtime 的 stale 阈值为 15 秒；Governance 的 stale 阈值为 180 秒。
+- stale 只显示最后已知数据及过期标记，不在本地继续推进 Review 阶段。
+
+页面接入：
+
+- `SystemPulse` 展示真实任务、队列、Worker、Provider 和风险摘要。
+- `CommandCenterTopology` 展示真实 ActiveFlow，但保持 DOM/CSS 静态拓扑。
+- `LiveOperationsRail` 展示有界 Flow 和 Alert。
+- `GovernanceLoop` 展示带 scope 和 coverage 的真实治理指标。
+- 任务链接只导航到既有 `/tasks/:taskId`；治理入口只链接到已有页面。
+- Phase 1 不接入 AppFrame Queue Drawer，重复轮询的统一收敛留到 Phase 3。
+
+## 7.10 查询性能边界
+
+### 7.10.1 固定上限
+
+- Runtime 固定查询数量目标：不超过约 18 条 `SELECT`。
+- Governance 固定查询数量目标：不超过约 12 条 `SELECT`。
+- 查询数量必须与返回 1 个或多个 Active Task 无关。
+- `activeLimit` 最大 50。
+- `alertLimit` 最大 50。
+- Worker 节点最大 100。
+- Finding JSON 扫描最大 2000 条 Result。
+- Provider 和 Alert 候选查询必须有时间范围与返回上限。
+
+### 7.10.2 字段与索引
+
+查询只选择首页字段，不读取：
+
+- `raw_output`
+- Progress `detail`
+- Notification target/response body
+- Provider API Key、Endpoint、Header
+- Feedback 长文本
+- Policy 正文
+
+优先使用已有索引：
+
+- ReviewTask status/review_status
+- SchedulerJob status/priority 及 task/job_type
+- ProgressEvent task/created_at
+- AgentRun task/status/heartbeat
+- Governance 各表 project/status/time
+
+MySQL 5.7 兼容要求：
+
+- 不使用窗口函数。
+- 不使用 `JSON_TABLE`。
+- 最新记录、Flow 归组和有限集合优先在 Python 内完成。
+
+Phase 1 不新增缓存、物化表或索引。如果真实查询计划无法满足边界，应停止并记录 MySQL `EXPLAIN` 证据，将索引或缓存方案放入经确认的小阶段或 Phase 3，不在本阶段扩张范围。
+
+### 7.10.3 一致性与覆盖度
+
+- Runtime 与 Governance 是独立快照，不承诺事务级一致。
+- 使用 `generatedAt`、实体 `updatedAt` 和 `stageSource` 明示时间与推断来源。
+- 所有有界扫描必须返回准确的 `coverage` 和 `truncated`。
+- Phase 1 接受 AppFrame 与 Command Center 的暂时重复轮询，统一请求所有权留到 Phase 3。
+
+## 7.11 完整测试矩阵
+
+### 7.11.1 后端 Service 单元测试
+
+| 类别 | 必测场景 |
+| ---- | -------- |
+| 阶段映射 | Rule 推断、Rule 完成、Preflight、Queued、Context、Model、四个 Agent 阶段、Finding Ready、Notifying、Completed、Failed、Skipped |
+| stageSource | 每个阶段的直接来源与 `INFERRED`，未知 Progress 安全降级 |
+| Flow 归组 | 同 Task 多 `reviewKey`、活跃 Task 保留已完成兄弟 Flow、稳定 ID |
+| Engine | Standard、Agent、显式 Agent → Standard Fallback |
+| Fallback | 两个合法直接事实；Agent Failed + Standard Result 不得误判 |
+| Provider | Active 优先级、Recent Success/Failure、Disabled、No Recent Data、Agent 不冒充 Provider |
+| Worker | Online、Offline、Idle、Busy、Draining、Legacy Heartbeat、60 秒边界 |
+| Queue | Queued、Running、Expired Lease、Oldest Queued、Capacity、Utilization |
+| Finding | Critical/Major/Minor、Highest Risk、Context 分布、损坏 JSON |
+| Governance | Window/All Time、2000 条截断、coverage、30 条 Sample Gate |
+| 空态 | 无任务、无 Worker、无 Provider 观察、无治理数据 |
+
+### 7.11.2 后端 API 契约测试
+
+构造并验证：
+
+- 多模型、多 `reviewKey` 任务。
+- Standard Running。
+- Agent Running。
+- 显式 Fallback。
+- Worker Idle/Busy/Draining/Offline。
+- Provider Active/Recent Success/Recent Failure/No Recent Data。
+- Critical Finding、Context Insufficient。
+- Notification Failed。
+- Feedback、Evaluation、Policy、Acceptance、Agent Sample Gate。
+
+契约断言：
+
+- 两个接口只执行 `SELECT`，不产生 INSERT/UPDATE/DELETE/DDL。
+- 1 个与多个 Active Task 时查询数量保持固定，不出现 N+1。
+- 响应中不存在敏感列和敏感字段。
+- 不生成虚假的 Provider Health。
+- Fallback 严格遵循明确 `STANDARD_FALLBACK` 事实。
+- 每个 Governance 区块的 scope、coverage 和 truncated 准确。
+- 参数错误继续遵循统一 `400 VALIDATION_ERROR`。
+
+### 7.11.3 前端测试
+
+新增 `commandCenterModel.test.mjs`：
+
+- V1 Schema 正常归一化。
+- 缺失/损坏响应安全缺省。
+- Runtime 15 秒、Governance 180 秒新鲜度。
+- 多 Flow 稳定 ID。
+- 未知枚举和未来字段安全降级。
+- 列表上限和 coverage 保留。
+
+新增 `commandCenterPresentation.test.mjs`：
+
+- Standard/Agent 静态分支。
+- Running/Fallback/Failed 展示语义。
+- Provider 最近观察标签。
+- Flow、Alert、Governance 的纯转换。
+- `allowAnimation=false`。
+
+扩展 `commandCenterInformationArchitecture.test.mjs`：
+
+- 首页仍按生命周期组织。
+- 真实数据组件已接入。
+- 不存在 Canvas、`requestAnimationFrame` 或动画库。
+- API 仍为只读 GET。
+- 轮询具备隐藏暂停、Focus 刷新、清理和竞态保护。
+- 不新增写操作、Queue Drawer 接入或 Phase 2/3 组件。
+
+### 7.11.4 验证命令
+
+```text
+scripts/run-backend.cmd test tests/contract/test_command_center_api_contract.py tests/unit/test_command_center_service.py
+scripts/run-backend.cmd ruff check app/command_center tests/contract/test_command_center_api_contract.py tests/unit/test_command_center_service.py
+node --test frontend/tests/commandCenter*.test.mjs
+node --test frontend/tests/*.test.mjs
+scripts/run-frontend.cmd build
+```
+
+如项目脚本不能将 pytest 参数透传，才进入 `backend-python/` 执行对应底层命令，并在验收记录说明原因。
+
+### 7.11.5 浏览器与响应式验收
+
+Phase 1 仅验收静态真实数据界面：
+
+- 1440 × 900
+- 1024 × 800
+- 390 × 844
+- Idle
+- Standard Running
+- Agent Running
+- Explicit Fallback
+- Failed
+- Runtime Stale
+- Governance Stale/接口独立失败
+
+验收必须确认：
+
+- 无 Canvas。
+- 无粒子。
+- 无状态动画。
+- 页面隐藏时不继续轮询。
+- stale 不推动本地假状态。
+
+## 7.12 Phase 1 执行与停止点
+
+收到用户明确的 Phase 1 实现确认后：
+
+1. 将本计划状态更新为 `PHASE 1 IN PROGRESS`。
+2. 严格按本章文件范围、数据口径和性能边界实现。
+3. 完成本章测试矩阵和响应式验收。
+4. 将实施结果、实际修改文件、验证结果和遗留风险回写本计划。
+5. 将状态更新为 `PHASE 1 COMPLETED — WAITING FOR PHASE 2 CONFIRMATION`。
+6. 立即停止，等待用户验证与明确确认。
+
+不得在 Phase 1 完成后自动开始 Phase 2，不得提前创建 Canvas、Renderer、粒子或动画实现。
+
+## 7.13 Phase 1 实施结果
+
+实施完成时间：2026-07-31
+
+### 7.13.1 后端只读聚合
+
+已完成：
+
+- Runtime 按“候选发现 → Active Task 限流 → 关联数据批量读取 → Python 归组”顺序实现。
+- ReviewTask、SchedulerJob、RuleReviewResult、AiReviewResult、ProgressEvent、AgentReviewRun、DeterministicCheckRun、NotificationRecord 均使用显式字段 `SELECT`。
+- ActiveTask 和 ActiveFlow 已按本章固定契约返回；Flow 稳定 ID 为 `{taskId}:{reviewKey}`。
+- 同一 Task 的多 `reviewKey` 独立归组，活跃 Task 保留已完成兄弟 Flow。
+- 已实现 Rule、Preflight、Context、Standard、Agent、Finding、Notification 阶段映射和 `stageSource`。
+- 未识别 Progress phase 只降级为安全运行阶段，不生成 Thinking。
+- Fallback 只认 AI Result 或 AgentRun 中明确的 `STANDARD_FALLBACK`。
+- Scheduler 汇总统计全部 Review Job；Agent Queue 只统计 `AGENT_REVIEW`，两个口径已分离。
+- Worker 使用 60 秒心跳窗口，支持注册 Worker 与 Legacy Heartbeat，只读展示 IDLE/BUSY/DRAINING。
+- Provider 只返回配置和最近观察状态；未读取 API Key/Endpoint，未使用健康检查语义。
+- Alert 已覆盖 Job/Agent Failure、明确 Fallback、Worker Offline/Draining、Expired Lease、Notification Failure 和 Critical Finding。
+- Governance 已覆盖 Rule、Preflight、Context Quality、Finding Risk、Notification、Feedback、Evaluation、Policy、Acceptance 和 30 条 Agent Sample Gate。
+- Finding JSON 单次最多扫描 2,000 条 Result，只解析 severity/contextStatus，并返回 coverage/truncated。
+- Runtime 与 Governance 查询数量由契约测试约束为分别不超过 18 和 12，且 Runtime 查询数不随 Active Task 数量增长。
+
+未修改：
+
+- Review、Scheduler、Agent、Notification、Feedback、Evaluation 的业务写链路。
+- 领域 Model 和数据库迁移。
+- API 路径和 Router 注册。
+- 任何真实业务表、缓存、物化统计或索引。
+
+### 7.13.2 前端真实数据接入
+
+已新增：
+
+- `frontend/src/command-center/commandCenterModel.js`
+- `frontend/src/command-center/commandCenterPresentation.js`
+- `frontend/tests/commandCenterModel.test.mjs`
+- `frontend/tests/commandCenterPresentation.test.mjs`
+
+已完成：
+
+- Runtime/Governance V1 Schema 归一化、稳定 ID、缺省值、未知枚举和未来字段安全降级。
+- Runtime 15 秒、Governance 180 秒 stale 判断。
+- Runtime 5 秒、Governance 60 秒独立轮询。
+- 页面隐藏时暂停 Timer 和请求；重新可见或 Focus 时刷新。
+- 同类型旧请求使用请求序号和 AbortController 隔离。
+- 单接口失败保留最后一次成功快照，Runtime 与 Governance 错误互不覆盖。
+- System Pulse 接入 Task、Job、Agent Queue、Worker、Provider 和 Critical Finding。
+- 静态生命周期拓扑接入 Standard、Agent 和显式 Fallback Flow。
+- Live Operations Rail 接入 Flow、Provider Observation 和安全 Alert。
+- Governance Loop 接入 WINDOW/ALL_TIME 指标、Acceptance 和 Agent Sample Gate。
+- 页面仍为纯 DOM/CSS 静态拓扑，`allowAnimation=false`。
+
+明确未实现：
+
+- Canvas、Renderer、粒子、流光和状态动画。
+- 本地阶段模拟。
+- AppFrame Queue Drawer 轮询收敛。
+- Phase 2/3 的任务聚焦、交互和性能抽象。
+
+### 7.13.3 实际修改文件
+
+后端：
+
+- `backend-python/app/command_center/schemas.py`
+- `backend-python/app/command_center/repository.py`
+- `backend-python/app/command_center/service.py`
+- `backend-python/tests/contract/test_command_center_api_contract.py`
+- `backend-python/tests/unit/test_command_center_service.py`
+
+前端：
+
+- `frontend/src/command-center/CommandCenterPage.jsx`
+- `frontend/src/command-center/CommandCenterTopology.jsx`
+- `frontend/src/command-center/SystemPulse.jsx`
+- `frontend/src/command-center/LiveOperationsRail.jsx`
+- `frontend/src/command-center/GovernanceLoop.jsx`
+- `frontend/src/command-center/useCommandCenterSnapshots.js`
+- `frontend/src/command-center/commandCenterApi.js`
+- `frontend/src/command-center/commandCenterModel.js`
+- `frontend/src/command-center/commandCenterPresentation.js`
+- `frontend/src/command-center/commandCenter.css`
+- `frontend/tests/commandCenterInformationArchitecture.test.mjs`
+- `frontend/tests/commandCenterModel.test.mjs`
+- `frontend/tests/commandCenterPresentation.test.mjs`
+
+保持不动：
+
+- `backend-python/app/command_center/api.py`
+- `backend-python/app/main.py`
+- `frontend/src/App.jsx`
+- `frontend/src/styles.css`
+- `frontend/src/review-canvas/ReviewImmersiveCanvas.jsx`
+- `frontend/src/review-canvas/reviewCanvasRenderer.js`
+- `frontend/src/review-journey/reviewJourney.js`
+- `frontend/package.json`
+- 全部业务 Model、迁移和现有 Review 写链路
+
+### 7.13.4 验证结果
+
+自动化：
+
+- 后端 Command Center contract/unit：`25 passed`
+- 后端定向 Ruff：通过
+- 前端 Command Center tests：`13 passed`
+- 前端全量 Node tests：`74 passed`
+- 前端生产构建：通过
+- `git diff --check`：通过，仅保留仓库现有 Windows LF/CRLF 提示
+
+契约验证覆盖：
+
+- Standard Running
+- Agent Running/Failure
+- 显式 Agent → Standard Fallback
+- Fallback 严格反例：Agent Failed + Standard Result 不得误判
+- Worker Online/Offline/Busy/Draining 和 Legacy Heartbeat
+- Provider Active/Disabled/Recent 状态且无虚假 Health
+- Critical Finding、Context Insufficient、Notification Failed
+- Feedback、Evaluation、Policy、Acceptance、Agent Sample Gate
+- 只执行 SELECT、响应无敏感字段、查询数固定
+
+浏览器验收：
+
+- 使用隔离 `.local` QA 数据库复用契约测试种子，未连接或修改真实业务数据库；验收后临时数据库和启动脚本已删除。
+- 1440 × 900：真实 Standard Running、显式 Fallback、Provider、Alert 和 Governance 展示正常。
+- 1024 × 800：主区和运行侧栏切换为单列，无横向溢出。
+- 390 × 844：生命周期、Flow 和 Governance 均为单列，无横向溢出。
+- 真实错误态可独立展示 Runtime/Governance 错误，并保留静态结构。
+- 三档视口 `canvasCount=0`。
+- 真实运行态页面控制台无 Error/Warning。
+- 验收启动的前后端端口 owner 已精确停止，临时 QA 产物已清理。
+
+### 7.13.5 Phase 1 停止确认
+
+当前状态：
+
+`PHASE 1 COMPLETED — WAITING FOR PHASE 2 CONFIRMATION`
+
+本阶段到此立即停止。不得自动开始 Phase 2，不得创建 Canvas、Renderer、粒子或动画实现。

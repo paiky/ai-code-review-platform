@@ -9,32 +9,30 @@ const FLOW_COLUMNS = [
     key: 'rule',
     eyebrow: 'RULE & DECISION',
     title: 'Rule Analysis',
-    description: '规则识别与 Risk Card 聚合将在 Phase 1 接入。'
+    description: '规则识别与 Risk Card 聚合。'
   },
   {
     key: 'orchestration',
     eyebrow: 'ORCHESTRATION',
     title: 'Review Execution Core',
-    description: '任务、Preflight 与 Review Target 编排。'
+    description: 'Task、Preflight 与 Scheduler 编排。'
   },
   {
     key: 'execution',
     eyebrow: 'EVIDENCE & EXECUTION',
     title: 'Standard / Agent',
-    description: '双引擎 Flow、Worker 与 Provider 将在 Phase 1 接入。'
+    description: 'Context、Provider、Agent Worker 双引擎执行。'
   },
   {
     key: 'delivery',
     eyebrow: 'RESULT & DELIVERY',
     title: 'Finding / Notification',
-    description: '风险结果与通知状态将在 Phase 1 接入。'
+    description: 'Finding 风险判断与通知交付。'
   }
 ];
 
 
-export default function CommandCenterTopology({ runtime }) {
-  const activeTasks = runtime?.intake?.activeTaskCount;
-
+export default function CommandCenterTopology({ topology }) {
   return (
     <section className="command-center-topology" aria-labelledby="execution-map-title">
       <div className="command-center-section-heading">
@@ -42,7 +40,7 @@ export default function CommandCenterTopology({ runtime }) {
           <span className="command-center-section-kicker">REVIEW EXECUTION MAP</span>
           <h2 id="execution-map-title">Review 生命周期</h2>
         </div>
-        <span className="command-center-phase-badge">PHASE 0 · STATIC SKELETON</span>
+        <span className="command-center-phase-badge">PHASE 1 · LIVE STATIC TOPOLOGY</span>
       </div>
 
       <div className="command-center-flow" role="list" aria-label="AI Review 生命周期">
@@ -52,11 +50,9 @@ export default function CommandCenterTopology({ runtime }) {
             <span>{column.eyebrow}</span>
             <h3>{column.title}</h3>
             <p>{column.description}</p>
-            {column.key === 'orchestration' && (
-              <div className="command-center-flow-reading">
-                活跃 Task <strong>{activeTasks ?? '—'}</strong>
-              </div>
-            )}
+            <div className="command-center-flow-reading">
+              当前 Flow <strong>{topology.flowCountByColumn[column.key] ?? 0}</strong>
+            </div>
             {index < FLOW_COLUMNS.length - 1 && (
               <div className="command-center-flow-connector" aria-hidden="true" />
             )}
@@ -64,10 +60,43 @@ export default function CommandCenterTopology({ runtime }) {
         ))}
       </div>
 
-      <div className="command-center-deferred-note">
-        当前只展示真实生命周期边界；活跃 Flow、Fallback、Context、Provider 和 Finding
-        状态将在 Phase 1 使用聚合数据接入。
+      <div className="command-center-engine-lanes" aria-label="Review 双引擎运行态">
+        <div>
+          <span>STANDARD FLOW</span>
+          <strong>{topology.standardFlowCount}</strong>
+          <small>配置驱动的 Provider Review</small>
+        </div>
+        <div>
+          <span>AGENT FLOW</span>
+          <strong>{topology.agentFlowCount}</strong>
+          <small>独立 Worker 与工具调用链</small>
+        </div>
+        <div className={topology.fallbackFlowCount ? 'is-warning' : ''}>
+          <span>EXPLICIT FALLBACK</span>
+          <strong>{topology.fallbackFlowCount}</strong>
+          <small>仅统计明确 STANDARD_FALLBACK</small>
+        </div>
       </div>
+
+      {topology.flows.length === 0 ? (
+        <div className="command-center-deferred-note">
+          当前没有活跃 Review Flow。拓扑保持静态，不生成模拟任务或本地阶段。
+        </div>
+      ) : (
+        <div className="command-center-topology-flows">
+          {topology.flows.slice(0, 8).map(flow => (
+            <a
+              className={`command-center-topology-flow is-${flow.stateToken}`}
+              href={`/tasks/${flow.taskId}`}
+              key={flow.id}
+            >
+              <span>{flow.engineKind}</span>
+              <strong>{flow.displayName}</strong>
+              <small>{flow.stageLabel} · {flow.stageSource}</small>
+            </a>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
