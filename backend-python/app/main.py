@@ -13,6 +13,7 @@ from app.code_quality.api import profile_router as code_quality_profile_router
 from app.code_quality.api import provider_router as code_quality_provider_router
 from app.code_quality.api import review_router as code_quality_review_router
 from app.code_quality.service import recover_stale_running_reviews_on_startup
+from app.command_center.api import router as command_center_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.response import ok
@@ -95,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(evaluation_run_router)
     app.include_router(review_quality_router)
     app.include_router(review_quality_acceptance_router)
+    app.include_router(command_center_router)
 
     @app.get("/api/health")
     async def health() -> dict:

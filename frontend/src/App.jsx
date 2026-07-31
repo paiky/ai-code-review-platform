@@ -48,6 +48,7 @@ import {
   ClusterOutlined,
   CommentOutlined,
   CopyOutlined,
+  DashboardOutlined,
   ExportOutlined,
   EyeOutlined,
   FileSearchOutlined,
@@ -92,6 +93,7 @@ import 'prismjs/components/prism-tsx';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-yaml';
 import { fetchApi, riskColor, statusColor } from './api.js';
+import CommandCenterPage from './command-center/CommandCenterPage.jsx';
 import {
   formatAgentTraceDetail,
   groupAgentTraceEvents,
@@ -11787,14 +11789,15 @@ function HomePage() {
     return <Navigate to={`/tasks/${legacyTaskId}`} replace />;
   }
 
-  return <TaskListPage />;
+  return <CommandCenterPage />;
 }
 
 function AppFrame() {
   const location = useLocation();
   const navigate = useNavigate();
   const route = currentRoute(location);
-  const isTaskRoute = location.pathname === HOME_ROUTE || location.pathname.startsWith(TASK_LIST_ROUTE);
+  const isCommandCenterRoute = location.pathname === HOME_ROUTE;
+  const isTaskRoute = location.pathname.startsWith(TASK_LIST_ROUTE);
   const isTaskDetailRoute = /^\/tasks\/[^/]+\/?$/.test(location.pathname);
   const isRuleGapRoute = location.pathname.startsWith(RULE_GAPS_ROUTE);
   const isFeedbackRoute = location.pathname.startsWith(FEEDBACK_ROUTE);
@@ -11959,10 +11962,17 @@ function AppFrame() {
       <Layout className={`app-layout${reviewWorkspaceFrame.immersive ? ' app-layout-review-immersive' : ''}`}>
         {!reviewWorkspaceFrame.immersive && (
           <Header className="app-header">
-        <button className="brand" type="button" onClick={() => navigate(TASK_LIST_ROUTE)}>
+        <button className="brand" type="button" onClick={() => navigate(HOME_ROUTE)}>
           AI代码质量审查平台
         </button>
         <Space className="top-nav">
+          <Button
+            icon={<DashboardOutlined />}
+            type={isCommandCenterRoute ? 'primary' : 'default'}
+            onClick={() => navigate(HOME_ROUTE)}
+          >
+            指挥中心
+          </Button>
           <Button
             icon={<UnorderedListOutlined />}
             type={isTaskRoute ? 'primary' : 'default'}
