@@ -2,11 +2,21 @@ import { createCanvasRuntime } from '../canvas/canvasRuntime.js';
 
 
 export const COMMAND_CENTER_CANVAS_MAX_DPR = 2;
-export const COMMAND_CENTER_PARTICLE_LIMIT = 48;
-export const COMMAND_CENTER_PARTICLES_PER_FLOW = 4;
+export const COMMAND_CENTER_DRAW_BUDGET_MS = 8;
+export const COMMAND_CENTER_PARTICLE_LIMIT = 120;
+export const COMMAND_CENTER_PARTICLE_LIMITS = Object.freeze({
+  compact: 48,
+  medium: 80,
+  wide: 120
+});
+export const COMMAND_CENTER_INDEPENDENT_FLOW_LIMIT = 20;
+export const COMMAND_CENTER_PARTICLES_PER_FLOW = 6;
 export const COMMAND_CENTER_TRANSITION_DURATION_MS = 900;
 
-const COMMAND_CENTER_FLOW_PARTICLE_LIMIT = 12;
+export const COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY = '__commandCenterCanvasDiagnostics';
+
+const COMMAND_CENTER_COMPACT_VIEWPORT_MAX = 700;
+const COMMAND_CENTER_MEDIUM_VIEWPORT_MAX = 1100;
 const TAU = Math.PI * 2;
 const CONTINUOUS_VISUAL_STATES = new Set([
   'QUEUED',
@@ -18,6 +28,18 @@ const CONTINUOUS_VISUAL_STATES = new Set([
 ]);
 const SCENE_FRESHNESS = new Set(['FRESH', 'STALE', 'EMPTY']);
 const FLOW_ENGINES = new Set(['STANDARD', 'AGENT', 'FALLBACK']);
+const FLOW_STATE_PRIORITY = Object.freeze([
+  'FAILED',
+  'FALLBACK',
+  'AGENT_SUBMITTING',
+  'AGENT_CONVERGING',
+  'AGENT_TOOL_ACTIVITY',
+  'AGENT_ANALYZING',
+  'QUEUED',
+  'RUNNING',
+  'COMPLETED',
+  'STALE'
+]);
 const STATE_COLORS = Object.freeze({
   QUEUED: '#f3c875',
   RUNNING: '#62d9ff',
@@ -106,6 +128,66 @@ export function resolveCommandCenterCanvasFallback({
 }
 
 
+export function resolveCommandCenterParticleLimit(viewportWidth) {
+  const width = finiteNumber(viewportWidth, COMMAND_CENTER_MEDIUM_VIEWPORT_MAX + 1);
+  if (width <= COMMAND_CENTER_COMPACT_VIEWPORT_MAX) {
+    return COMMAND_CENTER_PARTICLE_LIMITS.compact;
+  }
+  if (width <= COMMAND_CENTER_MEDIUM_VIEWPORT_MAX) {
+    return COMMAND_CENTER_PARTICLE_LIMITS.medium;
+  }
+  return COMMAND_CENTER_PARTICLE_LIMITS.wide;
+}
+
+
+export function createCommandCenterFlowRenderingPlan(
+  scene,
+  { independentLimit = COMMAND_CENTER_INDEPENDENT_FLOW_LIMIT } = {}
+) {
+  const normalizedScene = normalizeCommandCenterScene(scene);
+  const safeIndependentLimit = Math.max(
+    0,
+    Math.min(
+      COMMAND_CENTER_INDEPENDENT_FLOW_LIMIT,
+      Math.trunc(finiteNumber(independentLimit, 0))
+    )
+  );
+  const independentFlows = normalizedScene.flows.slice(0, safeIndependentLimit);
+  const overflowFlows = normalizedScene.flows.slice(safeIndependentLimit);
+  const overflowByColumn = groupFlowsByColumn(overflowFlows);
+  const aggregateFlows = [];
+
+  for (const node of normalizedScene.nodes) {
+    const groupedFlows = overflowByColumn.get(node.columnKey) || [];
+    if (groupedFlows.length === 0) continue;
+    const representative = selectAggregateRepresentative(groupedFlows);
+    aggregateFlows.push(Object.freeze({
+      id: `aggregate:${node.columnKey}`,
+      seedKey: `aggregate:${node.columnKey}`,
+      taskId: 0,
+      reviewKey: `aggregate:${node.columnKey}`,
+      engineKind: resolveAggregateEngineKind(groupedFlows, representative),
+      columnKey: node.columnKey,
+      visualState: representative.visualState,
+      motionMode: representative.motionMode,
+      stateRecognized: true,
+      updatedAt: representative.updatedAt,
+      aggregate: true,
+      aggregateCount: groupedFlows.length
+    }));
+  }
+
+  return Object.freeze({
+    independentFlows: Object.freeze(independentFlows),
+    aggregateFlows: Object.freeze(aggregateFlows),
+    renderFlows: Object.freeze([...independentFlows, ...aggregateFlows]),
+    independentFlowCount: independentFlows.length,
+    aggregatedFlowCount: overflowFlows.length,
+    aggregateGroupCount: aggregateFlows.length
+  });
+}
+
+
 export function deriveCommandCenterFlowSeed({
   taskId = 0,
   reviewKey = 'default'
@@ -116,14 +198,19 @@ export function deriveCommandCenterFlowSeed({
 
 export function createCommandCenterParticleLayout(
   scene,
-  { limit = COMMAND_CENTER_PARTICLE_LIMIT } = {}
+  {
+    limit = COMMAND_CENTER_PARTICLE_LIMIT,
+    renderingPlan
+  } = {}
 ) {
   const normalizedScene = normalizeCommandCenterScene(scene);
   const safeLimit = Math.max(
     0,
     Math.min(COMMAND_CENTER_PARTICLE_LIMIT, Math.trunc(finiteNumber(limit, 0)))
   );
-  const flows = normalizedScene.flows.slice(0, COMMAND_CENTER_FLOW_PARTICLE_LIMIT);
+  const flowPlan = renderingPlan
+    || createCommandCenterFlowRenderingPlan(normalizedScene);
+  const flows = flowPlan.renderFlows;
   if (safeLimit === 0 || flows.length === 0) return Object.freeze([]);
 
   const perFlow = Math.max(
@@ -148,7 +235,8 @@ export function createCommandCenterParticleLayout(
         offset: random(),
         laneOffset: random() * 2 - 1,
         speed: 0.055 + random() * 0.045,
-        radius: 1.6 + random() * 1.4
+        radius: 1.6 + random() * 1.4,
+        aggregateCount: flow.aggregateCount || 0
       }));
     }
   }
@@ -174,7 +262,7 @@ export function reconcileCommandCenterScenes(
 
   const previousFlows = new Map(previous.flows.map(flow => [flow.id, flow]));
   const transitions = [];
-  for (const flow of next.flows.slice(0, COMMAND_CENTER_FLOW_PARTICLE_LIMIT)) {
+  for (const flow of next.flows.slice(0, COMMAND_CENTER_INDEPENDENT_FLOW_LIMIT)) {
     if (!flow.stateRecognized) continue;
     const prior = previousFlows.get(flow.id);
     const entered = !prior;
@@ -208,6 +296,7 @@ export function drawCommandCenterCanvasFrame({
   dpr,
   scene,
   particles,
+  renderingPlan,
   transitions = [],
   transitionProgress = 1,
   timestamp = 0
@@ -217,11 +306,15 @@ export function drawCommandCenterCanvasFrame({
   if (!context || canvasWidth <= 0 || canvasHeight <= 0) return;
 
   const normalizedScene = normalizeCommandCenterScene(scene);
+  const flowPlan = renderingPlan
+    || createCommandCenterFlowRenderingPlan(normalizedScene);
   const particleLayout = Array.isArray(particles)
     ? particles
-    : createCommandCenterParticleLayout(normalizedScene);
+    : createCommandCenterParticleLayout(normalizedScene, {
+      renderingPlan: flowPlan
+    });
   const nodesById = new Map(normalizedScene.nodes.map(node => [node.id, node]));
-  const flowsById = new Map(normalizedScene.flows.map(flow => [flow.id, flow]));
+  const flowsById = new Map(flowPlan.renderFlows.map(flow => [flow.id, flow]));
   const flowsByColumn = groupFlowsByColumn(normalizedScene.flows);
   const geometry = resolveSceneGeometry(canvasWidth, canvasHeight);
 
@@ -263,6 +356,14 @@ export function drawCommandCenterCanvasFrame({
       drawStaticFlowParticle(context, particle, flow, normalizedScene, geometry);
     }
   }
+  for (const aggregateFlow of flowPlan.aggregateFlows) {
+    drawAggregateFlowMarker(
+      context,
+      aggregateFlow,
+      normalizedScene,
+      geometry
+    );
+  }
   for (const transition of transitions) {
     drawSceneTransition(
       context,
@@ -286,14 +387,26 @@ class CommandCenterCanvasController {
       || (typeof document === 'undefined' ? null : document);
     this.onFailure = options.onFailure;
     this.scene = normalizeCommandCenterScene(options.scene);
-    this.particles = createCommandCenterParticleLayout(this.scene);
+    this.viewportWidth = readCommandCenterViewportWidth(
+      this.environment,
+      this.container
+    );
+    this.particleLimit = resolveCommandCenterParticleLimit(this.viewportWidth);
+    this.renderingPlan = createCommandCenterFlowRenderingPlan(this.scene);
+    this.particles = createCommandCenterParticleLayout(this.scene, {
+      limit: this.particleLimit,
+      renderingPlan: this.renderingPlan
+    });
     this.transitions = Object.freeze([]);
     this.transitionStartedAt = null;
     this.runtime = null;
     this.lastRuntimeSnapshot = null;
     this.failed = false;
     this.disposed = false;
+    this.diagnosticReader = () => this.getSnapshot();
     this.handleRuntimeFailure = this.handleRuntimeFailure.bind(this);
+    this.attachDiagnostics();
+    this.updateDiagnosticAttributes();
   }
 
   initialize() {
@@ -302,6 +415,8 @@ class CommandCenterCanvasController {
       container: this.container,
       environment: this.environment,
       maxDpr: COMMAND_CENTER_CANVAS_MAX_DPR,
+      drawBudgetMs: COMMAND_CENTER_DRAW_BUDGET_MS,
+      onResize: ({ width }) => this.handleCanvasResize(width),
       onDraw: ({ context, width, height, dpr, timestamp }) => {
         const transitionFrame = this.resolveTransitionFrame(timestamp);
         drawCommandCenterCanvasFrame({
@@ -312,6 +427,7 @@ class CommandCenterCanvasController {
           timestamp,
           scene: this.scene,
           particles: this.particles,
+          renderingPlan: this.renderingPlan,
           transitions: transitionFrame.transitions,
           transitionProgress: transitionFrame.progress
         });
@@ -334,8 +450,34 @@ class CommandCenterCanvasController {
       : reconcileCommandCenterScenes(this.scene, nextScene);
     this.transitionStartedAt = null;
     this.scene = nextScene;
-    this.particles = createCommandCenterParticleLayout(nextScene);
+    this.renderingPlan = createCommandCenterFlowRenderingPlan(nextScene);
+    this.particles = createCommandCenterParticleLayout(nextScene, {
+      limit: this.particleLimit,
+      renderingPlan: this.renderingPlan
+    });
+    this.updateDiagnosticAttributes();
     this.runtime?.refresh();
+  }
+
+  handleCanvasResize(width) {
+    if (this.disposed || this.failed) return;
+    const nextViewportWidth = readCommandCenterViewportWidth(
+      this.environment,
+      this.container,
+      width
+    );
+    const nextParticleLimit = resolveCommandCenterParticleLimit(nextViewportWidth);
+    this.viewportWidth = nextViewportWidth;
+    if (nextParticleLimit === this.particleLimit) {
+      this.updateDiagnosticAttributes();
+      return;
+    }
+    this.particleLimit = nextParticleLimit;
+    this.particles = createCommandCenterParticleLayout(this.scene, {
+      limit: this.particleLimit,
+      renderingPlan: this.renderingPlan
+    });
+    this.updateDiagnosticAttributes();
   }
 
   shouldAnimate() {
@@ -378,6 +520,7 @@ class CommandCenterCanvasController {
     this.failed = true;
     this.transitions = Object.freeze([]);
     this.transitionStartedAt = null;
+    this.updateDiagnosticAttributes();
     safelyNotifyFailure(this.onFailure);
   }
 
@@ -385,6 +528,7 @@ class CommandCenterCanvasController {
     if (this.disposed) return;
     this.disposed = true;
     const runtime = this.runtime;
+    const canvas = this.canvas;
     runtime?.dispose();
     this.lastRuntimeSnapshot = runtime?.getSnapshot() || this.lastRuntimeSnapshot;
     this.runtime = null;
@@ -394,6 +538,13 @@ class CommandCenterCanvasController {
     this.particles = Object.freeze([]);
     this.transitions = Object.freeze([]);
     this.transitionStartedAt = null;
+    if (canvas?.[COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY] === this.diagnosticReader) {
+      try {
+        delete canvas[COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY];
+      } catch {
+        canvas[COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY] = undefined;
+      }
+    }
   }
 
   getSnapshot() {
@@ -408,9 +559,43 @@ class CommandCenterCanvasController {
       nodeCount: this.scene.nodes.length,
       edgeCount: this.scene.edges.length,
       flowCount: this.scene.flows.length,
+      viewportWidth: this.viewportWidth,
+      particleLimit: this.particleLimit,
       particleCount: this.particles.length,
+      independentFlowCount: this.renderingPlan.independentFlowCount,
+      aggregatedFlowCount: this.renderingPlan.aggregatedFlowCount,
+      aggregateGroupCount: this.renderingPlan.aggregateGroupCount,
+      renderFlowCount: this.renderingPlan.renderFlows.length,
       transitionCount: this.transitions.length
     };
+  }
+
+  attachDiagnostics() {
+    if (!this.canvas) return;
+    try {
+      this.canvas[COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY] = this.diagnosticReader;
+    } catch {
+      // Diagnostics are optional; Canvas rendering must remain available.
+    }
+  }
+
+  updateDiagnosticAttributes() {
+    this.canvas?.setAttribute?.(
+      'data-command-center-particle-limit',
+      String(this.particleLimit)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-independent-flows',
+      String(this.renderingPlan.independentFlowCount)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-aggregated-flows',
+      String(this.renderingPlan.aggregatedFlowCount)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-canvas-health',
+      this.failed ? 'failed' : 'ready'
+    );
   }
 }
 
@@ -632,6 +817,33 @@ function drawStaticFlowParticle(context, particle, flow, scene, geometry) {
 }
 
 
+function drawAggregateFlowMarker(context, flow, scene, geometry) {
+  const target = targetNode(scene, flow);
+  if (!target || flow.aggregateCount <= 0) return;
+  const center = nodePoint(target, geometry);
+  const x = center.x + geometry.nodeWidth * 0.34;
+  const y = center.y - geometry.nodeHeight * 0.34;
+  const radius = clamp(9 + Math.log2(flow.aggregateCount + 1) * 1.4, 10, 16);
+
+  context.save();
+  context.beginPath();
+  context.arc(x, y, radius, 0, TAU);
+  context.fillStyle = 'rgba(5, 12, 26, 0.92)';
+  context.fill();
+  context.strokeStyle = stateColor(flow);
+  context.lineWidth = 1.5;
+  context.stroke();
+  if (typeof context.fillText === 'function') {
+    context.fillStyle = '#eaf2ff';
+    context.font = '600 9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(`+${flow.aggregateCount}`, x, y + 0.5);
+  }
+  context.restore();
+}
+
+
 function drawSceneTransition(
   context,
   transition,
@@ -707,20 +919,25 @@ function groupFlowsByColumn(flows) {
 }
 
 
+function selectAggregateRepresentative(flows) {
+  for (const state of FLOW_STATE_PRIORITY) {
+    const match = flows.find(flow => flow.visualState === state);
+    if (match) return match;
+  }
+  return flows[0];
+}
+
+
+function resolveAggregateEngineKind(flows, representative) {
+  const engines = new Set(flows.map(flow => flow.engineKind));
+  return engines.size === 1
+    ? flows[0].engineKind
+    : representative.engineKind;
+}
+
+
 function resolveColumnStateColor(flows) {
-  const priorities = [
-    'FAILED',
-    'FALLBACK',
-    'AGENT_SUBMITTING',
-    'AGENT_CONVERGING',
-    'AGENT_TOOL_ACTIVITY',
-    'AGENT_ANALYZING',
-    'QUEUED',
-    'RUNNING',
-    'COMPLETED',
-    'STALE'
-  ];
-  for (const state of priorities) {
+  for (const state of FLOW_STATE_PRIORITY) {
     if (flows.some(flow => flow.visualState === state)) {
       return STATE_COLORS[state];
     }
@@ -783,6 +1000,32 @@ function clamp(value, minimum, maximum) {
 function finiteNumber(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+
+function readCommandCenterViewportWidth(
+  environment,
+  container,
+  fallbackWidth = 0
+) {
+  let environmentWidth = 0;
+  try {
+    environmentWidth = finiteNumber(environment?.getViewportWidth?.(), 0);
+  } catch {
+    environmentWidth = 0;
+  }
+  if (environmentWidth > 0) return environmentWidth;
+
+  const rootWidth = typeof window === 'undefined'
+    ? 0
+    : finiteNumber(window.innerWidth, 0);
+  if (rootWidth > 0) return rootWidth;
+
+  const containerWidth = finiteNumber(
+    container?.getBoundingClientRect?.()?.width,
+    0
+  );
+  return Math.max(0, containerWidth, finiteNumber(fallbackWidth, 0));
 }
 
 

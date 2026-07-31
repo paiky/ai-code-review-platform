@@ -1,4 +1,5 @@
 export const CANVAS_RUNTIME_DEFAULT_MAX_DPR = 2;
+export const CANVAS_RUNTIME_DEFAULT_DRAW_BUDGET_MS = 8;
 
 
 export function createCanvasRuntime(options = {}) {
@@ -33,6 +34,10 @@ class CanvasRuntime {
     this.isAnimationEnabled = options.isAnimationEnabled;
     this.onFailure = options.onFailure;
     this.maxDpr = options.maxDpr;
+    this.drawBudgetMs = Math.max(
+      0,
+      finiteNumber(options.drawBudgetMs, CANVAS_RUNTIME_DEFAULT_DRAW_BUDGET_MS)
+    );
     this.contextOptions = options.contextOptions || { alpha: true };
     this.environment = normalizeCanvasEnvironment(options.environment);
     this.context = null;
@@ -44,6 +49,11 @@ class CanvasRuntime {
     this.frameCount = 0;
     this.totalDrawMs = 0;
     this.maxDrawMs = 0;
+    this.lastDrawMs = 0;
+    this.overBudgetFrameCount = 0;
+    this.observerRegistrationCount = 0;
+    this.listenerRegistrationCount = 0;
+    this.maxConcurrentRafCount = 0;
     this.failed = false;
     this.disposed = false;
     this.listenerActive = false;
@@ -70,6 +80,7 @@ class CanvasRuntime {
 
     this.observer = new this.environment.ResizeObserverCtor(this.handleResize);
     this.observer.observe(this.container);
+    this.observerRegistrationCount += 1;
     this.environment.documentTarget?.addEventListener?.(
       'visibilitychange',
       this.handleVisibilityChange
@@ -77,6 +88,7 @@ class CanvasRuntime {
     this.listenerActive = Boolean(
       this.environment.documentTarget?.addEventListener
     );
+    if (this.listenerActive) this.listenerRegistrationCount += 1;
     this.applySize(this.container.getBoundingClientRect?.());
   }
 
@@ -176,6 +188,8 @@ class CanvasRuntime {
       this.frameCount += 1;
       this.totalDrawMs += drawMs;
       this.maxDrawMs = Math.max(this.maxDrawMs, drawMs);
+      this.lastDrawMs = drawMs;
+      if (drawMs > this.drawBudgetMs) this.overBudgetFrameCount += 1;
     } catch {
       this.fail();
     }
@@ -202,6 +216,10 @@ class CanvasRuntime {
   scheduleFrame() {
     if (this.rafId !== null || !this.shouldAnimate()) return;
     this.rafId = this.environment.requestFrame(this.handleAnimationFrame);
+    this.maxConcurrentRafCount = Math.max(
+      this.maxConcurrentRafCount,
+      this.rafId === null ? 0 : 1
+    );
   }
 
   stopLoop() {
@@ -252,6 +270,9 @@ class CanvasRuntime {
   }
 
   getSnapshot() {
+    const averageDrawMs = this.frameCount > 0
+      ? this.totalDrawMs / this.frameCount
+      : 0;
     return {
       disposed: this.disposed,
       failed: this.failed,
@@ -260,10 +281,18 @@ class CanvasRuntime {
       height: this.height,
       dpr: this.dpr,
       frameCount: this.frameCount,
-      averageDrawMs: this.frameCount > 0 ? this.totalDrawMs / this.frameCount : 0,
+      drawBudgetMs: this.drawBudgetMs,
+      averageDrawMs,
+      lastDrawMs: this.lastDrawMs,
       maxDrawMs: this.maxDrawMs,
+      overBudgetFrameCount: this.overBudgetFrameCount,
+      averageWithinBudget: averageDrawMs <= this.drawBudgetMs,
+      activeRafCount: this.rafId === null ? 0 : 1,
+      maxConcurrentRafCount: this.maxConcurrentRafCount,
       observerActive: Boolean(this.observer),
-      listenerActive: this.listenerActive
+      observerRegistrationCount: this.observerRegistrationCount,
+      listenerActive: this.listenerActive,
+      listenerRegistrationCount: this.listenerRegistrationCount
     };
   }
 }

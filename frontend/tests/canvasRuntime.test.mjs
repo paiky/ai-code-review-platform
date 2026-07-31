@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  CANVAS_RUNTIME_DEFAULT_DRAW_BUDGET_MS,
   createCanvasRuntime,
   normalizeCanvasDpr
 } from '../src/canvas/canvasRuntime.js';
@@ -31,6 +32,12 @@ test('owns size DPR observer visibility RAF and diagnostics without renderer sta
   assert.equal(harness.canvas.height, 640);
   assert.equal(runtime.getSnapshot().dpr, 2);
   assert.equal(runtime.getSnapshot().frameCount, 1);
+  assert.equal(runtime.getSnapshot().drawBudgetMs, CANVAS_RUNTIME_DEFAULT_DRAW_BUDGET_MS);
+  assert.equal(runtime.getSnapshot().averageWithinBudget, true);
+  assert.equal(runtime.getSnapshot().activeRafCount, 1);
+  assert.equal(runtime.getSnapshot().maxConcurrentRafCount, 1);
+  assert.equal(runtime.getSnapshot().observerRegistrationCount, 1);
+  assert.equal(runtime.getSnapshot().listenerRegistrationCount, 1);
   assert.equal(harness.pendingFrames(), 1);
   assert.deepEqual(
     drawEvents.map(({ width, height, dpr }) => [width, height, dpr]),
@@ -61,6 +68,42 @@ test('owns size DPR observer visibility RAF and diagnostics without renderer sta
   assert.equal(disposed.listenerActive, false);
   assert.equal(harness.observerInstances[0].disconnectCount, 1);
   assert.equal(harness.documentTarget.listenerCount(), 0);
+});
+
+
+test('enforces the draw budget diagnostic without accumulating owned resources', () => {
+  const harness = createHarness({ nowStep: 9 });
+  const runtime = harness.create({
+    drawBudgetMs: 8,
+    onDraw() {},
+    isAnimationEnabled: () => true
+  });
+
+  for (let index = 0; index < 600; index += 1) {
+    harness.flushFrame(index * 16);
+  }
+
+  const snapshot = runtime.getSnapshot();
+  assert.equal(snapshot.drawBudgetMs, 8);
+  assert.equal(snapshot.averageDrawMs, 9);
+  assert.equal(snapshot.lastDrawMs, 9);
+  assert.equal(snapshot.maxDrawMs, 9);
+  assert.equal(snapshot.overBudgetFrameCount, snapshot.frameCount);
+  assert.equal(snapshot.averageWithinBudget, false);
+  assert.equal(snapshot.activeRafCount, 1);
+  assert.equal(snapshot.maxConcurrentRafCount, 1);
+  assert.equal(snapshot.observerRegistrationCount, 1);
+  assert.equal(snapshot.listenerRegistrationCount, 1);
+  assert.equal(harness.observerInstances.length, 1);
+  assert.equal(harness.documentTarget.listenerCount(), 1);
+
+  harness.setHidden(true);
+  assert.equal(runtime.getSnapshot().activeRafCount, 0);
+  harness.setHidden(false);
+  assert.equal(runtime.getSnapshot().activeRafCount, 1);
+  assert.equal(runtime.getSnapshot().observerRegistrationCount, 1);
+  assert.equal(runtime.getSnapshot().listenerRegistrationCount, 1);
+  runtime.dispose();
 });
 
 
@@ -107,7 +150,8 @@ function createHarness({
   width = 640,
   height = 360,
   dpr = 1,
-  context = {}
+  context = {},
+  nowStep = 0.25
 } = {}) {
   let currentWidth = width;
   let currentHeight = height;
@@ -170,7 +214,7 @@ function createHarness({
     },
     getDevicePixelRatio: () => dpr,
     now: () => {
-      clock += 0.25;
+      clock += nowStep;
       return clock;
     }
   };
@@ -186,6 +230,11 @@ function createHarness({
       ...options
     }),
     pendingFrames: () => frameCallbacks.size,
+    flushFrame: timestamp => {
+      const callbacks = [...frameCallbacks.values()];
+      frameCallbacks.clear();
+      for (const callback of callbacks) callback(timestamp);
+    },
     resize: (nextWidth, nextHeight) => {
       currentWidth = nextWidth;
       currentHeight = nextHeight;

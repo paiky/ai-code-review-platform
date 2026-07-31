@@ -4,8 +4,8 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Phase 2C`
-- 阶段状态：`PHASE 2C COMPLETED — WAITING FOR PHASE 2D CONFIRMATION`
+- 当前阶段：`Phase 2D`
+- 阶段状态：`PHASE 2D IMPLEMENTED — BROWSER QA BLOCKED`
 - Phase 0 基线 Commit：`2005b8f`
 - Phase 1 基线 Commit：`0cbb148`
 - Phase 2 拆分确认时间：2026-07-31
@@ -15,10 +15,11 @@
 - Phase 2B 完成时间：2026-07-31
 - Phase 2C 授权时间：2026-07-31
 - Phase 2C 完成时间：2026-07-31
+- Phase 2D 授权时间：2026-07-31
 - 计划更新时间：2026-07-31
-- 当前目标：Phase 2C 已完成 Phase 1 ActiveFlow 和真实 Snapshot 状态到有限粒子、静态终态及一次性过渡的映射，使用稳定 ID、固定 seed 和前后快照对账。
-- 当前明确不做：不开始 Phase 2D；不修改后端、Runtime/Governance API、Command Center 轮询策略或 Phase 3 交互；不在本地推进业务阶段；不使用定时器模拟 Provider/Agent 工作；不进入 Phase 3。
-- 停止点：Phase 2C 已完成并通过状态矩阵、历史终态不重放、Stale/隐藏/reduced-motion 静止、Review Canvas 回归、全量测试和生产构建。提交后立即停止，等待用户验证及 Phase 2D 明确确认。
+- 当前目标：Phase 2D 实现和自动化验证已完成；待稳定的独立服务 owner 可用后，补齐三档视口、长时间动态状态、真实绘制耗时和视觉对齐浏览器验收。
+- 当前明确不做：不修改后端、Runtime/Governance API、Command Center 轮询策略、任务聚焦、节点交互、AppFrame 轮询去重、MySQL 优化或其他 Phase 3 能力；不使用定时器模拟 Provider/Agent 工作；不进入 Phase 3。
+- 停止点：当前 Codex/Windows 环境无法建立可复用的 5173/8090 长驻服务，按恢复约束停止环境重试。保留已通过的自动化与构建结果、明确登记未完成浏览器项并提交；Phase 2D 和 Phase 2 不标记 Completed，不进入 Phase 3。
 
 本计划同时作为分阶段实施总控和验收记录。每个阶段开始前更新状态，完成后回写验证结果并停止。
 
@@ -2537,3 +2538,86 @@ Renderer Controller 已实现相邻 Snapshot 对账：
 `PHASE 2C COMPLETED — WAITING FOR PHASE 2D CONFIRMATION`
 
 Phase 2C 到此立即停止。不得自动开始 Phase 2D，不得提前加入响应式粒子分档、长期性能门禁、任务聚焦、节点交互或 Phase 3 能力。
+
+## 8.10 Phase 2D 实施设计与执行记录
+
+开始时间：2026-07-31
+
+### 8.10.1 实施约束
+
+- 只修改 Phase 2D 允许的 Canvas Runtime、Command Center Canvas/Renderer/CSS、对应测试和本计划。
+- 粒子预算按视口宽度分为 `<= 700px: 48`、`701px ~ 1100px: 80`、`> 1100px: 120`，并继续保持 DPR 最大 2。
+- 真实 Flow 数据、DOM 拓扑和统计不裁剪；Canvas 最多独立表达 20 个 Flow，超出部分按生命周期列形成稳定聚合标记并显示聚合数量。
+- 通用 Canvas Runtime 记录 8ms 预算、最近/平均/最大绘制耗时和超预算帧数；Command Center Canvas 提供只读诊断快照供浏览器验收，不新增产品交互。
+- 零尺寸、页面隐藏、Stale、reduced-motion 不持续绘制；初始化或绘制失败沿用 DOM 拓扑并清理 RAF、Observer 和 visibility listener。
+
+### 8.10.2 验收矩阵
+
+- Renderer/Runtime：三档粒子预算、20 个独立 Flow 与超限聚合、单资源所有权、8ms 预算诊断、隐藏/恢复、零尺寸、Stale、初始化失败、绘制失败和 dispose。
+- 浏览器：`1440 × 900`、`1024 × 800`、`390 × 844`；Idle、Standard Running、Agent Running、Explicit Fallback、Failed、Stale；reduced-motion、页面隐藏/恢复和 DOM 失败回退。
+- 长时间动态状态验收记录平均/最大绘制耗时、帧数、粒子数、独立/聚合 Flow 数，以及 RAF、Observer、listener 是否累积。
+- 完成专项测试、前端全量 Node 测试、生产构建和 `git diff --check` 后回写结果；Phase 2D 和 Phase 2 整体通过后提交并立即停止。
+
+### 8.10.3 实际修改
+
+- `frontend/src/canvas/canvasRuntime.js`
+  - 增加默认 8ms 绘制预算、最近/平均/最大绘制耗时、超预算帧数和平均预算状态。
+  - 增加当前/最大并发 RAF、Observer/listener 注册次数诊断，资源清理语义不变。
+- `frontend/src/command-center/commandCenterCanvasRenderer.js`
+  - 增加 390/1024/1440 对应的 48/80/120 粒子上限解析和 ResizeObserver 驱动的粒子布局重算。
+  - Canvas 最多保留 20 个独立 Flow；其余真实 Flow 按生命周期列聚合为稳定 `+N` 标记，DOM 拓扑和业务统计仍保留全部真实 Flow。
+  - Controller 快照增加视口、粒子预算、独立/聚合 Flow、绘制预算和资源所有权字段；Canvas 元素提供只读诊断函数和低频数据属性。
+- `frontend/src/command-center/CommandCenterCanvas.jsx`
+  - Canvas 阶段标记更新为 `PHASE_2D`；reduced-motion、小屏和失败时继续使用完整 DOM 拓扑。
+- `frontend/tests/canvasRuntime.test.mjs`
+  - 增加 600 帧超预算诊断、隐藏/恢复和资源不累积验证。
+- `frontend/tests/commandCenterCanvasRenderer.test.mjs`
+  - 增加三档粒子预算、20 个独立 Flow 与超限聚合、响应式重算、1200 帧长时间运行、隐藏/恢复、Stale 和资源不累积验证。
+- `frontend/tests/commandCenterInformationArchitecture.test.mjs`
+  - 更新 Phase 2D 边界、独立 Flow 上限、粒子上限和诊断入口约束。
+
+### 8.10.4 自动化验证结果
+
+- 专项测试：
+  - `node --test frontend/tests/canvasRuntime.test.mjs frontend/tests/commandCenterCanvasRenderer.test.mjs frontend/tests/commandCenterInformationArchitecture.test.mjs frontend/tests/reviewCanvasRenderer.test.mjs`
+  - 27 项通过，0 失败。
+- 前端全量测试：
+  - `node --test frontend/tests/*.test.mjs`
+  - 92 项通过，0 失败。
+- 生产构建：
+  - `scripts\run-frontend.cmd build`
+  - 构建成功；CSS `67.02 kB`（gzip `13.71 kB`），JS `1,724.08 kB`（gzip `536.08 kB`）。
+  - Vite 主 Bundle 超过 500 kB 的既有警告仍存在；拆包不属于 Phase 2D。
+- 确定性性能门禁：
+  - Command Center 1200 帧测试中平均/最大模拟绘制耗时均为 `0.2ms`，预算 `8ms`，最大并发 RAF 为 1，Observer 和 visibility listener 注册次数均为 1。
+  - 通用 Runtime 以 `9ms` 模拟绘制验证全部超预算帧均被记录，证明预算诊断不是只覆盖通过路径。
+  - 以上为确定性时钟测试结果，不代替真实浏览器硬件绘制数据。
+
+### 8.10.5 浏览器恢复检查与阻塞
+
+- 用户中止首次长驻启动后，恢复检查确认：
+  - 5173 和 8090 均无监听进程。
+  - 已知 QA PID `57740` 不存活，也没有存活的 `start-detached`、Vite、uvicorn 或对应 cmd/PowerShell 子进程链。
+  - `.local/phase2d-qa` 日志没有可用的服务 ready 记录。
+- 不再复用未返回的 `start-detached` 命令。改用 `Win32_Process.Create` 建立独立 owner：
+  - 入口脚本启动 PID `60020` 立即退出，未监听 5173。
+  - 显式 Node/Vite 启动 PID `59340` 也在监听前立即退出，且没有形成新的可诊断日志。
+- 当前环境能够有界创建外部 PID，但无法让该 PID 稳定执行工作区长驻命令；无法同时满足进程存活、端口监听和 HTTP 200 三项 ready 条件。按用户恢复约束停止重试。
+- 未完成的真实浏览器验收：
+  - `1440 × 900`、`1024 × 800`、`390 × 844` 三档布局和截图。
+  - Idle、Standard Running、Agent Running、Explicit Fallback、Failed、Stale 动态状态切换。
+  - 浏览器页面隐藏/恢复、reduced-motion、初始化失败和绘制失败回退。
+  - 长时间真实轮询下的平均/最大绘制耗时、RAF/Observer/listener 和内存资源累积。
+  - 与视觉参考目标的最终像素级对齐。
+
+### 8.10.6 遗留风险与停止确认
+
+- Phase 2D 代码、专项/全量测试和生产构建已完成，但真实浏览器性能与响应式验收被环境阻塞，不能据此声明 Phase 2D 或 Phase 2 整体完成。
+- 聚合标记已由 Renderer 确定性测试覆盖；真实 Canvas 字体、不同设备像素比和窄屏 DOM fallback 的视觉效果仍需浏览器复核。
+- 主 Bundle 警告仍为既有风险，不在本阶段扩展范围。
+
+当前状态：
+
+`PHASE 2D IMPLEMENTED — BROWSER QA BLOCKED`
+
+Phase 2D 在此停止，不进入 Phase 3。待用户提供已 ready 的 5173/8090 环境或独立 runner 后，只补做上述浏览器验收并更新完成状态。

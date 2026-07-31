@@ -69,7 +69,7 @@ test('task list and task detail routes remain explicit and separate from home', 
 });
 
 
-test('phase two C Canvas stays read-only and uses only snapshot-driven animation', () => {
+test('phase two D Canvas stays read-only and uses only snapshot-driven animation', () => {
   assert.equal(pageSource.includes('data-command-center-phase="PHASE_2B"'), true);
   assert.equal(pageSource.includes('READ-ONLY CONTROL PLANE'), true);
   assert.equal(pageSource.includes('<canvas'), false);
@@ -79,13 +79,16 @@ test('phase two C Canvas stays read-only and uses only snapshot-driven animation
   assert.equal(topologySource.includes('<canvas'), false);
   assert.equal(topologySource.includes('requestAnimationFrame'), false);
   assert.equal((canvasSource.match(/<canvas/g) || []).length, 1);
-  assert.equal(canvasSource.includes('data-command-center-canvas-phase="PHASE_2C"'), true);
+  assert.equal(canvasSource.includes('data-command-center-canvas-phase="PHASE_2D"'), true);
   assert.equal(canvasSource.includes('prefers-reduced-motion: reduce'), true);
   assert.equal(canvasSource.includes('max-width: 700px'), true);
   assert.equal(canvasSource.includes('data-command-center-canvas-fallback'), false);
   assert.equal(topologySource.includes('data-command-center-canvas-fallback'), true);
   assert.equal(rendererSource.includes('isAnimationEnabled: () => this.shouldAnimate()'), true);
   assert.equal(rendererSource.includes('reconcileCommandCenterScenes'), true);
+  assert.equal(rendererSource.includes('COMMAND_CENTER_INDEPENDENT_FLOW_LIMIT = 20'), true);
+  assert.equal(rendererSource.includes('COMMAND_CENTER_PARTICLE_LIMIT = 120'), true);
+  assert.equal(rendererSource.includes('__commandCenterCanvasDiagnostics'), true);
   assert.equal(rendererSource.includes('setInterval'), false);
   assert.equal(rendererSource.includes('setTimeout'), false);
   assert.equal(presentationSource.includes("freshness === 'FRESH'"), true);

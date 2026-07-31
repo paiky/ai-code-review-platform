@@ -2,14 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY,
   COMMAND_CENTER_CANVAS_MAX_DPR,
+  COMMAND_CENTER_DRAW_BUDGET_MS,
+  COMMAND_CENTER_INDEPENDENT_FLOW_LIMIT,
   COMMAND_CENTER_PARTICLE_LIMIT,
+  COMMAND_CENTER_PARTICLE_LIMITS,
   createCommandCenterCanvasController,
+  createCommandCenterFlowRenderingPlan,
   createCommandCenterParticleLayout,
   deriveCommandCenterFlowSeed,
   normalizeCommandCenterScene,
   reconcileCommandCenterScenes,
-  resolveCommandCenterCanvasFallback
+  resolveCommandCenterCanvasFallback,
+  resolveCommandCenterParticleLimit
 } from '../src/command-center/commandCenterCanvasRenderer.js';
 import {
   buildCommandCenterPresentation
@@ -118,6 +124,53 @@ test('derives fixed seeds stable particle ids and a hard global particle cap', (
 });
 
 
+test('applies responsive particle tiers and aggregates flows beyond the independent limit', () => {
+  const flows = Array.from({ length: 27 }, (_, index) => (
+    flow(index + 1, `review-${index + 1}`, 'RUNNING', 'MODEL_CALLING')
+  ));
+  const scene = buildScene('2026-07-31T02:00:00Z', flows);
+  const renderingPlan = createCommandCenterFlowRenderingPlan(scene);
+
+  assert.equal(resolveCommandCenterParticleLimit(390), COMMAND_CENTER_PARTICLE_LIMITS.compact);
+  assert.equal(resolveCommandCenterParticleLimit(1024), COMMAND_CENTER_PARTICLE_LIMITS.medium);
+  assert.equal(resolveCommandCenterParticleLimit(1440), COMMAND_CENTER_PARTICLE_LIMITS.wide);
+  assert.equal(renderingPlan.independentFlowCount, COMMAND_CENTER_INDEPENDENT_FLOW_LIMIT);
+  assert.equal(renderingPlan.aggregatedFlowCount, 7);
+  assert.equal(renderingPlan.aggregateGroupCount, 1);
+  assert.equal(renderingPlan.renderFlows.length, 21);
+  assert.deepEqual(
+    renderingPlan.aggregateFlows.map(item => [
+      item.id,
+      item.columnKey,
+      item.aggregateCount
+    ]),
+    [['aggregate:execution', 'execution', 7]]
+  );
+
+  const compact = createCommandCenterParticleLayout(scene, {
+    limit: resolveCommandCenterParticleLimit(390),
+    renderingPlan
+  });
+  const medium = createCommandCenterParticleLayout(scene, {
+    limit: resolveCommandCenterParticleLimit(1024),
+    renderingPlan
+  });
+  const wide = createCommandCenterParticleLayout(scene, {
+    limit: resolveCommandCenterParticleLimit(1440),
+    renderingPlan
+  });
+  assert.ok(compact.length <= COMMAND_CENTER_PARTICLE_LIMITS.compact);
+  assert.ok(medium.length <= COMMAND_CENTER_PARTICLE_LIMITS.medium);
+  assert.ok(wide.length <= COMMAND_CENTER_PARTICLE_LIMITS.wide);
+  assert.ok(compact.length < medium.length);
+  assert.ok(medium.length < wide.length);
+  assert.equal(
+    wide.some(particle => particle.flowId === 'aggregate:execution'),
+    true
+  );
+});
+
+
 test('reconciles only real fresh snapshot changes and never replays initial history', () => {
   const running = buildScene(
     '2026-07-31T02:00:00Z',
@@ -180,15 +233,51 @@ test('keeps historical Failed and Fallback static on initial load', () => {
   assert.equal(controller.getSnapshot().running, false);
   assert.equal(controller.getSnapshot().allowAnimation, false);
   assert.equal(controller.getSnapshot().transitionCount, 0);
-  assert.equal(controller.getSnapshot().particleCount, 8);
+  assert.equal(controller.getSnapshot().particleLimit, COMMAND_CENTER_PARTICLE_LIMITS.medium);
+  assert.equal(controller.getSnapshot().particleCount, 12);
   assert.equal(controller.getSnapshot().frameCount, 1);
+  assert.equal(
+    typeof harness.canvas[COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY],
+    'function'
+  );
+  assert.equal(
+    harness.canvas.getAttribute('data-command-center-particle-limit'),
+    '80'
+  );
 
   harness.resize(800, 190);
   assert.equal(controller.getSnapshot().frameCount, 2);
   assert.equal(harness.pendingFrames(), 0);
   controller.dispose();
+  assert.equal(harness.canvas[COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY], undefined);
   assert.equal(harness.observerInstances[0].disconnectCount, 1);
   assert.equal(harness.documentTarget.listenerCount(), 0);
+});
+
+
+test('rebuilds only the particle layout across responsive tiers', () => {
+  const flows = Array.from({ length: 20 }, (_, index) => (
+    flow(index + 1, `review-${index + 1}`, 'RUNNING', 'MODEL_CALLING')
+  ));
+  const scene = buildScene('2026-07-31T02:00:00Z', flows);
+  const harness = createHarness({ width: 390, viewportWidth: 390 });
+  const controller = harness.create(scene);
+
+  assert.equal(controller.getSnapshot().particleLimit, 48);
+  assert.equal(controller.getSnapshot().particleCount, 40);
+  assert.equal(controller.getSnapshot().independentFlowCount, 20);
+  assert.equal(harness.observerInstances.length, 1);
+  assert.equal(harness.documentTarget.listenerCount(), 1);
+
+  harness.resize(900, 190, 1024);
+  assert.equal(controller.getSnapshot().particleLimit, 80);
+  assert.equal(controller.getSnapshot().particleCount, 80);
+  harness.resize(1100, 190, 1440);
+  assert.equal(controller.getSnapshot().particleLimit, 120);
+  assert.equal(controller.getSnapshot().particleCount, 120);
+  assert.equal(harness.observerInstances.length, 1);
+  assert.equal(harness.documentTarget.listenerCount(), 1);
+  controller.dispose();
 });
 
 
@@ -227,6 +316,45 @@ test('animates live state and stops after a one-time terminal transition', () =>
   assert.equal(controller.getSnapshot().transitionCount, 0);
   assert.equal(controller.getSnapshot().running, false);
   assert.equal(harness.pendingFrames(), 0);
+  controller.dispose();
+});
+
+
+test('stays within the draw budget and keeps one RAF observer and listener over time', () => {
+  const flows = Array.from({ length: 24 }, (_, index) => (
+    flow(index + 1, `review-${index + 1}`, 'RUNNING', 'MODEL_CALLING')
+  ));
+  const running = buildScene('2026-07-31T02:00:00Z', flows);
+  const stale = buildScene('2026-07-31T02:10:00Z', flows, 'STALE');
+  const harness = createHarness({ width: 1100, viewportWidth: 1440 });
+  const controller = harness.create(running);
+
+  for (let index = 0; index < 1_200; index += 1) {
+    harness.flushFrame(index * 16);
+  }
+
+  const longRunning = controller.getSnapshot();
+  assert.equal(longRunning.drawBudgetMs, COMMAND_CENTER_DRAW_BUDGET_MS);
+  assert.ok(longRunning.averageDrawMs <= COMMAND_CENTER_DRAW_BUDGET_MS);
+  assert.equal(longRunning.averageWithinBudget, true);
+  assert.equal(longRunning.activeRafCount, 1);
+  assert.equal(longRunning.maxConcurrentRafCount, 1);
+  assert.equal(longRunning.observerRegistrationCount, 1);
+  assert.equal(longRunning.listenerRegistrationCount, 1);
+  assert.equal(longRunning.independentFlowCount, 20);
+  assert.equal(longRunning.aggregatedFlowCount, 4);
+  assert.equal(longRunning.aggregateGroupCount, 1);
+  assert.equal(harness.observerInstances.length, 1);
+  assert.equal(harness.documentTarget.listenerCount(), 1);
+
+  harness.setHidden(true);
+  assert.equal(controller.getSnapshot().activeRafCount, 0);
+  harness.setHidden(false);
+  assert.equal(controller.getSnapshot().activeRafCount, 1);
+  controller.setScene(stale);
+  assert.equal(controller.getSnapshot().activeRafCount, 0);
+  assert.equal(controller.getSnapshot().observerRegistrationCount, 1);
+  assert.equal(controller.getSnapshot().listenerRegistrationCount, 1);
   controller.dispose();
 });
 
@@ -360,10 +488,12 @@ function createHarness({
   width = 640,
   height = 190,
   dpr = 1,
+  viewportWidth = width,
   context = createContext()
 } = {}) {
   let currentWidth = width;
   let currentHeight = height;
+  let currentViewportWidth = viewportWidth;
   let nextFrameId = 1;
   const frameCallbacks = new Map();
   const observerInstances = [];
@@ -371,7 +501,14 @@ function createHarness({
   const canvas = {
     width: 0,
     height: 0,
-    getContext: () => context
+    attributes: new Map(),
+    getContext: () => context,
+    setAttribute(name, value) {
+      this.attributes.set(name, value);
+    },
+    getAttribute(name) {
+      return this.attributes.get(name) ?? null;
+    }
   };
   const container = {
     getBoundingClientRect: () => ({
@@ -422,6 +559,7 @@ function createHarness({
       frameCallbacks.delete(id);
     },
     getDevicePixelRatio: () => dpr,
+    getViewportWidth: () => currentViewportWidth,
     now: () => {
       clock += 0.2;
       return clock;
@@ -446,9 +584,10 @@ function createHarness({
       frameCallbacks.clear();
       for (const callback of callbacks) callback(timestamp);
     },
-    resize: (nextWidth, nextHeight) => {
+    resize: (nextWidth, nextHeight, nextViewportWidth = nextWidth) => {
       currentWidth = nextWidth;
       currentHeight = nextHeight;
+      currentViewportWidth = nextViewportWidth;
       observerInstances[0].emit(nextWidth, nextHeight);
     },
     setHidden: hidden => {
@@ -520,6 +659,9 @@ function createContext() {
     },
     fill() {
       this.operations.push('fill');
+    },
+    fillText() {
+      this.operations.push('fillText');
     },
     stroke() {
       this.operations.push('stroke');
