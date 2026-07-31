@@ -50,6 +50,8 @@ test('runtime v1 model normalizes stable flow ids and bounded collections', () =
   assert.equal(runtime.freshness, 'FRESH');
   assert.equal(runtime.activeFlows[0].id, '41:agent-main');
   assert.equal(runtime.activeFlows[0].fallback, true);
+  assert.equal(runtime.activeFlows[0].statusRecognized, true);
+  assert.equal(runtime.activeFlows[0].stageRecognized, true);
   assert.deepEqual(runtime.activeFlows[0].contextStatusCounts, { INSUFFICIENT: 2 });
   assert.equal(runtime.agent.workerPool.workers[0].state, 'BUSY');
   assert.equal(runtime.providersObserved[0].status, 'ACTIVE');
@@ -75,6 +77,9 @@ test('runtime model safely handles damaged payload and unknown enums', () => {
   assert.equal(runtime.schemaCompatible, false);
   assert.equal(runtime.freshness, 'EMPTY');
   assert.equal(runtime.activeFlows[0].status, 'RUNNING');
+  assert.equal(runtime.activeFlows[0].statusRecognized, false);
+  assert.equal(runtime.activeFlows[0].stage, 'UNKNOWN');
+  assert.equal(runtime.activeFlows[0].stageRecognized, false);
   assert.equal(runtime.activeFlows[0].id, '9:future');
   assert.equal(runtime.providersObserved[0].status, 'NO_RECENT_DATA');
   assert.equal(runtime.alerts[0].navigationTarget, null);

@@ -74,22 +74,44 @@ const TOPOLOGY_COLUMNS = [
   }
 ];
 
+const AGENT_FLOW_STATES = new Set([
+  'AGENT_ANALYZING',
+  'AGENT_TOOL_ACTIVITY',
+  'AGENT_CONVERGING',
+  'AGENT_SUBMITTING'
+]);
+const GENERIC_ACTIVE_STAGES = new Set([
+  'RULE_ANALYSIS',
+  'RULE_COMPLETED',
+  'PREFLIGHT',
+  'CONTEXT_BUILDING',
+  'MODEL_CALLING',
+  'FINDING_READY',
+  'NOTIFYING'
+]);
+
 
 export function buildCommandCenterPresentation({ runtime, governance } = {}) {
   const safeRuntime = runtime || null;
   const safeGovernance = governance || null;
-  const flows = (safeRuntime?.activeFlows || []).map(flow => ({
-    ...flow,
-    engineKind: flow.fallback
+  const runtimeFreshness = safeRuntime?.freshness || 'EMPTY';
+  const flows = (safeRuntime?.activeFlows || []).map(flow => {
+    const engineKind = flow.fallback
       ? 'FALLBACK'
       : flow.requestedEngine === 'AGENT'
         ? 'AGENT'
-        : 'STANDARD',
-    stateToken: stateToken(flow.fallback ? 'FALLBACK' : flow.status),
-    columnKey: STAGE_COLUMNS[flow.stage] || 'execution',
-    providerModelLabel: [flow.providerCode, flow.model].filter(Boolean).join(' · ') || 'Provider 未记录',
-    stageLabel: stageLabel(flow.stage)
-  }));
+        : 'STANDARD';
+    const visual = resolveFlowVisualState(flow, runtimeFreshness);
+    return {
+      ...flow,
+      engineKind,
+      stateToken: stateToken(flow.fallback ? 'FALLBACK' : flow.status),
+      columnKey: STAGE_COLUMNS[flow.stage] || 'execution',
+      providerModelLabel: [flow.providerCode, flow.model].filter(Boolean).join(' · ') || 'Provider 未记录',
+      stageLabel: stageLabel(flow.stage),
+      ...visual
+    };
+  });
   const flowCountByColumn = flows.reduce((counts, flow) => ({
     ...counts,
     [flow.columnKey]: (counts[flow.columnKey] || 0) + 1
@@ -100,10 +122,15 @@ export function buildCommandCenterPresentation({ runtime, governance } = {}) {
     title: column.title,
     description: column.description
   }));
-  const topologyScene = buildTopologyScene(flowCountByColumn);
+  const topologyScene = buildTopologyScene({
+    flowCountByColumn,
+    flows,
+    freshness: runtimeFreshness,
+    generatedAt: safeRuntime?.generatedAt || null
+  });
 
   return {
-    allowAnimation: false,
+    allowAnimation: topologyScene.allowAnimation,
     pulse: {
       activeTasks: safeRuntime?.intake?.activeTaskCount ?? 0,
       activeJobs: safeRuntime?.scheduler?.activeJobCount ?? 0,
@@ -111,7 +138,7 @@ export function buildCommandCenterPresentation({ runtime, governance } = {}) {
       onlineWorkers: safeRuntime?.agent?.workerPool?.onlineCount ?? 0,
       activeProviders: (safeRuntime?.providersObserved || []).filter(provider => provider.status === 'ACTIVE').length,
       criticalFindings: safeGovernance?.findingRisk?.severityCounts?.CRITICAL ?? 0,
-      runtimeFreshness: safeRuntime?.freshness || 'EMPTY',
+      runtimeFreshness,
       governanceFreshness: safeGovernance?.freshness || 'EMPTY',
       generatedAt: safeRuntime?.generatedAt || null
     },
@@ -146,7 +173,12 @@ export function buildCommandCenterPresentation({ runtime, governance } = {}) {
 }
 
 
-function buildTopologyScene(flowCountByColumn) {
+function buildTopologyScene({
+  flowCountByColumn,
+  flows,
+  freshness,
+  generatedAt
+}) {
   const nodes = TOPOLOGY_COLUMNS.map(column => ({
     id: `lifecycle:${column.key}`,
     columnKey: column.key,
@@ -156,13 +188,116 @@ function buildTopologyScene(flowCountByColumn) {
   }));
   return {
     id: 'review-lifecycle',
-    allowAnimation: false,
+    snapshotKey: generatedAt || 'EMPTY',
+    freshness,
+    allowAnimation: (
+      freshness === 'FRESH'
+      && flows.some(flow => flow.motionMode === 'CONTINUOUS')
+    ),
     nodes,
     edges: nodes.slice(0, -1).map((node, index) => ({
       id: `${node.id}->${nodes[index + 1].id}`,
       from: node.id,
       to: nodes[index + 1].id
+    })),
+    flows: flows.map(flow => ({
+      id: flow.id,
+      seedKey: `${flow.taskId}:${flow.reviewKey}`,
+      taskId: flow.taskId,
+      reviewKey: flow.reviewKey,
+      engineKind: flow.engineKind,
+      columnKey: flow.columnKey,
+      visualState: flow.visualState,
+      motionMode: flow.motionMode,
+      stateRecognized: flow.stateRecognized,
+      updatedAt: flow.updatedAt || null
     }))
+  };
+}
+
+
+export function resolveFlowVisualState(flow = {}, freshness = 'EMPTY') {
+  if (freshness === 'STALE') {
+    return {
+      visualState: 'STALE',
+      motionMode: 'STATIC',
+      stateRecognized: true
+    };
+  }
+
+  const recognized = (
+    flow.statusRecognized !== false
+    && flow.stageRecognized !== false
+  );
+  if (!recognized) {
+    return {
+      visualState: 'RUNNING',
+      motionMode: 'STATIC',
+      stateRecognized: false
+    };
+  }
+
+  const status = String(flow.status || '').toUpperCase();
+  const stage = String(flow.stage || '').toUpperCase();
+  if (flow.fallback || status === 'FALLBACK' || stage === 'FALLBACK') {
+    return recognizedVisual('FALLBACK', 'STATIC');
+  }
+  if (
+    status === 'FAILED'
+    || status === 'TIMED_OUT'
+    || stage === 'FAILED'
+  ) {
+    return recognizedVisual('FAILED', 'STATIC');
+  }
+  if (
+    stage === 'COMPLETED'
+    || stage === 'SKIPPED'
+  ) {
+    return recognizedVisual('COMPLETED', 'STATIC');
+  }
+  if (
+    status === 'QUEUED'
+    || status === 'PENDING'
+    || stage === 'QUEUED'
+  ) {
+    return recognizedVisual('QUEUED', freshness === 'FRESH' ? 'CONTINUOUS' : 'STATIC');
+  }
+  if (AGENT_FLOW_STATES.has(stage)) {
+    return recognizedVisual(
+      stage,
+      freshness === 'FRESH' ? 'CONTINUOUS' : 'STATIC'
+    );
+  }
+  if (GENERIC_ACTIVE_STAGES.has(stage)) {
+    return recognizedVisual(
+      'RUNNING',
+      freshness === 'FRESH' ? 'CONTINUOUS' : 'STATIC'
+    );
+  }
+  if (
+    status === 'SUCCESS'
+    || status === 'COMPLETED'
+    || status === 'SKIPPED'
+    || status === 'CANCELLED'
+  ) {
+    return recognizedVisual('COMPLETED', 'STATIC');
+  }
+  if (status === 'RUNNING' || status === 'CLAIMED') {
+    return recognizedVisual('RUNNING', freshness === 'FRESH' ? 'CONTINUOUS' : 'STATIC');
+  }
+  return {
+    visualState: 'RUNNING',
+    motionMode: 'STATIC',
+    stateRecognized: false
+  };
+}
+
+
+function recognizedVisual(visualState, motionMode) {
+  return {
+    visualState,
+    motionMode,
+    stateRecognized: true
   };
 }
 

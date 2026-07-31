@@ -3,12 +3,13 @@ import test from 'node:test';
 
 import {
   buildCommandCenterPresentation,
+  resolveFlowVisualState,
   stageLabel,
   stateToken
 } from '../src/command-center/commandCenterPresentation.js';
 
 
-test('presentation keeps standard agent and fallback as explicit static lanes', () => {
+test('presentation keeps standard agent and fallback as explicit snapshot lanes', () => {
   const presentation = buildCommandCenterPresentation({
     runtime: {
       freshness: 'FRESH',
@@ -42,7 +43,7 @@ test('presentation keeps standard agent and fallback as explicit static lanes', 
     }
   });
 
-  assert.equal(presentation.allowAnimation, false);
+  assert.equal(presentation.allowAnimation, true);
   assert.equal(presentation.topology.standardFlowCount, 1);
   assert.equal(presentation.topology.agentFlowCount, 1);
   assert.equal(presentation.topology.fallbackFlowCount, 1);
@@ -68,8 +69,20 @@ test('presentation keeps standard agent and fallback as explicit static lanes', 
       ['lifecycle:delivery', 0.9, 0.5, 0]
     ]
   );
-  assert.equal(presentation.topology.scene.allowAnimation, false);
+  assert.equal(presentation.topology.scene.allowAnimation, true);
   assert.equal(presentation.topology.scene.edges.length, 4);
+  assert.deepEqual(
+    presentation.topology.scene.flows.map(flow => [
+      flow.id,
+      flow.visualState,
+      flow.motionMode
+    ]),
+    [
+      ['1:standard-main', 'RUNNING', 'CONTINUOUS'],
+      ['1:agent-main', 'AGENT_ANALYZING', 'CONTINUOUS'],
+      ['1:fallback-main', 'FALLBACK', 'STATIC']
+    ]
+  );
 });
 
 
@@ -140,6 +153,77 @@ test('state and stage labels use safe static tokens', () => {
 });
 
 
+test('maps the complete Phase 2C state matrix without inventing local stages', () => {
+  const cases = [
+    [flow('queued', 'STANDARD', 'STANDARD', false, 'QUEUED', 'QUEUED'), 'QUEUED', 'CONTINUOUS'],
+    [flow('running', 'STANDARD', 'STANDARD', false, 'MODEL_CALLING'), 'RUNNING', 'CONTINUOUS'],
+    [flow('analyzing', 'AGENT', 'AGENT', false, 'AGENT_ANALYZING'), 'AGENT_ANALYZING', 'CONTINUOUS'],
+    [flow('tool', 'AGENT', 'AGENT', false, 'AGENT_TOOL_ACTIVITY'), 'AGENT_TOOL_ACTIVITY', 'CONTINUOUS'],
+    [flow('converging', 'AGENT', 'AGENT', false, 'AGENT_CONVERGING'), 'AGENT_CONVERGING', 'CONTINUOUS'],
+    [flow('submitting', 'AGENT', 'AGENT', false, 'AGENT_SUBMITTING'), 'AGENT_SUBMITTING', 'CONTINUOUS'],
+    [flow('notifying', 'STANDARD', 'STANDARD', false, 'NOTIFYING', 'SUCCESS'), 'RUNNING', 'CONTINUOUS'],
+    [flow('failed', 'STANDARD', 'STANDARD', false, 'FAILED', 'FAILED'), 'FAILED', 'STATIC'],
+    [flow('fallback', 'AGENT', 'STANDARD_FALLBACK', true, 'FALLBACK', 'FALLBACK'), 'FALLBACK', 'STATIC'],
+    [flow('completed', 'STANDARD', 'STANDARD', false, 'COMPLETED', 'SUCCESS'), 'COMPLETED', 'STATIC']
+  ];
+
+  for (const [input, visualState, motionMode] of cases) {
+    assert.deepEqual(
+      resolveFlowVisualState(input, 'FRESH'),
+      { visualState, motionMode, stateRecognized: true },
+      input.reviewKey
+    );
+  }
+
+  assert.deepEqual(
+    resolveFlowVisualState(flow('stale', 'AGENT', 'AGENT', false, 'AGENT_ANALYZING'), 'STALE'),
+    { visualState: 'STALE', motionMode: 'STATIC', stateRecognized: true }
+  );
+  assert.deepEqual(
+    resolveFlowVisualState({
+      ...flow('future', 'AGENT', 'AGENT', false, 'UNKNOWN'),
+      statusRecognized: false,
+      stageRecognized: false
+    }, 'FRESH'),
+    { visualState: 'RUNNING', motionMode: 'STATIC', stateRecognized: false }
+  );
+});
+
+
+test('historical terminal and stale snapshots stay static', () => {
+  const terminal = buildCommandCenterPresentation({
+    runtime: {
+      freshness: 'FRESH',
+      generatedAt: '2026-07-31T02:00:00Z',
+      activeFlows: [
+        flow('failed', 'STANDARD', 'STANDARD', false, 'FAILED', 'FAILED'),
+        flow('fallback', 'AGENT', 'STANDARD_FALLBACK', true, 'FALLBACK', 'FALLBACK')
+      ]
+    }
+  });
+  const stale = buildCommandCenterPresentation({
+    runtime: {
+      freshness: 'STALE',
+      generatedAt: '2026-07-31T01:59:00Z',
+      activeFlows: [
+        flow('agent', 'AGENT', 'AGENT', false, 'AGENT_TOOL_ACTIVITY')
+      ]
+    }
+  });
+
+  assert.equal(terminal.allowAnimation, false);
+  assert.deepEqual(
+    terminal.topology.scene.flows.map(flow => flow.visualState),
+    ['FAILED', 'FALLBACK']
+  );
+  assert.equal(stale.allowAnimation, false);
+  assert.deepEqual(
+    stale.topology.scene.flows.map(flow => [flow.visualState, flow.motionMode]),
+    [['STALE', 'STATIC']]
+  );
+});
+
+
 test('empty data keeps only the real static lifecycle scene without synthetic flows', () => {
   const presentation = buildCommandCenterPresentation();
 
@@ -148,6 +232,7 @@ test('empty data keeps only the real static lifecycle scene without synthetic fl
   assert.equal(presentation.topology.columns.length, 5);
   assert.equal(presentation.topology.scene.nodes.length, 5);
   assert.equal(presentation.topology.scene.edges.length, 4);
+  assert.equal(presentation.topology.scene.flows.length, 0);
   assert.deepEqual(
     presentation.topology.scene.nodes.map(node => node.flowCount),
     [0, 0, 0, 0, 0]
@@ -155,7 +240,14 @@ test('empty data keeps only the real static lifecycle scene without synthetic fl
 });
 
 
-function flow(reviewKey, requestedEngine, effectiveEngine, fallback, stage) {
+function flow(
+  reviewKey,
+  requestedEngine,
+  effectiveEngine,
+  fallback,
+  stage,
+  status = fallback ? 'FALLBACK' : 'RUNNING'
+) {
   return {
     id: `1:${reviewKey}`,
     taskId: 1,
@@ -164,8 +256,10 @@ function flow(reviewKey, requestedEngine, effectiveEngine, fallback, stage) {
     requestedEngine,
     effectiveEngine,
     fallback,
-    status: fallback ? 'FALLBACK' : 'RUNNING',
+    status,
+    statusRecognized: true,
     stage,
+    stageRecognized: true,
     stageSource: fallback ? 'AI_RESULT' : 'PROGRESS'
   };
 }

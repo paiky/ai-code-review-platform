@@ -20,6 +20,25 @@ const KNOWN_FLOW_STATUSES = new Set([
   'SKIPPED',
   'CANCELLED',
   'TIMED_OUT',
+  'FALLBACK',
+  'COMPLETED'
+]);
+const KNOWN_FLOW_STAGES = new Set([
+  'RULE_ANALYSIS',
+  'RULE_COMPLETED',
+  'PREFLIGHT',
+  'QUEUED',
+  'CONTEXT_BUILDING',
+  'MODEL_CALLING',
+  'AGENT_ANALYZING',
+  'AGENT_TOOL_ACTIVITY',
+  'AGENT_CONVERGING',
+  'AGENT_SUBMITTING',
+  'FINDING_READY',
+  'NOTIFYING',
+  'COMPLETED',
+  'FAILED',
+  'SKIPPED',
   'FALLBACK'
 ]);
 const KNOWN_PROVIDER_STATUSES = new Set([
@@ -180,6 +199,9 @@ function normalizeFlow(value) {
   const reviewKey = safeText(raw.reviewKey, 'default');
   const stableId = `${taskId}:${reviewKey}`;
   const status = safeEnum(raw.status);
+  const stage = safeEnum(raw.stage);
+  const statusRecognized = KNOWN_FLOW_STATUSES.has(status);
+  const stageRecognized = KNOWN_FLOW_STAGES.has(stage);
   return {
     id: raw.id === stableId ? stableId : stableId,
     taskId,
@@ -189,8 +211,10 @@ function normalizeFlow(value) {
     requestedEngine: safeEnum(raw.requestedEngine, 'STANDARD'),
     effectiveEngine: safeEnum(raw.effectiveEngine, 'STANDARD'),
     fallback: Boolean(raw.fallback),
-    status: KNOWN_FLOW_STATUSES.has(status) ? status : 'RUNNING',
-    stage: safeEnum(raw.stage),
+    status: statusRecognized ? status : 'RUNNING',
+    statusRecognized,
+    stage: stageRecognized ? stage : 'UNKNOWN',
+    stageRecognized,
     stageSource: safeEnum(raw.stageSource, 'INFERRED'),
     providerCode: safeNullableText(raw.providerCode),
     model: safeNullableText(raw.model),

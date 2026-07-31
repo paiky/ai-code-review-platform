@@ -4,8 +4,8 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Phase 2B`
-- 阶段状态：`PHASE 2B COMPLETED — WAITING FOR PHASE 2C CONFIRMATION`
+- 当前阶段：`Phase 2C`
+- 阶段状态：`PHASE 2C COMPLETED — WAITING FOR PHASE 2D CONFIRMATION`
 - Phase 0 基线 Commit：`2005b8f`
 - Phase 1 基线 Commit：`0cbb148`
 - Phase 2 拆分确认时间：2026-07-31
@@ -13,10 +13,12 @@
 - Phase 2A 完成时间：2026-07-31
 - Phase 2B 授权时间：2026-07-31
 - Phase 2B 完成时间：2026-07-31
+- Phase 2C 授权时间：2026-07-31
+- Phase 2C 完成时间：2026-07-31
 - 计划更新时间：2026-07-31
-- 当前目标：Phase 2B 已完成由 Phase 1 Presentation 驱动的 Command Center 静态 Canvas、独立 Renderer、稳定 Scene 和完整 DOM fallback，桌面/平板只绘制真实静态拓扑。
-- 当前明确不做：不开始 Phase 2C；不创建粒子、状态动画或 Snapshot 过渡；不修改后端、Runtime/Governance API、Command Center Model 业务字段、轮询策略或 Phase 3 交互；不进入 Phase 2D 或 Phase 3。
-- 停止点：Phase 2B 已完成并通过专项、全量、构建和三档响应式验收。提交后立即停止，等待用户验证及 Phase 2C 明确确认。
+- 当前目标：Phase 2C 已完成 Phase 1 ActiveFlow 和真实 Snapshot 状态到有限粒子、静态终态及一次性过渡的映射，使用稳定 ID、固定 seed 和前后快照对账。
+- 当前明确不做：不开始 Phase 2D；不修改后端、Runtime/Governance API、Command Center 轮询策略或 Phase 3 交互；不在本地推进业务阶段；不使用定时器模拟 Provider/Agent 工作；不进入 Phase 3。
+- 停止点：Phase 2C 已完成并通过状态矩阵、历史终态不重放、Stale/隐藏/reduced-motion 静止、Review Canvas 回归、全量测试和生产构建。提交后立即停止，等待用户验证及 Phase 2D 明确确认。
 
 本计划同时作为分阶段实施总控和验收记录。每个阶段开始前更新状态，完成后回写验证结果并停止。
 
@@ -2432,3 +2434,106 @@ Command Center Presentation 已新增：
 `PHASE 2B COMPLETED — WAITING FOR PHASE 2C CONFIRMATION`
 
 Phase 2B 到此立即停止。不得自动开始 Phase 2C，不得创建粒子、状态动画、Snapshot 过渡或 Phase 3 交互。
+
+## 8.9 Phase 2C 实施结果
+
+实施完成时间：2026-07-31
+
+### 8.9.1 Model 与 Presentation 状态事实
+
+Command Center Model 已补充：
+
+- ActiveFlow `statusRecognized` 与 `stageRecognized`，用于区分已知 Runtime 状态和未来未知枚举。
+- `COMPLETED` 状态及当前后端可能输出的完整阶段白名单。
+- 未识别状态仍安全归一为通用 `RUNNING`/`UNKNOWN` 展示，但明确标记为未识别，不允许启动动画。
+
+Command Center Presentation 已将真实 ActiveFlow 映射为 Scene Flow：
+
+- 稳定 Flow ID、`taskId + reviewKey` seed key、引擎类型、真实列位置、视觉状态和运动模式。
+- `QUEUED`、`RUNNING`、四个 Agent 阶段使用 `CONTINUOUS`；`FAILED`、`FALLBACK`、`COMPLETED` 使用 `STATIC`。
+- `NOTIFYING`、`FINDING_READY` 等真实中间阶段安全映射为通用运行态，不在本地猜测或推进阶段。
+- Runtime `STALE` 时全部 Flow 映射为静态 `STALE`。
+- Scene `allowAnimation` 只在 Snapshot 为 `FRESH` 且至少存在一个真实连续态 Flow 时开启。
+- Scene `snapshotKey` 使用 Runtime `generatedAt`，为前后快照对账提供事实边界。
+
+### 8.9.2 确定性粒子与 Snapshot 对账
+
+Command Center Renderer 已实现：
+
+- 使用 `taskId + reviewKey` 的固定哈希 seed 生成确定性粒子属性。
+- 粒子 ID 固定为 `<flowId>:particle:<index>`。
+- 每个 Flow 最多 4 个粒子，单 Scene 全局硬上限 48，最多为前 12 个真实 Flow 建立粒子。
+- 活跃粒子只沿当前真实列之前的生命周期路径运动；终态和 Stale 粒子保持静态。
+- Standard、Agent、Fallback、Failed、Completed 和 Stale 使用固定状态色，不绘制文字或交互区域。
+
+Renderer Controller 已实现相邻 Snapshot 对账：
+
+- 相同 `snapshotKey`、相同状态/列、仅 `updatedAt` 变化不产生过渡。
+- 新 Flow 或同一稳定 Flow 的真实状态/列变化产生一次性过渡。
+- 首次挂载不对账，因此历史 Failed/Fallback 不重放。
+- Previous 或 Next 为 Stale 时不生成过渡。
+- 页面隐藏期间收到的 Snapshot 变化不积压、不在恢复后重放。
+- 一次性过渡固定 900ms；终态过渡完成后 RAF 自动停止。
+- 连续态更新复用同一 Controller、Canvas、ResizeObserver、visibility listener 和 RAF。
+- reduced-motion、小屏和 Canvas 初始化失败仍完整使用 Phase 2B DOM fallback。
+
+### 8.9.3 测试与验证
+
+专项测试覆盖：
+
+- 固定 seed、稳定粒子 ID、全局 48 粒子硬上限和不同 reviewKey seed 隔离。
+- Standard/Agent/Fallback/Failed/Completed/Queued/Running/Stale/未知状态矩阵。
+- Agent 分析、工具活动、收敛和提交四个真实阶段。
+- Snapshot 相同状态不触发、真实状态变化触发、新 Flow 进入触发。
+- 首次历史 Failed/Fallback 不重放。
+- 页面隐藏更新不积压、恢复不重放。
+- Stale、未知状态和 reduced-motion 保持静态。
+- 一次性终态过渡完成后 RAF 停止。
+- Canvas 初始化/绘制失败、Runtime 生命周期和 Review Canvas 完整回归。
+
+验证结果：
+
+- Phase 2C Model + Presentation + Renderer + 信息架构 + Runtime/Review Canvas 专项测试：`34 passed`
+- 前端全量 Node 测试：`88 passed`
+- 前端生产构建：通过
+- `git diff --check`：通过，仅有仓库现有 Windows LF/CRLF 提示
+- Renderer/Canvas 源码未包含 `setInterval`、`setTimeout`、网络请求、WebSocket、EventSource 或 `Math.random`
+- Vite 仍报告既有主 Bundle 大于 500 kB 的提示
+
+### 8.9.4 实际修改文件
+
+- `docs/AI Review Center Design/AI Review Command Center Implementation Plan.md`
+- `frontend/src/command-center/commandCenterModel.js`
+- `frontend/src/command-center/commandCenterPresentation.js`
+- `frontend/src/command-center/CommandCenterCanvas.jsx`
+- `frontend/src/command-center/commandCenterCanvasRenderer.js`
+- `frontend/tests/commandCenterModel.test.mjs`
+- `frontend/tests/commandCenterPresentation.test.mjs`
+- `frontend/tests/commandCenterCanvasRenderer.test.mjs`
+- `frontend/tests/commandCenterInformationArchitecture.test.mjs`
+
+未修改：
+
+- `frontend/src/canvas/canvasRuntime.js`
+- `frontend/src/command-center/CommandCenterPage.jsx`
+- `frontend/src/command-center/CommandCenterTopology.jsx`
+- `frontend/src/command-center/commandCenter.css`
+- `frontend/src/reviewCanvasRenderer.js`
+- `frontend/src/ReviewImmersiveCanvas.jsx`
+- Command Center API、轮询策略、后端、业务逻辑、数据库、迁移和依赖
+
+### 8.9.5 遗留风险
+
+- Phase 2C 使用保守的全局 48 粒子上限；390/1024/1440 分档上限、Flow 聚合和长时间绘制预算属于 Phase 2D。
+- 本阶段以确定性 Renderer/Controller 测试覆盖状态与时间推进，没有启动动态后端数据做浏览器状态切换；三档浏览器、长时间轮询、绘制耗时和资源累积验收属于 Phase 2D。
+- 固定 900ms 过渡只表达相邻 Snapshot 事实，不保证低性能设备预算；Phase 2D 需要结合平均/最大绘制耗时收口。
+- Vite 主 Bundle 仍超过 500 kB；路由拆包不属于 Phase 2C。
+- 任务聚焦、节点交互、AppFrame 轮询去重和其他 Phase 3 能力仍未实现。
+
+### 8.9.6 Phase 2C 停止确认
+
+当前状态：
+
+`PHASE 2C COMPLETED — WAITING FOR PHASE 2D CONFIRMATION`
+
+Phase 2C 到此立即停止。不得自动开始 Phase 2D，不得提前加入响应式粒子分档、长期性能门禁、任务聚焦、节点交互或 Phase 3 能力。
