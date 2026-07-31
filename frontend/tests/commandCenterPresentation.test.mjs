@@ -53,6 +53,23 @@ test('presentation keeps standard agent and fallback as explicit static lanes', 
   assert.equal(presentation.pulse.onlineWorkers, 2);
   assert.equal(presentation.pulse.activeProviders, 1);
   assert.equal(presentation.pulse.criticalFindings, 1);
+  assert.deepEqual(
+    presentation.topology.scene.nodes.map(node => [
+      node.id,
+      node.x,
+      node.y,
+      node.flowCount
+    ]),
+    [
+      ['lifecycle:intake', 0.1, 0.5, 0],
+      ['lifecycle:rule', 0.3, 0.5, 0],
+      ['lifecycle:orchestration', 0.5, 0.5, 0],
+      ['lifecycle:execution', 0.7, 0.5, 3],
+      ['lifecycle:delivery', 0.9, 0.5, 0]
+    ]
+  );
+  assert.equal(presentation.topology.scene.allowAnimation, false);
+  assert.equal(presentation.topology.scene.edges.length, 4);
 });
 
 
@@ -120,6 +137,21 @@ test('state and stage labels use safe static tokens', () => {
   assert.equal(stateToken('THINKING'), 'neutral');
   assert.equal(stageLabel('AGENT_CONVERGING'), 'Agent 收敛');
   assert.equal(stageLabel('FUTURE_PHASE'), '运行中');
+});
+
+
+test('empty data keeps only the real static lifecycle scene without synthetic flows', () => {
+  const presentation = buildCommandCenterPresentation();
+
+  assert.equal(presentation.allowAnimation, false);
+  assert.equal(presentation.topology.flows.length, 0);
+  assert.equal(presentation.topology.columns.length, 5);
+  assert.equal(presentation.topology.scene.nodes.length, 5);
+  assert.equal(presentation.topology.scene.edges.length, 4);
+  assert.deepEqual(
+    presentation.topology.scene.nodes.map(node => node.flowCount),
+    [0, 0, 0, 0, 0]
+  );
 });
 
 

@@ -36,6 +36,44 @@ const STATE_TOKENS = {
   STALE: 'warning'
 };
 
+const TOPOLOGY_COLUMNS = [
+  {
+    key: 'intake',
+    eyebrow: 'INTAKE',
+    title: 'GitLab / Manual',
+    description: '事件进入平台并创建 ReviewTask。',
+    position: { x: 0.1, y: 0.5 }
+  },
+  {
+    key: 'rule',
+    eyebrow: 'RULE & DECISION',
+    title: 'Rule Analysis',
+    description: '规则识别与 Risk Card 聚合。',
+    position: { x: 0.3, y: 0.5 }
+  },
+  {
+    key: 'orchestration',
+    eyebrow: 'ORCHESTRATION',
+    title: 'Review Execution Core',
+    description: 'Task、Preflight 与 Scheduler 编排。',
+    position: { x: 0.5, y: 0.5 }
+  },
+  {
+    key: 'execution',
+    eyebrow: 'EVIDENCE & EXECUTION',
+    title: 'Standard / Agent',
+    description: 'Context、Provider、Agent Worker 双引擎执行。',
+    position: { x: 0.7, y: 0.5 }
+  },
+  {
+    key: 'delivery',
+    eyebrow: 'RESULT & DELIVERY',
+    title: 'Finding / Notification',
+    description: 'Finding 风险判断与通知交付。',
+    position: { x: 0.9, y: 0.5 }
+  }
+];
+
 
 export function buildCommandCenterPresentation({ runtime, governance } = {}) {
   const safeRuntime = runtime || null;
@@ -56,6 +94,13 @@ export function buildCommandCenterPresentation({ runtime, governance } = {}) {
     ...counts,
     [flow.columnKey]: (counts[flow.columnKey] || 0) + 1
   }), {});
+  const topologyColumns = TOPOLOGY_COLUMNS.map(column => ({
+    key: column.key,
+    eyebrow: column.eyebrow,
+    title: column.title,
+    description: column.description
+  }));
+  const topologyScene = buildTopologyScene(flowCountByColumn);
 
   return {
     allowAnimation: false,
@@ -74,6 +119,8 @@ export function buildCommandCenterPresentation({ runtime, governance } = {}) {
       activeTasks: safeRuntime?.activeTasks || [],
       flows,
       flowCountByColumn,
+      columns: topologyColumns,
+      scene: topologyScene,
       standardFlowCount: flows.filter(flow => flow.engineKind === 'STANDARD').length,
       agentFlowCount: flows.filter(flow => flow.engineKind === 'AGENT').length,
       fallbackFlowCount: flows.filter(flow => flow.engineKind === 'FALLBACK').length
@@ -95,6 +142,27 @@ export function buildCommandCenterPresentation({ runtime, governance } = {}) {
       }))
     },
     governance: buildGovernancePresentation(safeGovernance)
+  };
+}
+
+
+function buildTopologyScene(flowCountByColumn) {
+  const nodes = TOPOLOGY_COLUMNS.map(column => ({
+    id: `lifecycle:${column.key}`,
+    columnKey: column.key,
+    x: column.position.x,
+    y: column.position.y,
+    flowCount: flowCountByColumn[column.key] || 0
+  }));
+  return {
+    id: 'review-lifecycle',
+    allowAnimation: false,
+    nodes,
+    edges: nodes.slice(0, -1).map((node, index) => ({
+      id: `${node.id}->${nodes[index + 1].id}`,
+      from: node.id,
+      to: nodes[index + 1].id
+    }))
   };
 }
 

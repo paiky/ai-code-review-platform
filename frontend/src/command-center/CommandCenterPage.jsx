@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 
-import CommandCenterTopology from './CommandCenterTopology.jsx';
+import CommandCenterCanvas from './CommandCenterCanvas.jsx';
 import GovernanceLoop from './GovernanceLoop.jsx';
 import LiveOperationsRail from './LiveOperationsRail.jsx';
 import SystemPulse from './SystemPulse.jsx';
@@ -26,7 +26,7 @@ export default function CommandCenterPage() {
   const loading = runtimeLoading || governanceLoading;
 
   return (
-    <main className="command-center-page" data-command-center-phase="PHASE_1">
+    <main className="command-center-page" data-command-center-phase="PHASE_2B">
       <header className="command-center-hero">
         <div>
           <span className="command-center-hero-kicker">AI REVIEW COMMAND CENTER</span>
@@ -60,7 +60,7 @@ export default function CommandCenterPage() {
       />
 
       <div className="command-center-main-grid">
-        <CommandCenterTopology topology={presentation.topology} />
+        <CommandCenterCanvas topology={presentation.topology} />
         <LiveOperationsRail
           operations={presentation.operations}
           runtimeLoading={runtimeLoading}

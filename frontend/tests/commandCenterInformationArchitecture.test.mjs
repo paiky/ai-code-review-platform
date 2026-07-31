@@ -20,6 +20,14 @@ const topologySource = await readFile(
   new URL('../src/command-center/CommandCenterTopology.jsx', import.meta.url),
   'utf8'
 );
+const canvasSource = await readFile(
+  new URL('../src/command-center/CommandCenterCanvas.jsx', import.meta.url),
+  'utf8'
+);
+const rendererSource = await readFile(
+  new URL('../src/command-center/commandCenterCanvasRenderer.js', import.meta.url),
+  'utf8'
+);
 const presentationSource = await readFile(
   new URL('../src/command-center/commandCenterPresentation.js', import.meta.url),
   'utf8'
@@ -61,14 +69,22 @@ test('task list and task detail routes remain explicit and separate from home', 
 });
 
 
-test('phase one page is read-only and does not create Canvas behavior', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="PHASE_1"'), true);
+test('phase two B page stays read-only and mounts one static Canvas boundary', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="PHASE_2B"'), true);
   assert.equal(pageSource.includes('READ-ONLY CONTROL PLANE'), true);
   assert.equal(pageSource.includes('<canvas'), false);
+  assert.equal(pageSource.includes('<CommandCenterCanvas'), true);
   assert.equal(pageSource.includes('WebSocket'), false);
   assert.equal(pageSource.includes('EventSource'), false);
   assert.equal(topologySource.includes('<canvas'), false);
   assert.equal(topologySource.includes('requestAnimationFrame'), false);
+  assert.equal((canvasSource.match(/<canvas/g) || []).length, 1);
+  assert.equal(canvasSource.includes('prefers-reduced-motion: reduce'), true);
+  assert.equal(canvasSource.includes('max-width: 700px'), true);
+  assert.equal(canvasSource.includes('data-command-center-canvas-fallback'), false);
+  assert.equal(topologySource.includes('data-command-center-canvas-fallback'), true);
+  assert.equal(rendererSource.includes('isAnimationEnabled: () => false'), true);
+  assert.equal(rendererSource.includes('particle'), false);
   assert.equal(presentationSource.includes('allowAnimation: false'), true);
 });
 

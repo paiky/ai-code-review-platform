@@ -1,63 +1,49 @@
-const FLOW_COLUMNS = [
-  {
-    key: 'intake',
-    eyebrow: 'INTAKE',
-    title: 'GitLab / Manual',
-    description: '事件进入平台并创建 ReviewTask。'
-  },
-  {
-    key: 'rule',
-    eyebrow: 'RULE & DECISION',
-    title: 'Rule Analysis',
-    description: '规则识别与 Risk Card 聚合。'
-  },
-  {
-    key: 'orchestration',
-    eyebrow: 'ORCHESTRATION',
-    title: 'Review Execution Core',
-    description: 'Task、Preflight 与 Scheduler 编排。'
-  },
-  {
-    key: 'execution',
-    eyebrow: 'EVIDENCE & EXECUTION',
-    title: 'Standard / Agent',
-    description: 'Context、Provider、Agent Worker 双引擎执行。'
-  },
-  {
-    key: 'delivery',
-    eyebrow: 'RESULT & DELIVERY',
-    title: 'Finding / Notification',
-    description: 'Finding 风险判断与通知交付。'
-  }
-];
-
-
-export default function CommandCenterTopology({ topology }) {
+export default function CommandCenterTopology({
+  topology,
+  canvasActive = false,
+  canvasContainerRef,
+  canvasLayer = null,
+  fallbackReason = null
+}) {
+  const columns = topology.columns || [];
   return (
-    <section className="command-center-topology" aria-labelledby="execution-map-title">
+    <section
+      className={[
+        'command-center-topology',
+        canvasActive ? 'is-canvas-active' : 'is-dom-fallback'
+      ].join(' ')}
+      aria-labelledby="execution-map-title"
+      data-command-center-canvas={canvasActive ? 'active' : 'fallback'}
+      data-command-center-canvas-fallback={fallbackReason || undefined}
+    >
       <div className="command-center-section-heading">
         <div>
           <span className="command-center-section-kicker">REVIEW EXECUTION MAP</span>
           <h2 id="execution-map-title">Review 生命周期</h2>
         </div>
-        <span className="command-center-phase-badge">PHASE 1 · LIVE STATIC TOPOLOGY</span>
+        <span className="command-center-phase-badge">
+          {canvasActive ? 'PHASE 2B · STATIC CANVAS' : 'PHASE 2B · DOM TOPOLOGY'}
+        </span>
       </div>
 
-      <div className="command-center-flow" role="list" aria-label="AI Review 生命周期">
-        {FLOW_COLUMNS.map((column, index) => (
-          <article className="command-center-flow-node" role="listitem" key={column.key}>
-            <div className="command-center-flow-node-index">{String(index + 1).padStart(2, '0')}</div>
-            <span>{column.eyebrow}</span>
-            <h3>{column.title}</h3>
-            <p>{column.description}</p>
-            <div className="command-center-flow-reading">
-              当前 Flow <strong>{topology.flowCountByColumn[column.key] ?? 0}</strong>
-            </div>
-            {index < FLOW_COLUMNS.length - 1 && (
-              <div className="command-center-flow-connector" aria-hidden="true" />
-            )}
-          </article>
-        ))}
+      <div className="command-center-topology-stage" ref={canvasContainerRef}>
+        {canvasLayer}
+        <div className="command-center-flow" role="list" aria-label="AI Review 生命周期">
+          {columns.map((column, index) => (
+            <article className="command-center-flow-node" role="listitem" key={column.key}>
+              <div className="command-center-flow-node-index">{String(index + 1).padStart(2, '0')}</div>
+              <span>{column.eyebrow}</span>
+              <h3>{column.title}</h3>
+              <p>{column.description}</p>
+              <div className="command-center-flow-reading">
+                当前 Flow <strong>{topology.flowCountByColumn[column.key] ?? 0}</strong>
+              </div>
+              {index < columns.length - 1 && (
+                <div className="command-center-flow-connector" aria-hidden="true" />
+              )}
+            </article>
+          ))}
+        </div>
       </div>
 
       <div className="command-center-engine-lanes" aria-label="Review 双引擎运行态">
