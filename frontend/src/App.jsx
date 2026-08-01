@@ -93,7 +93,9 @@ import 'prismjs/components/prism-tsx';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-yaml';
 import { fetchApi, riskColor, statusColor } from './api.js';
+import { AppFrameOperationsContext } from './appFrameOperations.js';
 import CommandCenterPage from './command-center/CommandCenterPage.jsx';
+import { createVisibilityRefreshLifecycle } from './visibilityRefreshLifecycle.js';
 import {
   formatAgentTraceDetail,
   groupAgentTraceEvents,
@@ -11820,6 +11822,9 @@ function AppFrame() {
   const [jobQueueOpen, setJobQueueOpen] = useState(false);
   const [failureNotifications, setFailureNotifications] = useState({ failureCount: 0, items: [] });
   const [failureNotificationsOpen, setFailureNotificationsOpen] = useState(false);
+  const frameDrawerOpenRef = useRef({ queue: false, failures: false });
+  const frameRequestsRef = useRef({ queue: null, failures: null });
+  const frameMountedRef = useRef(false);
   const [reviewWorkspaceMode, setReviewWorkspaceMode] = useState('RESULT');
   const reportReviewWorkspaceMode = useCallback(mode => {
     setReviewWorkspaceMode(normalizeReviewWorkspaceMode(mode));
@@ -11888,26 +11893,93 @@ function AppFrame() {
       : [])
   ];
 
-  const loadJobQueue = async () => {
-    try {
-      const data = await fetchApi('/api/code-quality-reviews/job-queue');
-      setJobQueue(data || { activeCount: 0, groups: [] });
-    } catch {
-      setJobQueue({ activeCount: 0, groups: [] });
-    }
-  };
+  const loadFrameResource = useCallback(kind => {
+    if (
+      !frameMountedRef.current
+      || document.hidden === true
+      || document.visibilityState === 'hidden'
+    ) return Promise.resolve(null);
+    const existing = frameRequestsRef.current[kind];
+    if (existing) return existing.promise;
 
-  const loadFailureNotifications = async () => {
-    try {
-      const data = await fetchApi('/api/code-quality-reviews/failure-notifications');
-      setFailureNotifications(data || { failureCount: 0, items: [] });
-    } catch {
-      setFailureNotifications({ failureCount: 0, items: [] });
+    const controller = new AbortController();
+    const request = { controller, promise: null };
+    frameRequestsRef.current[kind] = request;
+    request.promise = (async () => {
+      try {
+        const data = await fetchApi(
+          kind === 'queue'
+            ? '/api/code-quality-reviews/job-queue'
+            : '/api/code-quality-reviews/failure-notifications',
+          { signal: controller.signal }
+        );
+        if (!frameMountedRef.current || controller.signal.aborted) return null;
+        if (kind === 'queue') {
+          setJobQueue(data || { activeCount: 0, groups: [] });
+        } else {
+          setFailureNotifications(data || { failureCount: 0, items: [] });
+        }
+        return data;
+      } catch {
+        if (!frameMountedRef.current || controller.signal.aborted) return null;
+        if (kind === 'queue') {
+          setJobQueue({ activeCount: 0, groups: [] });
+        } else {
+          setFailureNotifications({ failureCount: 0, items: [] });
+        }
+        return null;
+      } finally {
+        if (frameRequestsRef.current[kind] === request) {
+          frameRequestsRef.current[kind] = null;
+        }
+      }
+    })();
+    return request.promise;
+  }, []);
+
+  const abortFrameRequests = useCallback(() => {
+    for (const kind of ['queue', 'failures']) {
+      frameRequestsRef.current[kind]?.controller.abort();
+      frameRequestsRef.current[kind] = null;
     }
-  };
+  }, []);
+
+  const loadJobQueue = useCallback(
+    () => loadFrameResource('queue'),
+    [loadFrameResource]
+  );
+
+  const loadFailureNotifications = useCallback(
+    () => loadFrameResource('failures'),
+    [loadFrameResource]
+  );
+
+  const openJobQueue = useCallback(() => {
+    frameDrawerOpenRef.current.queue = true;
+    setJobQueueOpen(true);
+    loadJobQueue();
+  }, [loadJobQueue]);
+
+  const openFailureNotifications = useCallback(() => {
+    frameDrawerOpenRef.current.failures = true;
+    setFailureNotificationsOpen(true);
+    loadFailureNotifications();
+  }, [loadFailureNotifications]);
+
+  const closeJobQueue = useCallback(() => {
+    frameDrawerOpenRef.current.queue = false;
+    setJobQueueOpen(false);
+  }, []);
+
+  const closeFailureNotifications = useCallback(() => {
+    frameDrawerOpenRef.current.failures = false;
+    setFailureNotificationsOpen(false);
+  }, []);
 
   const openTaskFromQueue = (taskId) => {
     if (!taskId) return;
+    frameDrawerOpenRef.current.queue = false;
+    frameDrawerOpenRef.current.failures = false;
     setJobQueueOpen(false);
     setFailureNotificationsOpen(false);
     navigate(`/tasks/${taskId}`, { state: { from: route } });
@@ -11925,41 +11997,97 @@ function AppFrame() {
   };
 
   useEffect(() => {
-    loadJobQueue();
-    loadFailureNotifications();
-  }, []);
-
-  useEffect(() => {
     if (!isTaskDetailRoute) {
       setReviewWorkspaceMode('RESULT');
     }
   }, [isTaskDetailRoute, location.pathname]);
 
   useEffect(() => {
-    const refreshIfVisible = () => {
-      if (document.visibilityState === 'visible') {
-        loadJobQueue();
-        loadFailureNotifications();
+    frameMountedRef.current = true;
+    let timer = null;
+    let disposed = false;
+    const clearTimer = () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
       }
     };
-    const timer = window.setInterval(refreshIfVisible, 5000);
+    const pause = () => {
+      clearTimer();
+      abortFrameRequests();
+    };
+    const refreshAndSchedule = async () => {
+      clearTimer();
+      if (
+        disposed
+        || document.hidden === true
+        || document.visibilityState === 'hidden'
+      ) return;
+      if (isCommandCenterRoute) {
+        const drawerRequests = [];
+        if (frameDrawerOpenRef.current.queue) drawerRequests.push(loadJobQueue());
+        if (frameDrawerOpenRef.current.failures) drawerRequests.push(loadFailureNotifications());
+        await Promise.all(drawerRequests);
+        return;
+      }
+      await Promise.all([loadJobQueue(), loadFailureNotifications()]);
+      if (
+        !disposed
+        && !isCommandCenterRoute
+        && document.hidden !== true
+        && document.visibilityState !== 'hidden'
+      ) {
+        timer = window.setTimeout(refreshAndSchedule, 5000);
+      }
+    };
+    const lifecycle = createVisibilityRefreshLifecycle({
+      onPause: pause,
+      onResume: refreshAndSchedule
+    });
+    lifecycle.start();
+
+    return () => {
+      disposed = true;
+      frameMountedRef.current = false;
+      lifecycle.dispose();
+      pause();
+    };
+  }, [abortFrameRequests, isCommandCenterRoute, loadFailureNotifications, loadJobQueue]);
+
+  useEffect(() => {
     window.addEventListener(JOB_QUEUE_REFRESH_EVENT, loadJobQueue);
     window.addEventListener(FAILURE_NOTIFICATION_REFRESH_EVENT, loadFailureNotifications);
-    document.addEventListener('visibilitychange', refreshIfVisible);
-    window.addEventListener('focus', refreshIfVisible);
-    refreshIfVisible();
     return () => {
-      window.clearInterval(timer);
       window.removeEventListener(JOB_QUEUE_REFRESH_EVENT, loadJobQueue);
       window.removeEventListener(FAILURE_NOTIFICATION_REFRESH_EVENT, loadFailureNotifications);
-      document.removeEventListener('visibilitychange', refreshIfVisible);
-      window.removeEventListener('focus', refreshIfVisible);
     };
-  }, []);
+  }, [loadFailureNotifications, loadJobQueue]);
+
+  const appFrameOperationsValue = useMemo(() => ({
+    jobQueue,
+    failureNotifications,
+    jobQueueOpen,
+    failureNotificationsOpen,
+    openJobQueue,
+    openFailureNotifications
+  }), [
+    failureNotifications,
+    failureNotificationsOpen,
+    jobQueue,
+    jobQueueOpen,
+    openFailureNotifications,
+    openJobQueue
+  ]);
 
   return (
-    <ReviewWorkspaceModeContext.Provider value={reviewWorkspaceContextValue}>
-      <Layout className={`app-layout${reviewWorkspaceFrame.immersive ? ' app-layout-review-immersive' : ''}`}>
+    <AppFrameOperationsContext.Provider value={appFrameOperationsValue}>
+      <ReviewWorkspaceModeContext.Provider value={reviewWorkspaceContextValue}>
+      <Layout
+        className={`app-layout${reviewWorkspaceFrame.immersive ? ' app-layout-review-immersive' : ''}`}
+        data-app-frame-background-polling={isCommandCenterRoute ? 'paused' : 'active'}
+        data-app-frame-job-queue-open={jobQueueOpen ? 'true' : 'false'}
+        data-app-frame-failure-open={failureNotificationsOpen ? 'true' : 'false'}
+      >
         {!reviewWorkspaceFrame.immersive && (
           <Header className="app-header">
         <button className="brand" type="button" onClick={() => navigate(HOME_ROUTE)}>
@@ -12023,10 +12151,7 @@ function AppFrame() {
               danger={Boolean(failureNotifications?.failureCount)}
               icon={<BellOutlined />}
               type={failureNotifications?.failureCount ? 'primary' : 'default'}
-              onClick={() => {
-                setFailureNotificationsOpen(true);
-                loadFailureNotifications();
-              }}
+              onClick={openFailureNotifications}
             />
           </Tooltip>
           <Tooltip title="AI Review 调度队列">
@@ -12034,10 +12159,7 @@ function AppFrame() {
               <Button
                 icon={<ClusterOutlined />}
                 type={jobQueue?.activeCount ? 'primary' : 'default'}
-                onClick={() => {
-                  setJobQueueOpen(true);
-                  loadJobQueue();
-                }}
+                onClick={openJobQueue}
               />
             </Badge>
           </Tooltip>
@@ -12069,18 +12191,19 @@ function AppFrame() {
         <JobQueueModal
         open={jobQueueOpen}
         queue={jobQueue}
-        onClose={() => setJobQueueOpen(false)}
+        onClose={closeJobQueue}
         onOpenTask={openTaskFromQueue}
         onCancelJob={cancelJobFromQueue}
       />
         <FailureNotificationsModal
         open={failureNotificationsOpen}
         notifications={failureNotifications}
-        onClose={() => setFailureNotificationsOpen(false)}
+        onClose={closeFailureNotifications}
         onOpenTask={openTaskFromQueue}
         />
       </Layout>
-    </ReviewWorkspaceModeContext.Provider>
+      </ReviewWorkspaceModeContext.Provider>
+    </AppFrameOperationsContext.Provider>
   );
 }
 

@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -9,6 +9,9 @@ ID_TYPE = BigInteger().with_variant(Integer, "sqlite")
 
 class ReviewTask(Base):
     __tablename__ = "review_tasks"
+    __table_args__ = (
+        Index("idx_review_tasks_cc_created", "created_at", "id"),
+    )
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
     project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -56,6 +59,14 @@ class ReviewResult(Base):
 
 class NotificationRecord(Base):
     __tablename__ = "notification_records"
+    __table_args__ = (
+        Index(
+            "idx_notification_records_cc_created_status_task",
+            "created_at",
+            "status",
+            "task_id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
     task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)

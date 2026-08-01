@@ -2800,32 +2800,42 @@ body {
   .app-header {
     height: auto;
     min-height: 56px;
-    flex-wrap: wrap;
-    padding: 0 16px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 0 16px 12px;
     gap: 12px;
   }
 
   .brand {
-    flex: 1 0 100%;
+    grid-column: 1 / -1;
     font-size: 15px;
     padding-top: 10px;
+    text-align: left;
   }
 
   .top-nav {
-    flex: 1 1 calc(100% - 52px);
+    grid-column: 1 / -1;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px !important;
-    overflow-x: auto;
-    padding-bottom: 10px;
+    width: 100%;
+    overflow: visible;
+  }
+
+  .top-nav .ant-space-item {
+    min-width: 0;
   }
 
   .top-nav .ant-btn {
-    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    padding-inline: 8px;
   }
 
   .header-actions {
-    align-self: flex-start;
+    grid-column: 1 / -1;
+    justify-content: flex-end;
     margin-left: 0;
-    padding-bottom: 10px;
   }
 
   .focus-indicator-grid {

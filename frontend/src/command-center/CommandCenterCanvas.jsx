@@ -11,7 +11,12 @@ const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 const SMALL_SCREEN_QUERY = '(max-width: 700px)';
 
 
-export default function CommandCenterCanvas({ topology }) {
+export default function CommandCenterCanvas({
+  topology,
+  focus,
+  onActivateNode,
+  onSelectFlow
+}) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const controllerRef = useRef(null);
@@ -67,10 +72,13 @@ export default function CommandCenterCanvas({ topology }) {
       canvasActive={canvasActive}
       canvasContainerRef={containerRef}
       fallbackReason={fallbackReason}
+      focus={focus}
+      onActivateNode={onActivateNode}
+      onSelectFlow={onSelectFlow}
       canvasLayer={shouldMountCanvas ? (
         <canvas
           className="command-center-topology-canvas"
-          data-command-center-canvas-phase="PHASE_2D"
+          data-command-center-canvas-phase="PHASE_3"
           ref={canvasRef}
           aria-hidden="true"
         />

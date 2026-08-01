@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -80,6 +80,13 @@ class CodeQualityReviewResult(Base):
     __tablename__ = "code_quality_review_results"
     __table_args__ = (
         UniqueConstraint("task_id", "review_key", name="uk_code_quality_result_task_review_key"),
+        Index("idx_cq_results_cc_updated", "updated_at", "id"),
+        Index(
+            "idx_cq_results_cc_provider_updated_status",
+            "provider",
+            "updated_at",
+            "status",
+        ),
     )
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)

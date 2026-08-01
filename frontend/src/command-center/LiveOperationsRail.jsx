@@ -1,5 +1,19 @@
-export default function LiveOperationsRail({ operations, runtimeLoading }) {
-  const hasFlows = operations.flows.length > 0;
+import {
+  flowsForCommandCenterTask,
+  prioritizeSelectedFlow
+} from './commandCenterFocus.js';
+
+
+export default function LiveOperationsRail({
+  operations,
+  runtimeLoading,
+  focus,
+  frameOperations,
+  onSelectFlow
+}) {
+  const focusedFlows = flowsForCommandCenterTask(operations.flows, focus?.taskId);
+  const visibleFlows = prioritizeSelectedFlow(focusedFlows, focus?.flowId, 6);
+  const hasFlows = visibleFlows.length > 0;
 
   return (
     <aside className="command-center-live-rail" aria-labelledby="live-operations-title">
@@ -8,6 +22,23 @@ export default function LiveOperationsRail({ operations, runtimeLoading }) {
           <span className="command-center-section-kicker">LIVE OPERATIONS</span>
           <h2 id="live-operations-title">运行侧栏</h2>
         </div>
+      </div>
+
+      <div className="command-center-drawer-actions" aria-label="AppFrame 运行抽屉">
+        <button
+          type="button"
+          aria-expanded={Boolean(frameOperations?.jobQueueOpen)}
+          onClick={frameOperations?.openJobQueue}
+        >
+          打开 Queue
+        </button>
+        <button
+          type="button"
+          aria-expanded={Boolean(frameOperations?.failureNotificationsOpen)}
+          onClick={frameOperations?.openFailureNotifications}
+        >
+          打开 Failure
+        </button>
       </div>
 
       <div className="command-center-rail-summary">
@@ -31,14 +62,20 @@ export default function LiveOperationsRail({ operations, runtimeLoading }) {
 
       <section className="command-center-rail-section">
         <h3>Active Flow</h3>
-        {hasFlows ? operations.flows.slice(0, 6).map(flow => (
-          <a className={`command-center-rail-row is-${flow.stateToken}`} href={`/tasks/${flow.taskId}`} key={flow.id}>
+        {hasFlows ? visibleFlows.map(flow => (
+          <button
+            type="button"
+            aria-pressed={focus?.flowId === flow.id}
+            className={`command-center-rail-row is-${flow.stateToken}${focus?.flowId === flow.id ? ' is-selected' : ''}`}
+            key={flow.id}
+            onClick={() => onSelectFlow?.(flow)}
+          >
             <span>{flow.engineKind}</span>
             <strong>{flow.displayName}</strong>
             <small>{flow.stageLabel}</small>
-          </a>
+          </button>
         )) : (
-          <p>{runtimeLoading ? '正在读取运行快照' : '当前无活跃 Review Flow'}</p>
+          <p>{runtimeLoading ? '正在读取运行快照' : focus?.taskId ? '所选 Task 当前无活跃 Review Flow' : '当前无活跃 Review Flow'}</p>
         )}
       </section>
 
@@ -54,7 +91,16 @@ export default function LiveOperationsRail({ operations, runtimeLoading }) {
       </section>
 
       <section className="command-center-rail-section">
-        <h3>Alerts</h3>
+        <div className="command-center-rail-section-heading">
+          <h3>Alerts</h3>
+          <button
+            type="button"
+            aria-expanded={Boolean(frameOperations?.failureNotificationsOpen)}
+            onClick={frameOperations?.openFailureNotifications}
+          >
+            Failure Drawer
+          </button>
+        </div>
         {operations.alerts.length ? operations.alerts.slice(0, 6).map(alert => {
           const content = (
             <>

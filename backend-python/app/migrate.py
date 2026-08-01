@@ -9,6 +9,38 @@ from app.core.database import create_engine_for_url
 
 
 BOOTSTRAP_DIR = Path(__file__).resolve().parents[1] / "migrations" / "bootstrap_sql"
+COMMAND_CENTER_INDEX_UPGRADES = (
+    (
+        "review_tasks",
+        "idx_review_tasks_cc_created",
+        ("created_at", "id"),
+    ),
+    (
+        "code_quality_review_results",
+        "idx_cq_results_cc_updated",
+        ("updated_at", "id"),
+    ),
+    (
+        "code_quality_review_results",
+        "idx_cq_results_cc_provider_updated_status",
+        ("provider", "updated_at", "status"),
+    ),
+    (
+        "deterministic_check_runs",
+        "idx_deterministic_runs_cc_created",
+        ("created_at", "id"),
+    ),
+    (
+        "notification_records",
+        "idx_notification_records_cc_created_status_task",
+        ("created_at", "status", "task_id"),
+    ),
+    (
+        "agent_review_runs",
+        "idx_agent_review_runs_cc_status_updated",
+        ("status", "updated_at", "id"),
+    ),
+)
 
 
 def main() -> None:
@@ -23,6 +55,9 @@ def main() -> None:
     inspector = inspect(engine)
     if inspector.has_table("review_tasks"):
         print("Core review tables already exist. Skip bootstrap SQL.")
+        applied = apply_command_center_index_upgrades(engine)
+        if not applied:
+            print("Command Center query indexes are already up to date.")
         return
 
     sql_files = sorted(BOOTSTRAP_DIR.glob("V*.sql"), key=_version_key)
@@ -34,6 +69,61 @@ def main() -> None:
             for statement in split_sql_statements(sql_file.read_text(encoding="utf-8")):
                 connection.exec_driver_sql(statement)
             print(f"Applied {sql_file.name}")
+
+
+def apply_command_center_index_upgrades(engine) -> list[str]:
+    if engine.dialect.name != "mysql":
+        raise ValueError("Command Center index upgrades support MySQL only.")
+
+    applied: list[str] = []
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        statements = build_command_center_index_upgrade_statements(
+            inspector,
+            engine.dialect.identifier_preparer,
+        )
+        for index_names, statement in statements:
+            connection.exec_driver_sql(statement)
+            applied.extend(index_names)
+            print(f"Applied Command Center indexes: {', '.join(index_names)}")
+    return applied
+
+
+def build_command_center_index_upgrade_statements(
+    inspector,
+    identifier_preparer,
+) -> list[tuple[list[str], str]]:
+    missing_by_table: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
+    for table_name, index_name, columns in COMMAND_CENTER_INDEX_UPGRADES:
+        if not inspector.has_table(table_name):
+            raise RuntimeError(
+                f"Command Center index target table is missing: {table_name}"
+            )
+        existing = {
+            item["name"] for item in inspector.get_indexes(table_name)
+        }
+        if index_name not in existing:
+            missing_by_table.setdefault(table_name, []).append(
+                (index_name, columns)
+            )
+
+    statements: list[tuple[list[str], str]] = []
+    quote = identifier_preparer.quote
+    for table_name, indexes in missing_by_table.items():
+        clauses = []
+        for index_name, columns in indexes:
+            column_sql = ", ".join(quote(column) for column in columns)
+            clauses.append(
+                f"ADD INDEX {quote(index_name)} ({column_sql})"
+            )
+        statements.append((
+            [index_name for index_name, _ in indexes],
+            (
+                f"ALTER TABLE {quote(table_name)} "
+                f"{', '.join(clauses)}, ALGORITHM=INPLACE, LOCK=NONE"
+            ),
+        ))
+    return statements
 
 
 def split_sql_statements(sql: str) -> list[str]:

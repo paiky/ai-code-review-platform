@@ -261,6 +261,11 @@ def test_command_center_query_bounds_read_only_and_sensitive_fields(
     )
 
     sql = "\n".join(runtime_statements).lower()
+    assert "review_tasks.created_at >=" in sql
+    assert "review_tasks.status in" in sql
+    assert "review_tasks.review_status in" in sql
+    assert "code_quality_scheduler_jobs.job_type in" in sql
+    assert "code_quality_scheduler_jobs.status in" in sql
     for prohibited_column in [
         "api_key",
         "endpoint_url",

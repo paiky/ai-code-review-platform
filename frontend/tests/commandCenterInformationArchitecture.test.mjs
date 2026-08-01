@@ -32,6 +32,18 @@ const presentationSource = await readFile(
   new URL('../src/command-center/commandCenterPresentation.js', import.meta.url),
   'utf8'
 );
+const focusSource = await readFile(
+  new URL('../src/command-center/commandCenterFocus.js', import.meta.url),
+  'utf8'
+);
+const railSource = await readFile(
+  new URL('../src/command-center/LiveOperationsRail.jsx', import.meta.url),
+  'utf8'
+);
+const lifecycleSource = await readFile(
+  new URL('../src/visibilityRefreshLifecycle.js', import.meta.url),
+  'utf8'
+);
 
 
 function sourceBetween(start, end) {
@@ -69,8 +81,8 @@ test('task list and task detail routes remain explicit and separate from home', 
 });
 
 
-test('phase two D Canvas stays read-only and uses only snapshot-driven animation', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="PHASE_2D"'), true);
+test('phase three Canvas stays draw-only while DOM owns focus and drill-down', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="PHASE_3"'), true);
   assert.equal(pageSource.includes('READ-ONLY CONTROL PLANE'), true);
   assert.equal(pageSource.includes('<canvas'), false);
   assert.equal(pageSource.includes('<CommandCenterCanvas'), true);
@@ -79,13 +91,17 @@ test('phase two D Canvas stays read-only and uses only snapshot-driven animation
   assert.equal(topologySource.includes('<canvas'), false);
   assert.equal(topologySource.includes('requestAnimationFrame'), false);
   assert.equal((canvasSource.match(/<canvas/g) || []).length, 1);
-  assert.equal(canvasSource.includes('data-command-center-canvas-phase="PHASE_2D"'), true);
+  assert.equal(canvasSource.includes('data-command-center-canvas-phase="PHASE_3"'), true);
   assert.equal(canvasSource.includes('prefers-reduced-motion: reduce'), true);
   assert.equal(canvasSource.includes('max-width: 700px'), true);
   assert.equal(canvasSource.includes('data-command-center-canvas-fallback'), false);
   assert.equal(topologySource.includes('data-command-center-canvas-fallback'), true);
-  assert.equal(topologySource.includes('PHASE 2D · LIVE CANVAS'), true);
-  assert.equal(topologySource.includes('PHASE 2D · DOM FALLBACK'), true);
+  assert.equal(topologySource.includes('PHASE 3 · LIVE CANVAS'), true);
+  assert.equal(topologySource.includes('PHASE 3 · DOM FALLBACK'), true);
+  assert.equal(topologySource.includes('data-command-center-dom-overlay="true"'), true);
+  assert.equal(topologySource.includes('command-center-flow-node-overlay'), true);
+  assert.equal(topologySource.includes('aria-pressed'), true);
+  assert.equal(canvasSource.includes('}, [shouldMountCanvas])'), true);
   assert.equal(rendererSource.includes('isAnimationEnabled: () => this.shouldAnimate()'), true);
   assert.equal(rendererSource.includes('reconcileCommandCenterScenes'), true);
   assert.equal(rendererSource.includes('COMMAND_CENTER_INDEPENDENT_FLOW_LIMIT = 20'), true);
@@ -110,10 +126,35 @@ test('runtime and governance polling are independent, pausable, and cleaned up',
   assert.equal(hookSource.includes('RUNTIME_INTERVAL_MS = 5_000'), true);
   assert.equal(hookSource.includes('GOVERNANCE_INTERVAL_MS = 60_000'), true);
   assert.equal(hookSource.includes("document.visibilityState === 'hidden'"), true);
-  assert.equal(hookSource.includes("document.addEventListener('visibilitychange'"), true);
-  assert.equal(hookSource.includes("window.addEventListener('focus'"), true);
+  assert.equal(hookSource.includes('createVisibilityRefreshLifecycle'), true);
+  assert.equal(lifecycleSource.includes("addEventListener?.('visibilitychange'"), true);
+  assert.equal(lifecycleSource.includes("addEventListener?.('focus'"), true);
   assert.equal(hookSource.includes('AbortController'), true);
   assert.equal(hookSource.includes('window.clearTimeout'), true);
   assert.equal(hookSource.includes('window.setTimeout'), true);
   assert.equal(hookSource.includes('setInterval'), false);
+  assert.equal(hookSource.includes('deduplicated'), true);
+  assert.equal(hookSource.includes('__commandCenterPollingDiagnostics'), true);
+});
+
+
+test('task flow focus stays outside the Canvas scene and synchronizes Live Operations', () => {
+  assert.equal(pageSource.includes('<CommandCenterFocusBar'), true);
+  assert.equal(pageSource.includes('focus={focus}'), true);
+  assert.equal(pageSource.includes('onSelectFlow={selectFlow}'), true);
+  assert.equal(focusSource.includes('taskId: selectedFlow.taskId'), true);
+  assert.equal(focusSource.includes("`${taskId}:${reviewKey}`"), false);
+  assert.equal(railSource.includes('aria-pressed={focus?.flowId === flow.id}'), true);
+  assert.equal(railSource.includes('openJobQueue'), true);
+  assert.equal(railSource.includes('openFailureNotifications'), true);
+});
+
+
+test('AppFrame owns drawers and disables its duplicate background polling on home', () => {
+  const frameSource = sourceBetween('function AppFrame()', 'export default function App()');
+  assert.equal(frameSource.includes('<AppFrameOperationsContext.Provider'), true);
+  assert.equal(frameSource.includes('isCommandCenterRoute'), true);
+  assert.equal(frameSource.includes('window.setInterval'), false);
+  assert.equal(frameSource.includes('createVisibilityRefreshLifecycle'), true);
+  assert.equal(frameSource.includes("{ signal: controller.signal }"), true);
 });

@@ -52,6 +52,7 @@ const STATE_COLORS = Object.freeze({
   COMPLETED: '#66edbe',
   STALE: '#7f8da3'
 });
+let commandCenterControllerSerial = 0;
 const EMPTY_SCENE = Object.freeze({
   id: 'review-lifecycle',
   snapshotKey: 'EMPTY',
@@ -380,6 +381,7 @@ export function drawCommandCenterCanvasFrame({
 
 class CommandCenterCanvasController {
   constructor(options) {
+    this.instanceId = ++commandCenterControllerSerial;
     this.canvas = options.canvas;
     this.container = options.container;
     this.environment = options.environment;
@@ -439,6 +441,7 @@ class CommandCenterCanvasController {
       isAnimationEnabled: () => this.shouldAnimate(),
       onFailure: this.handleRuntimeFailure
     });
+    this.updateDiagnosticAttributes();
     return Boolean(this.runtime);
   }
 
@@ -554,6 +557,7 @@ class CommandCenterCanvasController {
       ...runtimeSnapshot,
       failed: this.failed || Boolean(runtimeSnapshot.failed),
       disposed: this.disposed || Boolean(runtimeSnapshot.disposed),
+      controllerInstanceId: this.instanceId,
       allowAnimation: this.scene.allowAnimation,
       snapshotKey: this.scene.snapshotKey,
       freshness: this.scene.freshness,
@@ -581,6 +585,11 @@ class CommandCenterCanvasController {
   }
 
   updateDiagnosticAttributes() {
+    const runtimeSnapshot = this.runtime?.getSnapshot?.() || {};
+    this.canvas?.setAttribute?.(
+      'data-command-center-controller-instance',
+      String(this.instanceId)
+    );
     this.canvas?.setAttribute?.(
       'data-command-center-particle-limit',
       String(this.particleLimit)
@@ -596,6 +605,34 @@ class CommandCenterCanvasController {
     this.canvas?.setAttribute?.(
       'data-command-center-canvas-health',
       this.failed ? 'failed' : 'ready'
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-frame-count',
+      String(runtimeSnapshot.frameCount || 0)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-average-draw-ms',
+      String(runtimeSnapshot.averageDrawMs || 0)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-max-draw-ms',
+      String(runtimeSnapshot.maxDrawMs || 0)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-over-budget-frames',
+      String(runtimeSnapshot.overBudgetFrameCount || 0)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-active-raf',
+      String(runtimeSnapshot.activeRafCount || 0)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-observer-registrations',
+      String(runtimeSnapshot.observerRegistrationCount || 0)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-listener-registrations',
+      String(runtimeSnapshot.listenerRegistrationCount || 0)
     );
   }
 }

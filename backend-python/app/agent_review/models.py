@@ -49,7 +49,15 @@ class AgentReviewWorker(Base):
 
 class AgentReviewRun(Base):
     __tablename__ = "agent_review_runs"
-    __table_args__ = (UniqueConstraint("idempotency_key", name="uk_agent_review_run_idempotency"),)
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uk_agent_review_run_idempotency"),
+        Index(
+            "idx_agent_review_runs_cc_status_updated",
+            "status",
+            "updated_at",
+            "id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
     task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)

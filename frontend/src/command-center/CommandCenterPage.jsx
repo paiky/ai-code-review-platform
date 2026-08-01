@@ -1,15 +1,28 @@
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
+import { useAppFrameOperations } from '../appFrameOperations.js';
 import CommandCenterCanvas from './CommandCenterCanvas.jsx';
+import CommandCenterFocusBar from './CommandCenterFocusBar.jsx';
 import GovernanceLoop from './GovernanceLoop.jsx';
 import LiveOperationsRail from './LiveOperationsRail.jsx';
 import SystemPulse from './SystemPulse.jsx';
+import {
+  EMPTY_COMMAND_CENTER_FOCUS,
+  reconcileCommandCenterFocus,
+  resolveLifecycleNavigationTarget,
+  selectCommandCenterFlow,
+  selectCommandCenterTask
+} from './commandCenterFocus.js';
 import { buildCommandCenterPresentation } from './commandCenterPresentation.js';
 import { useCommandCenterSnapshots } from './useCommandCenterSnapshots.js';
 import './commandCenter.css';
 
 
 export default function CommandCenterPage() {
+  const navigate = useNavigate();
+  const frameOperations = useAppFrameOperations();
+  const [focus, setFocus] = useState(EMPTY_COMMAND_CENTER_FOCUS);
   const {
     runtime,
     governance,
@@ -25,8 +38,35 @@ export default function CommandCenterPage() {
   );
   const loading = runtimeLoading || governanceLoading;
 
+  useEffect(() => {
+    setFocus(current => {
+      const next = reconcileCommandCenterFocus(runtime, current);
+      return next.taskId === current.taskId && next.flowId === current.flowId
+        ? current
+        : next;
+    });
+  }, [runtime]);
+
+  const selectTask = useCallback(taskId => {
+    setFocus(selectCommandCenterTask(taskId));
+  }, []);
+  const selectFlow = useCallback(flow => {
+    setFocus(selectCommandCenterFlow(flow));
+  }, []);
+  const clearFocus = useCallback(() => {
+    setFocus(EMPTY_COMMAND_CENTER_FOCUS);
+  }, []);
+  const activateLifecycleNode = useCallback(columnKey => {
+    navigate(resolveLifecycleNavigationTarget(columnKey, focus));
+  }, [focus, navigate]);
+
   return (
-    <main className="command-center-page" data-command-center-phase="PHASE_2D">
+    <main
+      className="command-center-page"
+      data-command-center-phase="PHASE_3"
+      data-command-center-focus-task={focus.taskId || undefined}
+      data-command-center-focus-flow={focus.flowId || undefined}
+    >
       <header className="command-center-hero">
         <div>
           <span className="command-center-hero-kicker">AI REVIEW COMMAND CENTER</span>
@@ -59,11 +99,28 @@ export default function CommandCenterPage() {
         runtimeError={runtimeError}
       />
 
+      <CommandCenterFocusBar
+        tasks={presentation.topology.activeTasks}
+        flows={presentation.topology.flows}
+        focus={focus}
+        onClear={clearFocus}
+        onSelectTask={selectTask}
+        onSelectFlow={selectFlow}
+      />
+
       <div className="command-center-main-grid">
-        <CommandCenterCanvas topology={presentation.topology} />
+        <CommandCenterCanvas
+          topology={presentation.topology}
+          focus={focus}
+          onActivateNode={activateLifecycleNode}
+          onSelectFlow={selectFlow}
+        />
         <LiveOperationsRail
           operations={presentation.operations}
           runtimeLoading={runtimeLoading}
+          focus={focus}
+          frameOperations={frameOperations}
+          onSelectFlow={selectFlow}
         />
       </div>
 

@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -9,6 +9,9 @@ ID_TYPE = BigInteger().with_variant(Integer, "sqlite")
 
 class DeterministicCheckRun(Base):
     __tablename__ = "deterministic_check_runs"
+    __table_args__ = (
+        Index("idx_deterministic_runs_cc_created", "created_at", "id"),
+    )
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
     task_id: Mapped[int] = mapped_column(BigInteger, nullable=False)

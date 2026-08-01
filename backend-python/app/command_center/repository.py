@@ -256,34 +256,36 @@ def load_runtime_base_counts(
     project_id: int | None,
     group_id: int | None,
 ) -> RuntimeBaseCounts:
-    task_statement = select(
-        func.coalesce(
-            func.sum(case((ReviewTask.created_at >= window_from, 1), else_=0)),
-            0,
-        ).label("intake_task_count"),
-        func.coalesce(
-            func.sum(
-                case(
-                    (
-                        or_(
-                            ReviewTask.status.in_(ACTIVE_TASK_STATUSES),
-                            ReviewTask.review_status.in_(ACTIVE_REVIEW_STATUSES),
-                        ),
-                        1,
-                    ),
-                    else_=0,
-                )
-            ),
-            0,
-        ).label("active_task_count"),
-    ).select_from(ReviewTask)
-    task_statement = _apply_project_filters(
-        task_statement,
+    intake_task_statement = (
+        select(func.count())
+        .select_from(ReviewTask)
+        .where(ReviewTask.created_at >= window_from)
+    )
+    intake_task_statement = _apply_project_filters(
+        intake_task_statement,
         ReviewTask.project_id,
         project_id=project_id,
         group_id=group_id,
     )
-    task_counts = _row(db, task_statement) or {}
+    intake_task_count = _count(db, intake_task_statement)
+
+    active_task_statement = (
+        select(func.count())
+        .select_from(ReviewTask)
+        .where(
+            or_(
+                ReviewTask.status.in_(ACTIVE_TASK_STATUSES),
+                ReviewTask.review_status.in_(ACTIVE_REVIEW_STATUSES),
+            )
+        )
+    )
+    active_task_statement = _apply_project_filters(
+        active_task_statement,
+        ReviewTask.project_id,
+        project_id=project_id,
+        group_id=group_id,
+    )
+    active_task_count = _count(db, active_task_statement)
 
     job_statement = (
         select(
@@ -360,7 +362,10 @@ def load_runtime_base_counts(
             ).label("oldest_queued_at"),
         )
         .select_from(CodeQualitySchedulerJob)
-        .where(CodeQualitySchedulerJob.job_type.in_(REVIEW_JOB_TYPES))
+        .where(
+            CodeQualitySchedulerJob.job_type.in_(REVIEW_JOB_TYPES),
+            CodeQualitySchedulerJob.status.in_(ACTIVE_JOB_STATUSES),
+        )
     )
     job_statement = _apply_project_filters(
         job_statement,
@@ -371,8 +376,8 @@ def load_runtime_base_counts(
     job_counts = _row(db, job_statement) or {}
 
     return RuntimeBaseCounts(
-        intake_task_count=int(task_counts.get("intake_task_count") or 0),
-        active_task_count=int(task_counts.get("active_task_count") or 0),
+        intake_task_count=intake_task_count,
+        active_task_count=active_task_count,
         queued_job_count=int(job_counts.get("queued_job_count") or 0),
         running_job_count=int(job_counts.get("running_job_count") or 0),
         agent_queued_job_count=int(
@@ -741,6 +746,11 @@ def _load_provider_observations(
     db: Session,
     window_from: datetime,
 ) -> list[dict[str, Any]]:
+    provider_match = _case_insensitive_equal(
+        db,
+        AiReviewResult.provider,
+        CodeQualityModelProvider.provider_code,
+    )
     default_provider = (
         select(CodeQualityReviewSettings.default_provider_code)
         .order_by(CodeQualityReviewSettings.id.asc())
@@ -751,8 +761,7 @@ def _load_provider_observations(
         select(func.count())
         .select_from(AiReviewResult)
         .where(
-            func.upper(AiReviewResult.provider)
-            == func.upper(CodeQualityModelProvider.provider_code),
+            provider_match,
             AiReviewResult.updated_at >= window_from,
             AiReviewResult.status == "SUCCESS",
         )
@@ -763,8 +772,7 @@ def _load_provider_observations(
         select(func.count())
         .select_from(AiReviewResult)
         .where(
-            func.upper(AiReviewResult.provider)
-            == func.upper(CodeQualityModelProvider.provider_code),
+            provider_match,
             AiReviewResult.updated_at >= window_from,
             AiReviewResult.status == "FAILED",
         )
@@ -774,8 +782,7 @@ def _load_provider_observations(
     last_observed = (
         select(func.max(AiReviewResult.updated_at))
         .where(
-            func.upper(AiReviewResult.provider)
-            == func.upper(CodeQualityModelProvider.provider_code),
+            provider_match,
             AiReviewResult.updated_at >= window_from,
         )
         .correlate(CodeQualityModelProvider)
@@ -791,8 +798,11 @@ def _load_provider_observations(
             CodeQualityModelProvider.enabled.label("enabled"),
             case(
                 (
-                    func.upper(CodeQualityModelProvider.provider_code)
-                    == func.upper(default_provider),
+                    _case_insensitive_equal(
+                        db,
+                        CodeQualityModelProvider.provider_code,
+                        default_provider,
+                    ),
                     True,
                 ),
                 else_=False,
@@ -970,6 +980,13 @@ def _alert_union_text(db: Session, expression):
     if bind.dialect.name == "mysql":
         return expression.collate(MYSQL_ALERT_UNION_COLLATION)
     return expression
+
+
+def _case_insensitive_equal(db: Session, left, right):
+    bind = db.get_bind()
+    if bind.dialect.name == "mysql":
+        return left == right
+    return func.upper(left) == func.upper(right)
 
 
 def _select_active_task_ids(

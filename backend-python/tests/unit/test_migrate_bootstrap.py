@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from app.migrate import split_sql_statements
+from sqlalchemy.dialects import mysql
+
+from app.migrate import (
+    COMMAND_CENTER_INDEX_UPGRADES,
+    build_command_center_index_upgrade_statements,
+    split_sql_statements,
+)
 
 
 def test_split_sql_statements_ignores_comments_and_keeps_case_blocks() -> None:
@@ -41,3 +47,66 @@ def test_worker_pool_bootstrap_sql_creates_registration_table_and_index() -> Non
     assert "CREATE TABLE IF NOT EXISTS code_quality_agent_workers" in statements[0]
     assert "PRIMARY KEY" in statements[0]
     assert "idx_code_quality_agent_workers_heartbeat" in statements[0]
+
+
+def test_command_center_bootstrap_sql_creates_only_authorized_online_indexes() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    sql = (
+        repository_root
+        / "backend-python/migrations/bootstrap_sql/V45__command_center_query_indexes.sql"
+    ).read_text(encoding="utf-8")
+
+    statements = split_sql_statements(sql)
+
+    assert len(statements) == 5
+    assert all("ALGORITHM=INPLACE" in statement for statement in statements)
+    assert all("LOCK=NONE" in statement for statement in statements)
+    for _, index_name, _ in COMMAND_CENTER_INDEX_UPGRADES:
+        assert index_name in sql
+
+
+def test_existing_schema_upgrade_is_idempotent_and_groups_indexes_by_table() -> None:
+    inspector = _InspectorStub()
+    statements = build_command_center_index_upgrade_statements(
+        inspector,
+        mysql.dialect().identifier_preparer,
+    )
+
+    assert len(statements) == 5
+    result_upgrade = next(
+        item for item in statements
+        if "code_quality_review_results" in item[1]
+    )
+    assert result_upgrade[0] == [
+        "idx_cq_results_cc_updated",
+        "idx_cq_results_cc_provider_updated_status",
+    ]
+    assert result_upgrade[1].count("ADD INDEX") == 2
+
+    complete = {
+        table_name: {index_name}
+        for table_name, index_name, _ in COMMAND_CENTER_INDEX_UPGRADES
+    }
+    complete["code_quality_review_results"] = {
+        "idx_cq_results_cc_updated",
+        "idx_cq_results_cc_provider_updated_status",
+    }
+    assert build_command_center_index_upgrade_statements(
+        _InspectorStub(complete),
+        mysql.dialect().identifier_preparer,
+    ) == []
+
+
+class _InspectorStub:
+    def __init__(self, indexes=None) -> None:
+        self.indexes = indexes or {}
+
+    def has_table(self, table_name: str) -> bool:
+        return table_name in {
+            item[0] for item in COMMAND_CENTER_INDEX_UPGRADES
+        }
+
+    def get_indexes(self, table_name: str) -> list[dict]:
+        return [
+            {"name": name} for name in self.indexes.get(table_name, set())
+        ]

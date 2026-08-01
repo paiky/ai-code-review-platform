@@ -1,11 +1,19 @@
+import { prioritizeSelectedFlow } from './commandCenterFocus.js';
+
+
 export default function CommandCenterTopology({
   topology,
   canvasActive = false,
   canvasContainerRef,
   canvasLayer = null,
-  fallbackReason = null
+  fallbackReason = null,
+  focus,
+  onActivateNode,
+  onSelectFlow
 }) {
   const columns = topology.columns || [];
+  const visibleFlows = prioritizeSelectedFlow(topology.flows, focus?.flowId, 8);
+  const selectedFlow = topology.flows.find(flow => flow.id === focus?.flowId) || null;
   return (
     <section
       className={[
@@ -22,15 +30,29 @@ export default function CommandCenterTopology({
           <h2 id="execution-map-title">Review 生命周期</h2>
         </div>
         <span className="command-center-phase-badge">
-          {canvasActive ? 'PHASE 2D · LIVE CANVAS' : 'PHASE 2D · DOM FALLBACK'}
+          {canvasActive ? 'PHASE 3 · LIVE CANVAS' : 'PHASE 3 · DOM FALLBACK'}
         </span>
       </div>
 
-      <div className="command-center-topology-stage" ref={canvasContainerRef}>
+      <div
+        className="command-center-topology-stage"
+        data-command-center-dom-overlay="true"
+        ref={canvasContainerRef}
+      >
         {canvasLayer}
         <div className="command-center-flow" role="list" aria-label="AI Review 生命周期">
           {columns.map((column, index) => (
-            <article className="command-center-flow-node" role="listitem" key={column.key}>
+            <article
+              className={`command-center-flow-node${selectedFlow?.columnKey === column.key ? ' is-focused-stage' : ''}`}
+              role="listitem"
+              key={column.key}
+            >
+              <button
+                type="button"
+                className="command-center-flow-node-overlay"
+                onClick={() => onActivateNode?.(column.key)}
+                aria-label={`进入${column.title}`}
+              />
               <div className="command-center-flow-node-index">{String(index + 1).padStart(2, '0')}</div>
               <span>{column.eyebrow}</span>
               <h3>{column.title}</h3>
@@ -69,17 +91,19 @@ export default function CommandCenterTopology({
           当前没有活跃 Review Flow。拓扑保持静态，不生成模拟任务或本地阶段。
         </div>
       ) : (
-        <div className="command-center-topology-flows">
-          {topology.flows.slice(0, 8).map(flow => (
-            <a
-              className={`command-center-topology-flow is-${flow.stateToken}`}
-              href={`/tasks/${flow.taskId}`}
+        <div className="command-center-topology-flows" aria-label="拓扑 Review Flow 聚焦">
+          {visibleFlows.map(flow => (
+            <button
+              type="button"
+              aria-pressed={focus?.flowId === flow.id}
+              className={`command-center-topology-flow is-${flow.stateToken}${focus?.flowId === flow.id ? ' is-selected' : ''}`}
               key={flow.id}
+              onClick={() => onSelectFlow?.(flow)}
             >
               <span>{flow.engineKind}</span>
               <strong>{flow.displayName}</strong>
               <small>{flow.stageLabel} · {flow.stageSource}</small>
-            </a>
+            </button>
           ))}
         </div>
       )}

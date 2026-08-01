@@ -4,8 +4,8 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Phase 2D`
-- 阶段状态：`PHASE 2D IMPLEMENTED — BROWSER QA PARTIAL (VISIBILITY ONLY)`
+- 当前阶段：`Phase 3`
+- 阶段状态：`PHASE 3 COMPLETED — WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION`
 - Phase 0 基线 Commit：`2005b8f`
 - Phase 1 基线 Commit：`0cbb148`
 - Phase 2 拆分确认时间：2026-07-31
@@ -16,11 +16,17 @@
 - Phase 2C 授权时间：2026-07-31
 - Phase 2C 完成时间：2026-07-31
 - Phase 2D 授权时间：2026-07-31
+- Phase 2 人工验收完成时间：2026-08-01
+- Phase 2 人工验收结论：通过；用户接受 visibility 真实浏览器证据缺口和 390px AppFrame 导航风险转入 Phase 3。
+- Phase 3 授权时间：2026-08-01
+- Phase 3 Command Center 查询索引与迁移授权时间：2026-08-01
+- Phase 3 完成时间：2026-08-01
+- Phase 3 输入风险：浏览器 hidden/visible 证据缺口；Runtime/Governance、focus/visibility 恢复可能重复刷新；390px AppFrame 导航裁切与可见横向滚动条。
 - Phase 2D MySQL 兼容性热修复授权时间：2026-07-31
-- 计划更新时间：2026-07-31
-- 当前目标：严格收口已补齐 Active Flow、超限 Flow、reduced-motion、失败回退、资源清理和长期性能门禁；仅原生页面隐藏/恢复信号受当前唯一浏览器后端限制，保留为未完成项。
-- 当前明确不做：除本次用户明确授权的 Command Center MySQL 查询兼容性热修复外，不修改 Runtime/Governance API 契约、Command Center 轮询策略、数据库结构或业务数据；不增加任务聚焦、节点交互、AppFrame 轮询去重、MySQL 优化或其他 Phase 3 能力；不进入 Phase 3。
-- 停止点：提交本次最小修复和严格收口结果后立即停止；Phase 2 不标记 Completed，不停止用户新启动的 5173/8090 服务，不进入 Phase 3。
+- 计划更新时间：2026-08-01
+- 当前目标：Phase 3 代码、迁移、查询门禁和本地验收已完成；等待部署或真实环境确认。
+- 当前明确不做：不进入部署、后续阶段、主 Bundle 拆包或额外优化；不修改 Review、Scheduler、Agent、Provider、Notification、Feedback、Evaluation 或 Policy 业务状态机。
+- 停止点：提交 Phase 3 后立即停止；保留用户已有 5173/8090 服务，不进入部署、后续阶段或额外优化。
 
 本计划同时作为分阶段实施总控和验收记录。每个阶段开始前更新状态，完成后回写验证结果并停止。
 
@@ -1107,6 +1113,148 @@ POLICY
 - 长时间运行无 Timer、RAF、Observer、Listener 累积。
 - MySQL 查询计划无全表高频扫描；如需要索引，停止并单独申请下一阶段。
 - 完成后停止，等待部署或真实环境验收确认。
+
+### Phase 3 实施设计
+
+#### 交互状态与 DOM Overlay
+
+- Task/Flow 聚焦状态只属于 `CommandCenterPage` 的展示层，使用后端已返回的 `taskId + reviewKey` 稳定标识；Runtime 刷新时只校正已消失的选择，不新增业务状态、不回写后端。
+- Task 选择筛选可聚焦 Flow；同一 Task 下不同 `reviewKey` 保持独立 Flow 项并可分别聚焦。Topology 与 Live Operations Rail 共用同一选择状态和回调，选中项使用 `aria-pressed` / `aria-current` 与明确的 `:focus-visible` 样式表达。
+- Canvas 继续只接收 Runtime 派生 Scene 并负责绘制。生命周期节点、Task/Flow 选择和钻取全部由 Canvas 上方 DOM Overlay 承担；选择不会进入 Scene，也不改变 `CommandCenterCanvas` 的挂载条件，因此不得重建 Canvas、Controller、ResizeObserver 或 Canvas visibility listener。
+- 节点钻取只使用现有 `/tasks`、`/tasks/:taskId`、`/review-quality` 目标；已选 Task/Flow（含失败 Flow）进入现有任务详情，未选择时按生命周期进入现有任务列表或质量治理页。原生 `button` / `a` 提供 Tab、Enter、Space 行为，不创建虚构详情路由。
+
+#### Queue / Failure 单一所有权
+
+- Queue、Failure 的数据、打开状态、刷新和任务跳转继续由 `AppFrame` 单一持有，通过轻量 Context 将“打开现有 Queue/Failure Drawer”和当前打开状态提供给 Command Center；Command Center 不复制 Drawer 数据和状态。
+- Command Center 路由下停用 AppFrame 对 Queue/Failure 的 5 秒后台持续轮询，Runtime 继续提供首页聚合数字；只有打开 Drawer 或收到既有业务刷新事件时才由 AppFrame 拉取完整 Drawer 数据。其他路由保留现有周期刷新。
+- AppFrame 删除重复的双首次刷新，为 Queue/Failure 请求增加同类 in-flight 去重、AbortController 和卸载/隐藏清理；Drawer 打开与 Command Center 操作始终指向同一实例。
+
+#### 轮询与生命周期
+
+- Runtime 与 Governance 保持独立 5 秒 / 60 秒节奏和独立 AbortController；同类请求在途时，interval、focus 或 visibility 恢复不得重复启动或相互覆盖。
+- visibility hidden 时同步清理 Timer、Abort 在途请求并暂停 Canvas RAF；visible 恢复触发一轮 Runtime + Governance 刷新，并抑制紧随其后的 focus 重复刷新。普通 focus 仅在可见且没有同类在途请求时刷新。
+- Runtime/Governance 完成顺序不影响 Task/Flow 选择；卸载、隐藏和请求替换以 sequence 与 AbortController 双门禁阻止旧响应回写。增加只读诊断计数，供浏览器记录请求、Timer、Listener 和 abort 状态。
+
+#### 响应式、性能与查询门禁
+
+- 390px 下 AppFrame 导航改为可换行/网格化的完整可见导航，移除内部横向滚动条；不重构 AppFrame 路由或 `App.jsx` 的其他业务页面。Command Center 在不超过 700px 时继续使用完整静态 DOM fallback。
+- 保持 DPR 上限 2、390/1024/1440 粒子上限 48/80/120、20 条独立 Flow 与超限聚合、8ms 绘制预算。专项测试固定选择/轮询不重建 Controller，以及 Timer、RAF、Observer、Listener 的单实例和清理行为。
+- 对当前 Runtime/Governance 实际执行的 MySQL SELECT 逐条执行真实 `EXPLAIN` 并记录 access type、possible/key、rows 和 Extra；只读验证，不新增索引、迁移、缓存或物化表。若发现高频全表扫描必须依赖上述数据库变更，立即停止并单独申请。
+
+#### 预计修改与验证范围
+
+- 前端预计修改 `frontend/src/App.jsx`、`frontend/src/styles.css`、`frontend/src/command-center/` 下 Page、Canvas、Topology、Live Operations、Presentation、polling/Context 与样式文件，并补充 `frontend/tests/` 的 Phase 3 专项回归。
+- Python 后端仅在真实 EXPLAIN 或契约缺口证明必要时修改；否则保持 `backend-python/` 业务与查询代码不变，只执行既有 Command Center 查询/契约检查。
+- 完成前执行 Phase 3 专项测试、前端全量 Node 测试、生产构建、必要的 Python 专项测试、真实 MySQL EXPLAIN、1440×900 / 1024×800 / 390×844 浏览器与长时间资源验收、`git diff --check`。
+
+### Phase 3 停止点
+
+Phase 3 完成后将状态更新为 `PHASE 3 COMPLETED — WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION`，提交实际修改、测试、构建、EXPLAIN、浏览器结果和剩余风险后立即停止；不进入部署、后续阶段或额外优化。
+
+### Phase 3 执行阻塞：真实 MySQL EXPLAIN
+
+- 2026-08-01 使用当前 `.local/gitlab.env` 指向的真实 MySQL、现有 `backend-python` Runtime/Governance Repository 和页面实际参数（Runtime `activeLimit=50`、`alertLimit=20`、窗口 24 小时）执行只读查询并逐条执行真实 `EXPLAIN`；未修改数据库结构和数据。
+- Runtime 本次实际执行 9 条 SELECT，查询计划包含 8 个 `ALL` 步骤：
+  - Runtime Task 基础计数对 `review_tasks` 为 `type=ALL`、`key=NULL`、估算 `rows=1139`；该查询随 5 秒 Runtime 周期执行。
+  - Runtime Scheduler 基础聚合对 `code_quality_scheduler_jobs` 为 `type=ALL`、`key=NULL`、估算 `rows=1321`；该查询随 5 秒 Runtime 周期执行。
+  - Provider observation 的相关子查询存在 `code_quality_review_results type=ALL`、估算 `rows=683`；其他 active candidate / alert 分支可使用既有 `status`、`project`、主键或 index merge。
+- Governance 本次实际执行 9 条 SELECT，查询计划包含 7 个 `ALL` 步骤：`deterministic_check_runs rows=97`、`code_quality_review_results rows=683`、`notification_records rows=463`，以及当前仅 1～8 行的 Feedback/Evaluation/Acceptance 小表；Governance 周期为 60 秒。
+- 已核对真实索引：`review_tasks` 只有 `(project_id, created_at)`、`(status, created_at)`、`(review_status, created_at)`，缺少全局窗口可用的 `created_at` 首列索引；`code_quality_review_results` 缺少 Runtime/Governance 使用的 `updated_at` 首列索引；`deterministic_check_runs` 的 `created_at` 位于 `(task_id, check_type, created_at)` 尾部。仅收窄 Scheduler 聚合 WHERE 可改善 Job 计划，但无法消除 Task 窗口计数和 Governance Result 窗口的无 key 扫描。
+- 结论：当前计划不能满足“Runtime/Governance 无全表高频扫描”门禁；至少需要单独评审索引方案，可能同时配合只读查询重写。按照 Phase 3 明确约束，不擅自新增索引、迁移、缓存或物化表，Phase 3 在此立即停止并申请独立授权。
+- 停止前已完成但尚未提交的前端工作：Task/Flow 聚焦、DOM Overlay、Live Operations 同步、AppFrame Queue/Failure 单一状态桥接、首页重复轮询关闭、visibility/focus 去重、Abort/cleanup、390px 导航网格化和诊断计数；两份原有无关未跟踪文档保持不动。
+- 当前验证：Phase 3 前端专项 34/34，通过；前端全量 Node 测试 100/100，通过；第一轮生产构建通过（后续有 AppFrame Drawer 恢复刷新小改动，因此仍需在解除阻塞后重新执行最终构建）。尚未执行三视口最终浏览器验收、长时间最终观察、最终 `git diff --check`、最终计划收口和 Phase 3 commit。
+
+当前状态：
+
+`PHASE 3 IN PROGRESS — MYSQL INDEX APPROVAL REQUIRED`
+
+停止点：等待用户单独确认是否授权设计并实施 Command Center 查询索引/迁移；未获授权前不继续 Phase 3，不提交未完成结果。
+
+### Phase 3 Command Center 查询索引与迁移实施设计
+
+#### 授权恢复
+
+- 用户已于 2026-08-01 单独授权设计并实施 Command Center 查询索引与迁移，并在完成查询门禁后继续 Phase 3 全部验收与提交。
+- 阶段状态恢复为 `PHASE 3 IN PROGRESS`；此前 EXPLAIN 证据保留为迁移前基线，不覆盖或删除。
+
+#### 最小索引集合
+
+- `review_tasks (created_at, id)`：服务 Runtime 24 小时 intake 窗口计数；active Task 继续复用既有 `status/review_status + created_at` 索引。
+- `code_quality_review_results (updated_at, id)`：服务 Governance Finding 窗口、Fallback/高风险告警的时间窗口与倒序上限。
+- `code_quality_review_results (provider, updated_at, status)`：服务 Runtime Provider observation；MySQL 使用列本身的大小写不敏感 collation 等值比较，避免 `UPPER(column)` 阻断索引，非 MySQL 保持原兼容表达式。
+- `deterministic_check_runs (created_at, id)`：服务 Governance Preflight 24 小时窗口和 `LIMIT 2001` 倒序扫描。
+- `notification_records (created_at, status, task_id)`：服务 Governance Notification 窗口聚合并覆盖 Task 关联键。
+- `agent_review_runs (status, updated_at, id)`：服务 Runtime Agent 失败告警窗口；保留原有 heartbeat 与 task 索引语义。
+- Scheduler 基础聚合不新增索引：将 WHERE 从仅 `job_type` 收窄为既有产品语义内的 `job_type IN REVIEW_JOB_TYPES AND status IN (QUEUED, RUNNING)`，复用现有 status-leading 索引。
+
+#### 查询重写与兼容边界
+
+- 将 Runtime Task 的“窗口 intake 计数”和“active Task 计数”拆为两个只读 COUNT：前者命中新 `created_at` 索引，后者命中既有 `status/review_status` index merge；返回 schema、计数语义和过滤参数不变。
+- Runtime Provider observation 仅在 MySQL 去除 `UPPER(provider)`；当前两列均使用大小写不敏感 utf8mb4 collation，比较语义保持兼容。SQLite/其他方言继续使用 `UPPER`，不改变测试和开发兼容性。
+- 不改变 Review、Scheduler、Agent、Provider、Notification、Feedback、Evaluation 或 Policy 状态机；不新增表、缓存、物化视图或接口字段。
+
+#### 迁移与回滚
+
+- 新增 `V45__command_center_query_indexes.sql` 作为空库 bootstrap 的正式 schema 基准；同一批索引使用 `ALTER TABLE ... ADD INDEX`，MySQL 指定 `ALGORITHM=INPLACE, LOCK=NONE`，其中 Result 两个索引合并为一次 ALTER。
+- 现有 Python migrate 当前只在空库执行 bootstrap。为保证已有远程库可升级，增加仅面向已授权 V45 索引的幂等 incremental index upgrade：先通过 inspector 核对表和索引，再逐条执行缺失索引；已存在则跳过。不得重放历史非幂等 bootstrap DDL。
+- 当前真实 MySQL 执行前先读取索引状态；执行后核对六个索引均存在，并重新逐条 EXPLAIN。回滚为按精确索引名执行 `ALTER TABLE ... DROP INDEX`，仅在迁移失败且已确认本次新增范围时使用，不自动删除既有同名索引。
+
+#### 验收门禁
+
+- 后端新增 Repository SQL 编译/行为测试、migration SQL/幂等升级测试和 Command Center contract 回归；按影响范围执行相关 pytest。
+- 真实 MySQL 迁移后，Runtime 5 秒路径中的业务大表不得再出现无 key 的非有界 `ALL`；小型配置表、Worker 上限表和 UNION 派生表允许保留有明确数据上限的扫描。Governance 时间窗口大表必须使用新时间索引；全时域且当前小规模的 Feedback/Evaluation/Policy 聚合单独记录为低频剩余风险。
+- 若 `LOCK=NONE` 不被当前 MySQL/表能力支持、迁移失败或迁移后关键查询仍无可接受计划，立即停止，不继续浏览器验收。
+
+### Phase 3 实施结果
+
+#### 实际修改文件与行为
+
+- AppFrame 单一所有权与轮询治理：修改 `frontend/src/App.jsx`、`frontend/src/styles.css`，新增 `frontend/src/appFrameOperations.js`、`frontend/src/visibilityRefreshLifecycle.js`。Queue/Failure Drawer 的数据、打开状态、刷新、abort 与卸载清理仍由 AppFrame 持有；Command Center 首页暂停 AppFrame 的后台持续轮询，只在打开 Drawer 时按需拉取。
+- Task/Flow 聚焦与 DOM Overlay：修改 `frontend/src/command-center/CommandCenterPage.jsx`、`CommandCenterCanvas.jsx`、`CommandCenterTopology.jsx`、`LiveOperationsRail.jsx`、`commandCenter.css`，新增 `CommandCenterFocusBar.jsx`、`commandCenterFocus.js`。同一 Task 的多个 `reviewKey` 独立聚焦，FocusBar、Topology 和 Live Operations 共用选择状态；Canvas 只绘制，五个生命周期节点使用原生 DOM button 钻取既有 `/tasks`、`/tasks/:taskId`、`/review-quality`。
+- 生命周期与性能诊断：修改 `frontend/src/command-center/useCommandCenterSnapshots.js`、`commandCenterCanvasRenderer.js`。Runtime/Governance 使用独立 5 秒/60 秒 Timer、sequence 和 AbortController；hidden 时清理 Timer 和在途请求，visible 恢复只刷新一次并抑制紧随 focus；只读 data attribute 记录请求、Timer、RAF、Observer、Listener、Controller 和绘制预算。
+- 前端测试：修改 `frontend/tests/commandCenterInformationArchitecture.test.mjs`，新增 `frontend/tests/commandCenterFocus.test.mjs`、`frontend/tests/visibilityRefreshLifecycle.test.mjs`。
+- Python 查询与迁移：修改 `backend-python/app/command_center/repository.py`、`backend-python/app/migrate.py` 以及 `review_record`、`code_quality`、`deterministic_checks`、`agent_review` 的 Model 索引声明；新增 `backend-python/migrations/bootstrap_sql/V45__command_center_query_indexes.sql`。测试修改 `backend-python/tests/unit/test_migrate_bootstrap.py`、`test_command_center_repository.py`、`tests/contract/test_command_center_api_contract.py`。
+- 未修改 legacy Java 后端、业务状态机、API schema、业务数据写入语义；未新增表、缓存、物化视图、WebSocket/SSE、动画依赖或主 Bundle 拆包。
+
+#### 真实 MySQL 迁移与 EXPLAIN
+
+- `scripts\\run-backend.cmd migrate` 首次执行成功增加六个 V45 索引；第二次执行报告 Command Center 索引已是最新，证明现有库升级幂等。`ALGORITHM=INPLACE, LOCK=NONE` 在当前真实 MySQL/表能力上可执行。
+- 迁移前 Runtime 9 条 SELECT 含 8 个 `ALL`，估算 rows 合计 4359；迁移和只读查询收窄后 Runtime 10 条 SELECT 估算 rows 合计 129。Task intake 使用 `range idx_review_tasks_cc_created rows=8`，active Task 使用既有 status/review_status `index_merge rows=2`，Scheduler 使用既有 status-leading `range rows=2`，Result/Agent 时间窗口使用新索引；仅保留 8 行 Worker、5 行 Provider 配置和 17 行 UNION 派生表的有界扫描。
+- 迁移前 Governance 9 条 SELECT 含 7 个 `ALL`，估算 rows 合计 1657；迁移后估算 rows 合计 438。`deterministic_check_runs`、`code_quality_review_results`、`notification_records` 的 24 小时窗口分别使用新时间索引且均估算 `rows=8`；`review_results` 使用既有索引扫描约 400 行。剩余 `ALL` 仅为 60 秒路径上的 1～8 行全时域 Feedback/Evaluation/Acceptance 小表。
+- 结论：Runtime 高频业务大表和 Governance 时间窗口大表均已消除无 key 的非有界全表扫描，达到授权后的查询计划门禁。
+
+#### 测试与构建
+
+- Phase 3 前端专项测试：36/36 通过，覆盖多 `reviewKey` 聚焦、DOM Overlay、路由目标、AppFrame 单一所有权、hidden/visible 恢复去重、Canvas/Controller 和失败回退。
+- 前端全量 Node 测试：100/100 通过。
+- Python 受影响专项：33/33 通过；变更文件定向 Ruff 检查通过。
+- `scripts\\run-frontend.cmd build`：通过；CSS `70.07 kB`（gzip `14.13 kB`），JS `1,734.77 kB`（gzip `539.24 kB`）。保留既有大于 500 kB 的主 Bundle 警告，拆包不属于 Phase 3。
+- `git diff --check`：通过。
+
+#### 浏览器、交互与性能验收
+
+- 使用隔离只读 QA 快照覆盖 Standard、Agent、Explicit Fallback、Failed、Stale 和 27 条 Flow；不连接业务写链路、不触发 Provider、Agent Worker 或通知。验收临时 5174/8091 服务结束后按精确 PID 停止并清理，用户已有 5173/8090 保持 HTTP 200。
+- Task `#101` 和 `standard-main` 聚焦后，FocusBar、Topology、Live Operations 共 4 个选中表达同步；Canvas Controller 始终为实例 `#2`，选择前后 Canvas 数量 1、Observer 1、Canvas Listener 1，选择未重建 Canvas/Controller。DOM Overlay 保持 5 个原生 button，节点点击实际进入既有 `/tasks/106`。
+- Queue/Failure 打开后 AppFrame 的共享 `data-app-frame-*-open` 状态分别切换，两个既有 Drawer 展示真实合约形状；Command Center 稳定运行时 AppFrame background polling 为 `paused`，Queue/Failure 仅在打开或页面初始挂载时请求，没有与 Runtime 形成持续 5 秒重复轮询。
+- `1440 × 900`：页面 `clientWidth/scrollWidth=1425/1425`，Canvas 1，粒子上限 120；27 Flow 为 `independent=20`、`aggregated=7`。
+- `1024 × 800`：页面 `clientWidth/scrollWidth=1009/1009`，Canvas 1，粒子上限 80；27 Flow 仍为 20 条独立、7 条聚合。
+- `390 × 844`：页面 `clientWidth/scrollWidth=375/375`，Canvas 0，`SMALL_SCREEN` DOM fallback；AppFrame 六个主导航以 3×2 网格全部可见，导航 `clientWidth/scrollWidth=343/343`，无可见横向滚动条；关键 Pulse、Task/Flow 和生命周期 DOM 信息可访问。
+- Stale、Fallback、Failed 稳态 `activeRaf=0`；Agent/Standard 运行态 RAF 按需启动。Canvas 初始化/绘制失败、reduced-motion、hidden/visible 恢复和请求去重由专项测试覆盖。
+- 62 秒 1024 超限长观测跨过一轮 Governance 并完成 20 轮新增 Runtime：DOM 462、Canvas 1、Controller `#2`、Timer 2、页面 Listener 2、RAF 1、Observer 1、Canvas Listener 1 始终稳定；平均绘制最终 `0.36ms`，最大 `9.80ms`，6041 帧中 2 帧超过 8ms 门禁，没有持续超预算或资源累积。清洁浏览器会话控制台 warning/error 为 0。
+
+#### 剩余风险与真实环境确认项
+
+- Codex In-app Browser 打开其他标签后仍保持受控页面 `document.visibilityState=visible`，无法取得原生 OS/tab hidden 信号；hidden 停止 Timer/RAF、visible 单轮恢复和 focus 抑制由自动化测试覆盖，部署后的真实浏览器仍需确认一次。
+- 当前浏览器控制接口不能把焦点直接移动到指定 DOM Overlay button；原生 button、Tab 顺序、`:focus-visible` 和 Enter/Space 行为由结构与专项测试覆盖，节点鼠标钻取已在浏览器验证。部署后建议补一次纯键盘人工走查。
+- 27 Flow 长观测有 2/6041 个瞬时帧达到 `9.80ms`，平均仅 `0.36ms` 且资源计数稳定；真实生产构建和目标设备需观察是否持续出现超 8ms 帧。
+- Governance 仍有 1～8 行全时域小表的低频 `ALL`；若远程数据量增长，应基于远程 EXPLAIN 重新评估，不在本阶段增加缓存或物化统计。
+- Vite 主 Bundle 大于 500 kB 的既有警告保留；Phase 3 未授权拆包。
+
+当前状态：
+
+`PHASE 3 COMPLETED — WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION`
+
+停止点：提交 Phase 3 后立即停止；不进入部署、后续阶段或额外优化。
 
 ------
 
