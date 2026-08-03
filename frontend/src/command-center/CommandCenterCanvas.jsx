@@ -69,7 +69,7 @@ export default function CommandCenterCanvas({
       {shouldMountCanvas && (
         <canvas
           className="command-center-runtime-map-canvas"
-          data-command-center-canvas-phase="PHASE_5B"
+          data-command-center-canvas-phase="PHASE_5C"
           ref={canvasRef}
           aria-hidden="true"
         />
@@ -159,7 +159,7 @@ function LaneBase({ lane, visibleLimit, onOpenReview, onOpenOverflow }) {
           <button
             type="button"
             className="command-center-overflow-tower"
-            onClick={() => onOpenOverflow(lane)}
+            onClick={event => onOpenOverflow(lane, event.currentTarget)}
             aria-label={`查看${lane.title}另外 ${hiddenCount} 条运行 Review`}
           >
             <strong>+{hiddenCount}</strong>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal } from 'antd';
 import { useNavigate } from 'react-router-dom';
 
@@ -10,18 +10,32 @@ import './commandCenter.css';
 
 export default function CommandCenterPage() {
   const navigate = useNavigate();
-  const [overflowLane, setOverflowLane] = useState(null);
+  const [overflowZoneKey, setOverflowZoneKey] = useState(null);
+  const overflowTriggerRef = useRef(null);
+  const refreshButtonRef = useRef(null);
   const visibleLimit = useRunningItemLimit();
   const { runtime, runtimeLoading, runtimeError, reload } = useCommandCenterRuntimeSnapshot();
   const presentation = useMemo(() => buildCommandCenterPresentation({ runtime }), [runtime]);
+  const overflowLane = presentation.map.lanes.find(lane => lane.zoneKey === overflowZoneKey) || null;
   const openReview = useCallback(item => {
     const reviewKey = encodeURIComponent(item.reviewKey || 'default');
     navigate(`/tasks/${item.taskId}?reviewKey=${reviewKey}`);
   }, [navigate]);
+  const openOverflow = useCallback((lane, trigger) => {
+    overflowTriggerRef.current = trigger || null;
+    setOverflowZoneKey(lane.zoneKey);
+  }, []);
+  const closeOverflow = useCallback(() => setOverflowZoneKey(null), []);
+  const restoreOverflowFocus = useCallback(() => {
+    const trigger = overflowTriggerRef.current;
+    overflowTriggerRef.current = null;
+    const focusTarget = trigger?.isConnected ? trigger : refreshButtonRef.current;
+    if (focusTarget?.isConnected) focusTarget.focus();
+  }, []);
   const freshness = runtime?.freshness || (runtimeLoading ? 'LOADING' : 'EMPTY');
 
   return (
-    <main className="command-center-page" data-command-center-phase="PHASE_5B">
+    <main className="command-center-page" data-command-center-phase="PHASE_5C">
       <section className="command-center-map-shell" aria-labelledby="command-center-title">
         <header className="command-center-map-toolbar">
           <div className="command-center-map-identity">
@@ -47,7 +61,7 @@ export default function CommandCenterPage() {
               token={lane.colorToken}
             />
           ))}
-          <button type="button" className="command-center-refresh" onClick={reload} disabled={runtimeLoading}>
+          <button ref={refreshButtonRef} type="button" className="command-center-refresh" onClick={reload} disabled={runtimeLoading}>
             {runtimeLoading ? '刷新中' : '刷新 Runtime'}
           </button>
         </header>
@@ -63,7 +77,7 @@ export default function CommandCenterPage() {
           map={presentation.map}
           visibleLimit={visibleLimit}
           onOpenReview={openReview}
-          onOpenOverflow={setOverflowLane}
+          onOpenOverflow={openOverflow}
         />
       </section>
 
@@ -72,18 +86,24 @@ export default function CommandCenterPage() {
         open={Boolean(overflowLane)}
         footer={null}
         width={720}
-        onCancel={() => setOverflowLane(null)}
+        onCancel={closeOverflow}
+        afterClose={restoreOverflowFocus}
+        keyboard
         destroyOnHidden
       >
         {overflowLane?.runningItemsTruncated && (
           <p className="command-center-modal-notice">当前列表为 Runtime 快照的有界结果。</p>
         )}
         <div className="command-center-modal-list">
+          {(overflowLane?.runningItems || []).length === 0 && (
+            <p className="command-center-modal-empty" role="status">当前没有运行中的 Review。</p>
+          )}
           {(overflowLane?.runningItems || []).map(item => (
             <button
               type="button"
               key={`${item.jobId}:${item.taskId}:${item.reviewKey}`}
               onClick={() => openReview(item)}
+              aria-label={`查看 ${item.projectName} 的 ${item.displayName}`}
             >
               <span className={`command-center-modal-token is-${item.engineToken}`} aria-hidden="true" />
               <span>

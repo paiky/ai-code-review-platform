@@ -36,8 +36,8 @@ test('root route renders Command Center while preserving legacy taskId redirect'
 });
 
 
-test('phase 5B home is a compact platform-level dual-lane runtime map', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="PHASE_5B"'), true);
+test('phase 5C home is a compact platform-level dual-lane runtime map', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="PHASE_5C"'), true);
   assert.equal(pageSource.includes('平台 Review 运行地图'), true);
   assert.equal(pageSource.includes('<CommandCenterCanvas'), true);
   assert.equal(presentationSource.includes("zoneKey: 'shared-queue'"), true);
@@ -69,12 +69,18 @@ test('DOM owns review navigation and overflow modal while bases and next reviews
   assert.equal(pageSource.includes('`/tasks/${item.taskId}?reviewKey=${reviewKey}`'), true);
   assert.equal(pageSource.includes('<Modal'), true);
   assert.equal(canvasSource.includes('command-center-overflow-tower'), true);
-  assert.equal(canvasSource.includes('onOpenOverflow(lane)'), true);
+  assert.equal(canvasSource.includes('onOpenOverflow(lane, event.currentTarget)'), true);
   assert.equal(canvasSource.includes('function NextReview'), true);
   assert.equal(canvasSource.includes('data-zone-key={lane.zoneKey}'), true);
   assert.equal((canvasSource.match(/<canvas/g) || []).length, 1);
   assert.equal(canvasSource.includes('data-command-center-dom-overlay="true"'), true);
-  assert.equal(canvasSource.includes('data-command-center-canvas-phase="PHASE_5B"'), true);
+  assert.equal(canvasSource.includes('data-command-center-canvas-phase="PHASE_5C"'), true);
+  assert.equal(pageSource.includes('overflowZoneKey'), true);
+  assert.equal(pageSource.includes('afterClose={restoreOverflowFocus}'), true);
+  assert.equal(pageSource.includes('trigger?.isConnected'), true);
+  assert.equal(pageSource.includes('refreshButtonRef.current'), true);
+  assert.equal(pageSource.includes('focusTarget.focus()'), true);
+  assert.equal(pageSource.includes('当前没有运行中的 Review'), true);
 });
 
 

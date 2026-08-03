@@ -354,6 +354,7 @@
 
 .command-center-modal-notice { padding: 8px 10px; color: #765100; border-radius: 8px; background: var(--cc-queue-soft); }
 .command-center-modal-list { display: grid; gap: 7px; max-height: min(60vh, 560px); overflow: auto; }
+.command-center-modal-empty { margin: 0; padding: 20px; color: var(--cc-muted); text-align: center; border: 1px dashed #afc4d2; border-radius: 10px; background: #f7fafc; }
 .command-center-modal-list button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 10px; color: var(--cc-ink); text-align: left; border: 1px solid #c7d7e1; border-radius: 10px; background: #ffffff; cursor: pointer; }
 .command-center-modal-list span strong,
 .command-center-modal-list span small { display: block; }

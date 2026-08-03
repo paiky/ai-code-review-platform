@@ -4,14 +4,15 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Phase 5B`
-- 阶段状态：`PHASE 5B COMPLETED — WAITING FOR MAP EFFECT CONFIRMATION`
+- 当前阶段：`Phase 5C`
+- 阶段状态：`PHASE 5 COMPLETED — WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION`
 - Phase 4 基线 Commit：`d63fccf`
 - Phase 5A 授权时间：2026-08-03
 - 计划创建时间：2026-08-03
 - Phase 5B 授权时间：2026-08-03
-- 当前目标：等待用户确认地图动态效果强度。
-- 当前停止点：Phase 5B 已完成；未经用户确认“继续下一阶段”不得进入 Phase 5C。
+- Phase 5C 授权时间：2026-08-03
+- 当前目标：等待部署授权或真实运行 Review/队列积压环境的最终确认。
+- 当前停止点：Phase 5 已完成；不得部署、推送或继续扩展，等待用户下一步指令。
 
 本文档是 Phase 5 的独立实施总控。Phase 4 及更早阶段继续以原 Implementation Plan 为历史记录，不再向原文档追加 Phase 5 内容。
 
@@ -256,3 +257,25 @@ Phase 5A 到此停止。下一步只在用户明确确认“继续下一阶段�
 - `git diff --check` 通过；本阶段无后端变更，因此未重复执行 Python 测试或 MySQL EXPLAIN。
 
 Phase 5B 到此停止。下一步只在用户确认地图效果并明确“继续下一阶段”后执行 Phase 5C。
+
+### 8.6 Phase 5C 实施结果
+
+- 溢出 Modal 从保存 Lane 对象改为只保存稳定 `zoneKey`，Modal 列表始终从最新 Runtime Presentation 派生，长轮询期间不再停留在打开瞬间的旧快照。
+- 显式保存 `+N` 聚合塔触发元素并在 Modal 关闭动画结束后恢复焦点；若轮询后聚合塔已消失，则安全回退聚焦到“刷新 Runtime”，避免焦点落回 Body。
+- Modal 运行项在轮询中清空时显示明确空态；列表项继续使用原生 Button，并补充项目名与 Review 名称组成的可访问名称。
+- Review 标记、聚合塔、刷新入口保持原生 Button；Canvas 继续 `aria-hidden`，基地和下一候选保持非交互，没有新增自定义键盘状态机。
+- Phase 标记更新为 `PHASE_5C`；已确认的双路线结构、明亮视觉、Runtime v2、单 Canvas/RAF 和小屏 fallback 均未改变。
+
+### 8.7 Phase 5C 验证证据
+
+- 前端专项覆盖 Modal 最新快照、显式焦点返回、触发塔消失回退、原生键盘边界、Canvas fallback 与 visibility 生命周期；前端全量 Node 测试 `87 passed`、`0 failed`。
+- `scripts/run-frontend.cmd build` 生产构建通过，仅保留仓库既有的大 Chunk 警告；`git diff --check` 通过。
+- 1440×900、1024×800、390×844 均无横向溢出，候场区、两条路线与下一候选完整；桌面/平板为单 Canvas，390 为 `SMALL_SCREEN` 完整 DOM fallback。
+- 唯一“刷新 Runtime”按钮可被浏览器定位并获得 `:focus-visible`；应用内浏览器的全局 Tab/Enter 注入未产生原生激活事件，因此 Review、聚合塔、Escape 与焦点返回的自动化证据以原生 Button/Ant Design Modal 边界测试为准，未为验收新增自定义键盘处理。
+- 应用内浏览器创建第二标签页时原页面仍报告 `visible`，无法制造真实 hidden 状态；Canvas pause/resume 和轮询 visibility/focus 去重由共享 Runtime 与 lifecycle 专项测试覆盖。
+- 最终浏览器持续观察 `78.98s`，完成 15 次新 Runtime 请求和 15 次 Scene 更新；Canvas/RAF/Observer/Canvas Listener/Timer 始终各 1，Polling Listener 始终为 2，DOM 节点始终为 65。
+- 观察期新增 1765 帧，最终平均绘制约 `0.130ms`、最大 `0.4ms`、超 8ms 帧为 0；Runtime aborted 数保持不增长，控制台无 Error/Warning。
+- 真实环境当前有 2 个在线 Worker、无运行 Review 和等待队列；真实 Worker 心跳已验收，运行 Review 移动、队列积压、Fallback、溢出 Modal 与 Runtime 错误保留旧快照由专项/契约测试覆盖，未创建虚构业务任务。
+- 本阶段无后端接口、查询或业务状态机变更，因此未重复执行 Python 测试或 MySQL EXPLAIN。
+
+Phase 5 到此完成并停止。等待部署授权或带有真实运行 Review/队列积压数据的环境确认；不得自动部署或推送。
