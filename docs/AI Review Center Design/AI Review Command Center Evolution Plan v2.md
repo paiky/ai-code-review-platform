@@ -2,14 +2,13 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Evolution Phase 2：Visual & Motion Specification`
-- 当前状态：`EVOLUTION PHASE 2 VISUAL & MOTION SPEC READY — WAITING FOR VISUAL AUTHORIZATION`
+- 当前阶段：`Evolution Phase 3A / 3B 拆分规划`
+- 当前状态：`EVOLUTION PHASE 3 SPLIT READY — WAITING FOR PHASE 3A AUTHORIZATION`
 - 实施基线 Commit：`dfe20a9`
 - 参考图：`docs/AI Review Center Design/assets/ai-review-command-center-reference.png`
 - 计划创建时间：2026-08-03
-- 当前授权：用户已于 2026-08-03 明确授权执行 Evolution Phase 1；仅允许修改 Command Center 前端投影、页面、静态 Renderer、样式、相关测试及本文档。
-- 当前授权：用户已确认 Evolution Phase 1 空间架构并授权 Evolution Phase 2；本阶段只允许设计 Visual & Motion Specification，不允许编码。
-- 当前停止点：Visual & Motion Specification 已完成并提交；等待用户确认，未经确认不得进入 Evolution Phase 3。
+- 当前授权：用户已确认 Evolution Phase 2 Visual & Motion Specification；当前仅授权将 Phase 3 拆分为 Phase 3A/3B 并回写本文档，未授权执行 Phase 3A 或 Phase 3B 代码。
+- 当前停止点：Phase 3A/3B 计划拆分完成后停止；等待用户单独授权 Phase 3A，且 Phase 3A 完成并获静态视觉确认前不得进入 Phase 3B。
 
 本文档是 Phase 5A～5C 完成后的新视觉架构总控。`AI Review Platform Runtime Map Implementation Plan.md` 继续作为 Phase 5 历史实施记录，不再追加 Evolution v2 的阶段状态。
 
@@ -360,7 +359,7 @@ Core 状态：
 | Stale | `STALE` | 降饱和、环停驻、显示 Stale 标签 | 全部非必要动效停止 |
 | Runtime Error | 请求失败且保留旧快照 | 保留旧值，外环出现固定断点 | 停止事件动效，不清空地图 |
 
-Core 必须是唯一持续呼吸对象；其他建筑不得以相同频率和光强持续呼吸，防止地图处处抢焦点。
+只有 Phase 3B 获授权后，Core 才可成为唯一持续呼吸对象；Phase 3A 的 Core 全部层级保持静态。其他建筑不得以相同频率和光强持续呼吸，防止地图处处抢焦点。
 
 #### 5.1.6 Queue Gate、Standard Lane、Agent Lane 与 Beacon
 
@@ -404,6 +403,8 @@ Core 必须是唯一持续呼吸对象；其他建筑不得以相同频率和光
 
 #### 5.1.8 Runtime 事件—动效矩阵
 
+本节全部属于 Phase 3B，Phase 3A 禁止建立相邻快照差异状态或实现本节任何反馈入口。
+
 动效只允许由下列证据触发：
 
 | Runtime 证据 | 允许的反馈 | 禁止推断 |
@@ -445,6 +446,8 @@ Core 必须是唯一持续呼吸对象；其他建筑不得以相同频率和光
 
 #### 5.1.10 状态与降级矩阵
 
+下表“动效”列只在 Phase 3B 获授权后适用；Phase 3A 对所有场景固定为静态表达和 `activeRaf=0`。
+
 | 场景 | 1440/1024 Canvas | DOM | 动效 |
 | --- | --- | --- | --- |
 | Fresh Idle | 完整地形、道路、建筑底座 | 五节点和真实 0 值完整 | Core 低频呼吸；无任务光标 |
@@ -458,22 +461,20 @@ Core 必须是唯一持续呼吸对象；其他建筑不得以相同频率和光
 
 三视口细化：
 
-- **1440×900**：完整等距地形；Core 建议视觉直径 200～240px；每 Lane 最多 6 个 Review、最多 8 个 Worker 塔、环境粒子最多 24 个；五节点在首屏形成完整闭环。
-- **1024×800**：保持相同左右拓扑，不改成 Dashboard 堆叠；Core 缩至 160～190px；每 Lane 最多 4 个 Review、最多 4 个 Worker 塔加 `+N`；隐藏非关键描述而不隐藏容量、等待、下一候选和阶段；环境粒子最多 12 个。
+- **1440×900**：完整等距地形；Core 建议视觉直径 200～240px；每 Lane 最多 6 个 Review、最多 8 个 Worker 塔；五节点在首屏形成完整闭环。Phase 3A 环境粒子为 0，只有 Phase 3B 获授权后才允许最多 24 个。
+- **1024×800**：保持相同左右拓扑，不改成 Dashboard 堆叠；Core 缩至 160～190px；每 Lane 最多 4 个 Review、最多 4 个 Worker 塔加 `+N`；隐藏非关键描述而不隐藏容量、等待、下一候选和阶段。Phase 3A 环境粒子为 0，只有 Phase 3B 获授权后才允许最多 12 个。
 - **390×844**：不尝试缩小桌面塔防地图，也不挂载 Canvas；Core 使用紧凑双环徽记；Standard/Agent 各自保持金色/紫色纵向轨道；Worker 和 Review 使用两列站点；Beacon 作为纵向终点。所有节点正常滚动可达，无横向滚动。
 
 所有视口的正文、数字和交互标签继续以 `#17324D` 附近深蓝为主，并在实际衬底上满足 WCAG AA；光晕、颜色和粒子不得成为唯一状态载体。
 
-#### 5.1.11 Phase 3 实施切片与停止条件
+#### 5.1.11 Phase 3 拆分与停止条件
 
-Phase 3 获授权后按以下顺序编码，不得一次混合重写数据层：
+原 Evolution Phase 3 拆分为两个必须分别授权、分别提交、分别停止的阶段：
 
-1. 先建立 Visual Token、地图层级和无大白卡的静态道路/建筑底座。
-2. 将 Core、Standard 容量泊位、Agent Worker 塔、Review Marker 和 Beacon 地图化，保持交互不变。
-3. 完成三视口静态截图并与参考图并排确认空间语言；若仍像 Dashboard，停止动效实现并修正静态层。
-4. 再实现 Runtime 差异检测与事件—动效矩阵，确保运行项消失不触发结果动画。
-5. 加入 reduced-motion、Stale/Error、Canvas Failure 和性能自动降级。
-6. 完成专项/全量测试、生产构建、浏览器验收和资源稳定性检查后提交并停止。
+1. **Evolution Phase 3A：静态视觉重建**。只实现 L0～L5 静态地图语言，活动 RAF 恒为 0；先验证页面是否已经从 Dashboard 转化为 Operation Map。
+2. **Evolution Phase 3B：动效实现**。只有用户确认 Phase 3A 静态视觉后，才允许实现 L6 光效、Runtime 差异检测和 5.1.8 的事件—动效矩阵。
+
+Phase 3A 授权不包含 Phase 3B。Phase 3A 即使测试和构建全部通过，也必须在静态截图确认点停止，不得以“同属 Phase 3”为由继续实现任何动画。
 
 #### 5.1.12 用户要求追踪
 
@@ -494,17 +495,68 @@ Phase 2 完成状态：
 
 `EVOLUTION PHASE 2 VISUAL & MOTION SPEC READY — WAITING FOR VISUAL AUTHORIZATION`
 
-### 5.2 Evolution Phase 3：新地图动效与视觉增强
+### 5.2 Evolution Phase 3A：静态视觉重建
 
-只有 Visual & Motion Specification 获用户确认后才能实施。Phase 3 必须以新空间模型、视觉层级和已批准的事件—动效矩阵为依据，不恢复或机械迁移旧 Phase 5B 动画。
+Phase 3A 只有在用户单独授权后才允许编码。保持 Runtime v2、轮询、v1 fallback、Review 跳转、溢出 Modal、Worker 绑定和全部业务语义不变，只实施：
+
+1. Visual Token 与 L0～L5 静态地图层级。
+2. 去除 Standard/Agent 大型白色卡片。
+3. 连续地形、道路沟槽、路床、Queue→Core 主干、金色 Standard 内轨、紫色 Agent 内轨及双路汇聚。
+4. 四层 AI Review Core：地面基座、外层能量环、金/紫内层调度环、核心晶体/光核；所有层保持静态。
+5. Queue Gate 闸门、双队列泊位、等待数和真实下一候选铭牌。
+6. Standard 容量泊位、真实运行 Review 站点和 Fallback 静态标识。
+7. Agent Worker 塔、真实 Worker 状态、运行 Review 绑定位和 `+N Worker` 聚合塔。
+8. Review Marker 地图化，同时保留原生 Button、详情跳转、可见数量和 `+N` Modal。
+9. 嵌入地形并由双路线汇聚的 Result Beacon；继续不展示结果统计。
+10. 1440×900、1024×800、390×844 三视口静态布局与 Canvas/DOM fallback。
+
+Phase 3A 明确禁止：
+
+- Core 呼吸、旋转、能量波或任何持续动画。
+- 道路流光、任务光标、调度反馈和路径粒子。
+- Worker 心跳、塔动画、状态切换动画。
+- 环境粒子、地形微光漂移或待机灯动画。
+- 任何活动 RAF、CSS `animation/keyframes`、独立 Timer 或第二 Canvas。
+- Runtime 相邻快照差异检测和任何事件—动效实现。
+- 预留一个默认启动但“暂时不可见”的动画循环。
+
+Phase 3A Renderer 仍可在初始化、Resize 和 Runtime Snapshot 更新时执行一次静态重绘；绘制结束后 `activeRaf=0`。静态 Review、容量、Worker 状态更新属于 DOM/Canvas 重绘，不属于动效。
+
+Phase 3A 必须交付以下截图到工作区 `.local/command-center-evolution-phase-3a/`，不提交参考图或截图产物：
+
+- `phase-3a-1440.png`。
+- `phase-3a-1440-reference-comparison.png`：左侧实现、右侧参考图，并附“仅比较空间语言，不比较业务指标”的说明。
+- `phase-3a-1024.png`。
+- `phase-3a-390.png`。
+- `phase-3a-1440-labels-masked.png`：使用浏览器只读获取文字边界后，在截图副本上遮盖文字；不得在生产代码中加入隐藏文字开关。
+
+Phase 3A 场景验收至少覆盖 Empty、Standard-only、Agent-only、Standard/Agent 混合运行。每个场景必须确认 Runtime 值真实、无虚构站点；隐藏文字后的截图仍可识别 Gate、第一视觉重心 Core、上方金色 Standard、下方紫色 Agent 和汇聚 Beacon。
 
 完成状态：
 
-`EVOLUTION PHASE 3 COMPLETED — WAITING FOR VISUAL EFFECT CONFIRMATION`
+`EVOLUTION PHASE 3A COMPLETED — WAITING FOR STATIC VISUAL CONFIRMATION`
 
-### 5.3 Evolution Phase 4：最终验收
+完成测试、构建、截图、浏览器验收、证据回写和提交后立即停止。未经用户确认静态视觉，不得进入 Phase 3B。
 
-完成纯键盘、reduced-motion、失败回退、长轮询、资源稳定性、真实数据密度、三视口和生产构建验收，只修复验收暴露的真实问题，不扩展结构或动效。
+### 5.3 Evolution Phase 3B：新地图动效实现
+
+只有用户明确确认 Phase 3A 静态视觉并单独授权 Phase 3B 后才允许编码。Phase 3B 不再调整已确认的空间结构，只实现：
+
+- 5.1.5 Core 状态呼吸和真实调度反馈。
+- 5.1.8 Runtime 事件—动效白名单及身份去重。
+- 5.1.9 单 Canvas、单 RAF、有界光效、帧率和自动降级。
+- Fresh Idle 生命感、reduced-motion、Stale/Error、页面隐藏和 Canvas Failure 动效行为。
+- 运行项消失只移除 Marker，不播放结果抵达动画。
+
+不得恢复 Phase 5B 旧动画，不得新增模拟 Review、虚构结果、第二 Canvas、第二 RAF、独立动画 Timer 或第三方动画依赖。
+
+完成状态：
+
+`EVOLUTION PHASE 3B COMPLETED — WAITING FOR MOTION EFFECT CONFIRMATION`
+
+### 5.4 Evolution Phase 4：最终验收
+
+只有用户确认 Phase 3B 动效后才能开始。完成纯键盘、reduced-motion、失败回退、长轮询、资源稳定性、真实数据密度、三视口和生产构建验收，只修复验收暴露的真实问题，不扩展结构或动效。
 
 完成状态：
 
@@ -512,7 +564,7 @@ Phase 2 完成状态：
 
 ## 六、测试与验收矩阵
 
-6.1～6.5 记录 Phase 1 已建立的数据、交互和静态回退基线；Phase 3 实施视觉与动效时必须继续全部通过，并追加 6.6 的视觉与动效验收。
+6.1～6.5 记录 Phase 1 已建立的数据、交互和静态回退基线；Phase 3A/3B 实施时必须继续全部通过。Phase 3A 追加 6.6 静态视觉验收，Phase 3B 追加 6.7 动效验收。
 
 ### 6.1 Presentation 与信息架构
 
@@ -526,7 +578,7 @@ Phase 2 完成状态：
 
 - 道路锚点来自 DOM 节点，不来自硬编码路线终点。
 - 初始化、Resize、Runtime Snapshot 更新可触发静态重绘。
-- Phase 1 静态基线的活动 RAF、动画 Review 数和动画 Worker 数均为 0；Phase 3 只有符合 5.1.8 的真实事件或 Fresh Idle 待机生命感才允许启动单 RAF。
+- Phase 1 与 Phase 3A 静态基线的活动 RAF、动画 Review 数、动画 Worker 数和环境粒子数均为 0；只有 Phase 3B 获授权后，符合 5.1.8 的真实事件或 Fresh Idle 待机生命感才允许启动单 RAF。
 - 只有一个 Canvas、一个 Controller 和一个 ResizeObserver；多次快照更新后数量不增长。
 - Canvas 失败后 Controller、Observer 和 Listener 正确清理，DOM 信息保持完整。
 
@@ -563,13 +615,22 @@ Phase 2 完成状态：
 - 三视口浏览器验收、控制台检查和必要的静态截图。
 - `git diff --check`。
 
-Evolution Phase 1 不修改后端、查询或 Schema，因此不执行数据库迁移、MySQL EXPLAIN 或 Python 测试。若实施中发现必须修改 Runtime 接口或数据库，立即停止并单独申请授权。
+Evolution Phase 1、3A 和 3B 均不修改后端、查询或 Schema，因此不执行数据库迁移、MySQL EXPLAIN 或 Python 测试。若实施中发现必须修改 Runtime 接口或数据库，立即停止并单独申请授权。
 
-### 6.6 Phase 3 视觉与动效专项验收
+### 6.6 Phase 3A 静态视觉专项验收
 
 - 1440 实现截图与参考图并排：仅比较 Core 权重、道路连续性、建筑底座、双路线区分和 Beacon 汇聚；不得补齐参考图中的虚构指标。
-- 将页面截图转为灰度或临时隐藏文字后，仍能识别 Core 为第一视觉重心、Standard 为上方稳定路线、Agent 为下方智能路线。
+- 提供独立的 1024×800、390×844 实现截图；三视口均无横向溢出，关键 Runtime 信息完整。
+- 使用 Empty、Standard-only、Agent-only、Standard/Agent 混合运行四套确定性快照完成浏览器截图和数据核对。
+- 通过浏览器只读收集文字边界并在截图副本中遮盖文字后，仍能识别 Gate、Core 第一视觉重心、上方金色 Standard、下方紫色 Agent 和汇聚 Beacon；不得向生产代码加入验收开关。
 - Lane 和 Beacon 不存在覆盖路线的大型白色卡片；任一 Lane 的白色标签衬底面积不超过该 Lane 可见区域的 35%。
+- Core 具有静态四层结构，Queue Gate、容量泊位、Worker 塔、Review Marker 和 Beacon 均以地图构件而非大型卡片呈现。
+- Canvas 仍从真实 DOM 锚点读取路线；初始化、Resize、快照更新后可静态重绘且道路接驳保持对齐。
+- 全部 Phase 3A 场景的 `activeRaf=0`、动画 Review/Worker/粒子数为 0；源码不存在 Phase 3B Runtime 差异检测、Core 呼吸、流光或任务光标入口。
+- 完成专项测试、前端全量 Node 测试、生产构建、三视口浏览器验收、控制台检查和 `git diff --check`，并将证据回写到本文档。
+
+### 6.7 Phase 3B 动效专项验收
+
 - Fresh Idle 至少连续观察 20 秒：只有 Core、环境微光和建筑待机灯产生生命感，任务道路上不存在 Review 形状或方向性流动标记。
 - 新运行项、Stage 变化、Worker 状态变化分别使用确定性快照夹具验收；每个反馈均可追溯至具体字段差异并按身份去重。
 - 运行项从快照消失时不得触发 Beacon 抵达、成功、失败或完成反馈。
@@ -582,7 +643,7 @@ Evolution Phase 1 不修改后端、查询或 Schema，因此不执行数据库�
 ### 7.1 总控 Prompt
 
 ```text
-以 docs/AI Review Center Design/AI Review Command Center Evolution Plan v2.md 为唯一总控。只执行用户明确授权的 Evolution Phase；先更新文档状态，再开展该阶段工作。不得修改 Runtime v2、Review、Scheduler、Agent、Provider、Fallback、通知业务状态机，不得虚构运行数据。每阶段完成后回写验证证据、提交并立即停止，不得推送、部署或自动进入下一阶段。
+以 docs/AI Review Center Design/AI Review Command Center Evolution Plan v2.md 为唯一总控。只执行用户明确授权的 Evolution Phase；Phase 3A 与 Phase 3B 是两个独立授权阶段，3A 授权绝不包含 3B。先更新文档状态，再开展该阶段工作。不得修改 Runtime v2、Review、Scheduler、Agent、Provider、Fallback、通知业务状态机，不得虚构运行数据。每阶段完成后回写验证证据、提交并立即停止，不得推送、部署或自动进入下一阶段。
 ```
 
 ### 7.2 Evolution Phase 1 Prompt
@@ -597,16 +658,22 @@ Evolution Phase 1 不修改后端、查询或 Schema，因此不执行数据库�
 在 Evolution Phase 1 空间架构获用户确认后，仅规划新的 Visual & Motion Specification，不编码。重点解决大型白卡观感、Core 第一视觉重心、连续道路、零任务生命感、金色 Standard、紫色 Agent、Worker/Review/容量地图站点化和 Beacon 汇聚；明确地形、道路、建筑、光效、粒子、状态、视觉层级、Runtime 事件绑定、资源预算及 1440/1024/390 降级。使用参考图并排验收空间语言，但不得复制 Runtime 无法证明的指标或处理站。状态设为 EVOLUTION PHASE 2 VISUAL & MOTION SPEC READY — WAITING FOR VISUAL AUTHORIZATION 后提交并停止。
 ```
 
-### 7.4 Evolution Phase 3 Prompt
+### 7.4 Evolution Phase 3A Prompt
 
 ```text
-仅在 Evolution Phase 2 Visual & Motion Specification 获用户确认后执行 Evolution Phase 3。先实现无大型白卡的静态地图、Core、道路、容量泊位、Worker 塔、Review 站点和 Beacon，并完成参考图并排静态验收；静态空间语言通过后再严格按已批准的 Runtime 事件—动效矩阵实现单 Canvas/单 RAF 动效。不得创建模拟 Review、虚构结果、第二 Canvas、第二 RAF 循环或未授权指标。完成性能、reduced-motion、失败回退、三视口和真实场景验收后，将状态设为 EVOLUTION PHASE 3 COMPLETED — WAITING FOR VISUAL EFFECT CONFIRMATION，提交并立即停止。
+执行 Evolution Phase 3A 静态视觉重建。保持 Runtime v2、轮询、v1 fallback、Review 跳转、Modal 和所有业务语义不变，只实现 Visual Token、L0～L5 静态层、无大型白卡的连续地形与道路、静态四层 Core、Queue Gate、金色 Standard 容量泊位、紫色 Agent Worker 塔、地图化 Review Marker 和嵌入地形的 Beacon。1440/1024 使用静态 Canvas 道路，390 使用静态 DOM/CSS 纵向图。禁止 Core 呼吸、流光、任务光标、Worker 动画、环境粒子、Runtime 差异检测、CSS keyframes、Timer 和任何活动 RAF。使用 Empty、Standard-only、Agent-only、混合运行验收，输出 1440 与参考图并排、1024、390 和 1440 文字遮盖截图；完成专项/全量测试、构建、浏览器和 diff 验证后，将状态设为 EVOLUTION PHASE 3A COMPLETED — WAITING FOR STATIC VISUAL CONFIRMATION，提交并立即停止。未经用户确认不得进入 Phase 3B，不得推送或部署。
 ```
 
-### 7.5 Evolution Phase 4 Prompt
+### 7.5 Evolution Phase 3B Prompt
 
 ```text
-仅在用户确认 Evolution Phase 3 视觉效果后执行 Evolution Phase 4。完成纯键盘、焦点返回、长时间轮询、资源稳定性、Canvas 失败、Stale、真实数据密度、三视口、前端全量测试和生产构建验收。只修复验收暴露的问题，不扩展已确认结构和动效。状态设为 EVOLUTION V2 COMPLETED — WAITING FOR DEPLOYMENT CONFIRMATION，提交并立即停止，不得部署或推送。
+仅在用户确认 Evolution Phase 3A 静态视觉并明确授权 Phase 3B 后执行。保持已确认的 L0～L5 空间结构和交互不变，只按 Visual & Motion Specification 的 Runtime 事件白名单实现 Core 呼吸、真实调度反馈、Stage/Worker 局部反馈、Fresh Idle 生命感以及 reduced-motion、Stale/Error、隐藏页、Canvas Failure 和性能自动降级。只允许单 Canvas、单 RAF；运行项消失不得触发结果抵达。完成事件夹具、资源稳定性、性能、三视口和浏览器验收后，将状态设为 EVOLUTION PHASE 3B COMPLETED — WAITING FOR MOTION EFFECT CONFIRMATION，提交并立即停止，不得进入 Phase 4、推送或部署。
+```
+
+### 7.6 Evolution Phase 4 Prompt
+
+```text
+仅在用户确认 Evolution Phase 3B 动效效果后执行 Evolution Phase 4。完成纯键盘、焦点返回、长时间轮询、资源稳定性、Canvas 失败、Stale、真实数据密度、三视口、前端全量测试和生产构建验收。只修复验收暴露的问题，不扩展已确认结构和动效。状态设为 EVOLUTION V2 COMPLETED — WAITING FOR DEPLOYMENT CONFIRMATION，提交并立即停止，不得部署或推送。
 ```
 
 ## 八、Agent 自主推进边界
@@ -625,6 +692,9 @@ Evolution Phase 1 不修改后端、查询或 Schema，因此不执行数据库�
 - 修改全局 Queue/Failure 入口、通知状态机、任务详情和设置行为。
 - 更新 README、历史 Phase 5 计划或冻结的路线文档。
 - 自动推送、部署或进入下一阶段。
+- 在 Phase 3A 实现任何动效、Runtime 差异事件、活动 RAF、CSS keyframes、动画 Timer 或环境粒子。
+- 将 Phase 3A 授权视为 Phase 3B 授权，或在静态视觉未确认时预先实现/隐藏 Phase 3B 代码。
+- 在 Phase 3B 重新设计已由用户确认的 Phase 3A 空间结构；如动效需要结构变化，必须停止并重新申请视觉变更授权。
 
 ## 九、当前计划落地记录
 
@@ -675,4 +745,23 @@ Evolution Phase 1 已由用户确认通过。
 - 本阶段仅修改本文档；未修改前端、后端、测试、README、旧计划或未跟踪资料。
 - 文档差异通过 `git diff --check`；纯设计阶段不执行测试、构建或浏览器运行验收。
 
-Evolution Phase 2 到此停止。等待用户确认 Visual & Motion Specification；不得自动进入 Phase 3 编码、推送或部署。
+Evolution Phase 2 Visual & Motion Specification 已由用户确认通过。
+
+### Evolution Phase 3A / 3B 拆分记录
+
+- 2026-08-03：用户确认 Evolution Phase 2，但未授权完整 Phase 3；要求先拆分静态视觉和动效实施。
+- 原 Phase 3 已拆分为 `Evolution Phase 3A：静态视觉重建` 与 `Evolution Phase 3B：新地图动效实现`，两阶段必须独立授权、独立提交、独立停止。
+- Phase 3A 只允许 Visual Token、L0～L5、静态地形/道路/Core/Gate/容量泊位/Worker 塔/Review Marker/Beacon 和三视口布局；活动 RAF、动画和 Runtime 差异检测均为 0。
+- Phase 3A 已明确四个数据场景和五个截图产物的验收要求，完成状态固定为 `EVOLUTION PHASE 3A COMPLETED — WAITING FOR STATIC VISUAL CONFIRMATION`。
+- Phase 3B 仅在用户确认 Phase 3A 后实施 L6 与 Runtime 事件动效，不得重新设计已确认的静态空间。
+- 已更新总控 Prompt、Phase 3A/3B 独立 Prompt、测试矩阵、Agent 授权边界和 Phase 4 前置门禁。
+
+### Evolution Phase 3 拆分验证证据
+
+- 已逐项覆盖用户指定的 Phase 3A 十项实施范围、六类禁止项和全部完成交付物。
+- 已确认计划不把本次“回写拆分”解释为 Phase 3A 编码授权；本次仅修改本文档。
+- 已确认 Phase 3A 的静态 Renderer 只允许初始化、Resize、Snapshot 更新的一次性重绘，任意时刻 `activeRaf=0`。
+- 已确认 Phase 3A 验收包含 1440 参考图并排、1024、390、文字遮盖截图，以及 Empty、Standard-only、Agent-only、混合运行。
+- 文档差异通过 `git diff --check`；未修改前端、后端、测试、README、旧计划或未跟踪资料。
+
+Phase 3 拆分规划到此停止。等待用户明确授权执行 Evolution Phase 3A；不得编码、推送、部署或进入 Phase 3B。
