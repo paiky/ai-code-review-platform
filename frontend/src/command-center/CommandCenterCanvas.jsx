@@ -80,7 +80,7 @@ export default function CommandCenterCanvas({
       canvasLayer={shouldMountCanvas ? (
         <canvas
           className="command-center-topology-canvas"
-          data-command-center-canvas-phase="PHASE_4B"
+          data-command-center-canvas-phase="PHASE_4C"
           ref={canvasRef}
           aria-hidden="true"
         />

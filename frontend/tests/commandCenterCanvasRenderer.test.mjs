@@ -433,7 +433,7 @@ test('animates live state at 60fps and returns to 30fps ambient after one termin
 });
 
 
-test('stays within the draw budget and keeps one RAF observer and listener over time', () => {
+test('simulates 60 seconds within budget and keeps one RAF observer and listener', () => {
   const flows = Array.from({ length: 24 }, (_, index) => (
     flow(index + 1, `review-${index + 1}`, 'RUNNING', 'MODEL_CALLING')
   ));
@@ -442,7 +442,7 @@ test('stays within the draw budget and keeps one RAF observer and listener over 
   const harness = createHarness({ width: 1100, viewportWidth: 1440 });
   const controller = harness.create(running);
 
-  for (let index = 0; index < 1_200; index += 1) {
+  for (let index = 0; index < 3_750; index += 1) {
     harness.flushFrame(index * 16);
   }
 
@@ -450,6 +450,10 @@ test('stays within the draw budget and keeps one RAF observer and listener over 
   assert.equal(longRunning.drawBudgetMs, COMMAND_CENTER_DRAW_BUDGET_MS);
   assert.ok(longRunning.averageDrawMs <= COMMAND_CENTER_DRAW_BUDGET_MS);
   assert.equal(longRunning.averageWithinBudget, true);
+  assert.ok(longRunning.frameCount >= 3_750);
+  assert.ok(
+    longRunning.overBudgetFrameCount / longRunning.frameCount < 0.01
+  );
   assert.equal(longRunning.activeRafCount, 1);
   assert.equal(longRunning.maxConcurrentRafCount, 1);
   assert.equal(longRunning.observerRegistrationCount, 1);
@@ -462,8 +466,16 @@ test('stays within the draw budget and keeps one RAF observer and listener over 
 
   harness.setHidden(true);
   assert.equal(controller.getSnapshot().activeRafCount, 0);
+  assert.equal(
+    harness.canvas.getAttribute('data-command-center-active-raf'),
+    '0'
+  );
   harness.setHidden(false);
   assert.equal(controller.getSnapshot().activeRafCount, 1);
+  assert.equal(
+    harness.canvas.getAttribute('data-command-center-active-raf'),
+    '1'
+  );
   controller.setScene(stale);
   assert.equal(controller.getSnapshot().activeRafCount, 1);
   assert.equal(

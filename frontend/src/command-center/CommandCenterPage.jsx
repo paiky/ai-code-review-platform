@@ -69,7 +69,7 @@ export default function CommandCenterPage() {
   return (
     <main
       className="command-center-page"
-      data-command-center-phase="PHASE_4B"
+      data-command-center-phase="PHASE_4C"
       data-command-center-focus-task={focus.taskId || undefined}
       data-command-center-focus-flow={focus.flowId || undefined}
     >
@@ -133,6 +133,7 @@ export default function CommandCenterPage() {
             </button>
             <button
               type="button"
+              aria-haspopup="dialog"
               aria-expanded={Boolean(frameOperations?.jobQueueOpen)}
               onClick={frameOperations?.openJobQueue}
             >
@@ -141,6 +142,7 @@ export default function CommandCenterPage() {
             <button
               type="button"
               className={(frameOperations?.failureNotifications?.failureCount ?? 0) > 0 ? 'is-danger' : ''}
+              aria-haspopup="dialog"
               aria-expanded={Boolean(frameOperations?.failureNotificationsOpen)}
               onClick={frameOperations?.openFailureNotifications}
             >

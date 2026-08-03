@@ -52,6 +52,12 @@ export default function CommandCenterTopology({
                   type="button"
                   className="command-center-flow-node-overlay"
                   onClick={() => onActivateNode?.(column.key)}
+                  onKeyDown={event => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    onActivateNode?.(column.key);
+                  }}
+                  aria-current={focused ? 'step' : undefined}
                   aria-label={`进入${column.title}${focused ? `，当前 Flow 状态为${selectedFlow.stageLabel}` : ''}`}
                 />
                 <div className="command-center-flow-node-header">

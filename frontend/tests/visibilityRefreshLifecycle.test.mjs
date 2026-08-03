@@ -55,6 +55,48 @@ test('pauses while hidden and coalesces visibility plus focus into one resume', 
 });
 
 
+test('keeps two listeners and exactly one resume across repeated visibility cycles', () => {
+  const documentTarget = createEventTarget({ hidden: false, visibilityState: 'visible' });
+  const windowTarget = createEventTarget();
+  let now = 0;
+  let pauses = 0;
+  let resumes = 0;
+  const lifecycle = createVisibilityRefreshLifecycle({
+    documentTarget,
+    windowTarget,
+    now: () => now,
+    onPause: () => { pauses += 1; },
+    onResume: () => { resumes += 1; }
+  });
+
+  lifecycle.start();
+  for (let index = 0; index < 120; index += 1) {
+    documentTarget.hidden = true;
+    documentTarget.visibilityState = 'hidden';
+    documentTarget.emit('visibilitychange');
+    now += 1_000;
+    documentTarget.hidden = false;
+    documentTarget.visibilityState = 'visible';
+    documentTarget.emit('visibilitychange');
+    windowTarget.emit('focus');
+  }
+
+  const snapshot = lifecycle.getSnapshot();
+  assert.equal(pauses, 120);
+  assert.equal(resumes, 121);
+  assert.equal(snapshot.pauseCount, 120);
+  assert.equal(snapshot.resumeCount, 121);
+  assert.equal(snapshot.suppressedFocusCount, 120);
+  assert.equal(snapshot.listenerRegistrationCount, 2);
+  assert.equal(documentTarget.listenerCount(), 1);
+  assert.equal(windowTarget.listenerCount(), 1);
+
+  lifecycle.dispose();
+  assert.equal(documentTarget.listenerCount(), 0);
+  assert.equal(windowTarget.listenerCount(), 0);
+});
+
+
 function createEventTarget(initial = {}) {
   const listeners = new Map();
   return {

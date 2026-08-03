@@ -4,8 +4,8 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Phase 4B`
-- 阶段状态：`PHASE 4B COMPLETED — WAITING FOR EFFECT INTENSITY CONFIRMATION`
+- 当前阶段：`Phase 4C`
+- 阶段状态：`PHASE 4 COMPLETED — WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION`
 - Phase 0 基线 Commit：`2005b8f`
 - Phase 1 基线 Commit：`0cbb148`
 - Phase 2 拆分确认时间：2026-07-31
@@ -28,12 +28,16 @@
 - Phase 4B 授权时间：2026-08-03
 - Phase 4B 基线 Commit：`4fe191c`
 - Phase 4B 完成时间：2026-08-03
+- Phase 4B 特效强度人工确认时间：2026-08-03
+- Phase 4C 授权时间：2026-08-03
+- Phase 4C 基线 Commit：`8ae4832`
+- Phase 4C 完成时间：2026-08-03
 - Phase 3 输入风险：浏览器 hidden/visible 证据缺口；Runtime/Governance、focus/visibility 恢复可能重复刷新；390px AppFrame 导航裁切与可见横向滚动条。
 - Phase 2D MySQL 兼容性热修复授权时间：2026-07-31
 - 计划更新时间：2026-08-03
-- 当前目标：等待用户确认 Phase 4B 特效强度；当前不继续修改视觉或进入 Phase 4C。
-- 当前明确不做：未获用户确认前不执行 Phase 4C 的长时间最终资源验收、完整键盘/失败注入回归和最终完成状态；不修改 Python 后端、数据库、索引、迁移、业务状态机或公开 API。
-- 停止点：Phase 4B 已完成并提交后立即停止，等待用户确认特效强度；未确认前不进入 Phase 4C。
+- 当前目标：Phase 4 已完成，等待部署或真实环境确认；当前不继续实施、部署或追加视觉优化。
+- 当前明确不做：未获新授权前不进入部署、后续阶段或额外优化；不修改 Python 后端、数据库、索引、迁移、业务状态机或公开 API。
+- 停止点：Phase 4C 已完成，提交后立即停止；不进入部署、后续阶段或额外优化。
 
 本计划同时作为分阶段实施总控和验收记录。每个阶段开始前更新状态，完成后回写验证结果并停止。
 
@@ -1413,10 +1417,78 @@ Phase 4B 完成后状态更新为 `PHASE 4B COMPLETED — WAITING FOR EFFECT INT
 - 本轮数据来自受控 Runtime mock，用于确定性覆盖 Empty、Standard、Agent、Fallback、Failed、Completed、Stale、多 reviewKey 和 27 Flow；部署环境的真实数据密度仍需后续确认。
 - Phase 4C 尚未开始：至少 60 秒的最终绘制预算与资源观察、完整 Tab/Enter/Space/focus-visible 回归、hidden/reduced-motion/初始化失败/绘制失败浏览器注入和专用浏览器控制台检查仍属于下一停止段。
 
-### Phase 4C：性能、无障碍与最终收口（待确认）
+### Phase 4C：性能、无障碍与最终收口（已完成）
 
-- 完成纯键盘、DOM Overlay、失败回退、长时间资源、60 秒绘制预算、全量测试、构建和三档最终浏览器验收。
-- 最终状态为 `PHASE 4 COMPLETED — WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION`；提交后停止。
+#### 实施设计
+
+- 不再调整 Phase 4B 已确认的视觉强度；只修复最终门禁中发现的性能、资源清理、键盘、焦点、DOM fallback、Drawer 联动和响应式缺陷。
+- DOM Overlay 继续独占节点语义与交互：五个阶段均为可聚焦按钮，Tab 顺序跟随生命周期，Enter/Space 只激活现有任务详情或质量治理路由；Canvas 保持 `aria-hidden` 且不接管点击、键盘或业务状态。
+- Queue/Failure 继续由 AppFrame 单一持有 Drawer 状态；Command Center 按钮只调用既有开关能力，不增加请求、缓存或第二份状态。专项测试覆盖打开、关闭和焦点返回边界。
+- 浏览器失败注入只作用于受控验收会话：分别覆盖 `prefers-reduced-motion`、390 小屏、Canvas `getContext` 初始化失败和绘制方法抛错；不在生产代码新增调试 API 或虚构业务状态。所有场景必须保留五阶段 DOM、工具条、Flow Dock 和现有钻取目标。
+- visibility/focus 验收记录隐藏前后的 Runtime 请求次数、Timer/RAF、Abort 和恢复次数：hidden 期间 RAF 为 `0` 且不产生轮询；恢复后只允许一轮 Runtime 刷新，不得出现 visibility + focus 双重请求。首页 Governance 请求始终为 `0`。
+- 进行至少 60 秒活动场景观察，覆盖不少于 12 轮 Runtime 轮询：Controller、Canvas、ResizeObserver、listener 和 RAF 数量必须保持常数，DOM/Canvas 数量不增长；记录平均/最大绘制耗时、超 8ms 帧比例和控制台 error/warning。
+- 1440×900、1024×800 使用动态 Canvas；390×844 使用静态纵向 DOM。三档都验证五阶段、Task/Flow 选择、Agent/Fallback 聚焦、Queue/Failure、导航可见性和无横向滚动。
+
+#### 修改范围
+
+- 优先复用 `frontend/src/command-center/`、`frontend/src/canvas/canvasRuntime.js` 和现有测试；只有验收暴露真实缺陷时才修改产品代码。
+- 补充或收紧 `frontend/tests/commandCenterCanvasRenderer.test.mjs`、`frontend/tests/commandCenterInformationArchitecture.test.mjs`、`frontend/tests/canvasRuntime.test.mjs` 及必要的轮询/焦点测试，覆盖 Phase 4C 最终门禁。
+- 回写本 Implementation Plan 的实际文件、测试、构建、浏览器、资源观察和剩余风险；不修改 `backend-python/`。
+
+#### 验收标准
+
+- 纯键盘可依次到达工具条、Task/Flow 选择、五个 DOM 节点、Queue/Failure 和详情入口；Enter/Space 可激活，`focus-visible` 清晰，Canvas 不进入可访问树。
+- Empty、Standard、Agent、Fallback、Failed、Completed、Stale、多 reviewKey 和 27 Flow 保持 Phase 4B 视觉语言与真实语义；选择或轮询不重建 Controller/Canvas。
+- reduced-motion、390、初始化失败和绘制失败均停止动画并保留完整 DOM 地图；hidden 时 Timer/RAF 为 `0`，恢复仅一轮刷新。
+- 连续至少 60 秒观察中保持单 Canvas、单 RAF、单 ResizeObserver、单 listener；DPR≤2、独立 Flow≤20、粒子 48/80/120 门禁不回退，平均绘制≤4ms，超过 8ms 的帧低于 1%。
+- Phase 4 专项测试、前端全量 Node 测试、生产构建、1440×900/1024×800/390×844 浏览器验收、控制台检查和 `git diff --check` 全部通过。
+
+#### 停止点
+
+Phase 4C 完成后状态更新为 `PHASE 4 COMPLETED — WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION`，提交实际修改、测试、构建、浏览器与性能结果和剩余风险后立即停止；不进入部署、后续阶段或额外优化。
+
+#### 实施结果
+
+- Command Center 页面和 Canvas 诊断阶段更新为 `PHASE_4C`；首页结构、Phase 4B 视觉强度、Runtime-only 数据语义和既有业务路由保持不变。
+- 五个 DOM Overlay 节点增加 `aria-current="step"` 当前阶段语义，并显式处理 Enter/Space：阻止原生重复激活后只调用既有 `onActivateNode`，未新增跳转目标或业务状态。
+- Queue/Failure 工具按钮补充 `aria-haspopup="dialog"`，继续使用 AppFrame 唯一 Drawer/Modal 状态与请求所有权；打开、关闭、`aria-expanded` 和关闭后焦点返回均由现有 AppFrame 能力完成。
+- Canvas Runtime 增加可选 `onStateChange` 诊断回调，仅在 visibility 切换时同步现有属性；没有增加 RAF、Timer、Observer 或 listener，也不改变其他 Canvas 调用方默认行为。
+- 60 秒模拟门禁扩展为 3,750 帧，额外执行 120 次 hidden/visible + focus 连续周期；每周期只恢复一次，两个生命周期 listener 始终保持常数并在 dispose 后归零。
+
+实际修改文件：
+
+- `docs/AI Review Center Design/AI Review Command Center Implementation Plan.md`
+- `frontend/src/canvas/canvasRuntime.js`
+- `frontend/src/command-center/CommandCenterCanvas.jsx`
+- `frontend/src/command-center/CommandCenterPage.jsx`
+- `frontend/src/command-center/CommandCenterTopology.jsx`
+- `frontend/src/command-center/commandCenterCanvasRenderer.js`
+- `frontend/tests/canvasRuntime.test.mjs`
+- `frontend/tests/commandCenterCanvasRenderer.test.mjs`
+- `frontend/tests/commandCenterInformationArchitecture.test.mjs`
+- `frontend/tests/visibilityRefreshLifecycle.test.mjs`
+
+验证结果：
+
+- Phase 4C 专项：`node --test tests/commandCenterCanvasRenderer.test.mjs tests/commandCenterInformationArchitecture.test.mjs tests/canvasRuntime.test.mjs tests/visibilityRefreshLifecycle.test.mjs`，`30 passed`。
+- 前端全量：`node --test`，`107 passed`。
+- 生产构建：`scripts\\run-frontend.cmd build` 通过；CSS `73.51 kB`（gzip `14.84 kB`），JS `1,732.62 kB`（gzip `539.23 kB`）。主 Bundle 超过 500 kB 的既有提示仍保留，拆包不属于 Phase 4。
+- 键盘与 DOM Overlay：浏览器中 Enter 从 Intake 跳转 `/tasks`，Space 从 Execution 跳转 `/review-quality`；Rule 节点键盘焦点满足 `:focus-visible`，计算样式为青色 `3px` outline 与 `6px` 外发光；Canvas 保持 `aria-hidden`。
+- Queue/Failure：点击后 AppFrame 的 `data-app-frame-*-open` 与按钮 `aria-expanded` 同步为 `true`，受控队列和失败内容可见；关闭后均恢复为 `false`，焦点分别返回 `Queue 1`、`Failure 1` 按钮。
+- Flow 聚焦：选择 `1:agent-main` 后 DOM 当前步骤唯一指向 Execution，Flow Dock 显示真实 Agent/Provider；立即清除前后 Controller 均为 `2`、粒子布局 revision 均为 `26`、Observer/listener 均为 `1`，仅 focus revision 从 `1` 更新为 `2`。
+- 74.473 秒浏览器资源观察覆盖 15 轮 Runtime：Controller `2`、Canvas `1`、RAF `1`、ResizeObserver `1`、Canvas listener `1`、轮询 Timer `1`、轮询 listener `2`、DOM 阶段 `5` 全程不变；帧数增加 `4,531`，平均绘制 `0.579ms`、最大 `3.5ms`、超 8ms 帧 `0`。
+- 27 Flow 场景保持独立 Flow `20`、聚合 Flow `7`、1440 粒子门禁 `120`、1024 粒子门禁 `80`；DPR≤2 和 390 粒子门禁 `48` 继续由专项测试覆盖。
+- 1440×900：`phase4c-1440x900.png`、`phase4c-1440-focus-visible.png`；Canvas `1`、五阶段同屏、无横向溢出。
+- 1024×800：`phase4c-1024x800.png`；Canvas `1`、DOM 节点 `5`，地图底部 `697 < 800`，`scrollWidth/clientWidth = 1024/1024`。
+- 390×844：`phase4c-390x844.png`；Canvas `0`、DOM 节点 `5`、AppFrame 主导航 `6`、工具条和 Flow Dock 均存在，`scrollWidth/clientWidth = 390/390`。
+- 受控会话累计 Runtime 请求 `133`、Governance 请求 `0`；Queue/Failure 请求各 `5`（包含键盘钻取后的路由回归加载），首页未恢复 Governance 轮询。Vite 与 mock stderr 均为空，页面无 Runtime 错误浮层。
+- 验收后复核 5173/8090 监听 owner，只停止本次 Agent 启动的 Node PID `44352`、`43280`；owner cmd 随服务退出，两个端口均已释放。两份原有无关未跟踪文档保持不动。
+
+剩余风险：
+
+- 当前内置浏览器只提供界面可见性和 viewport 能力，不暴露页面 Page Visibility、reduced-motion 或 Canvas 方法故障注入；因此 hidden/visible、reduced-motion、初始化失败和绘制失败的最终证据来自真实浏览器行为等价的生命周期/Renderer 专项测试，其中包含 120 次恢复去重、RAF `1→0→1` 和一次性 cleanup。390 静态回退已有真实浏览器证据。
+- 当前浏览器控制接口未提供专用 console message 导出；本轮以页面无错误浮层、Vite/mock stderr 为空、全量测试和生产构建作为门禁。部署或真实环境确认时仍应复核浏览器 console error/warning。
+- 浏览器数据来自受控 Runtime mock；真实项目名称、Provider 延迟和部署数据密度仍属于 `WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION` 状态的确认项。
 
 ------
 

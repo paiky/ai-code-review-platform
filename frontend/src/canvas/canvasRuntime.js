@@ -33,6 +33,7 @@ class CanvasRuntime {
     this.onResize = options.onResize;
     this.isAnimationEnabled = options.isAnimationEnabled;
     this.getAnimationFrameInterval = options.getAnimationFrameInterval;
+    this.onStateChange = options.onStateChange;
     this.onFailure = options.onFailure;
     this.maxDpr = options.maxDpr;
     this.drawBudgetMs = Math.max(
@@ -119,9 +120,11 @@ class CanvasRuntime {
     if (this.disposed || this.failed) return;
     if (this.isDocumentHidden()) {
       this.stopLoop();
+      safelyNotifyStateChange(this.onStateChange);
       return;
     }
     this.refresh();
+    safelyNotifyStateChange(this.onStateChange);
   }
 
   handleAnimationFrame(timestamp) {
@@ -354,5 +357,15 @@ function safelyNotifyFailure(callback) {
     callback?.();
   } catch {
     // Canvas failure must remain local to its fallback boundary.
+  }
+}
+
+
+function safelyNotifyStateChange(callback) {
+  if (typeof callback !== 'function') return;
+  try {
+    callback();
+  } catch {
+    // Diagnostics must never affect Canvas lifecycle ownership.
   }
 }

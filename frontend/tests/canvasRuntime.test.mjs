@@ -13,11 +13,13 @@ test('owns size DPR observer visibility RAF and diagnostics without renderer sta
   const resizeEvents = [];
   const drawEvents = [];
   let animated = true;
+  let stateChanges = 0;
   const runtime = harness.create({
     maxDpr: 2,
     onResize: event => resizeEvents.push(event),
     onDraw: event => drawEvents.push(event),
-    isAnimationEnabled: () => animated
+    isAnimationEnabled: () => animated,
+    onStateChange: () => { stateChanges += 1; }
   });
 
   assert.ok(runtime);
@@ -52,9 +54,11 @@ test('owns size DPR observer visibility RAF and diagnostics without renderer sta
 
   harness.setHidden(true);
   assert.equal(harness.pendingFrames(), 0);
+  assert.equal(stateChanges, 1);
   harness.setHidden(false);
   assert.equal(runtime.getSnapshot().frameCount, 3);
   assert.equal(harness.pendingFrames(), 1);
+  assert.equal(stateChanges, 2);
 
   animated = false;
   runtime.refresh();

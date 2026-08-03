@@ -52,8 +52,8 @@ test('task list and task detail routes remain explicit and separate from home', 
 });
 
 
-test('phase 4B home remains one lifecycle workspace without pulse, rail, or governance panels', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="PHASE_4B"'), true);
+test('phase 4C home remains one lifecycle workspace without pulse, rail, or governance panels', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="PHASE_4C"'), true);
   assert.equal(pageSource.includes('command-center-map-shell'), true);
   assert.equal(pageSource.includes('command-center-map-toolbar'), true);
   assert.equal(pageSource.includes('command-center-flow-dock'), true);
@@ -72,7 +72,7 @@ test('phase 4B home remains one lifecycle workspace without pulse, rail, or gove
 });
 
 
-test('phase 4B Canvas stays draw-only while DOM owns drill-down and focus is independent', () => {
+test('phase 4C Canvas stays draw-only while DOM owns drill-down and focus is independent', () => {
   assert.equal(pageSource.includes('<canvas'), false);
   assert.equal(pageSource.includes('<CommandCenterCanvas'), true);
   assert.equal(pageSource.includes('WebSocket'), false);
@@ -80,12 +80,15 @@ test('phase 4B Canvas stays draw-only while DOM owns drill-down and focus is ind
   assert.equal(topologySource.includes('<canvas'), false);
   assert.equal(topologySource.includes('requestAnimationFrame'), false);
   assert.equal((canvasSource.match(/<canvas/g) || []).length, 1);
-  assert.equal(canvasSource.includes('data-command-center-canvas-phase="PHASE_4B"'), true);
+  assert.equal(canvasSource.includes('data-command-center-canvas-phase="PHASE_4C"'), true);
   assert.equal(canvasSource.includes('prefers-reduced-motion: reduce'), true);
   assert.equal(canvasSource.includes('max-width: 700px'), true);
   assert.equal(topologySource.includes('data-command-center-canvas-fallback'), true);
   assert.equal(topologySource.includes('data-command-center-dom-overlay="true"'), true);
   assert.equal(topologySource.includes('command-center-flow-node-overlay'), true);
+  assert.equal(topologySource.includes("aria-current={focused ? 'step' : undefined}"), true);
+  assert.equal(topologySource.includes("event.key !== 'Enter' && event.key !== ' '"), true);
+  assert.equal(topologySource.includes('event.preventDefault()'), true);
   assert.equal(topologySource.includes("onActivateNode?.(column.key)"), true);
   assert.equal(canvasSource.includes('}, [shouldMountCanvas])'), true);
   assert.equal(canvasSource.includes('controllerRef.current?.setFocus'), true);
@@ -141,6 +144,8 @@ test('Task Flow toolbar, focused map stage, Flow Dock, and AppFrame drawers shar
   assert.equal(pageSource.includes('selectedFlow.providerModelLabel'), true);
   assert.equal(pageSource.includes('openJobQueue'), true);
   assert.equal(pageSource.includes('openFailureNotifications'), true);
+  assert.equal((pageSource.match(/aria-haspopup="dialog"/g) || []).length, 2);
+  assert.equal((pageSource.match(/aria-expanded=/g) || []).length, 2);
   assert.equal(focusSource.includes('taskId: selectedFlow.taskId'), true);
   assert.equal(topologySource.includes('selectedFlow?.columnKey === column.key'), true);
 });
@@ -162,6 +167,8 @@ test('phase 4 palette provides WCAG AA body-text contrast on map and node surfac
     assert.ok(contrastRatio(colors.secondary, surface) >= 4.5);
   }
   assert.equal(styleSource.includes('@keyframes'), false);
+  assert.equal(styleSource.includes('.command-center-page button:focus-visible'), true);
+  assert.equal(styleSource.includes('outline: 3px solid var(--cc-cyan)'), true);
 });
 
 

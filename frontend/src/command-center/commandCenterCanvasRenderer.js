@@ -512,6 +512,7 @@ class CommandCenterCanvasController {
       },
       isAnimationEnabled: () => this.shouldAnimate(),
       getAnimationFrameInterval: () => this.resolveAnimationFrameInterval(),
+      onStateChange: () => this.updateDiagnosticAttributes(),
       onFailure: this.handleRuntimeFailure
     });
     this.updateDiagnosticAttributes();
