@@ -136,6 +136,46 @@ class AgentSnapshot(FlowEngineSnapshot):
     queue_metrics: AgentQueueSnapshot = Field(alias="queueMetrics")
 
 
+class ReviewLaneItemSnapshot(CommandCenterSchema):
+    job_id: int = Field(alias="jobId")
+    task_id: int = Field(alias="taskId")
+    review_key: str = Field(alias="reviewKey")
+    project_id: int | None = Field(default=None, alias="projectId")
+    project_name: str = Field(alias="projectName")
+    display_name: str = Field(alias="displayName")
+    requested_engine: str = Field(alias="requestedEngine")
+    effective_engine: str = Field(alias="effectiveEngine")
+    fallback: bool
+    status: Literal["QUEUED", "RUNNING"]
+    stage: str
+    provider: str | None = None
+    model: str | None = None
+    worker_id: str | None = Field(default=None, alias="workerId")
+    queued_at: datetime | None = Field(default=None, alias="queuedAt")
+    started_at: datetime | None = Field(default=None, alias="startedAt")
+    duration_seconds: int | None = Field(default=None, alias="durationSeconds")
+
+
+class ReviewLaneSnapshot(CommandCenterSchema):
+    zone_key: Literal["standard", "agent"] = Field(alias="zoneKey")
+    engine: Literal["STANDARD", "AGENT"]
+    capacity: int
+    running_count: int = Field(alias="runningCount")
+    queued_count: int = Field(alias="queuedCount")
+    utilization_percent: int = Field(alias="utilizationPercent")
+    running_items: list[ReviewLaneItemSnapshot] = Field(alias="runningItems")
+    next_queued: ReviewLaneItemSnapshot | None = Field(default=None, alias="nextQueued")
+    running_items_truncated: bool = Field(alias="runningItemsTruncated")
+    queue_order: Literal["PROVIDER_PRIORITY_FIFO", "AGENT_PRIORITY_FIFO"] = Field(
+        alias="queueOrder"
+    )
+
+
+class ReviewLanesSnapshot(CommandCenterSchema):
+    standard: ReviewLaneSnapshot
+    agent: ReviewLaneSnapshot
+
+
 class ProviderSnapshot(CommandCenterSchema):
     provider_code: str = Field(alias="providerCode")
     provider_name: str = Field(alias="providerName")
@@ -169,8 +209,8 @@ class AlertSnapshot(CommandCenterSchema):
 
 
 class RuntimeSnapshot(CommandCenterSchema):
-    schema_version: Literal["command-center-runtime-v1"] = Field(
-        default="command-center-runtime-v1",
+    schema_version: Literal["command-center-runtime-v2"] = Field(
+        default="command-center-runtime-v2",
         alias="schemaVersion",
     )
     generated_at: datetime = Field(alias="generatedAt")
@@ -181,6 +221,7 @@ class RuntimeSnapshot(CommandCenterSchema):
     scheduler: SchedulerSnapshot
     standard: FlowEngineSnapshot
     agent: AgentSnapshot
+    review_lanes: ReviewLanesSnapshot = Field(alias="reviewLanes")
     providers_observed: list[ProviderSnapshot] = Field(alias="providersObserved")
     alerts: list[AlertSnapshot]
     coverage: SnapshotCoverage

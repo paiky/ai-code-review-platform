@@ -60,6 +60,7 @@ from app.code_quality.repository import (
     update_provider,
     update_settings_record,
 )
+from app.code_quality.scheduler_config import PROVIDER_SCHEDULER_CAPACITY
 from app.core.database import SessionLocal
 from app.core.errors import AppError
 from app.core.json_utils import read_json, utc_now
@@ -95,7 +96,7 @@ REVIEW_JOB_PRIORITY = 10
 FIX_PREVIEW_JOB_PRIORITY = 50
 REFINEMENT_ALLOWED_SEVERITIES = {"CRITICAL", "MAJOR", "HIGH"}
 REFINEMENT_ALLOWED_CONTEXT_STATUSES = {"PARTIAL", "INSUFFICIENT"}
-SCHEDULER_MAX_WORKERS = 10
+SCHEDULER_MAX_WORKERS = PROVIDER_SCHEDULER_CAPACITY
 
 
 class _ProviderJobScheduler:

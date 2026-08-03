@@ -13,7 +13,7 @@ import {
 const NOW = Date.parse('2026-07-31T02:00:10Z');
 
 
-test('runtime v1 model normalizes stable flow ids and bounded collections', () => {
+test('runtime v2 model normalizes stable flow ids and bounded collections', () => {
   const runtime = normalizeRuntimeSnapshot({
     schemaVersion: RUNTIME_SCHEMA_VERSION,
     generatedAt: '2026-07-31T02:00:00Z',
@@ -61,7 +61,7 @@ test('runtime v1 model normalizes stable flow ids and bounded collections', () =
 
 test('runtime model safely handles damaged payload and unknown enums', () => {
   const runtime = normalizeRuntimeSnapshot({
-    schemaVersion: 'command-center-runtime-v2',
+    schemaVersion: 'command-center-runtime-v3',
     generatedAt: 'broken',
     activeFlows: [{
       taskId: 9,
@@ -83,6 +83,77 @@ test('runtime model safely handles damaged payload and unknown enums', () => {
   assert.equal(runtime.activeFlows[0].id, '9:future');
   assert.equal(runtime.providersObserved[0].status, 'NO_RECENT_DATA');
   assert.equal(runtime.alerts[0].navigationTarget, null);
+});
+
+
+test('runtime v2 preserves truthful lane items and engine-specific next review', () => {
+  const runtime = normalizeRuntimeSnapshot({
+    schemaVersion: RUNTIME_SCHEMA_VERSION,
+    generatedAt: '2026-07-31T02:00:00Z',
+    reviewLanes: {
+      standard: {
+        zoneKey: 'standard',
+        capacity: 10,
+        runningCount: 2,
+        queuedCount: 4,
+        utilizationPercent: 20,
+        runningItems: [{
+          jobId: 1,
+          taskId: 41,
+          reviewKey: 'fallback-main',
+          projectName: 'paycenter',
+          displayName: 'Fallback Review',
+          requestedEngine: 'AGENT',
+          effectiveEngine: 'STANDARD_FALLBACK',
+          fallback: true,
+          status: 'RUNNING',
+          stage: 'FALLBACK'
+        }],
+        nextQueued: { jobId: 2, taskId: 42, reviewKey: 'next-standard' },
+        runningItemsTruncated: false,
+        queueOrder: 'priority ASC, queuedAt ASC, id ASC'
+      },
+      agent: {
+        zoneKey: 'agent',
+        capacity: 3,
+        runningCount: 1,
+        queuedCount: 2,
+        utilizationPercent: 33,
+        runningItems: [],
+        nextQueued: { jobId: 3, taskId: 43, reviewKey: 'next-agent', workerId: null },
+        queueOrder: 'priority DESC, queuedAt ASC, id ASC'
+      }
+    }
+  }, { now: NOW });
+
+  assert.equal(runtime.reviewLanes.standard.capacity, 10);
+  assert.equal(runtime.reviewLanes.standard.runningItems[0].fallback, true);
+  assert.equal(runtime.reviewLanes.standard.nextQueued.reviewKey, 'next-standard');
+  assert.equal(runtime.reviewLanes.agent.nextQueued.reviewKey, 'next-agent');
+  assert.equal(runtime.reviewLanes.agent.capacity, 3);
+});
+
+
+test('runtime v1 fallback never invents a next review from active flow order', () => {
+  const runtime = normalizeRuntimeSnapshot({
+    schemaVersion: 'command-center-runtime-v1',
+    generatedAt: '2026-07-31T02:00:00Z',
+    scheduler: { runningJobCount: 3, queuedJobCount: 5 },
+    activeFlows: [{
+      taskId: 9,
+      reviewKey: 'latest-updated',
+      requestedEngine: 'STANDARD',
+      status: 'RUNNING',
+      stage: 'MODEL_CALLING'
+    }],
+    agent: { queueMetrics: { running: 1, queued: 2, onlineCapacity: 2 } }
+  }, { now: NOW });
+
+  assert.equal(runtime.schemaCompatible, true);
+  assert.equal(runtime.reviewLanes.standard.runningCount, 2);
+  assert.equal(runtime.reviewLanes.standard.queuedCount, 3);
+  assert.equal(runtime.reviewLanes.standard.nextQueued, null);
+  assert.equal(runtime.reviewLanes.agent.nextQueued, null);
 });
 
 

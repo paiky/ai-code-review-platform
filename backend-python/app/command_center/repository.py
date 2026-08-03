@@ -34,6 +34,7 @@ FAILED_AGENT_STATUSES = ("FAILED", "TIMED_OUT")
 TERMINAL_FAILURE_STATUSES = ("FAILED",)
 FINDING_SCAN_LIMIT = 2000
 WORKER_LIMIT = 100
+LANE_RUNNING_ITEM_LIMIT = 100
 MYSQL_ALERT_UNION_COLLATION = "utf8mb4_unicode_ci"
 
 
@@ -64,6 +65,9 @@ class RuntimeProjectionData:
     agent_settings: dict[str, Any] | None
     providers: list[dict[str, Any]]
     alerts: list[dict[str, Any]]
+    lane_running_jobs: list[dict[str, Any]]
+    standard_next_queued_job: dict[str, Any] | None
+    agent_next_queued_job: dict[str, Any] | None
     candidate_task_count: int
     selected_task_count: int
 
@@ -228,6 +232,23 @@ def load_runtime_projection(
         project_id=project_id,
         group_id=group_id,
     )
+    lane_running_jobs = _load_lane_running_jobs(
+        db,
+        project_id=project_id,
+        group_id=group_id,
+    )
+    standard_next_queued_job = _load_next_lane_job(
+        db,
+        job_type="AI_REVIEW",
+        project_id=project_id,
+        group_id=group_id,
+    )
+    agent_next_queued_job = _load_next_lane_job(
+        db,
+        job_type="AGENT_REVIEW",
+        project_id=project_id,
+        group_id=group_id,
+    )
 
     return RuntimeProjectionData(
         counts=counts,
@@ -243,8 +264,99 @@ def load_runtime_projection(
         agent_settings=agent_settings,
         providers=providers,
         alerts=alerts,
+        lane_running_jobs=lane_running_jobs,
+        standard_next_queued_job=standard_next_queued_job,
+        agent_next_queued_job=agent_next_queued_job,
         candidate_task_count=candidate_task_count,
         selected_task_count=len(selected_task_ids),
+    )
+
+
+def _lane_job_statement() -> Select:
+    review_key = func.coalesce(CodeQualitySchedulerJob.review_key, "default")
+    return (
+        select(
+            CodeQualitySchedulerJob.id.label("job_id"),
+            CodeQualitySchedulerJob.job_type.label("job_type"),
+            CodeQualitySchedulerJob.task_id.label("task_id"),
+            CodeQualitySchedulerJob.review_key.label("review_key"),
+            CodeQualitySchedulerJob.project_id.label("project_id"),
+            CodeQualitySchedulerJob.status.label("status"),
+            CodeQualitySchedulerJob.priority.label("priority"),
+            CodeQualitySchedulerJob.queued_at.label("queued_at"),
+            CodeQualitySchedulerJob.started_at.label("started_at"),
+            Project.name.label("project_name"),
+            AiReviewResult.display_name.label("display_name"),
+            AiReviewResult.provider.label("provider_code"),
+            AiReviewResult.model.label("model"),
+            AiReviewResult.requested_engine.label("result_requested_engine"),
+            AiReviewResult.effective_engine.label("result_effective_engine"),
+        )
+        .join(Project, Project.id == CodeQualitySchedulerJob.project_id)
+        .outerjoin(
+            AiReviewResult,
+            and_(
+                AiReviewResult.task_id == CodeQualitySchedulerJob.task_id,
+                AiReviewResult.review_key == review_key,
+            ),
+        )
+    )
+
+
+def _load_lane_running_jobs(
+    db: Session,
+    *,
+    project_id: int | None,
+    group_id: int | None,
+) -> list[dict[str, Any]]:
+    statement = _lane_job_statement().where(
+        CodeQualitySchedulerJob.job_type.in_(REVIEW_JOB_TYPES),
+        CodeQualitySchedulerJob.status == "RUNNING",
+    )
+    statement = _apply_project_filters(
+        statement,
+        CodeQualitySchedulerJob.project_id,
+        project_id=project_id,
+        group_id=group_id,
+    )
+    return _rows(
+        db,
+        statement.order_by(
+            CodeQualitySchedulerJob.started_at.asc(),
+            CodeQualitySchedulerJob.id.asc(),
+        ).limit(LANE_RUNNING_ITEM_LIMIT),
+    )
+
+
+def _load_next_lane_job(
+    db: Session,
+    *,
+    job_type: str,
+    project_id: int | None,
+    group_id: int | None,
+) -> dict[str, Any] | None:
+    statement = _lane_job_statement().where(
+        CodeQualitySchedulerJob.job_type == job_type,
+        CodeQualitySchedulerJob.status == "QUEUED",
+    )
+    statement = _apply_project_filters(
+        statement,
+        CodeQualitySchedulerJob.project_id,
+        project_id=project_id,
+        group_id=group_id,
+    )
+    priority_order = (
+        CodeQualitySchedulerJob.priority.desc()
+        if job_type == "AGENT_REVIEW"
+        else CodeQualitySchedulerJob.priority.asc()
+    )
+    return _row(
+        db,
+        statement.order_by(
+            priority_order,
+            CodeQualitySchedulerJob.queued_at.asc(),
+            CodeQualitySchedulerJob.id.asc(),
+        ).limit(1),
     )
 
 

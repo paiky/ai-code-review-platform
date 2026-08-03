@@ -1,4 +1,5 @@
-export const RUNTIME_SCHEMA_VERSION = 'command-center-runtime-v1';
+export const RUNTIME_SCHEMA_VERSION = 'command-center-runtime-v2';
+export const LEGACY_RUNTIME_SCHEMA_VERSION = 'command-center-runtime-v1';
 export const GOVERNANCE_SCHEMA_VERSION = 'command-center-governance-v1';
 export const RUNTIME_STALE_MS = 15_000;
 export const GOVERNANCE_STALE_MS = 180_000;
@@ -59,10 +60,16 @@ export function normalizeRuntimeSnapshot(input, { now = Date.now() } = {}) {
   const activeFlows = safeArray(raw.activeFlows)
     .slice(0, COMMAND_CENTER_LIMITS.activeFlows)
     .map(normalizeFlow);
+  const reviewLanes = normalizeReviewLanes(raw.reviewLanes, {
+    activeFlows,
+    scheduler: raw.scheduler,
+    agent: raw.agent
+  });
 
   return {
     schemaVersion: safeText(raw.schemaVersion, RUNTIME_SCHEMA_VERSION),
-    schemaCompatible: raw.schemaVersion === RUNTIME_SCHEMA_VERSION,
+    schemaCompatible: [RUNTIME_SCHEMA_VERSION, LEGACY_RUNTIME_SCHEMA_VERSION]
+      .includes(raw.schemaVersion),
     generatedAt,
     freshness: snapshotFreshness(generatedAt, RUNTIME_STALE_MS, now),
     window: normalizeWindow(raw.window),
@@ -72,6 +79,7 @@ export function normalizeRuntimeSnapshot(input, { now = Date.now() } = {}) {
     },
     activeTasks,
     activeFlows,
+    reviewLanes,
     scheduler: {
       activeJobCount: safeCount(raw.scheduler?.activeJobCount),
       queuedJobCount: safeCount(raw.scheduler?.queuedJobCount),
@@ -90,6 +98,93 @@ export function normalizeRuntimeSnapshot(input, { now = Date.now() } = {}) {
       .slice(0, COMMAND_CENTER_LIMITS.alerts)
       .map(normalizeAlert),
     coverage: normalizeCoverage(raw.coverage)
+  };
+}
+
+
+function normalizeReviewLanes(value, context) {
+  const raw = isRecord(value) ? value : {};
+  if (isRecord(raw.standard) || isRecord(raw.agent)) {
+    return {
+      standard: normalizeReviewLane(raw.standard, 'standard', 'STANDARD'),
+      agent: normalizeReviewLane(raw.agent, 'agent', 'AGENT')
+    };
+  }
+
+  const activeFlows = context.activeFlows || [];
+  const standardFlowCount = activeFlows.filter(
+    flow => flow.status === 'RUNNING' && (flow.requestedEngine !== 'AGENT' || flow.fallback)
+  ).length;
+  const agentFlowCount = activeFlows.filter(
+    flow => flow.status === 'RUNNING' && flow.requestedEngine === 'AGENT' && !flow.fallback
+  ).length;
+  const schedulerRunning = safeCount(context.scheduler?.runningJobCount);
+  const schedulerQueued = safeCount(context.scheduler?.queuedJobCount);
+  const agentRunning = safeCount(context.agent?.queueMetrics?.running);
+  const agentQueued = safeCount(context.agent?.queueMetrics?.queued);
+  return {
+    standard: normalizeReviewLane({
+      zoneKey: 'standard',
+      capacity: 0,
+      runningCount: Math.max(standardFlowCount, schedulerRunning - agentRunning),
+      queuedCount: Math.max(0, schedulerQueued - agentQueued),
+      runningItems: [],
+      queueOrder: null
+    }, 'standard', 'STANDARD'),
+    agent: normalizeReviewLane({
+      zoneKey: 'agent',
+      capacity: context.agent?.queueMetrics?.onlineCapacity,
+      runningCount: Math.max(agentFlowCount, agentRunning),
+      queuedCount: agentQueued,
+      runningItems: [],
+      queueOrder: null
+    }, 'agent', 'AGENT')
+  };
+}
+
+
+function normalizeReviewLane(value, zoneKey, engine) {
+  const raw = isRecord(value) ? value : {};
+  const capacity = safeCount(raw.capacity);
+  const runningCount = safeCount(raw.runningCount);
+  return {
+    zoneKey: safeText(raw.zoneKey, zoneKey),
+    engine,
+    capacity,
+    runningCount,
+    queuedCount: safeCount(raw.queuedCount),
+    utilizationPercent: capacity > 0
+      ? Math.min(safeCount(raw.utilizationPercent), 100)
+      : 0,
+    runningItems: safeArray(raw.runningItems)
+      .slice(0, 100)
+      .map(normalizeReviewLaneItem),
+    nextQueued: isRecord(raw.nextQueued) ? normalizeReviewLaneItem(raw.nextQueued) : null,
+    runningItemsTruncated: Boolean(raw.runningItemsTruncated),
+    queueOrder: safeNullableText(raw.queueOrder)
+  };
+}
+
+
+function normalizeReviewLaneItem(value) {
+  const raw = isRecord(value) ? value : {};
+  return {
+    jobId: safeCount(raw.jobId),
+    taskId: safeCount(raw.taskId),
+    reviewKey: safeText(raw.reviewKey, 'default'),
+    projectName: safeText(raw.projectName, '未知项目'),
+    displayName: safeText(raw.displayName, safeText(raw.reviewKey, 'default')),
+    requestedEngine: safeEnum(raw.requestedEngine, 'STANDARD'),
+    effectiveEngine: safeEnum(raw.effectiveEngine, 'STANDARD'),
+    fallback: Boolean(raw.fallback),
+    status: safeEnum(raw.status, 'QUEUED'),
+    stage: safeEnum(raw.stage, 'QUEUED'),
+    provider: safeNullableText(raw.provider),
+    model: safeNullableText(raw.model),
+    workerId: safeNullableText(raw.workerId),
+    queuedAt: safeIso(raw.queuedAt),
+    startedAt: safeIso(raw.startedAt),
+    durationSeconds: safeNullableCount(raw.durationSeconds)
   };
 }
 

@@ -1,17 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Select } from 'antd';
+import { Modal } from 'antd';
 import { useNavigate } from 'react-router-dom';
 
-import { useAppFrameOperations } from '../appFrameOperations.js';
 import CommandCenterCanvas from './CommandCenterCanvas.jsx';
-import {
-  EMPTY_COMMAND_CENTER_FOCUS,
-  flowsForCommandCenterTask,
-  reconcileCommandCenterFocus,
-  resolveLifecycleNavigationTarget,
-  selectCommandCenterFlow,
-  selectCommandCenterTask
-} from './commandCenterFocus.js';
 import { buildCommandCenterPresentation } from './commandCenterPresentation.js';
 import { useCommandCenterRuntimeSnapshot } from './useCommandCenterSnapshots.js';
 import './commandCenter.css';
@@ -19,197 +10,123 @@ import './commandCenter.css';
 
 export default function CommandCenterPage() {
   const navigate = useNavigate();
-  const frameOperations = useAppFrameOperations();
-  const [focus, setFocus] = useState(EMPTY_COMMAND_CENTER_FOCUS);
-  const {
-    runtime,
-    runtimeLoading,
-    runtimeError,
-    reload
-  } = useCommandCenterRuntimeSnapshot();
-  const presentation = useMemo(
-    () => buildCommandCenterPresentation({ runtime }),
-    [runtime]
-  );
-  const tasks = presentation.topology.activeTasks;
-  const flows = presentation.topology.flows;
-  const visibleFlows = useMemo(
-    () => flowsForCommandCenterTask(flows, focus.taskId),
-    [flows, focus.taskId]
-  );
-  const selectedTask = tasks.find(task => task.taskId === focus.taskId) || null;
-  const selectedFlow = flows.find(flow => flow.id === focus.flowId) || null;
-
-  useEffect(() => {
-    setFocus(current => {
-      const next = reconcileCommandCenterFocus(runtime, current);
-      return next.taskId === current.taskId && next.flowId === current.flowId
-        ? current
-        : next;
-    });
-  }, [runtime]);
-
-  const selectTask = useCallback(taskId => {
-    setFocus(selectCommandCenterTask(taskId));
-  }, []);
-  const selectFlow = useCallback(flowId => {
-    const flow = flows.find(candidate => candidate.id === flowId);
-    setFocus(flow ? selectCommandCenterFlow(flow) : EMPTY_COMMAND_CENTER_FOCUS);
-  }, [flows]);
-  const clearFocus = useCallback(() => {
-    setFocus(EMPTY_COMMAND_CENTER_FOCUS);
-  }, []);
-  const activateLifecycleNode = useCallback(columnKey => {
-    navigate(resolveLifecycleNavigationTarget(columnKey, focus));
-  }, [focus, navigate]);
-
+  const [overflowLane, setOverflowLane] = useState(null);
+  const visibleLimit = useRunningItemLimit();
+  const { runtime, runtimeLoading, runtimeError, reload } = useCommandCenterRuntimeSnapshot();
+  const presentation = useMemo(() => buildCommandCenterPresentation({ runtime }), [runtime]);
+  const openReview = useCallback(item => {
+    const reviewKey = encodeURIComponent(item.reviewKey || 'default');
+    navigate(`/tasks/${item.taskId}?reviewKey=${reviewKey}`);
+  }, [navigate]);
   const freshness = runtime?.freshness || (runtimeLoading ? 'LOADING' : 'EMPTY');
-  const generatedAt = formatSnapshotTime(runtime?.generatedAt);
 
   return (
-    <main
-      className="command-center-page"
-      data-command-center-phase="PHASE_4C"
-      data-command-center-focus-task={focus.taskId || undefined}
-      data-command-center-focus-flow={focus.flowId || undefined}
-    >
+    <main className="command-center-page" data-command-center-phase="PHASE_5A">
       <section className="command-center-map-shell" aria-labelledby="command-center-title">
         <header className="command-center-map-toolbar">
           <div className="command-center-map-identity">
             <span className="command-center-kicker">AI REVIEW COMMAND CENTER</span>
-            <h1 id="command-center-title">Review 生命周期地图</h1>
+            <h1 id="command-center-title">平台 Review 运行地图</h1>
           </div>
-
           <div className="command-center-snapshot-state" aria-live="polite">
             <span className={`command-center-status-dot is-${freshness.toLowerCase()}`} aria-hidden="true" />
             <span>
               <strong>{freshnessLabel(freshness)}</strong>
-              <small>{generatedAt}</small>
+              <small>{formatSnapshotTime(runtime?.generatedAt)}</small>
             </span>
           </div>
-
-          <div className="command-center-focus-controls" aria-label="Task 与 Review Flow 聚焦">
-            <Select
-              className="command-center-select command-center-task-select"
-              aria-label="选择活跃 Task"
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="全部 Task"
-              value={focus.taskId || undefined}
-              options={tasks.map(task => ({
-                value: task.taskId,
-                label: `#${task.taskId} · ${task.projectName}`
-              }))}
-              onChange={value => value ? selectTask(value) : clearFocus()}
-              notFoundContent="当前无活跃 Task"
+          <HudMetric label="平台负载" value={`${presentation.hud.utilizationPercent}%`} detail={`${presentation.hud.totalRunning}/${presentation.hud.totalCapacity || '—'}`} />
+          <HudMetric label="运行中" value={presentation.hud.totalRunning} detail="Standard + Agent" />
+          <HudMetric label="前方等待" value={presentation.hud.totalQueued} detail="双路线合计" token="queue" />
+          {presentation.map.lanes.map(lane => (
+            <HudMetric
+              key={lane.zoneKey}
+              label={lane.zoneKey === 'agent' ? 'Agent 占用' : 'Standard 占用'}
+              value={`${lane.utilizationPercent}%`}
+              detail={`${lane.runningCount}/${lane.capacity || '—'}`}
+              token={lane.colorToken}
             />
-            <Select
-              className="command-center-select command-center-flow-select"
-              aria-label="选择具体 Review Flow"
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder={selectedTask ? '该 Task 的 Flow' : '全部 Review Flow'}
-              value={focus.flowId || undefined}
-              options={visibleFlows.map(flow => ({
-                value: flow.id,
-                label: `${flow.reviewKey} · ${flow.engineKind} · ${flow.stageLabel}`
-              }))}
-              onChange={value => value ? selectFlow(value) : setFocus(current => ({
-                taskId: current.taskId,
-                flowId: null
-              }))}
-              notFoundContent={selectedTask ? '该 Task 当前无活跃 Flow' : '当前无活跃 Review Flow'}
-            />
-          </div>
-
-          <div className="command-center-toolbar-actions" aria-label="Command Center 操作">
-            {(selectedTask || selectedFlow) && (
-              <button type="button" className="is-quiet" onClick={clearFocus}>清除聚焦</button>
-            )}
-            <button type="button" onClick={reload} disabled={runtimeLoading}>
-              {runtimeLoading ? '刷新中' : '刷新'}
-            </button>
-            <button
-              type="button"
-              aria-haspopup="dialog"
-              aria-expanded={Boolean(frameOperations?.jobQueueOpen)}
-              onClick={frameOperations?.openJobQueue}
-            >
-              Queue <span>{frameOperations?.jobQueue?.activeCount ?? 0}</span>
-            </button>
-            <button
-              type="button"
-              className={(frameOperations?.failureNotifications?.failureCount ?? 0) > 0 ? 'is-danger' : ''}
-              aria-haspopup="dialog"
-              aria-expanded={Boolean(frameOperations?.failureNotificationsOpen)}
-              onClick={frameOperations?.openFailureNotifications}
-            >
-              Failure <span>{frameOperations?.failureNotifications?.failureCount ?? 0}</span>
-            </button>
-          </div>
+          ))}
+          <button type="button" className="command-center-refresh" onClick={reload} disabled={runtimeLoading}>
+            {runtimeLoading ? '刷新中' : '刷新 Runtime'}
+          </button>
         </header>
 
         {runtimeError && (
           <div className="command-center-runtime-error" role="alert">
             <strong>Runtime 快照暂不可用</strong>
-            <span>{runtimeError}。页面保留最后一次成功快照。</span>
+            <span>{runtimeError}。地图保留最后一次成功快照。</span>
           </div>
         )}
 
         <CommandCenterCanvas
-          topology={presentation.topology}
-          focus={focus}
-          onActivateNode={activateLifecycleNode}
+          map={presentation.map}
+          visibleLimit={visibleLimit}
+          onOpenReview={openReview}
+          onOpenOverflow={setOverflowLane}
         />
-
-        <footer className="command-center-flow-dock" aria-label="当前 Review Flow">
-          <div className="command-center-engine-legend" aria-label="Review Flow 类型图例">
-            <EngineLegend label="Standard" value={presentation.topology.standardFlowCount} token="standard" />
-            <EngineLegend label="Agent" value={presentation.topology.agentFlowCount} token="agent" />
-            <EngineLegend label="Fallback" value={presentation.topology.fallbackFlowCount} token="fallback" />
-          </div>
-
-          {selectedFlow ? (
-            <div className="command-center-selected-flow" aria-live="polite">
-              <span className={`command-center-flow-state is-${selectedFlow.stateToken}`}>
-                {flowStateLabel(selectedFlow)}
-              </span>
-              <div>
-                <small>REVIEW FLOW · TASK #{selectedFlow.taskId}</small>
-                <strong>{selectedFlow.reviewKey}</strong>
-              </div>
-              <dl>
-                <div><dt>Engine</dt><dd>{selectedFlow.engineKind}</dd></div>
-                <div><dt>Stage</dt><dd>{selectedFlow.stageLabel}</dd></div>
-                <div><dt>Provider</dt><dd>{selectedFlow.providerModelLabel}</dd></div>
-              </dl>
-              <button type="button" onClick={() => navigate(`/tasks/${selectedFlow.taskId}`)}>
-                查看任务详情
-              </button>
-            </div>
-          ) : (
-            <div className="command-center-flow-dock-empty">
-              <strong>{runtimeLoading ? '正在读取 Runtime 快照' : '选择 Task / Flow 聚焦真实执行路径'}</strong>
-              <span>地图只呈现真实运行数据；空闲态不会生成模拟任务或业务状态。</span>
-            </div>
-          )}
-        </footer>
       </section>
+
+      <Modal
+        title={overflowLane ? `${overflowLane.title} · 全部运行 Review` : '运行 Review'}
+        open={Boolean(overflowLane)}
+        footer={null}
+        width={720}
+        onCancel={() => setOverflowLane(null)}
+        destroyOnHidden
+      >
+        {overflowLane?.runningItemsTruncated && (
+          <p className="command-center-modal-notice">当前列表为 Runtime 快照的有界结果。</p>
+        )}
+        <div className="command-center-modal-list">
+          {(overflowLane?.runningItems || []).map(item => (
+            <button
+              type="button"
+              key={`${item.jobId}:${item.taskId}:${item.reviewKey}`}
+              onClick={() => openReview(item)}
+            >
+              <span className={`command-center-modal-token is-${item.engineToken}`} aria-hidden="true" />
+              <span>
+                <strong>{item.projectName}</strong>
+                <small>{item.displayName} · {item.providerModelLabel}</small>
+              </span>
+              <em>{item.stageLabel}</em>
+            </button>
+          ))}
+        </div>
+      </Modal>
     </main>
   );
 }
 
 
-function EngineLegend({ label, value, token }) {
+function HudMetric({ label, value, detail, token = 'neutral' }) {
   return (
-    <div className={`command-center-legend-item is-${token}`}>
-      <span aria-hidden="true" />
-      <strong>{label}</strong>
-      <small>{value}</small>
+    <div className={`command-center-hud-metric is-${token}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
     </div>
   );
+}
+
+
+function useRunningItemLimit() {
+  const [limit, setLimit] = useState(readRunningItemLimit);
+  useEffect(() => {
+    const update = () => setLimit(readRunningItemLimit());
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+  return limit;
+}
+
+
+function readRunningItemLimit() {
+  if (typeof window === 'undefined') return 6;
+  if (window.innerWidth <= 700) return 2;
+  if (window.innerWidth <= 1100) return 4;
+  return 6;
 }
 
 
@@ -220,17 +137,6 @@ function freshnessLabel(value) {
     LOADING: 'Runtime 连接中',
     EMPTY: 'Runtime 暂无数据'
   }[value] || 'Runtime 状态未知';
-}
-
-
-function flowStateLabel(flow) {
-  return {
-    danger: 'FAILED',
-    warning: flow.fallback ? 'FALLBACK' : 'STALE',
-    queued: 'QUEUED',
-    active: 'RUNNING',
-    success: 'COMPLETED'
-  }[flow.stateToken] || String(flow.status || 'UNKNOWN');
 }
 
 

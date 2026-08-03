@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.command_center.repository import (
     FINDING_SCAN_LIMIT,
+    LANE_RUNNING_ITEM_LIMIT,
     WORKER_LIMIT,
     GovernanceProjectionData,
     RuntimeProjectionData,
@@ -31,6 +32,9 @@ from app.command_center.schemas import (
     PolicySnapshot,
     PreflightSnapshot,
     ProviderSnapshot,
+    ReviewLaneItemSnapshot,
+    ReviewLanesSnapshot,
+    ReviewLaneSnapshot,
     RuleAnalysisSnapshot,
     RuntimeSnapshot,
     SampleGateSnapshot,
@@ -40,6 +44,7 @@ from app.command_center.schemas import (
     WorkerPoolSnapshot,
     WorkerSnapshot,
 )
+from app.code_quality.scheduler_config import PROVIDER_SCHEDULER_CAPACITY
 
 
 RUNTIME_COVERAGE = {
@@ -49,6 +54,7 @@ RUNTIME_COVERAGE = {
     "scheduler": "FULL",
     "standard": "BOUNDED",
     "agent": "BOUNDED",
+    "reviewLanes": "BOUNDED",
     "providersObserved": "FULL",
     "alerts": "BOUNDED",
 }
@@ -249,6 +255,38 @@ def build_runtime_snapshot(
     agent_flows = [
         flow for flow in active_flows if flow.requested_engine == "AGENT"
     ]
+    flow_lookup = {flow.id: flow for flow in active_flows}
+    worker_by_job_id = {
+        int(row["active_job_id"]): row.get("worker_id")
+        for row in data.workers
+        if row.get("active_job_id") is not None
+    }
+    lane_running_items = [
+        _build_review_lane_item(
+            row,
+            flow_lookup=flow_lookup,
+            worker_by_job_id=worker_by_job_id,
+            now=database_now,
+        )
+        for row in data.lane_running_jobs
+    ]
+    standard_running_items = [
+        item for item in lane_running_items if item.status == "RUNNING"
+        and _lane_engine(item) == "STANDARD"
+    ]
+    agent_running_items = [
+        item for item in lane_running_items if item.status == "RUNNING"
+        and _lane_engine(item) == "AGENT"
+    ]
+    standard_running_count = max(
+        data.counts.running_job_count - data.counts.agent_running_job_count,
+        0,
+    )
+    standard_queued_count = max(
+        data.counts.queued_job_count - data.counts.agent_queued_job_count,
+        0,
+    )
+    agent_capacity = agent_queue.online_capacity
 
     return RuntimeSnapshot(
         generatedAt=generated_at,
@@ -271,18 +309,77 @@ def build_runtime_snapshot(
             workerPool=worker_pool,
             queueMetrics=agent_queue,
         ),
+        reviewLanes=ReviewLanesSnapshot(
+            standard=ReviewLaneSnapshot(
+                zoneKey="standard",
+                engine="STANDARD",
+                capacity=PROVIDER_SCHEDULER_CAPACITY,
+                runningCount=standard_running_count,
+                queuedCount=standard_queued_count,
+                utilizationPercent=_utilization_percent(
+                    standard_running_count,
+                    PROVIDER_SCHEDULER_CAPACITY,
+                ),
+                runningItems=standard_running_items,
+                nextQueued=(
+                    _build_review_lane_item(
+                        data.standard_next_queued_job,
+                        flow_lookup=flow_lookup,
+                        worker_by_job_id=worker_by_job_id,
+                        now=database_now,
+                    )
+                    if data.standard_next_queued_job
+                    else None
+                ),
+                runningItemsTruncated=(
+                    standard_running_count
+                    > len(standard_running_items)
+                ),
+                queueOrder="PROVIDER_PRIORITY_FIFO",
+            ),
+            agent=ReviewLaneSnapshot(
+                zoneKey="agent",
+                engine="AGENT",
+                capacity=agent_capacity,
+                runningCount=data.counts.agent_running_job_count,
+                queuedCount=data.counts.agent_queued_job_count,
+                utilizationPercent=_utilization_percent(
+                    data.counts.agent_running_job_count,
+                    agent_capacity,
+                ),
+                runningItems=agent_running_items,
+                nextQueued=(
+                    _build_review_lane_item(
+                        data.agent_next_queued_job,
+                        flow_lookup=flow_lookup,
+                        worker_by_job_id=worker_by_job_id,
+                        now=database_now,
+                    )
+                    if data.agent_next_queued_job
+                    else None
+                ),
+                runningItemsTruncated=(
+                    data.counts.agent_running_job_count
+                    > len(agent_running_items)
+                ),
+                queueOrder="AGENT_PRIORITY_FIFO",
+            ),
+        ),
         providersObserved=providers,
         alerts=alerts,
         coverage=SnapshotCoverage(
             truncated=(
                 data.candidate_task_count > data.selected_task_count
                 or len(data.alerts) >= alert_limit
+                or standard_running_count > len(standard_running_items)
+                or data.counts.agent_running_job_count > len(agent_running_items)
             ),
             sections=RUNTIME_COVERAGE,
             limits={
                 "activeLimit": active_limit,
                 "alertLimit": alert_limit,
                 "workerLimit": WORKER_LIMIT,
+                "laneRunningItemLimit": LANE_RUNNING_ITEM_LIMIT,
             },
             filters={
                 "projectId": project_id,
@@ -292,10 +389,93 @@ def build_runtime_snapshot(
                 "candidateTasks": data.candidate_task_count,
                 "selectedTasks": data.selected_task_count,
                 "activeFlows": len(active_flows),
+                "laneRunningItems": len(lane_running_items),
                 "alerts": len(alerts),
             },
         ),
     )
+
+
+def _build_review_lane_item(
+    row: dict[str, Any],
+    *,
+    flow_lookup: dict[str, ActiveFlowSnapshot],
+    worker_by_job_id: dict[int, str | None],
+    now: datetime,
+) -> ReviewLaneItemSnapshot:
+    task_id = int(row["task_id"])
+    review_key = str(row.get("review_key") or DEFAULT_REVIEW_KEY)
+    job_type = str(row.get("job_type") or "AI_REVIEW").upper()
+    requested_engine = str(
+        row.get("result_requested_engine")
+        or ("AGENT" if job_type == "AGENT_REVIEW" else "STANDARD")
+    ).upper()
+    effective_engine = str(
+        row.get("result_effective_engine")
+        or requested_engine
+    ).upper()
+    fallback = (
+        requested_engine == "AGENT"
+        and effective_engine == "STANDARD_FALLBACK"
+    )
+    flow = flow_lookup.get(f"{task_id}:{review_key}")
+    status = str(row.get("status") or "QUEUED").upper()
+    stage = (
+        flow.stage
+        if flow is not None
+        else (
+            "QUEUED"
+            if status == "QUEUED"
+            else "AGENT_ANALYZING"
+            if job_type == "AGENT_REVIEW"
+            else "FALLBACK"
+            if fallback
+            else "MODEL_CALLING"
+        )
+    )
+    provider = row.get("provider_code")
+    if str(provider or "").upper() == "AGENT":
+        provider = None
+    return ReviewLaneItemSnapshot(
+        jobId=int(row["job_id"]),
+        taskId=task_id,
+        reviewKey=review_key,
+        projectId=_int_or_none(row.get("project_id")),
+        projectName=str(
+            row.get("project_name")
+            or f"Project {row.get('project_id') or '-'}"
+        ),
+        displayName=str(
+            row.get("display_name")
+            or ("Agent Review" if requested_engine == "AGENT" else review_key)
+        ),
+        requestedEngine=requested_engine,
+        effectiveEngine=effective_engine,
+        fallback=fallback,
+        status=status,
+        stage=stage,
+        provider=(str(provider) if provider else None),
+        model=row.get("model"),
+        workerId=(worker_by_job_id.get(int(row["job_id"])) if status == "RUNNING" else None),
+        queuedAt=row.get("queued_at"),
+        startedAt=row.get("started_at"),
+        durationSeconds=_duration_seconds(
+            row.get("started_at"),
+            None,
+            now=now,
+            duration_ms=None,
+        ),
+    )
+
+
+def _lane_engine(item: ReviewLaneItemSnapshot) -> str:
+    return "AGENT" if item.requested_engine == "AGENT" and not item.fallback else "STANDARD"
+
+
+def _utilization_percent(running_count: int, capacity: int) -> int:
+    if capacity <= 0:
+        return 0
+    return min(round((running_count / capacity) * 100), 100)
 
 
 def build_governance_snapshot(

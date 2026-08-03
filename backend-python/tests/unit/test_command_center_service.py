@@ -74,6 +74,65 @@ def test_runtime_snapshot_groups_review_keys_and_keeps_explicit_fallback() -> No
     assert snapshot["activeTasks"][0]["stage"] == "FALLBACK"
 
 
+def test_runtime_snapshot_builds_standard_fallback_lane_from_scheduler_job() -> None:
+    data = _runtime_data(
+        counts=RuntimeBaseCounts(
+            intake_task_count=1,
+            active_task_count=1,
+            queued_job_count=1,
+            running_job_count=1,
+            agent_queued_job_count=1,
+            agent_running_job_count=0,
+        ),
+        lane_running_jobs=[
+            {
+                "job_id": 51,
+                "job_type": "AI_REVIEW",
+                "task_id": 101,
+                "review_key": "agent-fallback",
+                "project_id": 9001,
+                "project_name": "Command Center",
+                "display_name": "Agent Fallback",
+                "result_requested_engine": "AGENT",
+                "result_effective_engine": "STANDARD_FALLBACK",
+                "provider_code": "DEEPSEEK",
+                "model": "deepseek-chat",
+                "status": "RUNNING",
+                "queued_at": DB_NOW - timedelta(minutes=2),
+                "started_at": DB_NOW - timedelta(minutes=1),
+            }
+        ],
+        agent_next_queued_job={
+            "job_id": 52,
+            "job_type": "AGENT_REVIEW",
+            "task_id": 102,
+            "review_key": "agent-next",
+            "project_id": 9001,
+            "project_name": "Command Center",
+            "display_name": "Agent Next",
+            "run_requested_engine": "AGENT",
+            "run_effective_engine": "AGENT",
+            "run_model": "agent-model",
+            "status": "QUEUED",
+            "queued_at": DB_NOW,
+            "started_at": None,
+        },
+    )
+
+    snapshot = _runtime_snapshot(data)
+    standard = snapshot["reviewLanes"]["standard"]
+    agent = snapshot["reviewLanes"]["agent"]
+
+    assert snapshot["schemaVersion"] == "command-center-runtime-v2"
+    assert standard["capacity"] == 10
+    assert standard["runningCount"] == 1
+    assert standard["runningItems"][0]["fallback"] is True
+    assert standard["runningItems"][0]["stage"] == "FALLBACK"
+    assert agent["queuedCount"] == 1
+    assert agent["nextQueued"]["reviewKey"] == "agent-next"
+    assert agent["nextQueued"]["workerId"] is None
+
+
 def test_agent_failure_plus_standard_result_is_not_inferred_as_fallback() -> None:
     data = _runtime_data(
         tasks=[_task(102)],
@@ -385,6 +444,9 @@ def _runtime_data(**overrides: object) -> RuntimeProjectionData:
         "agent_settings": {"enabled": True},
         "providers": [],
         "alerts": [],
+        "lane_running_jobs": [],
+        "standard_next_queued_job": None,
+        "agent_next_queued_job": None,
         "candidate_task_count": 1,
         "selected_task_count": 1,
     }

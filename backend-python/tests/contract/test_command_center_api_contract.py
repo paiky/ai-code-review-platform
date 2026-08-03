@@ -38,6 +38,7 @@ RUNTIME_TOP_LEVEL_KEYS = {
     "scheduler",
     "standard",
     "agent",
+    "reviewLanes",
     "providersObserved",
     "alerts",
     "coverage",
@@ -68,11 +69,24 @@ def test_command_center_empty_database_phase_one_contract(
     assert runtime_response.status_code == 200
     runtime = runtime_response.json()["data"]
     assert set(runtime) == RUNTIME_TOP_LEVEL_KEYS
-    assert runtime["schemaVersion"] == "command-center-runtime-v1"
+    assert runtime["schemaVersion"] == "command-center-runtime-v2"
     assert runtime["intake"]["taskCount"] == 0
     assert runtime["activeTasks"] == []
     assert runtime["activeFlows"] == []
     assert runtime["agent"]["workerPool"]["workers"] == []
+    assert runtime["reviewLanes"]["standard"] == {
+        "zoneKey": "standard",
+        "engine": "STANDARD",
+        "capacity": 10,
+        "runningCount": 0,
+        "queuedCount": 0,
+        "utilizationPercent": 0,
+        "runningItems": [],
+        "nextQueued": None,
+        "runningItemsTruncated": False,
+        "queueOrder": "PROVIDER_PRIORITY_FIFO",
+    }
+    assert runtime["reviewLanes"]["agent"]["capacity"] == 0
     assert runtime["providersObserved"] == []
     assert runtime["coverage"]["phase"] == "PHASE_1"
     assert runtime["coverage"]["sections"]["activeFlows"] == "BOUNDED"
@@ -122,6 +136,14 @@ def test_runtime_returns_real_task_flow_worker_provider_and_alert_data(
     assert runtime["agent"]["queueMetrics"]["queued"] == 1
     assert runtime["agent"]["queueMetrics"]["running"] == 0
     assert runtime["agent"]["queueMetrics"]["onlineCapacity"] == 1
+    standard_lane = runtime["reviewLanes"]["standard"]
+    agent_lane = runtime["reviewLanes"]["agent"]
+    assert standard_lane["runningCount"] == 1
+    assert standard_lane["runningItems"][0]["reviewKey"] == "standard-main"
+    assert standard_lane["runningItems"][0]["stage"] == "CONTEXT_BUILDING"
+    assert agent_lane["queuedCount"] == 1
+    assert agent_lane["nextQueued"]["reviewKey"] == "agent-main"
+    assert agent_lane["queueOrder"] == "AGENT_PRIORITY_FIFO"
     providers = {
         provider["providerCode"]: provider
         for provider in runtime["providersObserved"]
@@ -137,6 +159,86 @@ def test_runtime_returns_real_task_flow_worker_provider_and_alert_data(
     assert {"FALLBACK", "NOTIFICATION_FAILED", "CRITICAL_FINDING"} <= {
         alert["type"] for alert in runtime["alerts"]
     }
+
+
+def test_runtime_review_lanes_use_engine_specific_queue_order_and_worker_binding(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    project = _project(8101, 8001, "runtime-map")
+    tasks = [_task(8200 + index, project.id, now) for index in range(1, 7)]
+    jobs = [
+        _scheduler_job(8301, 8201, project.id, "standard-later", "AI_REVIEW", "QUEUED", 50, now - timedelta(minutes=10), now),
+        _scheduler_job(8302, 8202, project.id, "standard-next", "AI_REVIEW", "QUEUED", 10, now - timedelta(minutes=1), now),
+        _scheduler_job(8303, 8203, project.id, "agent-lower", "AGENT_REVIEW", "QUEUED", 10, now - timedelta(minutes=10), now),
+        _scheduler_job(8304, 8204, project.id, "agent-next", "AGENT_REVIEW", "QUEUED", 50, now - timedelta(minutes=1), now),
+        _scheduler_job(8305, 8205, project.id, "standard-running", "AI_REVIEW", "RUNNING", 10, now - timedelta(minutes=5), now, started_at=now - timedelta(minutes=4)),
+        _scheduler_job(8306, 8206, project.id, "agent-running", "AGENT_REVIEW", "RUNNING", 50, now - timedelta(minutes=5), now, started_at=now - timedelta(minutes=3)),
+    ]
+    results = [
+        CodeQualityReviewResult(
+            id=8400 + index,
+            task_id=job.task_id,
+            review_key=job.review_key,
+            project_id=project.id,
+            profile_code="backend-default",
+            provider="AGENT" if job.job_type == "AGENT_REVIEW" else "DEEPSEEK",
+            model="agent-model" if job.job_type == "AGENT_REVIEW" else "deepseek-chat",
+            display_name=job.review_key,
+            sort_order=index,
+            status="RUNNING" if job.status == "RUNNING" else "QUEUED",
+            finding_count=0,
+            findings_json="[]",
+            requested_engine="AGENT" if job.job_type == "AGENT_REVIEW" else "STANDARD",
+            effective_engine="AGENT" if job.job_type == "AGENT_REVIEW" else "STANDARD",
+            created_at=now,
+            updated_at=now,
+        )
+        for index, job in enumerate(jobs, start=1)
+    ]
+    db_session.add_all([
+        project,
+        *tasks,
+        *jobs,
+        *results,
+        AgentReviewSettings(
+            id=8501,
+            enabled=True,
+            worker_id="runtime-map-worker",
+            last_worker_heartbeat_at=now,
+            created_at=now,
+            updated_at=now,
+        ),
+        AgentReviewWorker(
+            worker_id="runtime-map-worker",
+            worker_version="v1",
+            cli_version="v1",
+            state="BUSY",
+            capacity=2,
+            active_job_id=8306,
+            active_run_id=None,
+            started_at=now - timedelta(hours=1),
+            last_heartbeat_at=now,
+            updated_at=now,
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get(
+        "/api/command-center/runtime",
+        params={"groupId": 8001},
+    )
+
+    assert response.status_code == 200
+    lanes = response.json()["data"]["reviewLanes"]
+    assert lanes["standard"]["nextQueued"]["reviewKey"] == "standard-next"
+    assert lanes["agent"]["nextQueued"]["reviewKey"] == "agent-next"
+    assert lanes["standard"]["runningItems"][0]["reviewKey"] == "standard-running"
+    assert lanes["agent"]["runningItems"][0]["reviewKey"] == "agent-running"
+    assert lanes["agent"]["runningItems"][0]["workerId"] == "runtime-map-worker"
+    assert lanes["standard"]["runningItems"][0]["provider"] == "DEEPSEEK"
+    assert lanes["agent"]["capacity"] == 2
 
 
 def test_governance_returns_window_and_all_time_metrics(
@@ -253,7 +355,7 @@ def test_command_center_query_bounds_read_only_and_sensitive_fields(
 
     assert runtime_response.status_code == 200
     assert governance_response.status_code == 200
-    assert len(runtime_statements) <= 18
+    assert len(runtime_statements) <= 20
     assert len(governance_statements) <= 12
     assert all(
         statement.lstrip().upper().startswith("SELECT")
@@ -333,7 +435,7 @@ def test_runtime_query_count_does_not_grow_with_active_task_count(
         assert client.get("/api/command-center/runtime").status_code == 200
 
     assert len(one_task_statements) == len(two_task_statements)
-    assert len(two_task_statements) <= 18
+    assert len(two_task_statements) <= 20
 
 
 def test_command_center_query_parameter_bounds_are_enforced(
@@ -637,5 +739,33 @@ def _task(task_id: int, project_id: int, now: datetime) -> ReviewTask:
         review_status="REVIEWING",
         risk_level="HIGH",
         created_at=now - timedelta(hours=1),
+        updated_at=now,
+    )
+
+
+def _scheduler_job(
+    job_id: int,
+    task_id: int,
+    project_id: int,
+    review_key: str,
+    job_type: str,
+    status: str,
+    priority: int,
+    queued_at: datetime,
+    now: datetime,
+    *,
+    started_at: datetime | None = None,
+) -> CodeQualitySchedulerJob:
+    return CodeQualitySchedulerJob(
+        id=job_id,
+        job_type=job_type,
+        task_id=task_id,
+        project_id=project_id,
+        review_key=review_key,
+        status=status,
+        priority=priority,
+        queued_at=queued_at,
+        started_at=started_at,
+        created_at=now,
         updated_at=now,
     )
