@@ -6,7 +6,6 @@ import {
 } from './platformRuntimeMapRenderer.js';
 
 
-const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 const SMALL_SCREEN_QUERY = '(max-width: 700px)';
 
 
@@ -19,10 +18,10 @@ export default function CommandCenterCanvas({
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const controllerRef = useRef(null);
-  const preferences = useCanvasPreferences();
+  const smallScreen = useSmallScreen();
   const [canvasReady, setCanvasReady] = useState(false);
   const [canvasFailed, setCanvasFailed] = useState(false);
-  const shouldMountCanvas = !preferences.reducedMotion && !preferences.smallScreen && !canvasFailed;
+  const shouldMountCanvas = !smallScreen && !canvasFailed;
 
   useEffect(() => {
     if (!shouldMountCanvas || !canvasRef.current || !containerRef.current) {
@@ -53,51 +52,61 @@ export default function CommandCenterCanvas({
   }, [map.scene]);
 
   const fallbackReason = resolvePlatformRuntimeMapFallback({
-    ...preferences,
+    smallScreen,
     canvasFailed,
     canvasReady
   });
+  const standardLane = map.lanes.find(lane => lane.zoneKey === 'standard');
+  const agentLane = map.lanes.find(lane => lane.zoneKey === 'agent');
 
   return (
     <section
       className="command-center-runtime-map"
+      data-zone-key={map.zoneKey}
       data-command-center-dom-overlay="true"
       data-command-center-canvas-fallback={fallbackReason || undefined}
       ref={containerRef}
-      aria-label="平台 Review 运行地图"
+      aria-label="AI Review Operation Map"
     >
       {shouldMountCanvas && (
         <canvas
           className="command-center-runtime-map-canvas"
-          data-command-center-canvas-phase="PHASE_5C"
+          data-command-center-canvas-phase="EVOLUTION_PHASE_1"
           ref={canvasRef}
           aria-hidden="true"
         />
       )}
       <div className="command-center-runtime-map-overlay">
-        <QueueCamp queue={map.queue} lanes={map.lanes} />
-        {map.lanes.map(lane => (
-          <LaneBase
-            key={lane.zoneKey}
-            lane={lane}
-            visibleLimit={visibleLimit}
-            onOpenReview={onOpenReview}
-            onOpenOverflow={onOpenOverflow}
-          />
-        ))}
+        <QueueGate queueGate={map.queueGate} lanes={map.lanes} />
+        <ReviewCore core={map.core} />
+        <LaneStation
+          lane={standardLane}
+          visibleLimit={visibleLimit}
+          onOpenReview={onOpenReview}
+          onOpenOverflow={onOpenOverflow}
+        />
+        <LaneStation
+          lane={agentLane}
+          visibleLimit={visibleLimit}
+          onOpenReview={onOpenReview}
+          onOpenOverflow={onOpenOverflow}
+        />
+        <ResultBeacon beacon={map.resultBeacon} />
       </div>
     </section>
   );
 }
 
 
-function QueueCamp({ queue, lanes }) {
+function QueueGate({ queueGate, lanes }) {
   return (
-    <article className="command-center-queue-camp" data-zone-key={queue.zoneKey}>
-      <span className="command-center-zone-kicker">SHARED STAGING AREA</span>
-      <h2>Review 候场区</h2>
-      <strong className="command-center-queue-total">{queue.queuedCount}</strong>
-      <span className="command-center-queue-caption">条 Review 等待调度</span>
+    <article className="command-center-map-node command-center-queue-gate" data-zone-key={queueGate.zoneKey}>
+      <span className="command-center-zone-kicker">QUEUE GATE</span>
+      <h2>Review 候场门</h2>
+      <div className="command-center-queue-summary">
+        <strong>{queueGate.queuedCount}</strong>
+        <span>条 Review 等待调度</span>
+      </div>
       <div className="command-center-queue-split" aria-label="两条路线等待数">
         {lanes.map(lane => (
           <div key={lane.zoneKey} className={`is-${lane.colorToken}`}>
@@ -107,10 +116,27 @@ function QueueCamp({ queue, lanes }) {
         ))}
       </div>
       <div className="command-center-next-reviews">
-        {lanes.map(lane => (
-          <NextReview key={lane.zoneKey} lane={lane} />
-        ))}
+        {lanes.map(lane => <NextReview key={lane.zoneKey} lane={lane} />)}
       </div>
+    </article>
+  );
+}
+
+
+function ReviewCore({ core }) {
+  return (
+    <article className="command-center-map-node command-center-review-core" data-zone-key={core.zoneKey}>
+      <span className="command-center-zone-kicker">SCHEDULING CORE</span>
+      <div className="command-center-core-emblem" aria-hidden="true"><span>AI</span></div>
+      <h2>AI Review Core</h2>
+      <p>统一接收并分流真实 Review</p>
+      <div className="command-center-core-load">
+        <strong>{core.runningCount}<small> / {core.capacity || '—'}</small></strong>
+        <span>{core.utilizationPercent}% 平台占用</span>
+      </div>
+      <span className={`command-center-core-freshness is-${core.freshness.toLowerCase()}`}>
+        {coreFreshnessLabel(core.freshness)}
+      </span>
     </article>
   );
 }
@@ -134,44 +160,48 @@ function NextReview({ lane }) {
 }
 
 
-function LaneBase({ lane, visibleLimit, onOpenReview, onOpenOverflow }) {
+function LaneStation({ lane, visibleLimit, onOpenReview, onOpenOverflow }) {
+  if (!lane) return null;
   const visibleItems = lane.runningItems.slice(0, visibleLimit);
   const hiddenCount = Math.max(0, lane.runningCount - visibleItems.length);
   return (
-    <article className={`command-center-lane-base is-${lane.colorToken}`} data-zone-key={lane.zoneKey}>
+    <article className={`command-center-map-node command-center-lane-station is-${lane.colorToken}`} data-zone-key={lane.zoneKey}>
       <header>
         <div>
-          <span className="command-center-zone-kicker">{lane.eyebrow}</span>
+          <span className="command-center-zone-kicker">{lane.eyebrow} LANE</span>
           <h2>{lane.title}</h2>
           <p>{lane.description}</p>
         </div>
         <div className="command-center-lane-load" aria-label={`${lane.title}容量`}>
           <strong>{lane.runningCount}<small> / {lane.capacity || '—'}</small></strong>
-          <span>{lane.utilizationPercent}% 占用</span>
+          <span>{lane.utilizationPercent}% 占用 · 等待 {lane.queuedCount}</span>
         </div>
       </header>
       <CapacitySlots lane={lane} />
-      <div className="command-center-running-items" aria-label={`${lane.title}运行中 Review`}>
-        {visibleItems.map(item => (
-          <ReviewMarker key={`${item.jobId}:${item.taskId}:${item.reviewKey}`} item={item} onOpen={onOpenReview} />
-        ))}
-        {hiddenCount > 0 && (
-          <button
-            type="button"
-            className="command-center-overflow-tower"
-            onClick={event => onOpenOverflow(lane, event.currentTarget)}
-            aria-label={`查看${lane.title}另外 ${hiddenCount} 条运行 Review`}
-          >
-            <strong>+{hiddenCount}</strong>
-            <span>全部运行项</span>
-          </button>
-        )}
-        {lane.runningCount === 0 && (
-          <div className="command-center-lane-empty">基地当前空闲，等待下一次调度</div>
-        )}
+      <div className="command-center-lane-track">
+        <span className="command-center-track-rail" aria-hidden="true" />
+        <div className="command-center-running-items" aria-label={`${lane.title}运行中 Review`}>
+          {visibleItems.map(item => (
+            <ReviewMarker key={`${item.jobId}:${item.taskId}:${item.reviewKey}`} item={item} onOpen={onOpenReview} />
+          ))}
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              className="command-center-overflow-tower"
+              onClick={event => onOpenOverflow(lane, event.currentTarget)}
+              aria-label={`查看${lane.title}另外 ${hiddenCount} 条运行 Review`}
+            >
+              <strong>+{hiddenCount}</strong>
+              <span>全部运行项</span>
+            </button>
+          )}
+          {lane.runningCount === 0 && (
+            <div className="command-center-lane-empty">路线当前空闲，等待下一次调度</div>
+          )}
+        </div>
       </div>
+      {lane.zoneKey === 'agent' && <WorkerTowers workers={lane.workers} />}
       <footer>
-        <span>{lane.queuedCount} 条在前方队列</span>
         <span>{lane.zoneKey === 'agent' ? `${lane.capacity} 在线 Worker Capacity` : '共享 Provider Scheduler'}</span>
       </footer>
     </article>
@@ -188,6 +218,36 @@ function CapacitySlots({ lane }) {
       ))}
       {lane.capacity > displayedCapacity && <small>+{lane.capacity - displayedCapacity}</small>}
     </div>
+  );
+}
+
+
+function WorkerTowers({ workers = [] }) {
+  if (workers.length === 0) return <div className="command-center-worker-empty">当前无 Worker 状态快照</div>;
+  return (
+    <div className="command-center-worker-towers" aria-label="Agent Worker 状态">
+      {workers.slice(0, 8).map(worker => (
+        <div key={worker.workerId} className={`is-${workerState(worker).toLowerCase()}`}>
+          <span aria-hidden="true" />
+          <strong>{worker.workerId || 'Worker'}</strong>
+          <small>{workerState(worker)}</small>
+        </div>
+      ))}
+      {workers.length > 8 && <em>+{workers.length - 8} Worker</em>}
+    </div>
+  );
+}
+
+
+function ResultBeacon({ beacon }) {
+  return (
+    <article className="command-center-map-node command-center-result-beacon" data-zone-key={beacon.zoneKey}>
+      <span className="command-center-zone-kicker">RESULT BEACON</span>
+      <div className="command-center-result-emblem" aria-hidden="true"><span>✓</span></div>
+      <h2>{beacon.title}</h2>
+      <p>{beacon.description}</p>
+      <small>STRUCTURAL ENDPOINT</small>
+    </article>
   );
 }
 
@@ -210,31 +270,37 @@ function ReviewMarker({ item, onOpen }) {
 }
 
 
-function useCanvasPreferences() {
-  const [preferences, setPreferences] = useState(readCanvasPreferences);
+function useSmallScreen() {
+  const [smallScreen, setSmallScreen] = useState(readSmallScreen);
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-    const reduced = window.matchMedia(REDUCED_MOTION_QUERY);
-    const small = window.matchMedia(SMALL_SCREEN_QUERY);
-    const sync = () => setPreferences({ reducedMotion: reduced.matches, smallScreen: small.matches });
-    reduced.addEventListener?.('change', sync);
-    small.addEventListener?.('change', sync);
+    const query = window.matchMedia(SMALL_SCREEN_QUERY);
+    const sync = () => setSmallScreen(query.matches);
+    query.addEventListener?.('change', sync);
     sync();
-    return () => {
-      reduced.removeEventListener?.('change', sync);
-      small.removeEventListener?.('change', sync);
-    };
+    return () => query.removeEventListener?.('change', sync);
   }, []);
-  return preferences;
+  return smallScreen;
 }
 
 
-function readCanvasPreferences() {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-    return { reducedMotion: false, smallScreen: false };
-  }
+function readSmallScreen() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia(SMALL_SCREEN_QUERY).matches;
+}
+
+
+function workerState(worker) {
+  if (!worker.online) return 'OFFLINE';
+  return String(worker.state || 'IDLE').toUpperCase();
+}
+
+
+function coreFreshnessLabel(value) {
   return {
-    reducedMotion: window.matchMedia(REDUCED_MOTION_QUERY).matches,
-    smallScreen: window.matchMedia(SMALL_SCREEN_QUERY).matches
-  };
+    FRESH: 'Runtime 实时',
+    STALE: 'Runtime 已过期',
+    EMPTY: '等待 Runtime 快照'
+  }[value] || 'Runtime 状态未知';
 }

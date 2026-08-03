@@ -7,7 +7,7 @@ import {
 } from '../src/command-center/commandCenterPresentation.js';
 
 
-test('presentation builds a shared queue and two stable review bases', () => {
+test('presentation builds the five-node operation map and stable review lanes', () => {
   const presentation = buildCommandCenterPresentation({
     runtime: {
       freshness: 'FRESH',
@@ -25,15 +25,28 @@ test('presentation builds a shared queue and two stable review bases', () => {
   });
 
   assert.deepEqual(presentation.map.lanes.map(laneItem => laneItem.zoneKey), ['standard', 'agent']);
-  assert.equal(presentation.map.queue.zoneKey, 'shared-queue');
-  assert.equal(presentation.map.queue.queuedCount, 12);
+  assert.equal(presentation.map.zoneKey, 'ai-review-operation-map');
+  assert.equal(presentation.map.queueGate.zoneKey, 'queue-gate');
+  assert.equal(presentation.map.queueGate.queuedCount, 12);
+  assert.equal(presentation.map.core.zoneKey, 'ai-review-core');
+  assert.equal(presentation.map.core.runningCount, 5);
+  assert.equal(presentation.map.resultBeacon.zoneKey, 'result-beacon');
+  assert.equal(presentation.map.resultBeacon.mode, 'STRUCTURAL_ONLY');
+  assert.equal(presentation.map.resultBeacon.description, '结果回流至任务详情与既有通知链路');
+  assert.deepEqual(presentation.map.connections.map(({ from, to }) => `${from}->${to}`), [
+    'queue-gate->ai-review-core',
+    'ai-review-core->standard',
+    'ai-review-core->agent',
+    'standard->result-beacon',
+    'agent->result-beacon'
+  ]);
   assert.equal(presentation.hud.totalRunning, 5);
   assert.equal(presentation.hud.totalCapacity, 14);
   assert.equal(presentation.hud.utilizationPercent, 36);
   assert.equal(presentation.map.lanes[0].nextQueued.engineToken, 'fallback');
   assert.equal(presentation.map.lanes[1].nextQueued.engineToken, 'agent');
-  assert.equal(presentation.map.scene.id, 'platform-runtime-map');
-  assert.equal(presentation.map.scene.workers[0].workerId, 'worker-1');
+  assert.equal(presentation.map.scene.id, 'ai-review-operation-map');
+  assert.equal(presentation.map.lanes[1].workers[0].workerId, 'worker-1');
 });
 
 
@@ -41,9 +54,11 @@ test('presentation keeps empty map truthful without synthetic reviews', () => {
   const presentation = buildCommandCenterPresentation();
 
   assert.equal(presentation.hud.totalRunning, 0);
-  assert.equal(presentation.map.queue.queuedCount, 0);
+  assert.equal(presentation.map.queueGate.queuedCount, 0);
   assert.equal(presentation.map.lanes.length, 2);
   assert.deepEqual(presentation.map.lanes.map(laneItem => laneItem.runningItems), [[], []]);
+  assert.equal(Object.hasOwn(presentation.map.resultBeacon, 'completedCount'), false);
+  assert.equal(Object.hasOwn(presentation.map.resultBeacon, 'failureCount'), false);
 });
 
 

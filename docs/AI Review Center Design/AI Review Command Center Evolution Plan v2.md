@@ -2,13 +2,13 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Evolution Plan v2 文档落地`
-- 当前状态：`EVOLUTION PLAN V2 READY — WAITING FOR SPATIAL MODEL AUTHORIZATION`
+- 当前阶段：`Evolution Phase 1：静态空间架构重置`
+- 当前状态：`EVOLUTION PHASE 1 COMPLETED — WAITING FOR SPATIAL ARCHITECTURE CONFIRMATION`
 - 实施基线 Commit：`dfe20a9`
 - 参考图：`docs/AI Review Center Design/assets/ai-review-command-center-reference.png`
 - 计划创建时间：2026-08-03
-- 当前授权：仅允许新增本文档，不允许修改代码、旧计划或 README。
-- 当前停止点：计划文档落地后停止；未经用户明确确认，不得执行 Evolution Phase 1。
+- 当前授权：用户已于 2026-08-03 明确授权执行 Evolution Phase 1；仅允许修改 Command Center 前端投影、页面、静态 Renderer、样式、相关测试及本文档。
+- 当前停止点：Evolution Phase 1 已完成并提交；等待用户确认空间结构，未经确认不得进入 Evolution Phase 2。
 
 本文档是 Phase 5A～5C 完成后的新视觉架构总控。`AI Review Platform Runtime Map Implementation Plan.md` 继续作为 Phase 5 历史实施记录，不再追加 Evolution v2 的阶段状态。
 
@@ -392,4 +392,25 @@ Evolution Phase 1 不修改后端、查询或 Schema，因此不执行数据库�
 - 已锁定 390px 使用无横向滚动的纵向单图。
 - 本次只创建本文档；前后端代码、旧计划和 README 均不修改。
 
-计划落地到此停止。等待用户明确授权执行 Evolution Phase 1。
+### Evolution Phase 1 实施记录
+
+- 2026-08-03：用户明确授权执行 Evolution Phase 1，状态更新为 `EVOLUTION PHASE 1 IN PROGRESS`。
+- 已将 Presentation 重置为 `ai-review-operation-map`、`queue-gate`、`ai-review-core`、`standard`、`agent`、`result-beacon` 稳定投影，并固定 Gate→Core、Core→双 Lane、双 Lane→Beacon 五条连接。
+- 已将 DOM Overlay 重构为单一地图表面：桌面/平板使用 Gate、Core、上下双 Lane、Beacon 网格，小屏使用 Gate→Core→Standard→Agent→Beacon 纵向单图。
+- 已保留 Runtime v2/v1 fallback、5 秒轮询、真实 Review 跳转、`+N` Modal、焦点返回、容量/队列/Fallback 和 Worker 状态语义；后端与业务状态机零修改。
+- Result Beacon 仅展示“结果回流至任务详情与既有通知链路”，未新增完成数、失败数、通过率、Finding 或通知状态。
+- Canvas 已改为读取五个真实 `data-zone-key` DOM 矩形并绘制静态道路；初始化、Resize 和 Runtime Snapshot 更新触发重绘，活动 RAF、动画 Review 和动画 Worker 恒为 `0`。
+- 已移除 Phase 5B 候场脉冲、路线能量、移动 Review、Worker 心跳及对应动画 helper；390px 不挂载 Canvas，Canvas 失败时完整 DOM 保持可用。
+
+### Evolution Phase 1 验证证据
+
+- Command Center 专项 Node 测试：`13 passed`。
+- 前端全量 Node 测试：`87 passed`。
+- 生产构建：`scripts/run-frontend.cmd build` 成功；仅保留既有大 Chunk 提示，无构建错误。
+- 1440×900：五节点均存在，五条 DOM 锚点道路，单 Canvas，`activeRaf=0`，无横向溢出。
+- 1024×800：保持同一 Gate/Core/双 Lane/Beacon 拓扑，五条 DOM 锚点道路，单 Canvas，`activeRaf=0`，无横向溢出。
+- 390×844：按 Gate→Core→Standard→Agent→Beacon 顺序完整可达，Canvas 数量 `0`，无横向溢出。
+- 浏览器控制台：无 warning/error；`git diff --check` 通过。
+- 未执行后端测试、迁移或 MySQL EXPLAIN：本阶段没有后端、接口、查询或 Schema 变更。
+
+Evolution Phase 1 到此停止。等待用户确认空间架构；不得自动进入 Motion Specification、动画、推送或部署。

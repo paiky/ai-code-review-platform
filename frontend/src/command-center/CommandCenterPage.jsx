@@ -35,12 +35,12 @@ export default function CommandCenterPage() {
   const freshness = runtime?.freshness || (runtimeLoading ? 'LOADING' : 'EMPTY');
 
   return (
-    <main className="command-center-page" data-command-center-phase="PHASE_5C">
+    <main className="command-center-page" data-command-center-phase="EVOLUTION_PHASE_1">
       <section className="command-center-map-shell" aria-labelledby="command-center-title">
         <header className="command-center-map-toolbar">
           <div className="command-center-map-identity">
             <span className="command-center-kicker">AI REVIEW COMMAND CENTER</span>
-            <h1 id="command-center-title">平台 Review 运行地图</h1>
+            <h1 id="command-center-title">AI Review Operation Map</h1>
           </div>
           <div className="command-center-snapshot-state" aria-live="polite">
             <span className={`command-center-status-dot is-${freshness.toLowerCase()}`} aria-hidden="true" />

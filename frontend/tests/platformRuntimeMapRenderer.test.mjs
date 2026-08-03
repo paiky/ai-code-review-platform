@@ -3,12 +3,13 @@ import test from 'node:test';
 
 import {
   createPlatformRuntimeMapController,
+  measureOperationMapAnchors,
   PLATFORM_RUNTIME_MAP_DIAGNOSTICS_KEY,
   resolvePlatformRuntimeMapFallback
 } from '../src/command-center/platformRuntimeMapRenderer.js';
 
 
-test('dynamic runtime map owns one observer/listener and one bounded RAF', () => {
+test('static operation map owns one observer and listener with zero RAF', () => {
   const harness = createHarness();
   const controller = createPlatformRuntimeMapController({
     canvas: harness.canvas,
@@ -21,17 +22,16 @@ test('dynamic runtime map owns one observer/listener and one bounded RAF', () =>
   const initial = controller.getSnapshot();
   assert.equal(initial.observerRegistrationCount, 1);
   assert.equal(initial.listenerRegistrationCount, 1);
-  assert.equal(initial.activeRafCount, 1);
+  assert.equal(initial.activeRafCount, 0);
   assert.equal(initial.frameCount, 1);
+  assert.equal(harness.pendingFrameCount(), 0);
+  assert.equal(harness.canvas.attributes.get('data-command-center-anchor-count'), '5');
 
-  harness.runFrame(40);
-  assert.equal(controller.getSnapshot().frameCount, 2);
-  assert.equal(controller.getSnapshot().activeRafCount, 1);
   controller.setScene(scene('two'));
-  assert.equal(controller.getSnapshot().frameCount, 3);
-  assert.equal(harness.canvas[PLATFORM_RUNTIME_MAP_DIAGNOSTICS_KEY].activeRafCount, 1);
-  assert.equal(harness.canvas.attributes.get('data-command-center-animated-reviews'), '2');
-  assert.equal(harness.canvas.attributes.get('data-command-center-online-workers'), '1');
+  assert.equal(controller.getSnapshot().frameCount, 2);
+  assert.equal(harness.canvas[PLATFORM_RUNTIME_MAP_DIAGNOSTICS_KEY].activeRafCount, 0);
+  assert.equal(harness.canvas.attributes.get('data-command-center-animated-reviews'), '0');
+  assert.equal(harness.canvas.attributes.get('data-command-center-animated-workers'), '0');
   assert.equal(harness.canvas.attributes.get('data-command-center-scene-updates'), '2');
   controller.dispose();
   assert.equal(harness.documentTarget.listenerCount(), 0);
@@ -39,25 +39,22 @@ test('dynamic runtime map owns one observer/listener and one bounded RAF', () =>
 });
 
 
-test('empty or stale snapshots remain static and never invent animation', () => {
+test('route anchors are measured from real DOM zone rectangles', () => {
   const harness = createHarness();
-  const controller = createPlatformRuntimeMapController({
-    canvas: harness.canvas,
-    container: harness.container,
-    environment: harness.environment,
-    scene: { ...scene('stale'), freshness: 'STALE', workers: [] }
-  });
-  assert.equal(controller.getSnapshot().activeRafCount, 0);
-  assert.equal(harness.canvas.attributes.get('data-command-center-animated-reviews'), '0');
-  controller.setScene({ snapshotKey: 'empty', freshness: 'FRESH', lanes: [], workers: [] });
-  assert.equal(controller.getSnapshot().activeRafCount, 0);
-  controller.dispose();
+  const anchors = measureOperationMapAnchors(harness.container, scene('anchors').connections);
+
+  assert.equal(anchors.length, 5);
+  assert.deepEqual(anchors[0].fromPoint, { x: 200, y: 250 });
+  assert.deepEqual(anchors[0].toPoint, { x: 260, y: 250 });
+  assert.deepEqual(anchors[1].fromPoint, { x: 420, y: 250 });
+  assert.deepEqual(anchors[1].toPoint, { x: 500, y: 140 });
+  assert.deepEqual(anchors[4].fromPoint, { x: 760, y: 360 });
+  assert.deepEqual(anchors[4].toPoint, { x: 810, y: 250 });
 });
 
 
-test('fallback resolver prefers complete static DOM conditions', () => {
+test('fallback resolver keeps small-screen and Canvas failure DOM complete', () => {
   assert.equal(resolvePlatformRuntimeMapFallback({ smallScreen: true }), 'SMALL_SCREEN');
-  assert.equal(resolvePlatformRuntimeMapFallback({ reducedMotion: true }), 'REDUCED_MOTION');
   assert.equal(resolvePlatformRuntimeMapFallback({ canvasFailed: true }), 'CANVAS_FAILED');
   assert.equal(resolvePlatformRuntimeMapFallback({ canvasReady: false }), 'CANVAS_LOADING');
   assert.equal(resolvePlatformRuntimeMapFallback({ canvasReady: true }), null);
@@ -68,17 +65,13 @@ function scene(snapshotKey) {
   return {
     snapshotKey,
     freshness: 'FRESH',
-    lanes: [
-      {
-        zoneKey: 'standard', utilizationPercent: 50, queuedCount: 2,
-        runningItems: [{ jobId: 11, taskId: 21, reviewKey: 'standard', fallback: false }]
-      },
-      {
-        zoneKey: 'agent', utilizationPercent: 25, queuedCount: 1,
-        runningItems: [{ jobId: 12, taskId: 22, reviewKey: 'agent', workerId: 'worker-1' }]
-      }
-    ],
-    workers: [{ workerId: 'worker-1', state: 'BUSY', online: true, capacity: 1, activeJobId: 12 }]
+    connections: [
+      { from: 'queue-gate', to: 'ai-review-core', token: 'queue' },
+      { from: 'ai-review-core', to: 'standard', token: 'standard' },
+      { from: 'ai-review-core', to: 'agent', token: 'agent' },
+      { from: 'standard', to: 'result-beacon', token: 'standard' },
+      { from: 'agent', to: 'result-beacon', token: 'agent' }
+    ]
   };
 }
 
@@ -114,9 +107,24 @@ function createHarness() {
     getContext: () => context,
     setAttribute(name, value) { this.attributes.set(name, value); }
   };
-  const harness = {
+  const rects = {
+    'queue-gate': rect(20, 100, 180, 300),
+    'ai-review-core': rect(260, 160, 160, 180),
+    standard: rect(500, 60, 260, 160),
+    agent: rect(500, 280, 260, 160),
+    'result-beacon': rect(810, 160, 140, 180)
+  };
+  const container = {
+    getBoundingClientRect: () => rect(0, 0, 980, 500),
+    querySelector(selector) {
+      const match = selector.match(/data-zone-key="([^"]+)"/);
+      const value = match ? rects[match[1]] : null;
+      return value ? { getBoundingClientRect: () => value } : null;
+    }
+  };
+  return {
     canvas,
-    container: { getBoundingClientRect: () => ({ width: 900, height: 500 }) },
+    container,
     documentTarget,
     environment: {
       documentTarget,
@@ -130,13 +138,11 @@ function createHarness() {
       getDevicePixelRatio: () => 1,
       now: () => { now += 0.1; return now; }
     },
-    runFrame(timestamp) {
-      const [entry] = frames.entries();
-      if (!entry) return;
-      frames.delete(entry[0]);
-      entry[1](timestamp);
-    },
     pendingFrameCount: () => frames.size
   };
-  return harness;
+}
+
+
+function rect(left, top, width, height) {
+  return { left, top, right: left + width, bottom: top + height, width, height };
 }

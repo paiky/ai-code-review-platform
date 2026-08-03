@@ -36,12 +36,15 @@ test('root route renders Command Center while preserving legacy taskId redirect'
 });
 
 
-test('phase 5C home is a compact platform-level dual-lane runtime map', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="PHASE_5C"'), true);
-  assert.equal(pageSource.includes('平台 Review 运行地图'), true);
+test('evolution phase 1 home is a five-node AI Review operation map', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="EVOLUTION_PHASE_1"'), true);
+  assert.equal(pageSource.includes('AI Review Operation Map'), true);
   assert.equal(pageSource.includes('<CommandCenterCanvas'), true);
-  assert.equal(presentationSource.includes("zoneKey: 'shared-queue'"), true);
-  assert.equal(presentationSource.includes("zoneKey: 'platform-runtime-map'"), true);
+  assert.equal(presentationSource.includes("zoneKey: 'queue-gate'"), true);
+  assert.equal(presentationSource.includes("zoneKey: 'ai-review-core'"), true);
+  assert.equal(presentationSource.includes("zoneKey: 'result-beacon'"), true);
+  assert.equal(presentationSource.includes("zoneKey: 'ai-review-operation-map'"), true);
+  assert.equal(presentationSource.includes("mode: 'STRUCTURAL_ONLY'"), true);
   assert.equal(presentationSource.includes("'standard'"), true);
   assert.equal(presentationSource.includes("'agent'"), true);
 });
@@ -65,16 +68,19 @@ test('removed lifecycle modules and duplicate global controls do not appear on h
 });
 
 
-test('DOM owns review navigation and overflow modal while bases and next reviews stay noninteractive', () => {
+test('DOM owns review navigation and overflow modal while map nodes stay noninteractive', () => {
   assert.equal(pageSource.includes('`/tasks/${item.taskId}?reviewKey=${reviewKey}`'), true);
   assert.equal(pageSource.includes('<Modal'), true);
   assert.equal(canvasSource.includes('command-center-overflow-tower'), true);
   assert.equal(canvasSource.includes('onOpenOverflow(lane, event.currentTarget)'), true);
+  assert.equal(canvasSource.includes('function QueueGate'), true);
+  assert.equal(canvasSource.includes('function ReviewCore'), true);
   assert.equal(canvasSource.includes('function NextReview'), true);
+  assert.equal(canvasSource.includes('function ResultBeacon'), true);
   assert.equal(canvasSource.includes('data-zone-key={lane.zoneKey}'), true);
   assert.equal((canvasSource.match(/<canvas/g) || []).length, 1);
   assert.equal(canvasSource.includes('data-command-center-dom-overlay="true"'), true);
-  assert.equal(canvasSource.includes('data-command-center-canvas-phase="PHASE_5C"'), true);
+  assert.equal(canvasSource.includes('data-command-center-canvas-phase="EVOLUTION_PHASE_1"'), true);
   assert.equal(pageSource.includes('overflowZoneKey'), true);
   assert.equal(pageSource.includes('afterClose={restoreOverflowFocus}'), true);
   assert.equal(pageSource.includes('trigger?.isConnected'), true);
@@ -84,19 +90,21 @@ test('DOM owns review navigation and overflow modal while bases and next reviews
 });
 
 
-test('single animated Canvas controller preserves fallback and resource ownership', () => {
-  assert.equal(canvasSource.includes('prefers-reduced-motion: reduce'), true);
+test('single static Canvas reads DOM anchors and never owns an animation loop', () => {
   assert.equal(canvasSource.includes('max-width: 700px'), true);
   assert.equal(rendererSource.includes('createCanvasRuntime'), true);
-  assert.equal(rendererSource.includes('isAnimationEnabled: () => hasAnimatedActivity(this.scene)'), true);
-  assert.equal(rendererSource.includes('PLATFORM_RUNTIME_MAP_FRAME_INTERVAL_MS'), true);
-  assert.equal(rendererSource.includes('drawQueuePulse'), true);
-  assert.equal(rendererSource.includes('drawReviewTokens'), true);
-  assert.equal(rendererSource.includes('drawWorkerTowers'), true);
+  assert.equal(rendererSource.includes('isAnimationEnabled: () => false'), true);
+  assert.equal(rendererSource.includes('measureOperationMapAnchors'), true);
+  assert.equal(rendererSource.includes('querySelector?.(`[data-zone-key="${zoneKey}"]`)'), true);
+  assert.equal(rendererSource.includes('drawQueuePulse'), false);
+  assert.equal(rendererSource.includes('drawReviewTokens'), false);
+  assert.equal(rendererSource.includes('drawWorkerTowers'), false);
+  assert.equal(rendererSource.includes('PLATFORM_RUNTIME_MAP_FRAME_INTERVAL_MS'), false);
   assert.equal(rendererSource.includes('setInterval'), false);
   assert.equal(rendererSource.includes('setTimeout'), false);
   assert.equal(rendererSource.includes('requestAnimationFrame'), false);
   assert.equal(rendererSource.includes('data-command-center-active-raf'), true);
+  assert.equal(rendererSource.includes("'data-command-center-animated-workers': 0"), true);
 });
 
 

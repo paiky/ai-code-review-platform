@@ -16,11 +16,14 @@ const LANE_META = Object.freeze({
 
 export function buildCommandCenterPresentation({ runtime } = {}) {
   const safeRuntime = runtime || null;
+  const workers = presentSceneWorkers(safeRuntime?.agent?.workerPool?.workers);
   const standard = presentLane(safeRuntime?.reviewLanes?.standard, 'standard');
-  const agent = presentLane(safeRuntime?.reviewLanes?.agent, 'agent');
+  const agent = presentLane(safeRuntime?.reviewLanes?.agent, 'agent', workers);
   const totalRunning = standard.runningCount + agent.runningCount;
   const totalQueued = standard.queuedCount + agent.queuedCount;
   const totalCapacity = standard.capacity + agent.capacity;
+  const freshness = safeRuntime?.freshness || 'EMPTY';
+  const generatedAt = safeRuntime?.generatedAt || null;
 
   return {
     hud: {
@@ -30,26 +33,55 @@ export function buildCommandCenterPresentation({ runtime } = {}) {
       utilizationPercent: totalCapacity > 0
         ? Math.min(100, Math.round(totalRunning / totalCapacity * 100))
         : 0,
-      freshness: safeRuntime?.freshness || 'EMPTY',
-      generatedAt: safeRuntime?.generatedAt || null
+      freshness,
+      generatedAt
     },
     map: {
-      zoneKey: 'platform-runtime-map',
-      queue: {
-        zoneKey: 'shared-queue',
+      zoneKey: 'ai-review-operation-map',
+      queueGate: {
+        zoneKey: 'queue-gate',
         queuedCount: totalQueued,
         standardQueuedCount: standard.queuedCount,
-        agentQueuedCount: agent.queuedCount
+        agentQueuedCount: agent.queuedCount,
+        nextQueued: {
+          standard: standard.nextQueued,
+          agent: agent.nextQueued
+        }
+      },
+      core: {
+        zoneKey: 'ai-review-core',
+        runningCount: totalRunning,
+        capacity: totalCapacity,
+        utilizationPercent: totalCapacity > 0
+          ? Math.min(100, Math.round(totalRunning / totalCapacity * 100))
+          : 0,
+        freshness,
+        generatedAt
       },
       lanes: [standard, agent],
+      resultBeacon: {
+        zoneKey: 'result-beacon',
+        mode: 'STRUCTURAL_ONLY',
+        title: 'Result Beacon',
+        description: '结果回流至任务详情与既有通知链路'
+      },
+      connections: [
+        { from: 'queue-gate', to: 'ai-review-core', token: 'queue' },
+        { from: 'ai-review-core', to: 'standard', token: 'standard' },
+        { from: 'ai-review-core', to: 'agent', token: 'agent' },
+        { from: 'standard', to: 'result-beacon', token: 'standard' },
+        { from: 'agent', to: 'result-beacon', token: 'agent' }
+      ],
       scene: {
-        id: 'platform-runtime-map',
+        id: 'ai-review-operation-map',
         snapshotKey: safeRuntime?.generatedAt || 'EMPTY',
-        freshness: safeRuntime?.freshness || 'EMPTY',
-        workers: presentSceneWorkers(safeRuntime?.agent?.workerPool?.workers),
-        lanes: [
-          sceneLane(standard),
-          sceneLane(agent)
+        freshness,
+        connections: [
+          { from: 'queue-gate', to: 'ai-review-core', token: 'queue' },
+          { from: 'ai-review-core', to: 'standard', token: 'standard' },
+          { from: 'ai-review-core', to: 'agent', token: 'agent' },
+          { from: 'standard', to: 'result-beacon', token: 'standard' },
+          { from: 'agent', to: 'result-beacon', token: 'agent' }
         ]
       }
     }
@@ -57,7 +89,7 @@ export function buildCommandCenterPresentation({ runtime } = {}) {
 }
 
 
-function presentLane(value, zoneKey) {
+function presentLane(value, zoneKey, workers = []) {
   const lane = value || {};
   const meta = LANE_META[zoneKey];
   return {
@@ -71,7 +103,8 @@ function presentLane(value, zoneKey) {
     utilizationPercent: number(lane.utilizationPercent),
     runningItems: (lane.runningItems || []).map(presentItem),
     nextQueued: lane.nextQueued ? presentItem(lane.nextQueued) : null,
-    runningItemsTruncated: Boolean(lane.runningItemsTruncated)
+    runningItemsTruncated: Boolean(lane.runningItemsTruncated),
+    workers: zoneKey === 'agent' ? workers : []
   };
 }
 
@@ -82,25 +115,6 @@ function presentItem(item) {
     providerModelLabel: [item.provider, item.model].filter(Boolean).join(' · ') || 'Provider 待分配',
     stageLabel: stageLabel(item.stage),
     engineToken: item.fallback ? 'fallback' : item.requestedEngine === 'AGENT' ? 'agent' : 'standard'
-  };
-}
-
-
-function sceneLane(lane) {
-  return {
-    zoneKey: lane.zoneKey,
-    capacity: lane.capacity,
-    runningCount: lane.runningCount,
-    queuedCount: lane.queuedCount,
-    utilizationPercent: lane.utilizationPercent,
-    runningItems: lane.runningItems.map(item => ({
-      jobId: item.jobId,
-      taskId: item.taskId,
-      reviewKey: item.reviewKey,
-      workerId: item.workerId,
-      fallback: item.fallback,
-      stage: item.stage
-    }))
   };
 }
 
