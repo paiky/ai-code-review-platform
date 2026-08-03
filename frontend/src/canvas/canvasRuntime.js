@@ -130,6 +130,9 @@ class CanvasRuntime {
   handleAnimationFrame(timestamp) {
     this.rafId = null;
     if (this.disposed || this.failed || !this.shouldAnimate()) return;
+    // Reserve the only next frame before drawing so renderer diagnostics taken
+    // inside onDraw observe the stable single-RAF ownership boundary.
+    this.scheduleFrame();
     const frameTimestamp = Math.max(0, finiteNumber(timestamp, 0));
     const frameInterval = Math.max(
       0,
@@ -145,7 +148,6 @@ class CanvasRuntime {
     } else {
       this.skippedAnimationFrameCount += 1;
     }
-    this.scheduleFrame();
   }
 
   applySize(rect) {

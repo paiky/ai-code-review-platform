@@ -21,7 +21,7 @@ export default function CommandCenterPage() {
   const freshness = runtime?.freshness || (runtimeLoading ? 'LOADING' : 'EMPTY');
 
   return (
-    <main className="command-center-page" data-command-center-phase="PHASE_5A">
+    <main className="command-center-page" data-command-center-phase="PHASE_5B">
       <section className="command-center-map-shell" aria-labelledby="command-center-title">
         <header className="command-center-map-toolbar">
           <div className="command-center-map-identity">

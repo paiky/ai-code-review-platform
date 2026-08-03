@@ -46,6 +46,7 @@ export function buildCommandCenterPresentation({ runtime } = {}) {
         id: 'platform-runtime-map',
         snapshotKey: safeRuntime?.generatedAt || 'EMPTY',
         freshness: safeRuntime?.freshness || 'EMPTY',
+        workers: presentSceneWorkers(safeRuntime?.agent?.workerPool?.workers),
         lanes: [
           sceneLane(standard),
           sceneLane(agent)
@@ -91,8 +92,27 @@ function sceneLane(lane) {
     capacity: lane.capacity,
     runningCount: lane.runningCount,
     queuedCount: lane.queuedCount,
-    utilizationPercent: lane.utilizationPercent
+    utilizationPercent: lane.utilizationPercent,
+    runningItems: lane.runningItems.map(item => ({
+      jobId: item.jobId,
+      taskId: item.taskId,
+      reviewKey: item.reviewKey,
+      workerId: item.workerId,
+      fallback: item.fallback,
+      stage: item.stage
+    }))
   };
+}
+
+
+function presentSceneWorkers(value) {
+  return (Array.isArray(value) ? value : []).map(worker => ({
+    workerId: worker.workerId,
+    state: worker.state,
+    online: Boolean(worker.online),
+    capacity: number(worker.capacity),
+    activeJobId: worker.activeJobId
+  }));
 }
 
 

@@ -36,8 +36,8 @@ test('root route renders Command Center while preserving legacy taskId redirect'
 });
 
 
-test('phase 5A home is a compact platform-level dual-lane runtime map', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="PHASE_5A"'), true);
+test('phase 5B home is a compact platform-level dual-lane runtime map', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="PHASE_5B"'), true);
   assert.equal(pageSource.includes('平台 Review 运行地图'), true);
   assert.equal(pageSource.includes('<CommandCenterCanvas'), true);
   assert.equal(presentationSource.includes("zoneKey: 'shared-queue'"), true);
@@ -74,15 +74,19 @@ test('DOM owns review navigation and overflow modal while bases and next reviews
   assert.equal(canvasSource.includes('data-zone-key={lane.zoneKey}'), true);
   assert.equal((canvasSource.match(/<canvas/g) || []).length, 1);
   assert.equal(canvasSource.includes('data-command-center-dom-overlay="true"'), true);
-  assert.equal(canvasSource.includes('data-command-center-canvas-phase="PHASE_5A"'), true);
+  assert.equal(canvasSource.includes('data-command-center-canvas-phase="PHASE_5B"'), true);
 });
 
 
-test('single static Canvas controller preserves fallback and resource ownership', () => {
+test('single animated Canvas controller preserves fallback and resource ownership', () => {
   assert.equal(canvasSource.includes('prefers-reduced-motion: reduce'), true);
   assert.equal(canvasSource.includes('max-width: 700px'), true);
   assert.equal(rendererSource.includes('createCanvasRuntime'), true);
-  assert.equal(rendererSource.includes('isAnimationEnabled: () => false'), true);
+  assert.equal(rendererSource.includes('isAnimationEnabled: () => hasAnimatedActivity(this.scene)'), true);
+  assert.equal(rendererSource.includes('PLATFORM_RUNTIME_MAP_FRAME_INTERVAL_MS'), true);
+  assert.equal(rendererSource.includes('drawQueuePulse'), true);
+  assert.equal(rendererSource.includes('drawReviewTokens'), true);
+  assert.equal(rendererSource.includes('drawWorkerTowers'), true);
   assert.equal(rendererSource.includes('setInterval'), false);
   assert.equal(rendererSource.includes('setTimeout'), false);
   assert.equal(rendererSource.includes('requestAnimationFrame'), false);

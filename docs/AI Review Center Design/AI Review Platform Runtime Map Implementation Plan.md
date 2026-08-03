@@ -4,13 +4,14 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Phase 5A`
-- 阶段状态：`PHASE 5A COMPLETED — WAITING FOR STRUCTURE AND INFORMATION DENSITY CONFIRMATION`
+- 当前阶段：`Phase 5B`
+- 阶段状态：`PHASE 5B COMPLETED — WAITING FOR MAP EFFECT CONFIRMATION`
 - Phase 4 基线 Commit：`d63fccf`
 - Phase 5A 授权时间：2026-08-03
 - 计划创建时间：2026-08-03
-- 当前目标：等待用户验证静态双路线地图的结构与信息密度。
-- 当前停止点：Phase 5A 已完成；未经用户确认“继续下一阶段”不得进入 Phase 5B。
+- Phase 5B 授权时间：2026-08-03
+- 当前目标：等待用户确认地图动态效果强度。
+- 当前停止点：Phase 5B 已完成；未经用户确认“继续下一阶段”不得进入 Phase 5C。
 
 本文档是 Phase 5 的独立实施总控。Phase 4 及更早阶段继续以原 Implementation Plan 为历史记录，不再向原文档追加 Phase 5 内容。
 
@@ -233,3 +234,25 @@ Phase 5A 完成后状态更新为 `PHASE 5A COMPLETED — WAITING FOR STRUCTURE 
 - 额外执行整个 Code Quality 合约文件时出现 3 个与本次范围无关的既有顺序敏感失败；本次唯一受影响的 Scheduler Capacity 用例已单独通过，不在 Phase 5A 修改范围内扩展修复。
 
 Phase 5A 到此停止。下一步只在用户明确确认“继续下一阶段”后执行 Phase 5B。
+
+### 8.4 Phase 5B 实施结果
+
+- Runtime v2、双路线 DOM、Review 跳转和溢出 Modal 保持不变；本阶段没有修改后端接口、队列顺序或业务状态机。
+- Presentation 仅将真实 `runningItems` 与 Runtime Worker Pool 的安全状态投影到 Canvas Scene，不生成模拟 Review、Worker 或队列数据。
+- 同一 Canvas Runtime 的单 RAF 管线新增候场脉冲、Standard/Agent 分流光流、真实运行 Review 标记移动和在线 Worker 心跳；Fallback 标记使用琥珀色。
+- 动画只在快照为 `FRESH` 且存在真实排队、运行 Review 或在线 Worker 时启动，固定约 30 FPS；Empty/Stale 保持静态。
+- reduced-motion、390 小屏和 Canvas 初始化/绘制失败继续使用完整静态 DOM；Canvas 仍为 `aria-hidden`，不承载文字、焦点或跳转。
+- 共享 Canvas Runtime 调整为预订唯一下一帧后再绘制当前帧，使帧内诊断准确反映单 RAF 所有权；失败清理、visibility pause/resume 与单 Observer/Listener 边界不变。
+- 增加只读 frame/scene update/真实运行项/在线 Worker 诊断，用于长时间资源稳定性验收，不暴露业务敏感字段。
+
+### 8.5 Phase 5B 验证证据
+
+- Renderer/Presentation/信息架构/Canvas Runtime 专项测试通过；前端全量 Node 测试 `87 passed`、`0 failed`。
+- `scripts/run-frontend.cmd build` 生产构建通过，仅保留仓库既有的大 Chunk 警告。
+- 1440×900 与 1024×800：单 Canvas、单 RAF、两条路线完整展示且无横向溢出；390×844：Canvas 不挂载，`SMALL_SCREEN` 完整 DOM fallback，两条路线、候场区和两条下一候选均保留且无横向溢出。
+- 真实环境当前有 2 个在线 Worker、无运行 Review；Worker 心跳在浏览器中由真实状态驱动，运行 Review 移动、Fallback 和队列脉冲由专项测试覆盖，未为验收创建虚构业务任务。
+- 浏览器持续观察 `73.5s`，Scene 更新由 `3` 增至 `17`，覆盖至少 12 次 Runtime 更新；Canvas/Observer/Listener/RAF 始终各 1，DOM 节点始终为 65。
+- 观察期累计 1685 帧，平均绘制约 `0.136ms`、最大 `0.5ms`、超 8ms 帧为 0；控制台无 Error/Warning。
+- `git diff --check` 通过；本阶段无后端变更，因此未重复执行 Python 测试或 MySQL EXPLAIN。
+
+Phase 5B 到此停止。下一步只在用户确认地图效果并明确“继续下一阶段”后执行 Phase 5C。

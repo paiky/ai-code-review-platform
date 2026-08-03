@@ -12,6 +12,11 @@ test('presentation builds a shared queue and two stable review bases', () => {
     runtime: {
       freshness: 'FRESH',
       generatedAt: '2026-08-03T02:00:00Z',
+      agent: {
+        workerPool: {
+          workers: [{ workerId: 'worker-1', state: 'BUSY', online: true, capacity: 1, activeJobId: 9 }]
+        }
+      },
       reviewLanes: {
         standard: lane('standard', 10, 3, 7, item({ fallback: true })),
         agent: lane('agent', 4, 2, 5, item({ requestedEngine: 'AGENT' }))
@@ -28,6 +33,7 @@ test('presentation builds a shared queue and two stable review bases', () => {
   assert.equal(presentation.map.lanes[0].nextQueued.engineToken, 'fallback');
   assert.equal(presentation.map.lanes[1].nextQueued.engineToken, 'agent');
   assert.equal(presentation.map.scene.id, 'platform-runtime-map');
+  assert.equal(presentation.map.scene.workers[0].workerId, 'worker-1');
 });
 
 

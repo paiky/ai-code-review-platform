@@ -69,7 +69,7 @@ export default function CommandCenterCanvas({
       {shouldMountCanvas && (
         <canvas
           className="command-center-runtime-map-canvas"
-          data-command-center-canvas-phase="PHASE_5A"
+          data-command-center-canvas-phase="PHASE_5B"
           ref={canvasRef}
           aria-hidden="true"
         />
