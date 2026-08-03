@@ -36,8 +36,8 @@ test('root route renders Command Center while preserving legacy taskId redirect'
 });
 
 
-test('evolution phase 1 home is a five-node AI Review operation map', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="EVOLUTION_PHASE_1"'), true);
+test('evolution phase 3A home is a five-node static AI Review operation map', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="EVOLUTION_PHASE_3A"'), true);
   assert.equal(pageSource.includes('AI Review Operation Map'), true);
   assert.equal(pageSource.includes('<CommandCenterCanvas'), true);
   assert.equal(presentationSource.includes("zoneKey: 'queue-gate'"), true);
@@ -80,7 +80,7 @@ test('DOM owns review navigation and overflow modal while map nodes stay noninte
   assert.equal(canvasSource.includes('data-zone-key={lane.zoneKey}'), true);
   assert.equal((canvasSource.match(/<canvas/g) || []).length, 1);
   assert.equal(canvasSource.includes('data-command-center-dom-overlay="true"'), true);
-  assert.equal(canvasSource.includes('data-command-center-canvas-phase="EVOLUTION_PHASE_1"'), true);
+  assert.equal(canvasSource.includes('data-command-center-canvas-phase="EVOLUTION_PHASE_3A"'), true);
   assert.equal(pageSource.includes('overflowZoneKey'), true);
   assert.equal(pageSource.includes('afterClose={restoreOverflowFocus}'), true);
   assert.equal(pageSource.includes('trigger?.isConnected'), true);
@@ -105,6 +105,29 @@ test('single static Canvas reads DOM anchors and never owns an animation loop', 
   assert.equal(rendererSource.includes('requestAnimationFrame'), false);
   assert.equal(rendererSource.includes('data-command-center-active-raf'), true);
   assert.equal(rendererSource.includes("'data-command-center-animated-workers': 0"), true);
+  assert.equal(rendererSource.includes("'data-command-center-environment-particles': 0"), true);
+  assert.equal(styleSource.includes('@keyframes'), false);
+  assert.equal(styleSource.includes('animation:'), false);
+});
+
+
+test('phase 3A replaces lane cards with static map structures', () => {
+  for (const token of [
+    'command-center-gate-hardware',
+    'command-center-core-ground',
+    'command-center-core-outer-ring',
+    'command-center-core-routing-ring',
+    'command-center-core-crystal',
+    'command-center-track-trench',
+    'command-center-track-roadbed',
+    'command-center-review-tower',
+    'command-center-worker-spire',
+    'command-center-result-merge-ring'
+  ]) assert.equal(canvasSource.includes(token), true, token);
+  assert.equal(styleSource.includes('--cc-standard: #c88a16'), true);
+  assert.equal(styleSource.includes('--cc-agent: #7056d8'), true);
+  assert.equal(styleSource.includes('.command-center-lane-station {'), true);
+  assert.equal(styleSource.includes('command-center-lane-station { display: flex; flex-direction: column; align-self: stretch; padding: 12px; overflow: hidden; }'), false);
 });
 
 
@@ -123,7 +146,7 @@ test('public snapshot API remains read-only and runtime polling stays deduplicat
 
 
 test('daylight palette maintains WCAG AA text contrast', () => {
-  const surfaces = ['#eaf2f7', '#ffffff', '#dff6f5', '#eee9ff', '#fff3cc'];
+  const surfaces = ['#e8f1f6', '#ffffff', '#fff1c7', '#eee9ff', '#fff3cc'];
   const text = '#17324d';
   for (const color of [text, ...surfaces]) assert.equal(styleSource.includes(color), true, color);
   for (const surface of surfaces) assert.ok(contrastRatio(text, surface) >= 4.5, surface);

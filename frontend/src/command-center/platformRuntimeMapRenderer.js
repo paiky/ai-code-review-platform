@@ -4,11 +4,25 @@ import { createCanvasRuntime } from '../canvas/canvasRuntime.js';
 export const PLATFORM_RUNTIME_MAP_DIAGNOSTICS_KEY = '__platformRuntimeMapDiagnostics';
 export const PLATFORM_RUNTIME_MAP_DRAW_BUDGET_MS = 8;
 
-const CONNECTION_COLORS = Object.freeze({
-  queue: '#b87500',
-  standard: '#0f8fa3',
+export const PLATFORM_RUNTIME_MAP_VISUAL_TOKENS = Object.freeze({
+  terrain: '#e8f1f6',
+  terrainInset: '#d8e7ef',
+  trench: '#7891a3',
+  roadbed: '#f8fcfe',
+  queue: '#c48619',
+  standard: '#c88a16',
+  standardHighlight: '#f4c451',
   agent: '#7056d8',
+  agentHighlight: '#a892ff',
+  beacon: '#2baebb',
   neutral: '#587187'
+});
+
+const CONNECTION_COLORS = Object.freeze({
+  queue: PLATFORM_RUNTIME_MAP_VISUAL_TOKENS.queue,
+  standard: PLATFORM_RUNTIME_MAP_VISUAL_TOKENS.standard,
+  agent: PLATFORM_RUNTIME_MAP_VISUAL_TOKENS.agent,
+  neutral: PLATFORM_RUNTIME_MAP_VISUAL_TOKENS.neutral
 });
 
 
@@ -117,6 +131,7 @@ class PlatformRuntimeMapController {
       'data-command-center-active-raf': snapshot.activeRafCount || 0,
       'data-command-center-animated-reviews': 0,
       'data-command-center-animated-workers': 0,
+      'data-command-center-environment-particles': 0,
       'data-command-center-anchor-count': this.lastAnchorCount,
       'data-command-center-observer-registrations': snapshot.observerRegistrationCount || 0,
       'data-command-center-listener-registrations': snapshot.listenerRegistrationCount || 0
@@ -158,13 +173,15 @@ function normalizeScene(value) {
 
 
 function drawDaylightTerrain(context, width, height, freshness) {
-  context.fillStyle = '#eaf2f7';
+  context.fillStyle = PLATFORM_RUNTIME_MAP_VISUAL_TOKENS.terrain;
   context.fillRect(0, 0, width, height);
   context.save();
   context.globalAlpha = freshness === 'STALE' ? 0.55 : 1;
-  context.strokeStyle = 'rgba(50, 85, 120, 0.08)';
+  context.fillStyle = 'rgba(255, 255, 255, 0.34)';
+  context.fillRect(width * 0.04, height * 0.08, width * 0.92, height * 0.84);
+  context.strokeStyle = 'rgba(50, 85, 120, 0.07)';
   context.lineWidth = 1;
-  const grid = 34;
+  const grid = 38;
   for (let x = -height; x < width + height; x += grid) {
     context.beginPath();
     context.moveTo(x, 0);
@@ -177,10 +194,14 @@ function drawDaylightTerrain(context, width, height, freshness) {
     context.lineTo(x - height, height);
     context.stroke();
   }
-  context.fillStyle = 'rgba(255, 255, 255, 0.42)';
+  context.strokeStyle = 'rgba(53, 100, 127, 0.1)';
+  context.lineWidth = 2;
+  context.strokeRect(width * 0.045, height * 0.085, width * 0.91, height * 0.83);
+  context.fillStyle = 'rgba(255, 255, 255, 0.3)';
   context.beginPath();
-  context.ellipse(width * 0.5, height * 0.5, width * 0.34, height * 0.38, 0, 0, Math.PI * 2);
+  context.ellipse(width * 0.52, height * 0.5, width * 0.29, height * 0.39, 0, 0, Math.PI * 2);
   context.fill();
+  drawStaticTerrainPads(context, width, height);
   context.restore();
 }
 
@@ -189,24 +210,29 @@ function drawStaticConnections(context, anchors, freshness) {
   context.save();
   context.lineCap = 'round';
   context.lineJoin = 'round';
-  context.globalAlpha = freshness === 'STALE' ? 0.38 : 0.68;
+  context.globalAlpha = freshness === 'STALE' ? 0.42 : 0.9;
   for (const anchor of anchors) {
     const color = CONNECTION_COLORS[anchor.token] || CONNECTION_COLORS.neutral;
-    const distance = Math.abs(anchor.toPoint.x - anchor.fromPoint.x);
-    const bend = Math.max(22, distance * 0.42);
-    context.beginPath();
-    context.moveTo(anchor.fromPoint.x, anchor.fromPoint.y);
-    context.bezierCurveTo(
-      anchor.fromPoint.x + bend,
-      anchor.fromPoint.y,
-      anchor.toPoint.x - bend,
-      anchor.toPoint.y,
-      anchor.toPoint.x,
-      anchor.toPoint.y
-    );
-    context.strokeStyle = color;
-    context.lineWidth = anchor.token === 'queue' ? 10 : 8;
+    traceConnection(context, anchor);
+    context.strokeStyle = 'rgba(56, 83, 103, 0.28)';
+    context.lineWidth = anchor.token === 'queue' ? 34 : 30;
     context.stroke();
+    traceConnection(context, anchor);
+    context.strokeStyle = 'rgba(255, 255, 255, 0.94)';
+    context.lineWidth = anchor.token === 'queue' ? 26 : 23;
+    context.stroke();
+    traceConnection(context, anchor);
+    context.strokeStyle = color;
+    context.lineWidth = anchor.token === 'queue' ? 7 : 6;
+    context.stroke();
+    context.save();
+    context.globalAlpha *= 0.42;
+    context.setLineDash?.([3, 12]);
+    traceConnection(context, anchor);
+    context.strokeStyle = '#ffffff';
+    context.lineWidth = 2;
+    context.stroke();
+    context.restore();
     drawEndpoint(context, anchor.toPoint, color);
   }
   context.restore();
@@ -215,15 +241,55 @@ function drawStaticConnections(context, anchors, freshness) {
 
 function drawEndpoint(context, point, color) {
   context.save();
-  context.globalAlpha = 0.9;
-  context.fillStyle = '#ffffff';
+  context.globalAlpha = 0.96;
+  context.fillStyle = 'rgba(255, 255, 255, 0.95)';
   context.strokeStyle = color;
-  context.lineWidth = 3;
+  context.lineWidth = 4;
   context.beginPath();
-  context.arc(point.x, point.y, 5, 0, Math.PI * 2);
+  context.arc(point.x, point.y, 9, 0, Math.PI * 2);
   context.fill();
   context.stroke();
+  context.fillStyle = color;
+  context.beginPath();
+  context.arc(point.x, point.y, 3, 0, Math.PI * 2);
+  context.fill();
   context.restore();
+}
+
+
+function drawStaticTerrainPads(context, width, height) {
+  context.save();
+  context.fillStyle = 'rgba(205, 222, 232, 0.32)';
+  context.strokeStyle = 'rgba(61, 99, 122, 0.09)';
+  context.lineWidth = 2;
+  const pads = [
+    [width * 0.02, height * 0.18, width * 0.17, height * 0.64],
+    [width * 0.22, height * 0.11, width * 0.22, height * 0.78],
+    [width * 0.47, height * 0.07, width * 0.36, height * 0.4],
+    [width * 0.47, height * 0.53, width * 0.36, height * 0.4],
+    [width * 0.86, height * 0.2, width * 0.12, height * 0.6]
+  ];
+  for (const [x, y, padWidth, padHeight] of pads) {
+    context.fillRect(x, y, padWidth, padHeight);
+    context.strokeRect(x, y, padWidth, padHeight);
+  }
+  context.restore();
+}
+
+
+function traceConnection(context, anchor) {
+  const distance = Math.abs(anchor.toPoint.x - anchor.fromPoint.x);
+  const bend = Math.max(24, distance * 0.42);
+  context.beginPath();
+  context.moveTo(anchor.fromPoint.x, anchor.fromPoint.y);
+  context.bezierCurveTo(
+    anchor.fromPoint.x + bend,
+    anchor.fromPoint.y,
+    anchor.toPoint.x - bend,
+    anchor.toPoint.y,
+    anchor.toPoint.x,
+    anchor.toPoint.y
+  );
 }
 
 

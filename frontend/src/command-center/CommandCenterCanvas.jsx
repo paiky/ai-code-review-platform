@@ -71,7 +71,7 @@ export default function CommandCenterCanvas({
       {shouldMountCanvas && (
         <canvas
           className="command-center-runtime-map-canvas"
-          data-command-center-canvas-phase="EVOLUTION_PHASE_1"
+          data-command-center-canvas-phase="EVOLUTION_PHASE_3A"
           ref={canvasRef}
           aria-hidden="true"
         />
@@ -101,8 +101,15 @@ export default function CommandCenterCanvas({
 function QueueGate({ queueGate, lanes }) {
   return (
     <article className="command-center-map-node command-center-queue-gate" data-zone-key={queueGate.zoneKey}>
-      <span className="command-center-zone-kicker">QUEUE GATE</span>
-      <h2>Review 候场门</h2>
+      <div className="command-center-gate-hardware" aria-hidden="true">
+        <span className="command-center-gate-pylon is-left" />
+        <span className="command-center-gate-portal"><i /></span>
+        <span className="command-center-gate-pylon is-right" />
+      </div>
+      <div className="command-center-zone-heading">
+        <span className="command-center-zone-kicker">QUEUE GATE</span>
+        <h2>Review 候场门</h2>
+      </div>
       <div className="command-center-queue-summary">
         <strong>{queueGate.queuedCount}</strong>
         <span>条 Review 等待调度</span>
@@ -127,7 +134,15 @@ function ReviewCore({ core }) {
   return (
     <article className="command-center-map-node command-center-review-core" data-zone-key={core.zoneKey}>
       <span className="command-center-zone-kicker">SCHEDULING CORE</span>
-      <div className="command-center-core-emblem" aria-hidden="true"><span>AI</span></div>
+      <div className="command-center-core-assembly" aria-hidden="true">
+        <span className="command-center-core-ground" />
+        <span className="command-center-core-outer-ring" />
+        <span className="command-center-core-routing-ring">
+          <i className="is-standard" />
+          <i className="is-agent" />
+        </span>
+        <span className="command-center-core-crystal"><b>AI</b></span>
+      </div>
       <h2>AI Review Core</h2>
       <p>统一接收并分流真实 Review</p>
       <div className="command-center-core-load">
@@ -166,6 +181,7 @@ function LaneStation({ lane, visibleLimit, onOpenReview, onOpenOverflow }) {
   const hiddenCount = Math.max(0, lane.runningCount - visibleItems.length);
   return (
     <article className={`command-center-map-node command-center-lane-station is-${lane.colorToken}`} data-zone-key={lane.zoneKey}>
+      <span className="command-center-lane-junction" aria-hidden="true" />
       <header>
         <div>
           <span className="command-center-zone-kicker">{lane.eyebrow} LANE</span>
@@ -179,6 +195,8 @@ function LaneStation({ lane, visibleLimit, onOpenReview, onOpenOverflow }) {
       </header>
       <CapacitySlots lane={lane} />
       <div className="command-center-lane-track">
+        <span className="command-center-track-trench" aria-hidden="true" />
+        <span className="command-center-track-roadbed" aria-hidden="true" />
         <span className="command-center-track-rail" aria-hidden="true" />
         <div className="command-center-running-items" aria-label={`${lane.title}运行中 Review`}>
           {visibleItems.map(item => (
@@ -200,7 +218,7 @@ function LaneStation({ lane, visibleLimit, onOpenReview, onOpenOverflow }) {
           )}
         </div>
       </div>
-      {lane.zoneKey === 'agent' && <WorkerTowers workers={lane.workers} />}
+      {lane.zoneKey === 'agent' && <WorkerTowers workers={lane.workers} runningItems={lane.runningItems} />}
       <footer>
         <span>{lane.zoneKey === 'agent' ? `${lane.capacity} 在线 Worker Capacity` : '共享 Provider Scheduler'}</span>
       </footer>
@@ -214,7 +232,7 @@ function CapacitySlots({ lane }) {
   return (
     <div className="command-center-capacity-slots" aria-hidden="true">
       {Array.from({ length: displayedCapacity }, (_, index) => (
-        <span key={index} className={index < lane.runningCount ? 'is-active' : ''} />
+        <span key={index} className={index < lane.runningCount ? 'is-active' : ''}><i /></span>
       ))}
       {lane.capacity > displayedCapacity && <small>+{lane.capacity - displayedCapacity}</small>}
     </div>
@@ -222,17 +240,25 @@ function CapacitySlots({ lane }) {
 }
 
 
-function WorkerTowers({ workers = [] }) {
+function WorkerTowers({ workers = [], runningItems = [] }) {
   if (workers.length === 0) return <div className="command-center-worker-empty">当前无 Worker 状态快照</div>;
   return (
     <div className="command-center-worker-towers" aria-label="Agent Worker 状态">
-      {workers.slice(0, 8).map(worker => (
-        <div key={worker.workerId} className={`is-${workerState(worker).toLowerCase()}`}>
-          <span aria-hidden="true" />
-          <strong>{worker.workerId || 'Worker'}</strong>
-          <small>{workerState(worker)}</small>
-        </div>
-      ))}
+      {workers.slice(0, 8).map(worker => {
+        const runningItem = runningItems.find(item => (
+          (worker.workerId && item.workerId === worker.workerId)
+          || (worker.activeJobId && String(item.jobId) === String(worker.activeJobId))
+        ));
+        return (
+          <div key={worker.workerId} className={`is-${workerState(worker).toLowerCase()}`}>
+            <span className="command-center-worker-spire" aria-hidden="true"><i /></span>
+            <span className="command-center-worker-label">
+              <strong>{worker.workerId || 'Worker'}</strong>
+              <small>{runningItem ? `${workerState(worker)} · ${runningItem.projectName}` : workerState(worker)}</small>
+            </span>
+          </div>
+        );
+      })}
       {workers.length > 8 && <em>+{workers.length - 8} Worker</em>}
     </div>
   );
@@ -243,7 +269,10 @@ function ResultBeacon({ beacon }) {
   return (
     <article className="command-center-map-node command-center-result-beacon" data-zone-key={beacon.zoneKey}>
       <span className="command-center-zone-kicker">RESULT BEACON</span>
-      <div className="command-center-result-emblem" aria-hidden="true"><span>✓</span></div>
+      <div className="command-center-result-platform" aria-hidden="true">
+        <span className="command-center-result-merge-ring" />
+        <span className="command-center-result-emblem"><i>✓</i></span>
+      </div>
       <h2>{beacon.title}</h2>
       <p>{beacon.description}</p>
       <small>STRUCTURAL ENDPOINT</small>
@@ -260,11 +289,13 @@ function ReviewMarker({ item, onOpen }) {
       onClick={() => onOpen(item)}
       aria-label={`查看 ${item.projectName} 的 ${item.displayName}`}
     >
-      <span className="command-center-review-beacon" aria-hidden="true" />
-      <strong>{item.projectName}</strong>
-      <span>{item.displayName}</span>
-      <small>{item.providerModelLabel}</small>
-      <em>{item.stageLabel}</em>
+      <span className="command-center-review-tower" aria-hidden="true"><i /></span>
+      <span className="command-center-review-label">
+        <strong>{item.projectName}</strong>
+        <span>{item.displayName}</span>
+        <small>{item.providerModelLabel}</small>
+        <em>{item.stageLabel}</em>
+      </span>
     </button>
   );
 }

@@ -2,13 +2,13 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Evolution Phase 3A / 3B 拆分规划`
-- 当前状态：`EVOLUTION PHASE 3 SPLIT READY — WAITING FOR PHASE 3A AUTHORIZATION`
+- 当前阶段：`Evolution Phase 3A：静态视觉重建`
+- 当前状态：`EVOLUTION PHASE 3A COMPLETED — WAITING FOR STATIC VISUAL CONFIRMATION`
 - 实施基线 Commit：`dfe20a9`
 - 参考图：`docs/AI Review Center Design/assets/ai-review-command-center-reference.png`
 - 计划创建时间：2026-08-03
-- 当前授权：用户已确认 Evolution Phase 2 Visual & Motion Specification；当前仅授权将 Phase 3 拆分为 Phase 3A/3B 并回写本文档，未授权执行 Phase 3A 或 Phase 3B 代码。
-- 当前停止点：Phase 3A/3B 计划拆分完成后停止；等待用户单独授权 Phase 3A，且 Phase 3A 完成并获静态视觉确认前不得进入 Phase 3B。
+- 当前授权：用户已明确授权执行 Evolution Phase 3A 静态视觉重建；该授权已执行完毕，不包含 Phase 3B 动效实现。
+- 当前停止点：Phase 3A 已完成；等待用户确认静态视觉并单独授权 Phase 3B，不得自动编码、推送或部署。
 
 本文档是 Phase 5A～5C 完成后的新视觉架构总控。`AI Review Platform Runtime Map Implementation Plan.md` 继续作为 Phase 5 历史实施记录，不再追加 Evolution v2 的阶段状态。
 
@@ -764,4 +764,37 @@ Evolution Phase 2 Visual & Motion Specification 已由用户确认通过。
 - 已确认 Phase 3A 验收包含 1440 参考图并排、1024、390、文字遮盖截图，以及 Empty、Standard-only、Agent-only、混合运行。
 - 文档差异通过 `git diff --check`；未修改前端、后端、测试、README、旧计划或未跟踪资料。
 
-Phase 3 拆分规划到此停止。等待用户明确授权执行 Evolution Phase 3A；不得编码、推送、部署或进入 Phase 3B。
+Phase 3 拆分规划当时在此停止，并等待用户明确授权 Evolution Phase 3A；该门禁随后由下方实施记录承接，Phase 3B 仍须保持独立授权。
+
+### Evolution Phase 3A 实施记录
+
+- 2026-08-03：用户明确授权执行 Evolution Phase 3A，状态更新为 `EVOLUTION PHASE 3A IN PROGRESS`。
+- 已将地图 Visual Token 固定为日光冰蓝地形、金色 Standard、紫色 Agent、琥珀 Queue 和青色 Beacon；Canvas 负责 L0～L2 静态地形、平台轮廓、道路沟槽、路床、模式内轨及五个真实 DOM 锚点接驳环。
+- Queue Gate 已重建为闸门建筑、双队列泊位和真实下一候选铭牌；AI Review Core 已重建为地面基座、外层能量环、金/紫调度环和核心晶体四层静态结构，并保持全图第一视觉重心。
+- Standard/Agent 大型白卡已移除，两条 Lane 改为贴地路线、容量泊位、紧凑标题铭牌和真实运行站；Standard 使用金色稳定路线，Agent 使用紫色推理路线和真实 Worker 塔，运行 Review 按 `workerId/activeJobId` 做只读绑定。
+- Review Marker 已地图化为轨道处理塔，同时保留原生 Button、项目优先文案、Review 跳转、6/4/2 可见数量和 `+N` Modal；Fallback 继续只归属 Standard 并使用琥珀静态标识。
+- Result Beacon 已重建为嵌入地形的双路线汇聚台，只保留固定结构说明，未新增完成、失败、通过率、Finding 或通知统计。
+- 1440/1024 保持 Gate→Core→上下双 Lane→Beacon 同一横向拓扑；390 使用 Gate→Core→Standard→Agent→Beacon 纵向静态 DOM 图，不挂载 Canvas且无横向滚动。
+- Phase 3B 的 Core 呼吸、道路流光、任务光标、Worker 动画、环境粒子、Runtime 差异事件、CSS keyframes、动画 Timer 和任何活动 RAF 均未实现。
+
+### Evolution Phase 3A 验证证据
+
+- Command Center 专项 Node 测试：`14 passed`；覆盖五节点投影、无旧白卡结构、四层 Core、地图构件、真实 DOM 锚点、静态资源所有权及 Visual Token。
+- 前端全量 Node 测试：`88 passed`。
+- 生产构建：`scripts/run-frontend.cmd build` 成功；仅保留既有大 Chunk 提示，无构建错误。
+- Empty：等待 `0`、运行 Marker `0`、双 Lane 空闲标识 `2`、Result Beacon 业务统计 `0`；Worker 塔只显示真实在线 Worker 待机状态。
+- Standard-only：等待 `2`、Standard Marker `2`、Agent Marker `0`，Agent 路线保持真实空闲。
+- Agent-only：等待 `2`、Agent Marker `2`、Standard Marker `0`，两个运行项均绑定真实 Worker 标签。
+- 混合运行：等待 `5`、运行 `6`，Standard/Agent 各 `3` 个 Marker；Agent 降级项以一个 Fallback Marker 归入 Standard，Agent 显示 `4` 个真实 Worker 塔。
+- 1440×900：五个节点、五条连续道路和首屏闭环完整可见；单 Canvas、五个真实锚点、无横向溢出。
+- 1024×800：保持横向同构地图、每 Lane 最多 `4` 个 Marker、五节点可见且无横向溢出。
+- 390×844：Canvas 数量 `0`、Fallback 为 `SMALL_SCREEN`、每 Lane 最多 `2` 个 Marker；五节点按纵向顺序完整可达且无横向溢出。
+- `+N` Modal 浏览器验收通过：Standard 溢出塔唯一可定位，Modal 列出全部运行 Review，关闭后焦点返回原溢出塔。
+- 全部浏览器场景的 `activeRaf=0`、动画 Review `0`、动画 Worker `0`、环境粒子 `0`；浏览器控制台 warning/error 为 `0`。
+- 文字遮盖截图由浏览器只读采集 `94` 个文字边界后在截图副本生成；隐藏文字后仍可识别 Gate、Core、上方金色 Standard、下方紫色 Agent 和汇聚 Beacon，生产代码未加入验收开关。
+- 截图产物保存在 `.local/command-center-evolution-phase-3a/`：`phase-3a-1440.png`、`phase-3a-1440-reference-comparison.png`、`phase-3a-1024.png`、`phase-3a-390.png`、`phase-3a-1440-labels-masked.png`；均不纳入提交。
+- 1440 实现与参考图并排验收只比较 Core 权重、道路连续性、建筑底座、双路线区分和 Beacon 汇聚，未复制参考图中的虚构处理站或业务指标。
+- `git diff --check` 通过；未修改后端、Runtime v2、Review/Scheduler/Agent/Provider/Fallback/通知状态机、README、旧计划或用户未跟踪资料。
+- 浏览器验收专用 Runtime mock 与 Vite 使用独立端口 `8091/5174`，验收后已精确停止；用户原有 `5173/8090` 服务继续返回 HTTP `200`。
+
+Evolution Phase 3A 已完成并停止。等待用户确认静态视觉；未经单独授权不得进入 Phase 3B。

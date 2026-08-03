@@ -5,6 +5,7 @@ import {
   createPlatformRuntimeMapController,
   measureOperationMapAnchors,
   PLATFORM_RUNTIME_MAP_DIAGNOSTICS_KEY,
+  PLATFORM_RUNTIME_MAP_VISUAL_TOKENS,
   resolvePlatformRuntimeMapFallback
 } from '../src/command-center/platformRuntimeMapRenderer.js';
 
@@ -32,7 +33,10 @@ test('static operation map owns one observer and listener with zero RAF', () => 
   assert.equal(harness.canvas[PLATFORM_RUNTIME_MAP_DIAGNOSTICS_KEY].activeRafCount, 0);
   assert.equal(harness.canvas.attributes.get('data-command-center-animated-reviews'), '0');
   assert.equal(harness.canvas.attributes.get('data-command-center-animated-workers'), '0');
+  assert.equal(harness.canvas.attributes.get('data-command-center-environment-particles'), '0');
   assert.equal(harness.canvas.attributes.get('data-command-center-scene-updates'), '2');
+  assert.equal(PLATFORM_RUNTIME_MAP_VISUAL_TOKENS.standard, '#c88a16');
+  assert.equal(PLATFORM_RUNTIME_MAP_VISUAL_TOKENS.agent, '#7056d8');
   controller.dispose();
   assert.equal(harness.documentTarget.listenerCount(), 0);
   assert.equal(harness.pendingFrameCount(), 0);
