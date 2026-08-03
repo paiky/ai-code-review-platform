@@ -4,8 +4,8 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Phase 3`
-- 阶段状态：`PHASE 3 COMPLETED — WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION`
+- 当前阶段：`Phase 4A`
+- 阶段状态：`PHASE 4A COMPLETED — WAITING FOR STRUCTURE AND COLOR CONFIRMATION`
 - Phase 0 基线 Commit：`2005b8f`
 - Phase 1 基线 Commit：`0cbb148`
 - Phase 2 拆分确认时间：2026-07-31
@@ -21,12 +21,15 @@
 - Phase 3 授权时间：2026-08-01
 - Phase 3 Command Center 查询索引与迁移授权时间：2026-08-01
 - Phase 3 完成时间：2026-08-01
+- Phase 4 基线 Commit：`58f2b0b`
+- Phase 4 授权时间：2026-08-03
+- Phase 4A 完成时间：2026-08-03
 - Phase 3 输入风险：浏览器 hidden/visible 证据缺口；Runtime/Governance、focus/visibility 恢复可能重复刷新；390px AppFrame 导航裁切与可见横向滚动条。
 - Phase 2D MySQL 兼容性热修复授权时间：2026-07-31
-- 计划更新时间：2026-08-01
-- 当前目标：Phase 3 代码、迁移、查询门禁和本地验收已完成；等待部署或真实环境确认。
-- 当前明确不做：不进入部署、后续阶段、主 Bundle 拆包或额外优化；不修改 Review、Scheduler、Agent、Provider、Notification、Feedback、Evaluation 或 Policy 业务状态机。
-- 停止点：提交 Phase 3 后立即停止；保留用户已有 5173/8090 服务，不进入部署、后续阶段或额外优化。
+- 计划更新时间：2026-08-03
+- 当前目标：完成 Phase 4A 一屏生命周期地图、Runtime-only 首页轮询、紧凑工具条与 Flow Dock，以及赛博霓虹高对比静态视觉基线。
+- 当前明确不做：Phase 4A 不加入环境动态、能量通道、粒子尾迹、冲击波或 `controller.setFocus` 绘制增强；不修改 Python 后端、数据库、索引、业务状态机、公开 API、主 Bundle 拆包或第三方动画依赖。
+- 停止点：Phase 4A 完成专项/全量测试、构建和 1440/1024/390 浏览器截图后提交并立即停止，等待用户确认结构与颜色；未确认前不进入 Phase 4B。
 
 本计划同时作为分阶段实施总控和验收记录。每个阶段开始前更新状态，完成后回写验证结果并停止。
 
@@ -1255,6 +1258,94 @@ Phase 3 完成后将状态更新为 `PHASE 3 COMPLETED — WAITING FOR DEPLOYMEN
 `PHASE 3 COMPLETED — WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION`
 
 停止点：提交 Phase 3 后立即停止；不进入部署、后续阶段或额外优化。
+
+## Phase 4：生命周期地图视觉重构
+
+### 用户结论与固定方向
+
+- 用户确认首页收敛为“一屏生命周期地图”，独立运行脉搏、Live Operations 侧栏和质量治理矩阵不再占用首页；质量治理仍由现有业务页面承载。
+- 主视觉采用赛博霓虹：背景 `#080B1A`、地图底板 `#101A33`、节点 `#132442`、主文字 `#F7FAFF`、次级文字 `#B8C7E6`；Running/Agent/强调/Success/Queued/Failed 分别使用 `#27E9FF`、`#A86BFF`、`#FF3DC8`、`#39FFB6`、`#FFD166`、`#FF4D6D`。
+- 生命周期保持 Intake、Rule、Orchestration、Execution、Delivery 五阶段，Preflight、Context、Finding、Notification 等仅作为真实子状态展示，不创建新业务阶段。
+- 空闲态允许纯装饰环境动画，真实业务粒子仍只来自 Runtime；该动态增强属于 Phase 4B，Phase 4A 先确认结构、信息密度、颜色与静态高对比基线。
+
+### 首页必要能力与移除项
+
+- 保留：生命周期地图、Task/Flow 聚焦、DOM Overlay 节点钻取、Standard/Agent/Fallback 图例、数据新鲜度、刷新、Queue/Failure Drawer 入口、失败/小屏/reduced-motion DOM fallback。
+- 移除首页独立展示：System Pulse、Live Operations Rail、Governance Loop 和大面积 Hero；必要操作合并到地图顶部工具条，选中 Flow 信息合并到底部 Flow Dock。
+- 首页只请求 `/api/command-center/runtime`，保留 5 秒轮询、Abort、visibility/focus 去重；不再首次请求或轮询 `/api/command-center/governance`。后端 Governance API、Model 与现有质量治理页面保持不变。
+- 1440×900 与 1024×800 初始视口必须同时看到五阶段、完整连接关系、工具条和 Flow Dock；390×844 使用高对比纵向 DOM 地图，无 Canvas 和横向滚动。
+
+### Phase 4A：一屏结构与高对比基线
+
+#### 实施范围
+
+- 将 `CommandCenterPage` 重组为单一地图 Shell：紧凑标题/新鲜度/刷新/Task/Flow/Queue/Failure 工具条、五阶段地图主体、引擎图例和选中 Flow Dock。
+- Task/Flow 使用紧凑、可搜索且键盘可访问的选择控件；Flow 选择仍使用既有 `taskId + reviewKey` 稳定标识，不进入业务状态。
+- 节点保持 DOM 文本和 button overlay；每个节点展示主阶段、真实 Flow 数和选中 Flow 的真实子状态。无选中 Flow 时不推断子状态。
+- Phase 4A 仅实现实体高对比底色、双层静态霓虹描边、清晰状态色、聚焦样式和响应式布局；Canvas Renderer 的动态语义与单实例门禁保持 Phase 3 行为。
+- 删除不再被首页使用的旧展示组件或将其职责迁移到新工具条/Flow Dock，禁止保留两套首页结构。
+
+#### 验收标准
+
+- 首页 DOM 不再渲染 System Pulse、Live Operations 侧栏或 Governance Loop；浏览器网络不出现 Governance 请求。
+- 1440/1024 首屏完整展示地图，390 展示五段纵向 fallback；三档均无页面横向溢出。
+- 主/次文字对比度分别满足普通文本 WCAG AA；状态除颜色外同时显示固定文本。
+- Task/Flow 聚焦、节点钻取、Queue/Failure Drawer、Runtime 轮询和 Canvas/Controller 不重建行为保持兼容。
+- Phase 4A 专项测试、前端全量 Node 测试、生产构建、三档浏览器截图、控制台检查和 `git diff --check` 通过。
+
+#### 停止点
+
+Phase 4A 完成后状态更新为 `PHASE 4A COMPLETED — WAITING FOR STRUCTURE AND COLOR CONFIRMATION`，提交实际文件、测试、构建和截图结果后立即停止；未经用户确认不得进入 Phase 4B 的空闲环境动态、能量通道、粒子尾迹、状态冲击波或 `controller.setFocus` 绘制增强。
+
+#### 实施结果
+
+- 首页已收敛为 `AppFrame Header + 单一地图 Shell`：顶部工具条承载标题、新鲜度、刷新、Task/Flow 选择、Queue/Failure；中部只保留五阶段地图；底部 Flow Dock 承载 Standard/Agent/Fallback 图例和选中 Flow 真实信息。
+- 删除首页旧 `SystemPulse`、`GovernanceLoop`、`LiveOperationsRail` 和 `CommandCenterFocusBar` 组件，不保留旧页面结构；Governance API、Model 和质量治理业务页面未修改。
+- `useCommandCenterRuntimeSnapshot` 只导入并请求 Runtime：保留一个 5 秒 Timer、一份 AbortController、visibility/focus 恢复去重和诊断属性；不存在 Governance 首次请求或 60 秒 Timer。
+- 生命周期仍使用 Intake、Rule、Orchestration、Execution、Delivery 五阶段；节点 DOM Overlay 继续拥有文本、键盘焦点和现有路由钻取，Canvas 只绘制并保持原 Controller 创建边界。
+- 静态视觉使用已锁定赛博霓虹 Token，节点改为高对比实体底色、静态双层描边和文本状态；Phase 4A 没有新增 `@keyframes`、环境动画、粒子语义、WebGL 或第三方依赖。
+- 390px 下 AppFrame 六个主导航按钮均可见；Command Center 使用五段纵向 DOM fallback、Canvas 数为 0，页面 `scrollWidth === clientWidth === 390`。
+
+实际修改文件：
+
+- `docs/AI Review Center Design/AI Review Command Center Implementation Plan.md`
+- `frontend/src/command-center/CommandCenterPage.jsx`
+- `frontend/src/command-center/CommandCenterTopology.jsx`
+- `frontend/src/command-center/CommandCenterCanvas.jsx`
+- `frontend/src/command-center/commandCenter.css`
+- `frontend/src/command-center/useCommandCenterSnapshots.js`
+- `frontend/tests/commandCenterInformationArchitecture.test.mjs`
+- 删除：`CommandCenterFocusBar.jsx`、`SystemPulse.jsx`、`LiveOperationsRail.jsx`、`GovernanceLoop.jsx`
+
+验证结果：
+
+- Phase 4A 专项：`node --test tests/commandCenterInformationArchitecture.test.mjs tests/commandCenterFocus.test.mjs tests/commandCenterPresentation.test.mjs tests/commandCenterCanvasRenderer.test.mjs`，`32 passed`。
+- 前端全量：`node --test`，`102 passed`。
+- 生产构建：`scripts\\run-frontend.cmd build` 通过；CSS `71.86 kB`（gzip `14.61 kB`），JS `1,725.95 kB`（gzip `537.37 kB`）。主 Bundle 超过 500 kB 的既有提示仍保留，拆包不属于 Phase 4A。
+- WCAG 自动门禁：主文字 `#F7FAFF`、次级文字 `#B8C7E6` 分别对 `#080B1A`、`#101A33`、`#132442` 全部达到普通文本 `4.5:1` 要求；状态同时显示固定文字，不只依赖颜色。
+- 1440×900：截图 `phase4a-1440x900.png`；五节点、完整连接、工具条和 Dock 同屏，Canvas 1、DOM Overlay 5，`scrollWidth/clientWidth = 1440/1440`。
+- 1024×800：截图 `phase4a-1024x800.png`；五节点、完整连接、工具条和 Dock 同屏，Canvas 1、DOM Overlay 5，`scrollWidth/clientWidth = 1024/1024`。
+- 390×844：截图 `phase4a-390x844.png`；五节点纵向 DOM 可访问，Canvas 0、DOM Overlay 5、AppFrame 主导航按钮 6，`scrollWidth/clientWidth = 390/390`。
+- 三档浏览器均未出现旧运行脉搏、Live Operations 侧栏或质量治理矩阵；控制台 error/warning 为 0。浏览器轮询诊断显示活动 Timer 1、visibility/focus listener 2；源码门禁同时确认首页 Hook 无 Governance loader、请求或 Timer。
+- 本次 5173 由独立 owner 启动，HTTP 200 后完成验收；结束前复核端口 owner，只停止本次记录的 Vite PID `54908`，5173 已释放。8090 当时未运行，因此浏览器同时验证了 Runtime `502` 时紧凑错误浮层不会挤压地图。
+
+剩余风险：
+
+- 本轮真实浏览器没有可用 8090 Runtime 数据，截图为真实空数据/请求失败态；有数据的 Task/Flow 选择、Flow Dock 聚焦和多 reviewKey 行为沿用 Phase 3 自动化与浏览器证据，待用户部署环境视觉确认。
+- Phase 4B 的环境动画、能量通道、粒子尾迹、状态冲击波和独立 `controller.setFocus` 尚未开始；Phase 4C 的长时间真实资源观察、完整键盘回归和最终失败注入也尚未开始。
+- 截图是结构与配色验收输入，不代表用户已确认视觉强度；必须停在本状态等待用户明确确认。
+
+### Phase 4B：地图特效与聚焦表现（待确认）
+
+- 在 Phase 4A 视觉确认后加入单 RAF 的空闲环境动画、能量连线、节点呼吸光、业务粒子尾迹和真实状态切换冲击波。
+- 新增独立 `controller.setFocus(flowId)`，选中 Flow 高亮完整路径但不重建 Scene、Controller、粒子布局或 Observer。
+- 空闲约 30fps、真实活动 Flow 可 60fps；hidden、390、reduced-motion 和 Canvas failure 时停止。
+- 完成效果强度浏览器确认后停止，等待 Phase 4C 授权。
+
+### Phase 4C：性能、无障碍与最终收口（待确认）
+
+- 完成纯键盘、DOM Overlay、失败回退、长时间资源、60 秒绘制预算、全量测试、构建和三档最终浏览器验收。
+- 最终状态为 `PHASE 4 COMPLETED — WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION`；提交后停止。
 
 ------
 
