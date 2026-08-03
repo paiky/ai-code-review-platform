@@ -46,6 +46,11 @@ test('presentation builds the five-node operation map and stable review lanes', 
   assert.equal(presentation.map.lanes[0].nextQueued.engineToken, 'fallback');
   assert.equal(presentation.map.lanes[1].nextQueued.engineToken, 'agent');
   assert.equal(presentation.map.scene.id, 'ai-review-operation-map');
+  assert.equal(presentation.map.scene.runningCount, 5);
+  assert.equal(presentation.map.scene.queuedCount, 12);
+  assert.equal(presentation.map.scene.capacity, 14);
+  assert.equal(presentation.map.scene.lanes[0].nextQueuedIdentity, '1:41:standard-main');
+  assert.deepEqual(presentation.map.scene.lanes[1].workers, [{ identity: 'worker-1', state: 'BUSY' }]);
   assert.equal(presentation.map.lanes[1].workers[0].workerId, 'worker-1');
 });
 
@@ -74,6 +79,7 @@ test('review labels use project first and static stage vocabulary', () => {
   const review = presentation.map.lanes[0].runningItems[0];
 
   assert.equal(review.projectName, 'paycenter');
+  assert.equal(review.motionIdentity, '1:41:standard-main');
   assert.equal(review.providerModelLabel, 'deepseek · v4');
   assert.equal(stageLabel('AGENT_CONVERGING'), 'Agent 收敛');
   assert.equal(stageLabel('FUTURE_STAGE'), '执行中');

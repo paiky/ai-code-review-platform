@@ -36,8 +36,8 @@ test('root route renders Command Center while preserving legacy taskId redirect'
 });
 
 
-test('evolution phase 3A home is a five-node static AI Review operation map', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="EVOLUTION_PHASE_3A"'), true);
+test('evolution phase 3B home preserves the five-node AI Review operation map', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="EVOLUTION_PHASE_3B"'), true);
   assert.equal(pageSource.includes('AI Review Operation Map'), true);
   assert.equal(pageSource.includes('<CommandCenterCanvas'), true);
   assert.equal(presentationSource.includes("zoneKey: 'queue-gate'"), true);
@@ -80,7 +80,7 @@ test('DOM owns review navigation and overflow modal while map nodes stay noninte
   assert.equal(canvasSource.includes('data-zone-key={lane.zoneKey}'), true);
   assert.equal((canvasSource.match(/<canvas/g) || []).length, 1);
   assert.equal(canvasSource.includes('data-command-center-dom-overlay="true"'), true);
-  assert.equal(canvasSource.includes('data-command-center-canvas-phase="EVOLUTION_PHASE_3A"'), true);
+  assert.equal(canvasSource.includes('data-command-center-canvas-phase="EVOLUTION_PHASE_3B"'), true);
   assert.equal(pageSource.includes('overflowZoneKey'), true);
   assert.equal(pageSource.includes('afterClose={restoreOverflowFocus}'), true);
   assert.equal(pageSource.includes('trigger?.isConnected'), true);
@@ -90,28 +90,30 @@ test('DOM owns review navigation and overflow modal while map nodes stay noninte
 });
 
 
-test('single static Canvas reads DOM anchors and never owns an animation loop', () => {
+test('single Canvas owns Runtime-driven motion without timers or CSS animation owners', () => {
   assert.equal(canvasSource.includes('max-width: 700px'), true);
   assert.equal(rendererSource.includes('createCanvasRuntime'), true);
-  assert.equal(rendererSource.includes('isAnimationEnabled: () => false'), true);
+  assert.equal(rendererSource.includes('isAnimationEnabled: () => {'), true);
+  assert.equal(rendererSource.includes('getAnimationFrameInterval'), true);
+  assert.equal(rendererSource.includes('diffPlatformRuntimeMapScenes'), true);
   assert.equal(rendererSource.includes('measureOperationMapAnchors'), true);
   assert.equal(rendererSource.includes('querySelector?.(`[data-zone-key="${zoneKey}"]`)'), true);
-  assert.equal(rendererSource.includes('drawQueuePulse'), false);
-  assert.equal(rendererSource.includes('drawReviewTokens'), false);
-  assert.equal(rendererSource.includes('drawWorkerTowers'), false);
-  assert.equal(rendererSource.includes('PLATFORM_RUNTIME_MAP_FRAME_INTERVAL_MS'), false);
+  assert.equal(rendererSource.includes('drawCoreMotion'), true);
+  assert.equal(rendererSource.includes('drawDispatchCursor'), true);
+  assert.equal(rendererSource.includes('drawEnvironmentLife'), true);
+  assert.equal(rendererSource.includes("'data-command-center-beacon-events': 0"), true);
   assert.equal(rendererSource.includes('setInterval'), false);
   assert.equal(rendererSource.includes('setTimeout'), false);
   assert.equal(rendererSource.includes('requestAnimationFrame'), false);
   assert.equal(rendererSource.includes('data-command-center-active-raf'), true);
-  assert.equal(rendererSource.includes("'data-command-center-animated-workers': 0"), true);
-  assert.equal(rendererSource.includes("'data-command-center-environment-particles': 0"), true);
+  assert.equal(canvasSource.includes('useReducedMotion'), true);
+  assert.equal(canvasSource.includes('runtimeError: Boolean(runtimeError)'), true);
   assert.equal(styleSource.includes('@keyframes'), false);
   assert.equal(styleSource.includes('animation:'), false);
 });
 
 
-test('phase 3A replaces lane cards with static map structures', () => {
+test('phase 3B preserves confirmed phase 3A map structures', () => {
   for (const token of [
     'command-center-gate-hardware',
     'command-center-core-ground',

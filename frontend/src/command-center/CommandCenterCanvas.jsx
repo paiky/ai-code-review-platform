@@ -11,6 +11,7 @@ const SMALL_SCREEN_QUERY = '(max-width: 700px)';
 
 export default function CommandCenterCanvas({
   map,
+  runtimeError,
   visibleLimit,
   onOpenReview,
   onOpenOverflow
@@ -19,6 +20,7 @@ export default function CommandCenterCanvas({
   const containerRef = useRef(null);
   const controllerRef = useRef(null);
   const smallScreen = useSmallScreen();
+  const reducedMotion = useReducedMotion();
   const [canvasReady, setCanvasReady] = useState(false);
   const [canvasFailed, setCanvasFailed] = useState(false);
   const shouldMountCanvas = !smallScreen && !canvasFailed;
@@ -31,7 +33,11 @@ export default function CommandCenterCanvas({
     const controller = createPlatformRuntimeMapController({
       canvas: canvasRef.current,
       container: containerRef.current,
-      scene: map.scene,
+      scene: {
+        ...map.scene,
+        motionDisabled: reducedMotion,
+        runtimeError: Boolean(runtimeError)
+      },
       onFailure: () => setCanvasFailed(true)
     });
     if (!controller) {
@@ -48,8 +54,12 @@ export default function CommandCenterCanvas({
   }, [shouldMountCanvas]);
 
   useEffect(() => {
-    controllerRef.current?.setScene(map.scene);
-  }, [map.scene]);
+    controllerRef.current?.setScene({
+      ...map.scene,
+      motionDisabled: reducedMotion,
+      runtimeError: Boolean(runtimeError)
+    });
+  }, [map.scene, reducedMotion, runtimeError]);
 
   const fallbackReason = resolvePlatformRuntimeMapFallback({
     smallScreen,
@@ -65,13 +75,16 @@ export default function CommandCenterCanvas({
       data-zone-key={map.zoneKey}
       data-command-center-dom-overlay="true"
       data-command-center-canvas-fallback={fallbackReason || undefined}
+      data-command-center-motion-disabled={reducedMotion ? 'true' : 'false'}
+      data-command-center-runtime-error={runtimeError ? 'true' : 'false'}
+      data-command-center-freshness={map.core.freshness}
       ref={containerRef}
       aria-label="AI Review Operation Map"
     >
       {shouldMountCanvas && (
         <canvas
           className="command-center-runtime-map-canvas"
-          data-command-center-canvas-phase="EVOLUTION_PHASE_3A"
+          data-command-center-canvas-phase="EVOLUTION_PHASE_3B"
           ref={canvasRef}
           aria-hidden="true"
         />
@@ -101,7 +114,7 @@ export default function CommandCenterCanvas({
 function QueueGate({ queueGate, lanes }) {
   return (
     <article className="command-center-map-node command-center-queue-gate" data-zone-key={queueGate.zoneKey}>
-      <div className="command-center-gate-hardware" aria-hidden="true">
+      <div className="command-center-gate-hardware" data-command-center-gate-anchor="true" aria-hidden="true">
         <span className="command-center-gate-pylon is-left" />
         <span className="command-center-gate-portal"><i /></span>
         <span className="command-center-gate-pylon is-right" />
@@ -134,7 +147,7 @@ function ReviewCore({ core }) {
   return (
     <article className="command-center-map-node command-center-review-core" data-zone-key={core.zoneKey}>
       <span className="command-center-zone-kicker">SCHEDULING CORE</span>
-      <div className="command-center-core-assembly" aria-hidden="true">
+      <div className="command-center-core-assembly" data-command-center-core-anchor="true" aria-hidden="true">
         <span className="command-center-core-ground" />
         <span className="command-center-core-outer-ring" />
         <span className="command-center-core-routing-ring">
@@ -160,7 +173,7 @@ function ReviewCore({ core }) {
 function NextReview({ lane }) {
   const item = lane.nextQueued;
   return (
-    <div className={`command-center-next-review is-${lane.colorToken}`}>
+    <div className={`command-center-next-review is-${lane.colorToken}`} data-command-center-next-review={lane.zoneKey}>
       <span>{lane.zoneKey === 'agent' ? 'Agent' : 'Standard'} 下一条</span>
       {item ? (
         <>
@@ -250,7 +263,13 @@ function WorkerTowers({ workers = [], runningItems = [] }) {
           || (worker.activeJobId && String(item.jobId) === String(worker.activeJobId))
         ));
         return (
-          <div key={worker.workerId} className={`is-${workerState(worker).toLowerCase()}`}>
+          <div
+            key={worker.workerId}
+            className={`is-${workerState(worker).toLowerCase()}`}
+            data-command-center-worker-tower="true"
+            data-worker-identity={worker.workerId || ''}
+            data-worker-state={workerState(worker)}
+          >
             <span className="command-center-worker-spire" aria-hidden="true"><i /></span>
             <span className="command-center-worker-label">
               <strong>{worker.workerId || 'Worker'}</strong>
@@ -269,7 +288,7 @@ function ResultBeacon({ beacon }) {
   return (
     <article className="command-center-map-node command-center-result-beacon" data-zone-key={beacon.zoneKey}>
       <span className="command-center-zone-kicker">RESULT BEACON</span>
-      <div className="command-center-result-platform" aria-hidden="true">
+      <div className="command-center-result-platform" data-command-center-beacon-anchor="true" aria-hidden="true">
         <span className="command-center-result-merge-ring" />
         <span className="command-center-result-emblem"><i>✓</i></span>
       </div>
@@ -286,6 +305,9 @@ function ReviewMarker({ item, onOpen }) {
     <button
       type="button"
       className={`command-center-review-marker is-${item.engineToken}`}
+      data-command-center-review-marker="true"
+      data-review-identity={item.motionIdentity}
+      data-review-stage={item.stage || 'RUNNING'}
       onClick={() => onOpen(item)}
       aria-label={`查看 ${item.projectName} 的 ${item.displayName}`}
     >
@@ -319,6 +341,27 @@ function readSmallScreen() {
   return typeof window !== 'undefined'
     && typeof window.matchMedia === 'function'
     && window.matchMedia(SMALL_SCREEN_QUERY).matches;
+}
+
+
+function useReducedMotion() {
+  const [reducedMotion, setReducedMotion] = useState(readReducedMotion);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => setReducedMotion(query.matches);
+    query.addEventListener?.('change', sync);
+    sync();
+    return () => query.removeEventListener?.('change', sync);
+  }, []);
+  return reducedMotion;
+}
+
+
+function readReducedMotion() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 

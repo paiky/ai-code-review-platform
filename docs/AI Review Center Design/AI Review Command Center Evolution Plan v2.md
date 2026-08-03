@@ -2,13 +2,13 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Evolution Phase 3A：静态视觉重建`
-- 当前状态：`EVOLUTION PHASE 3A COMPLETED — WAITING FOR STATIC VISUAL CONFIRMATION`
+- 当前阶段：`Evolution Phase 3B：新地图动效实现`
+- 当前状态：`EVOLUTION PHASE 3B COMPLETED — WAITING FOR MOTION EFFECT CONFIRMATION`
 - 实施基线 Commit：`dfe20a9`
 - 参考图：`docs/AI Review Center Design/assets/ai-review-command-center-reference.png`
 - 计划创建时间：2026-08-03
-- 当前授权：用户已明确授权执行 Evolution Phase 3A 静态视觉重建；该授权已执行完毕，不包含 Phase 3B 动效实现。
-- 当前停止点：Phase 3A 已完成；等待用户确认静态视觉并单独授权 Phase 3B，不得自动编码、推送或部署。
+- 当前授权：用户已确认 Evolution Phase 3A 静态视觉，并明确授权执行 Evolution Phase 3B；该阶段现已完成，尚未授权 Evolution Phase 4。
+- 当前停止点：等待用户确认 Phase 3B 动效效果；不得自动进入 Phase 4、推送或部署。
 
 本文档是 Phase 5A～5C 完成后的新视觉架构总控。`AI Review Platform Runtime Map Implementation Plan.md` 继续作为 Phase 5 历史实施记录，不再追加 Evolution v2 的阶段状态。
 
@@ -798,3 +798,34 @@ Phase 3 拆分规划当时在此停止，并等待用户明确授权 Evolution P
 - 浏览器验收专用 Runtime mock 与 Vite 使用独立端口 `8091/5174`，验收后已精确停止；用户原有 `5173/8090` 服务继续返回 HTTP `200`。
 
 Evolution Phase 3A 已完成并停止。等待用户确认静态视觉；未经单独授权不得进入 Phase 3B。
+
+### Evolution Phase 3B 实施记录
+
+- 2026-08-03：用户确认 Evolution Phase 3A 静态视觉，并明确授权执行 Evolution Phase 3B，状态更新为 `EVOLUTION PHASE 3B IN PROGRESS`。
+- 本阶段保持已确认的 L0～L5 空间结构、Runtime v2、轮询、Review 跳转、溢出 Modal 和全部业务语义不变，只实现单 Canvas/单 RAF 所有者下的 Core 呼吸、真实调度反馈、Stage/Worker 局部反馈、Fresh Idle 生命感和规定的降级行为。
+- 运行项消失只允许移除 Marker；不得播放 Beacon 抵达、成功、失败或完成反馈。Stale、Runtime Error、reduced-motion、页面隐藏、Canvas Failure 和 390px 必须保持 `activeRaf=0`。
+- Presentation 只向 Renderer 投影总运行/等待/容量/占用，以及每条 Lane 的下一候选身份、运行项身份与阶段、Worker 身份与状态；未新增接口、聚合统计或不可证明的业务字段。
+- Renderer 使用相邻 Runtime 快照产生白名单事件：Queue 从 0 变为非 0、下一候选变化、新运行项、Stage 变化、Worker 状态变化和占用变化；新运行项以 `jobId:taskId:reviewKey` 去重，每次快照最多绘制 2 个真实调度光标，历史身份集合上限为 200。
+- Core 成为唯一持续呼吸主体，并按真实平台占用和 Standard/Agent 占用绘制状态扇区；Fresh Idle 只在远离任务道路的地形区域显示确定性微光，1440 最多 16 个、1024 最多 8 个，不创建 Review 形状或方向性任务流。
+- 运行 Review、Stage 和 Worker 反馈分别绑定具体 Marker/Worker 塔；运行项从快照消失只移除 DOM Marker，Beacon 始终只保留低亮待机环，事件计数固定为 `0`。
+- 动态帧统一委托现有 Canvas Runtime：Fresh Idle/低优先级反馈最高 12fps，调度/Stage/Worker 事件最高 30fps；无 `setInterval`、独立 Timer、直接 RAF 或第三方动画依赖。
+- 连续超出 8ms 绘制预算 3 秒后按“环境粒子 → 12fps → 静态地图”逐级降级；Stale、Runtime Error、reduced-motion、页面隐藏、Canvas Failure 和 390px 均停止 RAF，完整 DOM 数据和原有交互不受影响。
+- 容量泊位只使用 400ms CSS 状态过渡，`prefers-reduced-motion` 下立即关闭；源码未新增 CSS keyframes 或第二动画所有者。
+
+### Evolution Phase 3B 验证证据
+
+- Command Center 专项 Node 测试：`19 passed`；覆盖五节点与 Phase 3A 结构不回退、Runtime 白名单差异、身份去重、Stage/Worker 局部反馈、任务消失、单 RAF、12 次快照更新、性能降级、隐藏页、reduced-motion、Stale/Error、Canvas Failure 和 DOM fallback。
+- 前端全量 Node 测试：`93 passed`。
+- 生产构建：`scripts/run-frontend.cmd build` 成功；仅保留既有大 Chunk 提示，无构建错误。
+- 1440×900 Fresh Idle 连续观察 20 秒：单 Canvas、单 RAF、单 Observer、单 Listener；环境微光 `16`，任务调度/Stage/Worker/Beacon 事件均为 `0`，帧数从 `301` 增至 `516`，符合最高 12fps 的待机节奏。
+- 1440 长轮询与性能：同一页面累计 `64` 次 Scene 更新后资源计数仍为 Canvas `1`、活动 RAF `1`、最大并发 RAF `1`、Observer `1`、Listener `1`；平均绘制约 `0.26ms`、最大约 `1.9ms`、超 8ms 帧 `0`。
+- 确定性 Runtime 差异：Baseline→Changed 后真实运行 Marker 由 `2` 增至 `4`，调度光标 `2`、Stage 反馈 `2`、Worker 反馈 `2`、Beacon 事件 `0`；最大并发 RAF 保持 `1`。
+- 运行项消失：Changed→Removed 后 Marker 从 `4` 降至 `2`，调度光标 `0`、Stage 反馈 `0`、Beacon 事件 `0`；仅真实 Worker 状态回落产生 `1` 个局部 Worker 反馈。
+- Stale：保留 `4` 个最近成功 Marker，状态为 `STALE`，活动 RAF `0`；确定性 HTTP 500：状态为 `RUNTIME_ERROR`，活动 RAF `0`，页面展示错误提示并保留最近快照。
+- 1024×800：五节点同构地图、单 Canvas、活动/最大并发 RAF 均为 `1`、Observer/Listener 均为 `1`，无横向溢出。
+- 390×844：Canvas 数量 `0`、Fallback 为 `SMALL_SCREEN`；Gate→Core→Standard→Agent→Beacon 纵向顺序正确，运行 Marker 和 `+N` 聚合塔完整，无横向溢出。
+- 浏览器在注入预期 HTTP 500 前 warning/error 为 `0`；降级后的网络错误为验收夹具预期结果，不存在额外前端异常。
+- `git diff --check` 通过；未修改后端、Runtime v2、Review/Scheduler/Agent/Provider/Fallback/通知状态机、README、旧计划或用户未跟踪资料。
+- 浏览器验收专用 Runtime mock 与 Vite 使用独立端口 `8091/5174`；验收完成后只精确停止本次启动的端口 Owner，不影响用户已有 `5173/8090` 服务。
+
+Evolution Phase 3B 已完成并停止。当前状态为 `EVOLUTION PHASE 3B COMPLETED — WAITING FOR MOTION EFFECT CONFIRMATION`；未经用户确认不得进入 Phase 4。

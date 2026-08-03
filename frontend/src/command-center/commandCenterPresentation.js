@@ -76,6 +76,13 @@ export function buildCommandCenterPresentation({ runtime } = {}) {
         id: 'ai-review-operation-map',
         snapshotKey: safeRuntime?.generatedAt || 'EMPTY',
         freshness,
+        runningCount: totalRunning,
+        queuedCount: totalQueued,
+        capacity: totalCapacity,
+        utilizationPercent: totalCapacity > 0
+          ? Math.min(100, Math.round(totalRunning / totalCapacity * 100))
+          : 0,
+        lanes: [standard, agent].map(presentMotionLane),
         connections: [
           { from: 'queue-gate', to: 'ai-review-core', token: 'queue' },
           { from: 'ai-review-core', to: 'standard', token: 'standard' },
@@ -112,10 +119,44 @@ function presentLane(value, zoneKey, workers = []) {
 function presentItem(item) {
   return {
     ...item,
+    motionIdentity: reviewMotionIdentity(item),
     providerModelLabel: [item.provider, item.model].filter(Boolean).join(' · ') || 'Provider 待分配',
     stageLabel: stageLabel(item.stage),
     engineToken: item.fallback ? 'fallback' : item.requestedEngine === 'AGENT' ? 'agent' : 'standard'
   };
+}
+
+
+function presentMotionLane(lane) {
+  return {
+    zoneKey: lane.zoneKey,
+    capacity: lane.capacity,
+    runningCount: lane.runningCount,
+    queuedCount: lane.queuedCount,
+    utilizationPercent: lane.utilizationPercent,
+    nextQueuedIdentity: lane.nextQueued?.motionIdentity || null,
+    runningItems: lane.runningItems.map(item => ({
+      identity: item.motionIdentity,
+      stage: item.stage || 'RUNNING'
+    })),
+    workers: lane.workers.map(worker => ({
+      identity: String(worker.workerId || ''),
+      state: workerMotionState(worker)
+    }))
+  };
+}
+
+
+function reviewMotionIdentity(item) {
+  return [item?.jobId, item?.taskId, item?.reviewKey]
+    .map(value => String(value ?? ''))
+    .join(':');
+}
+
+
+function workerMotionState(worker) {
+  if (!worker?.online) return 'OFFLINE';
+  return String(worker.state || 'IDLE').toUpperCase();
 }
 
 

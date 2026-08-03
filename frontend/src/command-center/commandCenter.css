@@ -150,6 +150,14 @@
     var(--cc-terrain);
 }
 
+.command-center-runtime-map[data-command-center-freshness="STALE"] {
+  filter: saturate(0.45);
+}
+
+.command-center-runtime-map[data-command-center-runtime-error="true"] {
+  filter: saturate(0.72);
+}
+
 .command-center-runtime-map::before,
 .command-center-runtime-map::after {
   position: absolute;
@@ -478,8 +486,9 @@
   background: #e6eff3;
   box-shadow: 0 4px 0 #b7c7d0;
   clip-path: polygon(20% 0, 80% 0, 100% 45%, 83% 100%, 17% 100%, 0 45%);
+  transition: border-color 400ms ease, background-color 400ms ease, box-shadow 400ms ease;
 }
-.command-center-capacity-slots > span i { width: 8px; height: 5px; border-radius: 50%; background: #9eb3c0; }
+.command-center-capacity-slots > span i { width: 8px; height: 5px; border-radius: 50%; background: #9eb3c0; transition: background-color 400ms ease; }
 .command-center-lane-station.is-standard .command-center-capacity-slots > span.is-active { border-color: var(--cc-standard); background: var(--cc-standard-soft); box-shadow: 0 4px 0 #b87d10; }
 .command-center-lane-station.is-standard .command-center-capacity-slots > span.is-active i { background: var(--cc-standard-bright); }
 .command-center-lane-station.is-agent .command-center-capacity-slots > span.is-active { border-color: var(--cc-agent); background: var(--cc-agent-soft); box-shadow: 0 4px 0 #5844ad; }
@@ -765,4 +774,11 @@
   .command-center-result-emblem { inset: 32px; }
   .command-center-modal-list button { grid-template-columns: auto minmax(0, 1fr); }
   .command-center-modal-list em { grid-column: 2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .command-center-capacity-slots > span,
+  .command-center-capacity-slots > span i {
+    transition: none;
+  }
 }
