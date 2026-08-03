@@ -4,15 +4,16 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Phase 5C`
-- 阶段状态：`PHASE 5 COMPLETED — WAITING FOR DEPLOYMENT OR REAL ENVIRONMENT CONFIRMATION`
+- 当前阶段：`Phase 5 Runtime Queue Timestamp Hotfix`
+- 阶段状态：`HOTFIX COMPLETED — WAITING FOR DEPLOYMENT CONFIRMATION`
 - Phase 4 基线 Commit：`d63fccf`
 - Phase 5A 授权时间：2026-08-03
 - 计划创建时间：2026-08-03
 - Phase 5B 授权时间：2026-08-03
 - Phase 5C 授权时间：2026-08-03
-- 当前目标：等待部署授权或真实运行 Review/队列积压环境的最终确认。
-- 当前停止点：Phase 5 已完成；不得部署、推送或继续扩展，等待用户下一步指令。
+- Hotfix 授权时间：2026-08-03
+- 当前目标：等待包含 Runtime Queue Timestamp Hotfix 的部署确认。
+- 当前停止点：Hotfix 已完成；不得部署或推送，等待用户下一步指令。
 
 本文档是 Phase 5 的独立实施总控。Phase 4 及更早阶段继续以原 Implementation Plan 为历史记录，不再向原文档追加 Phase 5 内容。
 
@@ -279,3 +280,18 @@ Phase 5B 到此停止。下一步只在用户确认地图效果并明确“继�
 - 本阶段无后端接口、查询或业务状态机变更，因此未重复执行 Python 测试或 MySQL EXPLAIN。
 
 Phase 5 到此完成并停止。等待部署授权或带有真实运行 Review/队列积压数据的环境确认；不得自动部署或推送。
+
+### 8.8 Runtime Queue Timestamp Hotfix
+
+- 生产日志确认：两名 Agent Worker 满载后，首条 Agent Job 进入 `QUEUED`，MySQL 的 `MIN(CASE ... queued_at)` 聚合结果以字符串返回；Command Center 在 `_build_agent_queue` 中直接执行 `datetime - str`，导致 `/api/command-center/runtime` 返回 500。
+- 修复范围仅限 Command Center Runtime 只读投影的数据库时间边界归一化与相关测试，不修改 Agent Claim、Provider Scheduler、Fallback、队列容量或任何业务状态机。
+- 必须覆盖 MySQL 常见的 `YYYY-MM-DD HH:MM:SS[.ffffff]`、ISO 8601、原生 `datetime`、`None` 与非法值；非法值不得使 Runtime 500，应降级为无队龄数据。
+- 必须增加“2 个 Agent RUNNING + 1 个 Agent QUEUED”的 Runtime 回归测试，确认接口返回 200、Agent 等待数为 1、下一候选存在且 Standard 数不被虚构。
+
+实施结果：
+
+- Repository 在 Command Center 数据库边界将原生 `datetime`、MySQL `YYYY-MM-DD HH:MM:SS[.ffffff]` 和 ISO 8601 时间统一归一化为 UTC-naive `datetime`；`None`、空串和非法值安全降级为无队龄数据。
+- Service 对 `oldest_queued_at` 增加类型防线，即使测试桩或未来驱动绕过 Repository 归一化，也不会因 `datetime - str` 使 Runtime 返回 500。
+- 新增 2 Agent Running + 1 Agent Queued 回归场景，确认 Scheduler 为 2 Running/1 Queued、Agent Capacity 2、Agent Queued 1、Next Queued 存在、队龄 45 秒且 Standard Queued 为 0。
+- Command Center Repository/Service/Contract 专项测试 `35 passed`，受影响文件 Ruff 检查通过，`git diff --check` 通过。
+- 接口 Schema、查询、索引、调度顺序、容量、Fallback 和业务状态机均未改变；本次无需数据库迁移或前端构建。

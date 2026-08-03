@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Select, and_, case, func, literal, or_, select, union_all
@@ -499,7 +499,9 @@ def load_runtime_base_counts(
             job_counts.get("agent_running_job_count") or 0
         ),
         expired_lease_count=int(job_counts.get("expired_lease_count") or 0),
-        oldest_queued_at=job_counts.get("oldest_queued_at"),
+        oldest_queued_at=_database_datetime_or_none(
+            job_counts.get("oldest_queued_at")
+        ),
     )
 
 
@@ -1149,3 +1151,21 @@ def _row(db: Session, statement: Select) -> dict[str, Any] | None:
 
 def _count(db: Session, statement: Select) -> int:
     return int(db.scalar(statement) or 0)
+
+
+def _database_datetime_or_none(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        normalized = value.strip()
+        if normalized.endswith("Z"):
+            normalized = f"{normalized[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed

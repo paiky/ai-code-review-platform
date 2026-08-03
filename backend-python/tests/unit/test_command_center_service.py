@@ -133,6 +133,101 @@ def test_runtime_snapshot_builds_standard_fallback_lane_from_scheduler_job() -> 
     assert agent["nextQueued"]["workerId"] is None
 
 
+def test_runtime_snapshot_keeps_first_agent_waiter_without_timestamp_crash() -> None:
+    data = _runtime_data(
+        counts=RuntimeBaseCounts(
+            intake_task_count=3,
+            active_task_count=3,
+            queued_job_count=1,
+            running_job_count=2,
+            agent_queued_job_count=1,
+            agent_running_job_count=2,
+            oldest_queued_at=DB_NOW - timedelta(seconds=45),
+        ),
+        workers=[
+            {
+                "worker_id": f"agent-worker-{index}",
+                "state": "BUSY",
+                "capacity": 1,
+                "active_job_id": 70 + index,
+                "active_run_id": 80 + index,
+                "last_heartbeat_at": DB_NOW,
+            }
+            for index in range(2)
+        ],
+        lane_running_jobs=[
+            {
+                "job_id": 70 + index,
+                "job_type": "AGENT_REVIEW",
+                "task_id": 200 + index,
+                "review_key": "agent:claude-code:deepseek-v4-pro",
+                "project_id": 9001,
+                "project_name": f"Agent Project {index}",
+                "display_name": "Agent Review",
+                "result_requested_engine": "AGENT",
+                "result_effective_engine": "AGENT",
+                "provider_code": "AGENT",
+                "model": "deepseek-v4-pro",
+                "status": "RUNNING",
+                "queued_at": DB_NOW - timedelta(minutes=2),
+                "started_at": DB_NOW - timedelta(minutes=1),
+            }
+            for index in range(2)
+        ],
+        agent_next_queued_job={
+            "job_id": 72,
+            "job_type": "AGENT_REVIEW",
+            "task_id": 202,
+            "review_key": "agent:claude-code:deepseek-v4-pro",
+            "project_id": 9001,
+            "project_name": "Queued Agent Project",
+            "display_name": "Agent Review",
+            "result_requested_engine": "AGENT",
+            "result_effective_engine": "AGENT",
+            "provider_code": "AGENT",
+            "model": "deepseek-v4-pro",
+            "status": "QUEUED",
+            "queued_at": DB_NOW - timedelta(seconds=45),
+            "started_at": None,
+        },
+    )
+
+    snapshot = _runtime_snapshot(data)
+    agent = snapshot["reviewLanes"]["agent"]
+
+    assert snapshot["scheduler"] == {
+        "status": "LIVE",
+        "scope": "CURRENT_STATE",
+        "activeJobCount": 3,
+        "queuedJobCount": 1,
+        "runningJobCount": 2,
+    }
+    assert agent["capacity"] == 2
+    assert agent["runningCount"] == 2
+    assert agent["queuedCount"] == 1
+    assert agent["nextQueued"]["taskId"] == 202
+    assert snapshot["agent"]["queueMetrics"]["oldestQueuedSeconds"] == 45
+    assert snapshot["reviewLanes"]["standard"]["queuedCount"] == 0
+
+
+def test_runtime_snapshot_accepts_timezone_aware_agent_queue_timestamp() -> None:
+    data = _runtime_data(
+        counts=RuntimeBaseCounts(
+            intake_task_count=1,
+            active_task_count=1,
+            queued_job_count=1,
+            running_job_count=0,
+            agent_queued_job_count=1,
+            agent_running_job_count=0,
+            oldest_queued_at=NOW - timedelta(seconds=30),
+        )
+    )
+
+    snapshot = _runtime_snapshot(data)
+
+    assert snapshot["agent"]["queueMetrics"]["oldestQueuedSeconds"] == 30
+
+
 def test_agent_failure_plus_standard_result_is_not_inferred_as_fallback() -> None:
     data = _runtime_data(
         tasks=[_task(102)],

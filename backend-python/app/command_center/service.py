@@ -1013,9 +1013,14 @@ def _build_agent_queue(
         worker.capacity for worker in online_workers if worker.state == "BUSY"
     )
     oldest_queued_seconds = None
-    if data.counts.oldest_queued_at:
+    oldest_queued_at = data.counts.oldest_queued_at
+    if isinstance(oldest_queued_at, datetime):
+        if oldest_queued_at.tzinfo is not None:
+            oldest_queued_at = oldest_queued_at.astimezone(timezone.utc).replace(
+                tzinfo=None
+            )
         oldest_queued_seconds = max(
-            int((now - data.counts.oldest_queued_at).total_seconds()),
+            int((now - oldest_queued_at).total_seconds()),
             0,
         )
     return AgentQueueSnapshot(
