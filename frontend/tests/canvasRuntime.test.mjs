@@ -107,6 +107,35 @@ test('enforces the draw budget diagnostic without accumulating owned resources',
 });
 
 
+test('throttles actual animation draws with one RAF while preserving the default cadence', () => {
+  const harness = createHarness();
+  const runtime = harness.create({
+    onDraw() {},
+    isAnimationEnabled: () => true,
+    getAnimationFrameInterval: () => 1000 / 30
+  });
+
+  assert.equal(runtime.getSnapshot().frameCount, 1);
+  assert.equal(harness.pendingFrames(), 1);
+  harness.flushFrame(16);
+  harness.flushFrame(32);
+  assert.equal(runtime.getSnapshot().frameCount, 1);
+  assert.equal(runtime.getSnapshot().skippedAnimationFrameCount, 2);
+  assert.equal(harness.pendingFrames(), 1);
+  harness.flushFrame(48);
+  assert.equal(runtime.getSnapshot().frameCount, 2);
+  assert.equal(runtime.getSnapshot().activeRafCount, 1);
+  assert.equal(runtime.getSnapshot().maxConcurrentRafCount, 1);
+
+  harness.setHidden(true);
+  assert.equal(runtime.getSnapshot().activeRafCount, 0);
+  harness.setHidden(false);
+  assert.equal(runtime.getSnapshot().frameCount, 3);
+  assert.equal(runtime.getSnapshot().activeRafCount, 1);
+  runtime.dispose();
+});
+
+
 test('keeps initialization and draw failures local and cleans runtime resources once', () => {
   let initializationFailures = 0;
   const unavailable = createHarness({ context: null }).create({

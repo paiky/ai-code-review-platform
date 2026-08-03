@@ -377,10 +377,79 @@
     inset 0 0 35px rgba(255, 61, 200, 0.08);
 }
 
+.command-center-flow-node.is-focus-path:not(.is-focused-stage) {
+  border-color: rgba(39, 233, 255, 0.72);
+  box-shadow:
+    0 0 0 1px rgba(39, 233, 255, 0.18),
+    0 0 28px rgba(39, 233, 255, 0.18),
+    inset 0 0 34px rgba(39, 233, 255, 0.05);
+}
+
+.command-center-flow-node.is-focus-muted {
+  opacity: 0.58;
+  filter: saturate(0.68);
+}
+
+.command-center-flow-node.is-focused-stage.is-engine-agent {
+  border-color: var(--cc-violet);
+  box-shadow:
+    0 0 0 2px rgba(168, 107, 255, 0.2),
+    0 0 36px rgba(168, 107, 255, 0.38),
+    inset 0 0 36px rgba(168, 107, 255, 0.1);
+}
+
+.command-center-flow-node.is-focused-stage.is-engine-fallback,
+.command-center-flow-node.is-focused-stage.is-state-warning,
+.command-center-flow-node.is-focused-stage.is-state-queued {
+  border-color: var(--cc-amber);
+  box-shadow:
+    0 0 0 2px rgba(255, 209, 102, 0.18),
+    0 0 34px rgba(255, 209, 102, 0.34),
+    inset 0 0 34px rgba(255, 209, 102, 0.08);
+}
+
+.command-center-flow-node.is-focused-stage.is-state-danger {
+  border-color: var(--cc-red);
+  box-shadow:
+    0 0 0 2px rgba(255, 77, 109, 0.2),
+    0 0 36px rgba(255, 77, 109, 0.4),
+    inset 0 0 36px rgba(255, 77, 109, 0.1);
+}
+
+.command-center-flow-node.is-focused-stage.is-state-success {
+  border-color: var(--cc-green);
+  box-shadow:
+    0 0 0 2px rgba(57, 255, 182, 0.18),
+    0 0 34px rgba(57, 255, 182, 0.34),
+    inset 0 0 34px rgba(57, 255, 182, 0.08);
+}
+
 .command-center-flow-node.is-focused-stage::before {
   width: 60%;
   background: var(--cc-pink);
   box-shadow: 0 0 16px 3px rgba(255, 61, 200, 0.6);
+}
+
+.command-center-flow-node.is-focused-stage.is-engine-agent::before {
+  background: var(--cc-violet);
+  box-shadow: 0 0 16px 3px rgba(168, 107, 255, 0.62);
+}
+
+.command-center-flow-node.is-focused-stage.is-engine-fallback::before,
+.command-center-flow-node.is-focused-stage.is-state-warning::before,
+.command-center-flow-node.is-focused-stage.is-state-queued::before {
+  background: var(--cc-amber);
+  box-shadow: 0 0 16px 3px rgba(255, 209, 102, 0.58);
+}
+
+.command-center-flow-node.is-focused-stage.is-state-danger::before {
+  background: var(--cc-red);
+  box-shadow: 0 0 16px 3px rgba(255, 77, 109, 0.62);
+}
+
+.command-center-flow-node.is-focused-stage.is-state-success::before {
+  background: var(--cc-green);
+  box-shadow: 0 0 16px 3px rgba(57, 255, 182, 0.58);
 }
 
 .command-center-flow-node-overlay {

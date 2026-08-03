@@ -69,7 +69,7 @@ export default function CommandCenterPage() {
   return (
     <main
       className="command-center-page"
-      data-command-center-phase="PHASE_4A"
+      data-command-center-phase="PHASE_4B"
       data-command-center-focus-task={focus.taskId || undefined}
       data-command-center-focus-flow={focus.flowId || undefined}
     >

@@ -12,6 +12,7 @@ export const COMMAND_CENTER_PARTICLE_LIMITS = Object.freeze({
 export const COMMAND_CENTER_INDEPENDENT_FLOW_LIMIT = 20;
 export const COMMAND_CENTER_PARTICLES_PER_FLOW = 6;
 export const COMMAND_CENTER_TRANSITION_DURATION_MS = 900;
+export const COMMAND_CENTER_AMBIENT_FRAME_INTERVAL_MS = 1000 / 30;
 
 export const COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY = '__commandCenterCanvasDiagnostics';
 
@@ -41,16 +42,16 @@ const FLOW_STATE_PRIORITY = Object.freeze([
   'STALE'
 ]);
 const STATE_COLORS = Object.freeze({
-  QUEUED: '#f3c875',
-  RUNNING: '#62d9ff',
-  AGENT_ANALYZING: '#9d8cff',
-  AGENT_TOOL_ACTIVITY: '#8bc7ff',
-  AGENT_CONVERGING: '#b89cff',
-  AGENT_SUBMITTING: '#66edbe',
-  FAILED: '#ff7184',
-  FALLBACK: '#f3c875',
-  COMPLETED: '#66edbe',
-  STALE: '#7f8da3'
+  QUEUED: '#ffd166',
+  RUNNING: '#27e9ff',
+  AGENT_ANALYZING: '#a86bff',
+  AGENT_TOOL_ACTIVITY: '#c08cff',
+  AGENT_CONVERGING: '#d6a8ff',
+  AGENT_SUBMITTING: '#39ffb6',
+  FAILED: '#ff4d6d',
+  FALLBACK: '#ffd166',
+  COMPLETED: '#39ffb6',
+  STALE: '#b59a63'
 });
 let commandCenterControllerSerial = 0;
 const EMPTY_SCENE = Object.freeze({
@@ -58,6 +59,7 @@ const EMPTY_SCENE = Object.freeze({
   snapshotKey: 'EMPTY',
   freshness: 'EMPTY',
   allowAnimation: false,
+  ambientAnimation: false,
   nodes: Object.freeze([]),
   edges: Object.freeze([]),
   flows: Object.freeze([])
@@ -103,11 +105,13 @@ export function normalizeCommandCenterScene(input) {
     && input.allowAnimation === true
     && flows.some(flow => flow.motionMode === 'CONTINUOUS')
   );
+  const ambientAnimation = input.ambientAnimation === true;
   return Object.freeze({
     id: safeIdentifier(input.id, 'review-lifecycle'),
     snapshotKey: safeIdentifier(input.snapshotKey, 'EMPTY'),
     freshness,
     allowAnimation,
+    ambientAnimation,
     nodes: Object.freeze(nodes),
     edges: Object.freeze(edges),
     flows: Object.freeze(flows)
@@ -194,6 +198,36 @@ export function deriveCommandCenterFlowSeed({
   reviewKey = 'default'
 } = {}) {
   return hashString(`${Math.max(0, Math.trunc(finiteNumber(taskId, 0)))}:${safeIdentifier(reviewKey, 'default')}`);
+}
+
+
+export function resolveCommandCenterFlowVisualLanguage(flow = {}) {
+  const state = safeIdentifier(flow.visualState, 'RUNNING').toUpperCase();
+  const engine = safeIdentifier(flow.engineKind, 'STANDARD').toUpperCase();
+  if (state === 'FAILED') {
+    return Object.freeze({ color: STATE_COLORS.FAILED, core: 'BROKEN', trail: 'STATIC', signature: 'CROSS' });
+  }
+  if (state === 'FALLBACK' || engine === 'FALLBACK') {
+    return Object.freeze({ color: STATE_COLORS.FALLBACK, core: 'SINGLE', trail: 'DASHED', signature: 'DASHED_RING' });
+  }
+  if (state === 'COMPLETED') {
+    return Object.freeze({ color: STATE_COLORS.COMPLETED, core: 'SETTLED', trail: 'STATIC', signature: 'RING' });
+  }
+  if (state === 'STALE') {
+    return Object.freeze({ color: STATE_COLORS.STALE, core: 'DIMMED', trail: 'DASHED', signature: 'STALE_LINE' });
+  }
+  if (state === 'QUEUED') {
+    return Object.freeze({ color: STATE_COLORS.QUEUED, core: 'PULSE', trail: 'SHORT', signature: 'NONE' });
+  }
+  if (engine === 'AGENT') {
+    return Object.freeze({ color: STATE_COLORS.AGENT_ANALYZING, core: 'DOUBLE', trail: 'LONG', signature: 'NONE' });
+  }
+  return Object.freeze({
+    color: STATE_COLORS[state] || STATE_COLORS.RUNNING,
+    core: 'SINGLE',
+    trail: 'SOLID',
+    signature: 'NONE'
+  });
 }
 
 
@@ -300,6 +334,7 @@ export function drawCommandCenterCanvasFrame({
   renderingPlan,
   transitions = [],
   transitionProgress = 1,
+  focusFlowId = null,
   timestamp = 0
 }) {
   const canvasWidth = Math.max(0, finiteNumber(width, 0));
@@ -318,6 +353,8 @@ export function drawCommandCenterCanvasFrame({
   const flowsById = new Map(flowPlan.renderFlows.map(flow => [flow.id, flow]));
   const flowsByColumn = groupFlowsByColumn(normalizedScene.flows);
   const geometry = resolveSceneGeometry(canvasWidth, canvasHeight);
+  const focusedFlow = normalizedScene.flows.find(flow => flow.id === focusFlowId) || null;
+  const focusPath = resolveFocusedPath(normalizedScene, focusedFlow);
 
   context.save();
   context.setTransform(
@@ -329,21 +366,41 @@ export function drawCommandCenterCanvasFrame({
     0
   );
   context.clearRect(0, 0, canvasWidth, canvasHeight);
-  drawSceneGrid(context, canvasWidth, canvasHeight);
+  drawAmbientEnvironment(
+    context,
+    canvasWidth,
+    canvasHeight,
+    timestamp,
+    normalizedScene.ambientAnimation
+  );
+  drawSceneGrid(context, canvasWidth, canvasHeight, timestamp);
   for (const edge of normalizedScene.edges) {
-    drawSceneEdge(context, edge, nodesById, geometry);
+    drawSceneEdge(context, edge, nodesById, geometry, {
+      focused: focusPath.edgeIds.has(edge.id),
+      dimmed: Boolean(focusedFlow) && !focusPath.edgeIds.has(edge.id),
+      timestamp
+    });
   }
   for (const node of normalizedScene.nodes) {
     drawSceneNode(
       context,
       node,
       geometry,
-      flowsByColumn.get(node.columnKey) || []
+      flowsByColumn.get(node.columnKey) || [],
+      {
+        focused: focusPath.nodeIds.has(node.id),
+        current: focusedFlow?.columnKey === node.columnKey,
+        dimmed: Boolean(focusedFlow) && !focusPath.nodeIds.has(node.id),
+        timestamp
+      }
     );
   }
   for (const particle of particleLayout) {
     const flow = flowsById.get(particle.flowId);
     if (!flow) continue;
+    const focusAlpha = focusedFlow
+      ? flow.id === focusedFlow.id ? 1 : 0.16
+      : 1;
     if (normalizedScene.allowAnimation && flow.motionMode === 'CONTINUOUS') {
       drawMovingFlowParticle(
         context,
@@ -351,10 +408,18 @@ export function drawCommandCenterCanvasFrame({
         flow,
         normalizedScene,
         geometry,
-        timestamp
+        timestamp,
+        focusAlpha
       );
     } else {
-      drawStaticFlowParticle(context, particle, flow, normalizedScene, geometry);
+      drawStaticFlowParticle(
+        context,
+        particle,
+        flow,
+        normalizedScene,
+        geometry,
+        focusAlpha
+      );
     }
   }
   for (const aggregateFlow of flowPlan.aggregateFlows) {
@@ -362,7 +427,8 @@ export function drawCommandCenterCanvasFrame({
       context,
       aggregateFlow,
       normalizedScene,
-      geometry
+      geometry,
+      focusedFlow ? 0.18 : 1
     );
   }
   for (const transition of transitions) {
@@ -372,7 +438,8 @@ export function drawCommandCenterCanvasFrame({
       flowsById.get(transition.flowId),
       normalizedScene,
       geometry,
-      transitionProgress
+      transitionProgress,
+      focusedFlow ? transition.flowId === focusedFlow.id ? 1 : 0.2 : 1
     );
   }
   context.restore();
@@ -399,6 +466,10 @@ class CommandCenterCanvasController {
       limit: this.particleLimit,
       renderingPlan: this.renderingPlan
     });
+    this.particleLayoutRevision = 1;
+    this.focusFlowId = null;
+    this.focusRevision = 0;
+    this.setFocusCallCount = 0;
     this.transitions = Object.freeze([]);
     this.transitionStartedAt = null;
     this.runtime = null;
@@ -431,7 +502,8 @@ class CommandCenterCanvasController {
           particles: this.particles,
           renderingPlan: this.renderingPlan,
           transitions: transitionFrame.transitions,
-          transitionProgress: transitionFrame.progress
+          transitionProgress: transitionFrame.progress,
+          focusFlowId: this.focusFlowId
         });
         if (transitionFrame.complete) {
           this.transitions = Object.freeze([]);
@@ -439,6 +511,7 @@ class CommandCenterCanvasController {
         }
       },
       isAnimationEnabled: () => this.shouldAnimate(),
+      getAnimationFrameInterval: () => this.resolveAnimationFrameInterval(),
       onFailure: this.handleRuntimeFailure
     });
     this.updateDiagnosticAttributes();
@@ -459,6 +532,27 @@ class CommandCenterCanvasController {
       limit: this.particleLimit,
       renderingPlan: this.renderingPlan
     });
+    this.particleLayoutRevision += 1;
+    if (!nextScene.flows.some(flow => flow.id === this.focusFlowId)) {
+      this.focusFlowId = null;
+    }
+    this.updateDiagnosticAttributes();
+    this.runtime?.refresh();
+  }
+
+  setFocus(flowId) {
+    if (this.disposed || this.failed) return;
+    this.setFocusCallCount += 1;
+    const candidate = safeNullableIdentifier(flowId);
+    const nextFocusFlowId = candidate && this.scene.flows.some(flow => flow.id === candidate)
+      ? candidate
+      : null;
+    if (nextFocusFlowId === this.focusFlowId) {
+      this.updateDiagnosticAttributes();
+      return;
+    }
+    this.focusFlowId = nextFocusFlowId;
+    this.focusRevision += 1;
     this.updateDiagnosticAttributes();
     this.runtime?.refresh();
   }
@@ -481,6 +575,7 @@ class CommandCenterCanvasController {
       limit: this.particleLimit,
       renderingPlan: this.renderingPlan
     });
+    this.particleLayoutRevision += 1;
     this.updateDiagnosticAttributes();
   }
 
@@ -488,8 +583,18 @@ class CommandCenterCanvasController {
     return (
       !this.disposed
       && !this.failed
-      && (this.scene.allowAnimation || this.transitions.length > 0)
+      && (
+        this.scene.ambientAnimation
+        || this.scene.allowAnimation
+        || this.transitions.length > 0
+      )
     );
+  }
+
+  resolveAnimationFrameInterval() {
+    return this.scene.allowAnimation || this.transitions.length > 0
+      ? 0
+      : COMMAND_CENTER_AMBIENT_FRAME_INTERVAL_MS;
   }
 
   isDocumentHidden() {
@@ -542,6 +647,7 @@ class CommandCenterCanvasController {
     this.particles = Object.freeze([]);
     this.transitions = Object.freeze([]);
     this.transitionStartedAt = null;
+    this.focusFlowId = null;
     if (canvas?.[COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY] === this.diagnosticReader) {
       try {
         delete canvas[COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY];
@@ -559,6 +665,7 @@ class CommandCenterCanvasController {
       disposed: this.disposed || Boolean(runtimeSnapshot.disposed),
       controllerInstanceId: this.instanceId,
       allowAnimation: this.scene.allowAnimation,
+      ambientAnimation: this.scene.ambientAnimation,
       snapshotKey: this.scene.snapshotKey,
       freshness: this.scene.freshness,
       nodeCount: this.scene.nodes.length,
@@ -567,11 +674,16 @@ class CommandCenterCanvasController {
       viewportWidth: this.viewportWidth,
       particleLimit: this.particleLimit,
       particleCount: this.particles.length,
+      particleLayoutRevision: this.particleLayoutRevision,
       independentFlowCount: this.renderingPlan.independentFlowCount,
       aggregatedFlowCount: this.renderingPlan.aggregatedFlowCount,
       aggregateGroupCount: this.renderingPlan.aggregateGroupCount,
       renderFlowCount: this.renderingPlan.renderFlows.length,
-      transitionCount: this.transitions.length
+      transitionCount: this.transitions.length,
+      focusFlowId: this.focusFlowId,
+      focusRevision: this.focusRevision,
+      setFocusCallCount: this.setFocusCallCount,
+      animationFrameIntervalMs: this.resolveAnimationFrameInterval()
     };
   }
 
@@ -601,6 +713,22 @@ class CommandCenterCanvasController {
     this.canvas?.setAttribute?.(
       'data-command-center-aggregated-flows',
       String(this.renderingPlan.aggregatedFlowCount)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-focus-flow',
+      this.focusFlowId || ''
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-focus-revision',
+      String(this.focusRevision)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-particle-layout-revision',
+      String(this.particleLayoutRevision)
+    );
+    this.canvas?.setAttribute?.(
+      'data-command-center-animation-fps',
+      this.resolveAnimationFrameInterval() > 0 ? '30' : '60'
     );
     this.canvas?.setAttribute?.(
       'data-command-center-canvas-health',
@@ -729,11 +857,57 @@ function nodePoint(node, geometry) {
 }
 
 
-function drawSceneGrid(context, width, height) {
+function drawAmbientEnvironment(context, width, height, timestamp, enabled) {
+  if (!enabled) return;
+  const time = Math.max(0, finiteNumber(timestamp, 0));
+  const phase = (time / 4200) % 1;
+  const horizon = height * 0.58;
+
   context.save();
-  context.strokeStyle = 'rgba(98, 217, 255, 0.045)';
+  context.globalAlpha = 0.32;
+  context.strokeStyle = '#27e9ff';
+  context.lineWidth = 0.7;
+  for (let index = -5; index <= 5; index += 1) {
+    context.beginPath();
+    context.moveTo(width * 0.5, horizon);
+    context.lineTo(width * 0.5 + index * width * 0.16, height);
+    context.stroke();
+  }
+
+  for (let index = 0; index < 7; index += 1) {
+    const normalized = ((index / 7) + phase) % 1;
+    const y = horizon + normalized * normalized * (height - horizon);
+    context.globalAlpha = 0.08 + normalized * 0.2;
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(width, y);
+    context.stroke();
+  }
+
+  const scanY = (time / 26) % Math.max(1, height);
+  context.globalAlpha = 0.1;
+  context.fillStyle = '#ff3dc8';
+  context.shadowColor = '#ff3dc8';
+  context.shadowBlur = 18;
+  context.fillRect?.(0, scanY, width, 2);
+
+  context.globalAlpha = 0.15 + Math.sin(time / 1500) * 0.04;
+  context.strokeStyle = '#a86bff';
+  context.shadowColor = '#a86bff';
+  context.shadowBlur = 28;
+  context.beginPath();
+  context.arc(width * 0.72, height * 1.08, width * 0.46, Math.PI * 1.08, Math.PI * 1.92);
+  context.stroke();
+  context.restore();
+}
+
+
+function drawSceneGrid(context, width, height, timestamp = 0) {
+  const offset = (Math.max(0, finiteNumber(timestamp, 0)) / 90) % 32;
+  context.save();
+  context.strokeStyle = 'rgba(39, 233, 255, 0.075)';
   context.lineWidth = 1;
-  for (let x = 0.5; x < width; x += 32) {
+  for (let x = 0.5 + offset; x < width; x += 32) {
     context.beginPath();
     context.moveTo(x, 0);
     context.lineTo(x, height);
@@ -743,7 +917,13 @@ function drawSceneGrid(context, width, height) {
 }
 
 
-function drawSceneEdge(context, edge, nodesById, geometry) {
+function drawSceneEdge(
+  context,
+  edge,
+  nodesById,
+  geometry,
+  { focused = false, dimmed = false, timestamp = 0 } = {}
+) {
   const from = nodesById.get(edge.from);
   const to = nodesById.get(edge.to);
   if (!from || !to) return;
@@ -754,6 +934,7 @@ function drawSceneEdge(context, edge, nodesById, geometry) {
   const controlOffset = Math.max(10, (endX - startX) * 0.42);
 
   context.save();
+  context.globalAlpha = dimmed ? 0.22 : 1;
   context.beginPath();
   context.moveTo(startX, start.y);
   context.bezierCurveTo(
@@ -764,22 +945,40 @@ function drawSceneEdge(context, edge, nodesById, geometry) {
     endX,
     end.y
   );
-  context.strokeStyle = 'rgba(98, 217, 255, 0.46)';
-  context.lineWidth = 1.25;
+  context.strokeStyle = focused ? '#ff3dc8' : 'rgba(39, 233, 255, 0.66)';
+  context.lineWidth = focused ? 2.8 : 1.5;
+  context.shadowColor = focused ? '#ff3dc8' : '#27e9ff';
+  context.shadowBlur = focused ? 18 : 10;
   context.stroke();
+
+  const energyProgress = (Math.max(0, finiteNumber(timestamp, 0)) / 1700) % 1;
+  const energyX = startX + (endX - startX) * energyProgress;
+  context.globalAlpha = dimmed ? 0.08 : focused ? 0.95 : 0.48;
+  context.beginPath();
+  context.arc(energyX, start.y, focused ? 3.2 : 2.1, 0, TAU);
+  context.fillStyle = focused ? '#ff3dc8' : '#27e9ff';
+  context.fill();
   context.restore();
 }
 
 
-function drawSceneNode(context, node, geometry, flows) {
+function drawSceneNode(
+  context,
+  node,
+  geometry,
+  flows,
+  { focused = false, current = false, dimmed = false, timestamp = 0 } = {}
+) {
   const center = nodePoint(node, geometry);
   const left = center.x - geometry.nodeWidth / 2;
   const top = center.y - geometry.nodeHeight / 2;
   const radius = Math.min(15, geometry.nodeWidth * 0.09);
   const active = node.flowCount > 0;
   const stateColor = resolveColumnStateColor(flows);
+  const pulse = 0.5 + Math.sin(Math.max(0, finiteNumber(timestamp, 0)) / 620) * 0.5;
 
   context.save();
+  context.globalAlpha = dimmed ? 0.3 : 1;
   context.beginPath();
   roundedRectPath(
     context,
@@ -792,16 +991,24 @@ function drawSceneNode(context, node, geometry, flows) {
   context.fillStyle = active
     ? 'rgba(19, 72, 105, 0.34)'
     : 'rgba(13, 26, 48, 0.48)';
-  context.strokeStyle = active
-    ? stateColor
-    : 'rgba(99, 154, 217, 0.3)';
-  context.lineWidth = active ? 1.5 : 1;
+  context.strokeStyle = current
+    ? '#ff3dc8'
+    : focused
+      ? '#27e9ff'
+      : active
+        ? stateColor
+        : 'rgba(39, 233, 255, 0.38)';
+  context.lineWidth = current ? 2.8 : focused || active ? 1.7 : 1;
+  context.shadowColor = current ? '#ff3dc8' : focused ? '#27e9ff' : stateColor;
+  context.shadowBlur = current ? 22 + pulse * 9 : focused || active ? 10 + pulse * 5 : 0;
   context.fill();
   context.stroke();
 
   context.beginPath();
   context.arc(left + 14, top + 14, active ? 3.5 : 2.5, 0, TAU);
-  context.fillStyle = active ? stateColor : 'rgba(157, 140, 255, 0.68)';
+  context.fillStyle = current
+    ? '#ff3dc8'
+    : active ? stateColor : 'rgba(168, 107, 255, 0.72)';
   context.fill();
   context.restore();
 }
@@ -813,7 +1020,8 @@ function drawMovingFlowParticle(
   flow,
   scene,
   geometry,
-  timestamp
+  timestamp,
+  focusAlpha = 1
 ) {
   const progress = (
     particle.offset
@@ -821,17 +1029,57 @@ function drawMovingFlowParticle(
   ) % 1;
   const point = pointOnFlowPath(scene, flow, geometry, progress, particle.laneOffset);
   if (!point) return;
+  const visualLanguage = resolveCommandCenterFlowVisualLanguage(flow);
+  const tailPoint = pointOnFlowPath(
+    scene,
+    flow,
+    geometry,
+    Math.max(0, progress - (visualLanguage.trail === 'LONG' ? 0.07 : 0.04)),
+    particle.laneOffset
+  );
+  const color = stateColor(flow);
 
   context.save();
+  context.globalAlpha = clamp(focusAlpha, 0, 1);
+  if (tailPoint) {
+    context.beginPath();
+    context.moveTo(tailPoint.x, tailPoint.y);
+    context.lineTo(point.x, point.y);
+    context.strokeStyle = color;
+    context.lineWidth = visualLanguage.trail === 'LONG' ? 2.2 : 1.4;
+    context.shadowColor = color;
+    context.shadowBlur = 12;
+    if (visualLanguage.trail === 'DASHED') context.setLineDash?.([4, 5]);
+    context.stroke();
+    context.setLineDash?.([]);
+  }
+  if (visualLanguage.core === 'DOUBLE') {
+    context.globalAlpha = clamp(focusAlpha * 0.48, 0, 1);
+    context.beginPath();
+    context.arc(point.x, point.y, particle.radius * 2.5, 0, TAU);
+    context.strokeStyle = '#a86bff';
+    context.lineWidth = 1;
+    context.stroke();
+  }
+  context.globalAlpha = clamp(focusAlpha, 0, 1);
   context.beginPath();
   context.arc(point.x, point.y, particle.radius, 0, TAU);
-  context.fillStyle = stateColor(flow);
+  context.fillStyle = color;
+  context.shadowColor = color;
+  context.shadowBlur = 15;
   context.fill();
   context.restore();
 }
 
 
-function drawStaticFlowParticle(context, particle, flow, scene, geometry) {
+function drawStaticFlowParticle(
+  context,
+  particle,
+  flow,
+  scene,
+  geometry,
+  focusAlpha = 1
+) {
   const target = targetNode(scene, flow);
   if (!target) return;
   const center = nodePoint(target, geometry);
@@ -840,7 +1088,8 @@ function drawStaticFlowParticle(context, particle, flow, scene, geometry) {
   const orbitY = geometry.nodeHeight * 0.28;
 
   context.save();
-  context.globalAlpha = flow.visualState === 'STALE' ? 0.42 : 0.72;
+  context.globalAlpha = (flow.visualState === 'STALE' ? 0.36 : 0.72) * focusAlpha;
+  if (flow.visualState === 'STALE') context.setLineDash?.([2, 5]);
   context.beginPath();
   context.arc(
     center.x + Math.cos(angle) * orbitX,
@@ -851,11 +1100,16 @@ function drawStaticFlowParticle(context, particle, flow, scene, geometry) {
   );
   context.fillStyle = stateColor(flow);
   context.fill();
+  context.setLineDash?.([]);
+
+  if (particle.id.endsWith(':particle:0')) {
+    drawTerminalStateSignature(context, flow, center, geometry, focusAlpha);
+  }
   context.restore();
 }
 
 
-function drawAggregateFlowMarker(context, flow, scene, geometry) {
+function drawAggregateFlowMarker(context, flow, scene, geometry, opacity = 1) {
   const target = targetNode(scene, flow);
   if (!target || flow.aggregateCount <= 0) return;
   const center = nodePoint(target, geometry);
@@ -864,6 +1118,7 @@ function drawAggregateFlowMarker(context, flow, scene, geometry) {
   const radius = clamp(9 + Math.log2(flow.aggregateCount + 1) * 1.4, 10, 16);
 
   context.save();
+  context.globalAlpha = clamp(opacity, 0, 1);
   context.beginPath();
   context.arc(x, y, radius, 0, TAU);
   context.fillStyle = 'rgba(5, 12, 26, 0.92)';
@@ -888,7 +1143,8 @@ function drawSceneTransition(
   flow,
   scene,
   geometry,
-  progress
+  progress,
+  opacity = 1
 ) {
   if (!flow) return;
   const safeProgress = clamp(finiteNumber(progress, 1), 0, 1);
@@ -898,7 +1154,7 @@ function drawSceneTransition(
   const color = stateColor(flow);
 
   context.save();
-  context.globalAlpha = Math.max(0, 1 - safeProgress);
+  context.globalAlpha = Math.max(0, 1 - safeProgress) * clamp(opacity, 0, 1);
   context.beginPath();
   context.arc(center.x, center.y, 12 + safeProgress * 34, 0, TAU);
   context.strokeStyle = color;
@@ -913,6 +1169,74 @@ function drawSceneTransition(
     context.fill();
   }
   context.restore();
+}
+
+
+function drawTerminalStateSignature(context, flow, center, geometry, opacity) {
+  const color = stateColor(flow);
+  const alpha = clamp(opacity, 0, 1);
+  const radius = Math.min(geometry.nodeWidth, geometry.nodeHeight) * 0.19;
+
+  context.save();
+  context.globalAlpha = alpha * 0.86;
+  context.strokeStyle = color;
+  context.fillStyle = color;
+  context.shadowColor = color;
+  context.shadowBlur = 16;
+  context.lineWidth = 1.8;
+
+  if (flow.visualState === 'FAILED') {
+    context.beginPath();
+    context.moveTo(center.x - radius, center.y - radius);
+    context.lineTo(center.x + radius, center.y + radius);
+    context.moveTo(center.x + radius, center.y - radius);
+    context.lineTo(center.x - radius, center.y + radius);
+    context.stroke();
+  } else if (flow.visualState === 'COMPLETED') {
+    context.beginPath();
+    context.arc(center.x, center.y, radius, 0, TAU);
+    context.stroke();
+    context.beginPath();
+    context.arc(center.x, center.y, Math.max(2, radius * 0.24), 0, TAU);
+    context.fill();
+  } else if (flow.visualState === 'FALLBACK') {
+    context.setLineDash?.([7, 6]);
+    context.beginPath();
+    context.arc(center.x, center.y, radius * 1.08, 0, TAU);
+    context.stroke();
+    context.setLineDash?.([]);
+  } else if (flow.visualState === 'STALE') {
+    context.setLineDash?.([3, 5]);
+    context.beginPath();
+    context.moveTo(center.x - radius * 1.3, center.y);
+    context.lineTo(center.x + radius * 1.3, center.y);
+    context.stroke();
+    context.setLineDash?.([]);
+  }
+  context.restore();
+}
+
+
+function resolveFocusedPath(scene, focusedFlow) {
+  if (!focusedFlow) {
+    return { nodeIds: new Set(), edgeIds: new Set() };
+  }
+  const orderedNodes = [...scene.nodes].sort((left, right) => left.x - right.x);
+  const targetIndex = orderedNodes.findIndex(
+    node => node.columnKey === focusedFlow.columnKey
+  );
+  if (targetIndex < 0) {
+    return { nodeIds: new Set(), edgeIds: new Set() };
+  }
+  const pathNodeIds = new Set(
+    orderedNodes.slice(0, targetIndex + 1).map(node => node.id)
+  );
+  const pathEdgeIds = new Set(
+    scene.edges
+      .filter(edge => pathNodeIds.has(edge.from) && pathNodeIds.has(edge.to))
+      .map(edge => edge.id)
+  );
+  return { nodeIds: pathNodeIds, edgeIds: pathEdgeIds };
 }
 
 
@@ -985,11 +1309,7 @@ function resolveColumnStateColor(flows) {
 
 
 function stateColor(flow) {
-  if (flow.engineKind === 'FALLBACK') return STATE_COLORS.FALLBACK;
-  if (flow.visualState === 'RUNNING' && flow.engineKind === 'AGENT') {
-    return STATE_COLORS.AGENT_ANALYZING;
-  }
-  return STATE_COLORS[flow.visualState] || STATE_COLORS.RUNNING;
+  return resolveCommandCenterFlowVisualLanguage(flow).color;
 }
 
 

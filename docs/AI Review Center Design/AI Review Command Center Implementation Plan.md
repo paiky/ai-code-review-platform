@@ -4,8 +4,8 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Phase 4A`
-- 阶段状态：`PHASE 4A COMPLETED — WAITING FOR STRUCTURE AND COLOR CONFIRMATION`
+- 当前阶段：`Phase 4B`
+- 阶段状态：`PHASE 4B COMPLETED — WAITING FOR EFFECT INTENSITY CONFIRMATION`
 - Phase 0 基线 Commit：`2005b8f`
 - Phase 1 基线 Commit：`0cbb148`
 - Phase 2 拆分确认时间：2026-07-31
@@ -24,12 +24,16 @@
 - Phase 4 基线 Commit：`58f2b0b`
 - Phase 4 授权时间：2026-08-03
 - Phase 4A 完成时间：2026-08-03
+- Phase 4A 结构与颜色人工确认时间：2026-08-03
+- Phase 4B 授权时间：2026-08-03
+- Phase 4B 基线 Commit：`4fe191c`
+- Phase 4B 完成时间：2026-08-03
 - Phase 3 输入风险：浏览器 hidden/visible 证据缺口；Runtime/Governance、focus/visibility 恢复可能重复刷新；390px AppFrame 导航裁切与可见横向滚动条。
 - Phase 2D MySQL 兼容性热修复授权时间：2026-07-31
 - 计划更新时间：2026-08-03
-- 当前目标：完成 Phase 4A 一屏生命周期地图、Runtime-only 首页轮询、紧凑工具条与 Flow Dock，以及赛博霓虹高对比静态视觉基线。
-- 当前明确不做：Phase 4A 不加入环境动态、能量通道、粒子尾迹、冲击波或 `controller.setFocus` 绘制增强；不修改 Python 后端、数据库、索引、业务状态机、公开 API、主 Bundle 拆包或第三方动画依赖。
-- 停止点：Phase 4A 完成专项/全量测试、构建和 1440/1024/390 浏览器截图后提交并立即停止，等待用户确认结构与颜色；未确认前不进入 Phase 4B。
+- 当前目标：等待用户确认 Phase 4B 特效强度；当前不继续修改视觉或进入 Phase 4C。
+- 当前明确不做：未获用户确认前不执行 Phase 4C 的长时间最终资源验收、完整键盘/失败注入回归和最终完成状态；不修改 Python 后端、数据库、索引、迁移、业务状态机或公开 API。
+- 停止点：Phase 4B 已完成并提交后立即停止，等待用户确认特效强度；未确认前不进入 Phase 4C。
 
 本计划同时作为分阶段实施总控和验收记录。每个阶段开始前更新状态，完成后回写验证结果并停止。
 
@@ -1335,12 +1339,79 @@ Phase 4A 完成后状态更新为 `PHASE 4A COMPLETED — WAITING FOR STRUCTURE 
 - Phase 4B 的环境动画、能量通道、粒子尾迹、状态冲击波和独立 `controller.setFocus` 尚未开始；Phase 4C 的长时间真实资源观察、完整键盘回归和最终失败注入也尚未开始。
 - 截图是结构与配色验收输入，不代表用户已确认视觉强度；必须停在本状态等待用户明确确认。
 
-### Phase 4B：地图特效与聚焦表现（待确认）
+### Phase 4B：地图特效与聚焦表现（已完成，待效果强度确认）
 
-- 在 Phase 4A 视觉确认后加入单 RAF 的空闲环境动画、能量连线、节点呼吸光、业务粒子尾迹和真实状态切换冲击波。
-- 新增独立 `controller.setFocus(flowId)`，选中 Flow 高亮完整路径但不重建 Scene、Controller、粒子布局或 Observer。
-- 空闲约 30fps、真实活动 Flow 可 60fps；hidden、390、reduced-motion 和 Canvas failure 时停止。
-- 完成效果强度浏览器确认后停止，等待 Phase 4C 授权。
+#### 实施设计
+
+- Renderer 保持单 Canvas、单 RAF、单 ResizeObserver 和单 visibility listener；在同一帧管线内按顺序绘制透视网格/极光/扫描光带、能量通道、节点光晕、真实 Flow 粒子与终态冲击波，不创建 CSS 动画 Timer 或第二个装饰 RAF。
+- Scene 增加只读绘制元数据而不增加业务语义：`ambientMode` 仅控制装饰层；Flow 继续只接受 Runtime 已归一化的 `visualState`、`motionMode`、`engineKind`、`columnKey` 和稳定 ID。空闲态不生成 Flow、Task、阶段或业务粒子。
+- 空闲或仅静态 Flow 时 RAF 以约 30fps 节流；存在真实 `CONTINUOUS` Flow 时使用 60fps。页面 hidden 时立即取消 RAF，visible 后只恢复现有一条绘制循环；390、reduced-motion、初始化失败和绘制失败仍不挂载 Canvas。
+- `controller.setFocus(flowId)` 只更新 Controller 内部焦点 ID 并请求重绘，不进入 Scene、不调用 `setScene`、不重建粒子布局、Canvas、Controller、Observer 或 listener。选中 Flow 高亮从 Intake 到其真实当前列的完整路径，其他真实路径降噪但保持可见；清除选择恢复全局显示。
+- Standard 使用电光青实心光核，Agent 使用紫色双核/尾迹，Fallback 使用琥珀断续尾迹，Failed 使用红色静态断裂与一次冲击波，Completed 使用绿色静态收束环，Stale 使用低饱和琥珀虚线；状态始终保留 DOM 固定文字，不只依赖颜色。
+- 冲击波只由同一稳定 Flow 的真实状态变更触发，首次加载的历史 Failed/Completed/Fallback 不回放；每个终态迁移最多产生一个有界短时效果，快照轮询不会重复触发。
+
+#### 修改范围
+
+- `frontend/src/command-center/CommandCenterCanvas.jsx`：把选中 Flow ID 通过独立 effect 交给 `controller.setFocus`，保持创建 effect 只依赖 Canvas 挂载条件。
+- `frontend/src/command-center/commandCenterCanvasRenderer.js`：实现环境层、状态路径/粒子、尾迹、冲击波、30/60fps 调度和焦点绘制状态。
+- `frontend/src/canvas/canvasRuntime.js`：增加可选帧间隔门禁，让同一 RAF 在空闲环境层按约 30fps 实际绘制；默认值保持现有 Canvas 调用方行为不变。
+- `frontend/src/command-center/commandCenterPresentation.js`：只补充 Renderer 必需的兼容绘制元数据，不修改 Runtime/Governance 产品语义。
+- `frontend/src/command-center/commandCenter.css`：补充 Canvas 与 DOM 聚焦协同、静态失败/回退类和 reduced-motion 兜底；不以 CSS 动画替代单 RAF。
+- `frontend/tests/commandCenterCanvasRenderer.test.mjs` 及必要的 Command Center 专项测试：覆盖焦点不重建、环境 30fps、活动 60fps、单 RAF、状态矩阵、终态不重放和 cleanup。
+
+#### 验收标准
+
+- Empty、Standard、Agent、Fallback、Failed、Completed、Stale、多 reviewKey 和 27 Flow 均有确定视觉语言；空闲态只有装饰动画，不出现虚构业务 Flow。
+- Task/Flow 选择只调用 `setFocus`，Controller/Canvas/Observer/listener/粒子布局实例不变；选中路径高亮到真实当前列，其他路径可见。
+- DPR≤2、独立 Flow≤20、粒子 48/80/120 分档和绘制预算门禁保持有效；始终只有一个 RAF。
+- hidden、390、reduced-motion、Canvas 初始化失败和绘制失败停止动画并保留完整 DOM 地图。
+- Phase 4B 专项测试、前端全量 Node 测试、生产构建、1440×900/1024×800/390×844 浏览器效果验收、控制台检查和 `git diff --check` 通过。
+
+#### 停止点
+
+Phase 4B 完成后状态更新为 `PHASE 4B COMPLETED — WAITING FOR EFFECT INTENSITY CONFIRMATION`，提交实际修改、测试、构建、浏览器效果和剩余风险后立即停止；未经用户确认不得进入 Phase 4C。
+
+#### 实施结果
+
+- Renderer 已在同一 Canvas/RAF 帧管线内增加移动透视网格、青紫极光、扫描光带、能量通道、节点呼吸光和真实 Flow 光核/尾迹；没有新增 CSS 动画 Timer、第二条 RAF、WebGL 或第三方依赖。
+- 空闲与 Stale 场景保持约 30fps 环境绘制，存在真实活动 Flow 时提升到 60fps；共享 Canvas Runtime 新增可选实际绘制间隔门禁，默认调用方行为保持不变。
+- `controller.setFocus(flowId)` 已成为独立绘制状态：Agent/Fallback 选择和清除聚焦期间 Controller 实例均为 `2`，清除前后粒子布局 revision 均为 `19`，Observer/listener 均为 `1`；焦点 revision 独立从 `1` 更新为 `2`。
+- Standard、Agent、Fallback、Failed、Completed、Stale 已分别使用青色实心光核、紫色双核长尾、琥珀断续尾迹、红色断裂十字、绿色收束环和低饱和虚线；状态固定文字与 DOM Overlay 仍保留。
+- 27 Flow 场景保持独立 Flow `20`、聚合 Flow `7`，没有突破既有独立 Flow、DPR、粒子和绘制预算门禁；Empty 场景业务 Flow 为 `0`，只保留环境动画。
+- 首页仍为 Runtime-only。受控浏览器会话累计 Runtime 请求 `58`，Governance 请求 `0`；本阶段未修改 Python 后端、数据库或公开 API。
+
+实际修改文件：
+
+- `docs/AI Review Center Design/AI Review Command Center Implementation Plan.md`
+- `frontend/src/canvas/canvasRuntime.js`
+- `frontend/src/command-center/CommandCenterCanvas.jsx`
+- `frontend/src/command-center/CommandCenterPage.jsx`
+- `frontend/src/command-center/CommandCenterTopology.jsx`
+- `frontend/src/command-center/commandCenter.css`
+- `frontend/src/command-center/commandCenterCanvasRenderer.js`
+- `frontend/src/command-center/commandCenterPresentation.js`
+- `frontend/tests/canvasRuntime.test.mjs`
+- `frontend/tests/commandCenterCanvasRenderer.test.mjs`
+- `frontend/tests/commandCenterInformationArchitecture.test.mjs`
+
+验证结果：
+
+- Phase 4B 专项：`node --test tests/commandCenterCanvasRenderer.test.mjs tests/commandCenterInformationArchitecture.test.mjs tests/canvasRuntime.test.mjs`，`28 passed`。
+- 前端全量：`node --test`，`106 passed`。
+- 生产构建：`scripts\\run-frontend.cmd build` 通过；CSS `73.51 kB`（gzip `14.84 kB`），JS `1,732.27 kB`（gzip `539.11 kB`）。主 Bundle 超过 500 kB 的既有提示仍保留，拆包不属于 Phase 4。
+- 1440×900：`phase4b-1440-mixed-27.png`、`phase4b-1440-agent-focus.png`、`phase4b-1440-fallback-focus.png`、`phase4b-1440-stale.png` 和 `phase4b-1440-empty.png` 覆盖 Mixed 27、Agent、Fallback、Stale、Empty；五阶段、完整通道、工具条和 Dock 同屏，Canvas `1`，无横向/纵向溢出。
+- 1024×800：`phase4b-1024-mixed.png`；五阶段、工具条和 Dock 首屏完整，Canvas `1`、DOM 节点 `5`，`scrollWidth/clientWidth = 1024/1024`，地图底部 `697 < 800`；活动帧率 `60fps`，平均绘制 `0.504ms`，超预算帧 `0`。
+- 390×844：`phase4b-390x844.png`；Canvas `0`、DOM 节点 `5`、AppFrame 主导航 `6`，`scrollWidth/clientWidth = 390/390`，不存在可见横向滚动条。
+- Empty：Canvas `1`、活动 RAF `1`、Observer/listener 注册各 `1`、动画帧率 `30fps`、平均绘制 `0.509ms`、最大绘制 `5.90ms`、超预算帧 `0`，独立/聚合 Flow 均为 `0`。
+- Stale：Runtime 新鲜度明确显示“已过期”，只有一个真实 Stale Flow；Canvas 保持 `30fps` 环境层且无模拟 Task/Flow。
+- Vite 与受控 Runtime mock 的 stderr 均为空，页面未出现错误浮层；`git diff --check` 通过。专用浏览器 console message 导出未在本次会话中取得，保留到 Phase 4C 最终控制台门禁复核。
+- 验收后复核 5173/8090 监听 owner，只停止本次 Agent 启动的 Node PID `26308`、`60436`；两个端口均已释放。两份原有无关未跟踪文档保持不动。
+
+剩余风险：
+
+- 特效强度、节奏和视觉偏好属于本停止点的人工确认项；用户确认前不继续调色、加速或减弱动画。
+- 本轮数据来自受控 Runtime mock，用于确定性覆盖 Empty、Standard、Agent、Fallback、Failed、Completed、Stale、多 reviewKey 和 27 Flow；部署环境的真实数据密度仍需后续确认。
+- Phase 4C 尚未开始：至少 60 秒的最终绘制预算与资源观察、完整 Tab/Enter/Space/focus-visible 回归、hidden/reduced-motion/初始化失败/绘制失败浏览器注入和专用浏览器控制台检查仍属于下一停止段。
 
 ### Phase 4C：性能、无障碍与最终收口（待确认）
 

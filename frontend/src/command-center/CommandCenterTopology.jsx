@@ -9,6 +9,9 @@ export default function CommandCenterTopology({
 }) {
   const columns = topology.columns || [];
   const selectedFlow = topology.flows.find(flow => flow.id === focus?.flowId) || null;
+  const selectedColumnIndex = columns.findIndex(
+    column => column.key === selectedFlow?.columnKey
+  );
 
   return (
     <section
@@ -29,9 +32,19 @@ export default function CommandCenterTopology({
         <div className="command-center-flow" role="list" aria-label="AI Review 生命周期">
           {columns.map((column, index) => {
             const focused = selectedFlow?.columnKey === column.key;
+            const onFocusedPath = selectedColumnIndex >= 0 && index <= selectedColumnIndex;
+            const focusClassName = selectedFlow
+              ? onFocusedPath ? ' is-focus-path' : ' is-focus-muted'
+              : '';
             return (
               <article
-                className={`command-center-flow-node${focused ? ' is-focused-stage' : ''}`}
+                className={[
+                  'command-center-flow-node',
+                  focusClassName,
+                  focused ? ' is-focused-stage' : '',
+                  focused ? ` is-engine-${selectedFlow.engineKind.toLowerCase()}` : '',
+                  focused ? ` is-state-${selectedFlow.stateToken}` : ''
+                ].join(' ')}
                 role="listitem"
                 key={column.key}
               >

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  COMMAND_CENTER_AMBIENT_FRAME_INTERVAL_MS,
   COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY,
   COMMAND_CENTER_CANVAS_MAX_DPR,
   COMMAND_CENTER_DRAW_BUDGET_MS,
@@ -14,6 +15,7 @@ import {
   deriveCommandCenterFlowSeed,
   normalizeCommandCenterScene,
   reconcileCommandCenterScenes,
+  resolveCommandCenterFlowVisualLanguage,
   resolveCommandCenterCanvasFallback,
   resolveCommandCenterParticleLimit
 } from '../src/command-center/commandCenterCanvasRenderer.js';
@@ -214,7 +216,7 @@ test('reconciles only real fresh snapshot changes and never replays initial hist
 });
 
 
-test('keeps historical Failed and Fallback static on initial load', () => {
+test('keeps historical Failed and Fallback business state static while ambient stays at 30fps', () => {
   const scene = buildScene('2026-07-31T02:00:00Z', [
     flow(1, 'failed', 'FAILED', 'FAILED'),
     flow(2, 'fallback', 'FALLBACK', 'FALLBACK', {
@@ -229,13 +231,24 @@ test('keeps historical Failed and Fallback static on initial load', () => {
   assert.ok(controller);
   assert.equal(harness.canvas.width, 960 * COMMAND_CENTER_CANVAS_MAX_DPR);
   assert.equal(harness.canvas.height, 190 * COMMAND_CENTER_CANVAS_MAX_DPR);
-  assert.equal(harness.pendingFrames(), 0);
-  assert.equal(controller.getSnapshot().running, false);
+  assert.equal(harness.pendingFrames(), 1);
+  assert.equal(controller.getSnapshot().running, true);
   assert.equal(controller.getSnapshot().allowAnimation, false);
+  assert.equal(controller.getSnapshot().ambientAnimation, true);
+  assert.equal(harness.context.operations.includes('fillRect'), true);
+  assert.equal(
+    controller.getSnapshot().animationFrameIntervalMs,
+    COMMAND_CENTER_AMBIENT_FRAME_INTERVAL_MS
+  );
   assert.equal(controller.getSnapshot().transitionCount, 0);
   assert.equal(controller.getSnapshot().particleLimit, COMMAND_CENTER_PARTICLE_LIMITS.medium);
   assert.equal(controller.getSnapshot().particleCount, 12);
   assert.equal(controller.getSnapshot().frameCount, 1);
+  harness.flushFrame(16);
+  harness.flushFrame(32);
+  assert.equal(controller.getSnapshot().frameCount, 1);
+  harness.flushFrame(48);
+  assert.equal(controller.getSnapshot().frameCount, 2);
   assert.equal(
     typeof harness.canvas[COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY],
     'function'
@@ -246,8 +259,8 @@ test('keeps historical Failed and Fallback static on initial load', () => {
   );
 
   harness.resize(800, 190);
-  assert.equal(controller.getSnapshot().frameCount, 2);
-  assert.equal(harness.pendingFrames(), 0);
+  assert.equal(controller.getSnapshot().frameCount, 3);
+  assert.equal(harness.pendingFrames(), 1);
   controller.dispose();
   assert.equal(harness.canvas[COMMAND_CENTER_CANVAS_DIAGNOSTICS_KEY], undefined);
   assert.equal(harness.observerInstances[0].disconnectCount, 1);
@@ -281,7 +294,95 @@ test('rebuilds only the particle layout across responsive tiers', () => {
 });
 
 
-test('animates live state and stops after a one-time terminal transition', () => {
+test('focus updates drawing state without rebuilding Controller Scene particles observer or listener', () => {
+  const scene = buildScene('2026-08-03T02:00:00Z', [
+    flow(1, 'standard', 'RUNNING', 'MODEL_CALLING'),
+    flow(1, 'agent', 'RUNNING', 'AGENT_TOOL_ACTIVITY', {
+      requestedEngine: 'AGENT',
+      effectiveEngine: 'AGENT'
+    })
+  ]);
+  const harness = createHarness();
+  const controller = harness.create(scene);
+  const initial = controller.getSnapshot();
+
+  controller.setFocus('1:standard');
+  const focused = controller.getSnapshot();
+  assert.equal(focused.focusFlowId, '1:standard');
+  assert.equal(focused.controllerInstanceId, initial.controllerInstanceId);
+  assert.equal(focused.snapshotKey, initial.snapshotKey);
+  assert.equal(focused.particleLayoutRevision, initial.particleLayoutRevision);
+  assert.equal(focused.particleCount, initial.particleCount);
+  assert.equal(focused.observerRegistrationCount, 1);
+  assert.equal(focused.listenerRegistrationCount, 1);
+  assert.equal(focused.focusRevision, 1);
+  assert.equal(focused.setFocusCallCount, 1);
+  assert.equal(
+    harness.canvas.getAttribute('data-command-center-focus-flow'),
+    '1:standard'
+  );
+
+  controller.setFocus('1:standard');
+  assert.equal(controller.getSnapshot().focusRevision, 1);
+  assert.equal(controller.getSnapshot().setFocusCallCount, 2);
+  assert.equal(controller.getSnapshot().particleLayoutRevision, initial.particleLayoutRevision);
+
+  controller.setFocus('1:agent');
+  assert.equal(controller.getSnapshot().focusFlowId, '1:agent');
+  assert.equal(controller.getSnapshot().focusRevision, 2);
+  assert.equal(controller.getSnapshot().particleLayoutRevision, initial.particleLayoutRevision);
+  assert.equal(harness.observerInstances.length, 1);
+  assert.equal(harness.documentTarget.listenerCount(), 1);
+
+  controller.setFocus(null);
+  assert.equal(controller.getSnapshot().focusFlowId, null);
+  assert.equal(controller.getSnapshot().focusRevision, 3);
+  assert.equal(controller.getSnapshot().particleLayoutRevision, initial.particleLayoutRevision);
+  controller.dispose();
+});
+
+
+test('maps Standard Agent Fallback Failed Completed Stale and Queued to stable visual languages', () => {
+  const matrix = [
+    [{ engineKind: 'STANDARD', visualState: 'RUNNING' }, ['#27e9ff', 'SINGLE', 'SOLID', 'NONE']],
+    [{ engineKind: 'AGENT', visualState: 'AGENT_TOOL_ACTIVITY' }, ['#a86bff', 'DOUBLE', 'LONG', 'NONE']],
+    [{ engineKind: 'FALLBACK', visualState: 'FALLBACK' }, ['#ffd166', 'SINGLE', 'DASHED', 'DASHED_RING']],
+    [{ engineKind: 'STANDARD', visualState: 'FAILED' }, ['#ff4d6d', 'BROKEN', 'STATIC', 'CROSS']],
+    [{ engineKind: 'STANDARD', visualState: 'COMPLETED' }, ['#39ffb6', 'SETTLED', 'STATIC', 'RING']],
+    [{ engineKind: 'STANDARD', visualState: 'STALE' }, ['#b59a63', 'DIMMED', 'DASHED', 'STALE_LINE']],
+    [{ engineKind: 'STANDARD', visualState: 'QUEUED' }, ['#ffd166', 'PULSE', 'SHORT', 'NONE']]
+  ];
+  for (const [input, expected] of matrix) {
+    const language = resolveCommandCenterFlowVisualLanguage(input);
+    assert.deepEqual(
+      [language.color, language.core, language.trail, language.signature],
+      expected
+    );
+  }
+});
+
+
+test('empty Scene animates only the 30fps ambient layer without synthetic flows or particles', () => {
+  const harness = createHarness();
+  const controller = harness.create(buildScene('2026-08-03T02:00:00Z', []));
+
+  assert.equal(controller.getSnapshot().flowCount, 0);
+  assert.equal(controller.getSnapshot().particleCount, 0);
+  assert.equal(controller.getSnapshot().allowAnimation, false);
+  assert.equal(controller.getSnapshot().ambientAnimation, true);
+  assert.equal(harness.pendingFrames(), 1);
+  const initialFrameCount = controller.getSnapshot().frameCount;
+  harness.flushFrame(16);
+  harness.flushFrame(32);
+  assert.equal(controller.getSnapshot().frameCount, initialFrameCount);
+  harness.flushFrame(48);
+  assert.equal(controller.getSnapshot().frameCount, initialFrameCount + 1);
+  assert.ok(controller.getSnapshot().skippedAnimationFrameCount >= 2);
+  controller.dispose();
+});
+
+
+test('animates live state at 60fps and returns to 30fps ambient after one terminal transition', () => {
   const running = buildScene(
     '2026-07-31T02:00:00Z',
     [flow(1, 'main', 'RUNNING', 'MODEL_CALLING')]
@@ -299,6 +400,7 @@ test('animates live state and stops after a one-time terminal transition', () =>
 
   assert.ok(controller);
   assert.equal(controller.getSnapshot().allowAnimation, true);
+  assert.equal(controller.getSnapshot().animationFrameIntervalMs, 0);
   assert.equal(harness.pendingFrames(), 1);
   harness.flushFrame(16);
   assert.equal(harness.pendingFrames(), 1);
@@ -321,8 +423,12 @@ test('animates live state and stops after a one-time terminal transition', () =>
 
   harness.flushFrame(1_200);
   assert.equal(controller.getSnapshot().transitionCount, 0);
-  assert.equal(controller.getSnapshot().running, false);
-  assert.equal(harness.pendingFrames(), 0);
+  assert.equal(controller.getSnapshot().running, true);
+  assert.equal(
+    controller.getSnapshot().animationFrameIntervalMs,
+    COMMAND_CENTER_AMBIENT_FRAME_INTERVAL_MS
+  );
+  assert.equal(harness.pendingFrames(), 1);
   controller.dispose();
 });
 
@@ -359,7 +465,11 @@ test('stays within the draw budget and keeps one RAF observer and listener over 
   harness.setHidden(false);
   assert.equal(controller.getSnapshot().activeRafCount, 1);
   controller.setScene(stale);
-  assert.equal(controller.getSnapshot().activeRafCount, 0);
+  assert.equal(controller.getSnapshot().activeRafCount, 1);
+  assert.equal(
+    controller.getSnapshot().animationFrameIntervalMs,
+    COMMAND_CENTER_AMBIENT_FRAME_INTERVAL_MS
+  );
   assert.equal(controller.getSnapshot().observerRegistrationCount, 1);
   assert.equal(controller.getSnapshot().listenerRegistrationCount, 1);
   controller.dispose();
@@ -385,12 +495,12 @@ test('does not replay snapshot changes received while hidden', () => {
   assert.equal(controller.getSnapshot().transitionCount, 0);
   harness.setHidden(false);
   assert.equal(controller.getSnapshot().allowAnimation, false);
-  assert.equal(harness.pendingFrames(), 0);
+  assert.equal(harness.pendingFrames(), 1);
   controller.dispose();
 });
 
 
-test('stops for stale snapshots and keeps unknown states static', () => {
+test('keeps stale and unknown business states static while ambient animation remains bounded', () => {
   const running = buildScene(
     '2026-07-31T02:00:00Z',
     [flow(1, 'main', 'RUNNING', 'MODEL_CALLING')]
@@ -415,12 +525,16 @@ test('stops for stale snapshots and keeps unknown states static', () => {
   assert.equal(controller.getSnapshot().freshness, 'STALE');
   assert.equal(controller.getSnapshot().allowAnimation, false);
   assert.equal(controller.getSnapshot().transitionCount, 0);
-  assert.equal(harness.pendingFrames(), 0);
+  assert.equal(harness.pendingFrames(), 1);
+  assert.equal(
+    controller.getSnapshot().animationFrameIntervalMs,
+    COMMAND_CENTER_AMBIENT_FRAME_INTERVAL_MS
+  );
 
   controller.setScene(unknown);
   assert.equal(controller.getSnapshot().allowAnimation, false);
   assert.equal(controller.getSnapshot().transitionCount, 0);
-  assert.equal(harness.pendingFrames(), 0);
+  assert.equal(harness.pendingFrames(), 1);
   controller.dispose();
 });
 
@@ -645,6 +759,12 @@ function createContext() {
     clearRect() {
       if (this.failDrawing) throw new Error('synthetic draw failure');
       this.operations.push('clearRect');
+    },
+    fillRect() {
+      this.operations.push('fillRect');
+    },
+    setLineDash() {
+      this.operations.push('setLineDash');
     },
     beginPath() {
       this.operations.push('beginPath');

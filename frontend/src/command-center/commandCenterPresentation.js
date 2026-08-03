@@ -190,6 +190,7 @@ function buildTopologyScene({
     id: 'review-lifecycle',
     snapshotKey: generatedAt || 'EMPTY',
     freshness,
+    ambientAnimation: true,
     allowAnimation: (
       freshness === 'FRESH'
       && flows.some(flow => flow.motionMode === 'CONTINUOUS')

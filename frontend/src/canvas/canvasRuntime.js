@@ -32,6 +32,7 @@ class CanvasRuntime {
     this.onDraw = options.onDraw;
     this.onResize = options.onResize;
     this.isAnimationEnabled = options.isAnimationEnabled;
+    this.getAnimationFrameInterval = options.getAnimationFrameInterval;
     this.onFailure = options.onFailure;
     this.maxDpr = options.maxDpr;
     this.drawBudgetMs = Math.max(
@@ -43,6 +44,8 @@ class CanvasRuntime {
     this.context = null;
     this.observer = null;
     this.rafId = null;
+    this.lastAnimationDrawAt = null;
+    this.skippedAnimationFrameCount = 0;
     this.width = 0;
     this.height = 0;
     this.dpr = 1;
@@ -98,7 +101,9 @@ class CanvasRuntime {
       this.stopLoop();
       return;
     }
-    this.drawCurrentFrame(this.environment.now());
+    const timestamp = this.environment.now();
+    this.drawCurrentFrame(timestamp);
+    this.lastAnimationDrawAt = timestamp;
     this.syncLoop();
   }
 
@@ -122,7 +127,21 @@ class CanvasRuntime {
   handleAnimationFrame(timestamp) {
     this.rafId = null;
     if (this.disposed || this.failed || !this.shouldAnimate()) return;
-    this.drawCurrentFrame(timestamp);
+    const frameTimestamp = Math.max(0, finiteNumber(timestamp, 0));
+    const frameInterval = Math.max(
+      0,
+      finiteNumber(this.getAnimationFrameInterval?.(), 0)
+    );
+    if (
+      this.lastAnimationDrawAt === null
+      || frameInterval === 0
+      || frameTimestamp - this.lastAnimationDrawAt >= frameInterval
+    ) {
+      this.drawCurrentFrame(frameTimestamp);
+      this.lastAnimationDrawAt = frameTimestamp;
+    } else {
+      this.skippedAnimationFrameCount += 1;
+    }
     this.scheduleFrame();
   }
 
@@ -164,7 +183,9 @@ class CanvasRuntime {
         dpr
       });
       if (!this.isDocumentHidden()) {
-        this.drawCurrentFrame(this.environment.now());
+        const timestamp = this.environment.now();
+        this.drawCurrentFrame(timestamp);
+        this.lastAnimationDrawAt = timestamp;
       }
       this.syncLoop();
     } catch {
@@ -223,9 +244,11 @@ class CanvasRuntime {
   }
 
   stopLoop() {
-    if (this.rafId === null) return;
-    this.environment.cancelFrame(this.rafId);
-    this.rafId = null;
+    if (this.rafId !== null) {
+      this.environment.cancelFrame(this.rafId);
+      this.rafId = null;
+    }
+    this.lastAnimationDrawAt = null;
   }
 
   hasValidSize() {
@@ -267,6 +290,7 @@ class CanvasRuntime {
     this.onDraw = null;
     this.onResize = null;
     this.isAnimationEnabled = null;
+    this.getAnimationFrameInterval = null;
   }
 
   getSnapshot() {
@@ -281,6 +305,7 @@ class CanvasRuntime {
       height: this.height,
       dpr: this.dpr,
       frameCount: this.frameCount,
+      skippedAnimationFrameCount: this.skippedAnimationFrameCount,
       drawBudgetMs: this.drawBudgetMs,
       averageDrawMs,
       lastDrawMs: this.lastDrawMs,

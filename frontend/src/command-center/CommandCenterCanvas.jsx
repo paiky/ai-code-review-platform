@@ -58,6 +58,10 @@ export default function CommandCenterCanvas({
     controllerRef.current?.setScene(topology.scene);
   }, [topology.scene]);
 
+  useEffect(() => {
+    controllerRef.current?.setFocus(focus?.flowId || null);
+  }, [focus?.flowId]);
+
   const canvasActive = shouldMountCanvas && canvasReady;
   const fallbackReason = resolveCommandCenterCanvasFallback({
     ...preferences,
@@ -76,7 +80,7 @@ export default function CommandCenterCanvas({
       canvasLayer={shouldMountCanvas ? (
         <canvas
           className="command-center-topology-canvas"
-          data-command-center-canvas-phase="PHASE_4A"
+          data-command-center-canvas-phase="PHASE_4B"
           ref={canvasRef}
           aria-hidden="true"
         />
