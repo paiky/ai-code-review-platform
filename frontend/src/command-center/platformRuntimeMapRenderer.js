@@ -476,9 +476,9 @@ function drawDaylightTerrain(context, width, height, freshness) {
   context.fillRect(0, 0, width, height);
   context.save();
   context.globalAlpha = freshness === 'STALE' ? 0.55 : 1;
-  context.fillStyle = 'rgba(255, 255, 255, 0.34)';
+  context.fillStyle = 'rgba(255, 255, 255, 0.22)';
   context.fillRect(width * 0.04, height * 0.08, width * 0.92, height * 0.84);
-  context.strokeStyle = 'rgba(50, 85, 120, 0.07)';
+  context.strokeStyle = 'rgba(50, 85, 120, 0.025)';
   context.lineWidth = 1;
   const grid = 38;
   for (let x = -height; x < width + height; x += grid) {
@@ -493,10 +493,7 @@ function drawDaylightTerrain(context, width, height, freshness) {
     context.lineTo(x - height, height);
     context.stroke();
   }
-  context.strokeStyle = 'rgba(53, 100, 127, 0.1)';
-  context.lineWidth = 2;
-  context.strokeRect(width * 0.045, height * 0.085, width * 0.91, height * 0.83);
-  context.fillStyle = 'rgba(255, 255, 255, 0.3)';
+  context.fillStyle = 'rgba(255, 255, 255, 0.21)';
   context.beginPath();
   context.ellipse(width * 0.52, height * 0.5, width * 0.29, height * 0.39, 0, 0, Math.PI * 2);
   context.fill();
@@ -512,6 +509,13 @@ function drawStaticConnections(context, anchors, freshness) {
   context.globalAlpha = freshness === 'STALE' ? 0.42 : 0.9;
   for (const anchor of anchors) {
     const color = CONNECTION_COLORS[anchor.token] || CONNECTION_COLORS.neutral;
+    context.save();
+    context.globalAlpha *= anchor.to === 'result-beacon' ? 0.28 : 0.15;
+    traceConnection(context, anchor);
+    context.strokeStyle = color;
+    context.lineWidth = anchor.to === 'result-beacon' ? 44 : 39;
+    context.stroke();
+    context.restore();
     traceConnection(context, anchor);
     context.strokeStyle = 'rgba(56, 83, 103, 0.28)';
     context.lineWidth = anchor.token === 'queue' ? 34 : 30;
@@ -522,7 +526,7 @@ function drawStaticConnections(context, anchors, freshness) {
     context.stroke();
     traceConnection(context, anchor);
     context.strokeStyle = color;
-    context.lineWidth = anchor.token === 'queue' ? 7 : 6;
+    context.lineWidth = anchor.token === 'queue' ? 7 : anchor.to === 'result-beacon' ? 8 : 6;
     context.stroke();
     context.save();
     context.globalAlpha *= 0.42;
@@ -780,19 +784,27 @@ function drawEndpoint(context, point, color) {
 
 function drawStaticTerrainPads(context, width, height) {
   context.save();
-  context.fillStyle = 'rgba(205, 222, 232, 0.32)';
-  context.strokeStyle = 'rgba(61, 99, 122, 0.09)';
-  context.lineWidth = 2;
   const pads = [
-    [width * 0.02, height * 0.18, width * 0.17, height * 0.64],
-    [width * 0.22, height * 0.11, width * 0.22, height * 0.78],
-    [width * 0.47, height * 0.07, width * 0.36, height * 0.4],
-    [width * 0.47, height * 0.53, width * 0.36, height * 0.4],
-    [width * 0.86, height * 0.2, width * 0.12, height * 0.6]
+    [width * 0.1, height * 0.54, width * 0.085, height * 0.25],
+    [width * 0.33, height * 0.55, width * 0.105, height * 0.3],
+    [width * 0.64, height * 0.27, width * 0.19, height * 0.13],
+    [width * 0.64, height * 0.73, width * 0.19, height * 0.13],
+    [width * 0.92, height * 0.54, width * 0.065, height * 0.2]
   ];
-  for (const [x, y, padWidth, padHeight] of pads) {
-    context.fillRect(x, y, padWidth, padHeight);
-    context.strokeRect(x, y, padWidth, padHeight);
+  for (const [centerX, centerY, radiusX, radiusY] of pads) {
+    context.fillStyle = 'rgba(72, 94, 108, 0.075)';
+    context.beginPath();
+    context.ellipse(centerX, centerY + 9, radiusX, radiusY, 0, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = 'rgba(218, 232, 239, 0.3)';
+    context.beginPath();
+    context.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = 'rgba(255, 255, 255, 0.34)';
+    context.lineWidth = 2;
+    context.beginPath();
+    context.ellipse(centerX, centerY - 2, radiusX * 0.88, radiusY * 0.82, 0, Math.PI * 1.08, Math.PI * 1.92);
+    context.stroke();
   }
   context.restore();
 }

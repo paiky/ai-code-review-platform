@@ -78,6 +78,7 @@ export default function CommandCenterCanvas({
       data-command-center-motion-disabled={reducedMotion ? 'true' : 'false'}
       data-command-center-runtime-error={runtimeError ? 'true' : 'false'}
       data-command-center-freshness={map.core.freshness}
+      data-command-center-visual-polish="EVOLUTION_PHASE_3B"
       ref={containerRef}
       aria-label="AI Review Operation Map"
     >
@@ -206,11 +207,11 @@ function LaneStation({ lane, visibleLimit, onOpenReview, onOpenOverflow }) {
           <span>{lane.utilizationPercent}% 占用 · 等待 {lane.queuedCount}</span>
         </div>
       </header>
-      <CapacitySlots lane={lane} />
-      <div className="command-center-lane-track">
+      <div className={`command-center-lane-track${lane.zoneKey === 'agent' ? ' has-worker-rail' : ''}`}>
         <span className="command-center-track-trench" aria-hidden="true" />
         <span className="command-center-track-roadbed" aria-hidden="true" />
         <span className="command-center-track-rail" aria-hidden="true" />
+        <CapacitySlots lane={lane} />
         <div className="command-center-running-items" aria-label={`${lane.title}运行中 Review`}>
           {visibleItems.map(item => (
             <ReviewMarker key={`${item.jobId}:${item.taskId}:${item.reviewKey}`} item={item} onOpen={onOpenReview} />
@@ -230,8 +231,8 @@ function LaneStation({ lane, visibleLimit, onOpenReview, onOpenOverflow }) {
             <div className="command-center-lane-empty">路线当前空闲，等待下一次调度</div>
           )}
         </div>
+        {lane.zoneKey === 'agent' && <WorkerTowers workers={lane.workers} runningItems={lane.runningItems} />}
       </div>
-      {lane.zoneKey === 'agent' && <WorkerTowers workers={lane.workers} runningItems={lane.runningItems} />}
       <footer>
         <span>{lane.zoneKey === 'agent' ? `${lane.capacity} 在线 Worker Capacity` : '共享 Provider Scheduler'}</span>
       </footer>
@@ -243,7 +244,7 @@ function LaneStation({ lane, visibleLimit, onOpenReview, onOpenOverflow }) {
 function CapacitySlots({ lane }) {
   const displayedCapacity = Math.min(Math.max(lane.capacity, lane.runningCount, 1), 10);
   return (
-    <div className="command-center-capacity-slots" aria-hidden="true">
+    <div className="command-center-capacity-slots" data-command-center-capacity-berths="track" aria-hidden="true">
       {Array.from({ length: displayedCapacity }, (_, index) => (
         <span key={index} className={index < lane.runningCount ? 'is-active' : ''}><i /></span>
       ))}
@@ -256,7 +257,7 @@ function CapacitySlots({ lane }) {
 function WorkerTowers({ workers = [], runningItems = [] }) {
   if (workers.length === 0) return <div className="command-center-worker-empty">当前无 Worker 状态快照</div>;
   return (
-    <div className="command-center-worker-towers" aria-label="Agent Worker 状态">
+    <div className="command-center-worker-towers" data-command-center-worker-rail="true" aria-label="Agent Worker 状态">
       {workers.slice(0, 8).map(worker => {
         const runningItem = runningItems.find(item => (
           (worker.workerId && item.workerId === worker.workerId)
@@ -287,6 +288,8 @@ function WorkerTowers({ workers = [], runningItems = [] }) {
 function ResultBeacon({ beacon }) {
   return (
     <article className="command-center-map-node command-center-result-beacon" data-zone-key={beacon.zoneKey}>
+      <span className="command-center-beacon-feeder is-standard" aria-hidden="true" />
+      <span className="command-center-beacon-feeder is-agent" aria-hidden="true" />
       <span className="command-center-zone-kicker">RESULT BEACON</span>
       <div className="command-center-result-platform" data-command-center-beacon-anchor="true" aria-hidden="true">
         <span className="command-center-result-merge-ring" />

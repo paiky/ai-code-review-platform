@@ -133,6 +133,23 @@ test('phase 3B preserves confirmed phase 3A map structures', () => {
 });
 
 
+test('phase 3B visual polish integrates berths workers and Beacon feeders without topology drift', () => {
+  assert.equal(canvasSource.includes('data-command-center-visual-polish="EVOLUTION_PHASE_3B"'), true);
+  assert.equal(canvasSource.includes('data-command-center-capacity-berths="track"'), true);
+  assert.equal(canvasSource.includes('data-command-center-worker-rail="true"'), true);
+  assert.equal(canvasSource.includes('command-center-beacon-feeder is-standard'), true);
+  assert.equal(canvasSource.includes('command-center-beacon-feeder is-agent'), true);
+  assert.ok(canvasSource.indexOf('<CapacitySlots lane={lane} />') > canvasSource.indexOf('command-center-lane-track'));
+  assert.ok(canvasSource.indexOf('<WorkerTowers workers={lane.workers}') > canvasSource.indexOf('command-center-lane-track'));
+  assert.equal(styleSource.includes('min-height: 352px'), true);
+  assert.equal(styleSource.includes('top: var(--command-center-track-y, 50%)'), true);
+  assert.equal(styleSource.includes('.command-center-worker-towers::before'), true);
+  assert.equal(rendererSource.includes("anchor.to === 'result-beacon' ? 44 : 39"), true);
+  assert.equal(rendererSource.includes('context.strokeRect(width * 0.045'), false);
+  assert.equal((presentationSource.match(/to: 'result-beacon'/g) || []).length, 4);
+});
+
+
 test('public snapshot API remains read-only and runtime polling stays deduplicated', () => {
   assert.equal(apiSource.includes('/api/command-center/runtime?'), true);
   assert.equal(apiSource.includes("method: 'POST'"), false);

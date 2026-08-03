@@ -117,6 +117,50 @@ test('Runtime evidence produces only whitelisted and identity-bound effects', ()
 });
 
 
+test('Standard and Agent entries remain independently reproducible Runtime events', () => {
+  const baseline = scene('baseline', {
+    standard: lane('standard', {
+      capacity: 4,
+      utilizationPercent: 25,
+      runningItems: [{ identity: 'standard-a', stage: 'PREFLIGHT' }]
+    }),
+    agent: lane('agent', {
+      capacity: 2,
+      utilizationPercent: 50,
+      runningItems: [{ identity: 'agent-a', stage: 'AGENT_ANALYZING' }]
+    })
+  });
+  const seen = new Set(['standard-a', 'agent-a']);
+  const standardEntry = diffPlatformRuntimeMapScenes(baseline, scene('standard-entry', {
+    standard: lane('standard', {
+      capacity: 4,
+      utilizationPercent: 50,
+      runningItems: [
+        { identity: 'standard-a', stage: 'PREFLIGHT' },
+        { identity: 'standard-b', stage: 'PREFLIGHT' }
+      ]
+    }),
+    agent: baseline.lanes[1]
+  }), { now: 100, seenDispatchIdentities: seen });
+  const agentEntry = diffPlatformRuntimeMapScenes(baseline, scene('agent-entry', {
+    standard: baseline.lanes[0],
+    agent: lane('agent', {
+      capacity: 2,
+      utilizationPercent: 100,
+      runningItems: [
+        { identity: 'agent-a', stage: 'AGENT_ANALYZING' },
+        { identity: 'agent-b', stage: 'AGENT_ANALYZING' }
+      ]
+    })
+  }), { now: 200, seenDispatchIdentities: seen });
+
+  assert.deepEqual(standardEntry.filter(item => item.type === 'dispatch').map(item => item.lane), ['standard']);
+  assert.deepEqual(agentEntry.filter(item => item.type === 'dispatch').map(item => item.lane), ['agent']);
+  assert.equal(standardEntry.some(item => item.type === 'beacon'), false);
+  assert.equal(agentEntry.some(item => item.type === 'beacon'), false);
+});
+
+
 test('new Review stage and Worker changes animate locally then expire without Beacon arrival', () => {
   const harness = createHarness();
   harness.setReviewRect('standard-a', rect(540, 90, 90, 80));

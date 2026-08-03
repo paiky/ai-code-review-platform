@@ -2,13 +2,13 @@
 
 ## 当前执行状态
 
-- 当前阶段：`Evolution Phase 3B：新地图动效实现`
-- 当前状态：`EVOLUTION PHASE 3B COMPLETED — WAITING FOR MOTION EFFECT CONFIRMATION`
+- 当前阶段：`Evolution Phase 3B Visual Polish：地图视觉收敛`
+- 当前状态：`EVOLUTION PHASE 3B VISUAL POLISH COMPLETED — WAITING FOR FINAL VISUAL AND MOTION CONFIRMATION`
 - 实施基线 Commit：`dfe20a9`
 - 参考图：`docs/AI Review Center Design/assets/ai-review-command-center-reference.png`
 - 计划创建时间：2026-08-03
-- 当前授权：用户已确认 Evolution Phase 3A 静态视觉，并明确授权执行 Evolution Phase 3B；该阶段现已完成，尚未授权 Evolution Phase 4。
-- 当前停止点：等待用户确认 Phase 3B 动效效果；不得自动进入 Phase 4、推送或部署。
+- 当前授权：用户已确认 Evolution Phase 3B 总体方向，并授权的一次有界 Visual Polish 已完成；尚未授权 Evolution Phase 4。
+- 当前停止点：等待用户完成视觉与动效最终确认；不得自动进入 Phase 4、推送或部署。
 
 本文档是 Phase 5A～5C 完成后的新视觉架构总控。`AI Review Platform Runtime Map Implementation Plan.md` 继续作为 Phase 5 历史实施记录，不再追加 Evolution v2 的阶段状态。
 
@@ -554,6 +554,21 @@ Phase 3A 场景验收至少覆盖 Empty、Standard-only、Agent-only、Standard/
 
 `EVOLUTION PHASE 3B COMPLETED — WAITING FOR MOTION EFFECT CONFIRMATION`
 
+### 5.3.1 Evolution Phase 3B Visual Polish：地图视觉收敛
+
+仅在用户确认 Phase 3B 总体方向后执行一次有界视觉收敛，不改变 Runtime、业务语义、Gate→Core→双 Lane→Beacon 空间拓扑或 5.1.8 事件—动效矩阵：
+
+- Standard 容量泊位移入金色轨道并沿线路分布，运行 Review 继续使用既有身份与容量映射。
+- Agent Worker 塔移入紫色轨道站点层，改为贴近轨道的塔群与轻量铭牌，不形成地图底部独立列表。
+- 双 Lane 到 Beacon 的既有五条连接保持不变，只强化两条汇聚支路与 Beacon 接驳环的直接视觉连续性。
+- Queue Gate 保留等待总数、双路线等待和两条下一候选，仅压缩内部留白、高度与标签间距。
+- 降低 L0/L1 大型矩形、网格和面板边界对比度；增强道路沟槽邻近层、建筑底座阴影与贴地感。
+- 不新增节点、状态、字段、持续动画、RAF 所有者、Timer、第三方依赖或 Beacon 结果统计。
+
+验收必须提供可复现的确定性场景：Fresh Idle 连续 20 秒、Standard 新运行项、Agent 新运行项、Worker 状态变化、Stage 变化，以及 Stale/reduced-motion 冻结。完成状态固定为：
+
+`EVOLUTION PHASE 3B VISUAL POLISH COMPLETED — WAITING FOR FINAL VISUAL AND MOTION CONFIRMATION`
+
 ### 5.4 Evolution Phase 4：最终验收
 
 只有用户确认 Phase 3B 动效后才能开始。完成纯键盘、reduced-motion、失败回退、长轮询、资源稳定性、真实数据密度、三视口和生产构建验收，只修复验收暴露的真实问题，不扩展结构或动效。
@@ -668,6 +683,12 @@ Evolution Phase 1、3A 和 3B 均不修改后端、查询或 Schema，因此不�
 
 ```text
 仅在用户确认 Evolution Phase 3A 静态视觉并明确授权 Phase 3B 后执行。保持已确认的 L0～L5 空间结构和交互不变，只按 Visual & Motion Specification 的 Runtime 事件白名单实现 Core 呼吸、真实调度反馈、Stage/Worker 局部反馈、Fresh Idle 生命感以及 reduced-motion、Stale/Error、隐藏页、Canvas Failure 和性能自动降级。只允许单 Canvas、单 RAF；运行项消失不得触发结果抵达。完成事件夹具、资源稳定性、性能、三视口和浏览器验收后，将状态设为 EVOLUTION PHASE 3B COMPLETED — WAITING FOR MOTION EFFECT CONFIRMATION，提交并立即停止，不得进入 Phase 4、推送或部署。
+```
+
+### 7.5.1 Evolution Phase 3B Visual Polish Prompt
+
+```text
+仅在用户确认 Evolution Phase 3B 总体方向后执行一次有界 Visual Polish。不得修改 Runtime、业务语义、空间拓扑或事件—动效矩阵；只调整 Standard 泊位沿轨分布、Agent Worker 塔贴轨表达、双路线到 Beacon 的汇聚连续性、Queue Gate 紧凑度、背景干扰和建筑贴地层次。不得新增节点、状态、持续动画或动画所有者。使用 Fresh Idle 20 秒、Standard/Agent 分别新增 runningItem、Worker/Stage 变化、Stale 和 reduced-motion 冻结完成可复现场景验收；状态设为 EVOLUTION PHASE 3B VISUAL POLISH COMPLETED — WAITING FOR FINAL VISUAL AND MOTION CONFIRMATION，提交并停止，不得进入 Phase 4、推送或部署。
 ```
 
 ### 7.6 Evolution Phase 4 Prompt
@@ -829,3 +850,46 @@ Evolution Phase 3A 已完成并停止。等待用户确认静态视觉；未经�
 - 浏览器验收专用 Runtime mock 与 Vite 使用独立端口 `8091/5174`；验收完成后只精确停止本次启动的端口 Owner，不影响用户已有 `5173/8090` 服务。
 
 Evolution Phase 3B 已完成并停止。当前状态为 `EVOLUTION PHASE 3B COMPLETED — WAITING FOR MOTION EFFECT CONFIRMATION`；未经用户确认不得进入 Phase 4。
+
+### Evolution Phase 3B Visual Polish 实施记录
+
+- 2026-08-03：用户确认 Phase 3B 总体方向，但明确不授权 Phase 4；授权一次有界 Visual Polish，状态更新为 `EVOLUTION PHASE 3B VISUAL POLISH IN PROGRESS`。
+- 本次只调整既有地图构件的排布、接驳、留白、地形干扰和贴地层次；Runtime v2、业务语义、五节点/五连接拓扑、事件—动效白名单、交互与资源所有权全部冻结。
+- 完成后必须提供 Fresh Idle 20 秒、Standard/Agent 分别新增运行项、Worker/Stage 变化和 Stale/reduced-motion 冻结的可复现验收证据，提交后停止等待最终确认。
+- Standard 容量泊位已从 Lane 标题下方移入金色轨道层，按真实容量横向分布并与 Review 处理塔共享轨道基线；1024 与 390 继续使用原有 4/2 个可见 Review 上限。
+- Agent Worker 塔已移入 Agent Lane 内部紫色支轨，主轨与 Worker 轨实际间距约 `24px`，Worker 身份、状态及运行 Review 绑定保持原语义，不再作为地图底部独立标签列表。
+- Standard/Agent 到 Beacon 的原两条连接未改变，只增加可见的金/紫接驳臂、白色路床和汇聚环；Beacon 仍为结构节点且事件计数固定为 `0`。
+- Queue Gate 保留等待总数、双路线等待和两条下一候选，桌面实际高度由原约 `430px` 收敛至 `375px`，390px 为 `315px`。
+- Canvas 背景网格透明度由 `0.035` 降至 `0.025`，移除大型矩形描边；地形底座改为低对比椭圆贴地层，并增强道路沟槽、路床阴影及建筑底座阴影。
+- 未修改 Runtime Model/Presentation 字段、五节点/五连接、差异事件类型、事件时长、持续动画数量、RAF 所有者或业务交互。
+
+### Evolution Phase 3B Visual Polish 可复现验收场景
+
+浏览器验收使用工作区临时夹具 `.local/command-center-evolution-phase-3b/runtime-mock.mjs`，端口 `8091`；前端 Vite 使用 `5174` 并代理到该夹具。每个差异场景均先切回 `baseline` 并重新加载页面，以建立新的身份去重基线：
+
+| 场景 | 控制序列 | 可验证结果 |
+| --- | --- | --- |
+| Fresh Idle 20 秒 | `GET /__phase3b__/scenario/idle` → reload → 等待 20 秒 | `FRESH_IDLE`、粒子 `16`、帧增量 `212`、调度/Stage/Worker/Beacon 事件均为 `0`，活动/最大并发 RAF 均为 `1` |
+| Standard 新运行项 | `baseline` → reload → `standard-entry` → 刷新 Runtime | Standard Marker `1→2`、Agent Marker 保持 `1`、调度反馈 `1`、Beacon `0` |
+| Agent 新运行项 | `baseline` → reload → `agent-entry` → 刷新 Runtime | Agent Marker `1→2`、Standard Marker 保持 `1`、调度反馈 `1`、真实 Worker 占用反馈 `1`、Beacon `0` |
+| Worker 状态变化 | `baseline` → reload → `worker-change` → 刷新 Runtime | `worker-11` 为 `DRAINING`、Worker 反馈 `1`，调度/Stage/Beacon 均为 `0` |
+| Stage 变化 | `baseline` → reload → `stage-change` → 刷新 Runtime | `standard-1` 为 `MODEL_CALLING`、Stage 反馈 `1`，调度/Worker/Beacon 均为 `0` |
+| Stale 冻结 | `GET /__phase3b__/scenario/stale` → reload | `STALE`、活动 RAF `0`、粒子 `0`、最近成功 Marker 仍完整、Beacon `0` |
+| reduced-motion 冻结 | 启用系统“减少动态效果”后 reload；或执行 Renderer 专项测试中的 `motionDisabled: true` 场景 | `REDUCED_MOTION`、活动 RAF `0`、无环境粒子，DOM 数据与交互保持 |
+
+以上浏览器场景只读取页面 DOM 与 Canvas 诊断属性，不向生产代码加入验收开关；reduced-motion 由真实 `prefers-reduced-motion` 媒体查询和确定性 Controller 测试共同覆盖。
+
+### Evolution Phase 3B Visual Polish 验证证据
+
+- Command Center 专项 Node 测试：`21 passed`；新增覆盖沿轨泊位、Worker 支轨、Beacon 双接驳、背景矩形移除，以及 Standard/Agent 独立入轨事件。
+- 前端全量 Node 测试：`95 passed`。
+- 生产构建：`scripts/run-frontend.cmd build` 成功；仅保留既有大 Chunk 提示，无构建错误。
+- Fresh Idle 20 秒：平均绘制约 `0.32ms`、最大约 `1.4ms`、超 8ms 帧 `0`；Canvas/RAF/Observer/Listener 均保持 `1`。
+- 1440×900：Standard 六个泊位横向覆盖约 `568px`，两个 Worker 塔均位于 Agent Track 内，Beacon 两条接驳臂可见，无横向溢出。
+- 1440 实现截图保存在 `.local/command-center-evolution-phase-3b-visual-polish/phase-3b-visual-polish-1440.png`，作为本次最终视觉确认的本地证据，不纳入提交。
+- 1024×800：同一五节点拓扑、单 Canvas、沿轨泊位、Worker 支轨和 Beacon 双接驳均保留，无横向溢出。
+- 390×844：Canvas `0`、Fallback 为 `SMALL_SCREEN`，Beacon 横向接驳臂隐藏，五节点保持纵向顺序；Marker `4`、溢出塔 `1`，无横向溢出。
+- 浏览器 warning/error 为 `0`；`git diff --check` 通过。
+- 未修改后端、Runtime v2、Review/Scheduler/Agent/Provider/Fallback/通知状态机、README、旧计划或用户未跟踪资料。
+
+Evolution Phase 3B Visual Polish 已完成并停止。当前状态为 `EVOLUTION PHASE 3B VISUAL POLISH COMPLETED — WAITING FOR FINAL VISUAL AND MOTION CONFIRMATION`；未经用户确认不得进入 Phase 4。
