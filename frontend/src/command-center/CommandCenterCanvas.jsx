@@ -1,383 +1,244 @@
-import { useEffect, useRef, useState } from 'react';
-
-import {
-  createPlatformRuntimeMapController,
-  resolvePlatformRuntimeMapFallback
-} from './platformRuntimeMapRenderer.js';
-
-
-const SMALL_SCREEN_QUERY = '(max-width: 700px)';
-
-
-export default function CommandCenterCanvas({
-  map,
-  runtimeError,
-  visibleLimit,
-  onOpenReview,
-  onOpenOverflow
-}) {
-  const canvasRef = useRef(null);
-  const containerRef = useRef(null);
-  const controllerRef = useRef(null);
-  const smallScreen = useSmallScreen();
-  const reducedMotion = useReducedMotion();
-  const [canvasReady, setCanvasReady] = useState(false);
-  const [canvasFailed, setCanvasFailed] = useState(false);
-  const shouldMountCanvas = !smallScreen && !canvasFailed;
-
-  useEffect(() => {
-    if (!shouldMountCanvas || !canvasRef.current || !containerRef.current) {
-      setCanvasReady(false);
-      return undefined;
-    }
-    const controller = createPlatformRuntimeMapController({
-      canvas: canvasRef.current,
-      container: containerRef.current,
-      scene: {
-        ...map.scene,
-        motionDisabled: reducedMotion,
-        runtimeError: Boolean(runtimeError)
-      },
-      onFailure: () => setCanvasFailed(true)
-    });
-    if (!controller) {
-      setCanvasFailed(true);
-      return undefined;
-    }
-    controllerRef.current = controller;
-    setCanvasReady(true);
-    return () => {
-      controller.dispose();
-      if (controllerRef.current === controller) controllerRef.current = null;
-      setCanvasReady(false);
-    };
-  }, [shouldMountCanvas]);
-
-  useEffect(() => {
-    controllerRef.current?.setScene({
-      ...map.scene,
-      motionDisabled: reducedMotion,
-      runtimeError: Boolean(runtimeError)
-    });
-  }, [map.scene, reducedMotion, runtimeError]);
-
-  const fallbackReason = resolvePlatformRuntimeMapFallback({
-    smallScreen,
-    canvasFailed,
-    canvasReady
-  });
-  const standardLane = map.lanes.find(lane => lane.zoneKey === 'standard');
-  const agentLane = map.lanes.find(lane => lane.zoneKey === 'agent');
+export default function CommandCenterCanvas({ presentation, runtimeLoading }) {
+  const {
+    intake,
+    engineSelection,
+    agentLane,
+    standardLane,
+    fallback,
+    resultPersistence
+  } = presentation;
 
   return (
     <section
       className="command-center-runtime-map"
-      data-zone-key={map.zoneKey}
-      data-command-center-dom-overlay="true"
-      data-command-center-canvas-fallback={fallbackReason || undefined}
-      data-command-center-motion-disabled={reducedMotion ? 'true' : 'false'}
-      data-command-center-runtime-error={runtimeError ? 'true' : 'false'}
-      data-command-center-freshness={map.core.freshness}
-      data-command-center-visual-polish="EVOLUTION_PHASE_3B"
-      ref={containerRef}
-      aria-label="AI Review Operation Map"
+      aria-label="AI Review 当前执行拓扑"
+      data-command-center-renderer="DOM_SVG_STATIC"
+      data-command-center-canvas-mounted="false"
     >
-      {shouldMountCanvas && (
-        <canvas
-          className="command-center-runtime-map-canvas"
-          data-command-center-canvas-phase="EVOLUTION_PHASE_3B"
-          ref={canvasRef}
-          aria-hidden="true"
-        />
-      )}
-      <div className="command-center-runtime-map-overlay">
-        <QueueGate queueGate={map.queueGate} lanes={map.lanes} />
-        <ReviewCore core={map.core} />
-        <LaneStation
-          lane={standardLane}
-          visibleLimit={visibleLimit}
-          onOpenReview={onOpenReview}
-          onOpenOverflow={onOpenOverflow}
-        />
-        <LaneStation
-          lane={agentLane}
-          visibleLimit={visibleLimit}
-          onOpenReview={onOpenReview}
-          onOpenOverflow={onOpenOverflow}
-        />
-        <ResultBeacon beacon={map.resultBeacon} />
+      <svg
+        className="command-center-static-connections"
+        viewBox="0 0 1200 440"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <defs>
+          <marker id="cc-arrow-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#2787f5" />
+          </marker>
+          <marker id="cc-arrow-agent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f3df4" />
+          </marker>
+          <marker id="cc-arrow-standard" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#f07818" />
+          </marker>
+        </defs>
+        <path className="is-intake" d="M 154 220 H 238" markerEnd="url(#cc-arrow-blue)" />
+        <path className="is-agent" d="M 390 220 C 430 220 422 104 476 104" markerEnd="url(#cc-arrow-agent)" />
+        <path className="is-standard" d="M 390 220 C 430 220 422 336 476 336" markerEnd="url(#cc-arrow-standard)" />
+        <path className="is-agent" d="M 995 104 C 1038 104 1028 220 1064 220" markerEnd="url(#cc-arrow-agent)" />
+        <path className="is-standard" d="M 995 336 C 1038 336 1028 220 1064 220" markerEnd="url(#cc-arrow-standard)" />
+        <path className="is-fallback" d="M 744 194 C 744 220 780 220 780 246" markerEnd="url(#cc-arrow-standard)" />
+      </svg>
+
+      <div className="command-center-map-grid">
+        <ReviewIntake intake={intake} />
+        <EngineSelection engineSelection={engineSelection} />
+        <ReviewModule lane={agentLane} runtimeLoading={runtimeLoading} />
+        <FallbackRelation fallback={fallback} />
+        <ReviewModule lane={standardLane} runtimeLoading={runtimeLoading} />
+        <ResultPersistence resultPersistence={resultPersistence} />
       </div>
     </section>
   );
 }
 
 
-function QueueGate({ queueGate, lanes }) {
+function ReviewIntake({ intake }) {
   return (
-    <article className="command-center-map-node command-center-queue-gate" data-zone-key={queueGate.zoneKey}>
-      <div className="command-center-gate-hardware" data-command-center-gate-anchor="true" aria-hidden="true">
-        <span className="command-center-gate-pylon is-left" />
-        <span className="command-center-gate-portal"><i /></span>
-        <span className="command-center-gate-pylon is-right" />
-      </div>
-      <div className="command-center-zone-heading">
-        <span className="command-center-zone-kicker">QUEUE GATE</span>
-        <h2>Review 候场门</h2>
-      </div>
-      <div className="command-center-queue-summary">
-        <strong>{queueGate.queuedCount}</strong>
-        <span>条 Review 等待调度</span>
-      </div>
-      <div className="command-center-queue-split" aria-label="两条路线等待数">
-        {lanes.map(lane => (
-          <div key={lane.zoneKey} className={`is-${lane.colorToken}`}>
-            <span>{lane.zoneKey === 'agent' ? 'Agent' : 'Standard'}</span>
-            <strong>{lane.queuedCount}</strong>
+    <article className="command-center-intake command-center-map-node" data-zone-key={intake.zoneKey}>
+      <NodeHeading eyebrow="TRIGGER INPUT" title={intake.title} subtitle="触发入口" />
+      <div className="command-center-intake-list">
+        {intake.items.map(item => (
+          <div key={item.key} className={`command-center-intake-item is-${item.key.toLowerCase()}`}>
+            <span aria-hidden="true">{intakeIcon(item.key)}</span>
+            <span>
+              <strong>{item.label}</strong>
+              <small>{item.description}</small>
+            </span>
           </div>
         ))}
       </div>
-      <div className="command-center-next-reviews">
-        {lanes.map(lane => <NextReview key={lane.zoneKey} lane={lane} />)}
-      </div>
     </article>
   );
 }
 
 
-function ReviewCore({ core }) {
+function EngineSelection({ engineSelection }) {
   return (
-    <article className="command-center-map-node command-center-review-core" data-zone-key={core.zoneKey}>
-      <span className="command-center-zone-kicker">SCHEDULING CORE</span>
-      <div className="command-center-core-assembly" data-command-center-core-anchor="true" aria-hidden="true">
-        <span className="command-center-core-ground" />
-        <span className="command-center-core-outer-ring" />
-        <span className="command-center-core-routing-ring">
-          <i className="is-standard" />
-          <i className="is-agent" />
-        </span>
-        <span className="command-center-core-crystal"><b>AI</b></span>
+    <article className="command-center-engine command-center-map-node" data-zone-key={engineSelection.zoneKey}>
+      <div className="command-center-engine-ring" aria-hidden="true">
+        <i />
+        <b>AI</b>
       </div>
-      <h2>AI Review Core</h2>
-      <p>统一接收并分流真实 Review</p>
-      <div className="command-center-core-load">
-        <strong>{core.runningCount}<small> / {core.capacity || '—'}</small></strong>
-        <span>{core.utilizationPercent}% 平台占用</span>
+      <NodeHeading eyebrow="POLICY ROUTER" title={engineSelection.title} subtitle="策略路由 · 可用性检查 · 安全门禁" />
+      <div className="command-center-engine-routes">
+        {engineSelection.routes.map(route => (
+          <span key={route.key} className={`is-${route.key.toLowerCase()}`}>
+            <i aria-hidden="true" />
+            {route.label}
+          </span>
+        ))}
       </div>
-      <span className={`command-center-core-freshness is-${core.freshness.toLowerCase()}`}>
-        {coreFreshnessLabel(core.freshness)}
-      </span>
+      <p>{engineSelection.automaticAgentUnavailableDescription}</p>
     </article>
   );
 }
 
 
-function NextReview({ lane }) {
-  const item = lane.nextQueued;
+function ReviewModule({ lane, runtimeLoading }) {
+  const isAgent = lane.engine === 'AGENT';
+  const nextQueued = lane.nextQueued;
+  const observedProvider = lane.providers[0];
   return (
-    <div className={`command-center-next-review is-${lane.colorToken}`} data-command-center-next-review={lane.zoneKey}>
-      <span>{lane.zoneKey === 'agent' ? 'Agent' : 'Standard'} 下一条</span>
-      {item ? (
-        <>
-          <strong>{item.projectName}</strong>
-          <small>{item.displayName} · {item.providerModelLabel}</small>
-        </>
-      ) : (
-        <small>{lane.queuedCount > 0 ? 'Runtime v1 不提供顺序' : '当前无等待 Review'}</small>
-      )}
-    </div>
-  );
-}
-
-
-function LaneStation({ lane, visibleLimit, onOpenReview, onOpenOverflow }) {
-  if (!lane) return null;
-  const visibleItems = lane.runningItems.slice(0, visibleLimit);
-  const hiddenCount = Math.max(0, lane.runningCount - visibleItems.length);
-  return (
-    <article className={`command-center-map-node command-center-lane-station is-${lane.colorToken}`} data-zone-key={lane.zoneKey}>
-      <span className="command-center-lane-junction" aria-hidden="true" />
+    <article
+      className={`command-center-review-module is-${lane.colorToken} command-center-map-node`}
+      data-zone-key={lane.zoneKey}
+    >
       <header>
-        <div>
-          <span className="command-center-zone-kicker">{lane.eyebrow} LANE</span>
+        <span className="command-center-module-icon" aria-hidden="true">{isAgent ? '⌘' : '▤'}</span>
+        <span>
+          <small>{lane.eyebrow}</small>
           <h2>{lane.title}</h2>
           <p>{lane.description}</p>
-        </div>
-        <div className="command-center-lane-load" aria-label={`${lane.title}容量`}>
-          <strong>{lane.runningCount}<small> / {lane.capacity || '—'}</small></strong>
-          <span>{lane.utilizationPercent}% 占用 · 等待 {lane.queuedCount}</span>
-        </div>
+        </span>
+        <em>{runtimeLoading ? '同步中' : '当前快照'}</em>
       </header>
-      <div className={`command-center-lane-track${lane.zoneKey === 'agent' ? ' has-worker-rail' : ''}`}>
-        <span className="command-center-track-trench" aria-hidden="true" />
-        <span className="command-center-track-roadbed" aria-hidden="true" />
-        <span className="command-center-track-rail" aria-hidden="true" />
-        <CapacitySlots lane={lane} />
-        <div className="command-center-running-items" aria-label={`${lane.title}运行中 Review`}>
-          {visibleItems.map(item => (
-            <ReviewMarker key={`${item.jobId}:${item.taskId}:${item.reviewKey}`} item={item} onOpen={onOpenReview} />
-          ))}
-          {hiddenCount > 0 && (
-            <button
-              type="button"
-              className="command-center-overflow-tower"
-              onClick={event => onOpenOverflow(lane, event.currentTarget)}
-              aria-label={`查看${lane.title}另外 ${hiddenCount} 条运行 Review`}
-            >
-              <strong>+{hiddenCount}</strong>
-              <span>全部运行项</span>
-            </button>
-          )}
-          {lane.runningCount === 0 && (
-            <div className="command-center-lane-empty">路线当前空闲，等待下一次调度</div>
-          )}
-        </div>
-        {lane.zoneKey === 'agent' && <WorkerTowers workers={lane.workers} runningItems={lane.runningItems} />}
+
+      <div className="command-center-module-metrics">
+        <ModuleMetric label="Queued Jobs" value={lane.queued} />
+        <ModuleMetric label="Running Jobs" value={lane.running} />
+        {isAgent ? (
+          <ModuleMetric label="Online Capacity" value={lane.onlineCapacity || '—'} />
+        ) : (
+          <ModuleMetric label="Provider Slots" value={`${lane.running} / ${lane.capacity || '—'}`} />
+        )}
+        {isAgent ? (
+          <WorkerSummary summary={lane.workerSummary} />
+        ) : (
+          <ModuleMetric
+            label="Observed Provider / Model"
+            value={observedProvider?.label || '暂无活跃 Provider'}
+            compact
+          />
+        )}
+        <ModuleMetric
+          label="Next Queued"
+          value={nextQueued ? nextQueued.displayName : '当前无等待 Review'}
+          detail={nextQueued ? nextQueued.projectName : null}
+          compact
+        />
+        <RunningItems lane={lane} />
       </div>
-      <footer>
-        <span>{lane.zoneKey === 'agent' ? `${lane.capacity} 在线 Worker Capacity` : '共享 Provider Scheduler'}</span>
-      </footer>
     </article>
   );
 }
 
 
-function CapacitySlots({ lane }) {
-  const displayedCapacity = Math.min(Math.max(lane.capacity, lane.runningCount, 1), 10);
+function ModuleMetric({ label, value, detail, compact = false }) {
   return (
-    <div className="command-center-capacity-slots" data-command-center-capacity-berths="track" aria-hidden="true">
-      {Array.from({ length: displayedCapacity }, (_, index) => (
-        <span key={index} className={index < lane.runningCount ? 'is-active' : ''}><i /></span>
-      ))}
-      {lane.capacity > displayedCapacity && <small>+{lane.capacity - displayedCapacity}</small>}
+    <div className={`command-center-module-metric${compact ? ' is-compact' : ''}`}>
+      <small>{label}</small>
+      <strong>{value}</strong>
+      {detail && <em>{detail}</em>}
     </div>
   );
 }
 
 
-function WorkerTowers({ workers = [], runningItems = [] }) {
-  if (workers.length === 0) return <div className="command-center-worker-empty">当前无 Worker 状态快照</div>;
+function WorkerSummary({ summary }) {
+  const rows = [
+    ['IDLE', summary?.idle || 0],
+    ['BUSY', summary?.busy || 0],
+    ['DRAINING', summary?.draining || 0],
+    ['OFFLINE', summary?.offline || 0]
+  ];
   return (
-    <div className="command-center-worker-towers" data-command-center-worker-rail="true" aria-label="Agent Worker 状态">
-      {workers.slice(0, 8).map(worker => {
-        const runningItem = runningItems.find(item => (
-          (worker.workerId && item.workerId === worker.workerId)
-          || (worker.activeJobId && String(item.jobId) === String(worker.activeJobId))
-        ));
-        return (
-          <div
-            key={worker.workerId}
-            className={`is-${workerState(worker).toLowerCase()}`}
-            data-command-center-worker-tower="true"
-            data-worker-identity={worker.workerId || ''}
-            data-worker-state={workerState(worker)}
-          >
-            <span className="command-center-worker-spire" aria-hidden="true"><i /></span>
-            <span className="command-center-worker-label">
-              <strong>{worker.workerId || 'Worker'}</strong>
-              <small>{runningItem ? `${workerState(worker)} · ${runningItem.projectName}` : workerState(worker)}</small>
-            </span>
-          </div>
-        );
-      })}
-      {workers.length > 8 && <em>+{workers.length - 8} Worker</em>}
-    </div>
-  );
-}
-
-
-function ResultBeacon({ beacon }) {
-  return (
-    <article className="command-center-map-node command-center-result-beacon" data-zone-key={beacon.zoneKey}>
-      <span className="command-center-beacon-feeder is-standard" aria-hidden="true" />
-      <span className="command-center-beacon-feeder is-agent" aria-hidden="true" />
-      <span className="command-center-zone-kicker">RESULT BEACON</span>
-      <div className="command-center-result-platform" data-command-center-beacon-anchor="true" aria-hidden="true">
-        <span className="command-center-result-merge-ring" />
-        <span className="command-center-result-emblem"><i>✓</i></span>
-      </div>
-      <h2>{beacon.title}</h2>
-      <p>{beacon.description}</p>
-      <small>STRUCTURAL ENDPOINT</small>
-    </article>
-  );
-}
-
-
-function ReviewMarker({ item, onOpen }) {
-  return (
-    <button
-      type="button"
-      className={`command-center-review-marker is-${item.engineToken}`}
-      data-command-center-review-marker="true"
-      data-review-identity={item.motionIdentity}
-      data-review-stage={item.stage || 'RUNNING'}
-      onClick={() => onOpen(item)}
-      aria-label={`查看 ${item.projectName} 的 ${item.displayName}`}
-    >
-      <span className="command-center-review-tower" aria-hidden="true"><i /></span>
-      <span className="command-center-review-label">
-        <strong>{item.projectName}</strong>
-        <span>{item.displayName}</span>
-        <small>{item.providerModelLabel}</small>
-        <em>{item.stageLabel}</em>
+    <div className="command-center-module-metric is-worker-summary">
+      <small>Worker Summary</small>
+      <span>
+        {rows.map(([label, value]) => (
+          <i key={label} className={`is-${label.toLowerCase()}`}>
+            <b aria-hidden="true" />{label}<em>{value}</em>
+          </i>
+        ))}
       </span>
-    </button>
+    </div>
   );
 }
 
 
-function useSmallScreen() {
-  const [smallScreen, setSmallScreen] = useState(readSmallScreen);
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-    const query = window.matchMedia(SMALL_SCREEN_QUERY);
-    const sync = () => setSmallScreen(query.matches);
-    query.addEventListener?.('change', sync);
-    sync();
-    return () => query.removeEventListener?.('change', sync);
-  }, []);
-  return smallScreen;
+function RunningItems({ lane }) {
+  const visible = Math.min(lane.visibleRunningItemCount, 4);
+  const total = lane.totalRunningItemCount;
+  return (
+    <div className="command-center-module-metric is-running-items">
+      <small>Running Items</small>
+      <strong>显示 {visible} / 共 {total}</strong>
+      <span aria-label={`当前展示 ${visible} 个，共 ${total} 个运行项`}>
+        {Array.from({ length: Math.min(Math.max(total, 4), 6) }, (_, index) => (
+          <i key={index} className={index < visible ? 'is-visible' : ''} />
+        ))}
+      </span>
+      {lane.runningItemsTruncated && <em>有界快照</em>}
+    </div>
+  );
 }
 
 
-function readSmallScreen() {
-  return typeof window !== 'undefined'
-    && typeof window.matchMedia === 'function'
-    && window.matchMedia(SMALL_SCREEN_QUERY).matches;
+function FallbackRelation({ fallback }) {
+  return (
+    <aside className="command-center-fallback" aria-label="Agent 到 Standard 的结构性降级关系">
+      <strong>Fallback · 结构性关系</strong>
+      <span>{fallback.description}</span>
+    </aside>
+  );
 }
 
 
-function useReducedMotion() {
-  const [reducedMotion, setReducedMotion] = useState(readReducedMotion);
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-    const query = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const sync = () => setReducedMotion(query.matches);
-    query.addEventListener?.('change', sync);
-    sync();
-    return () => query.removeEventListener?.('change', sync);
-  }, []);
-  return reducedMotion;
+function ResultPersistence({ resultPersistence }) {
+  return (
+    <article className="command-center-result command-center-map-node" data-zone-key={resultPersistence.zoneKey}>
+      <NodeHeading eyebrow="STRUCTURAL ONLY" title={resultPersistence.title} subtitle="结果落库" />
+      <div className="command-center-result-icon" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </div>
+      <strong>Task Detail / Notification</strong>
+      <p>{resultPersistence.description}</p>
+      <span className="command-center-result-route">Review 任务 · /tasks</span>
+    </article>
+  );
 }
 
 
-function readReducedMotion() {
-  return typeof window !== 'undefined'
-    && typeof window.matchMedia === 'function'
-    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function NodeHeading({ eyebrow, title, subtitle }) {
+  return (
+    <header className="command-center-node-heading">
+      <small>{eyebrow}</small>
+      <h2>{title}</h2>
+      <p>{subtitle}</p>
+    </header>
+  );
 }
 
 
-function workerState(worker) {
-  if (!worker.online) return 'OFFLINE';
-  return String(worker.state || 'IDLE').toUpperCase();
-}
-
-
-function coreFreshnessLabel(value) {
+function intakeIcon(key) {
   return {
-    FRESH: 'Runtime 实时',
-    STALE: 'Runtime 已过期',
-    EMPTY: '等待 Runtime 快照'
-  }[value] || 'Runtime 状态未知';
+    MANUAL: '○',
+    MERGE_REQUEST: '⑂',
+    PUSH: '</>',
+    RETRY: '↻'
+  }[key] || '•';
 }

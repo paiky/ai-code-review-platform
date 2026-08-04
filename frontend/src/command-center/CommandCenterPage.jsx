@@ -1,6 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Modal } from 'antd';
-import { useNavigate } from 'react-router-dom';
+import { useMemo } from 'react';
 
 import CommandCenterCanvas from './CommandCenterCanvas.jsx';
 import { buildCommandCenterPresentation } from './commandCenterPresentation.js';
@@ -9,146 +7,221 @@ import './commandCenter.css';
 
 
 export default function CommandCenterPage() {
-  const navigate = useNavigate();
-  const [overflowZoneKey, setOverflowZoneKey] = useState(null);
-  const overflowTriggerRef = useRef(null);
-  const refreshButtonRef = useRef(null);
-  const visibleLimit = useRunningItemLimit();
-  const { runtime, runtimeLoading, runtimeError, reload } = useCommandCenterRuntimeSnapshot();
-  const presentation = useMemo(() => buildCommandCenterPresentation({ runtime }), [runtime]);
-  const overflowLane = presentation.map.lanes.find(lane => lane.zoneKey === overflowZoneKey) || null;
-  const openReview = useCallback(item => {
-    const reviewKey = encodeURIComponent(item.reviewKey || 'default');
-    navigate(`/tasks/${item.taskId}?reviewKey=${reviewKey}`);
-  }, [navigate]);
-  const openOverflow = useCallback((lane, trigger) => {
-    overflowTriggerRef.current = trigger || null;
-    setOverflowZoneKey(lane.zoneKey);
-  }, []);
-  const closeOverflow = useCallback(() => setOverflowZoneKey(null), []);
-  const restoreOverflowFocus = useCallback(() => {
-    const trigger = overflowTriggerRef.current;
-    overflowTriggerRef.current = null;
-    const focusTarget = trigger?.isConnected ? trigger : refreshButtonRef.current;
-    if (focusTarget?.isConnected) focusTarget.focus();
-  }, []);
-  const freshness = runtime?.freshness || (runtimeLoading ? 'LOADING' : 'EMPTY');
+  const { runtime, runtimeLoading, runtimeError } = useCommandCenterRuntimeSnapshot();
+  const presentation = useMemo(
+    () => buildCommandCenterPresentation({ runtime, runtimeError }),
+    [runtime, runtimeError]
+  );
 
   return (
-    <main className="command-center-page" data-command-center-phase="EVOLUTION_PHASE_3B">
-      <section className="command-center-map-shell" aria-labelledby="command-center-title">
-        <header className="command-center-map-toolbar">
-          <div className="command-center-map-identity">
+    <main className="command-center-page" data-command-center-phase="HOMEPAGE_VNEXT_H2">
+      <section className="command-center-shell" aria-labelledby="command-center-title">
+        <header className="command-center-heading">
+          <div>
             <span className="command-center-kicker">AI REVIEW COMMAND CENTER</span>
-            <h1 id="command-center-title">AI Review Operation Map</h1>
-            <small>全局态势感知 · 真实调度投影 · Runtime 驱动作战地图</small>
+            <h1 id="command-center-title">AI Review 指挥中心</h1>
           </div>
-          <div className="command-center-snapshot-state" aria-live="polite">
-            <span className={`command-center-status-dot is-${freshness.toLowerCase()}`} aria-hidden="true" />
-            <span>
-              <strong>{freshnessLabel(freshness)}</strong>
-              <small>{formatSnapshotTime(runtime?.generatedAt)}</small>
-            </span>
-          </div>
-          <HudMetric label="平台负载" value={`${presentation.hud.utilizationPercent}%`} detail={`${presentation.hud.totalRunning}/${presentation.hud.totalCapacity || '—'}`} />
-          <HudMetric label="运行中" value={presentation.hud.totalRunning} detail="Standard + Agent" />
-          <HudMetric label="前方等待" value={presentation.hud.totalQueued} detail="双路线合计" token="queue" />
-          {presentation.map.lanes.map(lane => (
-            <HudMetric
-              key={lane.zoneKey}
-              label={lane.zoneKey === 'agent' ? 'Agent 占用' : 'Standard 占用'}
-              value={`${lane.utilizationPercent}%`}
-              detail={`${lane.runningCount}/${lane.capacity || '—'}`}
-              token={lane.colorToken}
-            />
-          ))}
-          <button ref={refreshButtonRef} type="button" className="command-center-refresh" onClick={reload} disabled={runtimeLoading}>
-            {runtimeLoading ? '刷新中' : '刷新 Runtime'}
-          </button>
+          <p>当前调度快照 · 双 Review 执行轨 · 结构性结果回流</p>
         </header>
 
-        {runtimeError && (
-          <div className="command-center-runtime-error" role="alert">
-            <strong>Runtime 快照暂不可用</strong>
-            <span>{runtimeError}。地图保留最后一次成功快照。</span>
-          </div>
-        )}
+        <RuntimeHud
+          presentation={presentation}
+          loading={runtimeLoading}
+        />
+
+        <RuntimeNotice
+          presentation={presentation}
+          loading={runtimeLoading}
+        />
 
         <CommandCenterCanvas
-          map={presentation.map}
-          runtimeError={runtimeError}
-          visibleLimit={visibleLimit}
-          onOpenReview={openReview}
-          onOpenOverflow={openOverflow}
+          presentation={presentation}
+          runtimeLoading={runtimeLoading}
         />
-      </section>
 
-      <Modal
-        title={overflowLane ? `${overflowLane.title} · 全部运行 Review` : '运行 Review'}
-        open={Boolean(overflowLane)}
-        footer={null}
-        width={720}
-        onCancel={closeOverflow}
-        afterClose={restoreOverflowFocus}
-        keyboard
-        destroyOnHidden
-      >
-        {overflowLane?.runningItemsTruncated && (
-          <p className="command-center-modal-notice">当前列表为 Runtime 快照的有界结果。</p>
-        )}
-        <div className="command-center-modal-list">
-          {(overflowLane?.runningItems || []).length === 0 && (
-            <p className="command-center-modal-empty" role="status">当前没有运行中的 Review。</p>
-          )}
-          {(overflowLane?.runningItems || []).map(item => (
-            <button
-              type="button"
-              key={`${item.jobId}:${item.taskId}:${item.reviewKey}`}
-              onClick={() => openReview(item)}
-              aria-label={`查看 ${item.projectName} 的 ${item.displayName}`}
-            >
-              <span className={`command-center-modal-token is-${item.engineToken}`} aria-hidden="true" />
-              <span>
-                <strong>{item.projectName}</strong>
-                <small>{item.displayName} · {item.providerModelLabel}</small>
-              </span>
-              <em>{item.stageLabel}</em>
-            </button>
-          ))}
-        </div>
-      </Modal>
+        <RuntimeFooter presentation={presentation} />
+
+        <p className="command-center-scope-note">
+          当前页面展示 Runtime 实时有界快照；运行项与告警列表可能受接口上限影响。
+        </p>
+      </section>
     </main>
   );
 }
 
 
-function HudMetric({ label, value, detail, token = 'neutral' }) {
+function RuntimeHud({ presentation, loading }) {
+  const { hud, agentLane, standardLane } = presentation;
+  const provider = hud.providersObserved[0];
+  const alert = hud.alerts[0];
+  const coverageDetail = hud.coverage.truncated
+    ? 'Bounded Snapshot · 部分截断'
+    : 'Bounded Snapshot';
+
   return (
-    <div className={`command-center-hud-metric is-${token}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </div>
+    <section className="command-center-hud" aria-label="Runtime 当前摘要">
+      <HudMetric
+        icon="◷"
+        label="Runtime 更新时间"
+        value={formatSnapshotTime(hud.generatedAt)}
+        detail={loading && !hud.generatedAt ? '正在获取首轮快照' : freshnessLabel(hud.resourceState)}
+        token="runtime"
+      />
+      <HudMetric
+        icon="▤"
+        label="Total Queued Jobs"
+        value={hud.totalQueuedJobs}
+        detail={`Agent ${agentLane.queued} · Standard ${standardLane.queued}`}
+        token="queued"
+      />
+      <HudMetric
+        icon="▷"
+        label="Total Running Jobs"
+        value={hud.totalRunningJobs}
+        detail={`Agent ${agentLane.running} · Standard ${standardLane.running}`}
+        token="running"
+      />
+      <HudMetric
+        icon="◇"
+        label="Snapshot Coverage"
+        value={coverageLabel(hud.coverage)}
+        detail={coverageDetail}
+        token={hud.coverage.truncated ? 'warning' : 'coverage'}
+      />
+      <HudMetric
+        icon="⬡"
+        label="Observed Provider / Model"
+        value={provider?.label || '暂无活跃 Provider'}
+        detail={hud.providersObserved.length > 1 ? `+${hud.providersObserved.length - 1} more` : '当前活动 Flow 观测'}
+        token="provider"
+      />
+      <HudMetric
+        icon="△"
+        label="Runtime Alerts"
+        value={`${hud.alerts.length} 条告警`}
+        detail={alert ? alertLabel(alert) : '当前无 Runtime 告警'}
+        token={hud.alerts.length > 0 ? 'alert' : 'neutral'}
+      />
+    </section>
   );
 }
 
 
-function useRunningItemLimit() {
-  const [limit, setLimit] = useState(readRunningItemLimit);
-  useEffect(() => {
-    const update = () => setLimit(readRunningItemLimit());
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
-  }, []);
-  return limit;
+function HudMetric({ icon, label, value, detail, token }) {
+  return (
+    <article className={`command-center-hud-card is-${token}`}>
+      <span className="command-center-hud-icon" aria-hidden="true">{icon}</span>
+      <span className="command-center-hud-copy">
+        <small>{label}</small>
+        <strong>{value}</strong>
+        <em>{detail}</em>
+      </span>
+    </article>
+  );
 }
 
 
-function readRunningItemLimit() {
-  if (typeof window === 'undefined') return 6;
-  if (window.innerWidth <= 700) return 2;
-  if (window.innerWidth <= 1100) return 4;
-  return 6;
+function RuntimeNotice({ presentation, loading }) {
+  const { hud, diagnostics } = presentation;
+  if (hud.resourceState === 'ERROR_RETAINED') {
+    return (
+      <div className="command-center-notice is-error" role="alert">
+        <strong>Runtime 刷新失败，已保留最后一次成功快照。</strong>
+        <span>{hud.error}</span>
+      </div>
+    );
+  }
+  if (hud.resourceState === 'ERROR_EMPTY') {
+    return (
+      <div className="command-center-notice is-error" role="alert">
+        <strong>Runtime 快照暂不可用。</strong>
+        <span>{hud.error}</span>
+      </div>
+    );
+  }
+  if (hud.freshness === 'STALE') {
+    return (
+      <div className="command-center-notice is-stale" role="status">
+        <strong>Runtime 已过期。</strong>
+        <span>页面保留最近快照，当前数据可能不是最新状态。</span>
+      </div>
+    );
+  }
+  if (hud.freshness === 'EMPTY' && !loading) {
+    return (
+      <div className="command-center-notice" role="status">
+        <strong>等待 Runtime 快照。</strong>
+        <span>不会生成模拟 Job、Worker 或 Provider。</span>
+      </div>
+    );
+  }
+  if (hud.coverage.truncated || diagnostics.length > 0) {
+    return (
+      <div className="command-center-notice is-bounded" role="status">
+        <strong>{hud.coverage.truncated ? 'Runtime 快照部分截断。' : 'Runtime 聚合需要对账。'}</strong>
+        <span>{diagnostics.length > 0 ? 'Scheduler 总数与 Lane 分布存在差异，页面分别保留真实字段。' : '运行项与告警为有界结果。'}</span>
+      </div>
+    );
+  }
+  return null;
+}
+
+
+function RuntimeFooter({ presentation }) {
+  const { footer } = presentation;
+  return (
+    <section className="command-center-footer" aria-label="Runtime 当前状态">
+      <FooterMetric
+        icon="◎"
+        label="Agent Capacity"
+        value={`${footer.agentCapacity.running} / ${footer.agentCapacity.onlineCapacity || '—'}`}
+        detail="Running / Online Capacity"
+        ratio={safeRatio(footer.agentCapacity.running, footer.agentCapacity.onlineCapacity)}
+        token="agent"
+      />
+      <FooterMetric
+        icon="▥"
+        label="Standard Provider Slots"
+        value={`${footer.standardSlots.running} / ${footer.standardSlots.capacity || '—'}`}
+        detail="Running / Capacity"
+        ratio={safeRatio(footer.standardSlots.running, footer.standardSlots.capacity)}
+        token="standard"
+      />
+      <FooterMetric
+        icon="◷"
+        label="Oldest Agent Queue Wait"
+        value={formatDuration(footer.oldestAgentQueueSeconds)}
+        detail={footer.oldestAgentQueueSeconds === null ? '当前无可观测等待时长' : '当前最久排队'}
+        token="wait"
+      />
+      <FooterMetric
+        icon="△"
+        label="Runtime Alerts"
+        value={footer.alerts.count}
+        detail={footer.alerts.count > 0 ? alertLabel(footer.alerts.items[0]) : '当前无告警'}
+        token={footer.alerts.count > 0 ? 'alert' : 'neutral'}
+      />
+    </section>
+  );
+}
+
+
+function FooterMetric({ icon, label, value, detail, ratio, token }) {
+  return (
+    <article className={`command-center-footer-card is-${token}`}>
+      <span className="command-center-footer-icon" aria-hidden="true">{icon}</span>
+      <span>
+        <small>{label}</small>
+        <strong>{value}</strong>
+        {typeof ratio === 'number' && (
+          <i className="command-center-meter" aria-hidden="true">
+            <b style={{ width: `${ratio}%` }} />
+          </i>
+        )}
+        <em>{detail}</em>
+      </span>
+    </article>
+  );
 }
 
 
@@ -156,20 +229,47 @@ function freshnessLabel(value) {
   return {
     FRESH: 'Runtime 实时',
     STALE: 'Runtime 已过期',
-    LOADING: 'Runtime 连接中',
-    EMPTY: 'Runtime 暂无数据'
+    EMPTY: '等待 Runtime 快照',
+    ERROR_RETAINED: '刷新失败 · 保留旧快照',
+    ERROR_EMPTY: 'Runtime 暂不可用'
   }[value] || 'Runtime 状态未知';
 }
 
 
+function coverageLabel(coverage) {
+  if (coverage.status === 'EMPTY') return '等待快照';
+  return coverage.truncated ? '部分截断' : '未截断';
+}
+
+
 function formatSnapshotTime(value) {
-  if (!value) return '等待首轮快照';
+  if (!value) return '—';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '快照时间未知';
-  return `更新于 ${new Intl.DateTimeFormat('zh-CN', {
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
     hour12: false
-  }).format(date)}`;
+  }).format(date);
+}
+
+
+function formatDuration(value) {
+  if (value === null || value === undefined) return '—';
+  const seconds = Math.max(0, Number(value) || 0);
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
+
+
+function safeRatio(value, capacity) {
+  if (!capacity) return null;
+  return Math.min(100, Math.round((value / capacity) * 100));
+}
+
+
+function alertLabel(alert) {
+  return [alert?.projectName, alert?.type].filter(Boolean).join(' · ') || 'Runtime 告警';
 }

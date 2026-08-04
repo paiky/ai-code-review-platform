@@ -4,10 +4,10 @@
 
 - 计划版本：`vNext / Homepage Frozen Topology`
 - 基线提交：`3fc3fb9 Document current AI review flow audit`
-- 当前阶段：`H1 Presentation 数据契约`
-- 当前状态：`H1 COMPLETED — WAITING FOR H2 CONFIRMATION`
+- 当前阶段：`H2 静态首页结构`
+- 当前状态：`H2 COMPLETED — WAITING FOR H3 CONFIRMATION`
 - 当前允许结果：仅新增本计划文档，不实施前端、不修改 Runtime、不进入旧计划的 Phase 4/5 延续工作。
-- 下一授权口令：H1 验收完成后，等待用户明确回复“继续 H2”。
+- 下一授权口令：H2 验收完成后，等待用户明确回复“继续 H3”。
 - 停止点：本计划落地并检查 diff 后立即停止。
 
 本文档是审计完成后的独立首页实施总控。它不修改、覆盖或续写以下历史计划的执行状态：
@@ -603,10 +603,52 @@ passed（仅提示 Git 将按工作区配置转换 LF/CRLF）
 
 H1 是纯 View Model 阶段，没有 DOM、样式或运行服务变更，因此未执行生产构建和浏览器验收；这些门禁从 H2 静态首页结构开始执行。
 
+## 11.3 H2 实施结果
+
+H2 已基于 H1 View Model 完成冻结首页的亮色静态结构：
+
+- 顶部六项 Runtime HUD：更新时间、queued Jobs、running Jobs、coverage、Provider/Model 观测和 alerts；
+- 桌面五主体双轨拓扑：Review Intake、Engine Selection、Agent Review、Standard Review、Result Persistence；
+- Agent 与 Standard 作为两个一级核心模块，Standard 保留 Engine Selection 独立入口；
+- Agent→Standard 仅保留一条 `STRUCTURAL_ONLY` fallback 虚线和说明，不表达任务级转移动画；
+- Result Persistence 仅表达结果落库、任务详情和既有通知链，不展示完成量或终态抵达；
+- 底部四项当前态：Agent capacity、Standard Provider slots、最老 Agent 排队时长和 Runtime alerts；
+- FRESH、STALE、EMPTY、ERROR、truncated、无 Provider、无 nextQueued 和容量为零均使用真实文案；
+- `≤700px` 静态降级为 Agent/Standard 两张纵向核心卡片，不挂载复杂地图。
+
+H2 关闭旧业务动画 Canvas。所有语义、文字和数字均由 DOM 渲染；背景网格和连线仅由 `aria-hidden`、无 pointer event 的静态 SVG/CSS 承载。页面未放置刷新、Review 跳转、Modal、告警导航、Result 导航或悬浮/详情按钮，避免在 H3 接线前出现无行为入口。
+
+本阶段实际修改：
+
+- `frontend/src/command-center/CommandCenterPage.jsx`
+- `frontend/src/command-center/CommandCenterCanvas.jsx`
+- `frontend/src/command-center/commandCenter.css`
+- `frontend/tests/commandCenterInformationArchitecture.test.mjs`
+- 本计划文档
+
+验证结果：
+
+```text
+node --test tests/commandCenterPresentation.test.mjs tests/commandCenterModel.test.mjs tests/commandCenterInformationArchitecture.test.mjs
+22 passed, 0 failed
+
+.\scripts\run-frontend.cmd build
+passed；Vite 仅保留既有的大 chunk 提示
+
+1440×900 应用内浏览器验收
+- viewport：1440×900
+- document：1440×900，无横向或纵向滚动溢出
+- HUD、Review Intake、Engine Selection、Agent、Standard、Result 和 Footer 全部位于首屏
+- Command Center 内：0 个 button、0 个 canvas、1 个静态 svg
+- 浏览器 console：0 warnings / 0 errors
+```
+
+浏览器验收复用了已运行后端和仓库脚本启动的独立 Vite 5174 实例；验收完成后只停止本次记录的 5174 owner/launcher，未影响此前存在的 5173 服务。
+
 当前状态：
 
 ```text
-H1 COMPLETED — WAITING FOR H2 CONFIRMATION
+H2 COMPLETED — WAITING FOR H3 CONFIRMATION
 ```
 
-本计划到此停止。未经用户明确回复“继续 H2”，不得修改首页 JSX/CSS/Canvas 或开始 H2。
+本计划到此停止。未经用户明确回复“继续 H3”，不得接入刷新、任务跳转、Modal、告警导航或 Result 导航。

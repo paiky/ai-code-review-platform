@@ -8,8 +8,6 @@ const pageSource = await read('../src/command-center/CommandCenterPage.jsx');
 const apiSource = await read('../src/command-center/commandCenterApi.js');
 const hookSource = await read('../src/command-center/useCommandCenterSnapshots.js');
 const canvasSource = await read('../src/command-center/CommandCenterCanvas.jsx');
-const rendererSource = await read('../src/command-center/platformRuntimeMapRenderer.js');
-const presentationSource = await read('../src/command-center/commandCenterPresentation.js');
 const lifecycleSource = await read('../src/visibilityRefreshLifecycle.js');
 const styleSource = await read('../src/command-center/commandCenter.css');
 
@@ -36,121 +34,116 @@ test('root route renders Command Center while preserving legacy taskId redirect'
 });
 
 
-test('evolution phase 3B home preserves the five-node AI Review operation map', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="EVOLUTION_PHASE_3B"'), true);
-  assert.equal(pageSource.includes('AI Review Operation Map'), true);
-  assert.equal(pageSource.includes('<CommandCenterCanvas'), true);
-  assert.equal(presentationSource.includes("zoneKey: 'queue-gate'"), true);
-  assert.equal(presentationSource.includes("zoneKey: 'ai-review-core'"), true);
-  assert.equal(presentationSource.includes("zoneKey: 'result-beacon'"), true);
-  assert.equal(presentationSource.includes("zoneKey: 'ai-review-operation-map'"), true);
-  assert.equal(presentationSource.includes("mode: 'STRUCTURAL_ONLY'"), true);
-  assert.equal(presentationSource.includes("'standard'"), true);
-  assert.equal(presentationSource.includes("'agent'"), true);
+test('H2 page renders six Runtime HUD metrics and four current-state footer metrics', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="HOMEPAGE_VNEXT_H2"'), true);
+  assert.equal(pageSource.includes('AI Review 指挥中心'), true);
+  assert.equal((pageSource.match(/<HudMetric/g) || []).length, 6);
+  assert.equal((pageSource.match(/<FooterMetric/g) || []).length, 4);
+  for (const label of [
+    'Runtime 更新时间',
+    'Total Queued Jobs',
+    'Total Running Jobs',
+    'Snapshot Coverage',
+    'Observed Provider / Model',
+    'Runtime Alerts',
+    'Agent Capacity',
+    'Standard Provider Slots',
+    'Oldest Agent Queue Wait'
+  ]) assert.equal(pageSource.includes(label), true, label);
 });
 
 
-test('removed lifecycle modules and duplicate global controls do not appear on home', () => {
-  const forbidden = [
-    '选择活跃 Task',
-    '选择具体 Review Flow',
-    'GitLab / Manual',
-    'Rule Analysis',
-    'Finding / Notification',
-    'command-center-flow-dock',
-    'openJobQueue',
-    'openFailureNotifications',
-    '<Select'
-  ];
-  for (const text of forbidden) assert.equal(pageSource.includes(text), false, text);
-  assert.equal(pageSource.includes('WebSocket'), false);
-  assert.equal(pageSource.includes('EventSource'), false);
+test('H2 uses the frozen five-subject dual-review topology with one structural fallback', () => {
+  for (const token of [
+    'ReviewIntake',
+    'EngineSelection',
+    'ReviewModule lane={agentLane}',
+    'ReviewModule lane={standardLane}',
+    'FallbackRelation',
+    'ResultPersistence'
+  ]) assert.equal(canvasSource.includes(token), true, token);
+  assert.equal((canvasSource.match(/<FallbackRelation/g) || []).length, 1);
+  assert.equal(canvasSource.includes('Fallback · 结构性关系'), true);
+  assert.equal(canvasSource.includes('STRUCTURAL ONLY'), true);
+  assert.equal(canvasSource.includes('Review 任务 · /tasks'), true);
+  assert.equal(canvasSource.includes('Agent 到 Standard 的结构性降级关系'), true);
 });
 
 
-test('DOM owns review navigation and overflow modal while map nodes stay noninteractive', () => {
-  assert.equal(pageSource.includes('`/tasks/${item.taskId}?reviewKey=${reviewKey}`'), true);
-  assert.equal(pageSource.includes('<Modal'), true);
-  assert.equal(canvasSource.includes('command-center-overflow-tower'), true);
-  assert.equal(canvasSource.includes('onOpenOverflow(lane, event.currentTarget)'), true);
-  assert.equal(canvasSource.includes('function QueueGate'), true);
-  assert.equal(canvasSource.includes('function ReviewCore'), true);
-  assert.equal(canvasSource.includes('function NextReview'), true);
-  assert.equal(canvasSource.includes('function ResultBeacon'), true);
-  assert.equal(canvasSource.includes('data-zone-key={lane.zoneKey}'), true);
-  assert.equal((canvasSource.match(/<canvas/g) || []).length, 1);
-  assert.equal(canvasSource.includes('data-command-center-dom-overlay="true"'), true);
-  assert.equal(canvasSource.includes('data-command-center-canvas-phase="EVOLUTION_PHASE_3B"'), true);
-  assert.equal(pageSource.includes('overflowZoneKey'), true);
-  assert.equal(pageSource.includes('afterClose={restoreOverflowFocus}'), true);
-  assert.equal(pageSource.includes('trigger?.isConnected'), true);
-  assert.equal(pageSource.includes('refreshButtonRef.current'), true);
-  assert.equal(pageSource.includes('focusTarget.focus()'), true);
-  assert.equal(pageSource.includes('当前没有运行中的 Review'), true);
-});
-
-
-test('single Canvas owns Runtime-driven motion without timers or CSS animation owners', () => {
-  assert.equal(canvasSource.includes('max-width: 700px'), true);
-  assert.equal(rendererSource.includes('createCanvasRuntime'), true);
-  assert.equal(rendererSource.includes('isAnimationEnabled: () => {'), true);
-  assert.equal(rendererSource.includes('getAnimationFrameInterval'), true);
-  assert.equal(rendererSource.includes('diffPlatformRuntimeMapScenes'), true);
-  assert.equal(rendererSource.includes('measureOperationMapAnchors'), true);
-  assert.equal(rendererSource.includes('querySelector?.(`[data-zone-key="${zoneKey}"]`)'), true);
-  assert.equal(rendererSource.includes('drawCoreMotion'), true);
-  assert.equal(rendererSource.includes('drawDispatchCursor'), true);
-  assert.equal(rendererSource.includes('drawEnvironmentLife'), true);
-  assert.equal(rendererSource.includes("'data-command-center-beacon-events': 0"), true);
-  assert.equal(rendererSource.includes('setInterval'), false);
-  assert.equal(rendererSource.includes('setTimeout'), false);
-  assert.equal(rendererSource.includes('requestAnimationFrame'), false);
-  assert.equal(rendererSource.includes('data-command-center-active-raf'), true);
-  assert.equal(canvasSource.includes('useReducedMotion'), true);
-  assert.equal(canvasSource.includes('runtimeError: Boolean(runtimeError)'), true);
+test('all semantic content is DOM-owned while SVG is static decoration and Canvas is disabled', () => {
+  assert.equal(canvasSource.includes('data-command-center-renderer="DOM_SVG_STATIC"'), true);
+  assert.equal(canvasSource.includes('data-command-center-canvas-mounted="false"'), true);
+  assert.equal((canvasSource.match(/<svg/g) || []).length, 1);
+  assert.equal(canvasSource.includes('aria-hidden="true"'), true);
+  assert.equal(canvasSource.includes('focusable="false"'), true);
+  assert.equal(canvasSource.includes('<canvas'), false);
+  assert.equal(canvasSource.includes('platformRuntimeMapRenderer'), false);
+  assert.equal(styleSource.includes('pointer-events: none'), true);
   assert.equal(styleSource.includes('@keyframes'), false);
   assert.equal(styleSource.includes('animation:'), false);
 });
 
 
-test('phase 3B preserves confirmed phase 3A map structures', () => {
-  for (const token of [
-    'command-center-gate-hardware',
-    'command-center-core-ground',
-    'command-center-core-outer-ring',
-    'command-center-core-routing-ring',
-    'command-center-core-crystal',
-    'command-center-track-trench',
-    'command-center-track-roadbed',
-    'command-center-review-tower',
-    'command-center-worker-spire',
-    'command-center-result-merge-ring'
-  ]) assert.equal(canvasSource.includes(token), true, token);
-  assert.equal(styleSource.includes('--cc-standard: #c88a16'), true);
-  assert.equal(styleSource.includes('--cc-agent: #7056d8'), true);
-  assert.equal(styleSource.includes('.command-center-lane-station {'), true);
-  assert.equal(styleSource.includes('command-center-lane-station { display: flex; flex-direction: column; align-self: stretch; padding: 12px; overflow: hidden; }'), false);
+test('H2 exposes truthful FRESH, STALE, EMPTY, ERROR and truncated copy', () => {
+  for (const copy of [
+    'Runtime 实时',
+    'Runtime 已过期',
+    '等待 Runtime 快照',
+    'Runtime 刷新失败，已保留最后一次成功快照。',
+    'Runtime 快照暂不可用。',
+    'Runtime 快照部分截断。',
+    'Scheduler 总数与 Lane 分布存在差异',
+    '不会生成模拟 Job、Worker 或 Provider。',
+    '当前无等待 Review',
+    '暂无活跃 Provider'
+  ]) assert.equal(`${pageSource}\n${canvasSource}`.includes(copy), true, copy);
 });
 
 
-test('phase 3B visual polish integrates berths workers and Beacon feeders without topology drift', () => {
-  assert.equal(canvasSource.includes('data-command-center-visual-polish="EVOLUTION_PHASE_3B"'), true);
-  assert.equal(canvasSource.includes('data-command-center-capacity-berths="track"'), true);
-  assert.equal(canvasSource.includes('data-command-center-worker-rail="true"'), true);
-  assert.equal(canvasSource.includes('command-center-beacon-feeder is-standard'), true);
-  assert.equal(canvasSource.includes('command-center-beacon-feeder is-agent'), true);
-  assert.ok(canvasSource.indexOf('<CapacitySlots lane={lane} />') > canvasSource.indexOf('command-center-lane-track'));
-  assert.ok(canvasSource.indexOf('<WorkerTowers workers={lane.workers}') > canvasSource.indexOf('command-center-lane-track'));
-  assert.equal(styleSource.includes('min-height: 352px'), true);
-  assert.equal(styleSource.includes('top: var(--command-center-track-y, 50%)'), true);
-  assert.equal(styleSource.includes('.command-center-worker-towers::before'), true);
-  assert.equal(rendererSource.includes("anchor.to === 'result-beacon' ? 44 : 39"), true);
-  assert.equal(rendererSource.includes('context.strokeRect(width * 0.045'), false);
-  assert.equal((presentationSource.match(/to: 'result-beacon'/g) || []).length, 4);
+test('H2 contains no unimplemented controls or unsupported homepage semantics', () => {
+  assert.equal(pageSource.includes('<button'), false);
+  assert.equal(canvasSource.includes('<button'), false);
+  assert.equal(pageSource.includes('<Modal'), false);
+  assert.equal(pageSource.includes('useNavigate'), false);
+  assert.equal(pageSource.includes('reload'), false);
+  for (const forbidden of [
+    '统一 Task Queue',
+    'AI Review Core',
+    '负载均衡',
+    '平台负载',
+    'Overall Pass Rate',
+    'Agent Hit Rate',
+    'Fallback Rate',
+    '查看全部结果',
+    '悬浮查看流程',
+    '点击查看详情'
+  ]) assert.equal(`${pageSource}\n${canvasSource}`.includes(forbidden), false, forbidden);
 });
 
 
-test('public snapshot API remains read-only and runtime polling stays deduplicated', () => {
+test('desktop and mobile layouts preserve the planned information hierarchy', () => {
+  assert.equal(styleSource.includes('grid-template-areas:'), true);
+  assert.equal(styleSource.includes('"intake engine agent result"'), true);
+  assert.equal(styleSource.includes('"intake engine standard result"'), true);
+  assert.equal(styleSource.includes('@media (max-width: 700px)'), true);
+  assert.equal(styleSource.includes('.command-center-intake,'), true);
+  assert.equal(styleSource.includes('.command-center-engine,'), true);
+  assert.equal(styleSource.includes('.command-center-fallback,'), true);
+  assert.equal(styleSource.includes('.command-center-result { display: none; }'), true);
+  assert.equal(styleSource.includes('flex-direction: column'), true);
+});
+
+
+test('daylight surfaces maintain WCAG AA body text contrast and visible focus styling', () => {
+  const surfaces = ['#ffffff', '#f7fbff', '#f1ebff', '#fff2e6', '#e8faf6', '#fff0ee'];
+  const text = '#17324d';
+  for (const color of [text, ...surfaces]) assert.equal(styleSource.includes(color), true, color);
+  for (const surface of surfaces) assert.ok(contrastRatio(text, surface) >= 4.5, surface);
+  assert.equal(styleSource.includes('.command-center-page :focus-visible'), true);
+});
+
+
+test('public snapshot API remains read-only and Runtime polling stays deduplicated', () => {
   assert.equal(apiSource.includes('/api/command-center/runtime?'), true);
   assert.equal(apiSource.includes("method: 'POST'"), false);
   assert.equal(hookSource.includes('RUNTIME_INTERVAL_MS = 5_000'), true);
@@ -161,15 +154,6 @@ test('public snapshot API remains read-only and runtime polling stays deduplicat
   assert.equal(hookSource.includes('deduplicated'), true);
   assert.equal(lifecycleSource.includes("addEventListener?.('visibilitychange'"), true);
   assert.equal(lifecycleSource.includes("addEventListener?.('focus'"), true);
-});
-
-
-test('daylight palette maintains WCAG AA text contrast', () => {
-  const surfaces = ['#e8f1f6', '#ffffff', '#fff1c7', '#eee9ff', '#fff3cc'];
-  const text = '#17324d';
-  for (const color of [text, ...surfaces]) assert.equal(styleSource.includes(color), true, color);
-  for (const surface of surfaces) assert.ok(contrastRatio(text, surface) >= 4.5, surface);
-  assert.equal(styleSource.includes('.command-center-page button:focus-visible'), true);
 });
 
 
