@@ -53,8 +53,8 @@ export default function CommandCenterCanvas({
       </svg>
 
       <div className="command-center-mobile-route-summary" role="note">
-        <strong>Review 路由</strong>
-        <span>Manual / MR / Push / Retry → Engine Selection → Agent 或 Standard → Review 任务</span>
+        <strong>审查路由</strong>
+        <span>手动 / MR / Push / 重试 → 引擎选择 → Agent 或 Standard → 审查任务</span>
       </div>
 
       <div className="command-center-map-grid">
@@ -83,7 +83,7 @@ export default function CommandCenterCanvas({
 function ReviewIntake({ intake }) {
   return (
     <article className="command-center-intake command-center-map-node" data-zone-key={intake.zoneKey}>
-      <NodeHeading eyebrow="TRIGGER INPUT" title={intake.title} subtitle="触发入口" />
+      <NodeHeading eyebrow="触发输入" title={intake.title} subtitle="触发入口" />
       <div className="command-center-intake-list">
         {intake.items.map(item => (
           <div key={item.key} className={`command-center-intake-item is-${item.key.toLowerCase()}`}>
@@ -107,7 +107,7 @@ function EngineSelection({ engineSelection }) {
         <i />
         <b>AI</b>
       </div>
-      <NodeHeading eyebrow="POLICY ROUTER" title={engineSelection.title} subtitle="策略路由 · 可用性检查 · 安全门禁" />
+      <NodeHeading eyebrow="策略路由" title={engineSelection.title} subtitle="策略路由 · 可用性检查 · 安全门禁" />
       <div className="command-center-engine-routes">
         {engineSelection.routes.map(route => (
           <span key={route.key} className={`is-${route.key.toLowerCase()}`}>
@@ -143,25 +143,25 @@ function ReviewModule({ lane, runtimeLoading, onOpenReview, onOpenOverflow }) {
       </header>
 
       <div className="command-center-module-metrics">
-        <ModuleMetric label="Queued Jobs" value={lane.queued} />
-        <ModuleMetric label="Running Jobs" value={lane.running} />
+        <ModuleMetric label="排队任务" value={lane.queued} />
+        <ModuleMetric label="运行任务" value={lane.running} />
         {isAgent ? (
-          <ModuleMetric label="Online Capacity" value={lane.onlineCapacity || '—'} />
+          <ModuleMetric label="在线容量" value={lane.onlineCapacity || '—'} />
         ) : (
-          <ModuleMetric label="Provider Slots" value={`${lane.running} / ${lane.capacity || '—'}`} />
+          <ModuleMetric label="Provider 槽位" value={`${lane.running} / ${lane.capacity || '—'}`} />
         )}
         {isAgent ? (
           <WorkerSummary summary={lane.workerSummary} />
         ) : (
           <ModuleMetric
-            label="Observed Provider / Model"
+            label="已观测 Provider / Model"
             value={observedProvider?.label || '暂无活跃 Provider'}
             compact
           />
         )}
         <ModuleMetric
-          label="Next Queued"
-          value={nextQueued ? nextQueued.displayName : '当前无等待 Review'}
+          label="下一排队任务"
+          value={nextQueued ? nextQueued.displayName : '当前无等待任务'}
           detail={nextQueued ? nextQueued.projectName : null}
           compact
         />
@@ -189,17 +189,17 @@ function ModuleMetric({ label, value, detail, compact = false }) {
 
 function WorkerSummary({ summary }) {
   const rows = [
-    ['IDLE', summary?.idle || 0],
-    ['BUSY', summary?.busy || 0],
-    ['DRAINING', summary?.draining || 0],
-    ['OFFLINE', summary?.offline || 0]
+    ['IDLE', '空闲', summary?.idle || 0],
+    ['BUSY', '忙碌', summary?.busy || 0],
+    ['DRAINING', '退出中', summary?.draining || 0],
+    ['OFFLINE', '离线', summary?.offline || 0]
   ];
   return (
     <div className="command-center-module-metric is-worker-summary">
-      <small>Worker Summary</small>
+      <small>执行器概览</small>
       <span>
-        {rows.map(([label, value]) => (
-          <i key={label} className={`is-${label.toLowerCase()}`}>
+        {rows.map(([state, label, value]) => (
+          <i key={state} className={`is-${state.toLowerCase()}`}>
             <b aria-hidden="true" />{label}<em>{value}</em>
           </i>
         ))}
@@ -218,7 +218,7 @@ function RunningItems({ lane, onOpenReview, onOpenOverflow }) {
     || total > visible;
   return (
     <div className="command-center-module-metric is-running-items">
-      <small>Running Items</small>
+      <small>运行项</small>
       <strong>显示 {visible} / 共 {total}</strong>
       <span className="command-center-running-markers" aria-label={`当前展示 ${visible} 个，共 ${total} 个运行项`}>
         {visibleItems.map(item => (
@@ -257,7 +257,7 @@ function RunningItems({ lane, onOpenReview, onOpenOverflow }) {
 function FallbackRelation({ fallback }) {
   return (
     <aside className="command-center-fallback" aria-label="Agent 到 Standard 的结构性降级关系">
-      <strong>Fallback · 结构性关系</strong>
+      <strong>降级 · 结构性关系</strong>
       <span>{fallback.description}</span>
     </aside>
   );
@@ -267,13 +267,13 @@ function FallbackRelation({ fallback }) {
 function ResultPersistence({ resultPersistence, onOpen }) {
   return (
     <article className="command-center-result command-center-map-node" data-zone-key={resultPersistence.zoneKey}>
-      <NodeHeading eyebrow="STRUCTURAL ONLY" title={resultPersistence.title} subtitle="结果落库" />
+      <NodeHeading eyebrow="仅结构展示" title={resultPersistence.title} subtitle="结果落库" />
       <div className="command-center-result-icon" aria-hidden="true">
         <i />
         <i />
         <i />
       </div>
-      <strong>Task Detail / Notification</strong>
+      <strong>任务详情 / 通知</strong>
       <p>{resultPersistence.description}</p>
       <button
         type="button"
@@ -281,7 +281,7 @@ function ResultPersistence({ resultPersistence, onOpen }) {
         data-command-center-action="open-review-tasks"
         onClick={() => onOpen(resultPersistence.navigationTarget)}
       >
-        查看 Review 任务
+        查看审查任务
       </button>
     </article>
   );

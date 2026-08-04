@@ -1,26 +1,26 @@
 const INTAKE_ITEMS = Object.freeze([
-  Object.freeze({ key: 'MANUAL', label: 'Manual Review', description: '手动发起 Review' }),
+  Object.freeze({ key: 'MANUAL', label: '手动审查', description: '手动发起审查' }),
   Object.freeze({ key: 'MERGE_REQUEST', label: 'Merge Request', description: 'GitLab MR 自动或手动触发' }),
   Object.freeze({ key: 'PUSH', label: 'Push', description: '通过 Push 审核策略门禁触发' }),
-  Object.freeze({ key: 'RETRY', label: 'Retry', description: '从既有 Review 任务重新发起' })
+  Object.freeze({ key: 'RETRY', label: '重试', description: '从既有审查任务重新发起' })
 ]);
 
 const ENGINE_ROUTES = Object.freeze([
-  Object.freeze({ key: 'AGENT', target: 'agent-review', label: 'AGENT → Agent Review' }),
-  Object.freeze({ key: 'STANDARD', target: 'standard-review', label: 'STANDARD → Standard Review' })
+  Object.freeze({ key: 'AGENT', target: 'agent-review', label: 'Agent → Agent Review' }),
+  Object.freeze({ key: 'STANDARD', target: 'standard-review', label: 'Standard → Standard Review' })
 ]);
 
 const LANE_META = Object.freeze({
   standard: {
     title: 'Standard Review',
-    eyebrow: 'STANDARD REVIEW',
-    description: 'Provider Scheduler 调度的标准代码质量 Review',
+    eyebrow: 'Standard Review',
+    description: '由 Provider 调度器执行的标准代码质量审查',
     colorToken: 'standard'
   },
   agent: {
     title: 'Agent Review',
-    eyebrow: 'AGENT REVIEW',
-    description: '由在线 Agent Worker 执行的证据驱动 Review',
+    eyebrow: 'Agent Review',
+    description: '由在线 Agent 执行器完成的证据驱动审查',
     colorToken: 'agent'
   }
 });
@@ -75,12 +75,12 @@ export function buildCommandCenterPresentation({ runtime, runtimeError = '' } = 
     },
     intake: {
       zoneKey: 'review-intake',
-      title: 'Review Intake',
+      title: '审查入口',
       items: INTAKE_ITEMS.map(item => ({ ...item }))
     },
     engineSelection: {
       zoneKey: 'engine-selection',
-      title: 'Engine Selection',
+      title: '引擎选择',
       routes: ENGINE_ROUTES.map(route => ({ ...route })),
       automaticAgentUnavailableDescription: UNAVAILABLE_DESCRIPTION
     },
@@ -91,13 +91,13 @@ export function buildCommandCenterPresentation({ runtime, runtimeError = '' } = 
       mode: 'STRUCTURAL_ONLY',
       from: 'agent-review',
       to: 'standard-review',
-      description: 'Agent 运行失败、超时或租约耗尽时可能创建新的 Standard Job；当前不表达任务级父子转移。'
+      description: 'Agent 运行失败、超时或租约耗尽时可能创建新的 Standard 任务；当前不表达任务级父子转移。'
     },
     resultPersistence: {
       zoneKey: 'result-persistence',
       mode: 'STRUCTURAL_ONLY',
-      title: 'Result Persistence',
-      description: '结果落库后进入 Review 任务详情与既有通知链路',
+      title: '结果持久化',
+      description: '结果落库后进入审查任务详情与既有通知链路',
       navigationTarget: '/tasks'
     },
     footer: {
@@ -260,8 +260,8 @@ function buildH1CompatibilityMap({ agentLane, standardLane, freshness, generated
     resultBeacon: {
       zoneKey: 'result-beacon',
       mode: 'STRUCTURAL_ONLY',
-      title: 'Result Persistence',
-      description: '结果落库后进入 Review 任务详情与既有通知链路'
+      title: '结果持久化',
+      description: '结果落库后进入审查任务详情与既有通知链路'
     },
     connections: [
       { from: 'queue-gate', to: 'ai-review-core', token: 'queue' },
@@ -374,7 +374,7 @@ function presentSceneWorkers(value) {
 
 export function stageLabel(value) {
   return {
-    PREFLIGHT: 'Preflight',
+    PREFLIGHT: '预检',
     QUEUED: '排队中',
     CONTEXT_BUILDING: '构建上下文',
     MODEL_CALLING: '模型调用',
@@ -382,7 +382,7 @@ export function stageLabel(value) {
     AGENT_TOOL_ACTIVITY: 'Agent 工具活动',
     AGENT_CONVERGING: 'Agent 收敛',
     AGENT_SUBMITTING: 'Agent 提交',
-    FALLBACK: 'Standard Fallback'
+    FALLBACK: 'Standard 降级'
   }[String(value || '').toUpperCase()] || '执行中';
 }
 

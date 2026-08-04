@@ -76,7 +76,7 @@ export default function CommandCenterPage() {
       </section>
 
       <Modal
-        title={overflowLane ? `${overflowLane.title} · 运行 Review` : '运行 Review'}
+        title={overflowLane ? `${overflowLane.title} · 运行中的审查` : '运行中的审查'}
         open={Boolean(overflowLane)}
         footer={null}
         width={720}
@@ -102,8 +102,8 @@ function RuntimeHud({ presentation, loading, onNavigate }) {
   const provider = hud.providersObserved[0];
   const alert = hud.alerts.find(item => item.navigationTarget) || hud.alerts[0];
   const coverageDetail = hud.coverage.truncated
-    ? 'Bounded Snapshot · 部分截断'
-    : 'Bounded Snapshot';
+    ? '有界快照 · 部分截断'
+    : '有界快照';
 
   return (
     <section className="command-center-hud" aria-label="Runtime 当前摘要">
@@ -116,35 +116,35 @@ function RuntimeHud({ presentation, loading, onNavigate }) {
       />
       <HudMetric
         icon="▤"
-        label="Total Queued Jobs"
+        label="排队任务总数"
         value={hud.totalQueuedJobs}
         detail={`Agent ${agentLane.queued} · Standard ${standardLane.queued}`}
         token="queued"
       />
       <HudMetric
         icon="▷"
-        label="Total Running Jobs"
+        label="运行任务总数"
         value={hud.totalRunningJobs}
         detail={`Agent ${agentLane.running} · Standard ${standardLane.running}`}
         token="running"
       />
       <HudMetric
         icon="◇"
-        label="Snapshot Coverage"
+        label="快照覆盖范围"
         value={coverageLabel(hud.coverage)}
         detail={coverageDetail}
         token={hud.coverage.truncated ? 'warning' : 'coverage'}
       />
       <HudMetric
         icon="⬡"
-        label="Observed Provider / Model"
+        label="已观测 Provider / Model"
         value={provider?.label || '暂无活跃 Provider'}
-        detail={hud.providersObserved.length > 1 ? `+${hud.providersObserved.length - 1} more` : '当前活动 Flow 观测'}
+        detail={hud.providersObserved.length > 1 ? `另外 ${hud.providersObserved.length - 1} 个` : '当前活动流程观测'}
         token="provider"
       />
       <HudMetric
         icon="△"
-        label="Runtime Alerts"
+        label="Runtime 告警"
         value={`${hud.alerts.length} 条告警`}
         detail={alert ? alertLabel(alert) : '当前无 Runtime 告警'}
         token={hud.alerts.length > 0 ? 'alert' : 'neutral'}
@@ -195,7 +195,7 @@ function RunningItemsModal({ lane, onOpenReview }) {
       </p>
       <div className="command-center-modal-list">
         {loaded === 0 && (
-          <p className="command-center-modal-empty">当前快照未返回可打开的运行 Review。</p>
+          <p className="command-center-modal-empty">当前快照未返回可打开的运行中审查。</p>
         )}
         {lane.runningItems.map(item => (
           item.navigationTarget ? (
@@ -260,7 +260,7 @@ function RuntimeNotice({ presentation, loading }) {
     return (
       <div className="command-center-notice" role="status">
         <strong>等待 Runtime 快照。</strong>
-        <span>不会生成模拟 Job、Worker 或 Provider。</span>
+        <span>不会生成模拟任务、执行器或 Provider。</span>
       </div>
     );
   }
@@ -268,7 +268,7 @@ function RuntimeNotice({ presentation, loading }) {
     return (
       <div className="command-center-notice is-bounded" role="status">
         <strong>{hud.coverage.truncated ? 'Runtime 快照部分截断。' : 'Runtime 聚合需要对账。'}</strong>
-        <span>{diagnostics.length > 0 ? 'Scheduler 总数与 Lane 分布存在差异，页面分别保留真实字段。' : '运行项与告警为有界结果。'}</span>
+        <span>{diagnostics.length > 0 ? '调度器总数与执行轨分布存在差异，页面分别保留真实字段。' : '运行项与告警为有界结果。'}</span>
       </div>
     );
   }
@@ -282,30 +282,30 @@ function RuntimeFooter({ presentation }) {
     <section className="command-center-footer" aria-label="Runtime 当前状态">
       <FooterMetric
         icon="◎"
-        label="Agent Capacity"
+        label="Agent 容量"
         value={`${footer.agentCapacity.running} / ${footer.agentCapacity.onlineCapacity || '—'}`}
-        detail="Running / Online Capacity"
+        detail="运行中 / 在线容量"
         ratio={safeRatio(footer.agentCapacity.running, footer.agentCapacity.onlineCapacity)}
         token="agent"
       />
       <FooterMetric
         icon="▥"
-        label="Standard Provider Slots"
+        label="Standard Provider 槽位"
         value={`${footer.standardSlots.running} / ${footer.standardSlots.capacity || '—'}`}
-        detail="Running / Capacity"
+        detail="运行中 / 总容量"
         ratio={safeRatio(footer.standardSlots.running, footer.standardSlots.capacity)}
         token="standard"
       />
       <FooterMetric
         icon="◷"
-        label="Oldest Agent Queue Wait"
+        label="Agent 最长排队等待"
         value={formatDuration(footer.oldestAgentQueueSeconds)}
         detail={footer.oldestAgentQueueSeconds === null ? '当前无可观测等待时长' : '当前最久排队'}
         token="wait"
       />
       <FooterMetric
         icon="△"
-        label="Runtime Alerts"
+        label="Runtime 告警"
         value={footer.alerts.count}
         detail={footer.alerts.count > 0 ? alertLabel(footer.alerts.items[0]) : '当前无告警'}
         token={footer.alerts.count > 0 ? 'alert' : 'neutral'}
@@ -369,7 +369,7 @@ function formatDuration(value) {
   const seconds = Math.max(0, Number(value) || 0);
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
-  return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
+  return minutes > 0 ? `${minutes} 分 ${remainder} 秒` : `${remainder} 秒`;
 }
 
 
@@ -380,5 +380,14 @@ function safeRatio(value, capacity) {
 
 
 function alertLabel(alert) {
-  return [alert?.projectName, alert?.type].filter(Boolean).join(' · ') || 'Runtime 告警';
+  const typeLabel = {
+    JOB_FAILED: '任务失败',
+    AGENT_RUN_FAILED: 'Agent 执行失败',
+    NOTIFICATION_FAILED: '通知失败',
+    FALLBACK: '发生降级',
+    CRITICAL_FINDING: '发现严重问题',
+    WORKER_OFFLINE: '执行器离线',
+    WORKER_DRAINING: '执行器退出中'
+  }[alert?.type] || '其他告警';
+  return [alert?.projectName, typeLabel].filter(Boolean).join(' · ') || 'Runtime 告警';
 }

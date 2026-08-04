@@ -880,6 +880,46 @@ passed；3541 modules transformed；仅保留既有的大 chunk 提示
 
 本次微调完成后恢复 `HOMEPAGE VNEXT COMPLETED — WAITING FOR DEPLOYMENT CONFIRMATION`，不自动部署或推送。
 
+## 11.9 部署前可见文案中文化
+
+当前状态：
+
+```text
+PRE-DEPLOYMENT CHINESE COPY POLISH COMPLETED
+```
+
+用户明确要求将指挥中心页面中展示的英文改为中文，同时保留必要的技术专有名词。本文案调整遵守以下边界：
+
+- 保留 `Agent Review`、`Standard Review`、`Runtime`、`Provider`、`Model`、`Merge Request`、`Push` 等产品或技术术语；
+- 页面标题、节点眉题、指标名称、状态说明、容量说明、Worker 状态和时长单位改为中文；
+- 不修改内部 key、枚举、Schema 字段、路由、DOM data 属性、接口返回值或业务逻辑；
+- 同步更新文案契约测试，并通过 Command Center 专项测试、前端构建和浏览器可见文案验收。
+
+实际调整：
+
+- HUD、审查入口、引擎选择、双 Review 执行轨、结果持久化和底部容量指标的普通英文标题全部改为中文；
+- `Manual Review`、`Retry`、Worker 状态、任务阶段、时长单位和 Runtime 告警类型改为中文展示；
+- 保留 `Agent Review`、`Standard Review`、`Runtime`、`Provider`、`Model`、`Merge Request`、`Push` 等约定专有名词；
+- 未修改任何内部枚举、接口字段、路由、数据属性、交互或动画行为。
+
+验证结果：
+
+```text
+Command Center 专项 Node 测试
+29 passed / 0 failed
+
+.\scripts\run-frontend.cmd build
+passed；3541 modules transformed；仅保留既有的大 chunk 提示
+
+应用内浏览器真实 Runtime 页面
+- 旧英文展示项 0
+- Agent Review / Standard Review 等约定专有名词均保留
+- 告警类型与执行器状态均为中文
+- console 0 warning / 0 error
+```
+
+本次文案微调完成后恢复 `HOMEPAGE VNEXT COMPLETED — WAITING FOR DEPLOYMENT CONFIRMATION`，不自动部署或推送。
+
 ## 11.8 部署前超宽视口与标题行微调
 
 当前状态：

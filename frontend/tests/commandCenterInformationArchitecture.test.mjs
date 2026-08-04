@@ -8,6 +8,7 @@ const pageSource = await read('../src/command-center/CommandCenterPage.jsx');
 const apiSource = await read('../src/command-center/commandCenterApi.js');
 const hookSource = await read('../src/command-center/useCommandCenterSnapshots.js');
 const canvasSource = await read('../src/command-center/CommandCenterCanvas.jsx');
+const presentationSource = await read('../src/command-center/commandCenterPresentation.js');
 const visualSource = await read('../src/command-center/commandCenterVisual.js');
 const lifecycleSource = await read('../src/visibilityRefreshLifecycle.js');
 const styleSource = await read('../src/command-center/commandCenter.css');
@@ -42,14 +43,14 @@ test('H5 accepted page preserves six Runtime HUD metrics and four current-state 
   assert.equal((pageSource.match(/<FooterMetric/g) || []).length, 4);
   for (const label of [
     'Runtime 更新时间',
-    'Total Queued Jobs',
-    'Total Running Jobs',
-    'Snapshot Coverage',
-    'Observed Provider / Model',
-    'Runtime Alerts',
-    'Agent Capacity',
-    'Standard Provider Slots',
-    'Oldest Agent Queue Wait'
+    '排队任务总数',
+    '运行任务总数',
+    '快照覆盖范围',
+    '已观测 Provider / Model',
+    'Runtime 告警',
+    'Agent 容量',
+    'Standard Provider 槽位',
+    'Agent 最长排队等待'
   ]) assert.equal(pageSource.includes(label), true, label);
 });
 
@@ -64,8 +65,8 @@ test('H5 accepted page preserves the frozen five-subject dual-review topology wi
     'ResultPersistence'
   ]) assert.equal(canvasSource.includes(token), true, token);
   assert.equal((canvasSource.match(/<FallbackRelation/g) || []).length, 1);
-  assert.equal(canvasSource.includes('Fallback · 结构性关系'), true);
-  assert.equal(canvasSource.includes('STRUCTURAL ONLY'), true);
+  assert.equal(canvasSource.includes('降级 · 结构性关系'), true);
+  assert.equal(canvasSource.includes('仅结构展示'), true);
   assert.equal(canvasSource.includes('resultPersistence.navigationTarget'), true);
   assert.equal(canvasSource.includes('Agent 到 Standard 的结构性降级关系'), true);
 });
@@ -99,9 +100,9 @@ test('H5 accepted page exposes truthful FRESH, STALE, EMPTY, ERROR and truncated
     'Runtime 刷新失败，已保留最后一次成功快照。',
     'Runtime 快照暂不可用。',
     'Runtime 快照部分截断。',
-    'Scheduler 总数与 Lane 分布存在差异',
-    '不会生成模拟 Job、Worker 或 Provider。',
-    '当前无等待 Review',
+    '调度器总数与执行轨分布存在差异',
+    '不会生成模拟任务、执行器或 Provider。',
+    '当前无等待任务',
     '暂无活跃 Provider'
   ]) assert.equal(`${pageSource}\n${canvasSource}`.includes(copy), true, copy);
 });
@@ -120,7 +121,7 @@ test('H5 accepted page preserves the H3 read-only interactions with native keybo
     'data-command-center-action="open-running-review"',
     'data-command-center-action="open-review-tasks"',
     'onOpenOverflow',
-    '查看 Review 任务',
+    '查看审查任务',
     '查看运行项'
   ]) assert.equal(canvasSource.includes(token), true, token);
   assert.equal(pageSource.includes('onKeyDown'), false);
@@ -143,6 +144,38 @@ test('H5 accepted page preserves the H3 read-only interactions with native keybo
     'cancelJob',
     'retryJob'
   ]) assert.equal(`${pageSource}\n${canvasSource}`.includes(forbidden), false, forbidden);
+});
+
+
+test('visible operational copy is Chinese while approved product terms remain unchanged', () => {
+  const visibleSources = `${pageSource}\n${canvasSource}\n${presentationSource}`;
+  for (const copy of [
+    'Agent Review',
+    'Standard Review',
+    'Runtime',
+    'Provider',
+    'Model',
+    'Merge Request',
+    'Push'
+  ]) assert.equal(visibleSources.includes(copy), true, copy);
+  for (const forbidden of [
+    'Manual Review',
+    'Retry',
+    'Review Intake',
+    'Engine Selection',
+    'TRIGGER INPUT',
+    'POLICY ROUTER',
+    'Queued Jobs',
+    'Running Jobs',
+    'Online Capacity',
+    'Worker Summary',
+    'Running Items',
+    'STRUCTURAL ONLY',
+    'Result Persistence',
+    'Task Detail / Notification',
+    'Bounded Snapshot',
+    'Runtime Alerts'
+  ]) assert.equal(visibleSources.includes(forbidden), false, forbidden);
 });
 
 
