@@ -8,7 +8,7 @@ import {
 } from '../src/command-center/commandCenterPresentation.js';
 
 
-test('H1 presentation exposes the frozen homepage contract from a fresh Runtime v2 snapshot', () => {
+test('I2 presentation exposes current status and quality output without duplicate footer metrics', () => {
   const presentation = buildCommandCenterPresentation({
     runtime: runtime({
       agent: {
@@ -42,6 +42,9 @@ test('H1 presentation exposes the frozen homepage contract from a fresh Runtime 
   });
 
   assert.deepEqual(Object.keys(presentation).filter(key => key !== 'map'), [
+    'resources',
+    'currentStatus',
+    'qualityOutput',
     'hud',
     'intake',
     'engineSelection',
@@ -49,7 +52,6 @@ test('H1 presentation exposes the frozen homepage contract from a fresh Runtime 
     'standardLane',
     'fallback',
     'resultPersistence',
-    'footer',
     'diagnostics'
   ]);
   assert.deepEqual(presentation.hud, {
@@ -73,7 +75,6 @@ test('H1 presentation exposes the frozen homepage contract from a fresh Runtime 
       activeFlowCount: 2,
       label: 'DeepSeek / v4'
     }],
-    alerts: [{ id: 'OFFLINE:w3', type: 'WORKER_OFFLINE', navigationTarget: null }],
     error: null
   });
   assert.deepEqual(presentation.intake.items.map(item => item.key), [
@@ -99,10 +100,7 @@ test('H1 presentation exposes the frozen homepage contract from a fresh Runtime 
   assert.equal(presentation.fallback.mode, 'STRUCTURAL_ONLY');
   assert.equal(presentation.resultPersistence.mode, 'STRUCTURAL_ONLY');
   assert.equal(presentation.resultPersistence.navigationTarget, '/tasks');
-  assert.deepEqual(presentation.footer.agentCapacity, { running: 2, onlineCapacity: 3 });
-  assert.deepEqual(presentation.footer.standardSlots, { running: 3, capacity: 10 });
-  assert.equal(presentation.footer.oldestAgentQueueSeconds, 91);
-  assert.equal(presentation.footer.alerts.count, 1);
+  assert.equal(presentation.currentStatus.oldestAgentQueueSeconds, 91);
   assert.deepEqual(presentation.diagnostics, []);
   assert.equal(presentation.map.compatibilityMode, 'H1_LEGACY_RENDERER');
 });
@@ -156,11 +154,11 @@ test('stale truncated snapshot keeps zero capacity, empty providers and empty ne
   assert.deepEqual(presentation.hud.providersObserved, []);
   assert.equal(presentation.agentLane.nextQueued, null);
   assert.equal(presentation.standardLane.nextQueued, null);
-  assert.equal(presentation.footer.oldestAgentQueueSeconds, null);
+  assert.equal(presentation.currentStatus.oldestAgentQueueSeconds, null);
 });
 
 
-test('empty and failed resources never synthesize reviews, providers, alerts or metrics', () => {
+test('empty and failed resources never synthesize reviews, providers or quality metrics', () => {
   const empty = buildCommandCenterPresentation();
   const failed = buildCommandCenterPresentation({ runtimeError: 'Runtime 数据加载失败' });
 
@@ -169,9 +167,11 @@ test('empty and failed resources never synthesize reviews, providers, alerts or 
     assert.equal(presentation.hud.totalQueuedJobs, 0);
     assert.equal(presentation.hud.totalRunningJobs, 0);
     assert.deepEqual(presentation.hud.providersObserved, []);
-    assert.deepEqual(presentation.hud.alerts, []);
     assert.deepEqual(presentation.agentLane.runningItems, []);
     assert.deepEqual(presentation.standardLane.runningItems, []);
+    assert.equal(presentation.qualityOutput.reviewTasks.count, null);
+    assert.equal(presentation.qualityOutput.providerExecution.successCount, null);
+    assert.equal(presentation.qualityOutput.findingRisk.findingCount, null);
     assert.equal(presentation.resultPersistence.navigationTarget, '/tasks');
   }
   assert.equal(empty.hud.resourceState, 'EMPTY');
@@ -197,6 +197,171 @@ test('request failure can retain the last successful snapshot without replacing 
   assert.equal(presentation.hud.generatedAt, '2026-08-03T02:00:00Z');
   assert.equal(presentation.hud.totalQueuedJobs, 4);
   assert.equal(presentation.standardLane.running, 1);
+});
+
+
+test('combined presentation keeps current Runtime status and 24-hour quality output separate', () => {
+  const presentation = buildCommandCenterPresentation({
+    runtime: runtime({
+      window: { hours: 24 },
+      intake: { taskCount: 18, activeTaskCount: 3 },
+      scheduler: { queuedJobCount: 4, runningJobCount: 2 },
+      providersObserved: [
+        { providerName: 'OpenAI', modelName: 'gpt-5.5', recentSuccessCount: 8, recentFailureCount: 2 },
+        { providerName: 'DeepSeek', modelName: 'v4', recentSuccessCount: 9, recentFailureCount: 1 }
+      ]
+    }),
+    governance: governance({
+      window: { hours: 24 },
+      findingRisk: {
+        findingCount: 12,
+        affectedTaskCount: 5,
+        highestRisk: 'HIGH',
+        severityCounts: { HIGH: 3, MEDIUM: 9 }
+      }
+    })
+  });
+
+  assert.equal(presentation.resources.runtime.state, 'FRESH');
+  assert.equal(presentation.resources.governance.state, 'FRESH');
+  assert.deepEqual(presentation.currentStatus, {
+    resourceState: 'FRESH',
+    available: true,
+    generatedAt: '2026-08-03T02:00:00Z',
+    queuedExecutionCount: 4,
+    runningExecutionCount: 2,
+    activeReviewTaskCount: 3,
+    oldestAgentQueueSeconds: null,
+    provider: {
+      providerCode: undefined,
+      providerName: 'OpenAI',
+      modelName: 'gpt-5.5',
+      status: undefined,
+      activeFlowCount: 0,
+      label: 'OpenAI / gpt-5.5'
+    }
+  });
+  assert.deepEqual(presentation.qualityOutput.window, {
+    hours: 24,
+    label: '近 24 小时',
+    runtimeHours: 24,
+    governanceHours: 24,
+    aligned: true
+  });
+  assert.equal(presentation.qualityOutput.reviewTasks.count, 18);
+  assert.deepEqual(presentation.qualityOutput.providerExecution, {
+    source: 'runtime',
+    resourceState: 'FRESH',
+    available: true,
+    successCount: 17,
+    failureCount: 3,
+    totalCount: 20,
+    successRate: 85,
+    hasRecords: true
+  });
+  assert.equal(presentation.qualityOutput.findingRisk.findingCount, 12);
+  assert.equal(presentation.qualityOutput.findingRisk.affectedTaskCount, 5);
+  assert.equal(presentation.qualityOutput.findingRisk.highestRisk, 'HIGH');
+});
+
+
+test('current provider prefers active flow, latest observation and enabled default over API order', () => {
+  const latestObserved = buildCommandCenterPresentation({
+    runtime: runtime({
+      providersObserved: [
+        {
+          providerName: 'OpenAI',
+          modelName: 'gpt-5.5',
+          enabled: true,
+          status: 'NO_RECENT_DATA'
+        },
+        {
+          providerName: 'DeepSeek',
+          modelName: 'v4',
+          enabled: true,
+          defaultProvider: true,
+          status: 'RECENT_SUCCESS',
+          lastObservedAt: '2026-08-04T10:03:09Z'
+        }
+      ]
+    })
+  });
+  assert.equal(latestObserved.currentStatus.provider.label, 'DeepSeek / v4');
+
+  const active = buildCommandCenterPresentation({
+    runtime: runtime({
+      providersObserved: [
+        {
+          providerName: 'DeepSeek',
+          modelName: 'v4',
+          enabled: true,
+          defaultProvider: true,
+          lastObservedAt: '2026-08-04T10:03:09Z'
+        },
+        {
+          providerName: 'Anthropic',
+          modelName: 'claude-sonnet-4-5',
+          enabled: true,
+          activeFlowCount: 1
+        }
+      ]
+    })
+  });
+  assert.equal(active.currentStatus.provider.label, 'Anthropic / claude-sonnet-4-5');
+
+  const enabledDefault = buildCommandCenterPresentation({
+    runtime: runtime({
+      providersObserved: [
+        { providerName: 'OpenAI', enabled: true },
+        { providerName: 'DeepSeek', enabled: true, defaultProvider: true }
+      ]
+    })
+  });
+  assert.equal(enabledDefault.currentStatus.provider.label, 'DeepSeek');
+});
+
+
+test('Runtime and Governance failures degrade only their own presentation fields', () => {
+  const runtimeFailed = buildCommandCenterPresentation({
+    runtimeError: 'Runtime HTTP 503',
+    governance: governance({
+      findingRisk: { findingCount: 7, affectedTaskCount: 2, highestRisk: 'CRITICAL' }
+    })
+  });
+  assert.equal(runtimeFailed.resources.runtime.state, 'ERROR_EMPTY');
+  assert.equal(runtimeFailed.resources.governance.state, 'FRESH');
+  assert.equal(runtimeFailed.currentStatus.runningExecutionCount, null);
+  assert.equal(runtimeFailed.qualityOutput.reviewTasks.count, null);
+  assert.equal(runtimeFailed.qualityOutput.providerExecution.successCount, null);
+  assert.equal(runtimeFailed.qualityOutput.findingRisk.findingCount, 7);
+
+  const governanceFailed = buildCommandCenterPresentation({
+    runtime: runtime({ intake: { taskCount: 6, activeTaskCount: 1 } }),
+    governanceError: 'Governance HTTP 503'
+  });
+  assert.equal(governanceFailed.resources.runtime.state, 'FRESH');
+  assert.equal(governanceFailed.resources.governance.state, 'ERROR_EMPTY');
+  assert.equal(governanceFailed.currentStatus.activeReviewTaskCount, 1);
+  assert.equal(governanceFailed.qualityOutput.reviewTasks.count, 6);
+  assert.equal(governanceFailed.qualityOutput.findingRisk.findingCount, null);
+  assert.equal(governanceFailed.qualityOutput.findingRisk.severityCounts, null);
+});
+
+
+test('retained snapshots remain available and expose independent error states', () => {
+  const presentation = buildCommandCenterPresentation({
+    runtime: runtime({ freshness: 'STALE', intake: { taskCount: 4 } }),
+    runtimeError: 'Runtime refresh failed',
+    governance: governance({ freshness: 'STALE', findingRisk: { findingCount: 9 } }),
+    governanceError: 'Governance refresh failed'
+  });
+
+  assert.equal(presentation.resources.runtime.state, 'ERROR_RETAINED');
+  assert.equal(presentation.resources.runtime.retained, true);
+  assert.equal(presentation.resources.governance.state, 'ERROR_RETAINED');
+  assert.equal(presentation.resources.governance.retained, true);
+  assert.equal(presentation.qualityOutput.reviewTasks.count, 4);
+  assert.equal(presentation.qualityOutput.findingRisk.findingCount, 9);
 });
 
 
@@ -268,6 +433,24 @@ function runtime(overrides = {}) {
       standard: lane('standard', 10, 0, 0),
       agent: lane('agent', 0, 0, 0)
     },
+    ...overrides
+  };
+}
+
+
+function governance(overrides = {}) {
+  return {
+    freshness: 'FRESH',
+    generatedAt: '2026-08-03T02:00:00Z',
+    schemaCompatible: true,
+    window: { hours: 24 },
+    findingRisk: {
+      findingCount: 0,
+      affectedTaskCount: 0,
+      highestRisk: null,
+      severityCounts: {}
+    },
+    coverage: { truncated: false },
     ...overrides
   };
 }

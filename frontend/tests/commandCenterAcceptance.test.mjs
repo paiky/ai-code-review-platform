@@ -12,7 +12,7 @@ const NOW = Date.parse('2026-08-04T02:00:10Z');
 const FRESH_AT = '2026-08-04T02:00:00Z';
 
 
-test('H5 data matrix keeps empty lanes, zero capacity and absent observations truthful', () => {
+test('I2 data matrix keeps empty lanes, zero capacity and absent observations truthful', () => {
   const presentation = present({
     reviewLanes: {
       standard: lane('standard', 0, 0, 0),
@@ -34,11 +34,12 @@ test('H5 data matrix keeps empty lanes, zero capacity and absent observations tr
   assert.equal(presentation.standardLane.capacity, 0);
   assert.equal(presentation.standardLane.nextQueued, null);
   assert.deepEqual(presentation.hud.providersObserved, []);
-  assert.deepEqual(presentation.hud.alerts, []);
+  assert.equal(Object.hasOwn(presentation.hud, 'alerts'), false);
+  assert.equal(presentation.qualityOutput.providerExecution.hasRecords, false);
 });
 
 
-test('H5 data matrix preserves a Standard-only workload, multiple providers and bounded running items', () => {
+test('I2 data matrix preserves a Standard-only workload, multiple providers and bounded running items', () => {
   const presentation = present({
     scheduler: { activeJobCount: 7, queuedJobCount: 4, runningJobCount: 3 },
     reviewLanes: {
@@ -87,7 +88,7 @@ test('H5 data matrix preserves a Standard-only workload, multiple providers and 
 });
 
 
-test('H5 data matrix preserves online, busy, draining and offline Agent worker states', () => {
+test('I2 data matrix preserves online, busy, draining and offline Agent worker states', () => {
   const runtime = normalize({
     reviewLanes: {
       standard: lane('standard', 10, 0, 0),
@@ -138,7 +139,7 @@ test('H5 data matrix preserves online, busy, draining and offline Agent worker s
 });
 
 
-test('H5 resource matrix distinguishes fresh, stale, empty and both error modes', () => {
+test('I2 resource matrix distinguishes fresh, stale, empty and both error modes', () => {
   const fresh = present();
   const staleRuntime = normalize({ generatedAt: '2026-08-04T01:59:00Z' });
   const stale = buildCommandCenterPresentation({ runtime: staleRuntime });
@@ -161,11 +162,11 @@ test('H5 resource matrix distinguishes fresh, stale, empty and both error modes'
     runtimeError: 'HTTP 503'
   });
 
-  assert.equal(fresh.hud.resourceState, 'FRESH');
-  assert.equal(stale.hud.resourceState, 'STALE');
-  assert.equal(empty.hud.resourceState, 'EMPTY');
-  assert.equal(errorEmpty.hud.resourceState, 'ERROR_EMPTY');
-  assert.equal(errorRetained.hud.resourceState, 'ERROR_RETAINED');
+  assert.equal(fresh.resources.runtime.state, 'FRESH');
+  assert.equal(stale.resources.runtime.state, 'STALE');
+  assert.equal(empty.resources.runtime.state, 'EMPTY');
+  assert.equal(errorEmpty.resources.runtime.state, 'ERROR_EMPTY');
+  assert.equal(errorRetained.resources.runtime.state, 'ERROR_RETAINED');
   assert.equal(errorRetained.hud.generatedAt, new Date(FRESH_AT).toISOString());
   assert.equal(empty.hud.totalRunningJobs, 0);
   assert.deepEqual(empty.hud.providersObserved, []);

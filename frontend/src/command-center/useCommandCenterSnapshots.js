@@ -1,30 +1,47 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createVisibilityRefreshLifecycle } from '../visibilityRefreshLifecycle.js';
 import {
+  GOVERNANCE_STALE_MS,
+  normalizeGovernanceSnapshot,
   normalizeRuntimeSnapshot,
-  RUNTIME_STALE_MS,
-  snapshotFreshness
+  RUNTIME_STALE_MS
 } from './commandCenterModel.js';
-import { loadRuntimeSnapshot } from './commandCenterApi.js';
+import { loadGovernanceSnapshot, loadRuntimeSnapshot } from './commandCenterApi.js';
+import {
+  createSnapshotResourceState,
+  reduceSnapshotResourceState
+} from './commandCenterResourceState.js';
 
 
-const RUNTIME_INTERVAL_MS = 5_000;
-const INITIAL_RESOURCE = {
-  data: null,
-  loading: true,
-  error: '',
-  updatedAt: null
-};
-
+export const RUNTIME_INTERVAL_MS = 5_000;
+export const GOVERNANCE_INTERVAL_MS = 60_000;
 export const COMMAND_CENTER_POLLING_DIAGNOSTICS_KEY = '__commandCenterPollingDiagnostics';
 
+const RESOURCE_CONFIGS = Object.freeze({
+  runtime: {
+    intervalMs: RUNTIME_INTERVAL_MS,
+    staleAfterMs: RUNTIME_STALE_MS,
+    load: loadRuntimeSnapshot,
+    normalize: normalizeRuntimeSnapshot,
+    fallbackError: 'Runtime 数据加载失败'
+  },
+  governance: {
+    intervalMs: GOVERNANCE_INTERVAL_MS,
+    staleAfterMs: GOVERNANCE_STALE_MS,
+    load: loadGovernanceSnapshot,
+    normalize: normalizeGovernanceSnapshot,
+    fallbackError: '质量统计加载失败'
+  }
+});
+const RESOURCE_KEYS = Object.freeze(Object.keys(RESOURCE_CONFIGS));
 
-export function useCommandCenterRuntimeSnapshot() {
-  const [runtimeState, setRuntimeState] = useState(INITIAL_RESOURCE);
-  const requestRef = useRef(null);
-  const timerRef = useRef(null);
-  const sequenceRef = useRef(0);
+
+export function useCommandCenterSnapshots() {
+  const [resources, setResources] = useState(createInitialResources);
+  const requestRef = useRef(createKeyedValue(null));
+  const timerRef = useRef(createKeyedValue(null));
+  const sequenceRef = useRef(createKeyedValue(0));
   const lifecycleRef = useRef(null);
   const mountedRef = useRef(false);
   const diagnosticsRef = useRef(createPollingDiagnostics());
@@ -34,7 +51,7 @@ export function useCommandCenterRuntimeSnapshot() {
     if (!root) return;
     const snapshot = readPollingDiagnostics({
       diagnostics: diagnosticsRef.current,
-      timer: timerRef.current,
+      timers: timerRef.current,
       lifecycle: lifecycleRef.current
     });
     const attributes = {
@@ -42,6 +59,10 @@ export function useCommandCenterRuntimeSnapshot() {
       'data-command-center-runtime-completed': snapshot.runtime.completed,
       'data-command-center-runtime-aborted': snapshot.runtime.aborted,
       'data-command-center-runtime-deduplicated': snapshot.runtime.deduplicated,
+      'data-command-center-governance-started': snapshot.governance.started,
+      'data-command-center-governance-completed': snapshot.governance.completed,
+      'data-command-center-governance-aborted': snapshot.governance.aborted,
+      'data-command-center-governance-deduplicated': snapshot.governance.deduplicated,
       'data-command-center-active-timers': snapshot.activeTimerCount,
       'data-command-center-polling-listeners': snapshot.lifecycle?.listenerRegistrationCount ?? 0,
       'data-command-center-suppressed-focus': snapshot.lifecycle?.suppressedFocusCount ?? 0
@@ -51,58 +72,61 @@ export function useCommandCenterRuntimeSnapshot() {
     }
   }, []);
 
-  const clearTimer = useCallback(() => {
-    if (timerRef.current === null) return;
-    window.clearTimeout(timerRef.current);
-    timerRef.current = null;
+  const clearResourceTimer = useCallback((resourceKey) => {
+    const timer = timerRef.current[resourceKey];
+    if (timer === null) return;
+    window.clearTimeout(timer);
+    timerRef.current[resourceKey] = null;
     syncDiagnosticAttributes();
   }, [syncDiagnosticAttributes]);
 
-  const abortRequest = useCallback(() => {
-    const request = requestRef.current;
+  const abortResourceRequest = useCallback((resourceKey) => {
+    const request = requestRef.current[resourceKey];
     if (!request) return;
-    requestRef.current = null;
+    requestRef.current[resourceKey] = null;
     request.controller.abort();
-    diagnosticsRef.current.aborted += 1;
-    diagnosticsRef.current.active = 0;
+    diagnosticsRef.current[resourceKey].aborted += 1;
+    diagnosticsRef.current[resourceKey].active = 0;
     syncDiagnosticAttributes();
   }, [syncDiagnosticAttributes]);
 
-  const loadRuntime = useCallback(() => {
-    clearTimer();
+  const loadResource = useCallback((resourceKey) => {
+    const config = RESOURCE_CONFIGS[resourceKey];
+    if (!config) return Promise.resolve(null);
+    clearResourceTimer(resourceKey);
     if (!mountedRef.current || isDocumentHidden()) return Promise.resolve(null);
-    const existing = requestRef.current;
+
+    const existing = requestRef.current[resourceKey];
     if (existing) {
-      diagnosticsRef.current.deduplicated += 1;
+      diagnosticsRef.current[resourceKey].deduplicated += 1;
       syncDiagnosticAttributes();
       return existing.promise;
     }
 
     const controller = new AbortController();
-    const sequence = sequenceRef.current + 1;
+    const sequence = sequenceRef.current[resourceKey] + 1;
     const request = { controller, promise: null, sequence };
-    sequenceRef.current = sequence;
-    requestRef.current = request;
-    diagnosticsRef.current.started += 1;
-    diagnosticsRef.current.active = 1;
+    sequenceRef.current[resourceKey] = sequence;
+    requestRef.current[resourceKey] = request;
+    diagnosticsRef.current[resourceKey].started += 1;
+    diagnosticsRef.current[resourceKey].active = 1;
     syncDiagnosticAttributes();
-    setRuntimeState(current => ({ ...current, loading: true, error: '' }));
+    updateResource(setResources, resourceKey, { type: 'LOAD_STARTED' });
 
     request.promise = (async () => {
       try {
-        const raw = await loadRuntimeSnapshot({ signal: controller.signal });
+        const raw = await config.load({ signal: controller.signal });
         if (
           !mountedRef.current
           || controller.signal.aborted
-          || sequence !== sequenceRef.current
+          || sequence !== sequenceRef.current[resourceKey]
         ) return null;
-        const data = normalizeRuntimeSnapshot(raw);
-        diagnosticsRef.current.completed += 1;
+        const data = config.normalize(raw);
+        diagnosticsRef.current[resourceKey].completed += 1;
         syncDiagnosticAttributes();
-        setRuntimeState({
+        updateResource(setResources, resourceKey, {
+          type: 'LOAD_SUCCEEDED',
           data,
-          loading: false,
-          error: '',
           updatedAt: new Date().toISOString()
         });
         return data;
@@ -110,52 +134,52 @@ export function useCommandCenterRuntimeSnapshot() {
         if (
           controller.signal.aborted
           || !mountedRef.current
-          || sequence !== sequenceRef.current
+          || sequence !== sequenceRef.current[resourceKey]
         ) return null;
-        diagnosticsRef.current.failed += 1;
+        diagnosticsRef.current[resourceKey].failed += 1;
         syncDiagnosticAttributes();
-        setRuntimeState(current => ({
-          ...current,
-          data: current.data
-            ? {
-                ...current.data,
-                freshness: snapshotFreshness(
-                  current.data.generatedAt,
-                  RUNTIME_STALE_MS
-                )
-              }
-            : null,
-          loading: false,
-          error: error instanceof Error
-            ? error.message
-            : 'Runtime 数据加载失败'
-        }));
+        updateResource(setResources, resourceKey, {
+          type: 'LOAD_FAILED',
+          error,
+          staleAfterMs: config.staleAfterMs,
+          fallbackError: config.fallbackError
+        });
         return null;
       } finally {
-        if (requestRef.current === request) {
-          requestRef.current = null;
-          diagnosticsRef.current.active = 0;
+        if (requestRef.current[resourceKey] === request) {
+          requestRef.current[resourceKey] = null;
+          diagnosticsRef.current[resourceKey].active = 0;
           if (
             mountedRef.current
             && !isDocumentHidden()
-            && sequence === sequenceRef.current
+            && sequence === sequenceRef.current[resourceKey]
           ) {
-            timerRef.current = window.setTimeout(loadRuntime, RUNTIME_INTERVAL_MS);
+            timerRef.current[resourceKey] = window.setTimeout(
+              () => loadResource(resourceKey),
+              config.intervalMs
+            );
           }
           syncDiagnosticAttributes();
         }
       }
     })();
     return request.promise;
-  }, [clearTimer, syncDiagnosticAttributes]);
+  }, [clearResourceTimer, syncDiagnosticAttributes]);
 
-  const reload = useCallback(() => loadRuntime(), [loadRuntime]);
+  const reload = useCallback(
+    () => Promise.all(RESOURCE_KEYS.map(resourceKey => loadResource(resourceKey))),
+    [loadResource]
+  );
+  const reloadRuntime = useCallback(() => loadResource('runtime'), [loadResource]);
+  const reloadGovernance = useCallback(() => loadResource('governance'), [loadResource]);
 
   useEffect(() => {
     mountedRef.current = true;
     const pause = () => {
-      clearTimer();
-      abortRequest();
+      for (const resourceKey of RESOURCE_KEYS) {
+        clearResourceTimer(resourceKey);
+        abortResourceRequest(resourceKey);
+      }
     };
     const lifecycle = createVisibilityRefreshLifecycle({
       onPause: pause,
@@ -164,7 +188,7 @@ export function useCommandCenterRuntimeSnapshot() {
     lifecycleRef.current = lifecycle;
     const diagnosticsReader = () => readPollingDiagnostics({
       diagnostics: diagnosticsRef.current,
-      timer: timerRef.current,
+      timers: timerRef.current,
       lifecycle: lifecycleRef.current
     });
     attachPollingDiagnostics(diagnosticsReader);
@@ -178,26 +202,59 @@ export function useCommandCenterRuntimeSnapshot() {
       pause();
       detachPollingDiagnostics(diagnosticsReader);
     };
-  }, [abortRequest, clearTimer, reload, syncDiagnosticAttributes]);
+  }, [abortResourceRequest, clearResourceTimer, reload, syncDiagnosticAttributes]);
 
-  return {
-    runtime: runtimeState.data,
-    runtimeLoading: runtimeState.loading,
-    runtimeError: runtimeState.error,
-    reload
-  };
+  return useMemo(() => ({
+    runtime: resources.runtime.data,
+    runtimeLoading: resources.runtime.loading,
+    runtimeError: resources.runtime.error,
+    governance: resources.governance.data,
+    governanceLoading: resources.governance.loading,
+    governanceError: resources.governance.error,
+    reload,
+    reloadRuntime,
+    reloadGovernance
+  }), [reload, reloadGovernance, reloadRuntime, resources]);
 }
 
 
-function createPollingDiagnostics() {
+function createInitialResources() {
+  return Object.fromEntries(
+    RESOURCE_KEYS.map(resourceKey => [resourceKey, createSnapshotResourceState()])
+  );
+}
+
+
+function createKeyedValue(value) {
+  return Object.fromEntries(RESOURCE_KEYS.map(resourceKey => [resourceKey, value]));
+}
+
+
+function updateResource(setResources, resourceKey, event) {
+  setResources(current => ({
+    ...current,
+    [resourceKey]: reduceSnapshotResourceState(current[resourceKey], event)
+  }));
+}
+
+
+function createResourceDiagnostics() {
   return { started: 0, completed: 0, failed: 0, aborted: 0, deduplicated: 0, active: 0 };
 }
 
 
-function readPollingDiagnostics({ diagnostics, timer, lifecycle }) {
+function createPollingDiagnostics() {
+  return Object.fromEntries(
+    RESOURCE_KEYS.map(resourceKey => [resourceKey, createResourceDiagnostics()])
+  );
+}
+
+
+function readPollingDiagnostics({ diagnostics, timers, lifecycle }) {
   return {
-    runtime: { ...diagnostics },
-    activeTimerCount: Number(timer !== null),
+    runtime: { ...diagnostics.runtime },
+    governance: { ...diagnostics.governance },
+    activeTimerCount: RESOURCE_KEYS.filter(resourceKey => timers[resourceKey] !== null).length,
     lifecycle: lifecycle?.getSnapshot?.() || null
   };
 }

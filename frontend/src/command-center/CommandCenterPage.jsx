@@ -6,7 +6,7 @@ import CommandCenterCanvas from './CommandCenterCanvas.jsx';
 import { restoreCommandCenterFocus } from './commandCenterInteractions.js';
 import { buildCommandCenterPresentation } from './commandCenterPresentation.js';
 import { commandCenterMotionState } from './commandCenterVisual.js';
-import { useCommandCenterRuntimeSnapshot } from './useCommandCenterSnapshots.js';
+import { useCommandCenterSnapshots } from './useCommandCenterSnapshots.js';
 import './commandCenter.css';
 
 
@@ -15,10 +15,34 @@ export default function CommandCenterPage() {
   const [overflowZoneKey, setOverflowZoneKey] = useState(null);
   const overflowTriggerRef = useRef(null);
   const pageRef = useRef(null);
-  const { runtime, runtimeLoading, runtimeError } = useCommandCenterRuntimeSnapshot();
+  const {
+    runtime,
+    runtimeLoading,
+    runtimeError,
+    governance,
+    governanceLoading,
+    governanceError,
+    reload,
+    reloadRuntime,
+    reloadGovernance
+  } = useCommandCenterSnapshots();
   const presentation = useMemo(
-    () => buildCommandCenterPresentation({ runtime, runtimeError }),
-    [runtime, runtimeError]
+    () => buildCommandCenterPresentation({
+      runtime,
+      runtimeLoading,
+      runtimeError,
+      governance,
+      governanceLoading,
+      governanceError
+    }),
+    [
+      governance,
+      governanceError,
+      governanceLoading,
+      runtime,
+      runtimeError,
+      runtimeLoading
+    ]
   );
   const motionState = commandCenterMotionState(presentation, runtimeLoading);
   const overflowLane = [presentation.agentLane, presentation.standardLane]
@@ -44,20 +68,22 @@ export default function CommandCenterPage() {
       ref={pageRef}
       className="command-center-page"
       tabIndex={-1}
-      data-command-center-phase="HOMEPAGE_VNEXT_H5"
-      data-command-center-resource-state={presentation.hud.resourceState}
+      data-command-center-phase="INFORMATION_ARCHITECTURE_I2"
+      data-command-center-resource-state={presentation.resources.runtime.state}
+      data-command-center-governance-state={presentation.resources.governance.state}
       data-command-center-motion={motionState}
     >
       <section className="command-center-shell" aria-label="AI Review 指挥中心">
         <RuntimeHud
           presentation={presentation}
           loading={runtimeLoading}
-          onNavigate={navigateTo}
         />
 
-        <RuntimeNotice
+        <CommandCenterNotice
           presentation={presentation}
           loading={runtimeLoading}
+          onRetryAll={reload}
+          onRetryRuntime={reloadRuntime}
         />
 
         <CommandCenterCanvas
@@ -68,10 +94,13 @@ export default function CommandCenterPage() {
           onOpenResult={navigateTo}
         />
 
-        <RuntimeFooter presentation={presentation} />
+        <QualityOutput
+          presentation={presentation}
+          onRetryGovernance={reloadGovernance}
+        />
 
         <p className="command-center-scope-note">
-          当前页面展示 Runtime 实时有界快照；运行项与告警列表可能受接口上限影响。
+          顶部与执行拓扑展示 Runtime 当前状态；下方展示近 24 小时 Runtime / Governance 质量产出，资源异常或部分截断时会在对应区域提示。
         </p>
       </section>
 
@@ -97,90 +126,78 @@ export default function CommandCenterPage() {
 }
 
 
-function RuntimeHud({ presentation, loading, onNavigate }) {
-  const { hud, agentLane, standardLane } = presentation;
-  const provider = hud.providersObserved[0];
-  const alert = hud.alerts.find(item => item.navigationTarget) || hud.alerts[0];
-  const coverageDetail = hud.coverage.truncated
-    ? '有界快照 · 部分截断'
-    : '有界快照';
+function RuntimeHud({ presentation, loading }) {
+  const { currentStatus, agentLane, standardLane, resources } = presentation;
+  const provider = currentStatus.provider;
+  const queuedDetail = [
+    `Agent ${agentLane.queued}`,
+    `Standard ${standardLane.queued}`,
+    currentStatus.oldestAgentQueueSeconds === null
+      ? null
+      : `Agent 最长等待 ${formatDuration(currentStatus.oldestAgentQueueSeconds)}`
+  ].filter(Boolean).join(' · ');
 
   return (
     <section className="command-center-hud" aria-label="Runtime 当前摘要">
       <HudMetric
         icon="◷"
         label="Runtime 更新时间"
-        value={formatSnapshotTime(hud.generatedAt)}
-        detail={loading && !hud.generatedAt ? '正在获取首轮快照' : freshnessLabel(hud.resourceState)}
+        value={formatSnapshotTime(currentStatus.generatedAt)}
+        detail={loading && !currentStatus.generatedAt
+          ? '正在获取首轮快照'
+          : freshnessLabel(resources.runtime.state)}
         token="runtime"
       />
       <HudMetric
         icon="▤"
-        label="排队任务总数"
-        value={hud.totalQueuedJobs}
-        detail={`Agent ${agentLane.queued} · Standard ${standardLane.queued}`}
+        label="排队执行数"
+        value={displayMetric(currentStatus.queuedExecutionCount)}
+        detail={currentStatus.available ? queuedDetail : runtimeUnavailableLabel(resources.runtime)}
         token="queued"
       />
       <HudMetric
         icon="▷"
-        label="运行任务总数"
-        value={hud.totalRunningJobs}
-        detail={`Agent ${agentLane.running} · Standard ${standardLane.running}`}
+        label="运行执行数"
+        value={displayMetric(currentStatus.runningExecutionCount)}
+        detail={currentStatus.available
+          ? `Agent ${agentLane.running} · Standard ${standardLane.running}`
+          : runtimeUnavailableLabel(resources.runtime)}
         token="running"
       />
       <HudMetric
-        icon="◇"
-        label="快照覆盖范围"
-        value={coverageLabel(hud.coverage)}
-        detail={coverageDetail}
-        token={hud.coverage.truncated ? 'warning' : 'coverage'}
+        icon="◎"
+        label="进行中审查任务"
+        value={displayMetric(currentStatus.activeReviewTaskCount)}
+        detail={currentStatus.available ? 'ReviewTask · 运行或审查中' : runtimeUnavailableLabel(resources.runtime)}
+        token="active"
       />
       <HudMetric
         icon="⬡"
-        label="已观测 Provider / Model"
-        value={provider?.label || '暂无活跃 Provider'}
-        detail={hud.providersObserved.length > 1 ? `另外 ${hud.providersObserved.length - 1} 个` : '当前活动流程观测'}
+        label="当前 Provider / Model"
+        value={currentStatus.available ? provider?.label || '暂无可观测 Provider' : '—'}
+        detail={currentStatus.available
+          ? presentation.hud.providersObserved.length > 1
+            ? `另外 ${presentation.hud.providersObserved.length - 1} 个可观测项`
+            : provider ? '当前或最近可观测' : '等待 Provider 执行记录'
+          : runtimeUnavailableLabel(resources.runtime)}
         token="provider"
-      />
-      <HudMetric
-        icon="△"
-        label="Runtime 告警"
-        value={`${hud.alerts.length} 条告警`}
-        detail={alert ? alertLabel(alert) : '当前无 Runtime 告警'}
-        token={hud.alerts.length > 0 ? 'alert' : 'neutral'}
-        actionLabel={alert?.navigationTarget ? `打开 ${alertLabel(alert)}` : null}
-        onAction={alert?.navigationTarget ? () => onNavigate(alert.navigationTarget) : null}
       />
     </section>
   );
 }
 
 
-function HudMetric({ icon, label, value, detail, token, actionLabel, onAction }) {
-  const content = (
-    <>
+function HudMetric({ icon, label, value, detail, token }) {
+  return (
+    <article className={`command-center-hud-card is-${token}`}>
       <span className="command-center-hud-icon" aria-hidden="true">{icon}</span>
       <span className="command-center-hud-copy">
         <small>{label}</small>
         <strong>{value}</strong>
         <em>{detail}</em>
       </span>
-    </>
+    </article>
   );
-  if (onAction) {
-    return (
-      <button
-        type="button"
-        className={`command-center-hud-card is-${token} is-actionable`}
-        data-command-center-action="open-alert"
-        aria-label={actionLabel}
-        onClick={onAction}
-      >
-        {content}
-      </button>
-    );
-  }
-  return <article className={`command-center-hud-card is-${token}`}>{content}</article>;
 }
 
 
@@ -230,33 +247,46 @@ function RunningItemsModal({ lane, onOpenReview }) {
 }
 
 
-function RuntimeNotice({ presentation, loading }) {
-  const { hud, diagnostics } = presentation;
-  if (hud.resourceState === 'ERROR_RETAINED') {
+function CommandCenterNotice({ presentation, loading, onRetryAll, onRetryRuntime }) {
+  const { hud, diagnostics, resources } = presentation;
+  const runtime = resources.runtime;
+  const governance = resources.governance;
+  if (runtime.state === 'ERROR_EMPTY' && governance.state === 'ERROR_EMPTY') {
+    return (
+      <div className="command-center-notice is-error" role="alert">
+        <strong>指挥中心数据暂时无法获取。</strong>
+        <span>Runtime 与近 24 小时质量统计均加载失败。</span>
+        <NoticeRetry onRetry={onRetryAll} label="重新加载" />
+      </div>
+    );
+  }
+  if (runtime.state === 'ERROR_RETAINED') {
     return (
       <div className="command-center-notice is-error" role="alert">
         <strong>Runtime 刷新失败，已保留最后一次成功快照。</strong>
-        <span>{hud.error}</span>
+        <span>{runtime.error}</span>
+        <NoticeRetry onRetry={onRetryRuntime} label="重试 Runtime" />
       </div>
     );
   }
-  if (hud.resourceState === 'ERROR_EMPTY') {
+  if (runtime.state === 'ERROR_EMPTY') {
     return (
       <div className="command-center-notice is-error" role="alert">
         <strong>Runtime 快照暂不可用。</strong>
-        <span>{hud.error}</span>
+        <span>{runtime.error}</span>
+        <NoticeRetry onRetry={onRetryRuntime} label="重试 Runtime" />
       </div>
     );
   }
-  if (hud.freshness === 'STALE') {
+  if (runtime.freshness === 'STALE') {
     return (
       <div className="command-center-notice is-stale" role="status">
         <strong>Runtime 已过期。</strong>
-        <span>页面保留最近快照，当前数据可能不是最新状态。</span>
+        <span>当前数据可能已过期，上次更新于 {formatSnapshotTime(runtime.generatedAt)}。</span>
       </div>
     );
   }
-  if (hud.freshness === 'EMPTY' && !loading) {
+  if (runtime.freshness === 'EMPTY' && !loading) {
     return (
       <div className="command-center-notice" role="status">
         <strong>等待 Runtime 快照。</strong>
@@ -268,7 +298,7 @@ function RuntimeNotice({ presentation, loading }) {
     return (
       <div className="command-center-notice is-bounded" role="status">
         <strong>{hud.coverage.truncated ? 'Runtime 快照部分截断。' : 'Runtime 聚合需要对账。'}</strong>
-        <span>{diagnostics.length > 0 ? '调度器总数与执行轨分布存在差异，页面分别保留真实字段。' : '运行项与告警为有界结果。'}</span>
+        <span>{diagnostics.length > 0 ? '调度器总数与执行轨分布存在差异，页面分别保留真实字段。' : '运行项为有界结果。'}</span>
       </div>
     );
   }
@@ -276,57 +306,142 @@ function RuntimeNotice({ presentation, loading }) {
 }
 
 
-function RuntimeFooter({ presentation }) {
-  const { footer } = presentation;
+function QualityOutput({ presentation, onRetryGovernance }) {
+  const { qualityOutput, resources } = presentation;
+  const { reviewTasks, providerExecution, findingRisk, window } = qualityOutput;
+  const bothUnavailable = resources.runtime.state === 'ERROR_EMPTY'
+    && resources.governance.state === 'ERROR_EMPTY';
   return (
-    <section className="command-center-footer" aria-label="Runtime 当前状态">
-      <FooterMetric
-        icon="◎"
-        label="Agent 容量"
-        value={`${footer.agentCapacity.running} / ${footer.agentCapacity.onlineCapacity || '—'}`}
-        detail="运行中 / 在线容量"
-        ratio={safeRatio(footer.agentCapacity.running, footer.agentCapacity.onlineCapacity)}
-        token="agent"
-      />
-      <FooterMetric
-        icon="▥"
-        label="Standard Provider 槽位"
-        value={`${footer.standardSlots.running} / ${footer.standardSlots.capacity || '—'}`}
-        detail="运行中 / 总容量"
-        ratio={safeRatio(footer.standardSlots.running, footer.standardSlots.capacity)}
-        token="standard"
-      />
-      <FooterMetric
-        icon="◷"
-        label="Agent 最长排队等待"
-        value={formatDuration(footer.oldestAgentQueueSeconds)}
-        detail={footer.oldestAgentQueueSeconds === null ? '当前无可观测等待时长' : '当前最久排队'}
-        token="wait"
-      />
-      <FooterMetric
-        icon="△"
-        label="Runtime 告警"
-        value={footer.alerts.count}
-        detail={footer.alerts.count > 0 ? alertLabel(footer.alerts.items[0]) : '当前无告警'}
-        token={footer.alerts.count > 0 ? 'alert' : 'neutral'}
-      />
+    <section
+      className="command-center-quality"
+      aria-label={`${window.label}质量产出`}
+      data-command-center-runtime-state={resources.runtime.state}
+      data-command-center-governance-state={resources.governance.state}
+    >
+      {!bothUnavailable && (
+        <QualityResourceNotice
+          resource={resources.governance}
+          onRetry={onRetryGovernance}
+        />
+      )}
+      <div className="command-center-quality-grid">
+        <QualityMetric
+          icon="▤"
+          label={`${window.label}审查任务`}
+          value={displayMetric(reviewTasks.count)}
+          detail={qualityMetricDetail(
+            resources.runtime,
+            reviewTasks.count === 0 ? `${window.label}暂无记录` : 'ReviewTask 创建数'
+          )}
+          token="review"
+          source="runtime"
+        />
+        <QualityMetric
+          icon="◉"
+          label="Provider 执行结果"
+          value={providerExecution.available
+            ? providerExecution.hasRecords
+              ? `成功 ${providerExecution.successCount} / 失败 ${providerExecution.failureCount}`
+              : '暂无执行记录'
+            : '—'}
+          detail={qualityMetricDetail(
+            resources.runtime,
+            providerExecution.hasRecords
+              ? `成功率 ${formatPercent(providerExecution.successRate)}`
+              : window.label
+          )}
+          token="provider-result"
+          source="runtime"
+        />
+        <QualityMetric
+          icon="◇"
+          label="发现问题数"
+          value={displayMetric(findingRisk.findingCount)}
+          detail={qualityMetricDetail(
+            resources.governance,
+            findingRisk.findingCount === 0 ? `${window.label}暂无记录` : 'Finding 总数'
+          )}
+          token="finding"
+          source="governance"
+        />
+        <QualityMetric
+          icon="△"
+          label="受影响任务"
+          value={displayMetric(findingRisk.affectedTaskCount)}
+          detail={qualityMetricDetail(
+            resources.governance,
+            findingRisk.affectedTaskCount === 0
+              ? `${window.label}暂无记录`
+              : `最高风险：${riskLabel(findingRisk.highestRisk)}`
+          )}
+          token="risk"
+          source="governance"
+        />
+      </div>
     </section>
   );
 }
 
 
-function FooterMetric({ icon, label, value, detail, ratio, token }) {
+function QualityResourceNotice({ resource, onRetry }) {
+  if (resource.state === 'ERROR_RETAINED') {
+    return (
+      <div className="command-center-quality-notice is-error" role="alert">
+        <span>质量统计刷新失败，已保留上次数据 · {formatSnapshotMinute(resource.generatedAt)}</span>
+        <NoticeRetry onRetry={onRetry} label="重试质量统计" />
+      </div>
+    );
+  }
+  if (resource.state === 'ERROR_EMPTY') {
+    return (
+      <div className="command-center-quality-notice is-error" role="alert">
+        <span>质量统计暂时无法获取。</span>
+        <NoticeRetry onRetry={onRetry} label="重试质量统计" />
+      </div>
+    );
+  }
+  if (resource.freshness === 'STALE') {
+    return (
+      <div className="command-center-quality-notice is-stale" role="status">
+        质量统计可能已过期，上次更新于 {formatSnapshotTime(resource.generatedAt)}。
+      </div>
+    );
+  }
+  if (resource.truncated) {
+    return (
+      <div className="command-center-quality-notice is-stale" role="status">
+        部分质量统计已截断，当前指标可能不完整。
+      </div>
+    );
+  }
+  return null;
+}
+
+
+function NoticeRetry({ onRetry, label }) {
+  if (typeof onRetry !== 'function') return null;
   return (
-    <article className={`command-center-footer-card is-${token}`}>
-      <span className="command-center-footer-icon" aria-hidden="true">{icon}</span>
+    <button
+      type="button"
+      className="command-center-notice-action"
+      onClick={onRetry}
+    >
+      {label}
+    </button>
+  );
+}
+
+
+function QualityMetric({ icon, label, value, detail, token, source }) {
+  return (
+    <article
+      className={`command-center-quality-card is-${token}`}
+      data-command-center-source={source}
+    >
+      <span className="command-center-quality-icon" aria-hidden="true">{icon}</span>
       <span>
         <small>{label}</small>
         <strong>{value}</strong>
-        {typeof ratio === 'number' && (
-          <i className="command-center-meter" aria-hidden="true">
-            <b style={{ width: `${ratio}%` }} />
-          </i>
-        )}
         <em>{detail}</em>
       </span>
     </article>
@@ -345,12 +460,6 @@ function freshnessLabel(value) {
 }
 
 
-function coverageLabel(coverage) {
-  if (coverage.status === 'EMPTY') return '等待快照';
-  return coverage.truncated ? '部分截断' : '未截断';
-}
-
-
 function formatSnapshotTime(value) {
   if (!value) return '—';
   const date = new Date(value);
@@ -359,6 +468,18 @@ function formatSnapshotTime(value) {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
+    hour12: false
+  }).format(date);
+}
+
+
+function formatSnapshotMinute(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
     hour12: false
   }).format(date);
 }
@@ -373,21 +494,48 @@ function formatDuration(value) {
 }
 
 
-function safeRatio(value, capacity) {
-  if (!capacity) return null;
-  return Math.min(100, Math.round((value / capacity) * 100));
+function displayMetric(value) {
+  return value === null || value === undefined ? '—' : value;
 }
 
 
-function alertLabel(alert) {
-  const typeLabel = {
-    JOB_FAILED: '任务失败',
-    AGENT_RUN_FAILED: 'Agent 执行失败',
-    NOTIFICATION_FAILED: '通知失败',
-    FALLBACK: '发生降级',
-    CRITICAL_FINDING: '发现严重问题',
-    WORKER_OFFLINE: '执行器离线',
-    WORKER_DRAINING: '执行器退出中'
-  }[alert?.type] || '其他告警';
-  return [alert?.projectName, typeLabel].filter(Boolean).join(' · ') || 'Runtime 告警';
+function runtimeUnavailableLabel(resource) {
+  if (resource.loading) return '正在获取 Runtime';
+  if (resource.state === 'ERROR_EMPTY') return 'Runtime 暂时无法获取';
+  return '等待 Runtime 快照';
+}
+
+
+function qualityMetricDetail(resource, normalDetail) {
+  if (!resource.available) {
+    if (resource.loading) return '正在获取数据';
+    if (resource.state === 'ERROR_EMPTY') return '暂时无法获取';
+    return '等待快照';
+  }
+  if (resource.state === 'ERROR_RETAINED') {
+    return `${normalDetail} · 上次数据 ${formatSnapshotMinute(resource.generatedAt)}`;
+  }
+  if (resource.freshness === 'STALE') {
+    return `${normalDetail} · 数据可能已过期`;
+  }
+  return normalDetail;
+}
+
+
+function formatPercent(value) {
+  if (value === null || value === undefined) return '—';
+  return `${Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 1 })}%`;
+}
+
+
+function riskLabel(value) {
+  return {
+    CRITICAL: '严重',
+    HIGH: '高',
+    MAJOR: '高',
+    MEDIUM: '中',
+    MINOR: '中',
+    LOW: '低',
+    INFO: '提示'
+  }[String(value || '').toUpperCase()] || '暂无';
 }

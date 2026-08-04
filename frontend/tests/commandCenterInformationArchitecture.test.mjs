@@ -36,22 +36,29 @@ test('root route renders Command Center while preserving legacy taskId redirect'
 });
 
 
-test('H5 accepted page preserves six Runtime HUD metrics and four current-state footer metrics', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="HOMEPAGE_VNEXT_H5"'), true);
+test('I2 page exposes five current Runtime metrics and four 24-hour quality metrics', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="INFORMATION_ARCHITECTURE_I2"'), true);
   assert.equal(pageSource.includes('AI Review 指挥中心'), true);
-  assert.equal((pageSource.match(/<HudMetric/g) || []).length, 6);
-  assert.equal((pageSource.match(/<FooterMetric/g) || []).length, 4);
+  assert.equal((pageSource.match(/<HudMetric/g) || []).length, 5);
+  assert.equal((pageSource.match(/<QualityMetric/g) || []).length, 4);
   for (const label of [
     'Runtime 更新时间',
-    '排队任务总数',
-    '运行任务总数',
-    '快照覆盖范围',
-    '已观测 Provider / Model',
-    'Runtime 告警',
-    'Agent 容量',
-    'Standard Provider 槽位',
-    'Agent 最长排队等待'
+    '排队执行数',
+    '运行执行数',
+    '进行中审查任务',
+    '当前 Provider / Model',
+    '审查任务',
+    'Provider 执行结果',
+    '发现问题数',
+    '受影响任务'
   ]) assert.equal(pageSource.includes(label), true, label);
+  for (const removed of [
+    'label="快照覆盖范围"',
+    'label="Runtime 告警"',
+    'label="Agent 容量"',
+    'label="Standard Provider 槽位"',
+    'label="Agent 最长排队等待"'
+  ]) assert.equal(pageSource.includes(removed), false, removed);
 });
 
 
@@ -85,14 +92,14 @@ test('all semantic content is DOM-owned while enhanced SVG remains decorative an
   assert.equal(styleSource.includes('pointer-events: none'), true);
   assert.equal(styleSource.includes('@keyframes cc-track-flow'), true);
   assert.equal(styleSource.includes('@keyframes cc-module-breathe'), true);
-  assert.equal(styleSource.includes('@keyframes cc-alert-accent'), true);
+  assert.equal(styleSource.includes('@keyframes cc-alert-accent'), false);
   assert.equal(`${pageSource}\n${canvasSource}\n${visualSource}`.includes('requestAnimationFrame'), false);
   assert.equal((canvasSource.match(/className="command-center-flow/g) || []).length, 3);
   assert.equal(canvasSource.includes('command-center-flow is-fallback'), false);
 });
 
 
-test('H5 accepted page exposes truthful FRESH, STALE, EMPTY, ERROR and truncated copy', () => {
+test('I2 page exposes truthful independent resource, retained, retry and truncated copy', () => {
   for (const copy of [
     'Runtime 实时',
     'Runtime 已过期',
@@ -102,20 +109,28 @@ test('H5 accepted page exposes truthful FRESH, STALE, EMPTY, ERROR and truncated
     'Runtime 快照部分截断。',
     '调度器总数与执行轨分布存在差异',
     '不会生成模拟任务、执行器或 Provider。',
+    '指挥中心数据暂时无法获取。',
+    '质量统计刷新失败，已保留上次数据',
+    '质量统计暂时无法获取。',
+    '部分质量统计已截断，当前指标可能不完整。',
+    '重试 Runtime',
+    '重试质量统计',
     '当前无等待任务',
-    '暂无活跃 Provider'
+    '暂无可观测 Provider'
   ]) assert.equal(`${pageSource}\n${canvasSource}`.includes(copy), true, copy);
 });
 
 
-test('H5 accepted page preserves the H3 read-only interactions with native keyboard controls', () => {
+test('I2 page preserves review navigation and adds only resource retry controls', () => {
   for (const token of [
     'useNavigate',
     '<Modal',
-    'data-command-center-action="open-alert"',
     'data-command-center-action="open-review-from-modal"',
     'afterClose={restoreOverflowFocus}',
-    'restoreCommandCenterFocus(trigger, pageRef.current)'
+    'restoreCommandCenterFocus(trigger, pageRef.current)',
+    'className="command-center-notice-action"',
+    'reloadRuntime',
+    'reloadGovernance'
   ]) assert.equal(pageSource.includes(token), true, token);
   for (const token of [
     'data-command-center-action="open-running-review"',
@@ -129,6 +144,7 @@ test('H5 accepted page preserves the H3 read-only interactions with native keybo
   assert.equal(`${pageSource}\n${canvasSource}`.includes('type="button"'), true);
   assert.equal(pageSource.includes('当前列表来自 Runtime 有界快照'), true);
   assert.equal(pageSource.includes('接口已标记为部分截断'), true);
+  assert.equal(pageSource.includes('data-command-center-action="open-alert"'), false);
   for (const forbidden of [
     '统一 Task Queue',
     'AI Review Core',
@@ -160,7 +176,6 @@ test('visible operational copy is Chinese while approved product terms remain un
   ]) assert.equal(visibleSources.includes(copy), true, copy);
   for (const forbidden of [
     'Manual Review',
-    'Retry',
     'Review Intake',
     'Engine Selection',
     'TRIGGER INPUT',
@@ -176,6 +191,7 @@ test('visible operational copy is Chinese while approved product terms remain un
     'Bounded Snapshot',
     'Runtime Alerts'
   ]) assert.equal(visibleSources.includes(forbidden), false, forbidden);
+  assert.equal(visibleSources.includes('label="Retry"'), false);
 });
 
 
@@ -196,6 +212,7 @@ test('desktop tablet and mobile layouts preserve the planned information hierarc
   assert.equal(styleSource.includes('"intake engine agent result"'), true);
   assert.equal(styleSource.includes('"intake engine standard result"'), true);
   assert.equal(styleSource.includes('@media (min-width: 1200px)'), true);
+  assert.equal(styleSource.includes('@media (min-width: 1200px) and (max-height: 1100px)'), true);
   assert.equal(styleSource.includes('@media (max-width: 1199px)'), true);
   assert.equal(styleSource.includes('@media (max-width: 700px)'), true);
   assert.equal(styleSource.includes('.command-center-intake,'), true);
@@ -203,6 +220,10 @@ test('desktop tablet and mobile layouts preserve the planned information hierarc
   assert.equal(styleSource.includes('.command-center-fallback,'), true);
   assert.equal(styleSource.includes('.command-center-result { display: none; }'), true);
   assert.equal(styleSource.includes('flex-direction: column'), true);
+  assert.equal(styleSource.includes('grid-template-columns: repeat(5, minmax(0, 1fr))'), true);
+  assert.equal(styleSource.includes('grid-template-rows: clamp(178px, 21vh, 205px) 40px clamp(178px, 21vh, 205px)'), true);
+  assert.equal(styleSource.includes('.command-center-hud-card.is-running { order: 1; }'), true);
+  assert.equal(styleSource.includes('.command-center-quality-card.is-provider-result { order: 4; }'), true);
   assert.equal(canvasSource.includes('command-center-mobile-route-summary'), true);
   assert.equal(styleSource.includes('.command-center-mobile-route-summary'), true);
 });
@@ -228,10 +249,16 @@ test('daylight surfaces maintain WCAG AA body text contrast and visible focus st
 });
 
 
-test('public snapshot API remains read-only and Runtime polling stays deduplicated', () => {
+test('public snapshot APIs remain read-only and both polling resources stay independent and deduplicated', () => {
   assert.equal(apiSource.includes('/api/command-center/runtime?'), true);
+  assert.equal(apiSource.includes('/api/command-center/governance?'), true);
   assert.equal(apiSource.includes("method: 'POST'"), false);
   assert.equal(hookSource.includes('RUNTIME_INTERVAL_MS = 5_000'), true);
+  assert.equal(hookSource.includes('GOVERNANCE_INTERVAL_MS = 60_000'), true);
+  assert.equal(hookSource.includes("runtime: {"), true);
+  assert.equal(hookSource.includes("governance: {"), true);
+  assert.equal(hookSource.includes("loadResource('runtime')"), true);
+  assert.equal(hookSource.includes("loadResource('governance')"), true);
   assert.equal(hookSource.includes('createVisibilityRefreshLifecycle'), true);
   assert.equal(hookSource.includes('AbortController'), true);
   assert.equal((hookSource.match(/window\.setTimeout/g) || []).length, 1);

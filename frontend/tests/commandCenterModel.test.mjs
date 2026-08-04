@@ -41,7 +41,14 @@ test('runtime v2 model normalizes stable flow ids and bounded collections', () =
       },
       queueMetrics: { queued: 1, utilizationPercent: 100 }
     },
-    providersObserved: [{ providerCode: 'DS', providerName: 'DeepSeek', status: 'ACTIVE' }],
+    providersObserved: [{
+      providerCode: 'DS',
+      providerName: 'DeepSeek',
+      status: 'ACTIVE',
+      recentSuccessCount: 8,
+      recentFailureCount: 2,
+      lastObservedAt: '2026-07-31T01:59:58Z'
+    }],
     alerts: [{ id: 'FALLBACK:1', type: 'FALLBACK', taskId: 41, navigationTarget: '/tasks/41' }],
     coverage: { phase: 'PHASE_1', truncated: false }
   }, { now: NOW });
@@ -55,6 +62,9 @@ test('runtime v2 model normalizes stable flow ids and bounded collections', () =
   assert.deepEqual(runtime.activeFlows[0].contextStatusCounts, { INSUFFICIENT: 2 });
   assert.equal(runtime.agent.workerPool.workers[0].state, 'BUSY');
   assert.equal(runtime.providersObserved[0].status, 'ACTIVE');
+  assert.equal(runtime.providersObserved[0].recentSuccessCount, 8);
+  assert.equal(runtime.providersObserved[0].recentFailureCount, 2);
+  assert.equal(runtime.providersObserved[0].lastObservedAt, '2026-07-31T01:59:58.000Z');
   assert.equal(runtime.alerts[0].navigationTarget, '/tasks/41');
 });
 
@@ -170,7 +180,13 @@ test('governance model preserves explicit scopes, coverage and sample gate', () 
     schemaVersion: GOVERNANCE_SCHEMA_VERSION,
     generatedAt: '2026-07-31T02:00:00Z',
     ruleAnalysis: { scope: 'WINDOW', riskItemCount: 4 },
-    findingRisk: { scope: 'WINDOW', severityCounts: { CRITICAL: 2 } },
+    findingRisk: {
+      scope: 'WINDOW',
+      findingCount: 9,
+      affectedTaskCount: 4,
+      highestRisk: 'CRITICAL',
+      severityCounts: { CRITICAL: 2 }
+    },
     feedback: { scope: 'ALL_TIME', pendingCount: 3 },
     evaluation: {
       scope: 'ALL_TIME',
@@ -185,6 +201,9 @@ test('governance model preserves explicit scopes, coverage and sample gate', () 
   assert.equal(governance.schemaCompatible, true);
   assert.equal(governance.ruleAnalysis.scope, 'WINDOW');
   assert.equal(governance.feedback.scope, 'ALL_TIME');
+  assert.equal(governance.findingRisk.findingCount, 9);
+  assert.equal(governance.findingRisk.affectedTaskCount, 4);
+  assert.equal(governance.findingRisk.highestRisk, 'CRITICAL');
   assert.equal(governance.evaluation.acceptance.latestStatus, 'PASSED');
   assert.equal(governance.evaluation.agentSampleGate.ready, false);
   assert.equal(governance.coverage.truncated, true);

@@ -1,3 +1,6 @@
+import { presentSnapshotResource } from './commandCenterResourceState.js';
+
+
 const INTAKE_ITEMS = Object.freeze([
   Object.freeze({ key: 'MANUAL', label: '手动审查', description: '手动发起审查' }),
   Object.freeze({ key: 'MERGE_REQUEST', label: 'Merge Request', description: 'GitLab MR 自动或手动触发' }),
@@ -28,11 +31,30 @@ const LANE_META = Object.freeze({
 const UNAVAILABLE_DESCRIPTION = '自动触发选择 Agent 但 Agent 不可用时，可按策略直接进入 Standard Review。';
 
 
-export function buildCommandCenterPresentation({ runtime, runtimeError = '' } = {}) {
-  const freshness = runtime?.freshness || 'EMPTY';
-  const safeRuntime = freshness === 'EMPTY' ? null : runtime || null;
+export function buildCommandCenterPresentation({
+  runtime,
+  runtimeLoading = false,
+  runtimeError = '',
+  governance,
+  governanceLoading = false,
+  governanceError = ''
+} = {}) {
+  const resources = {
+    runtime: presentSnapshotResource({
+      data: runtime,
+      loading: runtimeLoading,
+      error: runtimeError
+    }),
+    governance: presentSnapshotResource({
+      data: governance,
+      loading: governanceLoading,
+      error: governanceError
+    })
+  };
+  const freshness = resources.runtime.freshness;
+  const safeRuntime = resources.runtime.available ? runtime : null;
+  const safeGovernance = resources.governance.available ? governance : null;
   const providersObserved = presentProviders(safeRuntime?.providersObserved);
-  const alerts = Array.isArray(safeRuntime?.alerts) ? safeRuntime.alerts : [];
   const workers = presentSceneWorkers(safeRuntime?.agent?.workerPool?.workers);
   const standardLane = presentLane(safeRuntime?.reviewLanes?.standard, 'standard', {
     providers: providersObserved
@@ -57,11 +79,16 @@ export function buildCommandCenterPresentation({ runtime, runtimeError = '' } = 
     freshness,
     diagnostics
   });
-  const resourceState = runtimeError
-    ? safeRuntime ? 'ERROR_RETAINED' : 'ERROR_EMPTY'
-    : freshness;
+  const resourceState = resources.runtime.state;
 
   return {
+    resources,
+    currentStatus: presentCurrentStatus(safeRuntime, providersObserved, resources.runtime),
+    qualityOutput: presentQualityOutput({
+      runtime: safeRuntime,
+      governance: safeGovernance,
+      resources
+    }),
     hud: {
       freshness,
       resourceState,
@@ -70,7 +97,6 @@ export function buildCommandCenterPresentation({ runtime, runtimeError = '' } = 
       totalRunningJobs: schedulerRunning,
       coverage,
       providersObserved,
-      alerts,
       error: text(runtimeError) || null
     },
     intake: {
@@ -100,23 +126,6 @@ export function buildCommandCenterPresentation({ runtime, runtimeError = '' } = 
       description: '结果落库后进入审查任务详情与既有通知链路',
       navigationTarget: '/tasks'
     },
-    footer: {
-      agentCapacity: {
-        running: agentLane.running,
-        onlineCapacity: agentLane.onlineCapacity
-      },
-      standardSlots: {
-        running: standardLane.running,
-        capacity: standardLane.capacity
-      },
-      oldestAgentQueueSeconds: nullableNumber(
-        safeRuntime?.agent?.queueMetrics?.oldestQueuedSeconds
-      ),
-      alerts: {
-        count: alerts.length,
-        items: alerts
-      }
-    },
     diagnostics,
     // H1 does not change JSX/Canvas. This adapter keeps the existing renderer safe
     // until H2 switches the DOM to the frozen homepage contract above.
@@ -126,6 +135,102 @@ export function buildCommandCenterPresentation({ runtime, runtimeError = '' } = 
       freshness,
       generatedAt
     })
+  };
+}
+
+
+function presentCurrentStatus(runtime, providersObserved, resource) {
+  const available = resource.available;
+  return {
+    resourceState: resource.state,
+    available,
+    generatedAt: available ? runtime.generatedAt || null : null,
+    queuedExecutionCount: available ? number(runtime.scheduler?.queuedJobCount) : null,
+    runningExecutionCount: available ? number(runtime.scheduler?.runningJobCount) : null,
+    activeReviewTaskCount: available ? number(runtime.intake?.activeTaskCount) : null,
+    oldestAgentQueueSeconds: available
+      ? nullableNumber(runtime.agent?.queueMetrics?.oldestQueuedSeconds)
+      : null,
+    provider: available
+      ? selectCurrentProvider(runtime.providersObserved, providersObserved)
+      : null
+  };
+}
+
+
+function presentQualityOutput({ runtime, governance, resources }) {
+  const runtimeAvailable = resources.runtime.available;
+  const governanceAvailable = resources.governance.available;
+  const runtimeHours = positiveNumber(runtime?.window?.hours);
+  const governanceHours = positiveNumber(governance?.window?.hours);
+  const windowHours = runtimeHours || governanceHours || 24;
+  const providerExecution = presentProviderExecution(
+    runtimeAvailable ? runtime?.providersObserved : null,
+    resources.runtime.state
+  );
+  const findingRisk = governanceAvailable ? governance.findingRisk || {} : {};
+
+  return {
+    window: {
+      hours: windowHours,
+      label: `近 ${windowHours} 小时`,
+      runtimeHours,
+      governanceHours,
+      aligned: !runtimeHours || !governanceHours || runtimeHours === governanceHours
+    },
+    reviewTasks: {
+      source: 'runtime',
+      resourceState: resources.runtime.state,
+      available: runtimeAvailable,
+      count: runtimeAvailable ? number(runtime.intake?.taskCount) : null
+    },
+    providerExecution,
+    findingRisk: {
+      source: 'governance',
+      resourceState: resources.governance.state,
+      available: governanceAvailable,
+      findingCount: governanceAvailable ? number(findingRisk.findingCount) : null,
+      affectedTaskCount: governanceAvailable ? number(findingRisk.affectedTaskCount) : null,
+      highestRisk: governanceAvailable ? findingRisk.highestRisk || null : null,
+      severityCounts: governanceAvailable ? { ...(findingRisk.severityCounts || {}) } : null
+    }
+  };
+}
+
+
+function presentProviderExecution(value, resourceState) {
+  if (!Array.isArray(value)) {
+    return {
+      source: 'runtime',
+      resourceState,
+      available: false,
+      successCount: null,
+      failureCount: null,
+      totalCount: null,
+      successRate: null,
+      hasRecords: false
+    };
+  }
+  const successCount = value.reduce(
+    (total, provider) => total + number(provider?.recentSuccessCount),
+    0
+  );
+  const failureCount = value.reduce(
+    (total, provider) => total + number(provider?.recentFailureCount),
+    0
+  );
+  const totalCount = successCount + failureCount;
+  return {
+    source: 'runtime',
+    resourceState,
+    available: true,
+    successCount,
+    failureCount,
+    totalCount,
+    successRate: totalCount > 0
+      ? Math.round(successCount / totalCount * 1_000) / 10
+      : null,
+    hasRecords: totalCount > 0
   };
 }
 
@@ -194,6 +299,44 @@ function presentProviders(value) {
       .filter(Boolean)
       .join(' / ')
   }));
+}
+
+
+function selectCurrentProvider(rawProviders, presentedProviders) {
+  const source = Array.isArray(rawProviders) ? rawProviders : [];
+  if (!source.length) return null;
+
+  const ranked = source.map((provider, index) => ({
+    index,
+    rank: providerRank(provider),
+    observedAt: observedAtTimestamp(provider.lastObservedAt)
+  }));
+  ranked.sort((left, right) => {
+    const rankDifference = left.rank - right.rank;
+    if (rankDifference) return rankDifference;
+    if (left.rank === 1) {
+      const observedDifference = right.observedAt - left.observedAt;
+      if (observedDifference) return observedDifference;
+    }
+    return left.index - right.index;
+  });
+  return presentedProviders[ranked[0].index] || null;
+}
+
+
+function providerRank(provider) {
+  if (number(provider?.activeFlowCount) > 0) return 0;
+  if (observedAtTimestamp(provider?.lastObservedAt) !== null) return 1;
+  if (provider?.defaultProvider && provider?.enabled !== false) return 2;
+  if (provider?.enabled !== false) return 3;
+  return 4;
+}
+
+
+function observedAtTimestamp(value) {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
 }
 
 
@@ -397,6 +540,12 @@ function countOrDerived(source, key, items, predicate) {
 function nullableNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   return number(value);
+}
+
+
+function positiveNumber(value) {
+  const parsed = number(value);
+  return parsed > 0 ? parsed : null;
 }
 
 

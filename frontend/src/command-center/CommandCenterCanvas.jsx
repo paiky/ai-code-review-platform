@@ -155,7 +155,7 @@ function ReviewModule({ lane, runtimeLoading, onOpenReview, onOpenOverflow }) {
         ) : (
           <ModuleMetric
             label="已观测 Provider / Model"
-            value={observedProvider?.label || '暂无活跃 Provider'}
+            value={observedProvider?.label || '暂无可观测 Provider'}
             compact
           />
         )}
