@@ -6,7 +6,7 @@
 - 基线提交：`3fc3fb9 Document current AI review flow audit`
 - 当前阶段：`H5 生产验收与收口`
 - 当前状态：`HOMEPAGE VNEXT COMPLETED — WAITING FOR DEPLOYMENT CONFIRMATION`
-- 当前允许结果：首页 vNext 已完成生产验收并停止；不得继续修改、部署、推送或开始后续交互专项。
+- 当前允许结果：首页 vNext 与部署前顶部导航视觉微调均已完成；不得继续修改、部署、推送或开始后续交互专项。
 - 下一授权口令：部署、推送、悬浮流程、Drawer 或后续数据投影必须获得独立明确授权。
 - 停止点：H5 本地提交后立即停止，等待部署确认。
 
@@ -843,3 +843,39 @@ passed；3541 modules transformed；Vite 仅保留既有的大 chunk 提示
 剩余风险：生产构建仍有既有单 chunk 超过 500 kB 提示；浏览器能力无法直接模拟系统 reduced-motion，当前由实际加载 CSSOM 和自动化测试双重覆盖。两项均不阻塞首页 vNext 完成，但前者可在后续独立性能专项处理。
 
 本计划到此停止。不得自动部署、推送、修改 README/发布说明或开始悬浮流程、Drawer、Runtime 数据投影等后续专项。
+
+## 11.7 部署前顶部导航视觉微调
+
+当前状态：
+
+```text
+PRE-DEPLOYMENT NAV POLISH COMPLETED
+```
+
+用户明确授权参照 `docs/AI Review Center Design/assets/01.png`，将顶部导航从深色底改为与 Command Center 浅色页面一致的白色导航面。调整范围仅限 `frontend/src/styles.css` 中 Header、品牌文字和导航按钮的颜色、边界与轻量阴影；保留现有导航结构、路由、响应式排列、告警/队列状态和所有业务行为。
+
+实际调整：
+
+- Header 使用 98% 白色背景、浅蓝灰底边和低强度阴影，与 Command Center 白色 Shell 连成统一浅色界面；
+- 品牌文字从白色改为深蓝灰，hover/focus 使用平台蓝，并补充清晰 focus outline；
+- 默认导航与右侧操作按钮使用白底、浅边框和轻阴影；当前路由继续使用蓝色渐变主按钮；
+- 未修改 Header 高度、导航结构、按钮文案、路由、告警/队列状态或移动端三列布局。
+
+验证结果：
+
+```text
+.\scripts\run-frontend.cmd build
+passed；3541 modules transformed；仅保留既有的大 chunk 提示
+
+应用内浏览器 1440×900
+- Header background rgba(255,255,255,0.98)
+- 品牌与默认按钮为深色文字，当前路由为蓝色主按钮
+- document 1440×900，无横向/纵向溢出
+
+应用内浏览器 390×844
+- 6 个导航按钮与 2 个 Header 操作按钮均可见
+- document 375×1553，无横向溢出
+- console 0 warning / 0 error
+```
+
+本次微调完成后恢复 `HOMEPAGE VNEXT COMPLETED — WAITING FOR DEPLOYMENT CONFIRMATION`，不自动部署或推送。
