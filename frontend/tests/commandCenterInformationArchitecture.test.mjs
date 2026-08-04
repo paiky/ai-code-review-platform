@@ -111,12 +111,10 @@ test('H5 accepted page preserves the H3 read-only interactions with native keybo
   for (const token of [
     'useNavigate',
     '<Modal',
-    'reload',
-    'data-command-center-action="refresh-runtime"',
     'data-command-center-action="open-alert"',
     'data-command-center-action="open-review-from-modal"',
     'afterClose={restoreOverflowFocus}',
-    'restoreCommandCenterFocus(trigger, refreshButtonRef.current)'
+    'restoreCommandCenterFocus(trigger, pageRef.current)'
   ]) assert.equal(pageSource.includes(token), true, token);
   for (const token of [
     'data-command-center-action="open-running-review"',
@@ -145,6 +143,18 @@ test('H5 accepted page preserves the H3 read-only interactions with native keybo
     'cancelJob',
     'retryJob'
   ]) assert.equal(`${pageSource}\n${canvasSource}`.includes(forbidden), false, forbidden);
+});
+
+
+test('deployment polish fills wide viewports and removes the redundant heading row', () => {
+  assert.equal(pageSource.includes('className="command-center-heading"'), false);
+  assert.equal(pageSource.includes('data-command-center-action="refresh-runtime"'), false);
+  assert.equal(pageSource.includes('当前调度快照 · 双 Review 执行轨 · 结构性结果回流'), false);
+  assert.equal(pageSource.includes('aria-label="AI Review 指挥中心"'), true);
+  assert.match(styleSource, /\.command-center-page\s*\{[^}]*display:\s*flex;[^}]*min-height:\s*calc\(100dvh - 56px\);/s);
+  assert.match(styleSource, /\.command-center-shell\s*\{[^}]*width:\s*100%;/s);
+  assert.match(styleSource, /\.command-center-runtime-map\s*\{[^}]*flex:\s*1 1 438px;/s);
+  assert.doesNotMatch(styleSource, /\.command-center-shell\s*\{[^}]*width:\s*min\(1580px,\s*100%\);/s);
 });
 
 

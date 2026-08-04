@@ -6,7 +6,7 @@
 - 基线提交：`3fc3fb9 Document current AI review flow audit`
 - 当前阶段：`H5 生产验收与收口`
 - 当前状态：`HOMEPAGE VNEXT COMPLETED — WAITING FOR DEPLOYMENT CONFIRMATION`
-- 当前允许结果：首页 vNext 与部署前顶部导航视觉微调均已完成；不得继续修改、部署、推送或开始后续交互专项。
+- 当前允许结果：部署、推送或开始后续交互专项前必须获得用户独立明确授权。
 - 下一授权口令：部署、推送、悬浮流程、Drawer 或后续数据投影必须获得独立明确授权。
 - 停止点：H5 本地提交后立即停止，等待部署确认。
 
@@ -875,6 +875,51 @@ passed；3541 modules transformed；仅保留既有的大 chunk 提示
 应用内浏览器 390×844
 - 6 个导航按钮与 2 个 Header 操作按钮均可见
 - document 375×1553，无横向溢出
+- console 0 warning / 0 error
+```
+
+本次微调完成后恢复 `HOMEPAGE VNEXT COMPLETED — WAITING FOR DEPLOYMENT CONFIRMATION`，不自动部署或推送。
+
+## 11.8 部署前超宽视口与标题行微调
+
+当前状态：
+
+```text
+PRE-DEPLOYMENT WIDE VIEW POLISH COMPLETED
+```
+
+用户通过浏览器评论明确要求：
+
+- 浏览器处于约 50% 缩放、CSS viewport 约 2044px 时，Command Center 主体不再受 1580px 最大宽度限制，应与顶部导航一样使用可用页面宽度；
+- 移除 `command-center-heading` 整行，包括页面重复标题、说明和手动刷新按钮。
+
+本次仅调整 `CommandCenterPage.jsx`、`commandCenter.css` 及对应信息架构测试。自动 5 秒 Runtime 轮询保持不变；Modal 触发器消失时的焦点 fallback 从已移除的刷新按钮改为 Command Center 页面容器。不得修改 Runtime、后端、路由或 Review 业务语义。
+
+实际调整：
+
+- 移除 Shell 的 1580px 最大宽度和居中限制，页面与 Shell 改为全宽弹性布局；
+- 页面按实际 56px Header 高度占满剩余视口，Runtime 拓扑吸收首屏剩余高度，消除 50% 缩放时底部大块空白；
+- 700px 以下恢复自然文档流，避免移动端被强制拉伸；
+- 移除重复的标题、说明和手动刷新整行，保留 5 秒自动轮询；
+- Modal 原触发器在轮询后消失时，焦点安全回退到可聚焦的 Command Center 页面容器。
+
+验证结果：
+
+```text
+Command Center 专项 Node 测试
+28 passed / 0 failed
+
+.\scripts\run-frontend.cmd build
+passed；3541 modules transformed；仅保留既有的大 chunk 提示
+
+应用内浏览器（浏览器缩放 50%，有效 CSS viewport 2044×1824）
+- Header 2044px，Shell 2016px，宽度比 98.63%
+- 页面高度 1768px，Shell 底部距视口 14px，Runtime Map 高度 1499.5px
+- 标题行 0，手动刷新按钮 0，无横向溢出
+
+应用内浏览器（有效 CSS viewport 1440×900）
+- Shell 1412px，宽度比 98.06%，底部距视口 14px
+- 标题行 0，手动刷新按钮 0，无横向溢出
 - console 0 warning / 0 error
 ```
 

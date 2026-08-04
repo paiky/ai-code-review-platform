@@ -14,7 +14,7 @@ test('restores Modal focus to its connected overflow trigger', () => {
 });
 
 
-test('falls back to refresh when the overflow trigger disappeared during polling', () => {
+test('falls back to the connected page target when the overflow trigger disappeared during polling', () => {
   const trigger = focusTarget(false);
   const fallback = focusTarget(true);
 

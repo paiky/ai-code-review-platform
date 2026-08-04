@@ -14,8 +14,8 @@ export default function CommandCenterPage() {
   const navigate = useNavigate();
   const [overflowZoneKey, setOverflowZoneKey] = useState(null);
   const overflowTriggerRef = useRef(null);
-  const refreshButtonRef = useRef(null);
-  const { runtime, runtimeLoading, runtimeError, reload } = useCommandCenterRuntimeSnapshot();
+  const pageRef = useRef(null);
+  const { runtime, runtimeLoading, runtimeError } = useCommandCenterRuntimeSnapshot();
   const presentation = useMemo(
     () => buildCommandCenterPresentation({ runtime, runtimeError }),
     [runtime, runtimeError]
@@ -36,37 +36,19 @@ export default function CommandCenterPage() {
   const restoreOverflowFocus = useCallback(() => {
     const trigger = overflowTriggerRef.current;
     overflowTriggerRef.current = null;
-    restoreCommandCenterFocus(trigger, refreshButtonRef.current);
+    restoreCommandCenterFocus(trigger, pageRef.current);
   }, []);
 
   return (
     <main
+      ref={pageRef}
       className="command-center-page"
+      tabIndex={-1}
       data-command-center-phase="HOMEPAGE_VNEXT_H5"
       data-command-center-resource-state={presentation.hud.resourceState}
       data-command-center-motion={motionState}
     >
-      <section className="command-center-shell" aria-labelledby="command-center-title">
-        <header className="command-center-heading">
-          <div>
-            <span className="command-center-kicker">AI REVIEW COMMAND CENTER</span>
-            <h1 id="command-center-title">AI Review 指挥中心</h1>
-          </div>
-          <div className="command-center-heading-actions">
-            <p>当前调度快照 · 双 Review 执行轨 · 结构性结果回流</p>
-            <button
-              ref={refreshButtonRef}
-              type="button"
-              className="command-center-refresh"
-              data-command-center-action="refresh-runtime"
-              onClick={() => void reload()}
-              disabled={runtimeLoading}
-            >
-              {runtimeLoading ? '刷新中…' : '刷新 Runtime'}
-            </button>
-          </div>
-        </header>
-
+      <section className="command-center-shell" aria-label="AI Review 指挥中心">
         <RuntimeHud
           presentation={presentation}
           loading={runtimeLoading}
