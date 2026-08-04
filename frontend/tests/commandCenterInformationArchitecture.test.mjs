@@ -35,8 +35,8 @@ test('root route renders Command Center while preserving legacy taskId redirect'
 });
 
 
-test('H4 page preserves six Runtime HUD metrics and four current-state footer metrics', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="HOMEPAGE_VNEXT_H4"'), true);
+test('H5 accepted page preserves six Runtime HUD metrics and four current-state footer metrics', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="HOMEPAGE_VNEXT_H5"'), true);
   assert.equal(pageSource.includes('AI Review 指挥中心'), true);
   assert.equal((pageSource.match(/<HudMetric/g) || []).length, 6);
   assert.equal((pageSource.match(/<FooterMetric/g) || []).length, 4);
@@ -54,7 +54,7 @@ test('H4 page preserves six Runtime HUD metrics and four current-state footer me
 });
 
 
-test('H4 preserves the frozen five-subject dual-review topology with one structural fallback', () => {
+test('H5 accepted page preserves the frozen five-subject dual-review topology with one structural fallback', () => {
   for (const token of [
     'ReviewIntake',
     'EngineSelection',
@@ -91,7 +91,7 @@ test('all semantic content is DOM-owned while enhanced SVG remains decorative an
 });
 
 
-test('H4 exposes truthful FRESH, STALE, EMPTY, ERROR and truncated copy', () => {
+test('H5 accepted page exposes truthful FRESH, STALE, EMPTY, ERROR and truncated copy', () => {
   for (const copy of [
     'Runtime 实时',
     'Runtime 已过期',
@@ -107,7 +107,7 @@ test('H4 exposes truthful FRESH, STALE, EMPTY, ERROR and truncated copy', () => 
 });
 
 
-test('H4 preserves the H3 read-only interactions with native keyboard controls', () => {
+test('H5 accepted page preserves the H3 read-only interactions with native keyboard controls', () => {
   for (const token of [
     'useNavigate',
     '<Modal',

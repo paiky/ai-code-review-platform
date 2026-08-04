@@ -4,11 +4,11 @@
 
 - 计划版本：`vNext / Homepage Frozen Topology`
 - 基线提交：`3fc3fb9 Document current AI review flow audit`
-- 当前阶段：`H4 视觉强化与响应式`
-- 当前状态：`H4 COMPLETED — WAITING FOR H5 CONFIRMATION`
-- 当前允许结果：H4 已完成并停止；未经新授权不得进入生产验收收口或新增业务交互。
-- 下一授权口令：H4 验收完成后，等待用户明确回复“继续 H5”。
-- 停止点：H4 本地提交后立即停止，等待用户确认视觉强度。
+- 当前阶段：`H5 生产验收与收口`
+- 当前状态：`HOMEPAGE VNEXT COMPLETED — WAITING FOR DEPLOYMENT CONFIRMATION`
+- 当前允许结果：首页 vNext 已完成生产验收并停止；不得继续修改、部署、推送或开始后续交互专项。
+- 下一授权口令：部署、推送、悬浮流程、Drawer 或后续数据投影必须获得独立明确授权。
+- 停止点：H5 本地提交后立即停止，等待部署确认。
 
 本文档是审计完成后的独立首页实施总控。它不修改、覆盖或续写以下历史计划的执行状态：
 
@@ -777,4 +777,69 @@ STALE/ERROR 使用工作区隔离只读 mock（8091）和独立 Vite（5174）�
 H4 COMPLETED — WAITING FOR H5 CONFIRMATION
 ```
 
-本计划到此停止。未经用户明确回复“继续 H5”，不得进入生产验收收口、README/发布说明调整或任何新交互专项。
+H4 停止点已满足；用户明确回复“继续 H5”后进入生产验收收口。
+
+## 11.6 H5 实施结果
+
+当前状态：
+
+```text
+HOMEPAGE VNEXT COMPLETED — WAITING FOR DEPLOYMENT CONFIRMATION
+```
+
+本阶段只执行第 9.2 节冻结验收矩阵，没有新增首页功能、Runtime 字段、后端接口或交互层。
+
+验收发现并修复一个冻结语义缺陷：Runtime payload 缺少有效 `generatedAt` 时，归一化状态为 `EMPTY`，但旧 Presentation 仍会展示 payload 中的 Provider、告警和运行项，造成“等待 Runtime 快照”与实时数据同时出现。现在 `EMPTY` 快照统一视为不可用数据，不显示 Job、Worker、Provider、告警或任务编号；STALE 仍保留最近快照，ERROR 仍按有无成功旧快照区分 `ERROR_RETAINED` 与 `ERROR_EMPTY`。
+
+本阶段实际修改：
+
+- `frontend/src/command-center/commandCenterPresentation.js`：收口 EMPTY 数据语义；
+- `frontend/src/command-center/CommandCenterPage.jsx`：生产验收阶段标记更新为 `HOMEPAGE_VNEXT_H5`；
+- `frontend/tests/commandCenterAcceptance.test.mjs`：新增 H5 数据与资源状态矩阵；
+- `frontend/tests/commandCenterInformationArchitecture.test.mjs`：更新最终阶段契约断言；
+- 本计划文档。
+
+自动化验证：
+
+```text
+node --test tests/commandCenterApi.test.mjs tests/commandCenterModel.test.mjs tests/commandCenterPresentation.test.mjs tests/commandCenterInformationArchitecture.test.mjs tests/commandCenterInteractions.test.mjs tests/commandCenterVisual.test.mjs tests/commandCenterAcceptance.test.mjs tests/visibilityRefreshLifecycle.test.mjs
+36 passed, 0 failed
+
+node --test
+110 passed, 0 failed
+
+.\scripts\run-frontend.cmd build
+passed；3541 modules transformed；Vite 仅保留既有的大 chunk 提示
+```
+
+真实 Runtime 与三档视口验收：
+
+- 1440×900：五主体完整可见，document 1440×900，无横向/纵向溢出，0 Canvas、1 SVG、3 条装饰流光；
+- 1024×800：五主体完整可见，document 1009×909，无横向溢出；
+- 390×844：仅 Agent/Standard 双核心与移动路由摘要，document 375×1548，无横向溢出，SVG 隐藏且动画为 0；
+- 真实 Runtime 在验收期间覆盖双 Lane 空闲/Agent 运行、在线/忙碌/离线 Worker、多 Provider 和 7 条有界告警；运行项与告警按钮均有可读名称；
+- 运行项进入 `/tasks/:taskId?reviewKey=...`，Result 进入 `/tasks`；隔离含空格和斜杠的 `reviewKey` 验证为 `standard%2Fa%20b`；
+- 正常真实首页和正常隔离首页 console 均为 0 warning / 0 error。
+
+隔离 Runtime 状态验收：
+
+- FRESH Standard-only：Agent queued/running/capacity 均为 0，Standard queued=2、running=6、capacity=10；Worker IDLE/BUSY/DRAINING/OFFLINE 均为 1；两个 Provider 和一个有界告警准确展示；
+- runningItems/coverage truncated：主卡最多显示 4 个标记，Modal 显示 6/6 条并保留“部分截断”说明；关闭 Modal 后焦点返回 Standard overflow 触发器；
+- STALE：保留快照、显示过期提示，flow/module animation 均为 0；
+- EMPTY：修复后 Provider、告警、运行入口和 total running 均归零，不再泄漏 payload 数据；
+- ERROR_RETAINED：保留 4 个可见运行入口并显示刷新错误，motion=paused；
+- ERROR_EMPTY：Provider 和运行入口为空，显示不可用提示，0 Canvas；
+- 请求中卸载：2 秒延迟请求尚未完成时进入 `/tasks`，2.6 秒后 Command Center 根节点、notice 和 polling diagnostics 均未回写，console 无错误。
+
+性能与生命周期验收：
+
+- 真实 Runtime 连续观察 60 秒：started 13→28，completed 12→27，deduplicated=0，Timer 1→1，Listener 2→2，Canvas 0→0，SVG 1→1；
+- hidden/visible 120 次循环、焦点抑制、Listener 注册/释放和 reduced-motion 静态行为由 `visibilityRefreshLifecycle.test.mjs` 及既有 Canvas/Runtime 测试自动覆盖；
+- 浏览器控制面只提供 visibility/viewport，不能切换操作系统 reduced-motion；实际 CSSOM 已确认加载 Command Center `prefers-reduced-motion: reduce` 规则，专项测试同时断言 `animation: none !important`；
+- 页面不新增 RAF、Observer、Timer 或 Listener；动画 owner 仍为 `CSS_COMPOSITOR_ONLY`，Canvas 始终不挂载。
+
+隔离 mock 8091 与 Vite 5174 在 ready 时通过独立 launcher 返回、端口 owner 和 HTTP identity 检查。验收结束后只停止本次记录的 owner/launcher，确认 8091/5174 均关闭并删除全部 H5 临时 mock/log；未停止或修改用户已有服务。
+
+剩余风险：生产构建仍有既有单 chunk 超过 500 kB 提示；浏览器能力无法直接模拟系统 reduced-motion，当前由实际加载 CSSOM 和自动化测试双重覆盖。两项均不阻塞首页 vNext 完成，但前者可在后续独立性能专项处理。
+
+本计划到此停止。不得自动部署、推送、修改 README/发布说明或开始悬浮流程、Drawer、Runtime 数据投影等后续专项。

@@ -29,7 +29,8 @@ const UNAVAILABLE_DESCRIPTION = '自动触发选择 Agent 但 Agent 不可用时
 
 
 export function buildCommandCenterPresentation({ runtime, runtimeError = '' } = {}) {
-  const safeRuntime = runtime || null;
+  const freshness = runtime?.freshness || 'EMPTY';
+  const safeRuntime = freshness === 'EMPTY' ? null : runtime || null;
   const providersObserved = presentProviders(safeRuntime?.providersObserved);
   const alerts = Array.isArray(safeRuntime?.alerts) ? safeRuntime.alerts : [];
   const workers = presentSceneWorkers(safeRuntime?.agent?.workerPool?.workers);
@@ -51,7 +52,6 @@ export function buildCommandCenterPresentation({ runtime, runtimeError = '' } = 
     laneQueued,
     laneRunning
   });
-  const freshness = safeRuntime?.freshness || 'EMPTY';
   const generatedAt = safeRuntime?.generatedAt || null;
   const coverage = presentCoverage(safeRuntime?.coverage, {
     freshness,

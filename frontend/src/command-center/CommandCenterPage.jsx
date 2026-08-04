@@ -42,7 +42,7 @@ export default function CommandCenterPage() {
   return (
     <main
       className="command-center-page"
-      data-command-center-phase="HOMEPAGE_VNEXT_H4"
+      data-command-center-phase="HOMEPAGE_VNEXT_H5"
       data-command-center-resource-state={presentation.hud.resourceState}
       data-command-center-motion={motionState}
     >
