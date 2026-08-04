@@ -18,8 +18,10 @@ export default function CommandCenterCanvas({
     <section
       className="command-center-runtime-map"
       aria-label="AI Review 当前执行拓扑"
-      data-command-center-renderer="DOM_SVG_STATIC"
+      data-command-center-renderer="DOM_SVG_ENHANCED"
       data-command-center-canvas-mounted="false"
+      data-command-center-dom-fallback="always"
+      data-command-center-animation-owner="CSS_COMPOSITOR_ONLY"
     >
       <svg
         className="command-center-static-connections"
@@ -45,7 +47,15 @@ export default function CommandCenterCanvas({
         <path className="is-agent" d="M 995 104 C 1038 104 1028 220 1064 220" markerEnd="url(#cc-arrow-agent)" />
         <path className="is-standard" d="M 995 336 C 1038 336 1028 220 1064 220" markerEnd="url(#cc-arrow-standard)" />
         <path className="is-fallback" d="M 744 194 C 744 220 780 220 780 246" markerEnd="url(#cc-arrow-standard)" />
+        <path className="command-center-flow is-intake" pathLength="100" d="M 154 220 H 238" />
+        <path className="command-center-flow is-agent" pathLength="100" d="M 390 220 C 430 220 422 104 476 104" />
+        <path className="command-center-flow is-standard" pathLength="100" d="M 390 220 C 430 220 422 336 476 336" />
       </svg>
+
+      <div className="command-center-mobile-route-summary" role="note">
+        <strong>Review 路由</strong>
+        <span>Manual / MR / Push / Retry → Engine Selection → Agent 或 Standard → Review 任务</span>
+      </div>
 
       <div className="command-center-map-grid">
         <ReviewIntake intake={intake} />
@@ -120,6 +130,7 @@ function ReviewModule({ lane, runtimeLoading, onOpenReview, onOpenOverflow }) {
     <article
       className={`command-center-review-module is-${lane.colorToken} command-center-map-node`}
       data-zone-key={lane.zoneKey}
+      data-running={lane.running > 0 ? 'true' : 'false'}
     >
       <header>
         <span className="command-center-module-icon" aria-hidden="true">{isAgent ? '⌘' : '▤'}</span>

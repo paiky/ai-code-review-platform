@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import CommandCenterCanvas from './CommandCenterCanvas.jsx';
 import { restoreCommandCenterFocus } from './commandCenterInteractions.js';
 import { buildCommandCenterPresentation } from './commandCenterPresentation.js';
+import { commandCenterMotionState } from './commandCenterVisual.js';
 import { useCommandCenterRuntimeSnapshot } from './useCommandCenterSnapshots.js';
 import './commandCenter.css';
 
@@ -19,6 +20,7 @@ export default function CommandCenterPage() {
     () => buildCommandCenterPresentation({ runtime, runtimeError }),
     [runtime, runtimeError]
   );
+  const motionState = commandCenterMotionState(presentation, runtimeLoading);
   const overflowLane = [presentation.agentLane, presentation.standardLane]
     .find(lane => lane.zoneKey === overflowZoneKey) || null;
   const navigateTo = useCallback(target => {
@@ -38,7 +40,12 @@ export default function CommandCenterPage() {
   }, []);
 
   return (
-    <main className="command-center-page" data-command-center-phase="HOMEPAGE_VNEXT_H3">
+    <main
+      className="command-center-page"
+      data-command-center-phase="HOMEPAGE_VNEXT_H4"
+      data-command-center-resource-state={presentation.hud.resourceState}
+      data-command-center-motion={motionState}
+    >
       <section className="command-center-shell" aria-labelledby="command-center-title">
         <header className="command-center-heading">
           <div>

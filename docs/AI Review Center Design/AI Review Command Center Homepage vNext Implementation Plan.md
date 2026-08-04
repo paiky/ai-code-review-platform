@@ -4,11 +4,11 @@
 
 - 计划版本：`vNext / Homepage Frozen Topology`
 - 基线提交：`3fc3fb9 Document current AI review flow audit`
-- 当前阶段：`H3 既有 Runtime 交互接线`
-- 当前状态：`H3 COMPLETED — WAITING FOR H4 CONFIRMATION`
-- 当前允许结果：H3 已完成并停止；未经新授权不得进入视觉强化、响应式调整或悬浮/Drawer 专项。
-- 下一授权口令：H3 验收完成后，等待用户明确回复“继续 H4”。
-- 停止点：H3 本地提交后立即停止，等待用户确认。
+- 当前阶段：`H4 视觉强化与响应式`
+- 当前状态：`H4 COMPLETED — WAITING FOR H5 CONFIRMATION`
+- 当前允许结果：H4 已完成并停止；未经新授权不得进入生产验收收口或新增业务交互。
+- 下一授权口令：H4 验收完成后，等待用户明确回复“继续 H5”。
+- 停止点：H4 本地提交后立即停止，等待用户确认视觉强度。
 
 本文档是审计完成后的独立首页实施总控。它不修改、覆盖或续写以下历史计划的执行状态：
 
@@ -713,3 +713,68 @@ H3 COMPLETED — WAITING FOR H4 CONFIRMATION
 ```
 
 本计划到此停止。未经用户明确回复“继续 H4”，不得进入视觉强化、响应式、reduced-motion、Canvas fallback 或资源治理工作。
+
+## 11.5 H4 实施结果
+
+H4 在不改变 H2/H3 结构、数据口径和交互的前提下完成生产级视觉与降级能力：
+
+- 页面强化为亮色科技网格、双层 Shell 描边和更清晰的 HUD 层级，不切换 Dark Mode、不使用生成图片背景；
+- Agent 紫、Standard 橙、Result 青分别使用静态双层描边、轻量 2.5D 阴影和低成本渐变；
+- SVG 仅增加 Intake→Engine、Engine→Agent、Engine→Standard 三条装饰流光；fallback 与 Result 路径没有动画，不表达任务转移或结果抵达；
+- 只有 `resourceState=FRESH` 且本轮请求不在 loading 时启用装饰动效；有运行项的 Review 模块才显示边框呼吸；告警强调只执行两轮；
+- STALE、EMPTY、ERROR_RETAINED、ERROR_EMPTY 均将 motion 状态设为 `paused`；
+- `≥1200px` 保留完整五主体双轨，`701～1199px` 压缩入口/路由/结果，`≤700px` 仅保留 Agent/Standard 双核心与紧凑路由说明；
+- 移动端隐藏 SVG 并强制关闭动画；`prefers-reduced-motion: reduce` 统一关闭 Command Center animation/transition；
+- 首页继续不挂载 Canvas，DOM/SVG 语义层始终可用；标记为 `DOM_SVG_ENHANCED`、`data-command-center-dom-fallback=always`；
+- 未新增 RAF、Observer、Timer、Listener 或动画依赖；视觉动画由 CSS compositor 管理。
+
+本阶段实际修改：
+
+- `frontend/src/command-center/CommandCenterPage.jsx`
+- `frontend/src/command-center/CommandCenterCanvas.jsx`
+- `frontend/src/command-center/commandCenterVisual.js`
+- `frontend/src/command-center/commandCenter.css`
+- `frontend/tests/commandCenterInformationArchitecture.test.mjs`
+- `frontend/tests/commandCenterVisual.test.mjs`
+- 本计划文档
+
+H4 未实现悬浮流程、模块 Drawer、业务阶段模拟、fallback 转移动画、Result 抵达动画、真 3D/WebGL 或 Runtime/后端/数据库修改。
+
+验证结果：
+
+```text
+node --test tests/commandCenterPresentation.test.mjs tests/commandCenterModel.test.mjs tests/commandCenterInformationArchitecture.test.mjs tests/commandCenterInteractions.test.mjs tests/commandCenterVisual.test.mjs
+29 passed, 0 failed
+
+node --test
+106 passed, 0 failed
+
+.\scripts\run-frontend.cmd build
+passed；Vite 仅保留既有的大 chunk 提示
+
+应用内浏览器三档视口
+- 1440×900：document 1440×900，无横向/纵向溢出；五主体、Footer 和交互均位于首屏
+- 1024×800：document 1009×909，无横向溢出；五主体保留，SVG 轨道可见
+- 390×844：document 375×1548，无横向溢出；仅双 Review 核心与紧凑路由说明，SVG/动画均关闭
+
+隔离 Runtime 状态验收
+- FRESH：3 条装饰流光、2 个运行模块呼吸；bounded/truncated 文案和两个溢出入口可见
+- STALE：Runtime 已过期提示可见，motion=paused，flow/module animation 均为 0
+- ERROR_RETAINED：保留旧快照并显示错误，motion=paused
+- ERROR_EMPTY：不生成 Provider/Job 示例，DOM/SVG fallback 保持可用，0 Canvas
+- Modal：有界和截断提示可见；关闭后焦点恢复到 Agent overflow 触发器
+- 连续 3 次刷新：started 20→23，deduplicated=0，Timer 1→1，Listener 2→2，Canvas 0→0，SVG 1→1
+- Command Center 三个验收标签 console：0 warnings / 0 errors
+```
+
+浏览器控制面当前只提供 viewport 能力，无法切换操作系统 reduced-motion。验收已确认页面实际加载的 CSSOM 包含 Command Center `prefers-reduced-motion: reduce` 规则；规则内容和 FRESH/STALE/ERROR motion gate 另由 H4 专项测试覆盖。
+
+STALE/ERROR 使用工作区隔离只读 mock（8091）和独立 Vite（5174）验收。两套服务在 ready 时同时通过 PID、端口和 HTTP identity 检查；验收后仅停止本次记录的 owner/launcher 并删除临时 mock/log，既有 5173 前端和 8090 后端保持运行。
+
+当前状态：
+
+```text
+H4 COMPLETED — WAITING FOR H5 CONFIRMATION
+```
+
+本计划到此停止。未经用户明确回复“继续 H5”，不得进入生产验收收口、README/发布说明调整或任何新交互专项。
