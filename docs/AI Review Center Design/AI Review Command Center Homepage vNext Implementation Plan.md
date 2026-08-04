@@ -4,11 +4,11 @@
 
 - 计划版本：`vNext / Homepage Frozen Topology`
 - 基线提交：`3fc3fb9 Document current AI review flow audit`
-- 当前阶段：`H2 静态首页结构`
-- 当前状态：`H2 COMPLETED — WAITING FOR H3 CONFIRMATION`
-- 当前允许结果：仅新增本计划文档，不实施前端、不修改 Runtime、不进入旧计划的 Phase 4/5 延续工作。
-- 下一授权口令：H2 验收完成后，等待用户明确回复“继续 H3”。
-- 停止点：本计划落地并检查 diff 后立即停止。
+- 当前阶段：`H3 既有 Runtime 交互接线`
+- 当前状态：`H3 COMPLETED — WAITING FOR H4 CONFIRMATION`
+- 当前允许结果：H3 已完成并停止；未经新授权不得进入视觉强化、响应式调整或悬浮/Drawer 专项。
+- 下一授权口令：H3 验收完成后，等待用户明确回复“继续 H4”。
+- 停止点：H3 本地提交后立即停止，等待用户确认。
 
 本文档是审计完成后的独立首页实施总控。它不修改、覆盖或续写以下历史计划的执行状态：
 
@@ -652,3 +652,64 @@ H2 COMPLETED — WAITING FOR H3 CONFIRMATION
 ```
 
 本计划到此停止。未经用户明确回复“继续 H3”，不得接入刷新、任务跳转、Modal、告警导航或 Result 导航。
+
+## 11.4 H3 实施结果
+
+H3 已在冻结首页结构上接通现有 Runtime 支持的只读交互：
+
+- 顶部“刷新 Runtime”复用 `useCommandCenterRuntimeSnapshot().reload`，请求进行中禁用按钮，不新增第二套轮询；
+- 运行 Review 标记使用 Presentation 生成的安全内部地址 `/tasks/:taskId?reviewKey=...`，缺少正整数 taskId 时不渲染为可点击入口；
+- Agent/Standard 运行项超出首页四项或 Runtime 标记截断时，可打开现有 Ant Design Modal；Modal 始终说明列表来自有界 Runtime 快照，并展示已载入/总数及 truncated 状态；
+- Result Persistence 的“查看 Review 任务”进入既有 `/tasks` 路由；
+- HUD 选择首个带 `navigationTarget` 的当前告警作为可点击告警入口，不带安全内部目标时保持只读卡片；
+- 所有交互入口均使用原生 `button`，浏览器默认提供 Enter/Space 等价激活；没有新增手写键盘 Listener；
+- Modal 关闭后优先恢复溢出触发器焦点；若轮询导致触发器消失，则回退到刷新按钮；
+- 页面仍只使用原有 Runtime hook 的 AbortController、单 Timeout 和 visibility/focus lifecycle，未新增轮询、Observer 或全局 Listener。
+
+本阶段实际修改：
+
+- `frontend/src/command-center/CommandCenterPage.jsx`
+- `frontend/src/command-center/CommandCenterCanvas.jsx`
+- `frontend/src/command-center/commandCenterInteractions.js`
+- `frontend/src/command-center/commandCenterPresentation.js`
+- `frontend/src/command-center/commandCenter.css`
+- `frontend/tests/commandCenterInformationArchitecture.test.mjs`
+- `frontend/tests/commandCenterInteractions.test.mjs`
+- `frontend/tests/commandCenterPresentation.test.mjs`
+- 本计划文档
+
+H3 未实现悬浮执行链、模块详情 Drawer、fallback 点击追踪、队列写操作、新结果页、Runtime/后端/数据库或业务状态机修改。
+
+验证结果：
+
+```text
+node --test tests/commandCenterPresentation.test.mjs tests/commandCenterModel.test.mjs tests/commandCenterInformationArchitecture.test.mjs tests/commandCenterInteractions.test.mjs
+26 passed, 0 failed
+
+node --test
+103 passed, 0 failed
+
+.\scripts\run-frontend.cmd build
+passed；Vite 仅保留既有的大 chunk 提示
+
+1440×900 应用内浏览器验收
+- 复用既有 5173 前端和 8090 Runtime API，两个 URL 均返回 HTTP 200；未启动或停止服务
+- viewport/document：1440×900，无横向或纵向滚动溢出
+- 手动刷新只将 started 从 7 增至 8，deduplicated 保持 0
+- 运行 Review：进入 /tasks/1174?reviewKey=agent-claude-code-deepseek-v4-pro
+- Runtime Alert：进入 /tasks/1165
+- Result Persistence：进入 /tasks
+- 键盘焦点落在刷新按钮，focus-visible outline 为 solid 3px
+- 离开首页后 Command Center DOM 已卸载；轮询清理仍由既有 lifecycle 专项测试覆盖
+- Command Center 独立新标签 console：0 warnings / 0 errors
+```
+
+浏览器验收时真实 Runtime 没有出现超过首页上限的运行项，因此未人为创建后台任务。Modal 的触发器恢复、触发器消失后的刷新按钮回退和无效目标保护由 3 项纯函数专项测试覆盖；有界/truncated 文案和 Modal 接线由信息架构测试覆盖。
+
+当前状态：
+
+```text
+H3 COMPLETED — WAITING FOR H4 CONFIRMATION
+```
+
+本计划到此停止。未经用户明确回复“继续 H4”，不得进入视觉强化、响应式、reduced-motion、Canvas fallback 或资源治理工作。

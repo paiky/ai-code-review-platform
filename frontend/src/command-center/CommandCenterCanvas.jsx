@@ -1,4 +1,10 @@
-export default function CommandCenterCanvas({ presentation, runtimeLoading }) {
+export default function CommandCenterCanvas({
+  presentation,
+  runtimeLoading,
+  onOpenReview,
+  onOpenOverflow,
+  onOpenResult
+}) {
   const {
     intake,
     engineSelection,
@@ -44,10 +50,20 @@ export default function CommandCenterCanvas({ presentation, runtimeLoading }) {
       <div className="command-center-map-grid">
         <ReviewIntake intake={intake} />
         <EngineSelection engineSelection={engineSelection} />
-        <ReviewModule lane={agentLane} runtimeLoading={runtimeLoading} />
+        <ReviewModule
+          lane={agentLane}
+          runtimeLoading={runtimeLoading}
+          onOpenReview={onOpenReview}
+          onOpenOverflow={onOpenOverflow}
+        />
         <FallbackRelation fallback={fallback} />
-        <ReviewModule lane={standardLane} runtimeLoading={runtimeLoading} />
-        <ResultPersistence resultPersistence={resultPersistence} />
+        <ReviewModule
+          lane={standardLane}
+          runtimeLoading={runtimeLoading}
+          onOpenReview={onOpenReview}
+          onOpenOverflow={onOpenOverflow}
+        />
+        <ResultPersistence resultPersistence={resultPersistence} onOpen={onOpenResult} />
       </div>
     </section>
   );
@@ -96,7 +112,7 @@ function EngineSelection({ engineSelection }) {
 }
 
 
-function ReviewModule({ lane, runtimeLoading }) {
+function ReviewModule({ lane, runtimeLoading, onOpenReview, onOpenOverflow }) {
   const isAgent = lane.engine === 'AGENT';
   const nextQueued = lane.nextQueued;
   const observedProvider = lane.providers[0];
@@ -138,7 +154,11 @@ function ReviewModule({ lane, runtimeLoading }) {
           detail={nextQueued ? nextQueued.projectName : null}
           compact
         />
-        <RunningItems lane={lane} />
+        <RunningItems
+          lane={lane}
+          onOpenReview={onOpenReview}
+          onOpenOverflow={onOpenOverflow}
+        />
       </div>
     </article>
   );
@@ -178,19 +198,46 @@ function WorkerSummary({ summary }) {
 }
 
 
-function RunningItems({ lane }) {
-  const visible = Math.min(lane.visibleRunningItemCount, 4);
+function RunningItems({ lane, onOpenReview, onOpenOverflow }) {
+  const visibleItems = lane.runningItems.slice(0, 4);
+  const visible = visibleItems.length;
   const total = lane.totalRunningItemCount;
+  const hasOverflow = lane.runningItems.length > visible
+    || lane.runningItemsTruncated
+    || total > visible;
   return (
     <div className="command-center-module-metric is-running-items">
       <small>Running Items</small>
       <strong>显示 {visible} / 共 {total}</strong>
-      <span aria-label={`当前展示 ${visible} 个，共 ${total} 个运行项`}>
-        {Array.from({ length: Math.min(Math.max(total, 4), 6) }, (_, index) => (
-          <i key={index} className={index < visible ? 'is-visible' : ''} />
+      <span className="command-center-running-markers" aria-label={`当前展示 ${visible} 个，共 ${total} 个运行项`}>
+        {visibleItems.map(item => (
+          item.navigationTarget ? (
+            <button
+              key={item.motionIdentity}
+              type="button"
+              className="command-center-running-marker"
+              data-command-center-action="open-running-review"
+              data-review-identity={item.motionIdentity}
+              title={`${item.projectName} · ${item.displayName} · ${item.stageLabel}`}
+              aria-label={`打开 ${item.projectName} 的 ${item.displayName}`}
+              onClick={() => onOpenReview(item)}
+            />
+          ) : (
+            <i key={item.motionIdentity} className="command-center-running-marker is-disabled" />
+          )
         ))}
       </span>
-      {lane.runningItemsTruncated && <em>有界快照</em>}
+      {hasOverflow && (
+        <button
+          type="button"
+          className="command-center-running-overflow"
+          data-command-center-action={`open-${lane.engine.toLowerCase()}-overflow`}
+          onClick={event => onOpenOverflow(lane, event.currentTarget)}
+          aria-label={`查看 ${lane.title} 运行项列表`}
+        >
+          查看运行项
+        </button>
+      )}
     </div>
   );
 }
@@ -206,7 +253,7 @@ function FallbackRelation({ fallback }) {
 }
 
 
-function ResultPersistence({ resultPersistence }) {
+function ResultPersistence({ resultPersistence, onOpen }) {
   return (
     <article className="command-center-result command-center-map-node" data-zone-key={resultPersistence.zoneKey}>
       <NodeHeading eyebrow="STRUCTURAL ONLY" title={resultPersistence.title} subtitle="结果落库" />
@@ -217,7 +264,14 @@ function ResultPersistence({ resultPersistence }) {
       </div>
       <strong>Task Detail / Notification</strong>
       <p>{resultPersistence.description}</p>
-      <span className="command-center-result-route">Review 任务 · /tasks</span>
+      <button
+        type="button"
+        className="command-center-result-route"
+        data-command-center-action="open-review-tasks"
+        onClick={() => onOpen(resultPersistence.navigationTarget)}
+      >
+        查看 Review 任务
+      </button>
     </article>
   );
 }

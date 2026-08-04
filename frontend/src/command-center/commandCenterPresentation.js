@@ -308,10 +308,21 @@ function presentItem(item) {
   return {
     ...item,
     motionIdentity: reviewMotionIdentity(item),
+    navigationTarget: reviewTaskTarget(item),
     providerModelLabel: [item.provider, item.model].filter(Boolean).join(' · ') || 'Provider 待分配',
     stageLabel: stageLabel(item.stage),
     engineToken: item.fallback ? 'fallback' : item.requestedEngine === 'AGENT' ? 'agent' : 'standard'
   };
+}
+
+
+export function reviewTaskTarget(item) {
+  const taskId = Math.trunc(Number(item?.taskId));
+  if (!Number.isFinite(taskId) || taskId <= 0) return null;
+  const reviewKey = typeof item?.reviewKey === 'string' && item.reviewKey.trim()
+    ? item.reviewKey.trim()
+    : 'default';
+  return `/tasks/${taskId}?reviewKey=${encodeURIComponent(reviewKey)}`;
 }
 
 

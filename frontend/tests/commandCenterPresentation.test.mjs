@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   buildCommandCenterPresentation,
+  reviewTaskTarget,
   stageLabel
 } from '../src/command-center/commandCenterPresentation.js';
 
@@ -233,9 +234,21 @@ test('review labels use project first and stable stage vocabulary', () => {
 
   assert.equal(review.projectName, 'paycenter');
   assert.equal(review.motionIdentity, '1:41:standard-main');
+  assert.equal(review.navigationTarget, '/tasks/41?reviewKey=standard-main');
   assert.equal(review.providerModelLabel, 'deepseek · v4');
   assert.equal(stageLabel('AGENT_CONVERGING'), 'Agent 收敛');
   assert.equal(stageLabel('FUTURE_STAGE'), '执行中');
+});
+
+
+test('review task targets are internal, encoded and unavailable without a positive task id', () => {
+  assert.equal(
+    reviewTaskTarget({ taskId: 42, reviewKey: 'agent/a b' }),
+    '/tasks/42?reviewKey=agent%2Fa%20b'
+  );
+  assert.equal(reviewTaskTarget({ taskId: 7, reviewKey: '' }), '/tasks/7?reviewKey=default');
+  assert.equal(reviewTaskTarget({ taskId: 0, reviewKey: 'standard' }), null);
+  assert.equal(reviewTaskTarget({ taskId: 'not-a-task', reviewKey: 'standard' }), null);
 });
 
 

@@ -1,32 +1,69 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { Modal } from 'antd';
+import { useNavigate } from 'react-router-dom';
 
 import CommandCenterCanvas from './CommandCenterCanvas.jsx';
+import { restoreCommandCenterFocus } from './commandCenterInteractions.js';
 import { buildCommandCenterPresentation } from './commandCenterPresentation.js';
 import { useCommandCenterRuntimeSnapshot } from './useCommandCenterSnapshots.js';
 import './commandCenter.css';
 
 
 export default function CommandCenterPage() {
-  const { runtime, runtimeLoading, runtimeError } = useCommandCenterRuntimeSnapshot();
+  const navigate = useNavigate();
+  const [overflowZoneKey, setOverflowZoneKey] = useState(null);
+  const overflowTriggerRef = useRef(null);
+  const refreshButtonRef = useRef(null);
+  const { runtime, runtimeLoading, runtimeError, reload } = useCommandCenterRuntimeSnapshot();
   const presentation = useMemo(
     () => buildCommandCenterPresentation({ runtime, runtimeError }),
     [runtime, runtimeError]
   );
+  const overflowLane = [presentation.agentLane, presentation.standardLane]
+    .find(lane => lane.zoneKey === overflowZoneKey) || null;
+  const navigateTo = useCallback(target => {
+    if (typeof target === 'string' && target.startsWith('/') && !target.startsWith('//')) {
+      navigate(target);
+    }
+  }, [navigate]);
+  const openOverflow = useCallback((lane, trigger) => {
+    overflowTriggerRef.current = trigger || null;
+    setOverflowZoneKey(lane.zoneKey);
+  }, []);
+  const closeOverflow = useCallback(() => setOverflowZoneKey(null), []);
+  const restoreOverflowFocus = useCallback(() => {
+    const trigger = overflowTriggerRef.current;
+    overflowTriggerRef.current = null;
+    restoreCommandCenterFocus(trigger, refreshButtonRef.current);
+  }, []);
 
   return (
-    <main className="command-center-page" data-command-center-phase="HOMEPAGE_VNEXT_H2">
+    <main className="command-center-page" data-command-center-phase="HOMEPAGE_VNEXT_H3">
       <section className="command-center-shell" aria-labelledby="command-center-title">
         <header className="command-center-heading">
           <div>
             <span className="command-center-kicker">AI REVIEW COMMAND CENTER</span>
             <h1 id="command-center-title">AI Review 指挥中心</h1>
           </div>
-          <p>当前调度快照 · 双 Review 执行轨 · 结构性结果回流</p>
+          <div className="command-center-heading-actions">
+            <p>当前调度快照 · 双 Review 执行轨 · 结构性结果回流</p>
+            <button
+              ref={refreshButtonRef}
+              type="button"
+              className="command-center-refresh"
+              data-command-center-action="refresh-runtime"
+              onClick={() => void reload()}
+              disabled={runtimeLoading}
+            >
+              {runtimeLoading ? '刷新中…' : '刷新 Runtime'}
+            </button>
+          </div>
         </header>
 
         <RuntimeHud
           presentation={presentation}
           loading={runtimeLoading}
+          onNavigate={navigateTo}
         />
 
         <RuntimeNotice
@@ -37,6 +74,9 @@ export default function CommandCenterPage() {
         <CommandCenterCanvas
           presentation={presentation}
           runtimeLoading={runtimeLoading}
+          onOpenReview={item => navigateTo(item.navigationTarget)}
+          onOpenOverflow={openOverflow}
+          onOpenResult={navigateTo}
         />
 
         <RuntimeFooter presentation={presentation} />
@@ -45,15 +85,33 @@ export default function CommandCenterPage() {
           当前页面展示 Runtime 实时有界快照；运行项与告警列表可能受接口上限影响。
         </p>
       </section>
+
+      <Modal
+        title={overflowLane ? `${overflowLane.title} · 运行 Review` : '运行 Review'}
+        open={Boolean(overflowLane)}
+        footer={null}
+        width={720}
+        onCancel={closeOverflow}
+        afterClose={restoreOverflowFocus}
+        keyboard
+        destroyOnHidden
+      >
+        {overflowLane && (
+          <RunningItemsModal
+            lane={overflowLane}
+            onOpenReview={item => navigateTo(item.navigationTarget)}
+          />
+        )}
+      </Modal>
     </main>
   );
 }
 
 
-function RuntimeHud({ presentation, loading }) {
+function RuntimeHud({ presentation, loading, onNavigate }) {
   const { hud, agentLane, standardLane } = presentation;
   const provider = hud.providersObserved[0];
-  const alert = hud.alerts[0];
+  const alert = hud.alerts.find(item => item.navigationTarget) || hud.alerts[0];
   const coverageDetail = hud.coverage.truncated
     ? 'Bounded Snapshot · 部分截断'
     : 'Bounded Snapshot';
@@ -101,22 +159,84 @@ function RuntimeHud({ presentation, loading }) {
         value={`${hud.alerts.length} 条告警`}
         detail={alert ? alertLabel(alert) : '当前无 Runtime 告警'}
         token={hud.alerts.length > 0 ? 'alert' : 'neutral'}
+        actionLabel={alert?.navigationTarget ? `打开 ${alertLabel(alert)}` : null}
+        onAction={alert?.navigationTarget ? () => onNavigate(alert.navigationTarget) : null}
       />
     </section>
   );
 }
 
 
-function HudMetric({ icon, label, value, detail, token }) {
-  return (
-    <article className={`command-center-hud-card is-${token}`}>
+function HudMetric({ icon, label, value, detail, token, actionLabel, onAction }) {
+  const content = (
+    <>
       <span className="command-center-hud-icon" aria-hidden="true">{icon}</span>
       <span className="command-center-hud-copy">
         <small>{label}</small>
         <strong>{value}</strong>
         <em>{detail}</em>
       </span>
-    </article>
+    </>
+  );
+  if (onAction) {
+    return (
+      <button
+        type="button"
+        className={`command-center-hud-card is-${token} is-actionable`}
+        data-command-center-action="open-alert"
+        aria-label={actionLabel}
+        onClick={onAction}
+      >
+        {content}
+      </button>
+    );
+  }
+  return <article className={`command-center-hud-card is-${token}`}>{content}</article>;
+}
+
+
+function RunningItemsModal({ lane, onOpenReview }) {
+  const loaded = lane.runningItems.length;
+  const total = lane.totalRunningItemCount;
+  return (
+    <div className="command-center-modal-content">
+      <p className="command-center-modal-notice" role="status">
+        当前列表来自 Runtime 有界快照，已载入 {loaded} / 共 {total} 条运行项。
+        {lane.runningItemsTruncated ? ' 接口已标记为部分截断。' : ''}
+      </p>
+      <div className="command-center-modal-list">
+        {loaded === 0 && (
+          <p className="command-center-modal-empty">当前快照未返回可打开的运行 Review。</p>
+        )}
+        {lane.runningItems.map(item => (
+          item.navigationTarget ? (
+            <button
+              key={item.motionIdentity}
+              type="button"
+              data-command-center-action="open-review-from-modal"
+              onClick={() => onOpenReview(item)}
+              aria-label={`打开 ${item.projectName} 的 ${item.displayName}`}
+            >
+              <span className={`command-center-modal-token is-${item.engineToken}`} aria-hidden="true" />
+              <span>
+                <strong>{item.projectName}</strong>
+                <small>{item.displayName} · {item.providerModelLabel}</small>
+              </span>
+              <em>{item.stageLabel}</em>
+            </button>
+          ) : (
+            <div key={item.motionIdentity} className="command-center-modal-item is-disabled">
+              <span className={`command-center-modal-token is-${item.engineToken}`} aria-hidden="true" />
+              <span>
+                <strong>{item.projectName}</strong>
+                <small>{item.displayName} · 任务标识不可用</small>
+              </span>
+              <em>{item.stageLabel}</em>
+            </div>
+          )
+        ))}
+      </div>
+    </div>
   );
 }
 

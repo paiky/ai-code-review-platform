@@ -34,8 +34,8 @@ test('root route renders Command Center while preserving legacy taskId redirect'
 });
 
 
-test('H2 page renders six Runtime HUD metrics and four current-state footer metrics', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="HOMEPAGE_VNEXT_H2"'), true);
+test('H3 page preserves six Runtime HUD metrics and four current-state footer metrics', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="HOMEPAGE_VNEXT_H3"'), true);
   assert.equal(pageSource.includes('AI Review 指挥中心'), true);
   assert.equal((pageSource.match(/<HudMetric/g) || []).length, 6);
   assert.equal((pageSource.match(/<FooterMetric/g) || []).length, 4);
@@ -53,19 +53,19 @@ test('H2 page renders six Runtime HUD metrics and four current-state footer metr
 });
 
 
-test('H2 uses the frozen five-subject dual-review topology with one structural fallback', () => {
+test('H3 preserves the frozen five-subject dual-review topology with one structural fallback', () => {
   for (const token of [
     'ReviewIntake',
     'EngineSelection',
-    'ReviewModule lane={agentLane}',
-    'ReviewModule lane={standardLane}',
+    'lane={agentLane}',
+    'lane={standardLane}',
     'FallbackRelation',
     'ResultPersistence'
   ]) assert.equal(canvasSource.includes(token), true, token);
   assert.equal((canvasSource.match(/<FallbackRelation/g) || []).length, 1);
   assert.equal(canvasSource.includes('Fallback · 结构性关系'), true);
   assert.equal(canvasSource.includes('STRUCTURAL ONLY'), true);
-  assert.equal(canvasSource.includes('Review 任务 · /tasks'), true);
+  assert.equal(canvasSource.includes('resultPersistence.navigationTarget'), true);
   assert.equal(canvasSource.includes('Agent 到 Standard 的结构性降级关系'), true);
 });
 
@@ -84,7 +84,7 @@ test('all semantic content is DOM-owned while SVG is static decoration and Canva
 });
 
 
-test('H2 exposes truthful FRESH, STALE, EMPTY, ERROR and truncated copy', () => {
+test('H3 exposes truthful FRESH, STALE, EMPTY, ERROR and truncated copy', () => {
   for (const copy of [
     'Runtime 实时',
     'Runtime 已过期',
@@ -100,12 +100,29 @@ test('H2 exposes truthful FRESH, STALE, EMPTY, ERROR and truncated copy', () => 
 });
 
 
-test('H2 contains no unimplemented controls or unsupported homepage semantics', () => {
-  assert.equal(pageSource.includes('<button'), false);
-  assert.equal(canvasSource.includes('<button'), false);
-  assert.equal(pageSource.includes('<Modal'), false);
-  assert.equal(pageSource.includes('useNavigate'), false);
-  assert.equal(pageSource.includes('reload'), false);
+test('H3 wires only the frozen read-only interactions with native keyboard controls', () => {
+  for (const token of [
+    'useNavigate',
+    '<Modal',
+    'reload',
+    'data-command-center-action="refresh-runtime"',
+    'data-command-center-action="open-alert"',
+    'data-command-center-action="open-review-from-modal"',
+    'afterClose={restoreOverflowFocus}',
+    'restoreCommandCenterFocus(trigger, refreshButtonRef.current)'
+  ]) assert.equal(pageSource.includes(token), true, token);
+  for (const token of [
+    'data-command-center-action="open-running-review"',
+    'data-command-center-action="open-review-tasks"',
+    'onOpenOverflow',
+    '查看 Review 任务',
+    '查看运行项'
+  ]) assert.equal(canvasSource.includes(token), true, token);
+  assert.equal(pageSource.includes('onKeyDown'), false);
+  assert.equal(canvasSource.includes('onKeyDown'), false);
+  assert.equal(`${pageSource}\n${canvasSource}`.includes('type="button"'), true);
+  assert.equal(pageSource.includes('当前列表来自 Runtime 有界快照'), true);
+  assert.equal(pageSource.includes('接口已标记为部分截断'), true);
   for (const forbidden of [
     '统一 Task Queue',
     'AI Review Core',
@@ -116,7 +133,10 @@ test('H2 contains no unimplemented controls or unsupported homepage semantics', 
     'Fallback Rate',
     '查看全部结果',
     '悬浮查看流程',
-    '点击查看详情'
+    '点击查看详情',
+    'Drawer',
+    'cancelJob',
+    'retryJob'
   ]) assert.equal(`${pageSource}\n${canvasSource}`.includes(forbidden), false, forbidden);
 });
 
