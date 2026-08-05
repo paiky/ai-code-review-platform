@@ -62,6 +62,64 @@ test('keeps every migrated capability on an explicit Journey or finding entry', 
   }
 });
 
+test('temporarily hides deferred product entries without deleting their capabilities', () => {
+  for (const marker of [
+    'const QUALITY_GOVERNANCE_NAV_VISIBLE = false',
+    'const EVALUATION_CASE_ACTION_VISIBLE = false',
+    'const FINDING_REFINEMENT_ACTION_VISIBLE = false',
+    'const STANDARD_REVIEW_COMPARISON_ACTION_VISIBLE = false',
+    'QUALITY_GOVERNANCE_NAV_VISIBLE &&',
+    'EVALUATION_CASE_ACTION_VISIBLE &&',
+    'FINDING_REFINEMENT_ACTION_VISIBLE &&',
+    'STANDARD_REVIEW_COMPARISON_ACTION_VISIBLE'
+  ]) {
+    assert.equal(appSource.includes(marker), true, marker);
+  }
+
+  for (const preserved of [
+    'function ReviewImmersiveWorkspace',
+    'function EvaluationCaseControl',
+    'function FindingRefinementControl',
+    '追加普通 Review 对照',
+    '<Route path={REVIEW_QUALITY_ROUTE}'
+  ]) {
+    assert.equal(appSource.includes(preserved), true, preserved);
+  }
+
+  for (const removedDescription of [
+    '查看 GitLab MR、Push 和手动审查任务，按项目、端类型、触发类型和 Review 状态筛选。',
+    '维护全局 Review 能力、项目组、端类型、模型 Provider、AI Review Profile 和 Push 审核策略。',
+    '查看近期功能变化、部署注意和验证提示。',
+    '按 GitLab Webhook、钉钉机器人、平台项目组、GitLab 项目和模型配置的顺序完成接入。'
+  ]) {
+    assert.equal(appSource.includes(removedDescription), false, removedDescription);
+  }
+});
+
+test('removes the complete standalone page header from the primary utility pages', () => {
+  const pageRanges = [
+    ['function TaskList({', 'function ReviewFeedbackControl'],
+    ['function TemplateConfig()', 'function TaskListPage()'],
+    ['function ReleaseNotesPage()', 'function HelpImage'],
+    ['function HelpPage()', 'function ReviewQualityDashboardPage']
+  ];
+
+  for (const [start, end] of pageRanges) {
+    const pageSource = sourceBetween(start, end);
+    assert.equal(pageSource.includes('<TaskWorkspaceShell>'), true, start);
+    assert.equal(/<TaskWorkspaceShell\s+[^>]*title=/.test(pageSource), false, start);
+  }
+
+  const shellSource = sourceBetween(
+    'function TaskWorkspaceShell',
+    'function TaskList'
+  );
+  assert.equal(
+    shellSource.includes('{(title || description || actions || leading) && <Paper'),
+    true
+  );
+});
+
 test('the migrated context and preflight drawers render only safe derived fields', () => {
   const contextSource = sourceBetween(
     'function ContextStageDrawerDetails',

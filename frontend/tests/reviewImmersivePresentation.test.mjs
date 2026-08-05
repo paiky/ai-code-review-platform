@@ -241,6 +241,21 @@ test('AppFrame mode is route-scoped and invalid or departed routes restore the n
   assert.equal(appSource.includes('document.body.class'), false);
 });
 
+test('task detail pauses automatic immersive entry while preserving the reusable workspace', () => {
+  assert.match(appSource, /const TASK_DETAIL_AUTO_IMMERSIVE_ENTRY_ENABLED = false/);
+  assert.match(
+    appSource,
+    /const taskDetailWorkspaceMode = TASK_DETAIL_AUTO_IMMERSIVE_ENTRY_ENABLED[\s\S]*\? immersivePresentation\.mode[\s\S]*: 'RESULT'/
+  );
+  assert.match(
+    appSource,
+    /if \([\s\S]*TASK_DETAIL_AUTO_IMMERSIVE_ENTRY_ENABLED[\s\S]*immersivePresentation\.mode === 'IMMERSIVE'/
+  );
+  assert.match(appSource, /function ReviewImmersiveWorkspace/);
+  assert.match(appSource, /<ReviewImmersiveCanvas/);
+  assert.match(appSource, /journey\?\.running && \([\s\S]*<ReviewJourneyExperience/);
+});
+
 test('immersive workspace keeps semantic regions existing interactions and reduced motion', () => {
   const start = appSource.indexOf('function ReviewImmersiveWorkspace');
   const end = appSource.indexOf('function CodeQualityReviewView', start);

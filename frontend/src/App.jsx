@@ -190,6 +190,11 @@ const HELP_ROUTE = '/help';
 const REVIEW_LEARNING_UI_ENABLED = String(import.meta.env.VITE_REVIEW_LEARNING_UI_ENABLED || '').toLowerCase() === 'true';
 const PROJECT_REVIEW_POLICY_UI_ENABLED = REVIEW_LEARNING_UI_ENABLED
   && String(import.meta.env.VITE_PROJECT_REVIEW_POLICY_UI_ENABLED || '').toLowerCase() === 'true';
+const TASK_DETAIL_AUTO_IMMERSIVE_ENTRY_ENABLED = false;
+const QUALITY_GOVERNANCE_NAV_VISIBLE = false;
+const EVALUATION_CASE_ACTION_VISIBLE = false;
+const FINDING_REFINEMENT_ACTION_VISIBLE = false;
+const STANDARD_REVIEW_COMPARISON_ACTION_VISIBLE = false;
 const JOB_QUEUE_REFRESH_EVENT = 'ai-review-job-queue-refresh';
 const FAILURE_NOTIFICATION_REFRESH_EVENT = 'ai-review-failure-notification-refresh';
 const TARGET_TYPE_OPTIONS = [
@@ -1660,7 +1665,7 @@ function TaskWorkspaceShell({ title, description, actions, children, leading }) 
       }}
     >
       <Stack spacing={2.5}>
-        <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
+        {(title || description || actions || leading) && <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
           <Stack
             direction={{ xs: 'column', lg: 'row' }}
             spacing={2}
@@ -1672,7 +1677,7 @@ function TaskWorkspaceShell({ title, description, actions, children, leading }) 
                   {leading}
                 </Box>
               )}
-              <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: 0.75, color: '#1f2933' }}>
+              <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: description ? 0.75 : 0, color: '#1f2933' }}>
                 {title}
               </MuiTypography>
               {description && (
@@ -1700,7 +1705,7 @@ function TaskWorkspaceShell({ title, description, actions, children, leading }) 
               </Stack>
             )}
           </Stack>
-        </Paper>
+        </Paper>}
         {children}
       </Stack>
     </Box>
@@ -1787,10 +1792,7 @@ function TaskList({ onOpen }) {
   ];
 
   return (
-    <TaskWorkspaceShell
-      title="任务列表"
-      description="查看 GitLab MR、Push 和手动审查任务，按项目、端类型、触发类型和 Review 状态筛选。"
-    >
+    <TaskWorkspaceShell>
       <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
         <Space wrap className="task-filter-bar">
           <Cascader
@@ -5457,6 +5459,9 @@ function CodeQualityReviewView({
                 </Button>
               )}
               {isGitLabTask && (
+                alternateEngine === 'AGENT'
+                || STANDARD_REVIEW_COMPARISON_ACTION_VISIBLE
+              ) && (
                 <Button
                   loading={retrying}
                   disabled={review.status === 'RUNNING'}
@@ -5601,13 +5606,15 @@ function CodeQualityReviewView({
                               中断
                             </Button>
                           )}
-                          <FindingRefinementControl
-                            taskId={taskId}
-                            review={review}
-                            finding={finding}
-                            findingIndex={index}
-                            onRefresh={onRefresh}
-                          />
+                          {FINDING_REFINEMENT_ACTION_VISIBLE && (
+                            <FindingRefinementControl
+                              taskId={taskId}
+                              review={review}
+                              finding={finding}
+                              findingIndex={index}
+                              onRefresh={onRefresh}
+                            />
+                          )}
                         </Space>
                       </Descriptions.Item>
                       <Descriptions.Item label="来源">{sourceLabel(finding.source || review.provider)}</Descriptions.Item>
@@ -5631,12 +5638,14 @@ function CodeQualityReviewView({
                         originalRiskLevel: finding.severity
                       }}
                     />
-                    <EvaluationCaseControl
-                      taskId={taskId}
-                      review={review}
-                      finding={finding}
-                      compact
-                    />
+                    {EVALUATION_CASE_ACTION_VISIBLE && (
+                      <EvaluationCaseControl
+                        taskId={taskId}
+                        review={review}
+                        finding={finding}
+                        compact
+                      />
+                    )}
                   </Space>
                 )
               };
@@ -5897,6 +5906,9 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     presentationNow,
     error
   ]);
+  const taskDetailWorkspaceMode = TASK_DETAIL_AUTO_IMMERSIVE_ENTRY_ENABLED
+    ? immersivePresentation.mode
+    : 'RESULT';
 
   useEffect(() => {
     const taskChanged = reviewSelectionTaskRef.current !== taskId;
@@ -5916,19 +5928,19 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   }, [selectionKeys]);
 
   useEffect(() => {
-    reportMode(immersivePresentation.mode);
+    reportMode(taskDetailWorkspaceMode);
     return () => reportMode('RESULT');
-  }, [immersivePresentation.mode, reportMode]);
+  }, [taskDetailWorkspaceMode, reportMode]);
 
   useEffect(() => {
-    if (immersivePresentation.mode !== 'IMMERSIVE' || !immersivePresentation.startedAt) {
+    if (taskDetailWorkspaceMode !== 'IMMERSIVE' || !immersivePresentation.startedAt) {
       return undefined;
     }
     setPresentationNow(Date.now());
     const timer = window.setInterval(() => setPresentationNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [
-    immersivePresentation.mode,
+    taskDetailWorkspaceMode,
     immersivePresentation.selectedReviewKey,
     immersivePresentation.startedAt
   ]);
@@ -6194,7 +6206,8 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   );
 
   if (
-    immersivePresentation.mode === 'IMMERSIVE'
+    TASK_DETAIL_AUTO_IMMERSIVE_ENTRY_ENABLED
+    && immersivePresentation.mode === 'IMMERSIVE'
     && detail
     && activeJourney
   ) {
@@ -8609,10 +8622,7 @@ function TemplateConfig() {
     .filter(Boolean);
 
   return (
-    <TaskWorkspaceShell
-      title="设置"
-      description="维护全局 Review 能力、项目组、端类型、模型 Provider、AI Review Profile 和 Push 审核策略。"
-    >
+    <TaskWorkspaceShell>
       {contextHolder}
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
       <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 2 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
@@ -9805,10 +9815,7 @@ function ReleaseNotesPage() {
   const [activeReleaseId, setActiveReleaseId] = useState(releaseNotes[0]?.id || null);
 
   return (
-    <TaskWorkspaceShell
-      title="版本更新"
-      description="查看近期功能变化、部署注意和验证提示。"
-    >
+    <TaskWorkspaceShell>
       <Paper variant="outlined" className="release-page-shell" sx={{ p: { xs: 1.5, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
         <div className="release-list">
           {releaseNotes.map((item, index) => {
@@ -9883,10 +9890,7 @@ function HelpImage({ src, alt }) {
 
 function HelpPage() {
   return (
-    <TaskWorkspaceShell
-      title="GitLab / 钉钉 / 项目组接入"
-      description="按 GitLab Webhook、钉钉机器人、平台项目组、GitLab 项目和模型配置的顺序完成接入。"
-    >
+    <TaskWorkspaceShell>
       <Paper variant="outlined" className="help-page-shell" sx={{ p: { xs: 1.5, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff', maxWidth: 1180, width: '100%', mx: 'auto' }}>
         <div className="help-section-list">
         <section className="help-section">
@@ -12108,21 +12112,23 @@ function AppFrame() {
           >
             任务
           </Button>
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: governanceMenuItems,
-              selectedKeys: [governanceSelectedKey],
-              onClick: ({ key }) => navigate(key, { state: { from: route } })
-            }}
-          >
-            <Button
-              icon={<ClusterOutlined />}
-              type={isGovernanceRoute ? 'primary' : 'default'}
+          {QUALITY_GOVERNANCE_NAV_VISIBLE && (
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: governanceMenuItems,
+                selectedKeys: [governanceSelectedKey],
+                onClick: ({ key }) => navigate(key, { state: { from: route } })
+              }}
             >
-              质量治理
-            </Button>
-          </Dropdown>
+              <Button
+                icon={<ClusterOutlined />}
+                type={isGovernanceRoute ? 'primary' : 'default'}
+              >
+                质量治理
+              </Button>
+            </Dropdown>
+          )}
           <Button
             icon={<SettingOutlined />}
             type={isSettingsRoute ? 'primary' : 'default'}

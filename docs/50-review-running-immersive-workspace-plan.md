@@ -5,7 +5,8 @@
 - 文档状态：方案已由用户确认；阶段一“沉浸布局与状态切换”已实施、提交并通过用户人工验收；
   阶段二“原生 Canvas 粒子核心”已完成代码、自动化测试、构建和 1440 / 1024 / 390px 安全合成浏览器
   验收。Windows detached launcher 的 command-exit 复验继续按用户要求暂停，不影响本次人工准备环境下的
-  浏览器结论。
+  浏览器结论。`2026-08-05` 用户复验后暂停任务详情自动进入沉浸模式，沉浸能力代码完整保留，等待后续
+  由其他显式入口重新启用。
 - 前置基线：
   - `docs/38-review-lifecycle-and-frontend-entrypoints.md`：当前实际任务详情入口与 Review 生命周期。
   - `docs/48-review-task-detail-unified-progress-ui-plan.md`：ReviewJourney、六阶段、身份、时间轴、
@@ -17,6 +18,36 @@
   terminal 状态继续使用 `docs/48` 已完成的结果优先详情页。
 - 参考视觉只用于确定深色沉浸氛围、中央主视觉和左右信息分区，不照搬其中的虚构百分比、置信度、
   Reasoning Stream 或模型思考文案。
+
+### 1.1 2026-08-05 产品覆盖决策
+
+本节是当前生效决策，优先于本文后续“queued / running 自动进入沉浸工作台”的历史实施描述：
+
+- 任务详情页暂停自动进入沉浸模式；queued / running Review 继续留在全局亮色任务详情页，展示既有
+  `ReviewStatusHero + ReviewJourneyTimeline` 局部动画和真实 5 秒轮询状态；
+- `ReviewImmersivePresentation`、`ReviewImmersiveWorkspace`、`ReviewImmersiveCanvas`、Renderer、暗色样式、
+  reduced-motion、失败回退和测试不删除，后续可由新的显式入口重新接入；
+- 顶部“质量治理”入口暂时隐藏，但质量治理路由、页面、接口与数据不删除；
+- Finding 中“标注评估样本”和“补证据”操作入口暂时隐藏，既有评估样本、补证据结果、组件、接口和数据不删除；
+- Agent Review 结果中的“追加普通 Review 对照”暂时隐藏；Standard Review 结果中的“追加 Agent 对照”不在
+  本次隐藏范围；
+- 任务列表、设置、版本更新、接入帮助四个页面移除整块独立页头，包括标题、说明和页头容器；顶部导航已能表达当前位置，正文内容直接上移；
+- 本次只调整前端可见性和入口，不修改 Backend、数据库、Review 状态、轮询、结果、Finding、通知或直接路由。
+
+实施与验收结果：
+
+- `TaskDetail` 自动沉浸入口由显式关闭常量控制，当前始终向 AppFrame 报告 `RESULT`；原沉浸 early return、
+  Workspace、Canvas、Renderer、Presentation、暗色样式和测试仍保留；
+- 顶部质量治理、Finding 评估样本、Finding 补证据和 Agent → Standard 对照入口均按上述边界隐藏；
+  `/review-quality` 直接路由仍可正常渲染；
+- 任务列表、设置、版本更新、接入帮助不再传入独立页头内容；`TaskWorkspaceShell` 在没有标题、说明、操作和前置内容时不渲染页头容器，正文内容直接成为页面首行；
+- 最新页头调整专项 Node 测试：`15 passed / 0 failed`；`scripts/run-frontend.cmd build` 通过，仅保留既有主 Chunk
+  大于 500 kB 的非阻塞提示；`git diff --check` 通过，仅有仓库既有 LF / CRLF 提示；
+- `1600×900` 实际浏览器逐页确认任务列表、设置、版本更新、接入帮助均无正文 `h1` 和独立页头容器，
+  正文首行上移至统一页面内边距，四个路由均无横向溢出；此前 `1277×1140` 已确认任务 `1174 / 1188`
+  保持亮色普通任务详情且评估样本、补证据、追加普通 Review 对照不可见；
+- 当前真实队列 `activeCount=0`，未伪造或触发 Review；运行态不自动进入沉浸模式由前端契约测试覆盖；
+  浏览器仅记录既有 Ant Design `Space.direction / Alert.message` 废弃 API 提示，本次没有新增运行错误。
 
 ## 2. 决策与专项关系
 
