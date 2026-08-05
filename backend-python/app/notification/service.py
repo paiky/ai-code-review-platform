@@ -280,7 +280,7 @@ def format_review_summary_markdown(
         "### 变更审查结果\n\n"
         f"项目：{_project_text(context)}\n\n"
         f"分支：{_branch_text(context)}\n\n"
-        f"AI 模型：{_provider_label((code_quality_result or {}).get('provider'))}\n\n"
+        f"AI 模型：{_ai_model_label(code_quality_result)}\n\n"
         f"Review 引擎：{_review_engine_text(code_quality_result)}\n\n"
         f"{_event_label(context)} 作者：{_author_text(context)}\n\n"
     )
@@ -525,6 +525,15 @@ def _provider_label(provider: str | None) -> str:
         "ANTHROPIC_API": "Anthropic",
     }
     return labels.get(value, value or "-")
+
+
+def _ai_model_label(result: dict | None) -> str:
+    value = result or {}
+    provider = _provider_label(value.get("provider"))
+    model = str(value.get("model") or "").strip()
+    if model and provider != "-":
+        return f"{provider} / {model}"
+    return model or provider
 
 
 def _event_label(context: dict) -> str:

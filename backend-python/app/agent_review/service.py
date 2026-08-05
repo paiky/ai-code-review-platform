@@ -419,7 +419,15 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         sort_order=5,
         result=result,
     )
-    result["_resultId"] = saved.id
+    result.update(
+        {
+            "_resultId": saved.id,
+            "provider": saved.provider,
+            "model": saved.model,
+            "reviewKey": saved.review_key,
+            "displayName": saved.display_name,
+        }
+    )
     append_progress(
         db,
         run.task_id,

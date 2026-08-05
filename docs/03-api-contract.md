@@ -429,6 +429,8 @@ PUT /api/project-groups/{groupId}
 - `defaultProviderCode` 继续保留作旧数据和旧调用方兼容；未配置 `aiReviewModels` 时会回退为单模型执行项。
 - `providerCode` 必填；`modelName` 为空时使用 Profile / Provider 默认模型；`displayName` 用于任务详情模型子 tab。
 - 同一项目组内 `reviewKey` 稳定标识模型结果；未传时后端根据 provider / model 自动生成。
+- 项目组主引擎固定为 Agent Review。响应中的 `reviewEngine=AGENT`、`agentSourceExportAllowed=true`、`aiReviewEnabled=true`、`triggerOnManual=true` 是兼容字段，设置页不再提供对应选项；创建或更新请求传入相反值不会关闭这些能力。
+- `triggerOnMr`、`triggerOnPush`、自动修复预览和 Push 审核阈值仍按项目组配置。
 
 ## 5. Rule Template API
 
@@ -503,7 +505,7 @@ GET /api/rule-templates/{templateCode}
 
 钉钉推送当前使用 Markdown 消息。规则审查主要依据 RiskCard 中由规则命中的 `riskItems` 生成“提醒”展示，消息标题固定为“变更提醒”，正文包含作者、变更标题、分支、按 DB / MQ / Redis/缓存 / 配置聚合后的简要提醒，以及“查看平台详情”链接。平台详情链接由 `PLATFORM_BASE_URL` 拼接 `/tasks/{taskId}` 生成；钉钉消息不再额外展示 GitLab 链接。
 
-GitLab MR 自动 AI Review 完成后，也会向同一个钉钉 webhook 推送“代码质量 Review”消息，包含 provider、状态、等级、问题数、摘要、最多 5 条主要 finding 和平台详情链接。多模型任务中的 AI Review 摘要链接会追加 `?reviewKey={reviewKey}`，任务详情页据此直接选中消息对应的模型 Review 子 tab；finding 深链也保留同一个 `reviewKey`。
+GitLab MR 自动 AI Review 完成后，也会向同一个钉钉 webhook 推送“代码质量 Review”消息，包含 provider / 模型名称、状态、等级、问题数、摘要、最多 5 条主要 finding 和平台详情链接。“AI 模型”优先展示 `Provider / model`，例如 `DeepSeek / deepseek-v4-pro[1m]`；历史结果缺少 model 时回退为 Provider，Provider 也缺失时才展示 `-`。多模型任务（包括 Agent Review）中的 AI Review 摘要链接会追加持久化结果的 `?reviewKey={reviewKey}`，任务详情页据此直接选中消息对应的模型 Review 子 tab；finding 深链也保留同一个 `reviewKey`。
 
 当前 RiskCard 字段名仍沿用 `risk*` 兼容历史数据和接口；前端与钉钉展示层先统一使用“提醒”语义。后续若需要彻底改名，应分阶段迁移 JSON schema、数据库字段、API DTO 和前端字段。
 

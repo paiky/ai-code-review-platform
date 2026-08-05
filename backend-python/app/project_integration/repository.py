@@ -71,8 +71,8 @@ DEFAULT_PUSH_REVIEW_POLICY = {
     "pushDebounceSeconds": 300,
 }
 DEFAULT_GROUP_AI_REVIEW_POLICY = {
-    "reviewEngine": "STANDARD",
-    "agentSourceExportAllowed": False,
+    "reviewEngine": "AGENT",
+    "agentSourceExportAllowed": True,
     "aiReviewEnabled": True,
     "triggerOnManual": True,
     "triggerOnMr": True,
@@ -113,8 +113,8 @@ def ensure_project_config_schema(db: Session) -> None:
             group_columns = {column["name"] for column in inspector.get_columns("project_groups")} if inspector.has_table("project_groups") else set()
             _add_column_if_missing(db, group_columns, "project_groups", "default_code_quality_profile_code", "VARCHAR(64) NULL")
             _add_column_if_missing(db, group_columns, "project_groups", "default_provider_code", "VARCHAR(64) NULL")
-            _add_column_if_missing(db, group_columns, "project_groups", "review_engine", "VARCHAR(32) NOT NULL DEFAULT 'STANDARD'")
-            _add_column_if_missing(db, group_columns, "project_groups", "agent_source_export_allowed", "BOOLEAN NOT NULL DEFAULT FALSE")
+            _add_column_if_missing(db, group_columns, "project_groups", "review_engine", "VARCHAR(32) NOT NULL DEFAULT 'AGENT'")
+            _add_column_if_missing(db, group_columns, "project_groups", "agent_source_export_allowed", "BOOLEAN NOT NULL DEFAULT TRUE")
             _add_column_if_missing(db, group_columns, "project_groups", "ai_review_enabled", "BOOLEAN NOT NULL DEFAULT TRUE")
             _add_column_if_missing(db, group_columns, "project_groups", "trigger_on_manual", "BOOLEAN NOT NULL DEFAULT TRUE")
             _add_column_if_missing(db, group_columns, "project_groups", "trigger_on_mr", "BOOLEAN NOT NULL DEFAULT TRUE")
@@ -466,8 +466,8 @@ def project_group_to_dict(group: ProjectGroup) -> dict:
         "groupName": group.group_name,
         "defaultCodeQualityProfileCode": group.default_code_quality_profile_code,
         "defaultProviderCode": group.default_provider_code,
-        "reviewEngine": _normalize_review_engine(group.review_engine),
-        "agentSourceExportAllowed": bool(group.agent_source_export_allowed),
+        "reviewEngine": "AGENT",
+        "agentSourceExportAllowed": True,
         "aiReviewModels": list_project_group_ai_review_models(session, int(group.id), include_fallback=True)
         if session is not None
         else [],
@@ -538,7 +538,6 @@ def create_project_group(db: Session, request: dict) -> dict:
     if not group_code:
         raise AppError("VALIDATION_ERROR", "groupCode is required", 400)
     _assert_group_code_available(db, group_code)
-    _validate_agent_review_policy(request)
     group = ProjectGroup(
         group_name=group_name,
         group_code=group_code,
@@ -588,7 +587,6 @@ def update_project_group(db: Session, group_id: int, request: dict) -> dict:
         group.default_provider_code = _blank_to_none(request.get("defaultProviderCode"))
     if "defaultCodeQualityProfileCode" in request:
         group.default_code_quality_profile_code = _blank_to_none(request.get("defaultCodeQualityProfileCode"))
-    _validate_agent_review_policy(request, group)
     _update_group_ai_review_policy(group, request)
     _update_group_push_policy(group, request)
     if "status" in request:
@@ -726,10 +724,10 @@ def push_policy_to_dict(group: ProjectGroup | None) -> dict[str, Any]:
 
 def ai_review_policy_to_dict(group: ProjectGroup | None) -> dict[str, Any]:
     return {
-        "reviewEngine": _normalize_review_engine(getattr(group, "review_engine", None)),
-        "agentSourceExportAllowed": bool(getattr(group, "agent_source_export_allowed", False)),
-        "aiReviewEnabled": _policy_bool(getattr(group, "ai_review_enabled", None), "aiReviewEnabled"),
-        "triggerOnManual": _policy_bool(getattr(group, "trigger_on_manual", None), "triggerOnManual"),
+        "reviewEngine": "AGENT",
+        "agentSourceExportAllowed": True,
+        "aiReviewEnabled": True,
+        "triggerOnManual": True,
         "triggerOnMr": _policy_bool(getattr(group, "trigger_on_mr", None), "triggerOnMr"),
         "triggerOnPush": _policy_bool(getattr(group, "trigger_on_push", None), "triggerOnPush"),
         "triggerOnlyWhenRiskMatched": _policy_bool(
@@ -1148,10 +1146,10 @@ def _push_policy_columns(request: dict[str, Any]) -> dict[str, Any]:
 def _ai_review_policy_columns(request: dict[str, Any]) -> dict[str, Any]:
     policy = {**DEFAULT_GROUP_AI_REVIEW_POLICY, **{key: request[key] for key in DEFAULT_GROUP_AI_REVIEW_POLICY if key in request}}
     return {
-        "review_engine": _normalize_review_engine(policy.get("reviewEngine")),
-        "agent_source_export_allowed": bool(policy.get("agentSourceExportAllowed", False)),
-        "ai_review_enabled": bool(policy["aiReviewEnabled"]),
-        "trigger_on_manual": bool(policy["triggerOnManual"]),
+        "review_engine": "AGENT",
+        "agent_source_export_allowed": True,
+        "ai_review_enabled": True,
+        "trigger_on_manual": True,
         "trigger_on_mr": bool(policy["triggerOnMr"]),
         "trigger_on_push": bool(policy["triggerOnPush"]),
         "trigger_only_when_risk_matched": bool(policy["triggerOnlyWhenRiskMatched"]),
@@ -1165,9 +1163,6 @@ def _ai_review_policy_columns(request: dict[str, Any]) -> dict[str, Any]:
 
 def _update_group_ai_review_policy(group: ProjectGroup, request: dict[str, Any]) -> None:
     fields = {
-        "agentSourceExportAllowed": "agent_source_export_allowed",
-        "aiReviewEnabled": "ai_review_enabled",
-        "triggerOnManual": "trigger_on_manual",
         "triggerOnMr": "trigger_on_mr",
         "triggerOnPush": "trigger_on_push",
         "triggerOnlyWhenRiskMatched": "trigger_only_when_risk_matched",
@@ -1176,40 +1171,14 @@ def _update_group_ai_review_policy(group: ProjectGroup, request: dict[str, Any])
     for json_field, column_name in fields.items():
         if json_field in request:
             setattr(group, column_name, bool(request[json_field]))
-    if "reviewEngine" in request:
-        group.review_engine = _normalize_review_engine(request.get("reviewEngine"))
+    group.review_engine = "AGENT"
+    group.agent_source_export_allowed = True
+    group.ai_review_enabled = True
+    group.trigger_on_manual = True
     if "autoFixPreviewSeverities" in request:
         group.auto_fix_preview_severities = json.dumps(
             _normalize_auto_fix_preview_severities(request.get("autoFixPreviewSeverities")),
             ensure_ascii=False,
-        )
-
-
-def _normalize_review_engine(value: Any) -> str:
-    normalized = str(value or "STANDARD").strip().upper()
-    if normalized not in {"STANDARD", "AGENT"}:
-        raise AppError("VALIDATION_ERROR", f"Unsupported reviewEngine: {value}", 400)
-    return normalized
-
-
-def _validate_agent_review_policy(
-    request: dict[str, Any], group: ProjectGroup | None = None
-) -> None:
-    engine = _normalize_review_engine(
-        request.get("reviewEngine")
-        if "reviewEngine" in request
-        else getattr(group, "review_engine", "STANDARD")
-    )
-    allowed = bool(
-        request.get("agentSourceExportAllowed")
-        if "agentSourceExportAllowed" in request
-        else getattr(group, "agent_source_export_allowed", False)
-    )
-    if engine == "AGENT" and not allowed:
-        raise AppError(
-            "VALIDATION_ERROR",
-            "agentSourceExportAllowed must be true when reviewEngine is AGENT",
-            400,
         )
 
 

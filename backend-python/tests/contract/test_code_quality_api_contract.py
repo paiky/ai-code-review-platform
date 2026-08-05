@@ -2512,6 +2512,24 @@ def test_review_summary_markdown_includes_failed_reason() -> None:
     assert "原因：API key is required for provider DEEPSEEK" in markdown
 
 
+def test_review_summary_markdown_includes_provider_and_model() -> None:
+    from app.notification.service import format_review_summary_markdown
+
+    markdown = format_review_summary_markdown(
+        123,
+        None,
+        {
+            "status": "SUCCESS",
+            "provider": "DEEPSEEK",
+            "model": "deepseek-v4-pro[1m]",
+            "findings": [],
+        },
+        {"projectName": "demo-service", "triggerType": "GITLAB_MR_WEBHOOK"},
+    )
+
+    assert "AI 模型：DeepSeek / deepseek-v4-pro[1m]" in markdown
+
+
 def test_review_summary_markdown_includes_manual_interrupt_reason() -> None:
     from app.notification.service import format_review_summary_markdown
 
@@ -3233,6 +3251,8 @@ def test_manual_review_returns_running_without_waiting_for_provider(
     data = response.json()["data"]
     assert data["status"] == "RUNNING"
     assert data["provider"] == "DEEPSEEK"
+    assert data["requestedEngine"] == "AGENT"
+    assert data["effectiveEngine"] == "STANDARD_FALLBACK"
     assert submitted
     assert submitted[0]["kwargs"]["priority"] == service.REVIEW_JOB_PRIORITY
     assert service.REVIEW_JOB_PRIORITY < service.FIX_PREVIEW_JOB_PRIORITY

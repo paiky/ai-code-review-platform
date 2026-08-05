@@ -237,7 +237,7 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any]
         changed_files=_manual_preflight_changed_files(request),
     )
     request = {**request, "_deterministicPreflightSummary": preflight_summary}
-    if response.get("requestedEngine") == "AGENT":
+    if response.get("effectiveEngine") == "AGENT":
         from app.agent_review.service import enqueue_agent_review
 
         task = db.get(ReviewTask, task_id)
@@ -277,6 +277,12 @@ def create_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any]
                 "findingCount": 0,
                 "reviews": list_result_responses(db, task_id),
             }
+    if response.get("effectiveEngine") == "STANDARD_FALLBACK":
+        request = {
+            **request,
+            "requestedEngine": "AGENT",
+            "effectiveEngine": "STANDARD_FALLBACK",
+        }
     if _inline_enabled():
         result = run_manual_review_now(db, task_id, request)
         db.commit()
@@ -341,15 +347,19 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
         )
     from app.agent_review.service import resolve_review_engine
 
-    requested_engine = resolve_review_engine(
+    resolved_engine = resolve_review_engine(
         db,
         project,
         request.get("reviewEngine"),
-        explicit=True,
+        explicit="reviewEngine" in request,
     )
+    fallback_to_standard = resolved_engine == "AGENT_UNAVAILABLE"
+    requested_engine = "AGENT" if fallback_to_standard else resolved_engine
+    effective_engine = "STANDARD_FALLBACK" if fallback_to_standard else resolved_engine
+    execution_engine = "STANDARD" if fallback_to_standard else resolved_engine
     targets = (
         _resolve_review_targets(db, project, profile, target_config["targetType"])
-        if requested_engine == "STANDARD"
+        if execution_engine == "STANDARD"
         else []
     )
     task = create_review_task(
@@ -377,7 +387,7 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
         "QUEUED",
         "INFO",
         "手动 AI Review 已创建",
-        f"engine={requested_engine}, models={len(targets)}, profile={profile.profile_code}",
+        f"engine={requested_engine}->{effective_engine}, models={len(targets)}, profile={profile.profile_code}",
     )
     queued_reviews = []
     for target in targets:
@@ -408,7 +418,7 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
             }
         )
     db.commit()
-    if requested_engine == "AGENT":
+    if execution_engine == "AGENT":
         return {
             "taskId": task.id,
             "projectId": project.id,
@@ -432,8 +442,8 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
         "reviewKey": first_review["reviewKey"],
         "overallLevel": None,
         "findingCount": 0,
-        "requestedEngine": "STANDARD",
-        "effectiveEngine": "STANDARD",
+        "requestedEngine": requested_engine,
+        "effectiveEngine": effective_engine,
         "reviews": queued_reviews,
     }
 

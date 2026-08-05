@@ -1137,7 +1137,7 @@ XiaoMIMO 虽然有独立 `XIAOMIMO_CODE_REVIEW_TIMEOUT_SECONDS`，但默认仍�
 
 处理方式：
 
-1. 设置页的“项目组 AI Review 策略”必须展示并保存 `aiReviewEnabled`、`triggerOnManual`、`triggerOnMr` 和 `triggerOnPush`。
+1. 项目组 `aiReviewEnabled` 和 `triggerOnManual` 已固定为开启，设置页只展示并保存仍可配置的 `triggerOnMr` 和 `triggerOnPush`。
 2. 保存项目组策略后，重新触发一次 Push 审阅生成新任务；已经落库的旧 Gate 记录不会自动改写。
 3. 如果项目组 `triggerOnPush=true` 后仍未进入 AI Review，再继续检查全局 `reviewEnabled`、Provider API Key、项目组 `pushBranchPatterns`、diff 可用性、硬上限和大变更阈值。
 
@@ -1154,7 +1154,7 @@ Profile 更适合表达“怎么审”，例如 Prompt、Provider、模型和端
 处理方式：
 
 1. AI Review 设置页中保留 Profile 模块用于维护 Prompt / Provider / 模型。
-2. 新增或维护“项目组 AI Review 策略”，按项目组保存 `aiReviewEnabled`、`triggerOnManual`、`triggerOnMr`、`triggerOnPush`、`autoFixPreviewEnabled`、`autoFixPreviewSeverities` 和 Push 审核阈值。
+2. 新增或维护“项目组 AI Review 策略”，按项目组保存 `triggerOnMr`、`triggerOnPush`、`autoFixPreviewEnabled`、`autoFixPreviewSeverities` 和 Push 审核阈值；`aiReviewEnabled`、`triggerOnManual` 和 Agent 主引擎属于固定策略。
 3. 后端 MR / Push 自动触发和自动修复预览执行时读取任务所属项目组策略；Profile 上的历史触发字段只作为兼容字段，不再作为主要策略入口。
 
 ## 49. GitLab compare API 补拉 Push diff 时不能丢失 commit 数

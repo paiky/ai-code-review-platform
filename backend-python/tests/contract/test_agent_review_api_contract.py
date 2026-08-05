@@ -276,25 +276,40 @@ def test_agent_key_save_is_rejected_without_master_key(client: TestClient) -> No
     assert "sk-agent-secret" not in response.text
 
 
-def test_project_group_requires_explicit_source_export_consent(client: TestClient) -> None:
-    rejected = client.post(
-        "/api/project-groups",
-        json={"groupName": "Agent 项目", "groupCode": "agent", "reviewEngine": "AGENT"},
-    )
-    assert rejected.status_code == 400
-
-    accepted = client.post(
+def test_project_group_agent_review_policy_is_fixed_on(client: TestClient) -> None:
+    created = client.post(
         "/api/project-groups",
         json={
             "groupName": "Agent 项目",
             "groupCode": "agent",
-            "reviewEngine": "AGENT",
-            "agentSourceExportAllowed": True,
+            "reviewEngine": "STANDARD",
+            "agentSourceExportAllowed": False,
+            "aiReviewEnabled": False,
+            "triggerOnManual": False,
         },
     )
-    assert accepted.status_code == 200
-    assert accepted.json()["data"]["reviewEngine"] == "AGENT"
-    assert accepted.json()["data"]["agentSourceExportAllowed"] is True
+    assert created.status_code == 200
+    group = created.json()["data"]
+    assert group["reviewEngine"] == "AGENT"
+    assert group["agentSourceExportAllowed"] is True
+    assert group["aiReviewEnabled"] is True
+    assert group["triggerOnManual"] is True
+
+    updated = client.put(
+        f"/api/project-groups/{group['id']}",
+        json={
+            "reviewEngine": "STANDARD",
+            "agentSourceExportAllowed": False,
+            "aiReviewEnabled": False,
+            "triggerOnManual": False,
+        },
+    )
+    assert updated.status_code == 200
+    policy = updated.json()["data"]
+    assert policy["reviewEngine"] == "AGENT"
+    assert policy["agentSourceExportAllowed"] is True
+    assert policy["aiReviewEnabled"] is True
+    assert policy["triggerOnManual"] is True
 
 
 def test_agent_configuration_test_runs_through_worker_contract(
@@ -1276,6 +1291,11 @@ def test_worker_completion_is_idempotent_and_saves_engine_metadata(
             updated_at=now,
         )
     )
+    sent_notifications = []
+    monkeypatch.setattr(
+        "app.code_quality.service._send_auto_review_notification",
+        lambda _db, _task_id, result, *_args, **_kwargs: sent_notifications.append(dict(result)),
+    )
     run = create_agent_job(
         db_session,
         task_id=199,
@@ -1284,8 +1304,8 @@ def test_worker_completion_is_idempotent_and_saves_engine_metadata(
             "worktree": "worktrees/199/head",
             "case": {"id": "task-199", "changedFiles": ["src/a.py"], "diff": "+safe()"},
         },
-        completion_context={},
-        comparison_mode=True,
+        completion_context={"autoNotification": True},
+        comparison_mode=False,
     )
     db_session.commit()
     job = client.post(
@@ -1338,6 +1358,10 @@ def test_worker_completion_is_idempotent_and_saves_engine_metadata(
     assert result["effectiveEngine"] == "AGENT"
     assert result["agentRunSummary"]["runId"] == run.id
     assert result["agentRunSummary"]["effectiveBudgets"] == default_agent_budgets()
+    assert len(sent_notifications) == 1
+    assert sent_notifications[0]["provider"] == "DEEPSEEK"
+    assert sent_notifications[0]["model"] == "deepseek-v4-pro[1m]"
+    assert sent_notifications[0]["reviewKey"] == "agent-claude-code-deepseek-v4-pro"
     persisted = db_session.get(AgentReviewRun, run.id)
     assert persisted is not None
     persisted_text = persisted.tool_summary_json or ""

@@ -283,8 +283,8 @@ const REVIEW_PROFILE_DROPDOWN_LABELS = REVIEW_PROFILE_DROPDOWN_ITEMS.reduce(
   {}
 );
 const DEFAULT_PUSH_REVIEW_POLICY = {
-  reviewEngine: 'STANDARD',
-  agentSourceExportAllowed: false,
+  reviewEngine: 'AGENT',
+  agentSourceExportAllowed: true,
   aiReviewEnabled: true,
   triggerOnManual: true,
   triggerOnMr: true,
@@ -387,6 +387,10 @@ function pushPolicyFromGroup(group) {
   return {
     ...DEFAULT_PUSH_REVIEW_POLICY,
     ...(group || {}),
+    reviewEngine: 'AGENT',
+    agentSourceExportAllowed: true,
+    aiReviewEnabled: true,
+    triggerOnManual: true,
     pushBranchPatterns: Array.isArray(group?.pushBranchPatterns) ? group.pushBranchPatterns : [...DEFAULT_PUSH_REVIEW_POLICY.pushBranchPatterns],
     autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(group?.autoFixPreviewSeverities)
   };
@@ -7370,21 +7374,15 @@ function TemplateConfig() {
 
   const savePushReviewPolicy = async () => {
     if (!selectedPushPolicyGroupId || !pushPolicyDraft) return;
-    const reviewEngine = String(pushPolicyDraft.reviewEngine || 'STANDARD').toUpperCase();
-    const agentSourceExportAllowed = pushPolicyDraft.agentSourceExportAllowed === true;
-    if (reviewEngine === 'AGENT' && !agentSourceExportAllowed) {
-      messageApi.error('切换为 Agent Review 前，必须明确授权该项目组按需外发源码片段');
-      return;
-    }
     setPushPolicySaving(true);
     try {
       const updated = await fetchApi(`/api/project-groups/${selectedPushPolicyGroupId}`, {
         method: 'PUT',
         body: JSON.stringify({
-          reviewEngine,
-          agentSourceExportAllowed,
-          aiReviewEnabled: pushPolicyDraft.aiReviewEnabled !== false,
-          triggerOnManual: pushPolicyDraft.triggerOnManual !== false,
+          reviewEngine: 'AGENT',
+          agentSourceExportAllowed: true,
+          aiReviewEnabled: true,
+          triggerOnManual: true,
           triggerOnMr: pushPolicyDraft.triggerOnMr !== false,
           triggerOnPush: pushPolicyDraft.triggerOnPush === true,
           triggerOnlyWhenRiskMatched: false,
@@ -8387,18 +8385,10 @@ function TemplateConfig() {
                     <Space wrap>
                       <Text strong>项目组主 Review 引擎</Text>
                       {selectedPushPolicyGroupId && (
-                        <Tag color={pushPolicyDraft?.reviewEngine === 'AGENT' ? 'purple' : 'blue'}>
-                          {pushPolicyDraft?.reviewEngine || 'STANDARD'}
-                        </Tag>
+                        <Tag color="purple">AGENT</Tag>
                       )}
                     </Space>
                   </div>
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="此处决定所选项目组后续 MR、Push 和默认 Manual Review 使用的主引擎"
-                    description="选择 AGENT 时必须同时确认源码片段外发授权；Agent 不可用或执行失败会记录原因并执行 STANDARD_FALLBACK。"
-                  />
                   <Row gutter={[16, 16]}>
                     <Col xs={24} md={10}>
                       <Text strong>项目组</Text>
@@ -8411,55 +8401,7 @@ function TemplateConfig() {
                       />
                     </Col>
                   </Row>
-                  <Row gutter={[16, 16]} align="middle">
-                    <Col xs={24} md={8}>
-                      <Space direction="vertical" className="full-width">
-                        <Text strong>Review 引擎</Text>
-                        <Select
-                          value={pushPolicyDraft?.reviewEngine || 'STANDARD'}
-                          options={[
-                            { label: '普通 Review（STANDARD）', value: 'STANDARD' },
-                            { label: 'Agent Review（Claude Code + DeepSeek）', value: 'AGENT' }
-                          ]}
-                          onChange={value => updatePushPolicyDraft('reviewEngine', value)}
-                        />
-                      </Space>
-                    </Col>
-                  </Row>
                   <Row gutter={[16, 16]} align="middle" className="project-review-switch-row">
-                    <Col xs={12} sm={8} lg={4}>
-                      <Space direction="vertical">
-                        <Text strong>手动触发</Text>
-                        <Switch
-                          checked={pushPolicyDraft?.triggerOnManual !== false}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => updatePushPolicyDraft('triggerOnManual', checked)}
-                        />
-                      </Space>
-                    </Col>
-                    <Col xs={12} sm={8} lg={4}>
-                      <Space direction="vertical">
-                        <Text strong>允许 Agent 外发源码片段</Text>
-                        <Switch
-                          checked={pushPolicyDraft?.agentSourceExportAllowed === true}
-                          checkedChildren="已授权"
-                          unCheckedChildren="未授权"
-                          onChange={checked => updatePushPolicyDraft('agentSourceExportAllowed', checked)}
-                        />
-                      </Space>
-                    </Col>
-                    <Col xs={12} sm={8} lg={4}>
-                      <Space direction="vertical">
-                        <Text strong>启用项目组 AI Review</Text>
-                        <Switch
-                          checked={pushPolicyDraft?.aiReviewEnabled !== false}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => updatePushPolicyDraft('aiReviewEnabled', checked)}
-                        />
-                      </Space>
-                    </Col>
                     <Col xs={12} sm={8} lg={4}>
                       <Space direction="vertical">
                         <Text strong>MR 自动触发</Text>

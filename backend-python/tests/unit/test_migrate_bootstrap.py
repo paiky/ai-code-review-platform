@@ -65,6 +65,24 @@ def test_command_center_bootstrap_sql_creates_only_authorized_online_indexes() -
         assert index_name in sql
 
 
+def test_fixed_agent_review_policy_migration_updates_existing_groups_and_defaults() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    sql = (
+        repository_root
+        / "backend-python/migrations/bootstrap_sql/V46__fixed_agent_review_project_group_policy.sql"
+    ).read_text(encoding="utf-8")
+
+    statements = split_sql_statements(sql)
+
+    assert len(statements) == 2
+    assert "review_engine = 'AGENT'" in statements[0]
+    assert "agent_source_export_allowed = TRUE" in statements[0]
+    assert "ai_review_enabled = TRUE" in statements[0]
+    assert "trigger_on_manual = TRUE" in statements[0]
+    assert "DEFAULT 'AGENT'" in statements[1]
+    assert statements[1].count("DEFAULT TRUE") == 3
+
+
 def test_existing_schema_upgrade_is_idempotent_and_groups_indexes_by_table() -> None:
     inspector = _InspectorStub()
     statements = build_command_center_index_upgrade_statements(

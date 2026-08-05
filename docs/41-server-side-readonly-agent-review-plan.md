@@ -227,12 +227,12 @@ ReviewEngine = STANDARD | AGENT
 EffectiveReviewEngine = STANDARD | AGENT | STANDARD_FALLBACK
 ```
 
-项目组配置新增：
+项目组兼容字段：
 
 ```json
 {
-  "reviewEngine": "STANDARD",
-  "agentSourceExportAllowed": false
+  "reviewEngine": "AGENT",
+  "agentSourceExportAllowed": true
 }
 ```
 
@@ -250,13 +250,15 @@ Manual/Retry 请求新增可选字段：
 ```text
 Manual/Retry 显式 reviewEngine
   -> 项目组 reviewEngine
-  -> STANDARD
+  -> AGENT
 ```
 
 兼容与校验：
 
-- 旧请求、旧项目组和缺失字段一律保持 `STANDARD`。
-- 保存项目组 `reviewEngine=AGENT` 时必须同时确认 `agentSourceExportAllowed=true`。
+- 项目组主引擎固定为 `AGENT`，项目组 AI Review、Manual Review 和 Agent 源码片段外发授权固定开启；设置页不再提供这些开关。
+- `reviewEngine`、`agentSourceExportAllowed`、`aiReviewEnabled`、`triggerOnManual` 字段继续在项目组 API 中返回固定值，兼容旧调用方；创建或更新请求中的相反值不再改变运行策略。
+- 既有项目组通过迁移统一为 `AGENT + 已授权 + AI Review 开启 + Manual 开启`；MR、Push 和自动修复预览仍保留独立策略。
+- Manual 未显式传 `reviewEngine` 时使用固定 Agent 默认；Agent 暂不可用则执行 `STANDARD_FALLBACK`。调用方显式指定 `reviewEngine=AGENT` 时仍保持强约束，不可用返回 `409 AGENT_REVIEW_UNAVAILABLE`。
 - Manual/Retry 显式请求 Agent，但全局未启用、Key 不可用、项目未授权或 Worker 离线时，返回 `409 AGENT_REVIEW_UNAVAILABLE`，不产生伪 Agent 任务。
 - 已保存为 Agent 的 MR/Push 自动任务在运行期发现 Worker、Key、worktree 或模型不可用时，记录 requested engine 后执行 STANDARD fallback，Webhook 主链路不失败。
 - 首版不在 Review Profile 中增加 `reviewEngine`。
@@ -508,7 +510,7 @@ Prompt 优先级固定为：平台安全/工具约束 > Review Card 契约 > Pro
 阶段 2 落地记录（2026-07-18）：
 
 - 设置与契约：新增固定 Claude Code + DeepSeek 设置 API、独立 Fernet Key、Worker 在线状态和由 Worker 执行的无生产源码配置测试。
-- 选择与主链路：项目组保存 `reviewEngine` / `agentSourceExportAllowed`，Manual/Retry 支持覆盖；MR/Push 按项目组选择，运行期不可用或失败时记录 `STANDARD_FALLBACK`。
+- 选择与主链路：阶段 2 初始实现由项目组保存 `reviewEngine` / `agentSourceExportAllowed`；现已收敛为项目组固定 Agent 与固定授权，Manual/Retry 仍支持显式覆盖，运行期不可用或失败时记录 `STANDARD_FALLBACK`。
 - 执行与恢复：新增 `agent_review_runs`、`AGENT_REVIEW` Job、claim/lease/heartbeat/attempt/cancel/idempotent complete/fail；过期 lease 可重领，Worker 离线或队列超过宽限期由后端周期扫描并进入普通 Review 降级。
 - 输入与安全：小 diff 初始发送，大 diff 通过 `read_diff_range`；源码用 list/search/read 按需获取；敏感路径、符号链接和越界路径拒绝；内置网络代理只允许 `api.deepseek.com:443`。
 - 页面与通知：设置页、项目组策略、任务结果和 MR/Push 任务追加另一引擎对照已接入；任务结果与高准确流转展示请求/实际引擎、Run/turn/tool/源码预算、耗时和降级码，钉钉文本展示真实引擎。
@@ -516,6 +518,8 @@ Prompt 优先级固定为：平台安全/工具约束 > Review Card 契约 > Pro
 - 验证：Agent 专项与 Spike 安全测试 39 passed、1 skipped，其中阶段 2 契约 11 passed；剔除 4 个已记录既有失败后的 Python 回归 301 passed、1 skipped、4 deselected；Ruff 通过；前端 build 通过；两份 Compose 配置通过；Worker/代理镜像构建、Claude Code 2.1.112、MCP 五工具白名单、Squid 配置和 DeepSeek-only 出站实测通过。
 - 尚未执行：没有用户真实 DeepSeek Key，未产生模型费用，也未完成“授权项目真实 Agent 成功”这一生产验收项。
 - 已知边界：Manual Review 支持在首次请求选择 Agent，但完成后不持久化原始 diff，事后追加另一引擎对照仅对可从 GitLab 事件重建变更输入的 MR/Push 任务开放。
+
+策略收敛记录（2026-08-05）：项目组不再暴露主引擎、AI Review 总开关、Manual 开关和源码片段外发授权选项，统一固定为 `AGENT + 开启`；保留字段仅用于接口与历史数据库兼容。
 
 ### 7.4 阶段 3A：生产观察能力准备（已完成，待用户验证）
 
@@ -640,7 +644,7 @@ manual / webhook
 - 页面区分请求引擎、实际引擎、Agent 用量、对照结果和降级原因。
 - Agent 文件写入、越界读取和非 DeepSeek 网络访问均为 0。
 - Agent 不可用时 STANDARD 仍可用，且不会静默伪装为 Agent。
-- 只有 `agentSourceExportAllowed=true` 的项目可以发送 diff 和按需源码。
+- 项目组源码片段外发授权固定为 `true`；真实 Agent Review 仍须满足全局 Agent 配置、加密 Key、Worker 在线和受控只读工作区要求。
 
 ## 九、授权边界与默认假设
 
