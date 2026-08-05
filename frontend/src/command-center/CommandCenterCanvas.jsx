@@ -1,3 +1,11 @@
+import { useLayoutEffect, useRef, useState } from 'react';
+
+import { observeCommandCenterTopology } from './commandCenterTopology.js';
+
+
+const EMPTY_TOPOLOGY = Object.freeze({ ready: false, width: 0, height: 0, paths: [] });
+
+
 export default function CommandCenterCanvas({
   presentation,
   runtimeLoading,
@@ -5,60 +13,43 @@ export default function CommandCenterCanvas({
   onOpenOverflow,
   onOpenResult
 }) {
+  const mapRef = useRef(null);
+  const [topology, setTopology] = useState(EMPTY_TOPOLOGY);
   const {
-    intake,
+    taskQueue,
     engineSelection,
     agentLane,
     standardLane,
     fallback,
-    resultPersistence
+    todayResults
   } = presentation;
+
+  useLayoutEffect(() => {
+    if (!mapRef.current) return undefined;
+    const owner = observeCommandCenterTopology(mapRef.current, setTopology);
+    return () => owner.disconnect();
+  }, []);
 
   return (
     <section
+      ref={mapRef}
       className="command-center-runtime-map"
       aria-label="AI Review 当前执行拓扑"
-      data-command-center-renderer="DOM_SVG_ENHANCED"
+      data-command-center-renderer="DOM_SVG_LIVE_TOPOLOGY"
       data-command-center-canvas-mounted="false"
       data-command-center-dom-fallback="always"
-      data-command-center-animation-owner="CSS_COMPOSITOR_ONLY"
+      data-command-center-animation-owner="STATIC_M2_1"
+      data-command-center-topology-ready={topology.ready ? 'true' : 'false'}
     >
-      <svg
-        className="command-center-static-connections"
-        viewBox="0 0 1200 440"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-        focusable="false"
-      >
-        <defs>
-          <marker id="cc-arrow-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#2787f5" />
-          </marker>
-          <marker id="cc-arrow-agent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f3df4" />
-          </marker>
-          <marker id="cc-arrow-standard" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#f07818" />
-          </marker>
-        </defs>
-        <path className="is-intake" d="M 154 220 H 238" markerEnd="url(#cc-arrow-blue)" />
-        <path className="is-agent" d="M 390 220 C 430 220 422 104 476 104" markerEnd="url(#cc-arrow-agent)" />
-        <path className="is-standard" d="M 390 220 C 430 220 422 336 476 336" markerEnd="url(#cc-arrow-standard)" />
-        <path className="is-agent" d="M 995 104 C 1038 104 1028 220 1064 220" markerEnd="url(#cc-arrow-agent)" />
-        <path className="is-standard" d="M 995 336 C 1038 336 1028 220 1064 220" markerEnd="url(#cc-arrow-standard)" />
-        <path className="is-fallback" d="M 744 194 C 744 220 780 220 780 246" markerEnd="url(#cc-arrow-standard)" />
-        <path className="command-center-flow is-intake" pathLength="100" d="M 154 220 H 238" />
-        <path className="command-center-flow is-agent" pathLength="100" d="M 390 220 C 430 220 422 104 476 104" />
-        <path className="command-center-flow is-standard" pathLength="100" d="M 390 220 C 430 220 422 336 476 336" />
-      </svg>
+      <StaticConnections topology={topology} />
 
       <div className="command-center-mobile-route-summary" role="note">
         <strong>审查路由</strong>
-        <span>手动 / MR / Push / 重试 → 引擎选择 → Agent 或 Standard → 审查任务</span>
+        <span>任务队列 → 引擎选择 → Agent Review 或 Standard Review → 审查结果</span>
       </div>
 
       <div className="command-center-map-grid">
-        <ReviewIntake intake={intake} />
+        <ReviewTaskQueue taskQueue={taskQueue} onOpenReview={onOpenReview} />
         <EngineSelection engineSelection={engineSelection} />
         <ReviewModule
           lane={agentLane}
@@ -73,50 +64,151 @@ export default function CommandCenterCanvas({
           onOpenReview={onOpenReview}
           onOpenOverflow={onOpenOverflow}
         />
-        <ResultPersistence resultPersistence={resultPersistence} onOpen={onOpenResult} />
+        <TodayReviewResults todayResults={todayResults} onOpen={onOpenResult} />
       </div>
     </section>
   );
 }
 
 
-function ReviewIntake({ intake }) {
+function StaticConnections({ topology }) {
+  const marker = token => `url(#cc-arrow-${token})`;
   return (
-    <article className="command-center-intake command-center-map-node" data-zone-key={intake.zoneKey}>
-      <NodeHeading eyebrow="触发输入" title={intake.title} subtitle="触发入口" />
-      <div className="command-center-intake-list">
-        {intake.items.map(item => (
-          <div key={item.key} className={`command-center-intake-item is-${item.key.toLowerCase()}`}>
-            <span aria-hidden="true">{intakeIcon(item.key)}</span>
-            <span>
-              <strong>{item.label}</strong>
-              <small>{item.description}</small>
-            </span>
-          </div>
+    <svg
+      className="command-center-static-connections"
+      viewBox={`0 0 ${topology.width || 1} ${topology.height || 1}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+      focusable="false"
+      data-command-center-connections-ready={topology.ready ? 'true' : 'false'}
+    >
+      <defs>
+        <ConnectionMarker id="cc-arrow-intake" color="#2787f5" />
+        <ConnectionMarker id="cc-arrow-agent" color="#6f3df4" />
+        <ConnectionMarker id="cc-arrow-standard" color="#f07818" />
+        <ConnectionMarker id="cc-arrow-fallback" color="#08a9b9" />
+      </defs>
+      {topology.paths.map(path => (
+        <g
+          key={path.id}
+          className={`command-center-cable is-${path.token}`}
+          data-command-center-connection-group={path.id}
+          data-command-center-route-kind={path.kind}
+        >
+          <path className="command-center-connection is-glow" d={path.d} />
+          <path className="command-center-connection is-rail" d={path.d} />
+          <path
+            className="command-center-connection is-core"
+            data-command-center-connection={path.id}
+            d={path.d}
+            markerEnd={marker(path.token)}
+          />
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+
+function ConnectionMarker({ id, color }) {
+  return (
+    <marker id={id} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto">
+      <path d="M 1 1 L 9 5 L 1 9" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </marker>
+  );
+}
+
+
+function ReviewTaskQueue({ taskQueue, onOpenReview }) {
+  const countLabel = taskQueue.available
+    ? `展示 ${taskQueue.visibleCount} / 活动 ${taskQueue.activeCount}`
+    : '任务数据暂不可用';
+  return (
+    <article
+      className="command-center-intake command-center-task-queue command-center-map-node"
+      data-zone-key={taskQueue.zoneKey}
+      data-command-center-map-node="true"
+    >
+      <ConnectionPort id="queue-out" token="intake" position="right" />
+      <NodeHeading icon="▤" eyebrow={taskQueue.eyebrow} title={taskQueue.title} subtitle={taskQueue.subtitle} />
+      <strong className="command-center-task-count">{countLabel}</strong>
+      <div className="command-center-task-list">
+        {!taskQueue.available ? (
+          <p className="command-center-side-empty">Runtime 当前不可用</p>
+        ) : taskQueue.items.length === 0 ? (
+          <p className="command-center-side-empty">当前无活动 ReviewTask</p>
+        ) : taskQueue.items.map(item => (
+          <ReviewTaskItem key={item.taskId || `${item.projectName}:${item.updatedAt}`} item={item} onOpen={onOpenReview} />
         ))}
       </div>
+      {taskQueue.overflowCount > 0 && (
+        <small className="command-center-task-overflow">另有 {taskQueue.overflowCount} 项活动任务</small>
+      )}
     </article>
+  );
+}
+
+
+function ReviewTaskItem({ item, onOpen }) {
+  return (
+    <section className="command-center-task-item">
+      <div className="command-center-task-primary">
+        <strong title={item.projectName}>{item.projectName}</strong>
+        <span className="command-center-task-trigger">{item.triggerLabel}</span>
+      </div>
+      <span className="command-center-task-author">作者：{item.authorLabel}</span>
+      <span className="command-center-task-ref" title={item.branchCommitLabel}>{item.branchCommitLabel}</span>
+      <span className="command-center-task-state">
+        <b>{item.stageLabel}</b>
+        <time dateTime={item.updatedAt || undefined}>{formatRelativeTime(item.updatedAt)}</time>
+      </span>
+      <span className="command-center-task-actions">
+        {item.navigationTarget && (
+          <button type="button" onClick={() => onOpen(item)} data-command-center-action="open-queued-review">
+            查看任务
+          </button>
+        )}
+        {item.externalUrl && (
+          <a href={item.externalUrl} target="_blank" rel="noopener noreferrer">
+            打开 GitLab
+          </a>
+        )}
+      </span>
+    </section>
   );
 }
 
 
 function EngineSelection({ engineSelection }) {
   return (
-    <article className="command-center-engine command-center-map-node" data-zone-key={engineSelection.zoneKey}>
+    <article
+      className="command-center-engine command-center-map-node"
+      data-zone-key={engineSelection.zoneKey}
+      data-command-center-map-node="true"
+    >
       <div className="command-center-engine-ring" aria-hidden="true">
-        <i />
-        <b>AI</b>
+        <ConnectionPort id="engine-in" token="intake" position="orbit-left" />
+        <ConnectionPort id="engine-agent-out" token="agent" position="orbit-right-upper" />
+        <ConnectionPort id="engine-standard-out" token="standard" position="orbit-right-lower" />
+        <span className="command-center-engine-orbit is-outer"><i /></span>
+        <span className="command-center-engine-orbit is-main"><i /></span>
+        <span className="command-center-engine-orbit is-inner"><i /></span>
+        <span className="command-center-engine-core"><b>AI</b></span>
+        <i className="command-center-engine-node is-node-one" />
+        <i className="command-center-engine-node is-node-two" />
+        <i className="command-center-engine-node is-node-three" />
       </div>
-      <NodeHeading eyebrow="策略路由" title={engineSelection.title} subtitle="策略路由 · 可用性检查 · 安全门禁" />
-      <div className="command-center-engine-routes">
-        {engineSelection.routes.map(route => (
-          <span key={route.key} className={`is-${route.key.toLowerCase()}`}>
-            <i aria-hidden="true" />
-            {route.label}
-          </span>
-        ))}
+      <div className="command-center-engine-panel">
+        <NodeHeading eyebrow="策略路由" title={engineSelection.title} subtitle="可用性检查 · 安全门禁" />
+        <div className="command-center-engine-routes">
+          {engineSelection.routes.map(route => (
+            <span key={route.key} className={`is-${route.token}`}>
+              <i aria-hidden="true" />
+              {route.label}
+            </span>
+          ))}
+        </div>
       </div>
-      <p>{engineSelection.automaticAgentUnavailableDescription}</p>
     </article>
   );
 }
@@ -131,7 +223,21 @@ function ReviewModule({ lane, runtimeLoading, onOpenReview, onOpenOverflow }) {
       className={`command-center-review-module is-${lane.colorToken} command-center-map-node`}
       data-zone-key={lane.zoneKey}
       data-running={lane.running > 0 ? 'true' : 'false'}
+      data-command-center-map-node="true"
     >
+      {isAgent ? (
+        <>
+          <ConnectionPort id="agent-in" token="agent" position="left" />
+          <ConnectionPort id="agent-out" token="agent" position="right" />
+          <ConnectionPort id="agent-down" token="fallback" position="bottom" />
+        </>
+      ) : (
+        <>
+          <ConnectionPort id="standard-in" token="standard" position="left" />
+          <ConnectionPort id="standard-out" token="standard" position="right" />
+          <ConnectionPort id="standard-up" token="fallback" position="top" />
+        </>
+      )}
       <header>
         <span className="command-center-module-icon" aria-hidden="true">{isAgent ? '⌘' : '▤'}</span>
         <span>
@@ -139,7 +245,7 @@ function ReviewModule({ lane, runtimeLoading, onOpenReview, onOpenOverflow }) {
           <h2>{lane.title}</h2>
           <p>{lane.description}</p>
         </span>
-        <em>{runtimeLoading ? '同步中' : '当前快照'}</em>
+        <em><i aria-hidden="true" />{runtimeLoading ? '同步中' : '当前快照'}</em>
       </header>
 
       <div className="command-center-module-metrics">
@@ -257,40 +363,77 @@ function RunningItems({ lane, onOpenReview, onOpenOverflow }) {
 function FallbackRelation({ fallback }) {
   return (
     <aside className="command-center-fallback" aria-label="Agent 到 Standard 的结构性降级关系">
-      <strong>降级 · 结构性关系</strong>
+      <strong>Agent Review → Standard Review</strong>
       <span>{fallback.description}</span>
     </aside>
   );
 }
 
 
-function ResultPersistence({ resultPersistence, onOpen }) {
+function TodayReviewResults({ todayResults, onOpen }) {
+  const metrics = todayResults.available ? [
+    ['success', '成功', todayResults.successCount],
+    ['failure', '失败', todayResults.failureCount],
+    ['skipped', '跳过', todayResults.skippedCount],
+    ['running', '进行中', todayResults.runningCount]
+  ] : [];
   return (
-    <article className="command-center-result command-center-map-node" data-zone-key={resultPersistence.zoneKey}>
-      <NodeHeading eyebrow="仅结构展示" title={resultPersistence.title} subtitle="结果落库" />
-      <div className="command-center-result-icon" aria-hidden="true">
-        <i />
-        <i />
-        <i />
-      </div>
-      <strong>任务详情 / 通知</strong>
-      <p>{resultPersistence.description}</p>
+    <article
+      className="command-center-result command-center-today-results command-center-map-node"
+      data-zone-key={todayResults.zoneKey}
+      data-command-center-map-node="true"
+    >
+      <ConnectionPort id="result-agent-in" token="agent" position="left-upper" />
+      <ConnectionPort id="result-standard-in" token="standard" position="left-lower" />
+      <span className="command-center-result-badge" aria-hidden="true">✓</span>
+      <NodeHeading eyebrow={todayResults.eyebrow} title={todayResults.title} subtitle={todayResults.subtitle} />
+      {todayResults.available ? (
+        <>
+          <strong className="command-center-result-total">完成 {todayResults.completedCount}</strong>
+          <div className="command-center-result-metrics">
+            {metrics.map(([token, label, value]) => (
+              <span key={token} className={`is-${token}`}>
+                <small>{label}</small>
+                <b>{value}</b>
+              </span>
+            ))}
+          </div>
+          <p>共 {todayResults.totalCount} 个 Result</p>
+          {todayResults.otherCount > 0 && (
+            <small className="command-center-result-other">其他状态 {todayResults.otherCount}</small>
+          )}
+        </>
+      ) : (
+        <p className="command-center-side-empty">今日结果暂不可用</p>
+      )}
       <button
         type="button"
         className="command-center-result-route"
         data-command-center-action="open-review-tasks"
-        onClick={() => onOpen(resultPersistence.navigationTarget)}
+        onClick={() => onOpen(todayResults.navigationTarget)}
       >
-        查看审查任务
+        查看审查任务 <span aria-hidden="true">→</span>
       </button>
     </article>
   );
 }
 
 
-function NodeHeading({ eyebrow, title, subtitle }) {
+function ConnectionPort({ id, token, position }) {
+  return (
+    <i
+      className={`command-center-port is-${token} is-${position}`}
+      data-command-center-port={id}
+      aria-hidden="true"
+    />
+  );
+}
+
+
+function NodeHeading({ icon = null, eyebrow, title, subtitle }) {
   return (
     <header className="command-center-node-heading">
+      {icon && <span className="command-center-node-heading-icon" aria-hidden="true">{icon}</span>}
       <small>{eyebrow}</small>
       <h2>{title}</h2>
       <p>{subtitle}</p>
@@ -299,11 +442,12 @@ function NodeHeading({ eyebrow, title, subtitle }) {
 }
 
 
-function intakeIcon(key) {
-  return {
-    MANUAL: '○',
-    MERGE_REQUEST: '⑂',
-    PUSH: '</>',
-    RETRY: '↻'
-  }[key] || '•';
+function formatRelativeTime(value) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return '更新时间未知';
+  const seconds = Math.max(Math.floor((Date.now() - timestamp) / 1000), 0);
+  if (seconds < 60) return '刚刚更新';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
+  return `${Math.floor(seconds / 86400)} 天前`;
 }

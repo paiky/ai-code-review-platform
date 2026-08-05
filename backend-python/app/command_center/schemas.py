@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -57,6 +57,13 @@ class ActiveTaskSnapshot(CommandCenterSchema):
     project_name: str = Field(alias="projectName")
     group_id: int | None = Field(default=None, alias="groupId")
     trigger_type: str = Field(alias="triggerType")
+    author_name: str | None = Field(default=None, alias="authorName")
+    author_username: str | None = Field(default=None, alias="authorUsername")
+    external_url: str | None = Field(default=None, alias="externalUrl")
+    repository_url: str | None = Field(default=None, alias="repositoryUrl")
+    source_branch: str | None = Field(default=None, alias="sourceBranch")
+    target_branch: str | None = Field(default=None, alias="targetBranch")
+    commit_sha: str | None = Field(default=None, alias="commitSha")
     technical_status: str = Field(alias="technicalStatus")
     review_status: str = Field(alias="reviewStatus")
     risk_level: str | None = Field(default=None, alias="riskLevel")
@@ -208,6 +215,23 @@ class AlertSnapshot(CommandCenterSchema):
     navigation_target: str | None = Field(default=None, alias="navigationTarget")
 
 
+class TodayResultsSnapshot(CommandCenterSchema):
+    status: Literal["LIVE"] = "LIVE"
+    scope: Literal["TODAY"] = "TODAY"
+    date: date
+    timezone: Literal["UTC+08:00"] = "UTC+08:00"
+    from_at: datetime = Field(alias="from")
+    to: datetime
+    total_count: int = Field(alias="totalCount")
+    completed_count: int = Field(alias="completedCount")
+    success_count: int = Field(alias="successCount")
+    failure_count: int = Field(alias="failureCount")
+    skipped_count: int = Field(alias="skippedCount")
+    running_count: int = Field(alias="runningCount")
+    other_count: int = Field(alias="otherCount")
+    status_counts: dict[str, int] = Field(alias="statusCounts")
+
+
 class RuntimeSnapshot(CommandCenterSchema):
     schema_version: Literal["command-center-runtime-v2"] = Field(
         default="command-center-runtime-v2",
@@ -224,6 +248,7 @@ class RuntimeSnapshot(CommandCenterSchema):
     review_lanes: ReviewLanesSnapshot = Field(alias="reviewLanes")
     providers_observed: list[ProviderSnapshot] = Field(alias="providersObserved")
     alerts: list[AlertSnapshot]
+    today_results: TodayResultsSnapshot = Field(alias="todayResults")
     coverage: SnapshotCoverage
 
 

@@ -19,7 +19,19 @@ test('runtime v2 model normalizes stable flow ids and bounded collections', () =
     generatedAt: '2026-07-31T02:00:00Z',
     intake: { taskCount: 12, activeTaskCount: 2 },
     scheduler: { activeJobCount: 2, queuedJobCount: 1, runningJobCount: 1 },
-    activeTasks: [{ taskId: 41, projectId: 7, projectName: 'Core', stage: 'MODEL_CALLING' }],
+    activeTasks: [{
+      taskId: 41,
+      projectId: 7,
+      projectName: 'Core',
+      stage: 'MODEL_CALLING',
+      authorName: 'Mayn',
+      authorUsername: 'mayn',
+      externalUrl: 'https://gitlab.example.com/core/-/merge_requests/41',
+      repositoryUrl: 'https://gitlab.example.com/core',
+      sourceBranch: 'feature/live-topology',
+      targetBranch: 'main',
+      commitSha: 'abcdef123456'
+    }],
     activeFlows: [{
       id: 'damaged-id',
       taskId: 41,
@@ -50,6 +62,22 @@ test('runtime v2 model normalizes stable flow ids and bounded collections', () =
       lastObservedAt: '2026-07-31T01:59:58Z'
     }],
     alerts: [{ id: 'FALLBACK:1', type: 'FALLBACK', taskId: 41, navigationTarget: '/tasks/41' }],
+    todayResults: {
+      status: 'LIVE',
+      scope: 'TODAY',
+      date: '2026-07-31',
+      timezone: 'UTC+08:00',
+      from: '2026-07-30T16:00:00Z',
+      to: '2026-07-31T02:00:00Z',
+      totalCount: 7,
+      completedCount: 5,
+      successCount: 4,
+      failureCount: 1,
+      skippedCount: 0,
+      runningCount: 2,
+      otherCount: 0,
+      statusCounts: { SUCCESS: 4, FAILED: 1, RUNNING: 2 }
+    },
     coverage: { phase: 'PHASE_1', truncated: false }
   }, { now: NOW });
 
@@ -60,6 +88,13 @@ test('runtime v2 model normalizes stable flow ids and bounded collections', () =
   assert.equal(runtime.activeFlows[0].statusRecognized, true);
   assert.equal(runtime.activeFlows[0].stageRecognized, true);
   assert.deepEqual(runtime.activeFlows[0].contextStatusCounts, { INSUFFICIENT: 2 });
+  assert.equal(runtime.activeTasks[0].authorName, 'Mayn');
+  assert.equal(runtime.activeTasks[0].sourceBranch, 'feature/live-topology');
+  assert.equal(runtime.activeTasks[0].commitSha, 'abcdef123456');
+  assert.equal(runtime.todayResults.date, '2026-07-31');
+  assert.equal(runtime.todayResults.from, '2026-07-30T16:00:00.000Z');
+  assert.equal(runtime.todayResults.completedCount, 5);
+  assert.deepEqual(runtime.todayResults.statusCounts, { SUCCESS: 4, FAILED: 1, RUNNING: 2 });
   assert.equal(runtime.agent.workerPool.workers[0].state, 'BUSY');
   assert.equal(runtime.providersObserved[0].status, 'ACTIVE');
   assert.equal(runtime.providersObserved[0].recentSuccessCount, 8);
@@ -93,6 +128,7 @@ test('runtime model safely handles damaged payload and unknown enums', () => {
   assert.equal(runtime.activeFlows[0].id, '9:future');
   assert.equal(runtime.providersObserved[0].status, 'NO_RECENT_DATA');
   assert.equal(runtime.alerts[0].navigationTarget, null);
+  assert.equal(runtime.todayResults, null);
 });
 
 

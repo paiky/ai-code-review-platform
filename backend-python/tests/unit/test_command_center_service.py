@@ -72,6 +72,41 @@ def test_runtime_snapshot_groups_review_keys_and_keeps_explicit_fallback() -> No
     assert flows["agent-main"]["contextStatusCounts"] == {"INSUFFICIENT": 1}
     assert snapshot["activeTasks"][0]["flowCount"] == 2
     assert snapshot["activeTasks"][0]["stage"] == "FALLBACK"
+    assert snapshot["activeTasks"][0]["authorName"] == "Mayn"
+    assert snapshot["activeTasks"][0]["commitSha"] == "after-sha"
+
+
+def test_runtime_snapshot_builds_beijing_today_result_buckets() -> None:
+    snapshot = _runtime_snapshot(
+        _runtime_data(
+            today_result_status_counts={
+                "SUCCESS": 4,
+                "FAILED": 2,
+                "SKIPPED": 1,
+                "CANCELLED": 1,
+                "TIMED_OUT": 1,
+                "QUEUED": 2,
+                "PENDING": 1,
+                "CLAIMED": 1,
+                "RUNNING": 3,
+                "FUTURE_STATUS": 2,
+            }
+        )
+    )
+
+    today = snapshot["todayResults"]
+    assert today["date"] == "2026-07-31"
+    assert today["timezone"] == "UTC+08:00"
+    assert today["from"] == "2026-07-30T16:00:00Z"
+    assert today["to"] == "2026-07-31T02:00:00Z"
+    assert today["totalCount"] == 18
+    assert today["completedCount"] == 9
+    assert today["successCount"] == 4
+    assert today["failureCount"] == 2
+    assert today["skippedCount"] == 3
+    assert today["runningCount"] == 7
+    assert today["otherCount"] == 2
+    assert today["statusCounts"]["FUTURE_STATUS"] == 2
 
 
 def test_runtime_snapshot_builds_standard_fallback_lane_from_scheduler_job() -> None:
@@ -556,6 +591,14 @@ def _task(task_id: int) -> dict:
         "project_name": "Command Center",
         "group_id": 7001,
         "trigger_type": "MERGE_REQUEST",
+        "author_name": "Mayn",
+        "author_username": "mayn",
+        "external_url": "https://gitlab.example.com/group/project/-/merge_requests/1",
+        "repository_url": "https://gitlab.example.com/group/project",
+        "source_branch": "feature/live-topology",
+        "target_branch": "main",
+        "commit_sha": None,
+        "after_sha": "after-sha",
         "technical_status": "RUNNING",
         "review_status": "REVIEWING",
         "risk_level": "HIGH",

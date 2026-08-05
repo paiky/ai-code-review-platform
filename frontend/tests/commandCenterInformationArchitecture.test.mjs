@@ -9,9 +9,11 @@ const apiSource = await read('../src/command-center/commandCenterApi.js');
 const hookSource = await read('../src/command-center/useCommandCenterSnapshots.js');
 const canvasSource = await read('../src/command-center/CommandCenterCanvas.jsx');
 const presentationSource = await read('../src/command-center/commandCenterPresentation.js');
+const topologySource = await read('../src/command-center/commandCenterTopology.js');
 const visualSource = await read('../src/command-center/commandCenterVisual.js');
 const lifecycleSource = await read('../src/visibilityRefreshLifecycle.js');
 const styleSource = await read('../src/command-center/commandCenter.css');
+const globalStyleSource = await read('../src/styles.css');
 
 
 function read(relativePath) {
@@ -36,8 +38,8 @@ test('root route renders Command Center while preserving legacy taskId redirect'
 });
 
 
-test('I2 page exposes five current Runtime metrics and four 24-hour quality metrics', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="INFORMATION_ARCHITECTURE_I2"'), true);
+test('M2-1 page preserves five current Runtime metrics and four 24-hour quality metrics', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="LIVE_TOPOLOGY_M2_1"'), true);
   assert.equal(pageSource.includes('AI Review 指挥中心'), true);
   assert.equal((pageSource.match(/<HudMetric/g) || []).length, 5);
   assert.equal((pageSource.match(/<QualityMetric/g) || []).length, 4);
@@ -62,40 +64,52 @@ test('I2 page exposes five current Runtime metrics and four 24-hour quality metr
 });
 
 
-test('H5 accepted page preserves the frozen five-subject dual-review topology with one structural fallback', () => {
+test('M2-1 page exposes live side nodes, dual review tracks and one structural fallback', () => {
   for (const token of [
-    'ReviewIntake',
+    'ReviewTaskQueue',
     'EngineSelection',
     'lane={agentLane}',
     'lane={standardLane}',
     'FallbackRelation',
-    'ResultPersistence'
+    'TodayReviewResults'
   ]) assert.equal(canvasSource.includes(token), true, token);
   assert.equal((canvasSource.match(/<FallbackRelation/g) || []).length, 1);
-  assert.equal(canvasSource.includes('降级 · 结构性关系'), true);
-  assert.equal(canvasSource.includes('仅结构展示'), true);
-  assert.equal(canvasSource.includes('resultPersistence.navigationTarget'), true);
+  assert.equal(canvasSource.includes('Agent Review → Standard Review'), true);
+  assert.equal(canvasSource.includes('任务队列'), true);
+  assert.equal(canvasSource.includes('今日 Review 结果'), false);
+  assert.equal(presentationSource.includes("title: '今日 Review 结果'"), true);
+  assert.equal(canvasSource.includes('todayResults.navigationTarget'), true);
   assert.equal(canvasSource.includes('Agent 到 Standard 的结构性降级关系'), true);
+  assert.equal(canvasSource.includes('target="_blank"'), true);
+  assert.equal(canvasSource.includes('rel="noopener noreferrer"'), true);
 });
 
 
-test('all semantic content is DOM-owned while enhanced SVG remains decorative and Canvas stays disabled', () => {
-  assert.equal(canvasSource.includes('data-command-center-renderer="DOM_SVG_ENHANCED"'), true);
+test('M2-1 semantic DOM owns content while one measured SVG remains decorative and static', () => {
+  assert.equal(canvasSource.includes('data-command-center-renderer="DOM_SVG_LIVE_TOPOLOGY"'), true);
   assert.equal(canvasSource.includes('data-command-center-canvas-mounted="false"'), true);
   assert.equal(canvasSource.includes('data-command-center-dom-fallback="always"'), true);
-  assert.equal(canvasSource.includes('data-command-center-animation-owner="CSS_COMPOSITOR_ONLY"'), true);
+  assert.equal(canvasSource.includes('data-command-center-animation-owner="STATIC_M2_1"'), true);
   assert.equal((canvasSource.match(/<svg/g) || []).length, 1);
   assert.equal(canvasSource.includes('aria-hidden="true"'), true);
   assert.equal(canvasSource.includes('focusable="false"'), true);
   assert.equal(canvasSource.includes('<canvas'), false);
   assert.equal(canvasSource.includes('platformRuntimeMapRenderer'), false);
   assert.equal(styleSource.includes('pointer-events: none'), true);
-  assert.equal(styleSource.includes('@keyframes cc-track-flow'), true);
-  assert.equal(styleSource.includes('@keyframes cc-module-breathe'), true);
-  assert.equal(styleSource.includes('@keyframes cc-alert-accent'), false);
-  assert.equal(`${pageSource}\n${canvasSource}\n${visualSource}`.includes('requestAnimationFrame'), false);
-  assert.equal((canvasSource.match(/className="command-center-flow/g) || []).length, 3);
-  assert.equal(canvasSource.includes('command-center-flow is-fallback'), false);
+  assert.equal(canvasSource.includes('useLayoutEffect'), true);
+  assert.equal(canvasSource.includes('observeCommandCenterTopology'), true);
+  assert.equal(topologySource.includes('new ResizeObserverClass(publish)'), true);
+  assert.equal(`${pageSource}\n${canvasSource}\n${topologySource}\n${visualSource}`.includes('requestAnimationFrame'), false);
+  assert.equal(canvasSource.includes('command-center-flow'), false);
+  assert.equal(styleSource.includes('[data-command-center-motion="enabled"] .command-center-connection'), false);
+  for (const id of [
+    'queue-engine',
+    'engine-agent',
+    'engine-standard',
+    'agent-result',
+    'standard-result',
+    'agent-standard'
+  ]) assert.equal(topologySource.includes(`id: '${id}'`), true, id);
 });
 
 
@@ -209,19 +223,24 @@ test('deployment polish fills wide viewports and removes the redundant heading r
 
 test('desktop tablet and mobile layouts preserve the planned information hierarchy', () => {
   assert.equal(styleSource.includes('grid-template-areas:'), true);
-  assert.equal(styleSource.includes('"intake engine agent result"'), true);
-  assert.equal(styleSource.includes('"intake engine standard result"'), true);
+  assert.equal(styleSource.includes('"intake . engine . agent . result"'), true);
+  assert.equal(styleSource.includes('"intake . engine . standard . result"'), true);
   assert.equal(styleSource.includes('@media (min-width: 1200px)'), true);
+  assert.equal(styleSource.includes('@media (min-width: 1440px)'), true);
   assert.equal(styleSource.includes('@media (min-width: 1200px) and (max-height: 1100px)'), true);
   assert.equal(styleSource.includes('@media (max-width: 1199px)'), true);
+  assert.equal(styleSource.includes('@media (max-width: 900px)'), true);
   assert.equal(styleSource.includes('@media (max-width: 700px)'), true);
   assert.equal(styleSource.includes('.command-center-intake,'), true);
   assert.equal(styleSource.includes('.command-center-engine,'), true);
   assert.equal(styleSource.includes('.command-center-fallback,'), true);
   assert.equal(styleSource.includes('.command-center-result { display: none; }'), true);
   assert.equal(styleSource.includes('flex-direction: column'), true);
+  assert.equal(styleSource.includes('.command-center-task-queue { order: 1; width: min(100%, 520px);'), true);
+  assert.equal(styleSource.includes('.command-center-result { order: 6; width: min(100%, 520px);'), true);
+  assert.equal(globalStyleSource.includes('@media (min-width: 761px) and (max-width: 1000px)'), true);
   assert.equal(styleSource.includes('grid-template-columns: repeat(5, minmax(0, 1fr))'), true);
-  assert.equal(styleSource.includes('grid-template-rows: clamp(178px, 21vh, 205px) 40px clamp(178px, 21vh, 205px)'), true);
+  assert.equal(styleSource.includes('grid-template-rows: clamp(168px, 21vh, 200px) 58px clamp(168px, 21vh, 200px)'), true);
   assert.equal(styleSource.includes('.command-center-hud-card.is-running { order: 1; }'), true);
   assert.equal(styleSource.includes('.command-center-quality-card.is-provider-result { order: 4; }'), true);
   assert.equal(canvasSource.includes('command-center-mobile-route-summary'), true);
@@ -229,14 +248,33 @@ test('desktop tablet and mobile layouts preserve the planned information hierarc
 });
 
 
-test('motion is presentational, state-gated and disabled for reduced motion and small screens', () => {
+test('M2-1 keeps measured routes static and preserves reduced-motion and small-screen fallbacks', () => {
   assert.equal(pageSource.includes('data-command-center-resource-state'), true);
   assert.equal(pageSource.includes('data-command-center-motion={motionState}'), true);
   assert.equal(canvasSource.includes("data-running={lane.running > 0 ? 'true' : 'false'}"), true);
-  assert.equal(styleSource.includes('[data-command-center-motion="enabled"] .command-center-flow'), true);
-  assert.equal(styleSource.includes('[data-command-center-motion="enabled"] .command-center-review-module[data-running="true"]'), true);
+  assert.equal(styleSource.includes('[data-command-center-motion="enabled"] .command-center-flow'), false);
+  assert.equal(styleSource.includes('[data-command-center-motion="enabled"] .command-center-review-module[data-running="true"]'), false);
+  assert.equal(styleSource.includes('.command-center-static-connections,'), true);
+  assert.equal(styleSource.includes('.command-center-port { display: none; }'), true);
   assert.equal(styleSource.includes('@media (prefers-reduced-motion: reduce)'), true);
   assert.equal(styleSource.includes('animation: none !important'), true);
+});
+
+
+test('M2-1 exposes rounded glass surfaces, circular engine and truthful quality micro visuals', () => {
+  assert.equal(canvasSource.includes('command-center-engine-orbit is-outer'), true);
+  assert.equal(canvasSource.includes('command-center-engine-panel'), true);
+  assert.equal(canvasSource.includes('command-center-result-badge'), true);
+  assert.equal((canvasSource.match(/command-center-connection is-/g) || []).length >= 3, true);
+  assert.equal(pageSource.includes('providerQualityVisual'), true);
+  assert.equal(pageSource.includes('findingSeverityVisual'), true);
+  assert.equal(pageSource.includes('affectedRiskVisual'), true);
+  assert.equal(pageSource.includes('data-command-center-quality-visual="review-signal"'), true);
+  assert.equal(styleSource.includes('--cc-radius-card: 20px'), true);
+  assert.equal(styleSource.includes('border-radius: 13px 3px 13px 3px'), false);
+  assert.equal(styleSource.includes('border-radius: 14px 4px 14px 4px'), false);
+  assert.equal(styleSource.includes('@supports not (backdrop-filter: blur(1px))'), true);
+  assert.equal(styleSource.includes('@media (forced-colors: active)'), true);
 });
 
 

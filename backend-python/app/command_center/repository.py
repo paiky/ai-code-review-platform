@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -70,6 +70,7 @@ class RuntimeProjectionData:
     agent_next_queued_job: dict[str, Any] | None
     candidate_task_count: int
     selected_task_count: int
+    today_result_status_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,7 @@ def load_runtime_projection(
     db: Session,
     *,
     window_from: datetime,
+    today_from: datetime,
     now: datetime,
     active_limit: int,
     alert_limit: int,
@@ -106,6 +108,13 @@ def load_runtime_projection(
     counts = load_runtime_base_counts(
         db,
         window_from=window_from,
+        now=now,
+        project_id=project_id,
+        group_id=group_id,
+    )
+    today_result_status_counts = _load_today_result_status_counts(
+        db,
+        today_from=today_from,
         now=now,
         project_id=project_id,
         group_id=group_id,
@@ -269,7 +278,41 @@ def load_runtime_projection(
         agent_next_queued_job=agent_next_queued_job,
         candidate_task_count=candidate_task_count,
         selected_task_count=len(selected_task_ids),
+        today_result_status_counts=today_result_status_counts,
     )
+
+
+def _load_today_result_status_counts(
+    db: Session,
+    *,
+    today_from: datetime,
+    now: datetime,
+    project_id: int | None,
+    group_id: int | None,
+) -> dict[str, int]:
+    statement = (
+        select(
+            AiReviewResult.status.label("status"),
+            func.count(AiReviewResult.id).label("count"),
+        )
+        .where(
+            AiReviewResult.updated_at >= today_from,
+            AiReviewResult.updated_at < now,
+        )
+        .group_by(AiReviewResult.status)
+    )
+    statement = _apply_project_filters(
+        statement,
+        AiReviewResult.project_id,
+        project_id=project_id,
+        group_id=group_id,
+    )
+    return {
+        str(row.get("status") or "UNKNOWN").strip().upper() or "UNKNOWN": int(
+            row.get("count") or 0
+        )
+        for row in _rows(db, statement)
+    }
 
 
 def _lane_job_statement() -> Select:
@@ -368,36 +411,37 @@ def load_runtime_base_counts(
     project_id: int | None,
     group_id: int | None,
 ) -> RuntimeBaseCounts:
-    intake_task_statement = (
-        select(func.count())
-        .select_from(ReviewTask)
-        .where(ReviewTask.created_at >= window_from)
-    )
-    intake_task_statement = _apply_project_filters(
-        intake_task_statement,
-        ReviewTask.project_id,
-        project_id=project_id,
-        group_id=group_id,
-    )
-    intake_task_count = _count(db, intake_task_statement)
-
-    active_task_statement = (
-        select(func.count())
-        .select_from(ReviewTask)
-        .where(
-            or_(
-                ReviewTask.status.in_(ACTIVE_TASK_STATUSES),
-                ReviewTask.review_status.in_(ACTIVE_REVIEW_STATUSES),
-            )
+    task_statement = (
+        select(
+            func.coalesce(
+                func.sum(case((ReviewTask.created_at >= window_from, 1), else_=0)),
+                0,
+            ).label("intake_task_count"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            or_(
+                                ReviewTask.status.in_(ACTIVE_TASK_STATUSES),
+                                ReviewTask.review_status.in_(ACTIVE_REVIEW_STATUSES),
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("active_task_count"),
         )
+        .select_from(ReviewTask)
     )
-    active_task_statement = _apply_project_filters(
-        active_task_statement,
+    task_statement = _apply_project_filters(
+        task_statement,
         ReviewTask.project_id,
         project_id=project_id,
         group_id=group_id,
     )
-    active_task_count = _count(db, active_task_statement)
+    task_counts = _row(db, task_statement) or {}
 
     job_statement = (
         select(
@@ -488,8 +532,8 @@ def load_runtime_base_counts(
     job_counts = _row(db, job_statement) or {}
 
     return RuntimeBaseCounts(
-        intake_task_count=intake_task_count,
-        active_task_count=active_task_count,
+        intake_task_count=int(task_counts.get("intake_task_count") or 0),
+        active_task_count=int(task_counts.get("active_task_count") or 0),
         queued_job_count=int(job_counts.get("queued_job_count") or 0),
         running_job_count=int(job_counts.get("running_job_count") or 0),
         agent_queued_job_count=int(
@@ -708,7 +752,15 @@ def _load_tasks(db: Session, task_ids: list[int]) -> list[dict[str, Any]]:
             ReviewTask.project_id.label("project_id"),
             Project.name.label("project_name"),
             Project.group_id.label("group_id"),
+            Project.repository_url.label("repository_url"),
             ReviewTask.trigger_type.label("trigger_type"),
+            ReviewTask.author_name.label("author_name"),
+            ReviewTask.author_username.label("author_username"),
+            ReviewTask.external_url.label("external_url"),
+            ReviewTask.source_branch.label("source_branch"),
+            ReviewTask.target_branch.label("target_branch"),
+            ReviewTask.commit_sha.label("commit_sha"),
+            ReviewTask.after_sha.label("after_sha"),
             ReviewTask.status.label("technical_status"),
             ReviewTask.review_status.label("review_status"),
             ReviewTask.risk_level.label("risk_level"),

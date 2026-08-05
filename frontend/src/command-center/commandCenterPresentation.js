@@ -1,16 +1,10 @@
 import { presentSnapshotResource } from './commandCenterResourceState.js';
 
 
-const INTAKE_ITEMS = Object.freeze([
-  Object.freeze({ key: 'MANUAL', label: '手动审查', description: '手动发起审查' }),
-  Object.freeze({ key: 'MERGE_REQUEST', label: 'Merge Request', description: 'GitLab MR 自动或手动触发' }),
-  Object.freeze({ key: 'PUSH', label: 'Push', description: '通过 Push 审核策略门禁触发' }),
-  Object.freeze({ key: 'RETRY', label: '重试', description: '从既有审查任务重新发起' })
-]);
-
 const ENGINE_ROUTES = Object.freeze([
-  Object.freeze({ key: 'AGENT', target: 'agent-review', label: 'Agent → Agent Review' }),
-  Object.freeze({ key: 'STANDARD', target: 'standard-review', label: 'Standard → Standard Review' })
+  Object.freeze({ key: 'AGENT', target: 'agent-review', label: 'Agent → Agent Review', token: 'agent' }),
+  Object.freeze({ key: 'STANDARD', target: 'standard-review', label: 'Standard → Standard Review', token: 'standard' }),
+  Object.freeze({ key: 'AGENT_STANDARD', target: 'agent-standard-fallback', label: 'Agent Review → Standard Review', token: 'fallback' })
 ]);
 
 const LANE_META = Object.freeze({
@@ -27,9 +21,6 @@ const LANE_META = Object.freeze({
     colorToken: 'agent'
   }
 });
-
-const UNAVAILABLE_DESCRIPTION = '自动触发选择 Agent 但 Agent 不可用时，可按策略直接进入 Standard Review。';
-
 
 export function buildCommandCenterPresentation({
   runtime,
@@ -80,6 +71,8 @@ export function buildCommandCenterPresentation({
     diagnostics
   });
   const resourceState = resources.runtime.state;
+  const taskQueue = presentTaskQueue(safeRuntime, resources.runtime);
+  const todayResults = presentTodayResults(safeRuntime, resources.runtime);
 
   return {
     resources,
@@ -99,16 +92,11 @@ export function buildCommandCenterPresentation({
       providersObserved,
       error: text(runtimeError) || null
     },
-    intake: {
-      zoneKey: 'review-intake',
-      title: '审查入口',
-      items: INTAKE_ITEMS.map(item => ({ ...item }))
-    },
+    taskQueue,
     engineSelection: {
       zoneKey: 'engine-selection',
       title: '引擎选择',
-      routes: ENGINE_ROUTES.map(route => ({ ...route })),
-      automaticAgentUnavailableDescription: UNAVAILABLE_DESCRIPTION
+      routes: ENGINE_ROUTES.map(route => ({ ...route }))
     },
     agentLane,
     standardLane,
@@ -119,13 +107,7 @@ export function buildCommandCenterPresentation({
       to: 'standard-review',
       description: 'Agent 运行失败、超时或租约耗尽时可能创建新的 Standard 任务；当前不表达任务级父子转移。'
     },
-    resultPersistence: {
-      zoneKey: 'result-persistence',
-      mode: 'STRUCTURAL_ONLY',
-      title: '结果持久化',
-      description: '结果落库后进入审查任务详情与既有通知链路',
-      navigationTarget: '/tasks'
-    },
+    todayResults,
     diagnostics,
     // H1 does not change JSX/Canvas. This adapter keeps the existing renderer safe
     // until H2 switches the DOM to the frozen homepage contract above.
@@ -136,6 +118,105 @@ export function buildCommandCenterPresentation({
       generatedAt
     })
   };
+}
+
+
+function presentTaskQueue(runtime, resource) {
+  const tasks = resource.available && Array.isArray(runtime?.activeTasks)
+    ? runtime.activeTasks
+    : [];
+  const activeCount = resource.available
+    ? number(runtime?.intake?.activeTaskCount)
+    : null;
+  const items = tasks.slice(0, 3).map(task => {
+    const taskId = Math.trunc(Number(task?.taskId));
+    const sourceBranch = text(task?.sourceBranch);
+    const targetBranch = text(task?.targetBranch);
+    const commitSha = text(task?.commitSha);
+    return {
+      taskId: Number.isFinite(taskId) && taskId > 0 ? taskId : null,
+      projectName: text(task?.projectName) || '未知项目',
+      authorLabel: taskAuthorLabel(task),
+      triggerLabel: taskTriggerLabel(task?.triggerType),
+      branchCommitLabel: sourceBranch && targetBranch
+        ? `${sourceBranch} → ${targetBranch}`
+        : sourceBranch || (commitSha ? `Commit ${commitSha.slice(0, 8)}` : '未记录分支或 Commit'),
+      stage: text(task?.stage) || 'UNKNOWN',
+      stageLabel: stageLabel(task?.stage),
+      updatedAt: task?.updatedAt || null,
+      navigationTarget: Number.isFinite(taskId) && taskId > 0 ? `/tasks/${taskId}` : null,
+      externalUrl: safeExternalReviewUrl(task?.externalUrl)
+        || safeExternalReviewUrl(task?.repositoryUrl)
+    };
+  });
+  return {
+    zoneKey: 'review-task-queue',
+    eyebrow: '实时任务',
+    title: '任务队列',
+    subtitle: '最近活动 · 非跨引擎执行顺序',
+    resourceState: resource.state,
+    available: resource.available,
+    visibleCount: items.length,
+    activeCount,
+    overflowCount: activeCount === null ? 0 : Math.max(activeCount - items.length, 0),
+    items
+  };
+}
+
+
+function presentTodayResults(runtime, resource) {
+  const value = resource.available ? runtime?.todayResults : null;
+  const available = Boolean(value);
+  return {
+    zoneKey: 'today-review-results',
+    eyebrow: '北京时间自然日',
+    title: '今日 Review 结果',
+    subtitle: '00:00—当前',
+    resourceState: resource.state,
+    available,
+    date: available ? value.date || null : null,
+    timezone: available ? value.timezone || 'UTC+08:00' : null,
+    totalCount: available ? number(value.totalCount) : null,
+    completedCount: available ? number(value.completedCount) : null,
+    successCount: available ? number(value.successCount) : null,
+    failureCount: available ? number(value.failureCount) : null,
+    skippedCount: available ? number(value.skippedCount) : null,
+    runningCount: available ? number(value.runningCount) : null,
+    otherCount: available ? number(value.otherCount) : null,
+    navigationTarget: '/tasks'
+  };
+}
+
+
+function taskAuthorLabel(task) {
+  const name = text(task?.authorName);
+  if (name) return name;
+  const username = text(task?.authorUsername);
+  return username ? `@${username.replace(/^@+/, '')}` : '未记录作者';
+}
+
+
+function taskTriggerLabel(value) {
+  return {
+    MANUAL: 'Manual',
+    MERGE_REQUEST: 'Merge Request',
+    PUSH: 'Push',
+    RETRY: 'Retry'
+  }[String(value || '').trim().toUpperCase()] || '其他触发';
+}
+
+
+export function safeExternalReviewUrl(value) {
+  const candidate = text(value);
+  if (!candidate) return null;
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+      ? parsed.href
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 

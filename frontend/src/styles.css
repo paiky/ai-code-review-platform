@@ -3451,6 +3451,35 @@ body {
   }
 }
 
+@media (min-width: 761px) and (max-width: 1000px) {
+  .app-header {
+    height: auto;
+    min-height: 56px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 8px 16px 12px;
+  }
+
+  .brand {
+    grid-column: 1 / -1;
+    font-size: 16px;
+    text-align: left;
+  }
+
+  .top-nav {
+    grid-column: 1 / -1;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px !important;
+    width: 100%;
+  }
+
+  .top-nav .ant-space-item { min-width: 0; }
+  .top-nav .ant-btn { width: 100%; min-width: 0; padding-inline: 8px; }
+  .header-actions { grid-column: 1 / -1; justify-content: flex-end; margin-left: 0; }
+}
+
 @media (max-width: 760px) {
   .app-layout-review-immersive,
   .app-content-review-immersive {

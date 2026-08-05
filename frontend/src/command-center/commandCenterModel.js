@@ -97,6 +97,7 @@ export function normalizeRuntimeSnapshot(input, { now = Date.now() } = {}) {
     alerts: safeArray(raw.alerts)
       .slice(0, COMMAND_CENTER_LIMITS.alerts)
       .map(normalizeAlert),
+    todayResults: normalizeTodayResults(raw.todayResults),
     coverage: normalizeCoverage(raw.coverage)
   };
 }
@@ -275,6 +276,13 @@ function normalizeTask(value) {
     projectName: safeText(raw.projectName, `Project ${safeCount(raw.projectId)}`),
     groupId: safeNullableCount(raw.groupId),
     triggerType: safeEnum(raw.triggerType),
+    authorName: safeNullableText(raw.authorName),
+    authorUsername: safeNullableText(raw.authorUsername),
+    externalUrl: safeNullableText(raw.externalUrl),
+    repositoryUrl: safeNullableText(raw.repositoryUrl),
+    sourceBranch: safeNullableText(raw.sourceBranch),
+    targetBranch: safeNullableText(raw.targetBranch),
+    commitSha: safeNullableText(raw.commitSha),
     technicalStatus: safeEnum(raw.technicalStatus),
     reviewStatus: safeEnum(raw.reviewStatus),
     riskLevel: safeNullableEnum(raw.riskLevel),
@@ -284,6 +292,27 @@ function normalizeTask(value) {
     stageSource: safeEnum(raw.stageSource),
     createdAt: safeIso(raw.createdAt),
     updatedAt: safeIso(raw.updatedAt)
+  };
+}
+
+
+function normalizeTodayResults(value) {
+  if (!isRecord(value)) return null;
+  return {
+    status: safeEnum(value.status, 'LIVE'),
+    scope: safeEnum(value.scope, 'TODAY'),
+    date: safeNullableText(value.date),
+    timezone: safeText(value.timezone, 'UTC+08:00'),
+    from: safeIso(value.from),
+    to: safeIso(value.to),
+    totalCount: safeCount(value.totalCount),
+    completedCount: safeCount(value.completedCount),
+    successCount: safeCount(value.successCount),
+    failureCount: safeCount(value.failureCount),
+    skippedCount: safeCount(value.skippedCount),
+    runningCount: safeCount(value.runningCount),
+    otherCount: safeCount(value.otherCount),
+    statusCounts: safeCounts(value.statusCounts)
   };
 }
 

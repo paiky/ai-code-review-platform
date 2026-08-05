@@ -41,6 +41,7 @@ from app.command_center.schemas import (
     SchedulerSnapshot,
     SnapshotCoverage,
     SnapshotWindow,
+    TodayResultsSnapshot,
     WorkerPoolSnapshot,
     WorkerSnapshot,
 )
@@ -57,6 +58,7 @@ RUNTIME_COVERAGE = {
     "reviewLanes": "BOUNDED",
     "providersObserved": "FULL",
     "alerts": "BOUNDED",
+    "todayResults": "FULL",
 }
 
 GOVERNANCE_COVERAGE = {
@@ -76,6 +78,10 @@ SAMPLE_GATE_REQUIRED = 30
 FAILED_STATUSES = {"FAILED", "TIMED_OUT"}
 SKIPPED_STATUSES = {"SKIPPED", "CANCELLED"}
 RUNNING_STATUSES = {"RUNNING", "PENDING", "CLAIMED"}
+TODAY_RUNNING_STATUSES = {"QUEUED", "PENDING", "CLAIMED", "RUNNING"}
+TODAY_SKIPPED_STATUSES = {"SKIPPED", "CANCELLED", "TIMED_OUT"}
+BEIJING_TIMEZONE = timezone(timedelta(hours=8))
+BEIJING_TIMEZONE_LABEL = "UTC+08:00"
 ACTIVE_TASK_STATUSES = {"RUNNING"}
 ACTIVE_REVIEW_STATUSES = {"REVIEWING"}
 SEVERITY_ORDER = {"CRITICAL": 3, "MAJOR": 2, "MINOR": 1}
@@ -110,11 +116,13 @@ def get_runtime_snapshot(
     now: datetime | None = None,
 ) -> RuntimeSnapshot:
     generated_at = _normalize_utc(now)
+    today_from, _ = _beijing_day_window(generated_at)
     data = load_runtime_projection(
         db,
         window_from=_database_datetime(
             generated_at - timedelta(hours=window_hours)
         ),
+        today_from=_database_datetime(today_from),
         now=_database_datetime(generated_at),
         active_limit=active_limit,
         alert_limit=alert_limit,
@@ -204,6 +212,13 @@ def build_runtime_snapshot(
                 projectName=str(task.get("project_name") or f"Project {task['project_id']}"),
                 groupId=_int_or_none(task.get("group_id")),
                 triggerType=str(task.get("trigger_type") or "UNKNOWN"),
+                authorName=task.get("author_name"),
+                authorUsername=task.get("author_username"),
+                externalUrl=task.get("external_url"),
+                repositoryUrl=task.get("repository_url"),
+                sourceBranch=task.get("source_branch"),
+                targetBranch=task.get("target_branch"),
+                commitSha=task.get("commit_sha") or task.get("after_sha"),
                 technicalStatus=str(task.get("technical_status") or "UNKNOWN"),
                 reviewStatus=str(task.get("review_status") or "UNKNOWN"),
                 riskLevel=_normalize_severity(task.get("risk_level")),
@@ -287,6 +302,10 @@ def build_runtime_snapshot(
         0,
     )
     agent_capacity = agent_queue.online_capacity
+    today_results = _build_today_results(
+        data.today_result_status_counts,
+        generated_at=generated_at,
+    )
 
     return RuntimeSnapshot(
         generatedAt=generated_at,
@@ -367,6 +386,7 @@ def build_runtime_snapshot(
         ),
         providersObserved=providers,
         alerts=alerts,
+        todayResults=today_results,
         coverage=SnapshotCoverage(
             truncated=(
                 data.candidate_task_count > data.selected_task_count
@@ -389,10 +409,46 @@ def build_runtime_snapshot(
                 "candidateTasks": data.candidate_task_count,
                 "selectedTasks": data.selected_task_count,
                 "activeFlows": len(active_flows),
+                "todayResults": today_results.total_count,
                 "laneRunningItems": len(lane_running_items),
                 "alerts": len(alerts),
             },
         ),
+    )
+
+
+def _build_today_results(
+    raw_status_counts: dict[str, int],
+    *,
+    generated_at: datetime,
+) -> TodayResultsSnapshot:
+    status_counts: Counter[str] = Counter()
+    for status, count in raw_status_counts.items():
+        status_counts[_safe_enum(status)] += max(int(count or 0), 0)
+
+    success_count = status_counts["SUCCESS"]
+    failure_count = status_counts["FAILED"]
+    skipped_count = sum(status_counts[status] for status in TODAY_SKIPPED_STATUSES)
+    running_count = sum(status_counts[status] for status in TODAY_RUNNING_STATUSES)
+    total_count = sum(status_counts.values())
+    completed_count = success_count + failure_count + skipped_count
+    categorized_count = completed_count + running_count
+    today_from, today_to = _beijing_day_window(generated_at)
+    return TodayResultsSnapshot(
+        date=generated_at.astimezone(BEIJING_TIMEZONE).date(),
+        timezone=BEIJING_TIMEZONE_LABEL,
+        **{
+            "from": today_from,
+            "to": today_to,
+            "totalCount": total_count,
+            "completedCount": completed_count,
+            "successCount": success_count,
+            "failureCount": failure_count,
+            "skippedCount": skipped_count,
+            "runningCount": running_count,
+            "otherCount": max(total_count - categorized_count, 0),
+            "statusCounts": dict(status_counts),
+        },
     )
 
 
@@ -1334,6 +1390,13 @@ def _window(now: datetime, hours: int) -> SnapshotWindow:
             "hours": hours,
         }
     )
+
+
+def _beijing_day_window(now: datetime) -> tuple[datetime, datetime]:
+    generated_at = _normalize_utc(now)
+    local_now = generated_at.astimezone(BEIJING_TIMEZONE)
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_start.astimezone(timezone.utc), generated_at
 
 
 def _normalize_utc(value: datetime | None) -> datetime:

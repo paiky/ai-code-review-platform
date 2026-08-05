@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildCommandCenterPresentation,
   reviewTaskTarget,
+  safeExternalReviewUrl,
   stageLabel
 } from '../src/command-center/commandCenterPresentation.js';
 
@@ -46,12 +47,12 @@ test('I2 presentation exposes current status and quality output without duplicat
     'currentStatus',
     'qualityOutput',
     'hud',
-    'intake',
+    'taskQueue',
     'engineSelection',
     'agentLane',
     'standardLane',
     'fallback',
-    'resultPersistence',
+    'todayResults',
     'diagnostics'
   ]);
   assert.deepEqual(presentation.hud, {
@@ -77,12 +78,12 @@ test('I2 presentation exposes current status and quality output without duplicat
     }],
     error: null
   });
-  assert.deepEqual(presentation.intake.items.map(item => item.key), [
-    'MANUAL', 'MERGE_REQUEST', 'PUSH', 'RETRY'
+  assert.equal(presentation.taskQueue.visibleCount, 0);
+  assert.equal(presentation.taskQueue.activeCount, 0);
+  assert.deepEqual(presentation.engineSelection.routes.map(route => route.key), [
+    'AGENT', 'STANDARD', 'AGENT_STANDARD'
   ]);
-  assert.equal(Object.hasOwn(presentation.intake, 'queuedCount'), false);
-  assert.deepEqual(presentation.engineSelection.routes.map(route => route.key), ['AGENT', 'STANDARD']);
-  assert.match(presentation.engineSelection.automaticAgentUnavailableDescription, /直接进入 Standard Review/);
+  assert.equal(Object.hasOwn(presentation.engineSelection, 'automaticAgentUnavailableDescription'), false);
   assert.equal(presentation.agentLane.queued, 5);
   assert.equal(presentation.agentLane.running, 2);
   assert.equal(presentation.agentLane.onlineCapacity, 3);
@@ -98,8 +99,8 @@ test('I2 presentation exposes current status and quality output without duplicat
   assert.equal(presentation.agentLane.totalRunningItemCount, 2);
   assert.equal(presentation.agentLane.runningItemsTruncated, true);
   assert.equal(presentation.fallback.mode, 'STRUCTURAL_ONLY');
-  assert.equal(presentation.resultPersistence.mode, 'STRUCTURAL_ONLY');
-  assert.equal(presentation.resultPersistence.navigationTarget, '/tasks');
+  assert.equal(presentation.todayResults.completedCount, 0);
+  assert.equal(presentation.todayResults.navigationTarget, '/tasks');
   assert.equal(presentation.currentStatus.oldestAgentQueueSeconds, 91);
   assert.deepEqual(presentation.diagnostics, []);
   assert.equal(presentation.map.compatibilityMode, 'H1_LEGACY_RENDERER');
@@ -172,7 +173,10 @@ test('empty and failed resources never synthesize reviews, providers or quality 
     assert.equal(presentation.qualityOutput.reviewTasks.count, null);
     assert.equal(presentation.qualityOutput.providerExecution.successCount, null);
     assert.equal(presentation.qualityOutput.findingRisk.findingCount, null);
-    assert.equal(presentation.resultPersistence.navigationTarget, '/tasks');
+    assert.equal(presentation.taskQueue.available, false);
+    assert.equal(presentation.todayResults.available, false);
+    assert.equal(presentation.todayResults.completedCount, null);
+    assert.equal(presentation.todayResults.navigationTarget, '/tasks');
   }
   assert.equal(empty.hud.resourceState, 'EMPTY');
   assert.equal(failed.hud.resourceState, 'ERROR_EMPTY');
@@ -417,10 +421,94 @@ test('review task targets are internal, encoded and unavailable without a positi
 });
 
 
+test('M2 task queue is bounded, keeps backend order and rejects unsafe external links', () => {
+  const presentation = buildCommandCenterPresentation({
+    runtime: runtime({
+      intake: { taskCount: 8, activeTaskCount: 4 },
+      activeTasks: [
+        task(1, {
+          projectName: 'First',
+          authorName: 'Mayn',
+          externalUrl: 'https://gitlab.example.com/first/-/merge_requests/1',
+          sourceBranch: 'feature/one',
+          targetBranch: 'main'
+        }),
+        task(2, {
+          projectName: 'Second',
+          authorUsername: '@reviewer',
+          externalUrl: 'javascript:alert(1)',
+          repositoryUrl: 'https://gitlab.example.com/second',
+          sourceBranch: null,
+          targetBranch: null,
+          commitSha: 'abcdef1234567890'
+        }),
+        task(3, {
+          projectName: 'Third',
+          externalUrl: 'data:text/html,unsafe',
+          repositoryUrl: '/relative/path'
+        }),
+        task(4, { projectName: 'Hidden fourth' })
+      ]
+    })
+  });
+
+  assert.deepEqual(presentation.taskQueue.items.map(item => item.projectName), [
+    'First', 'Second', 'Third'
+  ]);
+  assert.equal(presentation.taskQueue.visibleCount, 3);
+  assert.equal(presentation.taskQueue.activeCount, 4);
+  assert.equal(presentation.taskQueue.overflowCount, 1);
+  assert.equal(presentation.taskQueue.items[0].authorLabel, 'Mayn');
+  assert.equal(presentation.taskQueue.items[0].branchCommitLabel, 'feature/one → main');
+  assert.equal(presentation.taskQueue.items[0].navigationTarget, '/tasks/1');
+  assert.equal(
+    presentation.taskQueue.items[0].externalUrl,
+    'https://gitlab.example.com/first/-/merge_requests/1'
+  );
+  assert.equal(presentation.taskQueue.items[1].authorLabel, '@reviewer');
+  assert.equal(presentation.taskQueue.items[1].branchCommitLabel, 'Commit abcdef12');
+  assert.equal(presentation.taskQueue.items[1].externalUrl, 'https://gitlab.example.com/second');
+  assert.equal(presentation.taskQueue.items[2].authorLabel, '未记录作者');
+  assert.equal(presentation.taskQueue.items[2].externalUrl, null);
+  assert.equal(safeExternalReviewUrl('http://gitlab.example.com/project'), 'http://gitlab.example.com/project');
+  assert.equal(safeExternalReviewUrl('javascript:alert(1)'), null);
+  assert.equal(safeExternalReviewUrl('data:text/plain,unsafe'), null);
+  assert.equal(safeExternalReviewUrl('/relative'), null);
+});
+
+
+test('M2 today results preserve real zero, unknown states and retained snapshots', () => {
+  const zero = buildCommandCenterPresentation({ runtime: runtime() });
+  const unknown = buildCommandCenterPresentation({
+    runtime: runtime({
+      todayResults: todayResults({ totalCount: 2, otherCount: 2, statusCounts: { FUTURE: 2 } })
+    })
+  });
+  const missing = buildCommandCenterPresentation({
+    runtime: runtime({ todayResults: undefined })
+  });
+  const retained = buildCommandCenterPresentation({
+    runtime: runtime({ todayResults: todayResults({ completedCount: 3, successCount: 3, totalCount: 3 }) }),
+    runtimeError: 'HTTP 503'
+  });
+
+  assert.equal(zero.todayResults.available, true);
+  assert.equal(zero.todayResults.totalCount, 0);
+  assert.equal(unknown.todayResults.otherCount, 2);
+  assert.equal(missing.todayResults.available, false);
+  assert.equal(missing.todayResults.totalCount, null);
+  assert.equal(retained.resources.runtime.state, 'ERROR_RETAINED');
+  assert.equal(retained.todayResults.available, true);
+  assert.equal(retained.todayResults.completedCount, 3);
+});
+
+
 function runtime(overrides = {}) {
   return {
     freshness: 'FRESH',
     generatedAt: '2026-08-03T02:00:00Z',
+    intake: { taskCount: 0, activeTaskCount: 0 },
+    activeTasks: [],
     scheduler: { queuedJobCount: 0, runningJobCount: 0 },
     agent: {
       workerPool: { workers: [] },
@@ -433,6 +521,40 @@ function runtime(overrides = {}) {
       standard: lane('standard', 10, 0, 0),
       agent: lane('agent', 0, 0, 0)
     },
+    todayResults: todayResults(),
+    ...overrides
+  };
+}
+
+
+function todayResults(overrides = {}) {
+  return {
+    status: 'LIVE',
+    scope: 'TODAY',
+    date: '2026-08-03',
+    timezone: 'UTC+08:00',
+    from: '2026-08-02T16:00:00Z',
+    to: '2026-08-03T02:00:00Z',
+    totalCount: 0,
+    completedCount: 0,
+    successCount: 0,
+    failureCount: 0,
+    skippedCount: 0,
+    runningCount: 0,
+    otherCount: 0,
+    statusCounts: {},
+    ...overrides
+  };
+}
+
+
+function task(taskId, overrides = {}) {
+  return {
+    taskId,
+    projectName: `Project ${taskId}`,
+    triggerType: 'MERGE_REQUEST',
+    stage: 'MODEL_CALLING',
+    updatedAt: '2026-08-03T01:59:00Z',
     ...overrides
   };
 }

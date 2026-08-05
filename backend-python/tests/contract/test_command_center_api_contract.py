@@ -19,6 +19,7 @@ from app.code_quality.models import (
     CodeQualityReviewSettings,
     CodeQualitySchedulerJob,
 )
+from app.command_center.service import get_runtime_snapshot
 from app.deterministic_checks.models import DeterministicCheckRun
 from app.evaluation.models import EvaluationCase, EvaluationRun
 from app.project_integration.models import Project
@@ -41,6 +42,7 @@ RUNTIME_TOP_LEVEL_KEYS = {
     "reviewLanes",
     "providersObserved",
     "alerts",
+    "todayResults",
     "coverage",
 }
 
@@ -88,8 +90,13 @@ def test_command_center_empty_database_phase_one_contract(
     }
     assert runtime["reviewLanes"]["agent"]["capacity"] == 0
     assert runtime["providersObserved"] == []
+    assert runtime["todayResults"]["scope"] == "TODAY"
+    assert runtime["todayResults"]["timezone"] == "UTC+08:00"
+    assert runtime["todayResults"]["totalCount"] == 0
+    assert runtime["todayResults"]["statusCounts"] == {}
     assert runtime["coverage"]["phase"] == "PHASE_1"
     assert runtime["coverage"]["sections"]["activeFlows"] == "BOUNDED"
+    assert runtime["coverage"]["sections"]["todayResults"] == "FULL"
 
     assert governance_response.status_code == 200
     governance = governance_response.json()["data"]
@@ -124,6 +131,13 @@ def test_runtime_returns_real_task_flow_worker_provider_and_alert_data(
     assert len(runtime["activeTasks"]) == 1
     assert runtime["activeTasks"][0]["projectName"] == "command-center-one"
     assert runtime["activeTasks"][0]["flowCount"] == 2
+    assert runtime["activeTasks"][0]["authorName"] == "Command Center Author"
+    assert runtime["activeTasks"][0]["authorUsername"] == "cc-author"
+    assert runtime["activeTasks"][0]["sourceBranch"] == "feature/runtime-map"
+    assert runtime["activeTasks"][0]["targetBranch"] == "main"
+    assert runtime["activeTasks"][0]["commitSha"] == "after-sha"
+    assert runtime["activeTasks"][0]["externalUrl"].startswith("https://gitlab.example.com/")
+    assert runtime["activeTasks"][0]["repositoryUrl"].startswith("https://gitlab.example.com/")
     flows = {flow["reviewKey"]: flow for flow in runtime["activeFlows"]}
     assert set(flows) == {"standard-main", "agent-main"}
     assert flows["standard-main"]["stage"] == "CONTEXT_BUILDING"
@@ -159,6 +173,102 @@ def test_runtime_returns_real_task_flow_worker_provider_and_alert_data(
     assert {"FALLBACK", "NOTIFICATION_FAILED", "CRITICAL_FINDING"} <= {
         alert["type"] for alert in runtime["alerts"]
     }
+
+
+def test_runtime_today_results_use_beijing_boundary_and_group_filter(
+    db_session: Session,
+) -> None:
+    now = datetime(2026, 8, 4, 4, 0, tzinfo=timezone.utc)
+    database_now = now.replace(tzinfo=None)
+    today_from = datetime(2026, 8, 3, 16, 0)
+    project = _project(7601, 7001, "today-in-scope")
+    other_project = _project(7602, 7002, "today-out-of-scope")
+    tasks = [
+        _task(7610 + index, project.id, database_now)
+        for index in range(1, 8)
+    ]
+    other_task = _task(7699, other_project.id, database_now)
+    statuses_and_times = [
+        ("SUCCESS", today_from),
+        ("FAILED", today_from + timedelta(minutes=1)),
+        ("TIMED_OUT", today_from + timedelta(minutes=2)),
+        ("QUEUED", today_from + timedelta(minutes=3)),
+        ("FUTURE_STATUS", today_from + timedelta(minutes=4)),
+        ("SUCCESS", today_from - timedelta(microseconds=1)),
+        ("SUCCESS", database_now),
+    ]
+    results = [
+        _quality_result(
+            7700 + index,
+            task.id,
+            project.id,
+            f"today-{index}",
+            status,
+            updated_at,
+        )
+        for index, (task, (status, updated_at)) in enumerate(
+            zip(tasks, statuses_and_times),
+            start=1,
+        )
+    ]
+    results.append(
+        _quality_result(
+            7799,
+            other_task.id,
+            other_project.id,
+            "other-project",
+            "SUCCESS",
+            today_from + timedelta(minutes=5),
+        )
+    )
+    db_session.add_all([project, other_project, *tasks, other_task, *results])
+    db_session.commit()
+
+    snapshot = get_runtime_snapshot(
+        db_session,
+        window_hours=24,
+        active_limit=20,
+        alert_limit=20,
+        project_id=None,
+        group_id=7001,
+        now=now,
+    ).model_dump(by_alias=True, mode="json")
+
+    assert snapshot["todayResults"] == {
+        "status": "LIVE",
+        "scope": "TODAY",
+        "date": "2026-08-04",
+        "timezone": "UTC+08:00",
+        "from": "2026-08-03T16:00:00Z",
+        "to": "2026-08-04T04:00:00Z",
+        "totalCount": 5,
+        "completedCount": 3,
+        "successCount": 1,
+        "failureCount": 1,
+        "skippedCount": 1,
+        "runningCount": 1,
+        "otherCount": 1,
+        "statusCounts": {
+            "FAILED": 1,
+            "FUTURE_STATUS": 1,
+            "QUEUED": 1,
+            "SUCCESS": 1,
+            "TIMED_OUT": 1,
+        },
+    }
+    assert snapshot["coverage"]["scanned"]["todayResults"] == 5
+
+    project_snapshot = get_runtime_snapshot(
+        db_session,
+        window_hours=24,
+        active_limit=20,
+        alert_limit=20,
+        project_id=other_project.id,
+        group_id=None,
+        now=now,
+    ).model_dump(by_alias=True, mode="json")
+    assert project_snapshot["todayResults"]["totalCount"] == 1
+    assert project_snapshot["todayResults"]["successCount"] == 1
 
 
 def test_runtime_review_lanes_use_engine_specific_queue_order_and_worker_binding(
@@ -724,6 +834,7 @@ def _project(project_id: int, group_id: int, name: str) -> Project:
         name=name,
         git_provider="GITLAB",
         git_project_id=f"cc-{project_id}",
+        repository_url=f"https://gitlab.example.com/command-center/{project_id}",
         default_template_code="backend-default",
         status="ENABLED",
     )
@@ -734,12 +845,47 @@ def _task(task_id: int, project_id: int, now: datetime) -> ReviewTask:
         id=task_id,
         project_id=project_id,
         trigger_type="MERGE_REQUEST",
+        external_url=f"https://gitlab.example.com/command-center/{project_id}/-/merge_requests/{task_id}",
+        source_branch="feature/runtime-map",
+        target_branch="main",
+        commit_sha=None,
+        after_sha="after-sha",
+        author_name="Command Center Author",
+        author_username="cc-author",
         template_code="backend-default",
         status="RUNNING",
         review_status="REVIEWING",
         risk_level="HIGH",
         created_at=now - timedelta(hours=1),
         updated_at=now,
+    )
+
+
+def _quality_result(
+    result_id: int,
+    task_id: int,
+    project_id: int,
+    review_key: str,
+    status: str,
+    updated_at: datetime,
+) -> CodeQualityReviewResult:
+    return CodeQualityReviewResult(
+        id=result_id,
+        task_id=task_id,
+        review_key=review_key,
+        project_id=project_id,
+        profile_code="backend-default",
+        provider="DEEPSEEK",
+        model="deepseek-chat",
+        display_name=review_key,
+        sort_order=0,
+        status=status,
+        finding_count=0,
+        findings_json="[]",
+        requested_engine="STANDARD",
+        effective_engine="STANDARD",
+        created_at=updated_at,
+        updated_at=updated_at,
     )
 
 

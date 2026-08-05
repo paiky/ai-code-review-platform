@@ -5,6 +5,11 @@ import { useNavigate } from 'react-router-dom';
 import CommandCenterCanvas from './CommandCenterCanvas.jsx';
 import { restoreCommandCenterFocus } from './commandCenterInteractions.js';
 import { buildCommandCenterPresentation } from './commandCenterPresentation.js';
+import {
+  affectedRiskVisual,
+  findingSeverityVisual,
+  providerQualityVisual
+} from './commandCenterQualityVisual.js';
 import { commandCenterMotionState } from './commandCenterVisual.js';
 import { useCommandCenterSnapshots } from './useCommandCenterSnapshots.js';
 import './commandCenter.css';
@@ -68,7 +73,7 @@ export default function CommandCenterPage() {
       ref={pageRef}
       className="command-center-page"
       tabIndex={-1}
-      data-command-center-phase="INFORMATION_ARCHITECTURE_I2"
+      data-command-center-phase="LIVE_TOPOLOGY_M2_1"
       data-command-center-resource-state={presentation.resources.runtime.state}
       data-command-center-governance-state={presentation.resources.governance.state}
       data-command-center-motion={motionState}
@@ -309,6 +314,9 @@ function CommandCenterNotice({ presentation, loading, onRetryAll, onRetryRuntime
 function QualityOutput({ presentation, onRetryGovernance }) {
   const { qualityOutput, resources } = presentation;
   const { reviewTasks, providerExecution, findingRisk, window } = qualityOutput;
+  const providerVisual = providerQualityVisual(providerExecution);
+  const findingVisual = findingSeverityVisual(findingRisk);
+  const riskVisual = affectedRiskVisual(findingRisk);
   const bothUnavailable = resources.runtime.state === 'ERROR_EMPTY'
     && resources.governance.state === 'ERROR_EMPTY';
   return (
@@ -335,6 +343,7 @@ function QualityOutput({ presentation, onRetryGovernance }) {
           )}
           token="review"
           source="runtime"
+          visual={{ type: 'signal' }}
         />
         <QualityMetric
           icon="◉"
@@ -352,6 +361,7 @@ function QualityOutput({ presentation, onRetryGovernance }) {
           )}
           token="provider-result"
           source="runtime"
+          visual={{ type: 'provider', ...providerVisual }}
         />
         <QualityMetric
           icon="◇"
@@ -363,6 +373,7 @@ function QualityOutput({ presentation, onRetryGovernance }) {
           )}
           token="finding"
           source="governance"
+          visual={{ type: 'finding', ...findingVisual }}
         />
         <QualityMetric
           icon="△"
@@ -376,6 +387,7 @@ function QualityOutput({ presentation, onRetryGovernance }) {
           )}
           token="risk"
           source="governance"
+          visual={{ type: 'risk', ...riskVisual }}
         />
       </div>
     </section>
@@ -432,19 +444,81 @@ function NoticeRetry({ onRetry, label }) {
 }
 
 
-function QualityMetric({ icon, label, value, detail, token, source }) {
+function QualityMetric({ icon, label, value, detail, token, source, visual }) {
   return (
     <article
       className={`command-center-quality-card is-${token}`}
       data-command-center-source={source}
     >
       <span className="command-center-quality-icon" aria-hidden="true">{icon}</span>
-      <span>
+      <span className="command-center-quality-copy">
         <small>{label}</small>
         <strong>{value}</strong>
         <em>{detail}</em>
       </span>
+      <QualityMicroVisual visual={visual} />
     </article>
+  );
+}
+
+
+function QualityMicroVisual({ visual }) {
+  if (!visual) return null;
+  if (visual.type === 'signal') {
+    return (
+      <span
+        className="command-center-quality-visual is-signal"
+        data-command-center-quality-visual="review-signal"
+        aria-hidden="true"
+      />
+    );
+  }
+  if (visual.type === 'provider') {
+    return (
+      <span
+        className="command-center-quality-visual is-provider"
+        data-command-center-quality-visual="provider-breakdown"
+        data-empty={visual.empty ? 'true' : 'false'}
+        role="img"
+        aria-label={visual.label}
+      >
+        <i className="is-success" style={{ '--cc-segment-share': `${visual.successPercent}%` }} />
+        <i className="is-failure" style={{ '--cc-segment-share': `${visual.failurePercent}%` }} />
+      </span>
+    );
+  }
+  if (visual.type === 'finding') {
+    return (
+      <span
+        className="command-center-quality-visual is-finding"
+        data-command-center-quality-visual="finding-severity"
+        data-empty={visual.empty ? 'true' : 'false'}
+        role="img"
+        aria-label={visual.label}
+      >
+        {visual.bars.map(bar => (
+          <i
+            key={bar.token}
+            className={`is-${bar.token}`}
+            style={{ '--cc-bar-level': `${bar.percent}%` }}
+            title={`${bar.label} ${bar.count}`}
+          />
+        ))}
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`command-center-quality-visual is-risk is-${visual.token}`}
+      data-command-center-quality-visual="risk-level"
+      data-empty={visual.empty ? 'true' : 'false'}
+      role="img"
+      aria-label={visual.label}
+    >
+      {[1, 2, 3, 4].map(level => (
+        <i key={level} data-active={level <= visual.level ? 'true' : 'false'} />
+      ))}
+    </span>
   );
 }
 
