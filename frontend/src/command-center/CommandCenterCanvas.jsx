@@ -10,6 +10,7 @@ export default function CommandCenterCanvas({
   presentation,
   motionScene,
   runtimeLoading,
+  preview,
   onOpenReview,
   onOpenOverflow,
   onOpenResult
@@ -22,8 +23,10 @@ export default function CommandCenterCanvas({
     agentLane,
     standardLane,
     fallback,
-    todayResults
+    todayResults,
+    resources
   } = presentation;
+  const runtimeState = resources.runtime.state;
 
   useLayoutEffect(() => {
     if (!mapRef.current) return undefined;
@@ -43,12 +46,10 @@ export default function CommandCenterCanvas({
       data-command-center-activity={motionScene.activity}
       data-command-center-topology-ready={topology.ready ? 'true' : 'false'}
     >
+      <PreviewToolbar preview={preview} />
       <StaticConnections topology={topology} motionScene={motionScene} />
 
-      <div className="command-center-mobile-route-summary" role="note">
-        <strong>审查路由</strong>
-        <span>任务队列 → 引擎选择 → Agent Review 或 Standard Review → 审查结果</span>
-      </div>
+      <MobileRouteSummary motionScene={motionScene} runtimeState={runtimeState} preview={preview} />
 
       <div className="command-center-map-grid">
         <ReviewTaskQueue taskQueue={taskQueue} onOpenReview={onOpenReview} />
@@ -57,21 +58,98 @@ export default function CommandCenterCanvas({
           lane={agentLane}
           motionLane={motionScene.lanes.agent}
           runtimeLoading={runtimeLoading}
+          runtimeState={runtimeState}
           onOpenReview={onOpenReview}
           onOpenOverflow={onOpenOverflow}
+          fallback={fallback}
+          fallbackActive={motionScene.fallbackActive}
         />
-        <FallbackRelation fallback={fallback} active={motionScene.fallbackActive} />
+        <ResponsiveHandoffDivider fallbackActive={motionScene.fallbackActive} />
         <ReviewModule
           lane={standardLane}
           motionLane={motionScene.lanes.standard}
           runtimeLoading={runtimeLoading}
+          runtimeState={runtimeState}
           onOpenReview={onOpenReview}
           onOpenOverflow={onOpenOverflow}
+          fallbackActive={motionScene.fallbackActive}
         />
         <TodayReviewResults todayResults={todayResults} onOpen={onOpenResult} />
       </div>
     </section>
   );
+}
+
+
+function PreviewToolbar({ preview }) {
+  return (
+    <div
+      className="command-center-preview-toolbar"
+      data-command-center-preview-state={preview.phase || 'IDLE'}
+    >
+      <PreviewControl preview={preview} />
+    </div>
+  );
+}
+
+
+function PreviewControl({ preview }) {
+  return (
+    <span className="command-center-preview-control">
+      {preview.active && (
+        <span className="command-center-preview-badge" role="status">
+          演示 · {preview.phaseLabel}
+        </span>
+      )}
+      <button
+        type="button"
+        className="command-center-preview-button"
+        data-command-center-action="preview-review-motion"
+        disabled={!preview.enabled || preview.active}
+        title={preview.enabled ? '预览 Agent 优先与 Standard 降级动画' : '仅 Runtime 实时且当前空闲时可预览'}
+        onClick={preview.onStart}
+      >
+        <span aria-hidden="true">▷</span>
+        {preview.active ? '预览中' : '预览动画'}
+      </button>
+    </span>
+  );
+}
+
+
+function MobileRouteSummary({ motionScene, runtimeState, preview }) {
+  const status = mobileRouteStatus(motionScene, runtimeState);
+  return (
+    <div
+      className="command-center-mobile-route-summary"
+      role="note"
+      data-runtime-state={runtimeState}
+      data-agent-activity={motionScene.lanes.agent.activity}
+      data-standard-activity={motionScene.lanes.standard.activity}
+      data-fallback-active={motionScene.fallbackActive ? 'true' : 'false'}
+    >
+      <strong>Agent 优先审查路由</strong>
+      <span>任务队列 → Agent Review 主通道 → 审查结果；异常时由 Standard Review 接管</span>
+      <em>{status}</em>
+      <span className="command-center-mobile-route-actions">
+        <PreviewControl preview={preview} />
+      </span>
+    </div>
+  );
+}
+
+
+function mobileRouteStatus(motionScene, runtimeState) {
+  if (runtimeState === 'ERROR_RETAINED') return '刷新失败，保留旧快照 · 动效已暂停';
+  if (runtimeState === 'STALE') return 'Runtime 快照已过期 · 动效已暂停';
+  if (runtimeState === 'ERROR_EMPTY') return 'Runtime 暂不可用';
+  if (runtimeState === 'EMPTY') return '等待 Runtime 快照';
+  if (motionScene.fallbackActive) return 'Agent 异常 · Standard 正在兜底';
+  if (motionScene.lanes.agent.running) return 'Agent 主通道运行中';
+  if (motionScene.lanes.agent.queued) return 'Agent 主通道排队中';
+  if (motionScene.lanes.standard.running) return 'Standard 备用通道运行中';
+  if (motionScene.lanes.standard.queued) return 'Standard 备用通道排队中';
+  return motionScene.activity === 'paused' ? '线路动效已暂停' : '当前空闲';
 }
 
 
@@ -90,7 +168,7 @@ function StaticConnections({ topology, motionScene }) {
         <ConnectionMarker id="cc-arrow-intake" color="#2787f5" />
         <ConnectionMarker id="cc-arrow-agent" color="#6f3df4" />
         <ConnectionMarker id="cc-arrow-standard" color="#f07818" />
-        <ConnectionMarker id="cc-arrow-fallback" color="#08a9b9" />
+        <ConnectionMarker id="cc-arrow-fallback" color="#f07818" />
       </defs>
       {topology.paths.map(path => {
         const state = motionScene.connections[path.id] || { activity: 'idle', active: false };
@@ -116,10 +194,47 @@ function StaticConnections({ topology, motionScene }) {
             />
             <path className="command-center-connection command-center-flow" d={path.d} pathLength="100" />
             <path className="command-center-connection command-center-pulse" d={path.d} pathLength="100" />
+            {path.kind === 'fallback' && path.midpoint && (
+              <FallbackHandoffNode midpoint={path.midpoint} active={fallbackActive} />
+            )}
           </g>
         );
       })}
     </svg>
+  );
+}
+
+
+function FallbackHandoffNode({ midpoint, active }) {
+  return (
+    <g
+      className="command-center-fallback-handoff"
+      transform={`translate(${midpoint.x} ${midpoint.y})`}
+      data-command-center-fallback-handoff="desktop"
+      data-active={active ? 'true' : 'false'}
+    >
+      <circle className="command-center-fallback-handoff-halo" r="28" />
+      <circle className="command-center-fallback-handoff-surface" r="24" />
+      <path className="command-center-fallback-handoff-chevron" d="M -8 -8 L 0 0 L 8 -8" />
+      <path className="command-center-fallback-handoff-chevron" d="M -8 1 L 0 9 L 8 1" />
+      <text className="command-center-fallback-handoff-label" x="0" y="42">降级通道</text>
+    </g>
+  );
+}
+
+
+function ResponsiveHandoffDivider({ fallbackActive }) {
+  return (
+    <div
+      className="command-center-responsive-handoff"
+      role="note"
+      aria-label="Agent Review 异常时降级至 Standard Review"
+      data-command-center-fallback-handoff="responsive"
+      data-active={fallbackActive ? 'true' : 'false'}
+    >
+      <span aria-hidden="true"><i /><i /></span>
+      <small>异常降级至 Standard Review</small>
+    </div>
   );
 }
 
@@ -214,32 +329,37 @@ function EngineSelection({ engineSelection, activity }) {
         <i className="command-center-engine-node is-node-three" />
       </div>
       <div className="command-center-engine-panel">
-        <NodeHeading eyebrow="策略路由" title={engineSelection.title} subtitle="可用性检查 · 安全门禁" />
-        <div className="command-center-engine-routes">
-          {engineSelection.routes.map(route => (
-            <span key={route.key} className={`is-${route.token}`}>
-              <i aria-hidden="true" />
-              {route.label}
-            </span>
-          ))}
-        </div>
+        <NodeHeading eyebrow="策略路由" title={engineSelection.title} subtitle={engineSelection.subtitle} />
       </div>
     </article>
   );
 }
 
 
-function ReviewModule({ lane, motionLane, runtimeLoading, onOpenReview, onOpenOverflow }) {
+function ReviewModule({
+  lane,
+  motionLane,
+  runtimeLoading,
+  runtimeState,
+  onOpenReview,
+  onOpenOverflow,
+  fallback = null,
+  fallbackActive = false
+}) {
   const isAgent = lane.engine === 'AGENT';
   const nextQueued = lane.nextQueued;
   const observedProvider = lane.providers[0];
+  const statusLabel = reviewModuleStatus({ lane, motionLane, runtimeLoading, runtimeState });
   return (
     <article
-      className={`command-center-review-module is-${lane.colorToken} command-center-map-node`}
+      className={`command-center-review-module is-${lane.colorToken} is-${lane.role} command-center-map-node`}
       data-zone-key={lane.zoneKey}
+      data-review-role={lane.role}
       data-queued={lane.queued > 0 ? 'true' : 'false'}
       data-running={lane.running > 0 ? 'true' : 'false'}
       data-activity={motionLane.activity}
+      data-runtime-state={runtimeState}
+      data-fallback-active={fallbackActive ? 'true' : 'false'}
       data-command-center-map-node="true"
     >
       {isAgent ? (
@@ -258,29 +378,32 @@ function ReviewModule({ lane, motionLane, runtimeLoading, onOpenReview, onOpenOv
       <span className="command-center-review-neon" aria-hidden="true" />
       <header>
         <span className="command-center-module-icon" aria-hidden="true">{isAgent ? '⌘' : '▤'}</span>
-        <span>
-          <h2>{lane.title}</h2>
+        <span className="command-center-module-copy">
+          <span className="command-center-module-title-row">
+            <h2>{lane.title}</h2>
+            <strong className="command-center-module-role">{lane.roleLabel}</strong>
+            {lane.supportLabel && (
+              <small className="command-center-module-support">{lane.supportLabel}</small>
+            )}
+          </span>
           <p>{lane.description}</p>
         </span>
-        <em>
+        <em data-runtime-status={statusLabel}>
           <i aria-hidden="true" />
-          {runtimeLoading
-            ? '同步中'
-            : motionLane.running
-              ? '运行中'
-              : motionLane.queued
-                ? '排队中'
-                : '当前快照'}
+          {statusLabel}
         </em>
       </header>
 
-      <div className="command-center-module-metrics">
+      <div className="command-center-module-metrics" data-review-metric-layout={lane.role}>
         <ModuleMetric label="排队任务" value={lane.queued} />
         <ModuleMetric label="运行任务" value={lane.running} />
         {isAgent ? (
-          <ModuleMetric label="在线容量" value={lane.onlineCapacity || '—'} />
+          <ModuleMetric label="在线容量" value={lane.available ? lane.onlineCapacity : '—'} />
         ) : (
-          <ModuleMetric label="Provider 槽位" value={`${lane.running} / ${lane.capacity || '—'}`} />
+          <ModuleMetric
+            label="Provider 槽位"
+            value={lane.available ? `${lane.running} / ${lane.capacity}` : '—'}
+          />
         )}
         {isAgent ? (
           <WorkerSummary summary={lane.workerSummary} />
@@ -303,8 +426,26 @@ function ReviewModule({ lane, motionLane, runtimeLoading, onOpenReview, onOpenOv
           onOpenOverflow={onOpenOverflow}
         />
       </div>
+      {isAgent && fallback && (
+        <AgentPriorityStrategy fallback={fallback} active={fallbackActive} />
+      )}
     </article>
   );
+}
+
+
+function reviewModuleStatus({ lane, motionLane, runtimeLoading, runtimeState }) {
+  if (runtimeLoading) return lane.available ? '刷新中' : '同步中';
+  if (runtimeState === 'ERROR_RETAINED') return '保留旧状态';
+  if (runtimeState === 'STALE') return '快照已过期';
+  if (!lane.available) return '数据不可用';
+  if (motionLane.running) return '运行中';
+  if (motionLane.queued) return '排队中';
+  if (lane.engine === 'AGENT') {
+    return lane.onlineCapacity > 0 ? '有在线执行器' : '暂无在线执行器';
+  }
+  if (lane.capacity > lane.running) return '有可用槽位';
+  return lane.capacity > 0 ? '槽位已满' : '暂无可用槽位';
 }
 
 
@@ -386,14 +527,14 @@ function RunningItems({ lane, onOpenReview, onOpenOverflow }) {
 }
 
 
-function FallbackRelation({ fallback, active }) {
+function AgentPriorityStrategy({ fallback, active }) {
   return (
     <aside
-      className="command-center-fallback"
-      aria-label="Agent 到 Standard 的结构性降级关系"
+      className="command-center-agent-strategy"
+      aria-label="Agent 优先策略"
       data-fallback-active={active ? 'true' : 'false'}
     >
-      <strong>Agent Review → Standard Review</strong>
+      <strong>{fallback.title}</strong>
       <span>{fallback.description}</span>
     </aside>
   );

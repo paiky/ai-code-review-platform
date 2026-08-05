@@ -11957,7 +11957,7 @@ function AppFrame() {
             type={isCommandCenterRoute ? 'primary' : 'default'}
             onClick={() => navigate(HOME_ROUTE)}
           >
-            指挥中心
+            运行总览
           </Button>
           <Button
             icon={<FileSearchOutlined />}

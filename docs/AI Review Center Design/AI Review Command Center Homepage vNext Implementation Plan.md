@@ -10,6 +10,8 @@
 - 下一授权口令：部署、推送、悬浮流程、Drawer 或后续数据投影必须获得独立明确授权。
 - 停止点：H5 本地提交后立即停止，等待部署确认。
 
+> 后续专题定向（2026-08-05）：首页产品定位已调整为 `Agent Review` 主通道、`Standard Review` 降级辅助通道。新的信息层级、布局权重、视觉语义与后续实施阶段统一转至 [`52-AI Review Command Center Agent-First Homepage Plan.md`](52-AI%20Review%20Command%20Center%20Agent-First%20Homepage%20Plan.md)。本文档保留为 vNext 首页历史实施与验收记录，不重写既有 H0～H5 结论。
+
 本文档是审计完成后的独立首页实施总控。它不修改、覆盖或续写以下历史计划的执行状态：
 
 - `AI Review Command Center Evolution Plan v2.md`

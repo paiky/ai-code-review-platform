@@ -3,17 +3,17 @@ export const releaseNotes = [
     id: '2026-08-05-ai-review-command-center-1-3-0',
     version: 'v1.3.0',
     releaseDate: '2026-08-05',
-    title: 'AI Review 指挥中心动态拓扑与实时总览',
-    summary: '平台升级至 1.3.0：完成 AI Review 指挥中心的亮色一体化设计与实现，将当前调度状态、Agent Review / Standard Review 双执行轨、实时任务、今日结果和近 24 小时质量产出收敛到同一张可信拓扑中，并以真实运行证据驱动动效。',
+    title: 'AI Review 运行总览动态拓扑与实时状态',
+    summary: '平台升级至 1.3.0：完成 AI Review 运行总览的亮色一体化设计与实现，将当前调度状态、Agent Review 主通道、Standard Review 降级辅助通道、实时任务、今日结果和近 24 小时质量产出收敛到同一张可信拓扑中，并以真实运行证据驱动动效。',
     highlights: [
-      '首页信息架构重新聚焦：顶部固定展示 Runtime 更新时间、排队执行、运行执行、进行中 ReviewTask 和当前 Provider / Model；中部突出 Agent Review 与 Standard Review 双轨；底部集中展示近 24 小时审查任务、Provider 执行结果、Finding 和受影响任务风险。',
-      '中部拓扑接入真实数据：左侧展示最近活动 ReviewTask，右侧汇总北京时间自然日今日 Result；六条连接基于真实 DOM 端口动态测量，任务、引擎、双 Review、今日结果和 Agent fallback 在缩放及响应式布局下保持准确连接。',
-      '运行反馈升级为状态驱动动画：排队和运行分别触发路线流光、引擎内外环反向旋转及 Review 霓虹边框，Agent 与 Standard 可独立点亮，只有真实 fallback Item 才强化降级线路；过期、异常、移动端和 reduced-motion 环境自动保持静止。',
-      '整体视觉统一为白色导航、圆润轻量卡片、半透明科技表面、细描边和低强度语义色柔光，并针对 100% / 125% 缩放和多档视口收紧双 Review 密度、保留线路走廊。',
+      '首页信息架构重新聚焦：顶部固定展示 Runtime 更新时间、排队执行、运行执行、进行中 ReviewTask 和当前 Provider / Model；中部突出 Agent Review 主通道，并将 Standard Review 明确为降级辅助与兜底通道；底部集中展示近 24 小时审查任务、Provider 执行结果、Finding 和受影响任务风险。',
+      '中部拓扑接入真实数据：左侧展示最近活动 ReviewTask，右侧汇总北京时间自然日今日 Result；六条连接基于真实 DOM 端口动态测量，任务、引擎、Agent 主通道、Standard 备用通道、今日结果和 Agent fallback 在缩放及响应式布局下保持准确连接；Agent 与 Standard 之间新增基于实测端口中点的圆形双箭头降级节点。',
+      '运行反馈升级为状态驱动动画：排队和运行分别触发路线流光、引擎内外环反向旋转及 Review 霓虹边框，Agent 与 Standard 可独立点亮，只有真实 fallback Item 才强化降级线路；Runtime 实时且当前空闲时可通过“预览动画”查看约 6 秒的纯前端演示，始终显示“演示”标记，不创建任务或改变指标；过期、异常、移动端和 reduced-motion 环境自动保持静止。',
+      '整体视觉统一为白色导航、圆润轻量卡片、半透明科技表面、细描边和低强度语义色柔光，并针对 100% / 125% 缩放和多档视口收紧主辅 Review 密度、保留线路走廊。',
       'Runtime v2 向后兼容扩展活动任务详情和 todayResults，不新增数据库迁移或独立接口；GitLab 外链仅接受 HTTP(S)，历史字段缺失、空数据和保留快照均使用真实降级语义。',
       '真实 Runtime、隔离活动与故障矩阵、Python Command Center 专项、前端全量测试和生产构建均已完成验证；动效不引入 Canvas 或业务 RAF，也不制造任务完成抵达事件。'
     ],
-    tags: ['1.3.0', '指挥中心', '动态拓扑', 'Agent Review', 'Standard Review', '实时任务', '今日结果', '状态动画']
+    tags: ['1.3.0', '运行总览', '动态拓扑', 'Agent Review', 'Standard Review', '实时任务', '今日结果', '状态动画']
   },
   {
     id: '2026-07-29-agent-review-worker-pool-queue-governance-1-2-0',

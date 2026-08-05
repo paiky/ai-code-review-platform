@@ -23,6 +23,7 @@ export function measureCommandCenterTopology(container) {
       ...connection,
       from,
       to,
+      midpoint: connection.kind === 'fallback' ? pathMidpoint(from, to) : null,
       d: connectionPath(connection.kind, from, to)
     });
   }
@@ -169,6 +170,14 @@ function verticalBridge(from, to) {
     `Q ${to.x} ${bendY} ${to.x} ${roundCoordinate(bendY + directionY * radius)}`,
     `V ${endY}`
   ].join(' ');
+}
+
+
+function pathMidpoint(from, to) {
+  return {
+    x: roundCoordinate((from.x + to.x) / 2),
+    y: roundCoordinate((from.y + to.y) / 2)
+  };
 }
 
 

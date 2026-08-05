@@ -11,6 +11,7 @@ const canvasSource = await read('../src/command-center/CommandCenterCanvas.jsx')
 const presentationSource = await read('../src/command-center/commandCenterPresentation.js');
 const topologySource = await read('../src/command-center/commandCenterTopology.js');
 const visualSource = await read('../src/command-center/commandCenterVisual.js');
+const previewSource = await read('../src/command-center/commandCenterPreview.js');
 const lifecycleSource = await read('../src/visibilityRefreshLifecycle.js');
 const styleSource = await read('../src/command-center/commandCenter.css');
 const globalStyleSource = await read('../src/styles.css');
@@ -35,12 +36,14 @@ test('root route renders Command Center while preserving legacy taskId redirect'
   assert.equal(source.includes("new URLSearchParams(location.search).get('taskId')"), true);
   assert.equal(source.includes('to={`/tasks/${legacyTaskId}`}'), true);
   assert.equal(source.includes('<CommandCenterPage />'), true);
+  assert.equal(appSource.includes('运行总览'), true);
+  assert.equal(appSource.includes('指挥中心'), false);
 });
 
 
 test('M3 page preserves five current Runtime metrics and four 24-hour quality metrics', () => {
   assert.equal(pageSource.includes('data-command-center-phase="LIVE_TOPOLOGY_M3"'), true);
-  assert.equal(pageSource.includes('AI Review 指挥中心'), true);
+  assert.equal(pageSource.includes('AI Review 运行总览'), true);
   assert.equal((pageSource.match(/<HudMetric/g) || []).length, 5);
   assert.equal((pageSource.match(/<QualityMetric/g) || []).length, 4);
   for (const label of [
@@ -64,24 +67,32 @@ test('M3 page preserves five current Runtime metrics and four 24-hour quality me
 });
 
 
-test('M2-1 page exposes live side nodes, dual review tracks and one structural fallback', () => {
+test('A1 page exposes Agent as the primary review module and Standard as its supporting fallback', () => {
   for (const token of [
     'ReviewTaskQueue',
     'EngineSelection',
     'lane={agentLane}',
     'lane={standardLane}',
-    'FallbackRelation',
+    'AgentPriorityStrategy',
     'TodayReviewResults'
   ]) assert.equal(canvasSource.includes(token), true, token);
-  assert.equal((canvasSource.match(/<FallbackRelation/g) || []).length, 1);
-  assert.equal(canvasSource.includes('Agent Review → Standard Review'), true);
+  assert.equal((canvasSource.match(/<AgentPriorityStrategy/g) || []).length, 1);
+  assert.equal(canvasSource.includes('function FallbackRelation'), false);
+  assert.equal(canvasSource.includes('data-review-role={lane.role}'), true);
+  assert.equal(canvasSource.includes('command-center-module-role'), true);
+  assert.equal(canvasSource.includes('Agent 优先策略'), true);
   assert.equal(canvasSource.includes('任务队列'), true);
   assert.equal(canvasSource.includes('今日 Review 结果'), false);
   assert.equal(presentationSource.includes("title: '今日 Review 结果'"), true);
   assert.equal(canvasSource.includes('todayResults.navigationTarget'), true);
-  assert.equal(canvasSource.includes('Agent 到 Standard 的结构性降级关系'), true);
+  assert.equal(canvasSource.includes('aria-label="Agent 优先策略"'), true);
   assert.equal(canvasSource.includes('target="_blank"'), true);
   assert.equal(canvasSource.includes('rel="noopener noreferrer"'), true);
+  assert.equal(presentationSource.includes("mode: 'AGENT_FIRST'"), true);
+  assert.equal(presentationSource.includes("roleLabel: '主通道'"), true);
+  assert.equal(presentationSource.includes("roleLabel: '降级兜底'"), true);
+  assert.equal(presentationSource.includes("supportLabel: '备用路径'"), true);
+  assert.ok(canvasSource.indexOf('lane={agentLane}') < canvasSource.indexOf('lane={standardLane}'));
 });
 
 
@@ -124,7 +135,7 @@ test('I2 page exposes truthful independent resource, retained, retry and truncat
     'Runtime 快照部分截断。',
     '调度器总数与执行轨分布存在差异',
     '不会生成模拟任务、执行器或 Provider。',
-    '指挥中心数据暂时无法获取。',
+    '运行总览数据暂时无法获取。',
     '质量统计刷新失败，已保留上次数据',
     '质量统计暂时无法获取。',
     '部分质量统计已截断，当前指标可能不完整。',
@@ -214,7 +225,7 @@ test('deployment polish fills wide viewports and removes the redundant heading r
   assert.equal(pageSource.includes('className="command-center-heading"'), false);
   assert.equal(pageSource.includes('data-command-center-action="refresh-runtime"'), false);
   assert.equal(pageSource.includes('当前调度快照 · 双 Review 执行轨 · 结构性结果回流'), false);
-  assert.equal(pageSource.includes('aria-label="AI Review 指挥中心"'), true);
+  assert.equal(pageSource.includes('aria-label="AI Review 运行总览"'), true);
   assert.match(styleSource, /\.command-center-page\s*\{[^}]*display:\s*flex;[^}]*min-height:\s*calc\(100dvh - 56px\);/s);
   assert.match(styleSource, /\.command-center-shell\s*\{[^}]*width:\s*100%;/s);
   assert.match(styleSource, /\.command-center-runtime-map\s*\{[^}]*flex:\s*1 1 438px;/s);
@@ -226,6 +237,7 @@ test('desktop tablet and mobile layouts preserve the planned information hierarc
   assert.equal(styleSource.includes('grid-template-areas:'), true);
   assert.equal(styleSource.includes('"intake . engine . agent . result"'), true);
   assert.equal(styleSource.includes('"intake . engine . standard . result"'), true);
+  assert.equal(styleSource.includes('"intake . engine . . . result"'), true);
   assert.equal(styleSource.includes('@media (min-width: 1200px)'), true);
   assert.equal(styleSource.includes('@media (min-width: 1440px)'), true);
   assert.equal(styleSource.includes('@media (min-width: 1200px) and (max-height: 1100px)'), true);
@@ -234,14 +246,14 @@ test('desktop tablet and mobile layouts preserve the planned information hierarc
   assert.equal(styleSource.includes('@media (max-width: 700px)'), true);
   assert.equal(styleSource.includes('.command-center-intake,'), true);
   assert.equal(styleSource.includes('.command-center-engine,'), true);
-  assert.equal(styleSource.includes('.command-center-fallback,'), true);
+  assert.equal(styleSource.includes('.command-center-agent-strategy'), true);
   assert.equal(styleSource.includes('.command-center-result { display: none; }'), true);
   assert.equal(styleSource.includes('flex-direction: column'), true);
   assert.equal(styleSource.includes('.command-center-task-queue { order: 1; width: min(100%, 520px);'), true);
   assert.equal(styleSource.includes('.command-center-result { order: 6; width: min(100%, 520px);'), true);
   assert.equal(globalStyleSource.includes('@media (min-width: 761px) and (max-width: 1000px)'), true);
   assert.equal(styleSource.includes('grid-template-columns: repeat(5, minmax(0, 1fr))'), true);
-  assert.equal(styleSource.includes('grid-template-rows: clamp(168px, 21vh, 200px) 58px clamp(168px, 21vh, 200px)'), true);
+  assert.equal(styleSource.includes('grid-template-rows: clamp(255px, 31.5vh, 295px) clamp(88px, 9vh, 110px) clamp(122px, 15vh, 142px)'), true);
   assert.equal(styleSource.includes('.command-center-hud-card.is-running { order: 1; }'), true);
   assert.equal(styleSource.includes('.command-center-quality-card.is-provider-result { order: 4; }'), true);
   assert.equal(canvasSource.includes('command-center-mobile-route-summary'), true);
@@ -287,11 +299,110 @@ test('M2-1 exposes rounded glass surfaces, circular engine and truthful quality 
 });
 
 
+test('A2 desktop styling gives Agent the dominant surface and quiets Standard and auxiliary chrome', () => {
+  assert.equal(canvasSource.includes('command-center-engine-routes'), false);
+  assert.match(styleSource, /\.command-center-review-module\.is-agent\s*\{[^}]*border-width:\s*2px;/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-agent h2\s*\{[^}]*font-size:\s*24px;/s);
+  assert.match(styleSource, /\.command-center-review-module h2\s*\{[^}]*font-size:\s*16px;/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-agent \.command-center-module-metrics\s*\{[^}]*min-height:\s*126px;/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-standard\s*\{[^}]*width:\s*90%;/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-standard::before\s*\{[^}]*opacity:\s*0\.08;/s);
+  assert.match(styleSource, /\.command-center-static-connections \.command-center-cable\.is-agent\[data-active="false"\]\s*\{[^}]*opacity:\s*0\.68;/s);
+  assert.match(styleSource, /\.command-center-static-connections \.command-center-cable\.is-standard\[data-active="false"\]\s*\{[^}]*opacity:\s*0\.2;/s);
+  assert.match(styleSource, /\.command-center-quality-grid\s*\{[^}]*gap:\s*10px;[^}]*border:\s*0;/s);
+});
+
+
+test('A3 gives Agent-first routes stronger motion and keeps responsive and retained states explicit', () => {
+  assert.equal(canvasSource.includes('function MobileRouteSummary'), true);
+  assert.equal(canvasSource.includes("return 'Agent 异常 · Standard 正在兜底'"), true);
+  assert.equal(canvasSource.includes("return '刷新失败，保留旧快照 · 动效已暂停'"), true);
+  assert.equal(canvasSource.includes('data-runtime-state={runtimeState}'), true);
+  assert.equal(canvasSource.includes('data-fallback-active={fallbackActive'), true);
+  assert.match(styleSource, /\.command-center-cable\.is-agent\[data-active="true"\] \.command-center-flow\s*\{[^}]*stroke-width:\s*5\.8;/s);
+  assert.match(styleSource, /\.command-center-cable\.is-standard\[data-active="true"\] \.command-center-flow\s*\{[^}]*stroke-width:\s*3\.2;/s);
+  assert.match(styleSource, /\.command-center-cable\.is-fallback\[data-fallback-active="true"\] \.command-center-flow\s*\{[^}]*stroke-width:\s*4\.6;/s);
+  assert.match(styleSource, /@media \(max-width: 1199px\)[\s\S]*grid-template-rows:\s*minmax\(300px, 1\.7fr\) 42px minmax\(160px, 0\.86fr\) auto;/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-queued="false"\]\[data-running="false"\] \.command-center-module-metric:nth-child\(n\+4\)/);
+  assert.equal(styleSource.includes('.command-center-review-module[data-runtime-state="ERROR_RETAINED"] header > em'), true);
+});
+
+
+test('A6 creates a measured desktop fallback corridor and compact responsive handoff', () => {
+  assert.equal(topologySource.includes("id: 'agent-standard', from: 'agent-down', to: 'standard-up'"), true);
+  assert.equal(topologySource.includes("midpoint: connection.kind === 'fallback' ? pathMidpoint(from, to) : null"), true);
+  assert.equal(canvasSource.includes('function FallbackHandoffNode'), true);
+  assert.equal(canvasSource.includes('data-command-center-fallback-handoff="desktop"'), true);
+  assert.equal(canvasSource.includes('<circle className="command-center-fallback-handoff-halo" r="28" />'), true);
+  assert.equal((canvasSource.match(/command-center-fallback-handoff-chevron/g) || []).length, 2);
+  assert.equal(canvasSource.includes('降级通道'), true);
+  assert.equal(canvasSource.includes('function ResponsiveHandoffDivider'), true);
+  assert.equal(canvasSource.includes('Agent Review 异常时降级至 Standard Review'), true);
+  assert.equal(canvasSource.includes('<ConnectionMarker id="cc-arrow-fallback" color="#f07818" />'), true);
+  assert.match(styleSource, /\.command-center-static-connections \.command-center-cable\.is-fallback\s*\{\s*color:\s*var\(--cc-standard\);/s);
+  assert.match(styleSource, /\.command-center-fallback-handoff\s*\{[^}]*color:\s*var\(--cc-standard\);/s);
+  assert.match(styleSource, /\.command-center-fallback-handoff\[data-active="true"\] \.command-center-fallback-handoff-chevron\s*\{[^}]*animation:\s*cc-fallback-chevron-flow 1\.15s ease-in-out infinite;/s);
+  assert.match(styleSource, /\.command-center-fallback-handoff\[data-active="true"\] \.command-center-fallback-handoff-chevron \+ \.command-center-fallback-handoff-chevron\s*\{[^}]*animation-delay:\s*0\.18s;/s);
+  assert.match(styleSource, /@keyframes cc-fallback-chevron-flow\s*\{[^}]*translateY\(-2px\)[\s\S]*translateY\(4px\);/s);
+  assert.match(styleSource, /\.command-center-responsive-handoff\[data-active="true"\] > span > i\s*\{[^}]*animation:\s*cc-responsive-fallback-chevron-flow 1\.15s ease-in-out infinite;/s);
+  assert.match(styleSource, /\.command-center-port\.is-fallback\s*\{\s*color:\s*var\(--cc-standard\);/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-activity="running"\] \.command-center-review-neon\s*\{[^}]*color:\s*var\(--cc-standard\);[^}]*drop-shadow\(0 0 3px var\(--cc-standard\)\);/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-fallback-active="true"\] \.command-center-review-neon\s*\{[^}]*color:\s*var\(--cc-standard\);[^}]*drop-shadow\(0 0 4px var\(--cc-standard\)\);/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-fallback-active="true"\]\s*\{[^}]*border-color:\s*rgba\(240, 120, 24, 0\.58\);[^}]*rgba\(240, 120, 24, 0\.82\);/s);
+  const standardActivityStyles = [...styleSource.matchAll(
+    /\.command-center-review-module\.is-standard\[data-(?:activity="(?:queued|running)"|fallback-active="true")\][^{]*\{[^}]*\}/g
+  )].map(match => match[0]).join('\n');
+  assert.ok(standardActivityStyles.length > 0);
+  assert.doesNotMatch(standardActivityStyles, /var\(--cc-fallback\)|rgba\(8,\s*169,\s*185|#0f8fd8|#08a9b9/);
+  assert.match(styleSource, /\.command-center-map-grid\s*\{[^}]*grid-template-rows:\s*minmax\(290px, 1\.7fr\) clamp\(88px, 9vh, 110px\) minmax\(140px, 0\.75fr\);/s);
+  assert.match(styleSource, /\.command-center-static-connections \.command-center-cable\.is-fallback\[data-active="false"\]\s*\{\s*opacity:\s*0\.48;/s);
+  assert.match(styleSource, /@media \(max-width: 1199px\)[\s\S]*"intake engine fallback"[\s\S]*\.command-center-responsive-handoff\s*\{[^}]*display:\s*flex;/s);
+  assert.match(styleSource, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.command-center-fallback-handoff\s*\{\s*filter:\s*none !important;/s);
+
+  const desktopHeight = 900;
+  const agentHeight = Math.min(295, Math.max(255, desktopHeight * 0.315));
+  const standardHeight = Math.min(142, Math.max(122, desktopHeight * 0.15));
+  const standardWidthRatio = 0.9;
+  assert.ok(agentHeight / (standardHeight * standardWidthRatio) >= 2);
+});
+
+
+test('A7 preview stays display-only, exposes its demo state and preserves responsive placement', () => {
+  assert.equal(pageSource.includes('createCommandCenterPreviewController'), true);
+  assert.equal(pageSource.includes('composeCommandCenterPreviewScene(previewEvidenceScene, effectivePreviewPhase)'), true);
+  assert.equal(pageSource.includes('const previewInitialLoading = runtimeLoading && !runtime;'), true);
+  assert.equal(pageSource.includes("data-command-center-preview-state={effectivePreviewPhase || 'IDLE'}"), true);
+  assert.equal(pageSource.includes('firstLoadComplete: Boolean(runtime)'), true);
+  assert.equal(canvasSource.includes('data-command-center-action="preview-review-motion"'), true);
+  assert.equal(canvasSource.includes("{preview.active ? '预览中' : '预览动画'}"), true);
+  assert.equal(canvasSource.includes('演示 · {preview.phaseLabel}'), true);
+  assert.match(styleSource, /\.command-center-preview-toolbar\s*\{[^}]*position:\s*absolute;[^}]*top:\s*14px;[^}]*right:\s*16px;/s);
+  assert.match(styleSource, /@media \(max-width: 1199px\)[\s\S]*padding:\s*56px 12px 12px;/s);
+  assert.match(styleSource, /@media \(max-width: 900px\)[\s\S]*\.command-center-preview-toolbar\s*\{\s*display:\s*none;[^}]*[\s\S]*\.command-center-mobile-route-actions/s);
+  assert.equal(previewSource.includes('COMMAND_CENTER_PREVIEW_PHASES'), true);
+  assert.equal(previewSource.includes('setTimeoutFn'), true);
+  assert.equal(previewSource.includes('setInterval'), false);
+  assert.equal(previewSource.includes('requestAnimationFrame'), false);
+  assert.equal(previewSource.includes('fetch('), false);
+  assert.equal(previewSource.includes('<canvas'), false);
+});
+
+
 test('M4 desktop polish keeps topology overlays translucent and removes duplicate lane eyebrow labels', () => {
   assert.equal(canvasSource.includes('<small>{lane.eyebrow}</small>'), false);
   assert.equal(styleSource.includes('background: rgba(255, 255, 255, 0.08);'), true);
-  assert.equal(styleSource.includes('background: rgba(247, 252, 255, 0.06);'), true);
+  assert.equal(styleSource.includes('linear-gradient(90deg, rgba(241, 235, 255, 0.62), rgba(247, 252, 255, 0.18))'), true);
   assert.equal((styleSource.match(/backdrop-filter: none;/g) || []).length >= 2, true);
+});
+
+
+test('A1 keeps runtime copy truthful while removing equal-weight snapshot labels', () => {
+  assert.equal(canvasSource.includes("return lane.onlineCapacity > 0 ? '有在线执行器' : '暂无在线执行器'"), true);
+  assert.equal(canvasSource.includes("return lane.capacity > 0 ? '槽位已满' : '暂无可用槽位'"), true);
+  assert.equal(canvasSource.includes("if (!lane.available) return '数据不可用'"), true);
+  assert.equal(canvasSource.includes("'当前快照'"), false);
+  assert.equal(pageSource.includes('备用 Standard'), true);
+  assert.equal(canvasSource.includes('异常时由 Standard Review 接管'), true);
 });
 
 

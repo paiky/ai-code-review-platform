@@ -83,7 +83,15 @@ test('I2 presentation exposes current status and quality output without duplicat
   assert.deepEqual(presentation.engineSelection.routes.map(route => route.key), [
     'AGENT', 'STANDARD', 'AGENT_STANDARD'
   ]);
+  assert.equal(presentation.engineSelection.mode, 'AGENT_FIRST');
+  assert.equal(presentation.engineSelection.primaryRouteKey, 'AGENT');
+  assert.deepEqual(presentation.engineSelection.routes.map(route => route.prominence), [
+    'primary', 'supporting', 'fallback'
+  ]);
   assert.equal(Object.hasOwn(presentation.engineSelection, 'automaticAgentUnavailableDescription'), false);
+  assert.equal(presentation.agentLane.role, 'primary');
+  assert.equal(presentation.agentLane.roleLabel, '主通道');
+  assert.equal(presentation.agentLane.available, true);
   assert.equal(presentation.agentLane.queued, 5);
   assert.equal(presentation.agentLane.running, 2);
   assert.equal(presentation.agentLane.onlineCapacity, 3);
@@ -94,11 +102,15 @@ test('I2 presentation exposes current status and quality output without duplicat
     offline: 1
   });
   assert.equal(presentation.standardLane.capacity, 10);
+  assert.equal(presentation.standardLane.role, 'supporting');
+  assert.equal(presentation.standardLane.roleLabel, '降级兜底');
+  assert.equal(presentation.standardLane.supportLabel, '备用路径');
   assert.equal(presentation.standardLane.providers[0].label, 'DeepSeek / v4');
   assert.equal(presentation.agentLane.visibleRunningItemCount, 0);
   assert.equal(presentation.agentLane.totalRunningItemCount, 2);
   assert.equal(presentation.agentLane.runningItemsTruncated, true);
   assert.equal(presentation.fallback.mode, 'STRUCTURAL_ONLY');
+  assert.equal(presentation.fallback.title, 'Agent 优先策略');
   assert.equal(presentation.todayResults.completedCount, 0);
   assert.equal(presentation.todayResults.navigationTarget, '/tasks');
   assert.equal(presentation.currentStatus.oldestAgentQueueSeconds, 91);

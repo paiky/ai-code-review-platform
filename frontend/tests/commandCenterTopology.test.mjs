@@ -28,7 +28,9 @@ test('M2-1 measures six semantic cable paths from real port centers', () => {
   assert.equal(snapshot.paths.some(path => path.d.includes(' C ')), false);
   assert.equal(snapshot.paths.at(-1).token, 'fallback');
   assert.equal(snapshot.paths.at(-1).kind, 'fallback');
-  assert.equal(snapshot.paths.at(-1).d, 'M 744 194 L 744 208 V 236');
+  assert.equal(snapshot.paths.at(-1).to.y - snapshot.paths.at(-1).from.y, 100);
+  assert.deepEqual(snapshot.paths.at(-1).midpoint, { x: 744, y: 244 });
+  assert.equal(snapshot.paths.at(-1).d, 'M 744 194 L 744 208 V 284');
 });
 
 
@@ -89,7 +91,7 @@ function createHarness({ width = 1200, height = 440 } = {}) {
     'standard-out': rect(990, 331),
     'result-standard-in': rect(1059, 310),
     'agent-down': rect(739, 189),
-    'standard-up': rect(739, 241)
+    'standard-up': rect(739, 289)
   };
   const nodeElements = [{}, {}, {}, {}, {}];
   const observers = [];

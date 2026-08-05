@@ -1,10 +1,16 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal } from 'antd';
 import { useNavigate } from 'react-router-dom';
 
 import CommandCenterCanvas from './CommandCenterCanvas.jsx';
 import { restoreCommandCenterFocus } from './commandCenterInteractions.js';
 import { buildCommandCenterPresentation } from './commandCenterPresentation.js';
+import {
+  canStartCommandCenterPreview,
+  commandCenterPreviewPhaseLabel,
+  composeCommandCenterPreviewScene,
+  createCommandCenterPreviewController
+} from './commandCenterPreview.js';
 import {
   affectedRiskVisual,
   findingSeverityVisual,
@@ -18,8 +24,10 @@ import './commandCenter.css';
 export default function CommandCenterPage() {
   const navigate = useNavigate();
   const [overflowZoneKey, setOverflowZoneKey] = useState(null);
+  const [previewPhase, setPreviewPhase] = useState(null);
   const overflowTriggerRef = useRef(null);
   const pageRef = useRef(null);
+  const previewControllerRef = useRef(null);
   const {
     runtime,
     runtimeLoading,
@@ -49,7 +57,21 @@ export default function CommandCenterPage() {
       runtimeLoading
     ]
   );
-  const motionScene = commandCenterMotionScene(presentation, runtimeLoading);
+  const realMotionScene = commandCenterMotionScene(presentation, runtimeLoading);
+  const previewEvidenceScene = commandCenterMotionScene(presentation, false);
+  const previewInitialLoading = runtimeLoading && !runtime;
+  const previewAvailability = {
+    runtimeState: presentation.resources.runtime.state,
+    runtimeLoading: previewInitialLoading,
+    firstLoadComplete: Boolean(runtime),
+    realActivity: previewEvidenceScene.activity
+  };
+  const previewEnabled = canStartCommandCenterPreview(previewAvailability);
+  const effectivePreviewPhase = previewEnabled ? previewPhase : null;
+  const motionScene = effectivePreviewPhase
+    ? composeCommandCenterPreviewScene(previewEvidenceScene, effectivePreviewPhase)
+    : realMotionScene;
+  const previewActive = Boolean(effectivePreviewPhase);
   const overflowLane = [presentation.agentLane, presentation.standardLane]
     .find(lane => lane.zoneKey === overflowZoneKey) || null;
   const navigateTo = useCallback(target => {
@@ -67,6 +89,34 @@ export default function CommandCenterPage() {
     overflowTriggerRef.current = null;
     restoreCommandCenterFocus(trigger, pageRef.current);
   }, []);
+  const startPreview = useCallback(() => {
+    previewControllerRef.current?.start({
+      runtimeState: presentation.resources.runtime.state,
+      runtimeLoading: previewInitialLoading,
+      firstLoadComplete: Boolean(runtime),
+      realActivity: previewEvidenceScene.activity
+    });
+  }, [presentation.resources.runtime.state, previewEvidenceScene.activity, previewInitialLoading, runtime]);
+
+  useEffect(() => {
+    const controller = createCommandCenterPreviewController({
+      onPhaseChange: setPreviewPhase
+    });
+    previewControllerRef.current = controller;
+    return () => {
+      controller.dispose();
+      if (previewControllerRef.current === controller) previewControllerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    previewControllerRef.current?.syncAvailability(previewAvailability);
+  }, [
+    previewAvailability.firstLoadComplete,
+    previewAvailability.realActivity,
+    previewAvailability.runtimeLoading,
+    previewAvailability.runtimeState
+  ]);
 
   return (
     <main
@@ -78,8 +128,9 @@ export default function CommandCenterPage() {
       data-command-center-governance-state={presentation.resources.governance.state}
       data-command-center-motion={motionScene.activity}
       data-command-center-activity={motionScene.activity}
+      data-command-center-preview-state={effectivePreviewPhase || 'IDLE'}
     >
-      <section className="command-center-shell" aria-label="AI Review 指挥中心">
+      <section className="command-center-shell" aria-label="AI Review 运行总览">
         <RuntimeHud
           presentation={presentation}
           loading={runtimeLoading}
@@ -96,6 +147,13 @@ export default function CommandCenterPage() {
           presentation={presentation}
           motionScene={motionScene}
           runtimeLoading={runtimeLoading}
+          preview={{
+            active: previewActive,
+            enabled: previewEnabled,
+            phase: effectivePreviewPhase,
+            phaseLabel: commandCenterPreviewPhaseLabel(effectivePreviewPhase),
+            onStart: startPreview
+          }}
           onOpenReview={item => navigateTo(item.navigationTarget)}
           onOpenOverflow={openOverflow}
           onOpenResult={navigateTo}
@@ -138,7 +196,7 @@ function RuntimeHud({ presentation, loading }) {
   const provider = currentStatus.provider;
   const queuedDetail = [
     `Agent ${agentLane.queued}`,
-    `Standard ${standardLane.queued}`,
+    `备用 Standard ${standardLane.queued}`,
     currentStatus.oldestAgentQueueSeconds === null
       ? null
       : `Agent 最长等待 ${formatDuration(currentStatus.oldestAgentQueueSeconds)}`
@@ -167,7 +225,7 @@ function RuntimeHud({ presentation, loading }) {
         label="运行执行数"
         value={displayMetric(currentStatus.runningExecutionCount)}
         detail={currentStatus.available
-          ? `Agent ${agentLane.running} · Standard ${standardLane.running}`
+          ? `Agent ${agentLane.running} · 备用 Standard ${standardLane.running}`
           : runtimeUnavailableLabel(resources.runtime)}
         token="running"
       />
@@ -261,7 +319,7 @@ function CommandCenterNotice({ presentation, loading, onRetryAll, onRetryRuntime
   if (runtime.state === 'ERROR_EMPTY' && governance.state === 'ERROR_EMPTY') {
     return (
       <div className="command-center-notice is-error" role="alert">
-        <strong>指挥中心数据暂时无法获取。</strong>
+        <strong>运行总览数据暂时无法获取。</strong>
         <span>Runtime 与近 24 小时质量统计均加载失败。</span>
         <NoticeRetry onRetry={onRetryAll} label="重新加载" />
       </div>

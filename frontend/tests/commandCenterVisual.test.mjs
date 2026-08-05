@@ -73,6 +73,9 @@ test('fallback path activates only for a truthful fallback running item or next 
   }));
   assert.equal(fallbackRunning.fallbackActive, true);
   assert.deepEqual(fallbackRunning.connections['agent-standard'], { activity: 'running', active: true });
+  assert.deepEqual(fallbackRunning.connections['engine-agent'], { activity: 'running', active: true });
+  assert.deepEqual(fallbackRunning.connections['engine-standard'], { activity: 'idle', active: false });
+  assert.deepEqual(fallbackRunning.connections['standard-result'], { activity: 'running', active: true });
 
   const fallbackQueued = commandCenterMotionScene(presentation({
     standardQueued: 1,
@@ -80,6 +83,9 @@ test('fallback path activates only for a truthful fallback running item or next 
   }));
   assert.equal(fallbackQueued.fallbackActive, true);
   assert.deepEqual(fallbackQueued.connections['agent-standard'], { activity: 'queued', active: true });
+  assert.deepEqual(fallbackQueued.connections['engine-agent'], { activity: 'queued', active: true });
+  assert.deepEqual(fallbackQueued.connections['engine-standard'], { activity: 'idle', active: false });
+  assert.equal(fallbackQueued.connections['standard-result'].active, false);
 });
 
 

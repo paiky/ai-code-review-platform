@@ -36,6 +36,12 @@ test('M4 fixtures drive every truthful activity state through normalize and Pres
       scene.fallbackActive
     ], expected, scenario);
   }
+
+  const fallback = commandCenterMotionScene(present('fallback-running'));
+  assert.equal(fallback.connections['engine-agent'].activity, 'running');
+  assert.equal(fallback.connections['engine-standard'].active, false);
+  assert.equal(fallback.connections['agent-standard'].activity, 'running');
+  assert.equal(fallback.connections['standard-result'].activity, 'running');
 });
 
 

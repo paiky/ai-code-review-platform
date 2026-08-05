@@ -2,23 +2,47 @@ import { presentSnapshotResource } from './commandCenterResourceState.js';
 
 
 const ENGINE_ROUTES = Object.freeze([
-  Object.freeze({ key: 'AGENT', target: 'agent-review', label: 'Agent → Agent Review', token: 'agent' }),
-  Object.freeze({ key: 'STANDARD', target: 'standard-review', label: 'Standard → Standard Review', token: 'standard' }),
-  Object.freeze({ key: 'AGENT_STANDARD', target: 'agent-standard-fallback', label: 'Agent Review → Standard Review', token: 'fallback' })
+  Object.freeze({
+    key: 'AGENT',
+    target: 'agent-review',
+    label: '默认 → Agent Review',
+    token: 'agent',
+    prominence: 'primary'
+  }),
+  Object.freeze({
+    key: 'STANDARD',
+    target: 'standard-review',
+    label: '显式 Standard → 备用执行',
+    token: 'standard',
+    prominence: 'supporting'
+  }),
+  Object.freeze({
+    key: 'AGENT_STANDARD',
+    target: 'agent-standard-fallback',
+    label: 'Agent 异常 → Standard 兜底',
+    token: 'fallback',
+    prominence: 'fallback'
+  })
 ]);
 
 const LANE_META = Object.freeze({
   standard: {
     title: 'Standard Review',
     eyebrow: 'Standard Review',
-    description: '由 Provider 调度器执行的标准代码质量审查',
-    colorToken: 'standard'
+    description: 'Agent 不可用、失败或超时时接管，也可承接显式 Standard 兼容执行',
+    colorToken: 'standard',
+    role: 'supporting',
+    roleLabel: '降级兜底',
+    supportLabel: '备用路径'
   },
   agent: {
     title: 'Agent Review',
     eyebrow: 'Agent Review',
     description: '由在线 Agent 执行器完成的证据驱动审查',
-    colorToken: 'agent'
+    colorToken: 'agent',
+    role: 'primary',
+    roleLabel: '主通道',
+    supportLabel: null
   }
 });
 
@@ -48,9 +72,11 @@ export function buildCommandCenterPresentation({
   const providersObserved = presentProviders(safeRuntime?.providersObserved);
   const workers = presentSceneWorkers(safeRuntime?.agent?.workerPool?.workers);
   const standardLane = presentLane(safeRuntime?.reviewLanes?.standard, 'standard', {
+    available: resources.runtime.available,
     providers: providersObserved
   });
   const agentLane = presentLane(safeRuntime?.reviewLanes?.agent, 'agent', {
+    available: resources.runtime.available,
     onlineCapacity: safeRuntime?.agent?.queueMetrics?.onlineCapacity,
     workers,
     workerSummary: presentWorkerSummary(safeRuntime?.agent?.workerPool)
@@ -95,7 +121,10 @@ export function buildCommandCenterPresentation({
     taskQueue,
     engineSelection: {
       zoneKey: 'engine-selection',
-      title: '引擎选择',
+      mode: 'AGENT_FIRST',
+      title: 'Agent 优先路由',
+      subtitle: '可用性检查 · 安全门禁',
+      primaryRouteKey: 'AGENT',
       routes: ENGINE_ROUTES.map(route => ({ ...route }))
     },
     agentLane,
@@ -105,7 +134,9 @@ export function buildCommandCenterPresentation({
       mode: 'STRUCTURAL_ONLY',
       from: 'agent-review',
       to: 'standard-review',
-      description: 'Agent 运行失败、超时或租约耗尽时可能创建新的 Standard 任务；当前不表达任务级父子转移。'
+      title: 'Agent 优先策略',
+      description: '优先使用 Agent Review；失败、超时或不可用时由 Standard Review 接管。',
+      evidenceNote: '仅在存在真实 fallback 证据时点亮降级线路。'
     },
     todayResults,
     diagnostics,
@@ -339,6 +370,7 @@ function presentLane(value, zoneKey, options = {}) {
     zoneKey: `${zoneKey}-review`,
     colorToken: zoneKey,
     engine: zoneKey === 'agent' ? 'AGENT' : 'STANDARD',
+    available: Boolean(options.available),
     queued,
     running,
     capacity,

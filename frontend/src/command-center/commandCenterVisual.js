@@ -13,15 +13,16 @@ export function commandCenterMotionScene(presentation, runtimeLoading = false) {
       ? 'queued'
       : 'idle';
   const fallbackActivity = realFallbackActivity(presentation?.standardLane);
+  const fallbackActive = fallbackActivity !== 'idle';
 
   return {
     activity,
-    fallbackActive: fallbackActivity !== 'idle',
+    fallbackActive,
     lanes: { agent, standard },
     connections: {
       'queue-engine': connectionActivity(activity),
-      'engine-agent': connectionActivity(agent.activity),
-      'engine-standard': connectionActivity(standard.activity),
+      'engine-agent': connectionActivity(fallbackActive ? fallbackActivity : agent.activity),
+      'engine-standard': connectionActivity(fallbackActive ? 'idle' : standard.activity),
       'agent-result': connectionActivity(agent.running ? 'running' : 'idle'),
       'standard-result': connectionActivity(standard.running ? 'running' : 'idle'),
       'agent-standard': connectionActivity(fallbackActivity)
