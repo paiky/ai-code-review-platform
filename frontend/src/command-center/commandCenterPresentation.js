@@ -198,10 +198,15 @@ function taskAuthorLabel(task) {
 
 function taskTriggerLabel(value) {
   return {
-    MANUAL: 'Manual',
+    MANUAL: '手动审查',
+    MANUAL_REVIEW: '手动审查',
     MERGE_REQUEST: 'Merge Request',
+    GITLAB_MR: 'Merge Request',
+    GITLAB_MR_WEBHOOK: 'Merge Request',
     PUSH: 'Push',
-    RETRY: 'Retry'
+    GITLAB_PUSH: 'Push',
+    GITLAB_PUSH_WEBHOOK: 'Push',
+    RETRY: '重试'
   }[String(value || '').trim().toUpperCase()] || '其他触发';
 }
 

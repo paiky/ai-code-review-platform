@@ -477,6 +477,32 @@ test('M2 task queue is bounded, keeps backend order and rejects unsafe external 
 });
 
 
+test('M4 task queue recognizes the real backend trigger enum vocabulary', () => {
+  const triggerTypes = [
+    ['GITLAB_MR_WEBHOOK', 'Merge Request'],
+    ['GITLAB_PUSH_WEBHOOK', 'Push'],
+    ['MANUAL', '手动审查'],
+    ['RETRY', '重试']
+  ];
+
+  for (const [triggerType, expected] of triggerTypes) {
+    const presentation = buildCommandCenterPresentation({
+      runtime: runtime({
+        intake: { taskCount: 1, activeTaskCount: 1 },
+        activeTasks: [{
+          taskId: 901,
+          projectId: 101,
+          projectName: 'M4 project',
+          triggerType,
+          stage: 'REVIEW_RUNNING'
+        }]
+      })
+    });
+    assert.equal(presentation.taskQueue.items[0].triggerLabel, expected, triggerType);
+  }
+});
+
+
 test('M2 today results preserve real zero, unknown states and retained snapshots', () => {
   const zero = buildCommandCenterPresentation({ runtime: runtime() });
   const unknown = buildCommandCenterPresentation({

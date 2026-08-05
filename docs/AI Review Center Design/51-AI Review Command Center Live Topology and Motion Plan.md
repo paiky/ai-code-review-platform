@@ -3,10 +3,10 @@
 ## 0. 文档状态
 
 - 文档日期：`2026-08-04`
-- 当前状态：`M2 COMPLETE — M2-1 IMPLEMENTED — WAITING FOR USER VISUAL VERIFICATION`
+- 当前状态：`M4 IMPLEMENTED — WAITING FOR USER DESKTOP VISUAL CONFIRMATION`
 - 文档用途：冻结 AI Review 指挥中心中部拓扑的侧栏数据、连接端口、活动动画和分阶段实施契约。
-- 当前授权：M2-1 实现、自动化验证和当前可用视口浏览器验收已完成；只允许报告结果或修复用户视觉验收发现的本阶段缺陷，不得实现 M3 持续动画或自动进入 M3。
-- 停止点：等待用户视觉确认；确认后由用户明确输入“继续 M3”。
+- 当前授权：M4 实现、数据矩阵、故障矩阵、当前可用视口浏览器验收和全部自动化验证已完成；只允许报告结果或修复用户最终视觉确认发现的本专项缺陷。
+- 停止点：等待用户在桌面 100% / 125% 缩放下完成最终视觉确认，再决定提交、推送、部署或继续优化。
 
 本计划是独立的新专项，不续写或修改已完成的：
 
@@ -432,7 +432,7 @@ M2-1 已为每条连接提供辉光、基轨和高亮内芯三层静态线缆。
 ### 7.3 动效降级
 
 - `prefers-reduced-motion: reduce`：所有旋转、流光、霓虹和变化强调关闭；
-- `<=700px`：关闭连续动画；
+- `<=1199px`：关闭连续动画；该断点下连接 SVG 已进入静态隐藏或语义降级，避免仅剩引擎与卡片装饰单独运动；
 - Runtime 非 FRESH：关闭连续动画；
 - 动画只能改变 transform、opacity、stroke-dashoffset 或装饰层，不触发布局重排；
 - 浏览器控制台不得出现 ResizeObserver loop、React key 或无效 SVG 属性警告。
@@ -680,6 +680,31 @@ M2-1 已为每条连接提供辉光、基轨和高亮内芯三层静态线缆。
 
 ### M3：状态驱动动画
 
+阶段状态：`COMPLETE（2026-08-05）`
+
+实施结果：
+
+- 新增可独立测试的 M3 motion scene：页面状态严格分为 `paused / idle / queued / running`；loading、STALE、ERROR_EMPTY 和 ERROR_RETAINED 全部进入 `paused`；
+- Agent 与 Standard 分别输出 `data-queued`、`data-running` 和 `data-activity`，单轨排队、单轨运行和双轨混合时互不借用对方状态；
+- 六条连接均输出 `data-active` 与 `data-flow-state`：任务队列到引擎跟随全局活动，引擎分支跟随各自执行轨，结果侧只在对应轨真实 running 时活动；
+- fallback 只在 Standard 的 `runningItems` 或 `nextQueued` 中存在 `fallback=true`，且对应 running / queued 计数为正时激活；计数矛盾、普通 Standard Item 和结构性说明均不会点亮降级路径；
+- 每条连接在 M2-1 的辉光、基轨、内芯之上增加流光和短脉冲两层，五层复用同一个 `d` 与 `pathLength=100`；queued 使用 2.4 秒、running 使用 1.1 秒的 CSS `stroke-dashoffset` 循环；
+- 引擎外环顺时针、内环逆时针：queued 为 4.8 / 3.6 秒，running 为 1.8 / 1.25 秒；AI 核心只通过装饰伪元素的 opacity / transform 产生信号光，不旋转文字；
+- Review 卡片 queued 使用 3.8 秒低亮霓虹，running 使用 1.6 秒高亮霓虹，并显示真实“排队中 / 运行中”胶囊；霓虹使用蒙版边框内的旋转 conic-gradient 层，不依赖当前内置浏览器不支持的可动画自定义属性；
+- `prefers-reduced-motion`、1199px 及以下、Runtime 非 FRESH 均关闭连续动画；高对比模式隐藏流光和霓虹装饰但保留实线、端口与文本；
+- 未新增 Canvas、业务 RAF、轮询 timer、visibility listener、完成抵达 Beacon 或第二套路径坐标，M2-1 节点比例和线路走廊未改动。
+
+验证结果：
+
+- M3 Visual 与页面契约专项：`18 passed / 0 failed`；
+- 前端全量 Node 测试：`131 passed / 0 failed`；
+- `scripts/run-frontend.cmd build`：通过；仅保留既有主 Chunk 大于 500 kB 的非阻塞警告；
+- `git diff --check`：通过，仅有仓库既有 LF / CRLF 提示；
+- 应用内浏览器真实 Runtime 为 FRESH + idle：页面阶段为 `LIVE_TOPOLOGY_M3`，动画所有权为 `CSS_STATE_M3`，双环、流光和霓虹计算样式均为 `animation-name: none`；
+- 浏览器中六条路径均为 `data-active=false / data-flow-state=idle`，每条均为 5 层且 5 层 `d` 完全相同；1600px 当前视口无横向溢出；
+- 浏览器已解析流光、双环正反转、霓虹、状态点和 reduced-motion 规则；控制台无 warning / error；
+- 当前真实 Runtime 没有 queued、running 或 fallback Item，因此本阶段未伪造业务任务进行肉眼演示；活动态映射由自动化矩阵覆盖，真实活动数据、多视口和 reduced-motion 最终肉眼复验保留在 M4。
+
 允许范围：
 
 - activity 状态；
@@ -698,6 +723,63 @@ M2-1 已为每条连接提供辉光、基轨和高亮内芯三层静态线缆。
 停止点：等待用户确认“继续 M4”。
 
 ### M4：真实数据验收与收口
+
+阶段状态：`IMPLEMENTED（2026-08-05；精确桌面视口人工确认待完成）`
+
+验收环境设计：
+
+- 真实环境继续复用当前 `5173 → 8090` 前后端，只读检查真实 Runtime / Governance、空闲态、数据口径和控制台；
+- 隔离环境使用 `scripts/command-center-m4-mock-server.mjs`，默认建议 `5184 → 8094`，所有数据仅存在于 mock 进程内存，不写数据库、不触发 Provider、GitLab 或通知；
+- mock 场景固定为 `idle / agent-queued / standard-queued / agent-running / standard-running / dual-running / fallback-running / stale / runtime-error / governance-error`，通过专用 `POST /__mock__/scenario/{name}` 切换；
+- retained 必须先成功载入活动快照，再切换到 `runtime-error` 并等待下一轮真实前端 polling；ERROR_EMPTY 必须在错误场景下重新加载隔离页面，两者不得用 DOM 属性伪造；
+- 每个活动场景返回相互一致的 scheduler、reviewLanes、runningItems / nextQueued 和 `fallback` 证据；fixture 直接进入前端 normalize、Presentation 和 M3 motion scene 测试；
+- 隔离服务启动前核对端口，验收后只停止本次启动且仍拥有对应端口的 PID，不处理用户已有服务。
+
+实施与验收结果：
+
+- 桌面 100% 人工验收第一轮反馈进入 M4 收口：引擎说明面板与 Agent → Standard 结构关系说明降低玻璃底色和背景模糊，确保静态/活动连接线可从其后方辨认；Agent Review、Standard Review 卡片标题上方的重复小号英文标签从视图移除，保留主标题、描述和既有数据契约；
+- 微调后在 `1600×900` 实际浏览器视口确认：引擎面板 / 结构关系说明底色 alpha 分别为 `0.30 / 0.34`，背景模糊分别为 `4px / 2px`；两张 Review 卡片 header 的重复 `small` 均为 0，页面无横向溢出，浏览器控制台无 warning / error；信息架构专项 `14 passed / 0 failed`，前端构建通过；
+- 桌面人工验收第二轮要求连接线优先：引擎面板与结构关系说明改为近透明底色并取消 `backdrop-filter`，不再使用磨砂玻璃模糊线路；仅保留低对比边框和必要文字承载，真实 fallback 活动态只允许增加轻量青色底色，不得恢复高遮挡玻璃层；
+- 近透明微调后在 `1600×900` 实际浏览器复验：引擎面板 / 结构关系说明底色 alpha 为 `0.08 / 0.06`，两者计算样式的 `backdrop-filter` 均为 `none`；页面无横向溢出，控制台无 warning / error，信息架构专项 `14 passed / 0 failed`，前端构建通过；
+- 新增 `scripts/command-center-m4-fixtures.mjs` 与 `scripts/command-center-m4-mock-server.mjs`，提供 10 个固定安全场景；fixture 仅包含合成项目、任务和统计，不连接数据库、Provider、GitLab 或通知；
+- 新增 `frontend/tests/commandCenterM4Fixtures.test.mjs`，让全部活动 fixture 依次经过 Runtime normalize、Presentation 和 M3 motion scene，验证两条执行轨和 fallback 证据不会在层间漂移；
+- 真实 `5173 → 8090` 环境确认 Runtime v2、Governance v1、今日自然日结果和 coverage 字段可用；验收期间真实 Agent Review 从 running 转为 success，今日结果同步从 `1 success + 1 running` 更新为 `2 success`；
+- 隔离浏览器依次通过 idle、Agent queued、Standard queued、Agent running、Standard running、dual running、fallback running、stale、Runtime ERROR_EMPTY、Runtime ERROR_RETAINED 和 Governance ERROR_EMPTY；
+- retained 场景先载入 dual running，再切换 Runtime 503 并等待真实 5 秒 polling；页面保留最后成功快照、根活动状态进入 paused、连续动画关闭；
+- fallback 只有 `Standard runningItems[].fallback=true` 时点亮；普通 Standard running、双轨 running 和结构说明不会误激活；
+- 759px 当前浏览器视口下双轨状态、任务队列 3+1、引擎、双 Review 和质量卡无横向溢出；连接 SVG、引擎旋转和霓虹按小屏规则保持静止，非 full-page 截图视觉检查通过；
+- 浏览器解析了 queued / running 两档流光、外环正转、内环反转、霓虹、状态点、1199px 静态降级和 reduced-motion 规则；所有真实与隔离场景控制台均无 warning / error；
+- polling 诊断保持 2 个资源 timer、2 个既有 visibility / focus listener，没有新增业务 RAF、timer 或 listener；
+- 修复 M4 发现的两项缺陷：真实 `GITLAB_MR_WEBHOOK / GITLAB_PUSH_WEBHOOK` 不再显示“其他触发”；retained / stale 快照的 `data-queued / data-running` 保留业务事实，`data-activity` 单独负责暂停动画；
+- Python Command Center contract / service / repository 专项：`37 passed / 0 failed`；
+- 前端全量 Node 测试：`136 passed / 0 failed`；
+- `scripts/run-frontend.cmd build`：通过；仅保留既有主 Chunk 大于 500 kB 的非阻塞警告；
+- `git diff --check`：通过，仅有仓库既有 LF / CRLF 提示；
+- 隔离前端 5184 与 mock 8094 在验收后按实际端口 PID 精确停止；用户已有 5173 / 8090 继续返回 HTTP 200 / success；
+- 本阶段未创建提交、未推送、未部署。
+
+验收环境复现：
+
+```powershell
+# 终端 A：启动隔离 mock
+node scripts/command-center-m4-mock-server.mjs --port 8094 --scenario dual-running
+
+# 终端 B：启动隔离前端
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-frontend.ps1 `
+  -Script dev -ApiProxyTarget http://127.0.0.1:8094 `
+  -HostAddress 127.0.0.1 -Port 5184 -StrictPort
+
+# 切换固定场景
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8094/__mock__/scenario/fallback-running
+```
+
+当前工具限制与最终人工确认：
+
+- 本轮应用内浏览器 CSS 视口固定为 759px，未提供任意 viewport setter；尝试使用已连接 Chrome 时返回不可用；
+- 因此不能在本轮重新取得精确 `1920×900`、`1536×727`、900px 和 390px 四档截图，也不能主动切换 `prefers-reduced-motion` 媒体环境；
+- M2 / M2-1 既有桌面与响应式证据、当前 CSS 契约测试和 759px 实际浏览器证据继续成立，但不把它们冒充本轮精确四档复验；
+- 最终停止点保留为用户在实际浏览器 100% / 125% 下确认桌面流光、双环、霓虹强度、端口贴合与页面密度。若发现视觉缺陷，只修复本专项后再收口。
 
 允许范围：
 
@@ -842,4 +924,4 @@ M2-1 已为每条连接提供辉光、基轨和高亮内芯三层静态线缆。
 
 ### 当前停止点
 
-M2-1 静态拓扑构图与未来科技视觉基底已实现并完成自动化及当前可用视口验收。停止等待用户视觉确认；确认后输入：`继续 M3`。
+M4 实现、自动化、真实数据、隔离故障矩阵和当前 759px 浏览器验收已完成；精确桌面视口受当前浏览器能力限制，停止等待用户在实际浏览器 100% / 125% 缩放下完成最终视觉确认。确认后再决定提交、推送、部署或继续优化。

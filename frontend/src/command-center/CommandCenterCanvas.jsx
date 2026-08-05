@@ -8,6 +8,7 @@ const EMPTY_TOPOLOGY = Object.freeze({ ready: false, width: 0, height: 0, paths:
 
 export default function CommandCenterCanvas({
   presentation,
+  motionScene,
   runtimeLoading,
   onOpenReview,
   onOpenOverflow,
@@ -38,10 +39,11 @@ export default function CommandCenterCanvas({
       data-command-center-renderer="DOM_SVG_LIVE_TOPOLOGY"
       data-command-center-canvas-mounted="false"
       data-command-center-dom-fallback="always"
-      data-command-center-animation-owner="STATIC_M2_1"
+      data-command-center-animation-owner="CSS_STATE_M3"
+      data-command-center-activity={motionScene.activity}
       data-command-center-topology-ready={topology.ready ? 'true' : 'false'}
     >
-      <StaticConnections topology={topology} />
+      <StaticConnections topology={topology} motionScene={motionScene} />
 
       <div className="command-center-mobile-route-summary" role="note">
         <strong>审查路由</strong>
@@ -50,16 +52,18 @@ export default function CommandCenterCanvas({
 
       <div className="command-center-map-grid">
         <ReviewTaskQueue taskQueue={taskQueue} onOpenReview={onOpenReview} />
-        <EngineSelection engineSelection={engineSelection} />
+        <EngineSelection engineSelection={engineSelection} activity={motionScene.activity} />
         <ReviewModule
           lane={agentLane}
+          motionLane={motionScene.lanes.agent}
           runtimeLoading={runtimeLoading}
           onOpenReview={onOpenReview}
           onOpenOverflow={onOpenOverflow}
         />
-        <FallbackRelation fallback={fallback} />
+        <FallbackRelation fallback={fallback} active={motionScene.fallbackActive} />
         <ReviewModule
           lane={standardLane}
+          motionLane={motionScene.lanes.standard}
           runtimeLoading={runtimeLoading}
           onOpenReview={onOpenReview}
           onOpenOverflow={onOpenOverflow}
@@ -71,7 +75,7 @@ export default function CommandCenterCanvas({
 }
 
 
-function StaticConnections({ topology }) {
+function StaticConnections({ topology, motionScene }) {
   const marker = token => `url(#cc-arrow-${token})`;
   return (
     <svg
@@ -88,23 +92,33 @@ function StaticConnections({ topology }) {
         <ConnectionMarker id="cc-arrow-standard" color="#f07818" />
         <ConnectionMarker id="cc-arrow-fallback" color="#08a9b9" />
       </defs>
-      {topology.paths.map(path => (
-        <g
-          key={path.id}
-          className={`command-center-cable is-${path.token}`}
-          data-command-center-connection-group={path.id}
-          data-command-center-route-kind={path.kind}
-        >
-          <path className="command-center-connection is-glow" d={path.d} />
-          <path className="command-center-connection is-rail" d={path.d} />
-          <path
-            className="command-center-connection is-core"
-            data-command-center-connection={path.id}
-            d={path.d}
-            markerEnd={marker(path.token)}
-          />
-        </g>
-      ))}
+      {topology.paths.map(path => {
+        const state = motionScene.connections[path.id] || { activity: 'idle', active: false };
+        const fallbackActive = path.id === 'agent-standard' && motionScene.fallbackActive;
+        return (
+          <g
+            key={path.id}
+            className={`command-center-cable is-${path.token}`}
+            data-command-center-connection-group={path.id}
+            data-command-center-route-kind={path.kind}
+            data-active={state.active ? 'true' : 'false'}
+            data-flow-state={state.activity}
+            data-fallback-active={fallbackActive ? 'true' : 'false'}
+          >
+            <path className="command-center-connection is-glow" d={path.d} pathLength="100" />
+            <path className="command-center-connection is-rail" d={path.d} pathLength="100" />
+            <path
+              className="command-center-connection is-core"
+              data-command-center-connection={path.id}
+              d={path.d}
+              pathLength="100"
+              markerEnd={marker(path.token)}
+            />
+            <path className="command-center-connection command-center-flow" d={path.d} pathLength="100" />
+            <path className="command-center-connection command-center-pulse" d={path.d} pathLength="100" />
+          </g>
+        );
+      })}
     </svg>
   );
 }
@@ -179,12 +193,13 @@ function ReviewTaskItem({ item, onOpen }) {
 }
 
 
-function EngineSelection({ engineSelection }) {
+function EngineSelection({ engineSelection, activity }) {
   return (
     <article
       className="command-center-engine command-center-map-node"
       data-zone-key={engineSelection.zoneKey}
       data-command-center-map-node="true"
+      data-activity={activity}
     >
       <div className="command-center-engine-ring" aria-hidden="true">
         <ConnectionPort id="engine-in" token="intake" position="orbit-left" />
@@ -214,7 +229,7 @@ function EngineSelection({ engineSelection }) {
 }
 
 
-function ReviewModule({ lane, runtimeLoading, onOpenReview, onOpenOverflow }) {
+function ReviewModule({ lane, motionLane, runtimeLoading, onOpenReview, onOpenOverflow }) {
   const isAgent = lane.engine === 'AGENT';
   const nextQueued = lane.nextQueued;
   const observedProvider = lane.providers[0];
@@ -222,7 +237,9 @@ function ReviewModule({ lane, runtimeLoading, onOpenReview, onOpenOverflow }) {
     <article
       className={`command-center-review-module is-${lane.colorToken} command-center-map-node`}
       data-zone-key={lane.zoneKey}
+      data-queued={lane.queued > 0 ? 'true' : 'false'}
       data-running={lane.running > 0 ? 'true' : 'false'}
+      data-activity={motionLane.activity}
       data-command-center-map-node="true"
     >
       {isAgent ? (
@@ -238,14 +255,23 @@ function ReviewModule({ lane, runtimeLoading, onOpenReview, onOpenOverflow }) {
           <ConnectionPort id="standard-up" token="fallback" position="top" />
         </>
       )}
+      <span className="command-center-review-neon" aria-hidden="true" />
       <header>
         <span className="command-center-module-icon" aria-hidden="true">{isAgent ? '⌘' : '▤'}</span>
         <span>
-          <small>{lane.eyebrow}</small>
           <h2>{lane.title}</h2>
           <p>{lane.description}</p>
         </span>
-        <em><i aria-hidden="true" />{runtimeLoading ? '同步中' : '当前快照'}</em>
+        <em>
+          <i aria-hidden="true" />
+          {runtimeLoading
+            ? '同步中'
+            : motionLane.running
+              ? '运行中'
+              : motionLane.queued
+                ? '排队中'
+                : '当前快照'}
+        </em>
       </header>
 
       <div className="command-center-module-metrics">
@@ -360,9 +386,13 @@ function RunningItems({ lane, onOpenReview, onOpenOverflow }) {
 }
 
 
-function FallbackRelation({ fallback }) {
+function FallbackRelation({ fallback, active }) {
   return (
-    <aside className="command-center-fallback" aria-label="Agent 到 Standard 的结构性降级关系">
+    <aside
+      className="command-center-fallback"
+      aria-label="Agent 到 Standard 的结构性降级关系"
+      data-fallback-active={active ? 'true' : 'false'}
+    >
       <strong>Agent Review → Standard Review</strong>
       <span>{fallback.description}</span>
     </aside>

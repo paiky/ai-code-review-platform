@@ -10,7 +10,7 @@ import {
   findingSeverityVisual,
   providerQualityVisual
 } from './commandCenterQualityVisual.js';
-import { commandCenterMotionState } from './commandCenterVisual.js';
+import { commandCenterMotionScene } from './commandCenterVisual.js';
 import { useCommandCenterSnapshots } from './useCommandCenterSnapshots.js';
 import './commandCenter.css';
 
@@ -49,7 +49,7 @@ export default function CommandCenterPage() {
       runtimeLoading
     ]
   );
-  const motionState = commandCenterMotionState(presentation, runtimeLoading);
+  const motionScene = commandCenterMotionScene(presentation, runtimeLoading);
   const overflowLane = [presentation.agentLane, presentation.standardLane]
     .find(lane => lane.zoneKey === overflowZoneKey) || null;
   const navigateTo = useCallback(target => {
@@ -73,10 +73,11 @@ export default function CommandCenterPage() {
       ref={pageRef}
       className="command-center-page"
       tabIndex={-1}
-      data-command-center-phase="LIVE_TOPOLOGY_M2_1"
+      data-command-center-phase="LIVE_TOPOLOGY_M3"
       data-command-center-resource-state={presentation.resources.runtime.state}
       data-command-center-governance-state={presentation.resources.governance.state}
-      data-command-center-motion={motionState}
+      data-command-center-motion={motionScene.activity}
+      data-command-center-activity={motionScene.activity}
     >
       <section className="command-center-shell" aria-label="AI Review 指挥中心">
         <RuntimeHud
@@ -93,6 +94,7 @@ export default function CommandCenterPage() {
 
         <CommandCenterCanvas
           presentation={presentation}
+          motionScene={motionScene}
           runtimeLoading={runtimeLoading}
           onOpenReview={item => navigateTo(item.navigationTarget)}
           onOpenOverflow={openOverflow}

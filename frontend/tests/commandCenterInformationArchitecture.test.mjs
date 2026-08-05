@@ -38,8 +38,8 @@ test('root route renders Command Center while preserving legacy taskId redirect'
 });
 
 
-test('M2-1 page preserves five current Runtime metrics and four 24-hour quality metrics', () => {
-  assert.equal(pageSource.includes('data-command-center-phase="LIVE_TOPOLOGY_M2_1"'), true);
+test('M3 page preserves five current Runtime metrics and four 24-hour quality metrics', () => {
+  assert.equal(pageSource.includes('data-command-center-phase="LIVE_TOPOLOGY_M3"'), true);
   assert.equal(pageSource.includes('AI Review 指挥中心'), true);
   assert.equal((pageSource.match(/<HudMetric/g) || []).length, 5);
   assert.equal((pageSource.match(/<QualityMetric/g) || []).length, 4);
@@ -85,11 +85,11 @@ test('M2-1 page exposes live side nodes, dual review tracks and one structural f
 });
 
 
-test('M2-1 semantic DOM owns content while one measured SVG remains decorative and static', () => {
+test('M3 semantic DOM owns content while one measured SVG owns CSS-only route motion', () => {
   assert.equal(canvasSource.includes('data-command-center-renderer="DOM_SVG_LIVE_TOPOLOGY"'), true);
   assert.equal(canvasSource.includes('data-command-center-canvas-mounted="false"'), true);
   assert.equal(canvasSource.includes('data-command-center-dom-fallback="always"'), true);
-  assert.equal(canvasSource.includes('data-command-center-animation-owner="STATIC_M2_1"'), true);
+  assert.equal(canvasSource.includes('data-command-center-animation-owner="CSS_STATE_M3"'), true);
   assert.equal((canvasSource.match(/<svg/g) || []).length, 1);
   assert.equal(canvasSource.includes('aria-hidden="true"'), true);
   assert.equal(canvasSource.includes('focusable="false"'), true);
@@ -100,8 +100,9 @@ test('M2-1 semantic DOM owns content while one measured SVG remains decorative a
   assert.equal(canvasSource.includes('observeCommandCenterTopology'), true);
   assert.equal(topologySource.includes('new ResizeObserverClass(publish)'), true);
   assert.equal(`${pageSource}\n${canvasSource}\n${topologySource}\n${visualSource}`.includes('requestAnimationFrame'), false);
-  assert.equal(canvasSource.includes('command-center-flow'), false);
-  assert.equal(styleSource.includes('[data-command-center-motion="enabled"] .command-center-connection'), false);
+  assert.equal(canvasSource.includes('command-center-flow'), true);
+  assert.equal(canvasSource.includes('command-center-pulse'), true);
+  assert.equal(canvasSource.includes('pathLength="100"'), true);
   for (const id of [
     'queue-engine',
     'engine-agent',
@@ -248,12 +249,20 @@ test('desktop tablet and mobile layouts preserve the planned information hierarc
 });
 
 
-test('M2-1 keeps measured routes static and preserves reduced-motion and small-screen fallbacks', () => {
+test('M3 drives measured routes from truthful state and preserves reduced-motion and small-screen fallbacks', () => {
   assert.equal(pageSource.includes('data-command-center-resource-state'), true);
-  assert.equal(pageSource.includes('data-command-center-motion={motionState}'), true);
+  assert.equal(pageSource.includes('data-command-center-activity={motionScene.activity}'), true);
+  assert.equal(canvasSource.includes("data-queued={lane.queued > 0 ? 'true' : 'false'}"), true);
   assert.equal(canvasSource.includes("data-running={lane.running > 0 ? 'true' : 'false'}"), true);
-  assert.equal(styleSource.includes('[data-command-center-motion="enabled"] .command-center-flow'), false);
-  assert.equal(styleSource.includes('[data-command-center-motion="enabled"] .command-center-review-module[data-running="true"]'), false);
+  assert.equal(canvasSource.includes("data-active={state.active ? 'true' : 'false'}"), true);
+  assert.equal(canvasSource.includes('data-fallback-active'), true);
+  assert.equal(styleSource.includes('[data-flow-state="queued"]'), true);
+  assert.equal(styleSource.includes('[data-flow-state="running"]'), true);
+  assert.equal(styleSource.includes('cc-engine-orbit-clockwise'), true);
+  assert.equal(styleSource.includes('cc-engine-orbit-counterclockwise'), true);
+  assert.equal(styleSource.includes('cc-review-neon'), true);
+  assert.equal(canvasSource.includes('command-center-review-neon'), true);
+  assert.equal(styleSource.includes('@property --cc-neon-angle'), false);
   assert.equal(styleSource.includes('.command-center-static-connections,'), true);
   assert.equal(styleSource.includes('.command-center-port { display: none; }'), true);
   assert.equal(styleSource.includes('@media (prefers-reduced-motion: reduce)'), true);
@@ -275,6 +284,14 @@ test('M2-1 exposes rounded glass surfaces, circular engine and truthful quality 
   assert.equal(styleSource.includes('border-radius: 14px 4px 14px 4px'), false);
   assert.equal(styleSource.includes('@supports not (backdrop-filter: blur(1px))'), true);
   assert.equal(styleSource.includes('@media (forced-colors: active)'), true);
+});
+
+
+test('M4 desktop polish keeps topology overlays translucent and removes duplicate lane eyebrow labels', () => {
+  assert.equal(canvasSource.includes('<small>{lane.eyebrow}</small>'), false);
+  assert.equal(styleSource.includes('background: rgba(255, 255, 255, 0.08);'), true);
+  assert.equal(styleSource.includes('background: rgba(247, 252, 255, 0.06);'), true);
+  assert.equal((styleSource.match(/backdrop-filter: none;/g) || []).length >= 2, true);
 });
 
 
