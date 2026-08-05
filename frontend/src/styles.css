@@ -101,8 +101,96 @@ body {
   align-items: center;
 }
 
+.settings-collapse .ant-collapse-body,
+.settings-collapse .ant-collapse-content-box {
+  padding: 8px !important;
+}
+
 .settings-inner-card .ant-card-body {
-  padding: 18px 20px;
+  padding: 8px;
+}
+
+.settings-inner-card > .ant-card-body > .settings-card-header {
+  margin-bottom: 20px;
+}
+
+.settings-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+}
+
+.settings-card-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.settings-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: #1677ff;
+  background: #eaf3ff;
+  font-size: 22px;
+}
+
+.settings-card-title-copy {
+  min-width: 0;
+}
+
+.settings-card-title-row {
+  min-height: 28px;
+}
+
+.settings-card-title.ant-typography {
+  margin: 0 !important;
+  color: #0f1f3d;
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.settings-card-description {
+  display: block;
+  margin-top: 3px;
+  color: #7a869a !important;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.settings-card-extra {
+  flex: 0 0 auto;
+}
+
+.settings-card-header-compact {
+  gap: 12px;
+}
+
+.settings-card-header-compact .settings-card-heading {
+  gap: 10px;
+}
+
+.settings-card-header-compact .settings-card-icon {
+  flex-basis: 30px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  font-size: 17px;
+}
+
+.settings-card-header-compact .settings-card-title.ant-typography {
+  font-size: 15px;
+}
+
+.settings-card-header-compact .settings-card-description {
+  font-size: 12px;
 }
 
 .settings-action-row {
@@ -430,7 +518,7 @@ body {
 }
 
 .global-setting-field {
-  width: min(580px, 100%);
+  width: min(720px, 100%);
 }
 
 .settings-inline-head {
@@ -441,7 +529,7 @@ body {
 }
 
 .global-settings-stack {
-  width: min(580px, 100%);
+  width: 100%;
 }
 
 .webhook-list {
@@ -1462,66 +1550,6 @@ body {
   margin-top: 8px;
 }
 
-.agent-worker-pool-toolbar {
-  display: flex;
-  align-items: stretch;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.agent-worker-pool-stats {
-  display: grid;
-  flex: 1;
-  grid-template-columns: repeat(5, minmax(100px, 1fr));
-  gap: 10px;
-}
-
-.agent-queue-summary {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.agent-queue-stats {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(92px, 1fr));
-  gap: 10px;
-}
-
-.agent-queue-stats > div,
-.agent-worker-pool-stats > div {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #fafafa;
-}
-
-.agent-capacity-utilization {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(240px, 2fr);
-  align-items: center;
-  gap: 16px;
-  padding: 10px 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.agent-capacity-utilization > div:first-child {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.agent-worker-pool-table .ant-table-cell {
-  vertical-align: middle;
-}
-
 .agent-budget-toolbar {
   display: flex;
   align-items: center;
@@ -1541,14 +1569,11 @@ body {
   display: grid;
   gap: 12px;
   width: 100%;
+  justify-content: start;
 }
 
 .agent-budget-grid-basic {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-}
-
-.agent-budget-grid-advanced {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(190px, 212px));
 }
 
 .agent-budget-field-card {
@@ -1613,64 +1638,7 @@ body {
   white-space: nowrap;
 }
 
-.agent-budget-advanced {
-  width: 100%;
-  min-width: 0;
-  margin-top: 2px;
-}
-
-.agent-budget-advanced .ant-collapse-content,
-.agent-budget-advanced .ant-collapse-content-box {
-  min-width: 0;
-}
-
-.agent-budget-advanced > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
-  padding: 16px;
-  background: #f8fafc;
-}
-
-@media (max-width: 1280px) {
-  .agent-queue-stats {
-    grid-template-columns: repeat(4, minmax(92px, 1fr));
-  }
-
-  .agent-budget-grid-basic {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 980px) {
-  .agent-worker-pool-stats {
-    grid-template-columns: repeat(3, minmax(100px, 1fr));
-  }
-
-  .agent-capacity-utilization {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .agent-budget-grid-basic,
-  .agent-budget-grid-advanced {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 760px) {
-  .agent-worker-pool-toolbar {
-    flex-direction: column;
-  }
-
-  .agent-worker-pool-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .agent-queue-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .agent-worker-pool-toolbar .ant-btn {
-    align-self: flex-start;
-  }
-
   .agent-budget-toolbar {
     align-items: stretch;
     flex-direction: column;
@@ -1680,8 +1648,7 @@ body {
     align-self: flex-start;
   }
 
-  .agent-budget-grid-basic,
-  .agent-budget-grid-advanced {
+  .agent-budget-grid-basic {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -1689,8 +1656,18 @@ body {
 .settings-subsection {
   padding: 16px;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #fafafa;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 4px 14px rgba(15, 31, 61, 0.04);
+}
+
+.settings-subsection > .settings-card-header {
+  margin-bottom: 24px;
+}
+
+.settings-subcard {
+  padding: 14px;
+  background: #fafcff;
 }
 
 .project-review-switch-row .ant-space {
@@ -1707,6 +1684,28 @@ body {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.project-review-policy-panel .settings-card-header {
+  margin-bottom: 12px;
+}
+
+@media (max-width: 767px) {
+  .settings-card-header {
+    flex-direction: column;
+  }
+
+  .settings-card-extra {
+    width: 100%;
+  }
+
+  .settings-card-extra .ant-btn {
+    width: 100%;
+  }
+
+  .settings-subsection {
+    padding: 12px;
+  }
 }
 
 .project-config-save-row {

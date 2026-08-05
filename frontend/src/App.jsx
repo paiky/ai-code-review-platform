@@ -41,26 +41,35 @@ import {
   Typography
 } from 'antd';
 import {
+  ApiOutlined,
+  ApartmentOutlined,
   ArrowLeftOutlined,
   BellOutlined,
+  BranchesOutlined,
   ClockCircleOutlined,
   CloseOutlined,
   ClusterOutlined,
   CommentOutlined,
+  ControlOutlined,
   CopyOutlined,
   DashboardOutlined,
   ExportOutlined,
   EyeOutlined,
+  FileTextOutlined,
   FileSearchOutlined,
+  GlobalOutlined,
+  KeyOutlined,
   LoadingOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SafetyCertificateOutlined,
   SearchOutlined,
   SettingOutlined,
   MoonOutlined,
   QuestionCircleOutlined,
   SunOutlined,
-  UnorderedListOutlined
+  TeamOutlined,
+  ThunderboltOutlined
 } from '@ant-design/icons';
 import MuiAlert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -129,20 +138,13 @@ import {
   agentBudgetLimits,
   bytesToKilobytes,
   formatAgentBudgetSummary,
-  hasRaisedAgentBudget,
   kilobytesToBytes,
   normalizeAgentBudgets,
   validateAgentBudgets
 } from './agentReviewBudgets.js';
 import {
-  buildAgentQueueAlerts,
-  formatAgentQueueSummary,
-  formatQueueAge,
-  formatWorkerActivity,
   normalizeAgentQueueMetrics,
-  normalizeAgentWorkerPool,
-  workerStateColor,
-  workerStateLabel
+  normalizeAgentWorkerPool
 } from './agentWorkerPool.js';
 import { releaseNotes } from './releaseNotes.js';
 
@@ -6336,6 +6338,24 @@ function TaskDetail({ taskId, onBack, onOpen }) {
 }
 
 
+function SettingsCardHeader({ icon, title, description, tags, extra, compact = false }) {
+  return (
+    <div className={`settings-card-header${compact ? ' settings-card-header-compact' : ''}`}>
+      <div className="settings-card-heading">
+        <span className="settings-card-icon" aria-hidden="true">{icon}</span>
+        <div className="settings-card-title-copy">
+          <Space wrap size={[8, 6]} className="settings-card-title-row">
+            <Title level={compact ? 5 : 4} className="settings-card-title">{title}</Title>
+            {tags && <Space wrap size={[4, 4]}>{tags}</Space>}
+          </Space>
+          <Text type="secondary" className="settings-card-description">{description}</Text>
+        </div>
+      </div>
+      {extra && <div className="settings-card-extra">{extra}</div>}
+    </div>
+  );
+}
+
 function AgentBudgetFieldCard({
   field,
   value,
@@ -6423,7 +6443,6 @@ function TemplateConfig() {
   });
   const [agentSettingsSaving, setAgentSettingsSaving] = useState(false);
   const [agentSettingsTesting, setAgentSettingsTesting] = useState(false);
-  const [agentWorkerPoolRefreshing, setAgentWorkerPoolRefreshing] = useState(false);
   const [agentSettingsTestResult, setAgentSettingsTestResult] = useState(null);
   const [providerApiKeyDraft, setProviderApiKeyDraft] = useState('');
   const [loading, setLoading] = useState(false);
@@ -7194,20 +7213,6 @@ function TemplateConfig() {
     }));
   };
 
-  const refreshAgentWorkerPool = async () => {
-    if (agentWorkerPoolRefreshing) return;
-    setAgentWorkerPoolRefreshing(true);
-    try {
-      const settings = await fetchApi('/api/code-quality-reviews/agent-settings');
-      setAgentSettings(settings);
-      setAgentSettingsTestResult(settings?.configurationTest || null);
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setAgentWorkerPoolRefreshing(false);
-    }
-  };
-
   const testAgentSettings = async () => {
     if (agentSettingsTesting) return;
     if (!agentSettings?.enabled || !agentSettings?.apiKeyConfigured) {
@@ -7625,7 +7630,6 @@ function TemplateConfig() {
   );
   const currentAgentBudgetLimits = agentBudgetLimits(agentSettings);
   const agentBudgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings);
-  const raisedAgentBudget = hasRaisedAgentBudget(agentSettingsDraft.budgets, agentSettings);
   const agentWorkerPool = useMemo(
     () => normalizeAgentWorkerPool(agentSettings),
     [agentSettings]
@@ -7634,47 +7638,6 @@ function TemplateConfig() {
     () => normalizeAgentQueueMetrics(agentSettings, agentWorkerPool),
     [agentSettings, agentWorkerPool]
   );
-  const agentQueueAlerts = useMemo(
-    () => agentSettings ? buildAgentQueueAlerts(agentSettings) : [],
-    [agentSettings]
-  );
-  const agentWorkerColumns = [
-    {
-      title: 'Worker 节点',
-      dataIndex: 'workerId',
-      render: value => <Text code>{value}</Text>
-    },
-    {
-      title: '状态',
-      width: 110,
-      render: (_, node) => (
-        <Tag color={workerStateColor(node.state, node.online)}>
-          {node.online ? workerStateLabel(node.state) : '离线'}
-        </Tag>
-      )
-    },
-    {
-      title: '容量',
-      dataIndex: 'capacity',
-      width: 80
-    },
-    {
-      title: '当前活动',
-      width: 190,
-      render: (_, node) => formatWorkerActivity(node)
-    },
-    {
-      title: '版本',
-      width: 190,
-      render: (_, node) => `${node.workerVersion || '-'} / CLI ${node.cliVersion || '-'}`
-    },
-    {
-      title: '最近心跳',
-      dataIndex: 'lastHeartbeatAt',
-      width: 190,
-      render: value => formatDateTime(value)
-    }
-  ];
   const agentBudgetFields = [
     { key: 'maxTurns', label: '模型决策回合', unit: 'turns' },
     { key: 'maxToolCalls', label: 'MCP 工具调用', unit: '次' },
@@ -7701,7 +7664,19 @@ function TemplateConfig() {
           bordered={false}
           className="settings-inner-card"
         >
-          <Space direction="vertical" size="middle" className="global-settings-stack">
+          <div className="settings-subsection">
+            <Space direction="vertical" size="middle" className="global-settings-stack">
+            <SettingsCardHeader
+              icon={<GlobalOutlined />}
+              title="平台全局能力"
+              description="控制全平台 AI Review 调用和钉钉消息推送；规则分析与结果落库不受影响。"
+              tags={(
+                <>
+                  <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(settingsDraft?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
+                  <Tag color={(settingsDraft?.dingtalkNotificationEnabled ?? true) ? 'blue' : 'default'}>钉钉 {(settingsDraft?.dingtalkNotificationEnabled ?? true) ? '开启' : '关闭'}</Tag>
+                </>
+              )}
+            />
             <div className="global-setting-field">
               <div className="settings-inline-head">
                 <Text strong>代码质量 AI Review 全局能力</Text>
@@ -7732,7 +7707,8 @@ function TemplateConfig() {
                 关闭后，规则审查和 AI Review 仍会正常执行与落库，但不会向钉钉发送消息。
               </Text>
             </div>
-          </Space>
+            </Space>
+          </div>
         </Card>
       )
     },
@@ -7749,89 +7725,22 @@ function TemplateConfig() {
       children: (
         <Card bordered={false} className="settings-inner-card">
           <Space direction="vertical" size="middle" className="full-width">
-            <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
-              <Descriptions.Item label="Runner">Claude Code {agentSettings?.cliVersion || '2.1.112'}</Descriptions.Item>
-              <Descriptions.Item label="模型">{agentSettings?.model || 'deepseek-v4-pro[1m]'}</Descriptions.Item>
-              <Descriptions.Item label="Worker Pool">
-                {agentWorkerPool.onlineCount} 在线 / {agentQueueMetrics.onlineCapacity} 可接单容量
-              </Descriptions.Item>
-              <Descriptions.Item label="最近心跳">{formatDateTime(agentQueueMetrics.lastWorkerHeartbeatAt)}</Descriptions.Item>
-              <Descriptions.Item label="预算来源">{agentSettings?.budgetConfigSource === 'CUSTOM' ? '自定义' : '默认'}</Descriptions.Item>
-              <Descriptions.Item label="当前预算" span={2}>
-                {formatAgentBudgetSummary(agentSettings?.budgets) || '12 turns / 40 tools / 200 KB source'}
-              </Descriptions.Item>
-            </Descriptions>
-            <Divider orientation="left">队列运行治理</Divider>
-            <div className="agent-queue-summary">
-              <div className="agent-queue-stats">
-                <div><Text type="secondary">排队</Text><Text strong>{agentQueueMetrics.queued}</Text></div>
-                <div><Text type="secondary">运行</Text><Text strong>{agentQueueMetrics.running}</Text></div>
-                <div><Text type="secondary">过期租约</Text><Text strong>{agentQueueMetrics.expiredLease}</Text></div>
-                <div><Text type="secondary">最老等待</Text><Text strong>{formatQueueAge(agentQueueMetrics.oldestQueuedSeconds)}</Text></div>
-                <div><Text type="secondary">在线容量</Text><Text strong>{agentQueueMetrics.onlineCapacity}</Text></div>
-                <div><Text type="secondary">忙碌容量</Text><Text strong>{agentQueueMetrics.busyCapacity}</Text></div>
-                <div><Text type="secondary">排空节点</Text><Text strong>{agentQueueMetrics.drainingWorkers}</Text></div>
-              </div>
-              <div className="agent-capacity-utilization">
-                <div>
-                  <Text strong>容量利用率</Text>
-                  <Text type="secondary">{formatAgentQueueSummary(agentQueueMetrics)}</Text>
-                </div>
-                <Progress
-                  percent={agentQueueMetrics.utilizationPercent}
-                  status={agentQueueMetrics.expiredLease > 0 ? 'exception' : 'normal'}
-                  size="small"
-                />
-              </div>
-            </div>
-            {agentQueueAlerts.map(alert => (
-              <Alert
-                key={alert.key}
-                type={alert.type}
-                showIcon
-                message={alert.message}
-                description={alert.description}
+            <div className="settings-subsection">
+              <SettingsCardHeader
+                icon={<KeyOutlined />}
+                title="Agent Review 接入配置"
+                description="配置 Agent Review 开关、专用 API Key，并验证执行链路连通性。"
+                tags={<Tag color={agentSettings?.apiKeyConfigured ? 'green' : 'gold'}>Key {agentSettings?.apiKeyConfigured ? '已配置' : '未配置'}</Tag>}
               />
-            ))}
-            <Divider orientation="left">Worker Pool</Divider>
-            <div className="agent-worker-pool-toolbar">
-              <div className="agent-worker-pool-stats">
-                <div><Text type="secondary">在线节点</Text><Text strong>{agentWorkerPool.onlineCount}</Text></div>
-                <div><Text type="secondary">空闲</Text><Text strong>{agentWorkerPool.idleCount}</Text></div>
-                <div><Text type="secondary">忙碌</Text><Text strong>{agentWorkerPool.busyCount}</Text></div>
-                <div><Text type="secondary">排空</Text><Text strong>{agentWorkerPool.drainingCount}</Text></div>
-                <div><Text type="secondary">在线容量</Text><Text strong>{agentWorkerPool.onlineCapacity}</Text></div>
-              </div>
-              <Button
-                icon={<ReloadOutlined />}
-                loading={agentWorkerPoolRefreshing}
-                onClick={refreshAgentWorkerPool}
-              >
-                刷新节点
-              </Button>
-            </div>
-            {agentWorkerPool.nodes.length > 0 ? (
-              <Table
-                className="agent-worker-pool-table"
-                size="small"
-                rowKey="workerId"
-                columns={agentWorkerColumns}
-                dataSource={agentWorkerPool.nodes}
-                pagination={false}
-                scroll={{ x: 860 }}
-              />
-            ) : (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无 Worker 注册记录" />
-            )}
-            {!agentSettings?.encryptionAvailable && (
+              {!agentSettings?.encryptionAvailable && (
               <Alert
                 type="error"
                 showIcon
                 message="需要配置 Agent 加密主密钥"
                 description="请在后端运行环境设置 AGENT_REVIEW_CONFIG_ENCRYPTION_KEY 并重启服务。该密钥只用于加密保存 Agent 专用 DeepSeek Key。"
               />
-            )}
-            <Row gutter={[16, 16]} align="middle">
+              )}
+              <Row gutter={[16, 16]} align="middle">
               <Col xs={24} md={5}>
                 <Space direction="vertical">
                   <Text strong>启用 Agent Review</Text>
@@ -7866,21 +7775,31 @@ function TemplateConfig() {
                   <Button danger loading={agentSettingsSaving} disabled={!agentSettings?.apiKeyConfigured} onClick={() => saveAgentSettings({ clearApiKey: true })}>清除 Key</Button>
                 </Space>
               </Col>
-            </Row>
-            <Divider orientation="left">运行参数</Divider>
-            <div className="agent-budget-toolbar">
+              </Row>
+              {agentSettingsTestResult && !['NOT_RUN', 'SUCCESS'].includes(agentTestStatus) && (
+                <Alert
+                  showIcon
+                  type={agentTestAlertType}
+                  message={agentTestMessage}
+                  description={agentSettingsTestResult.message || (agentTestPending ? 'Worker 正在执行 Claude Code + DeepSeek 最小连通性测试。' : undefined)}
+                />
+              )}
+            </div>
+            <div className="settings-subsection">
+              <SettingsCardHeader
+                icon={<ControlOutlined />}
+                title="Agent 执行预算"
+                description="控制任务回合数、工具调用、源码量、超时和证据调用上限。"
+                tags={<Tag color="blue">{agentSettings?.budgetConfigSource === 'CUSTOM' ? '自定义预算' : '默认预算'}</Tag>}
+                extra={<Button loading={agentSettingsSaving} onClick={resetAgentBudgets}>恢复默认运行参数</Button>}
+              />
+              <div className="agent-budget-toolbar">
               <Text type="secondary">
                 参数只影响保存后新建的 Agent 任务；已排队和运行中的任务继续使用入队快照。KB 按 1000 bytes 计算。
               </Text>
-              <Button
-                loading={agentSettingsSaving}
-                onClick={resetAgentBudgets}
-              >
-                恢复默认运行参数
-              </Button>
-            </div>
-            <div className="agent-budget-grid agent-budget-grid-basic">
-              {agentBudgetFields.filter(item => !item.advanced).map(item => (
+              </div>
+              <div className="agent-budget-grid agent-budget-grid-basic">
+              {agentBudgetFields.map(item => (
                 <AgentBudgetFieldCard
                   key={item.key}
                   field={item}
@@ -7890,46 +7809,9 @@ function TemplateConfig() {
                   onChange={updateAgentBudget}
                 />
               ))}
+              </div>
+              {agentBudgetError && <Alert type="error" showIcon message="运行参数无效" description={agentBudgetError} />}
             </div>
-            <Collapse
-              size="small"
-              className="agent-budget-advanced"
-              items={[{
-                key: 'agent-budget-convergence',
-                label: '高级收敛参数',
-                children: (
-                  <div className="agent-budget-grid agent-budget-grid-advanced">
-                    {agentBudgetFields.filter(item => item.advanced).map(item => (
-                      <AgentBudgetFieldCard
-                        key={item.key}
-                        field={item}
-                        value={agentSettingsDraft.budgets?.[item.key]}
-                        defaultValue={agentSettings?.budgetDefaults?.[item.key]}
-                        limits={currentAgentBudgetLimits[item.key]}
-                        onChange={updateAgentBudget}
-                      />
-                    ))}
-                  </div>
-                )
-              }]}
-            />
-            {agentBudgetError && <Alert type="error" showIcon message="运行参数无效" description={agentBudgetError} />}
-            {raisedAgentBudget && !agentBudgetError && (
-              <Alert
-                type="warning"
-                showIcon
-                message="当前配置高于默认预算"
-                description="提高预算会增加执行时间、模型成本和允许返回给模型的源码量，请仅对受控任务使用。"
-              />
-            )}
-            {agentSettingsTestResult && !['NOT_RUN', 'SUCCESS'].includes(agentTestStatus) && (
-              <Alert
-                showIcon
-                type={agentTestAlertType}
-                message={agentTestMessage}
-                description={agentSettingsTestResult.message || (agentTestPending ? 'Worker 正在执行 Claude Code + DeepSeek 最小连通性测试。' : undefined)}
-              />
-            )}
           </Space>
         </Card>
       )
@@ -7947,13 +7829,13 @@ function TemplateConfig() {
           <Space direction="vertical" size="middle" className="full-width">
             <div className="settings-subsection">
               <Space direction="vertical" size="middle" className="full-width">
-                <div className="settings-inline-head">
-                  <Space wrap>
-                    <Text strong>项目组管理</Text>
-                    <Tag>{groups.length} 个项目组</Tag>
-                  </Space>
-                  <Button icon={<ReloadOutlined />} onClick={refreshProjectConfigData} loading={projectConfigReloading}>刷新</Button>
-                </div>
+                <SettingsCardHeader
+                  icon={<TeamOutlined />}
+                  title="项目组管理"
+                  description="维护项目组、默认 Review 模板、可用模型及基础信息。"
+                  tags={<Tag>{groups.length} 个项目组</Tag>}
+                  extra={<Button icon={<ReloadOutlined />} onClick={refreshProjectConfigData} loading={projectConfigReloading}>刷新</Button>}
+                />
                 <Row gutter={[12, 12]} align="bottom">
                   <Col xs={24} md={4}>
                     <Text strong>名称</Text>
@@ -8018,17 +7900,15 @@ function TemplateConfig() {
                   scroll={{ x: 1180 }}
                 />
                 {editingGroupDraft && (
-                  <div className="settings-subsection">
-                    <div className="settings-inline-head">
-                      <Space wrap>
-                        <Text strong>{editingGroupDraft.groupName || '项目组'} 钉钉机器人</Text>
-                        <Tag>{(editingGroupDraft.dingtalkWebhooks || []).filter(item => item.enabled !== false).length} 个启用</Tag>
-                      </Space>
-                      <Button icon={<PlusOutlined />} onClick={() => addGroupWebhookDraft('editing')}>新增机器人</Button>
-                    </div>
-                    <Text type="secondary" className="settings-description">
-                      该项目组下项目的规则提醒和 AI Review 结果只会推送到这些机器人；未配置时通知会记录为跳过。
-                    </Text>
+                  <div className="settings-subsection settings-subcard">
+                    <SettingsCardHeader
+                      compact
+                      icon={<BellOutlined />}
+                      title={`${editingGroupDraft.groupName || '项目组'}钉钉通知`}
+                      description="配置该项目组接收规则提醒和 AI Review 结果的钉钉机器人；未配置时通知会记录为跳过。"
+                      tags={<Tag>{(editingGroupDraft.dingtalkWebhooks || []).filter(item => item.enabled !== false).length} 个启用</Tag>}
+                      extra={<Button icon={<PlusOutlined />} onClick={() => addGroupWebhookDraft('editing')}>新增机器人</Button>}
+                    />
                     {renderWebhookDraftList(editingGroupDraft.dingtalkWebhooks || [], 'editing')}
                   </div>
                 )}
@@ -8036,8 +7916,14 @@ function TemplateConfig() {
             </div>
             <div className="settings-subsection">
               <Space direction="vertical" size="middle" className="full-width">
+                <SettingsCardHeader
+                  icon={<ApartmentOutlined />}
+                  title="项目归属与 Review 配置"
+                  description="为具体 GitLab 项目绑定项目组、端类型和默认 Review 模型。"
+                  tags={targetConfigDraft?.targetType ? <Tag>{targetTypeLabel(targetConfigDraft.targetType)}</Tag> : null}
+                />
                 <Row gutter={[16, 16]}>
-                  <Col xs={24} md={8}>
+                  <Col xs={24} md={7}>
                     <Text strong>项目组筛选</Text>
                     <Select
                       className="full-width prompt-field"
@@ -8048,7 +7934,7 @@ function TemplateConfig() {
                       onChange={selectProjectGroupFilter}
                     />
                   </Col>
-                  <Col xs={24} md={8}>
+                  <Col xs={24} md={10}>
                     <Text strong>项目</Text>
                     <Select
                       showSearch
@@ -8066,7 +7952,7 @@ function TemplateConfig() {
                 </Row>
                 {selectedProjectId && (
                   <Row gutter={[16, 16]} align="bottom">
-                  <Col xs={24} md={6}>
+                  <Col xs={24} md={7}>
                       <Text strong>当前项目所属项目组</Text>
                       <Select
                         className="full-width prompt-field"
@@ -8085,7 +7971,7 @@ function TemplateConfig() {
                         onChange={value => updateProjectConfigDraft('targetType', value)}
                       />
                     </Col>
-                  <Col xs={24} md={6}>
+                  <Col xs={24} md={7}>
                     <Text strong>当前项目所用模型</Text>
                     <Select
                       className="full-width prompt-field"
@@ -8094,7 +7980,7 @@ function TemplateConfig() {
                       onChange={value => updateTargetConfigDraft('providerCode', value || null)}
                     />
                   </Col>
-                  <Col xs={24} md={6}>
+                  <Col xs={24} md={4}>
                       <div className="settings-action-row project-config-save-row">
                         <Button type="primary" loading={projectConfigSaving} onClick={saveSelectedProjectConfig}>
                           保存项目配置
@@ -8107,15 +7993,17 @@ function TemplateConfig() {
             </div>
             <div className="settings-subsection">
               <Space direction="vertical" size="middle" className="full-width">
-                <div className="settings-inline-head">
-                  <Space wrap>
-                    <Text strong>端类型路径映射</Text>
-                    <Tag>{targetPathMappingDrafts.filter(item => item.enabled !== false).length} 个启用</Tag>
-                  </Space>
-                  <Button type="primary" loading={targetPathMappingSaving} onClick={saveTargetPathMappings}>
-                    保存路径映射
-                  </Button>
-                </div>
+                <SettingsCardHeader
+                  icon={<BranchesOutlined />}
+                  title="端类型自动识别规则"
+                  description="根据仓库目录结构识别后端、PC、App 等端类型。"
+                  tags={<Tag>{targetPathMappingDrafts.filter(item => item.enabled !== false).length} 个启用</Tag>}
+                  extra={(
+                    <Button type="primary" loading={targetPathMappingSaving} onClick={saveTargetPathMappings}>
+                      保存路径映射
+                    </Button>
+                  )}
+                />
                 <Alert
                   type="info"
                   showIcon
@@ -8184,6 +8072,18 @@ function TemplateConfig() {
           bordered={false}
           className="settings-inner-card"
         >
+          <SettingsCardHeader
+            icon={<ApiOutlined />}
+            title="AI 模型 Provider"
+            description="配置模型服务地址、模型名称、访问凭证、超时和启用状态。"
+            tags={(
+              <>
+                <Tag color="blue">{sourceLabel(aiSettings?.defaultProviderCode || selectedProviderCode)}</Tag>
+                <Tag color={providerDraft?.enabled ? 'green' : 'default'}>{providerDraft?.enabled ? '已启用' : '未启用'}</Tag>
+                <Tag color={providerDraft?.apiKeyConfigured ? 'green' : 'gold'}>Key {providerDraft?.apiKeyConfigured ? '已配置' : '未配置'}</Tag>
+              </>
+            )}
+          />
           <Row gutter={[16, 16]} align="bottom">
             <Col xs={24} md={8}>
               <Text strong>Provider</Text>
@@ -8312,8 +8212,14 @@ function TemplateConfig() {
             <div className="full-width" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div className="settings-subsection" style={{ order: 2 }}>
                 <Space direction="vertical" size="middle" className="full-width">
+                  <SettingsCardHeader
+                    icon={<FileTextOutlined />}
+                    title="普通 Review 初始 Prompt"
+                    description="配置普通 Review 的审查场景、模型覆盖与初始审查指令；该配置不影响 Agent Review。"
+                    tags={<Tag color="blue">STANDARD REVIEW</Tag>}
+                  />
                   <Row gutter={[16, 16]}>
-                    <Col xs={24} lg={10}>
+                    <Col xs={24} lg={8}>
                       <Text strong>Profile</Text>
                       <Select
                         className="full-width prompt-field"
@@ -8381,14 +8287,17 @@ function TemplateConfig() {
               </div>
               <div className="settings-subsection" style={{ order: 1 }}>
                 <Space direction="vertical" size="middle" className="full-width">
-                  <div className="settings-inline-head">
-                    <Space wrap>
-                      <Text strong>项目组主 Review 引擎</Text>
-                      {selectedPushPolicyGroupId && (
-                        <Tag color="purple">AGENT</Tag>
-                      )}
-                    </Space>
-                  </div>
+                  <SettingsCardHeader
+                    icon={<SettingOutlined />}
+                    title="项目组 AI Review 通用策略"
+                    description="配置项目组默认 Review 引擎、自动触发方式与 Push 审核门槛。"
+                    tags={(
+                      <>
+                        <Tag color="blue">项目组级</Tag>
+                        {selectedPushPolicyGroupId && <Tag color="purple">AGENT</Tag>}
+                      </>
+                    )}
+                  />
                   <Row gutter={[16, 16]}>
                     <Col xs={24} md={10}>
                       <Text strong>项目组</Text>
@@ -8436,34 +8345,37 @@ function TemplateConfig() {
                       </Space>
                     </Col>
                   </Row>
-                  <Row gutter={[16, 16]} align="stretch" className="project-review-policy-panels">
-                    <Col xs={24} lg={8}>
-                      <div
-                        className="project-review-policy-panel"
-                        style={{ opacity: (pushPolicyDraft?.autoFixPreviewEnabled === true) ? 1 : 0.55 }}
-                      >
-                        <Space direction="vertical" size={4} className="full-width">
-                          <Text strong>自动生成修复预览</Text>
-                          <Text type="secondary">
-                            在 Review 之后，根据风险点建议，自动对如下等级风险点生成可查看的代码预览，免去手动生成的长时间等待。按需配置风险等级，避免过度消耗 token。
-                          </Text>
-                        </Space>
-                        <Select
-                          mode="multiple"
-                          className="full-width prompt-field"
-                          value={normalizeAutoFixPreviewSeverities(pushPolicyDraft?.autoFixPreviewSeverities)}
-                          options={AUTO_FIX_PREVIEW_SEVERITY_OPTIONS}
-                          onChange={value => updatePushPolicyDraft('autoFixPreviewSeverities', normalizeAutoFixPreviewSeverities(value))}
-                        />
-                      </div>
-                    </Col>
-                    <Col xs={24} lg={16}>
-                      <div className="project-review-policy-panel">
-                        <Space direction="vertical" size={4} className="full-width">
-                          <Text strong>Push 审核策略</Text>
-                          <Text type="secondary">允许分支匹配后，最小文件数、最小 Diff、最小 Commit、最大文件数、最大 Diff、Debounce 全部满足才会自动进入 AI Review；-1 表示不限制。</Text>
-                        </Space>
-                        <Row gutter={[16, 16]}>
+                  {(pushPolicyDraft?.autoFixPreviewEnabled === true || pushPolicyDraft?.triggerOnPush === true) && (
+                    <Row gutter={[16, 16]} align="stretch" className="project-review-policy-panels">
+                    {pushPolicyDraft?.autoFixPreviewEnabled === true && (
+                      <Col xs={24} lg={pushPolicyDraft?.triggerOnPush === true ? 8 : 24}>
+                        <div className="project-review-policy-panel">
+                          <SettingsCardHeader
+                            compact
+                            icon={<ThunderboltOutlined />}
+                            title="修复预览策略"
+                            description="配置自动生成修复预览的风险等级和生成范围，避免不必要的 token 消耗。"
+                          />
+                          <Select
+                            mode="multiple"
+                            className="full-width prompt-field"
+                            value={normalizeAutoFixPreviewSeverities(pushPolicyDraft?.autoFixPreviewSeverities)}
+                            options={AUTO_FIX_PREVIEW_SEVERITY_OPTIONS}
+                            onChange={value => updatePushPolicyDraft('autoFixPreviewSeverities', normalizeAutoFixPreviewSeverities(value))}
+                          />
+                        </div>
+                      </Col>
+                    )}
+                    {pushPolicyDraft?.triggerOnPush === true && (
+                      <Col xs={24} lg={pushPolicyDraft?.autoFixPreviewEnabled === true ? 16 : 24}>
+                        <div className="project-review-policy-panel">
+                          <SettingsCardHeader
+                            compact
+                            icon={<SafetyCertificateOutlined />}
+                            title="Push 审核策略"
+                            description="配置 Push 事件进入 AI Review 前必须满足的分支和变更门槛；-1 表示不限制。"
+                          />
+                          <Row gutter={[16, 16]}>
                           <Col xs={24}>
                             <Text strong>允许分支</Text>
                             <Select
@@ -8528,10 +8440,12 @@ function TemplateConfig() {
                               onChange={value => updatePushPolicyDraft('pushDebounceSeconds', value)}
                             />
                           </Col>
-                        </Row>
-                      </div>
-                    </Col>
-                  </Row>
+                          </Row>
+                        </div>
+                      </Col>
+                    )}
+                    </Row>
+                  )}
                   <div className="settings-action-row">
                     <Button
                       type="primary"
@@ -8567,11 +8481,9 @@ function TemplateConfig() {
     <TaskWorkspaceShell>
       {contextHolder}
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
-      <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 2 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
-        <Spin spinning={loading}>
-          <Collapse className="settings-collapse" items={orderedCollapseItems} />
-        </Spin>
-      </Paper>
+      <Spin spinning={loading}>
+        <Collapse className="settings-collapse" items={orderedCollapseItems} />
+      </Spin>
     </TaskWorkspaceShell>
   );
 }
@@ -12048,7 +11960,7 @@ function AppFrame() {
             指挥中心
           </Button>
           <Button
-            icon={<UnorderedListOutlined />}
+            icon={<FileSearchOutlined />}
             type={isTaskRoute ? 'primary' : 'default'}
             onClick={() => navigate(TASK_LIST_ROUTE)}
           >
