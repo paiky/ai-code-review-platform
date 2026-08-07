@@ -79,11 +79,10 @@ function Write-AgentEgressProxyConfig {
         "",
         "acl CONNECT method CONNECT",
         "acl SSL_ports port 443",
-        "acl deepseek dstdomain api.deepseek.com",
         "acl windows_backend dstdomain host.docker.internal",
         "acl windows_backend_port port 8090",
         "",
-        "http_access allow CONNECT SSL_ports deepseek",
+        "http_access allow CONNECT SSL_ports",
         "http_access allow windows_backend windows_backend_port",
         "http_access deny all",
         "",
@@ -106,9 +105,9 @@ function Write-AgentEgressProxyConfig {
             throw "AGENT_REVIEW_UPSTREAM_PROXY must be an HTTP proxy in host:port or http://host:port form without credentials or a path."
         }
         $lines.Add("cache_peer $($uri.Host) parent $($uri.Port) 0 no-query default name=lan_upstream")
-        $lines.Add("cache_peer_access lan_upstream allow deepseek")
+        $lines.Add("cache_peer_access lan_upstream allow CONNECT SSL_ports")
         $lines.Add("cache_peer_access lan_upstream deny all")
-        $lines.Add("never_direct allow deepseek")
+        $lines.Add("never_direct allow CONNECT SSL_ports")
     }
 
     @(

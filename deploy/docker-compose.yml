@@ -139,6 +139,7 @@ services:
     restart: unless-stopped
     read_only: true
     tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m
       - /var/spool/squid:rw,nosuid,size=64m
       - /var/log/squid:rw,nosuid,size=16m
       - /run:rw,nosuid,size=8m

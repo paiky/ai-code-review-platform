@@ -282,10 +282,16 @@ BACKEND_PORT = 容器内后端监听端口，只在 Docker 网络内使用
 - Windows 本地后端不要直接执行生产完整 Compose 来“补一个 Worker”，否则可能额外启动连接同一数据库的 backend 并形成重复调度。使用 `.\scripts\run-agent-worker.cmd start`，它只启动 Windows 专用 Worker 和代理。
 - Docker internal 网络不能假设可直接解析或访问 `host.docker.internal`。Windows 专用方案通过双网卡代理严格放行 `host.docker.internal:8090`；不要把 Worker 直接加入普通网络来绕过连接问题。
 - Docker Desktop 可能同时返回 IPv6/IPv4，而 Squid 5 已移除 `dns_v4_first`。Windows 一键脚本会查询实际 IPv4 host-gateway，并生成 `.local/agent-review-squid-hosts` 只读挂载给代理；不要硬编码 Docker Desktop 网段。
-- Worker 容器有 `HTTP_PROXY/HTTPS_PROXY` 但配置测试恰好在 180 秒返回 `AGENT_TIMEOUT` 时，检查 Claude Code 子进程是否丢失了代理变量。子进程只能选择性继承代理变量，不能复制包含数据库、GitLab 等凭据的整个 Worker 环境。局域网上游代理应配置到白名单 Squid 的 `AGENT_REVIEW_UPSTREAM_PROXY`，不得让 Worker 绕过 Squid 直连。
+- Worker 容器有 `HTTP_PROXY/HTTPS_PROXY` 但配置测试恰好在 90 秒返回 `AGENT_TIMEOUT` 时，检查 Claude Code 子进程是否丢失了代理变量。子进程只能选择性继承代理变量，不能复制包含数据库、GitLab 等凭据的整个 Worker 环境。局域网上游代理应配置到白名单 Squid 的 `AGENT_REVIEW_UPSTREAM_PROXY`，不得让 Worker 绕过 Squid 直连。
 - `connect_error: [Errno -2] Name or service not known` 是发起请求一侧的 DNS / 出站链路错误，不是模型业务错误。Agent 可用但普通 DeepSeek 失败时，通常是只配置了 `AGENT_REVIEW_UPSTREAM_PROXY`；普通 Provider 应配置 `CODE_QUALITY_REVIEW_PROXY`，该变量只代理模型请求，不要用全局 `HTTP_PROXY` 误伤 GitLab、钉钉和内网请求。
 - Linux 生产不使用 Windows 专用 Compose。生产 Worker 通过 internal 网络访问 Compose backend，并与 backend 只读挂载同一个 `LOCAL_REPO_WORKSPACE_HOST_DIR`。
 - Windows 的 `run-backend.cmd dev` 会异步启动 Worker，不能在 uvicorn 启动前同步等待 Worker 心跳，否则会形成启动死锁。失败详情查看 `.local/agent-worker-startup.*.log`；设置 `AGENT_REVIEW_AUTO_START_WORKER=false` 可排除 Docker 启动因素。
+- Worker 镜像存在时，`run-agent-worker.cmd ensure` 会复用镜像；若宿主 Backend/Worker 心跳契约已更新，可能表现为容器
+  长期 `health: starting` 且本地池无节点。先比较宿主与容器内 `worker.py` 摘要，确认过期后使用
+  `run-agent-worker.cmd start` 强制重建，不要把问题误判为远程 Worker 竞争。
+- 只读 Squid 镜像的入口若要在 `/tmp` 生成运行期配置，Compose 必须提供受限 tmpfs；否则代理会因
+  `cannot create /tmp/...: Read-only file system` 重启。Windows 专用代理还必须显式使用启动脚本生成并挂载的
+  `/etc/squid/squid.conf`，否则通用代理配置不包含本地 Backend 的 HTTP 8090 例外，Worker 心跳表现为 Squid 403。
 - 自动启动只作用于 Windows `dev`，不得影响 `test`、`lint`、`migrate` 或 Linux runtime。远程离线包继续使用 `docker-compose.runtime.yml`，不要把 `docker-compose.windows-agent.yml` 上传叠加到生产环境。
 - 不要让 Windows 本地 Backend 与 Linux 生产 Backend 同时连接同一生产数据库。旧版本使用无时区 `DATETIME` 和
   `datetime.now()` 判断 Worker 心跳、租约，UTC 与东八区进程并存会把刚领取的任务误判为超时 8 小时。修复后

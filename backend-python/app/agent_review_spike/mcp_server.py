@@ -4,86 +4,10 @@ import json
 import os
 from pathlib import Path
 import sys
-import tempfile
 from typing import Any, BinaryIO
 
-from app.agent_review_spike.schema import (
-    ReviewSchemaError,
-    review_card_input_schema,
-    validate_review_card,
-)
-from app.agent_review_spike.workspace import (
-    EVIDENCE_TOOLS,
-    ReviewToolError,
-    ReviewWorkspace,
-    ToolBudget,
-)
-
-
-def tool_definitions() -> list[dict[str, Any]]:
-    return [
-        {
-            "name": "list_files",
-            "description": "List safe source files inside the current review worktree.",
-            "inputSchema": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "pattern": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                },
-            },
-        },
-        {
-            "name": "search_code",
-            "description": "Search safe text source files inside the current review worktree.",
-            "inputSchema": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["query"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "globs": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
-                    "isRegex": {"type": "boolean"},
-                    "caseSensitive": {"type": "boolean"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                },
-            },
-        },
-        {
-            "name": "read_file_range",
-            "description": "Read at most 400 lines from one safe source file.",
-            "inputSchema": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["path", "startLine", "endLine"],
-                "properties": {
-                    "path": {"type": "string"},
-                    "startLine": {"type": "integer", "minimum": 1},
-                    "endLine": {"type": "integer", "minimum": 1},
-                },
-            },
-        },
-        {
-            "name": "read_diff_range",
-            "description": "Read at most 400 lines of the task diff for one changed file.",
-            "inputSchema": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["path", "startLine", "endLine"],
-                "properties": {
-                    "path": {"type": "string"},
-                    "startLine": {"type": "integer", "minimum": 1},
-                    "endLine": {"type": "integer", "minimum": 1},
-                },
-            },
-        },
-        {
-            "name": "submit_review",
-            "description": "Validate and submit the final platform Review Card exactly once.",
-            "inputSchema": review_card_input_schema(),
-        },
-    ]
+from app.agent_review_spike.tool_executor import ReviewToolExecutor, tool_definitions
+from app.agent_review_spike.workspace import ReviewWorkspace, ToolBudget
 
 
 class ReviewMcpServer:
@@ -96,13 +20,19 @@ class ReviewMcpServer:
         budget: ToolBudget,
         diff_by_file: dict[str, str] | None = None,
     ) -> None:
-        self.workspace = workspace
-        self.changed_files = changed_files
-        self.result_path = result_path
-        self.audit_path = audit_path
-        self.budget = budget
-        self.diff_by_file = diff_by_file or {}
-        self.submitted = False
+        self.executor = ReviewToolExecutor(
+            workspace,
+            changed_files,
+            result_path,
+            audit_path,
+            budget,
+            diff_by_file,
+        )
+        self.workspace = self.executor.workspace
+        self.changed_files = self.executor.changed_files
+        self.result_path = self.executor.result_path
+        self.audit_path = self.executor.audit_path
+        self.budget = self.executor.budget
 
     def dispatch(self, message: dict[str, Any]) -> dict[str, Any] | None:
         method = str(message.get("method") or "")
@@ -129,132 +59,15 @@ class ReviewMcpServer:
         return _error(request_id, -32601, "method not found")
 
     def call_tool(self, name: Any, arguments: Any) -> dict[str, Any]:
-        tool = str(name or "")
-        args = arguments if isinstance(arguments, dict) else {}
-        started = None
-        try:
-            started = self.budget.begin(tool)
-            if tool == "list_files":
-                value = self.workspace.list_files(args.get("pattern") or "**/*", args.get("limit") or 200)
-                paths = [item["path"] for item in value["files"]]
-                self.budget.finish(tool, started, item_count=value["count"], paths=paths)
-            elif tool == "search_code":
-                value = self.workspace.search_code(
-                    args.get("query"),
-                    globs=args.get("globs"),
-                    is_regex=bool(args.get("isRegex", False)),
-                    case_sensitive=bool(args.get("caseSensitive", True)),
-                    limit=args.get("limit") or 50,
-                )
-                paths = [item["path"] for item in value["matches"]]
-                source_bytes = sum(
-                    len(item["text"].encode("utf-8")) for item in value["matches"]
-                )
-                self.budget.finish(
-                    tool,
-                    started,
-                    source_bytes=source_bytes,
-                    item_count=value["count"],
-                    paths=paths,
-                    query=str(args.get("query") or ""),
-                )
-            elif tool == "read_file_range":
-                value = self.workspace.read_file_range(
-                    args.get("path"), args.get("startLine"), args.get("endLine")
-                )
-                self.budget.finish(
-                    tool,
-                    started,
-                    source_bytes=len(value["content"].encode("utf-8")),
-                    item_count=value["lineCount"],
-                    paths=[value["path"]],
-                )
-            elif tool == "read_diff_range":
-                path = str(args.get("path") or "").replace("\\", "/")
-                if path not in self.changed_files or path not in self.diff_by_file:
-                    raise ReviewToolError("DIFF_PATH_NOT_ALLOWED", "diff path is not a changed file")
-                start_line = int(args.get("startLine") or 0)
-                end_line = int(args.get("endLine") or 0)
-                if start_line < 1 or end_line < start_line or end_line - start_line + 1 > 400:
-                    raise ReviewToolError("INVALID_ARGUMENT", "diff range must contain 1 to 400 lines")
-                lines = self.diff_by_file[path].splitlines()
-                content = "\n".join(lines[start_line - 1 : end_line])
-                value = {"path": path, "startLine": start_line, "endLine": min(end_line, len(lines)), "lineCount": len(lines[start_line - 1 : end_line]), "content": content}
-                self.budget.finish(tool, started, source_bytes=len(content.encode("utf-8")), item_count=value["lineCount"], paths=[path])
-            elif tool == "submit_review":
-                if self.submitted:
-                    raise ReviewToolError("REVIEW_ALREADY_SUBMITTED", "submit_review may only be called once")
-                card = validate_review_card(args, self.changed_files)
-                _atomic_write_json(self.result_path, card)
-                self.submitted = True
-                value = {"accepted": True, "findingCount": len(card["findings"])}
-                self.budget.finish(tool, started, item_count=len(card["findings"]))
-            else:
-                raise ReviewToolError("TOOL_NOT_ALLOWED", "tool is not available")
-            self._write_audit()
-            return _tool_content(self._with_review_budget(tool, value), is_error=False)
-        except (ReviewToolError, ReviewSchemaError) as exception:
-            if isinstance(exception, ReviewToolError):
-                error_code = exception.code
-            else:
-                error_code = "REVIEW_SCHEMA_INVALID"
-            if error_code in {
-                "PATH_OUTSIDE_WORKTREE",
-                "SENSITIVE_PATH_DENIED",
-                "SYMLINK_DENIED",
-            }:
-                self.budget.blocked()
-            if started is not None:
-                try:
-                    self.budget.finish(
-                        tool,
-                        started,
-                        status="FAILED",
-                        error_code=error_code,
-                        query=str(args.get("query")) if tool == "search_code" else None,
-                    )
-                except ReviewToolError:
-                    pass
-            self._write_audit()
-            return _tool_content(
-                self._with_review_budget(
-                    tool,
-                    {"errorCode": error_code, "message": str(exception)},
-                ),
-                is_error=True,
-            )
-        except Exception:
-            if started is not None:
-                try:
-                    self.budget.finish(
-                        tool,
-                        started,
-                        status="FAILED",
-                        error_code="INTERNAL_TOOL_ERROR",
-                    )
-                except ReviewToolError:
-                    pass
-            self._write_audit()
-            return _tool_content(
-                self._with_review_budget(
-                    tool,
-                    {
-                        "errorCode": "INTERNAL_TOOL_ERROR",
-                        "message": "tool execution failed",
-                    },
-                ),
-                is_error=True,
-            )
+        result = self.executor.execute(name, arguments)
+        return _tool_content(result.value, is_error=result.is_error)
 
-    def _with_review_budget(self, tool: str, value: dict[str, Any]) -> dict[str, Any]:
-        if tool not in EVIDENCE_TOOLS:
-            return value
-        return {**value, "reviewBudget": self.budget.review_budget()}
+    @property
+    def submitted(self) -> bool:
+        return self.executor.submitted
 
     def _write_audit(self) -> None:
-        summary = self.budget.summary()
-        summary["reviewSubmitted"] = self.submitted
-        _atomic_write_json(self.audit_path, summary)
+        self.executor.write_audit()
 
 
 def main() -> int:
@@ -335,16 +148,6 @@ def _load_diff_map(value: str | None) -> dict[str, str]:
     if not isinstance(parsed, dict):
         raise ValueError("REVIEW_DIFF_MAP_PATH must contain an object")
     return {str(key).replace("\\", "/"): str(content) for key, content in parsed.items()}
-
-
-def _atomic_write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=path.parent, delete=False, prefix=f".{path.name}."
-    ) as handle:
-        json.dump(value, handle, ensure_ascii=False, separators=(",", ":"))
-        temporary = Path(handle.name)
-    os.replace(temporary, path)
 
 
 def _response(request_id: Any, result: Any) -> dict[str, Any]:

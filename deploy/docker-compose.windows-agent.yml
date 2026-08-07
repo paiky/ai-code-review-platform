@@ -55,6 +55,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/agent-egress-proxy.Dockerfile
+    entrypoint: ["squid", "-N", "-f", "/etc/squid/squid.conf"]
     restart: unless-stopped
     read_only: true
     volumes:
@@ -67,6 +68,7 @@ services:
         target: /etc/squid/hosts.windows
         read_only: true
     tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m
       - /var/spool/squid:rw,nosuid,size=64m
       - /var/log/squid:rw,nosuid,size=16m
       - /run:rw,nosuid,size=8m

@@ -124,7 +124,7 @@ curl http://localhost:8090/actuator/health
 
 ## 四、数据库迁移
 
-迁移入口：
+应用当前运行环境的迁移入口：
 
 ```powershell
 .\scripts\run-backend.cmd migrate
@@ -132,12 +132,101 @@ curl http://localhost:8090/actuator/health
 
 - Python 迁移实现位于 `backend-python/app/migrate.py`。
 - 历史 bootstrap SQL 位于 `backend-python/migrations/bootstrap_sql/`。
-- 空数据库会按版本顺序初始化历史表和内置数据。
-- 已存在核心表的数据库会跳过 bootstrap，并执行后续兼容迁移。
+- 空数据库会按版本顺序初始化历史表和内置数据，并在 `schema_migrations` 登记 version/checksum。
+- 已存在核心表但尚无迁移账本的数据库不会重放历史 SQL；必须先通过 schema baseline 校验并显式登记 V1～V47。
+- 已登记数据库只执行待应用版本；已执行文件的 checksum 变化、版本重复或历史 schema 不完整时拒绝继续。
 - Docker backend 启动时会先运行 `python -m app.migrate`。
 - 回滚应用镜像不会自动回滚 schema；迁移应优先新增表或列，避免在可回滚窗口删除、重命名旧字段。
 
 迁移后至少检查健康接口和任务列表接口；涉及共享模型或数据库兼容时运行全量 Python 测试。
+
+### 本地库与测试线库目标隔离
+
+本地与测试线连接分别保存在 Git 已忽略的文件中：
+
+```text
+.local/database.local.env
+.local/database.test.env
+```
+
+`database.local.env` 只供本地 Backend 和本地迁移使用；`database.test.env` 保留原测试线 JDBC/SQLAlchemy URL，
+不得被本地 Backend 自动加载。可填写 `DATABASE_URL`，或填写 `MYSQL_URL + MYSQL_USERNAME + MYSQL_PASSWORD`；
+`DATABASE_URL` 非空时优先。真实连接串和密码不得出现在命令参数、Git、文档或终端输出中。
+
+执行 `run-backend.cmd dev`、`run-backend-python.cmd dev` 或其 `migrate` 动作时，启动脚本先读取通用的
+`.local/gitlab.env`，再读取并校验 `database.local.env`，因此本地数据库变量固定覆盖通用文件或父进程中的同名变量。
+`database.local.env` 存在时必须声明 `DATABASE_TARGET=LOCAL` 并提供完整连接信息；启动脚本不会读取
+`database.test.env`。修改数据库目标后必须停止并重新启动 Backend，Uvicorn reload 不会重新执行 PowerShell 启动脚本。
+
+双目标迁移工具：
+
+```powershell
+# 只解析目标、检查本地/测试线不是同一个 schema，并查看迁移状态
+.\scripts\run-database-migration.cmd status local
+.\scripts\run-database-migration.cmd status test
+
+# 只展示计划，不执行 DDL/DML
+.\scripts\run-database-migration.cmd dry-run local
+
+# 历史库首次接入账本；只有 schema 满足 V1～V47 基线才能登记
+.\scripts\run-database-migration.cmd baseline local
+
+# 应用待执行版本并校验
+.\scripts\run-database-migration.cmd apply local
+.\scripts\run-database-migration.cmd verify local
+```
+
+测试线的 `baseline` 和 `apply` 额外要求显式确认参数，并且仍需遵守变更前备份和用户授权：
+
+```powershell
+.\scripts\run-database-migration.cmd baseline test -ConfirmTest
+.\scripts\run-database-migration.cmd apply test -ConfirmTest
+```
+
+每次 schema 或登记数据变更使用同一迁移文件，顺序固定为“本地 dry-run/apply/verify → 测试与备份 → 测试线
+dry-run/apply/verify → 比对 version/checksum”。这不是业务数据双向同步；任务、Worker、队列和运行状态不得自动在
+两套数据库间复制。测试线到本地的一次性脱敏数据迁移属于 `docs/53` 阶段三 B，必须在用户配置变量并再次确认后执行。
+
+历史库 baseline 前若缺少 V1～V47 的命名索引，使用 reconcile 工具先做只读计划：
+
+```powershell
+.\scripts\run-database-baseline-reconcile.cmd plan local
+.\scripts\run-database-baseline-reconcile.cmd plan test
+```
+
+计划会输出表/索引名、唯一性、估算行数、数据/索引字节和唯一索引重复状态，不读取或输出业务行值。实际增加索引是
+写操作，本地要求 `-ConfirmWrite`，测试线同时要求 `-ConfirmWrite -ConfirmTest`：
+
+```powershell
+.\scripts\run-database-baseline-reconcile.cmd apply local -ConfirmWrite
+.\scripts\run-database-baseline-reconcile.cmd apply test -ConfirmWrite -ConfirmTest
+```
+
+索引 DDL 固定使用 `ALGORITHM=INPLACE, LOCK=NONE`；任一缺失唯一索引存在重复数据时整次 apply 在首条 DDL 前拒绝。
+测试线仍必须另行确认备份和变更窗口。
+
+测试线数据单向复制到空本地库：
+
+```powershell
+# 只读检查客户端、源库容量和本地表数量
+.\scripts\run-database-data-copy.cmd plan
+
+# 写入本地；读取测试线，不修改测试线
+.\scripts\run-database-data-copy.cmd apply -ConfirmCopy -ConfirmSourceData
+```
+
+复制工具要求本地库表数量为 `0`，使用 `mysqldump --single-transaction` 流式传给本地 `mysql` 客户端，不生成持久化
+dump 文件；连接凭据只写入执行期临时 client option 文件，命令参数和日志不包含密码，结束后立即删除。导入成功后在
+本地事务中执行安全清理：
+
+- 清空普通 Provider Key、Agent 双 Key、Webhook、Worker 注册和 Scheduler Job；
+- 关闭 Agent Review、普通 AI Review、钉钉通知、项目组自动触发和自动修复预览；
+- 清除通知目标/响应、Worker 心跳和配置测试状态；
+- 把未完成 Agent Run 标记为本地迁移取消，保留已完成任务、Review 结果和进度用于复现；
+- Review/source 历史会复制到本地，因此 apply 额外要求 `-ConfirmSourceData`，本地机器仍须满足源码数据授权。
+
+当前推荐写入顺序是“流式复制到空本地库 → 本地索引 reconcile → 本地 baseline/verify → 切换本地 Backend 并验证 →
+测试线备份与窗口确认 → 测试线索引 reconcile → 测试线 baseline/verify”。任何一步失败都停止，不自动推进下一目标。
 
 ## 五、Docker 部署
 
@@ -341,6 +430,10 @@ AGENT_REVIEW_BACKEND_URL=http://backend:8090
 AGENT_REVIEW_WORKER_ID=agent-worker-1
 ```
 
+自定义 OpenAI Responses Agent 的目标地址以设置页保存的 Base URL 为准，不再需要额外环境白名单。Backend 仍只接受
+HTTPS 默认 443 的 DNS hostname，拒绝 IP、通配符、userinfo、query、fragment 和自定义端口；Worker 代理仅允许
+CONNECT 443 和本地 Backend 8090，不开放其它端口或普通 HTTP 外联。默认 `Claude Code + DeepSeek` 行为不变。
+
 生成密钥：
 
 ```bash
@@ -373,7 +466,9 @@ Windows 本地开发可直接初始化这两个基础密钥（不会生成或读
 .\scripts\run-agent-worker.cmd stop
 ```
 
-Windows 专用代理只允许 Worker 访问 `host.docker.internal:8090` 和 `api.deepseek.com:443`；Worker 自身仍只加入 internal 网络。若后端使用非 `8090` 端口，当前安全白名单不会放行，应先统一回默认端口，而不是扩大代理端口范围。
+Windows 专用代理只允许 Worker 访问 `host.docker.internal:8090` 和 HTTPS `443`；实际模型目标由当前任务中固化的
+设置页 Base URL 决定，Worker 自身仍只加入 internal 网络。若后端使用非 `8090` 端口，当前代理不会放行，应先统一回
+默认端口，而不是扩大代理端口范围。
 
 需要通过局域网 HTTP 代理访问 DeepSeek 时，在本机 `.local/gitlab.env` 设置：
 
@@ -383,6 +478,16 @@ CODE_QUALITY_REVIEW_PROXY=http://192.168.100.133:7897
 ```
 
 重新执行 `.\scripts\run-agent-worker.cmd start` 后，Windows 启动脚本会生成本机专用 Squid 配置。`AGENT_REVIEW_UPSTREAM_PROXY` 供 Agent Worker 使用，`CODE_QUALITY_REVIEW_PROXY` 供 Python backend 的普通 Provider 请求使用；本地未显式配置后者时会兼容复用前者。上游代理只承接模型请求，Linux 生产不会自动继承该本机设置。
+
+自定义 Responses Agent 的安全启用顺序：
+
+1. 在设置页确认至少一个在线 Worker 上报 `OPENAI_RESPONSES_CUSTOM`；
+2. 保存符合安全 URL 约束的自定义 Base URL、模型和 Key，先保持 Agent Review 关闭；
+3. 确认“URL 安全校验通过 / 配置完整”后再启用并执行 synthetic 配置测试。
+
+修改页面 Base URL 不需要重启 Backend、代理或 Worker。配置测试只发送平台生成的 synthetic 文件，不读取生产任务、
+仓库或历史 diff。Base URL、模型和运行时会固化到新任务快照，Key 按凭据槽位在 Worker Claim 时瞬时解密，因此后续
+修改设置不会改变已排队任务的地址和模型，Key 轮换则立即作用于同一槽位。
 
 Agent Job 领取兼容现有 MySQL 5.7 数据库：后端会使用普通 `FOR UPDATE` 串行领取；MySQL 8.0+ 自动使用 `FOR UPDATE SKIP LOCKED`，多 Worker 并发更好。新建和生产数据库仍按环境要求使用 MySQL 8.0+，无需为 Windows 本地兼容模式修改 Compose。
 

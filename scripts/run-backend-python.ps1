@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $backendDir = Join-Path $repoRoot "backend-python"
 $localGitLabEnv = Join-Path $repoRoot ".local\gitlab.env"
+$localDatabaseEnv = Join-Path $repoRoot ".local\database.local.env"
 $agentWorkerScript = Join-Path $PSScriptRoot "run-agent-worker.ps1"
 
 function Import-DotEnvIfPresent {
@@ -35,6 +36,52 @@ function Import-DotEnvIfPresent {
             $value = $value.Substring(1, $value.Length - 2)
         }
         [Environment]::SetEnvironmentVariable($key, $value, "Process")
+    }
+}
+
+function Import-LocalDatabaseEnvIfPresent {
+    param([string] $Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $declaredTarget = $null
+    Get-Content -LiteralPath $Path -Encoding UTF8 | ForEach-Object {
+        $line = $_.Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith("#")) {
+            return
+        }
+        $separatorIndex = $line.IndexOf("=")
+        if ($separatorIndex -le 0) {
+            return
+        }
+        $key = $line.Substring(0, $separatorIndex).Trim()
+        if ($key -ne "DATABASE_TARGET") {
+            return
+        }
+        $value = $line.Substring($separatorIndex + 1).Trim()
+        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        $declaredTarget = $value.Trim().ToUpperInvariant()
+    }
+
+    if ($declaredTarget -ne "LOCAL") {
+        throw "database.local.env must declare DATABASE_TARGET=LOCAL."
+    }
+
+    foreach ($key in @("DATABASE_URL", "MYSQL_URL", "MYSQL_USERNAME", "MYSQL_PASSWORD")) {
+        [Environment]::SetEnvironmentVariable($key, $null, "Process")
+    }
+    Import-DotEnvIfPresent $Path
+
+    if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
+        if ([string]::IsNullOrWhiteSpace($env:MYSQL_URL) -or
+            [string]::IsNullOrWhiteSpace($env:MYSQL_USERNAME) -or
+            [string]::IsNullOrWhiteSpace($env:MYSQL_PASSWORD)) {
+            throw "database.local.env must provide DATABASE_URL or MYSQL_URL with MYSQL_USERNAME and MYSQL_PASSWORD."
+        }
     }
 }
 
@@ -156,14 +203,18 @@ if (-not (Test-Path $backendDir)) {
     throw "backend-python directory was not found: $backendDir"
 }
 
-Import-DotEnvIfPresent $localGitLabEnv
-Enable-BackendPythonStartupHooks
-
-$pythonCommand = Resolve-PythonCommand
 $command = "dev"
 if ($Args.Count -gt 0) {
     $command = $Args[0]
 }
+
+Import-DotEnvIfPresent $localGitLabEnv
+if ($command -in @("dev", "migrate")) {
+    Import-LocalDatabaseEnvIfPresent $localDatabaseEnv
+}
+Enable-BackendPythonStartupHooks
+
+$pythonCommand = Resolve-PythonCommand
 
 $remainingArgs = @()
 if ($Args.Count -gt 1) {

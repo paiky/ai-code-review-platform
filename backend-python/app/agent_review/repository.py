@@ -12,6 +12,22 @@ from sqlalchemy.orm import Session
 
 from app.agent_review.crypto import decrypt_api_key, encrypt_api_key, encryption_available, mask_fingerprint
 from app.agent_review.models import AgentReviewRun, AgentReviewSettings, AgentReviewWorker
+from app.agent_review.runtime import (
+    CUSTOM_DEFAULT_DISPLAY_NAME,
+    CUSTOM_DEFAULT_MODEL,
+    CUSTOM_REASONING_EFFORTS,
+    CUSTOM_REVIEW_KEY,
+    CUSTOM_RUNTIME,
+    DEFAULT_REVIEW_KEY,
+    DEFAULT_RUNTIME,
+    RESPONSES_RUNNER_VERSION,
+    custom_base_url_host,
+    normalize_custom_base_url,
+    normalize_runtime_type,
+    normalize_worker_capabilities,
+    runtime_snapshot,
+    worker_supports,
+)
 from app.agent_review_spike.budgets import (
     AGENT_BUDGET_KEYS,
     AGENT_BUDGET_LIMITS,
@@ -31,7 +47,7 @@ from app.core.errors import AppError
 from app.core.json_utils import utc_now
 
 
-AGENT_REVIEW_KEY = "agent-claude-code-deepseek-v4-pro"
+AGENT_REVIEW_KEY = DEFAULT_REVIEW_KEY
 AGENT_MODEL = "deepseek-v4-pro[1m]"
 AGENT_CLI_VERSION = "2.1.112"
 AGENT_RUNNER_VERSION = "agent-worker-v1"
@@ -39,6 +55,7 @@ AGENT_ENDPOINT = "https://api.deepseek.com/anthropic"
 AGENT_WORKER_ONLINE_SECONDS = 60
 AGENT_WORKER_RETENTION_HOURS = 48
 AGENT_WORKER_NODE_LIMIT = 100
+CONFIGURATION_TEST_TIMEOUT_SECONDS = 90
 MAX_TURNS = DEFAULT_AGENT_BUDGETS["maxTurns"]
 MAX_TOOL_CALLS = DEFAULT_AGENT_BUDGETS["maxToolCalls"]
 MAX_SOURCE_BYTES = DEFAULT_AGENT_BUDGETS["maxSourceBytes"]
@@ -97,6 +114,7 @@ def ensure_agent_review_schema(db: Session) -> None:
         AgentReviewRun.__table__.create(connection, checkfirst=True)
         _ensure_settings_columns(db, inspector)
         _ensure_worker_columns(db, inspector)
+        _ensure_run_columns(db, inspector)
         _ensure_worker_indexes(db, inspector)
         ensure_result_schema(db)
         ensure_scheduler_job_schema(db)
@@ -145,15 +163,75 @@ def agent_settings_response(db: Session) -> dict[str, Any]:
             legacy_heartbeat=record.last_worker_heartbeat_at,
         )
     budgets, budget_source = effective_agent_budgets(record)
+    selected_runtime = normalize_runtime_type(record.runtime_type)
+    custom_url_safe = custom_base_url_host(record.custom_base_url) is not None
+    custom_api_key_configured = bool(record.custom_api_key_ciphertext)
+    custom_configuration_complete = bool(
+        record.custom_base_url
+        and record.custom_model
+        and record.custom_reasoning_effort
+        and custom_api_key_configured
+        and custom_url_safe
+    )
+    selected_is_custom = selected_runtime == CUSTOM_RUNTIME
+    selected_key_configured = (
+        custom_api_key_configured if selected_is_custom else bool(record.api_key_ciphertext)
+    )
+    selected_key_masked = (
+        mask_fingerprint(record.custom_api_key_fingerprint)
+        if selected_is_custom
+        else mask_fingerprint(record.api_key_fingerprint)
+    )
+    selected_model = (
+        str(record.custom_model or CUSTOM_DEFAULT_MODEL) if selected_is_custom else AGENT_MODEL
+    )
+    selected_endpoint = (
+        f"{str(record.custom_base_url or '').rstrip('/')}/responses"
+        if selected_is_custom and record.custom_base_url
+        else AGENT_ENDPOINT
+    )
     return {
         "enabled": bool(record.enabled),
-        "runner": "CLAUDE_CODE",
-        "cliVersion": AGENT_CLI_VERSION,
-        "provider": "DEEPSEEK",
-        "endpoint": AGENT_ENDPOINT,
-        "model": AGENT_MODEL,
-        "apiKeyConfigured": bool(record.api_key_ciphertext),
-        "apiKeyMasked": mask_fingerprint(record.api_key_fingerprint),
+        "selectedRuntime": selected_runtime,
+        "runtimeOptions": [
+            {"value": DEFAULT_RUNTIME, "label": "Claude Code + DeepSeek", "isDefault": True},
+            {
+                "value": CUSTOM_RUNTIME,
+                "label": "自定义 OpenAI Responses Agent",
+                "isDefault": False,
+            },
+        ],
+        "runner": "OPENAI_RESPONSES_AGENT" if selected_is_custom else "CLAUDE_CODE",
+        "cliVersion": None if selected_is_custom else AGENT_CLI_VERSION,
+        "provider": "CUSTOM_OPENAI" if selected_is_custom else "DEEPSEEK",
+        "endpoint": selected_endpoint,
+        "model": selected_model,
+        "apiKeyConfigured": selected_key_configured,
+        "apiKeyMasked": selected_key_masked,
+        "defaultRuntime": {
+            "runtimeType": DEFAULT_RUNTIME,
+            "provider": "DEEPSEEK",
+            "model": AGENT_MODEL,
+            "endpoint": AGENT_ENDPOINT,
+            "apiKeyConfigured": bool(record.api_key_ciphertext),
+            "apiKeyMasked": mask_fingerprint(record.api_key_fingerprint),
+        },
+        "customRuntime": {
+            "runtimeType": CUSTOM_RUNTIME,
+            "protocol": "OPENAI_RESPONSES",
+            "displayName": record.custom_display_name or CUSTOM_DEFAULT_DISPLAY_NAME,
+            "baseUrl": record.custom_base_url,
+            "model": record.custom_model or CUSTOM_DEFAULT_MODEL,
+            "reasoningEffort": record.custom_reasoning_effort or "high",
+            "tlsVerify": record.custom_tls_verify is not False,
+            "reasoningEffortOptions": list(CUSTOM_REASONING_EFFORTS),
+            "apiKeyConfigured": custom_api_key_configured,
+            "apiKeyMasked": mask_fingerprint(record.custom_api_key_fingerprint),
+            "egressAllowed": custom_url_safe,
+            "urlSafetyValidated": custom_url_safe,
+            "configurationComplete": custom_configuration_complete,
+            "workerSupported": _worker_pool_supports(worker_pool, CUSTOM_RUNTIME),
+        },
         "encryptionAvailable": encryption_available(),
         "workerStatus": "ONLINE" if online else "OFFLINE",
         "workerId": record.worker_id,
@@ -171,6 +249,9 @@ def agent_settings_response(db: Session) -> dict[str, Any]:
             "durationMs": record.test_duration_ms,
             "startedAt": format_datetime(record.test_started_at),
             "finishedAt": format_datetime(record.test_finished_at),
+            "runtimeType": selected_runtime,
+            "protocol": "OPENAI_RESPONSES" if selected_is_custom else "ANTHROPIC_COMPATIBLE",
+            "model": selected_model,
         },
         "budgets": {**budgets, "maxDiffBytes": MAX_DIFF_BYTES},
         "budgetDefaults": default_agent_budgets(),
@@ -209,6 +290,51 @@ def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any
             else json.dumps(next_budgets, ensure_ascii=False, sort_keys=True)
         )
 
+    next_runtime = normalize_runtime_type(
+        request.get("selectedRuntime", record.runtime_type), strict=True
+    )
+    custom_request = request.get("customRuntime")
+    if custom_request is not None and not isinstance(custom_request, dict):
+        raise AppError("VALIDATION_ERROR", "customRuntime must be an object", 400)
+    custom_request = custom_request or {}
+    if "displayName" in custom_request:
+        display_name = str(custom_request.get("displayName") or "").strip()
+        if len(display_name) > 64:
+            raise AppError("VALIDATION_ERROR", "customRuntime.displayName is too long", 400)
+        record.custom_display_name = display_name or CUSTOM_DEFAULT_DISPLAY_NAME
+    if "baseUrl" in custom_request:
+        raw_base_url = str(custom_request.get("baseUrl") or "").strip()
+        record.custom_base_url = (
+            normalize_custom_base_url(raw_base_url) if raw_base_url else None
+        )
+    if "model" in custom_request:
+        model = str(custom_request.get("model") or "").strip()
+        if len(model) > 128:
+            raise AppError("VALIDATION_ERROR", "customRuntime.model is invalid", 400)
+        record.custom_model = model or None
+    if "reasoningEffort" in custom_request:
+        effort = str(custom_request.get("reasoningEffort") or "").strip().lower()
+        if effort not in CUSTOM_REASONING_EFFORTS:
+            raise AppError("VALIDATION_ERROR", "customRuntime.reasoningEffort is invalid", 400)
+        record.custom_reasoning_effort = effort
+    if "tlsVerify" in custom_request:
+        tls_verify = custom_request.get("tlsVerify")
+        if not isinstance(tls_verify, bool):
+            raise AppError("VALIDATION_ERROR", "customRuntime.tlsVerify must be a boolean", 400)
+        record.custom_tls_verify = tls_verify
+    if custom_request.get("clearApiKey") is True:
+        record.custom_api_key_ciphertext = None
+        record.custom_api_key_fingerprint = None
+        if next_runtime == CUSTOM_RUNTIME:
+            record.enabled = False
+    elif "apiKey" in custom_request:
+        if custom_request.get("apiKey") is None:
+            pass
+        else:
+            ciphertext, fingerprint = encrypt_api_key(str(custom_request.get("apiKey") or ""))
+            record.custom_api_key_ciphertext = ciphertext
+            record.custom_api_key_fingerprint = fingerprint
+
     if request.get("clearApiKey") is True:
         record.api_key_ciphertext = None
         record.api_key_fingerprint = None
@@ -220,8 +346,11 @@ def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any
     if "enabled" in request:
         enabled = bool(request.get("enabled"))
         if enabled:
-            decrypt_api_key(record.api_key_ciphertext)
+            _assert_runtime_ready(db, record, next_runtime, require_worker=next_runtime == CUSTOM_RUNTIME)
         record.enabled = enabled
+    elif record.enabled and next_runtime != normalize_runtime_type(record.runtime_type):
+        _assert_runtime_ready(db, record, next_runtime, require_worker=next_runtime == CUSTOM_RUNTIME)
+    record.runtime_type = next_runtime
     record.budget_config_json = next_budget_json
     record.updated_at = utc_now()
     db.commit()
@@ -247,6 +376,8 @@ def record_worker_heartbeat(
     worker_id: str,
     worker_version: str,
     cli_version: str,
+    capabilities: list[str],
+    responses_runner_version: str | None,
     state: str,
     capacity: int,
     active_job_id: int | None,
@@ -268,6 +399,10 @@ def record_worker_heartbeat(
         db.add(worker)
     worker.worker_version = _bounded(worker_version, 64)
     worker.cli_version = _bounded(cli_version, 64)
+    worker.capabilities_json = json.dumps(
+        normalize_worker_capabilities(capabilities), ensure_ascii=False
+    )
+    worker.responses_runner_version = _bounded(responses_runner_version, 64)
     worker.state = state
     worker.capacity = capacity
     worker.active_job_id = active_job_id
@@ -318,6 +453,8 @@ def agent_worker_pool(db: Session) -> dict[str, Any]:
                 "workerId": worker.worker_id,
                 "workerVersion": worker.worker_version,
                 "cliVersion": worker.cli_version,
+                "capabilities": normalize_worker_capabilities(worker.capabilities_json),
+                "responsesRunnerVersion": worker.responses_runner_version,
                 "state": state,
                 "capacity": capacity,
                 "activeJobId": worker.active_job_id,
@@ -383,6 +520,8 @@ def _legacy_worker_pool(record: AgentReviewSettings) -> dict[str, Any]:
                 "workerId": record.worker_id,
                 "workerVersion": record.worker_version,
                 "cliVersion": record.cli_version,
+                "capabilities": [DEFAULT_RUNTIME],
+                "responsesRunnerVersion": None,
                 "state": "IDLE",
                 "capacity": 1,
                 "activeJobId": None,
@@ -476,11 +615,14 @@ def assert_agent_available(db: Session, *, require_worker: bool = True) -> Agent
     record = get_agent_settings_record(db)
     if not record.enabled:
         raise AppError("AGENT_REVIEW_UNAVAILABLE", "Agent Review is disabled", 409)
-    decrypt_api_key(record.api_key_ciphertext)
+    runtime_type = normalize_runtime_type(record.runtime_type)
+    _assert_runtime_ready(db, record, runtime_type, require_worker=False)
     worker_pool = agent_worker_pool(db)
-    registered_online = worker_pool["onlineCount"] > 0
     legacy_online = worker_pool["totalCount"] == 0 and _worker_online(record)
-    if require_worker and not (registered_online or legacy_online):
+    runtime_online = _worker_pool_supports(worker_pool, runtime_type)
+    if require_worker and not (
+        runtime_online or (runtime_type == DEFAULT_RUNTIME and legacy_online)
+    ):
         raise AppError("AGENT_REVIEW_UNAVAILABLE", "Agent Review Worker is offline", 409)
     return record
 
@@ -510,6 +652,12 @@ def claim_configuration_test(db: Session, *, worker_id: str) -> dict[str, Any] |
         return None
     if record.test_status != "QUEUED" or not record.test_request_id:
         return None
+    runtime_type = normalize_runtime_type(record.runtime_type)
+    worker = db.get(AgentReviewWorker, worker_id)
+    if runtime_type == CUSTOM_RUNTIME and (
+        worker is None or not worker_supports(worker.capabilities_json, runtime_type)
+    ):
+        return None
     now = utc_now()
     record.test_status = "RUNNING"
     record.test_started_at = now
@@ -517,11 +665,25 @@ def claim_configuration_test(db: Session, *, worker_id: str) -> dict[str, Any] |
     record.test_message = None
     record.updated_at = now
     db.commit()
+    snapshot = runtime_snapshot(record)
     return {
         "kind": "CONFIG_TEST",
         "requestId": record.test_request_id,
-        "apiKey": decrypt_api_key(record.api_key_ciphertext),
-        "budgets": {"maxTurns": 4, "maxToolCalls": 8, "maxSourceBytes": 10_000, "timeoutSeconds": 180},
+        "runtime": {
+            **snapshot,
+            "apiKey": _decrypt_runtime_api_key(record, runtime_type),
+        },
+        "apiKey": _decrypt_runtime_api_key(record, runtime_type),
+        "budgets": {
+            "maxTurns": 6,
+            "maxToolCalls": 10,
+            "maxSourceBytes": 10_000,
+            "timeoutSeconds": CONFIGURATION_TEST_TIMEOUT_SECONDS,
+            "inlineDiffBytes": 10_000,
+            "maxEvidenceCalls": 4,
+            "convergeAtCalls": 2,
+            "submitByTurn": 3,
+        },
     }
 
 
@@ -551,18 +713,29 @@ def create_agent_job(
     input_payload: dict[str, Any],
     completion_context: dict[str, Any] | None,
     comparison_mode: bool,
+    runtime: dict[str, Any] | None = None,
 ) -> AgentReviewRun:
     ensure_agent_review_schema(db)
     now = utc_now()
     idempotency_key = f"agent:{task_id}:{uuid4().hex}"
+    snapshot = runtime or runtime_snapshot(get_agent_settings_record(db))
+    runtime_type = normalize_runtime_type(snapshot.get("runtimeType"))
+    custom = runtime_type == CUSTOM_RUNTIME
+    review_key = CUSTOM_REVIEW_KEY if custom else AGENT_REVIEW_KEY
+    model = str(snapshot.get("model") or (CUSTOM_DEFAULT_MODEL if custom else AGENT_MODEL))
+    input_payload = {**input_payload, "runtimeSnapshot": snapshot}
     job = CodeQualitySchedulerJob(
         job_type="AGENT_REVIEW",
         task_id=task_id,
-        review_key=AGENT_REVIEW_KEY,
+        review_key=review_key,
         project_id=project_id,
         status="QUEUED",
         priority=80,
-        label="Agent Review - Claude Code + DeepSeek",
+        label=(
+            f"Agent Review - {snapshot.get('displayName') or CUSTOM_DEFAULT_DISPLAY_NAME}"
+            if custom
+            else "Agent Review - Claude Code + DeepSeek"
+        ),
         error_message=None,
         lease_owner=None,
         lease_expires_at=None,
@@ -581,13 +754,15 @@ def create_agent_job(
     db.flush()
     run = AgentReviewRun(
         task_id=task_id,
-        review_key=AGENT_REVIEW_KEY,
+        review_key=review_key,
         scheduler_job_id=job.id,
         idempotency_key=idempotency_key,
         requested_engine="AGENT",
         effective_engine=None,
-        runner_version=AGENT_RUNNER_VERSION,
-        model=AGENT_MODEL,
+        runner_version=RESPONSES_RUNNER_VERSION if custom else AGENT_RUNNER_VERSION,
+        runner_type="OPENAI_RESPONSES_AGENT" if custom else "CLAUDE_CODE",
+        provider="CUSTOM_OPENAI" if custom else "DEEPSEEK",
+        model=model,
         status="PENDING",
         input_json=json.dumps(input_payload, ensure_ascii=False),
         completion_context_json=json.dumps(completion_context or {}, ensure_ascii=False),
@@ -604,9 +779,18 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
     settings_record = assert_agent_available(db, require_worker=False)
     ensure_agent_review_schema(db)
     now = utc_now()
+    worker = db.get(AgentReviewWorker, worker_id)
+    capabilities = normalize_worker_capabilities(
+        worker.capabilities_json if worker is not None else None
+    )
+    allowed_runner_types = ["CLAUDE_CODE"]
+    if CUSTOM_RUNTIME in capabilities:
+        allowed_runner_types.append("OPENAI_RESPONSES_AGENT")
     stmt = (
         select(CodeQualitySchedulerJob)
+        .join(AgentReviewRun, AgentReviewRun.scheduler_job_id == CodeQualitySchedulerJob.id)
         .where(CodeQualitySchedulerJob.job_type == "AGENT_REVIEW")
+        .where(AgentReviewRun.runner_type.in_(allowed_runner_types))
         .where(
             or_(
                 CodeQualitySchedulerJob.status == "QUEUED",
@@ -648,6 +832,10 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
     run.heartbeat_at = now
     run.updated_at = now
     input_payload = _read_json(run.input_json, {})
+    snapshot = input_payload.get("runtimeSnapshot")
+    if not isinstance(snapshot, dict):
+        snapshot = runtime_snapshot(object())
+    runtime_type = normalize_runtime_type(snapshot.get("runtimeType"))
     raw_budgets = input_payload.get("budgets")
     if raw_budgets is None:
         # 兼容配置化上线前已排队的 Run；旧任务必须使用原默认值，而不是后来保存的全局配置。
@@ -659,6 +847,7 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
             # 不把损坏的持久化原文返回给 Worker；安全哨兵会触发 Worker 的严格拒绝。
             budgets = {"invalidBudgetContract": 1}
     db.commit()
+    api_key = _decrypt_runtime_api_key(settings_record, runtime_type)
     return {
         "jobId": job.id,
         "runId": run.id,
@@ -667,7 +856,8 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
         "reviewKey": run.review_key,
         "worktree": input_payload.get("worktree"),
         "input": input_payload.get("case") or {},
-        "apiKey": decrypt_api_key(settings_record.api_key_ciphertext),
+        "apiKey": api_key,
+        "runtime": {**snapshot, "apiKey": api_key},
         "budgets": budgets,
         "leaseSeconds": lease_seconds,
         "claimAttempt": int(job.attempt or 0),
@@ -814,7 +1004,13 @@ def run_to_summary(run: AgentReviewRun, *, fallback_triggered: bool | None = Non
     result = {
         "runId": run.id,
         "runnerVersion": run.runner_version,
-        "cliVersion": run.cli_version or AGENT_CLI_VERSION,
+        "runnerType": run.runner_type or "CLAUDE_CODE",
+        "provider": run.provider or "DEEPSEEK",
+        "cliVersion": (
+            run.cli_version or AGENT_CLI_VERSION
+            if (run.runner_type or "CLAUDE_CODE") == "CLAUDE_CODE"
+            else None
+        ),
         "model": run.model,
         "status": run.status,
         "turnCount": int(run.turn_count or 0),
@@ -1088,6 +1284,58 @@ def _assert_claim_attempt(job: CodeQualitySchedulerJob, claim_attempt: int) -> N
         )
 
 
+def _worker_pool_supports(worker_pool: dict[str, Any], runtime_type: str) -> bool:
+    nodes = worker_pool.get("nodes") if isinstance(worker_pool, dict) else None
+    if not isinstance(nodes, list):
+        return False
+    return any(
+        isinstance(node, dict)
+        and node.get("online") is True
+        and str(node.get("state") or "IDLE").upper() != "DRAINING"
+        and runtime_type in normalize_worker_capabilities(node.get("capabilities"))
+        for node in nodes
+    )
+
+
+def _decrypt_runtime_api_key(record: AgentReviewSettings, runtime_type: str) -> str:
+    if normalize_runtime_type(runtime_type) == CUSTOM_RUNTIME:
+        return decrypt_api_key(record.custom_api_key_ciphertext)
+    return decrypt_api_key(record.api_key_ciphertext)
+
+
+def _assert_runtime_ready(
+    db: Session,
+    record: AgentReviewSettings,
+    runtime_type: str,
+    *,
+    require_worker: bool,
+) -> None:
+    normalized = normalize_runtime_type(runtime_type)
+    _decrypt_runtime_api_key(record, normalized)
+    if normalized == CUSTOM_RUNTIME:
+        if not record.custom_base_url or not record.custom_model:
+            raise AppError(
+                "AGENT_CUSTOM_CONFIG_INCOMPLETE",
+                "自定义 OpenAI Responses Agent 配置不完整",
+                409,
+            )
+        normalize_custom_base_url(record.custom_base_url)
+        if str(record.custom_reasoning_effort or "high") not in CUSTOM_REASONING_EFFORTS:
+            raise AppError(
+                "AGENT_CUSTOM_CONFIG_INCOMPLETE",
+                "自定义 OpenAI Responses Agent 推理强度无效",
+                409,
+            )
+        if require_worker and not _worker_pool_supports(
+            agent_worker_pool(db), CUSTOM_RUNTIME
+        ):
+            raise AppError(
+                "AGENT_REVIEW_UNAVAILABLE",
+                "没有支持自定义 Responses Agent 的在线 Worker",
+                409,
+            )
+
+
 def _ensure_result_columns(db: Session, inspector) -> None:
     columns = {column["name"] for column in inspector.get_columns("code_quality_review_results")}
     _add_column(db, columns, "code_quality_review_results", "requested_engine", "VARCHAR(32) NOT NULL DEFAULT 'STANDARD'")
@@ -1099,6 +1347,13 @@ def _ensure_result_columns(db: Session, inspector) -> None:
 def _ensure_settings_columns(db: Session, inspector) -> None:
     columns = {column["name"] for column in inspector.get_columns("code_quality_agent_settings")}
     definitions = {
+        "runtime_type": "VARCHAR(32) NOT NULL DEFAULT 'CLAUDE_CODE_DEEPSEEK'",
+        "custom_display_name": "VARCHAR(64) NULL",
+        "custom_base_url": "VARCHAR(1024) NULL",
+        "custom_model": "VARCHAR(128) NULL",
+        "custom_reasoning_effort": "VARCHAR(16) NULL",
+        "custom_api_key_ciphertext": "TEXT NULL",
+        "custom_api_key_fingerprint": "VARCHAR(32) NULL",
         "budget_config_json": "TEXT NULL",
         "test_request_id": "VARCHAR(128) NULL",
         "test_status": "VARCHAR(32) NULL",
@@ -1119,6 +1374,8 @@ def _ensure_worker_columns(db: Session, inspector) -> None:
     definitions = {
         "worker_version": "VARCHAR(64) NULL",
         "cli_version": "VARCHAR(64) NULL",
+        "capabilities_json": "TEXT NULL",
+        "responses_runner_version": "VARCHAR(64) NULL",
         "state": "VARCHAR(16) NOT NULL DEFAULT 'IDLE'",
         "capacity": "INT NOT NULL DEFAULT 1",
         "active_job_id": "BIGINT NULL",
@@ -1129,6 +1386,16 @@ def _ensure_worker_columns(db: Session, inspector) -> None:
     }
     for name, definition in definitions.items():
         _add_column(db, columns, "code_quality_agent_workers", name, definition)
+
+
+def _ensure_run_columns(db: Session, inspector) -> None:
+    columns = {column["name"] for column in inspector.get_columns("agent_review_runs")}
+    definitions = {
+        "runner_type": "VARCHAR(32) NOT NULL DEFAULT 'CLAUDE_CODE'",
+        "provider": "VARCHAR(32) NOT NULL DEFAULT 'DEEPSEEK'",
+    }
+    for name, definition in definitions.items():
+        _add_column(db, columns, "agent_review_runs", name, definition)
 
 
 def _ensure_worker_indexes(db: Session, inspector) -> None:

@@ -20,7 +20,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tini \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 10001 --shell /usr/sbin/nologin agent-review
+    && useradd --create-home --uid 10001 --shell /usr/sbin/nologin agent-review \
+    && pip install --no-cache-dir "httpx>=0.27.0"
 
 COPY --from=claude-code /usr/local/bin/node /usr/local/bin/node
 COPY --from=claude-code /usr/local/lib/node_modules/@anthropic-ai/claude-code /usr/local/lib/node_modules/@anthropic-ai/claude-code

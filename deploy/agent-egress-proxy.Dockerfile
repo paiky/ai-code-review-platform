@@ -6,7 +6,9 @@ RUN apt-get update \
     && chown -R proxy:proxy /var/spool/squid /var/log/squid
 
 COPY deploy/agent-egress-squid.conf /etc/squid/squid.conf
+COPY deploy/agent-egress-proxy-entrypoint.sh /usr/local/bin/agent-egress-proxy-entrypoint
+RUN chmod 0755 /usr/local/bin/agent-egress-proxy-entrypoint
 
 USER proxy:proxy
 EXPOSE 3128
-ENTRYPOINT ["squid", "-N", "-f", "/etc/squid/squid.conf"]
+ENTRYPOINT ["/usr/local/bin/agent-egress-proxy-entrypoint"]

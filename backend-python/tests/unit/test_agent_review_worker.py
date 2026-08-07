@@ -148,6 +148,89 @@ def test_worker_completion_carries_final_callback_snapshot(tmp_path, monkeypatch
     assert payload["runSummary"]["audit"] == _safe_audit()
 
 
+def test_worker_routes_custom_runtime_to_responses_runner(tmp_path, monkeypatch):
+    requests = []
+    captured = {}
+
+    class FakeResponsesRunner:
+        def __init__(self, transport, config):
+            captured["transport"] = transport
+            captured["config"] = config
+
+        def run(self, case, worktree, *, cancel_event, progress_callback):
+            captured["case"] = case
+            captured["worktree"] = worktree
+            progress_callback(_safe_audit())
+            return {
+                "status": "SUCCESS",
+                "card": {"summary": "未发现问题", "overallLevel": "LOW", "findings": []},
+                "toolAudit": _safe_audit(),
+            }
+
+    monkeypatch.setattr(worker, "Thread", _NoopThread)
+    monkeypatch.setattr(worker, "_resolve_worktree", lambda _root, _relative: tmp_path)
+    monkeypatch.setattr(
+        worker,
+        "HttpxResponsesTransport",
+        lambda endpoint, key, *, verify_tls: (endpoint, key, verify_tls),
+    )
+    monkeypatch.setattr(worker, "OpenAIResponsesAgentRunner", FakeResponsesRunner)
+    monkeypatch.setattr(
+        worker,
+        "run_agent_candidate",
+        lambda *_args, **_kwargs: pytest.fail("Claude runner must not handle custom jobs"),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_post",
+        lambda _url, _token, path, payload: requests.append((path, payload)) or {},
+    )
+
+    worker._run_job(
+        "http://backend",
+        "token",
+        "worker-1",
+        tmp_path,
+        {
+            "jobId": 88,
+            "runId": 98,
+            "claimAttempt": 1,
+            "idempotencyKey": "agent:88",
+            "worktree": "worktrees/88/head",
+            "input": {"id": "custom-case", "changedFiles": ["src/service.py"]},
+            "runtime": {
+                "runtimeType": "OPENAI_RESPONSES_CUSTOM",
+                "baseUrl": "https://relay.example/v1",
+                "model": "gpt-5.6-sol",
+                "reasoningEffort": "high",
+                "tlsVerify": False,
+                "apiKey": "custom-secret",
+            },
+            "budgets": default_agent_budgets(),
+        },
+    )
+
+    assert captured["transport"] == (
+        "https://relay.example/v1/responses",
+        "custom-secret",
+        False,
+    )
+    assert captured["config"].model == "gpt-5.6-sol"
+    path, payload = requests[-1]
+    assert path == "/internal/agent-review/jobs/88/complete"
+    assert payload["reviewCard"]["findings"] == []
+    assert payload["runSummary"]["runnerVersion"] == "openai-responses-agent-v1"
+    assert payload["runSummary"]["cliVersion"] is None
+
+
+@pytest.mark.parametrize(
+    ("runtime", "expected"),
+    [({}, True), ({"tlsVerify": True}, True), ({"tlsVerify": False}, False), ({"tlsVerify": "false"}, True)],
+)
+def test_custom_tls_verify_requires_explicit_false(runtime, expected):
+    assert worker._custom_tls_verify(runtime) is expected
+
+
 def test_worker_maps_all_runtime_budgets_to_runner_config() -> None:
     budgets = {
         "maxTurns": 14,
@@ -413,6 +496,8 @@ def test_draining_worker_heartbeat_continues_with_safe_active_references(
             "workerId": "worker-draining",
             "workerVersion": worker.WORKER_VERSION,
             "cliVersion": worker.CLI_VERSION,
+            "capabilities": worker.WORKER_CAPABILITIES,
+            "responsesRunnerVersion": worker.RESPONSES_RUNNER_VERSION,
             "state": "DRAINING",
             "capacity": 1,
             "activeJobId": 71,

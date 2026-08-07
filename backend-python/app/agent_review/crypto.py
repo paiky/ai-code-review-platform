@@ -9,7 +9,7 @@ from app.core.errors import AppError
 def encrypt_api_key(value: str) -> tuple[str, str]:
     key = str(value or "").strip()
     if not key:
-        raise AppError("VALIDATION_ERROR", "Agent DeepSeek API Key cannot be empty", 400)
+        raise AppError("VALIDATION_ERROR", "Agent API Key cannot be empty", 400)
     cipher = _fernet()
     ciphertext = cipher.encrypt(key.encode("utf-8")).decode("ascii")
     fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
@@ -18,7 +18,7 @@ def encrypt_api_key(value: str) -> tuple[str, str]:
 
 def decrypt_api_key(ciphertext: str | None) -> str:
     if not ciphertext:
-        raise AppError("AGENT_API_KEY_UNAVAILABLE", "Agent DeepSeek API Key is not configured", 409)
+        raise AppError("AGENT_API_KEY_UNAVAILABLE", "Agent API Key is not configured", 409)
     try:
         return _fernet().decrypt(ciphertext.encode("ascii")).decode("utf-8")
     except AppError:
@@ -26,7 +26,7 @@ def decrypt_api_key(ciphertext: str | None) -> str:
     except Exception as exception:
         raise AppError(
             "AGENT_API_KEY_DECRYPT_FAILED",
-            "Agent DeepSeek API Key cannot be decrypted with the configured master key",
+            "Agent API Key cannot be decrypted with the configured master key",
             409,
         ) from exception
 

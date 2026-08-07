@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.agent_review import repository
-from app.agent_review.repository import AGENT_REVIEW_KEY
+from app.agent_review.runtime import CUSTOM_RUNTIME
 from app.agent_review_spike.schema import ReviewSchemaError, validate_review_card
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
 from app.code_quality.repository import append_progress, save_result
@@ -92,6 +92,18 @@ def enqueue_agent_review(
     completion_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings_record = repository.assert_agent_available(db, require_worker=False)
+    runtime = repository.runtime_snapshot(settings_record)
+    custom_runtime = runtime["runtimeType"] == CUSTOM_RUNTIME
+    review_key = (
+        repository.CUSTOM_REVIEW_KEY if custom_runtime else repository.AGENT_REVIEW_KEY
+    )
+    provider = "CUSTOM_OPENAI" if custom_runtime else "DEEPSEEK"
+    model = str(runtime.get("model") or repository.AGENT_MODEL)
+    display_name = (
+        f"Agent · {runtime.get('displayName') or 'Custom OpenAI Agent'}"
+        if custom_runtime
+        else "Agent · Claude Code + DeepSeek"
+    )
     budgets, _ = repository.effective_agent_budgets(settings_record)
     requested_files = _changed_file_paths(request)
     if not requested_files:
@@ -169,6 +181,7 @@ def enqueue_agent_review(
         },
         completion_context=completion_context,
         comparison_mode=comparison_mode,
+        runtime=runtime,
     )
     result_payload = {
         "status": "RUNNING",
@@ -188,12 +201,12 @@ def enqueue_agent_review(
     save_result(
         db,
         task_id=int(task.id),
-        review_key=AGENT_REVIEW_KEY,
+        review_key=review_key,
         project_id=int(project.id),
         profile_code=profile.profile_code,
-        provider="DEEPSEEK",
-        model=repository.AGENT_MODEL,
-        display_name="Agent · Claude Code + DeepSeek",
+        provider=provider,
+        model=model,
+        display_name=display_name,
         sort_order=5,
         result=result_payload,
     )
@@ -205,7 +218,7 @@ def enqueue_agent_review(
             "WARN",
             "Agent Review 已排除敏感路径，其余文件继续审查",
             json.dumps(input_case["reviewCoverage"], ensure_ascii=False),
-            review_key=AGENT_REVIEW_KEY,
+            review_key=review_key,
         )
     append_progress(
         db,
@@ -222,7 +235,7 @@ def enqueue_agent_review(
             },
             ensure_ascii=False,
         ),
-        review_key=AGENT_REVIEW_KEY,
+        review_key=review_key,
     )
     db.commit()
     return {
@@ -230,10 +243,10 @@ def enqueue_agent_review(
         "projectId": project.id,
         "status": "RUNNING",
         "profileCode": profile.profile_code,
-        "provider": "DEEPSEEK",
-        "model": repository.AGENT_MODEL,
-        "reviewKey": AGENT_REVIEW_KEY,
-        "displayName": "Agent · Claude Code + DeepSeek",
+        "provider": provider,
+        "model": model,
+        "reviewKey": review_key,
+        "displayName": display_name,
         "requestedEngine": "AGENT",
         "effectiveEngine": "AGENT",
         "agentRunId": run.id,
@@ -258,6 +271,7 @@ def worker_heartbeat(db: Session, request: dict[str, Any]) -> dict[str, Any]:
         raise AppError("VALIDATION_ERROR", "capacity must be the integer 1", 400)
     active_job_id = _optional_positive_integer(request.get("activeJobId"), "activeJobId")
     active_run_id = _optional_positive_integer(request.get("activeRunId"), "activeRunId")
+    capabilities = repository.normalize_worker_capabilities(request.get("capabilities"))
     if state == "IDLE" and (active_job_id is not None or active_run_id is not None):
         raise AppError(
             "VALIDATION_ERROR",
@@ -269,6 +283,10 @@ def worker_heartbeat(db: Session, request: dict[str, Any]) -> dict[str, Any]:
         worker_id=worker_id,
         worker_version=str(request.get("workerVersion") or repository.AGENT_RUNNER_VERSION),
         cli_version=str(request.get("cliVersion") or repository.AGENT_CLI_VERSION),
+        capabilities=capabilities,
+        responses_runner_version=(
+            str(request.get("responsesRunnerVersion") or "").strip() or None
+        ),
         state=state,
         capacity=capacity,
         active_job_id=active_job_id,
@@ -368,6 +386,9 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
     if run.status == "SUCCEEDED":
         return {"accepted": True, "idempotent": True, "run": repository.run_to_summary(run)}
     input_payload = _json_object(run.input_json)
+    runtime_snapshot = (
+        input_payload.get("runtime") if isinstance(input_payload.get("runtime"), dict) else {}
+    )
     changed_files = ((input_payload.get("case") or {}).get("changedFiles") or [])
     try:
         card = validate_review_card(request.get("reviewCard"), changed_files)
@@ -380,7 +401,11 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         run_summary,
         claim_attempt=claim_attempt,
     )
-    run.cli_version = str(run_summary.get("cliVersion") or repository.AGENT_CLI_VERSION)
+    run.cli_version = (
+        str(run_summary.get("cliVersion") or repository.AGENT_CLI_VERSION)
+        if str(run.runner_type or "CLAUDE_CODE") == "CLAUDE_CODE"
+        else None
+    )
     result = {
         "status": "SUCCESS",
         "overallLevel": card.get("overallLevel"),
@@ -413,9 +438,13 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         review_key=run.review_key,
         project_id=task.project_id,
         profile_code=task.code_quality_profile_code or "backend-default-ai-review",
-        provider="DEEPSEEK",
-        model=repository.AGENT_MODEL,
-        display_name="Agent · Claude Code + DeepSeek",
+        provider=str(run.provider or "DEEPSEEK"),
+        model=str(run.model or repository.AGENT_MODEL),
+        display_name=(
+            f"Agent · {runtime_snapshot.get('displayName') or '自定义 OpenAI Agent'}"
+            if str(run.runner_type or "") == "OPENAI_RESPONSES_AGENT"
+            else "Agent · Claude Code + DeepSeek"
+        ),
         sort_order=5,
         result=result,
     )

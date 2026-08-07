@@ -146,6 +146,14 @@ import {
   normalizeAgentQueueMetrics,
   normalizeAgentWorkerPool
 } from './agentWorkerPool.js';
+import {
+  agentConfigurationTestPollTimeoutMs,
+  buildAgentSettingsPayload,
+  customAgentRuntime,
+  normalizeAgentRuntimeDraft,
+  selectedRuntimeSettings,
+  validateAgentRuntimeDraft
+} from './agentReviewRuntime.js';
 import { releaseNotes } from './releaseNotes.js';
 
 const { Header, Content } = Layout;
@@ -6437,8 +6445,7 @@ function TemplateConfig() {
   const [settingsDraft, setSettingsDraft] = useState(null);
   const [agentSettings, setAgentSettings] = useState(null);
   const [agentSettingsDraft, setAgentSettingsDraft] = useState({
-    enabled: false,
-    apiKey: '',
+    ...normalizeAgentRuntimeDraft(null),
     budgets: normalizeAgentBudgets(null)
   });
   const [agentSettingsSaving, setAgentSettingsSaving] = useState(false);
@@ -6498,8 +6505,7 @@ function TemplateConfig() {
       setAiSettings(settingsData);
       setAgentSettings(agentSettingsData);
       setAgentSettingsDraft({
-        enabled: agentSettingsData?.enabled ?? false,
-        apiKey: '',
+        ...normalizeAgentRuntimeDraft(agentSettingsData),
         budgets: normalizeAgentBudgets(agentSettingsData)
       });
       setAgentSettingsTestResult(agentSettingsData?.configurationTest || null);
@@ -6557,7 +6563,7 @@ function TemplateConfig() {
 
     let cancelled = false;
     let timer = null;
-    const deadline = Date.now() + 210000;
+    const deadline = Date.now() + agentConfigurationTestPollTimeoutMs;
     const poll = async () => {
       if (cancelled) return;
       if (Date.now() >= deadline) {
@@ -7141,41 +7147,38 @@ function TemplateConfig() {
     saveAiSettings(nextSettings, successText);
   };
 
-  const saveAgentSettings = async ({ clearApiKey = false } = {}) => {
-    if (agentSettingsSaving) return;
-    const apiKey = String(agentSettingsDraft.apiKey || '').trim();
-    if (!clearApiKey && agentSettingsDraft.enabled && !apiKey && !agentSettings?.apiKeyConfigured) {
-      messageApi.error('启用 Agent Review 前请填写独立 DeepSeek API Key');
-      return;
+  const saveAgentSettings = async ({ clearApiKey = false, showSuccess = true } = {}) => {
+    if (agentSettingsSaving) return null;
+    const runtimeError = validateAgentRuntimeDraft(agentSettingsDraft, agentSettings);
+    if (!clearApiKey && runtimeError) {
+      messageApi.error(runtimeError);
+      return null;
     }
     const budgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings);
     if (!clearApiKey && budgetError) {
       messageApi.error(budgetError);
-      return;
+      return null;
     }
     setAgentSettingsSaving(true);
     try {
-      const body = clearApiKey
-        ? { clearApiKey: true, enabled: false }
-        : {
-            enabled: agentSettingsDraft.enabled,
-            budgets: agentSettingsDraft.budgets,
-            ...(apiKey ? { apiKey } : {})
-          };
+      const body = buildAgentSettingsPayload(agentSettingsDraft, { clearKey: clearApiKey });
       const settings = await fetchApi('/api/code-quality-reviews/agent-settings', {
         method: 'PUT',
         body: JSON.stringify(body)
       });
       setAgentSettings(settings);
       setAgentSettingsDraft({
-        enabled: settings?.enabled ?? false,
-        apiKey: '',
+        ...normalizeAgentRuntimeDraft(settings),
         budgets: normalizeAgentBudgets(settings)
       });
       setAgentSettingsTestResult(settings?.configurationTest || null);
-      messageApi.success(clearApiKey ? 'Agent API Key 已清除' : 'Agent Review 设置已保存');
+      if (showSuccess) {
+        messageApi.success(clearApiKey ? 'Agent API Key 已清除' : 'Agent Review 设置已保存');
+      }
+      return settings;
     } catch (err) {
       messageApi.error(err.message);
+      return null;
     } finally {
       setAgentSettingsSaving(false);
     }
@@ -7214,12 +7217,26 @@ function TemplateConfig() {
   };
 
   const testAgentSettings = async () => {
-    if (agentSettingsTesting) return;
-    if (!agentSettings?.enabled || !agentSettings?.apiKeyConfigured) {
+    if (agentSettingsTesting || agentSettingsSaving) return;
+    const savedSettings = await saveAgentSettings({ showSuccess: false });
+    if (!savedSettings) return;
+    const selectedRuntime = selectedRuntimeSettings(
+      savedSettings,
+      savedSettings?.selectedRuntime
+    );
+    if (!savedSettings?.enabled || !selectedRuntime?.apiKeyConfigured) {
       messageApi.warning('请先保存并启用 Agent Review 配置');
       return;
     }
-    if (agentSettings?.workerStatus !== 'ONLINE') {
+    if (savedSettings?.selectedRuntime === customAgentRuntime && !selectedRuntime?.configurationComplete) {
+      messageApi.warning('自定义 Agent 配置不完整或 Base URL 未通过安全校验');
+      return;
+    }
+    if (savedSettings?.selectedRuntime === customAgentRuntime && !selectedRuntime?.workerSupported) {
+      messageApi.warning('当前没有支持 OpenAI Responses 的在线 Worker');
+      return;
+    }
+    if (savedSettings?.workerStatus !== 'ONLINE') {
       messageApi.warning('Agent Worker 当前离线，无法执行配置测试');
       return;
     }
@@ -7625,8 +7642,15 @@ function TemplateConfig() {
   const agentTestMessage = agentTestPending
     ? 'Agent 配置测试进行中'
     : 'Agent 配置不可用';
+  const selectedAgentRuntime = selectedRuntimeSettings(
+    agentSettings,
+    agentSettingsDraft.selectedRuntime
+  );
+  const agentRuntimeError = validateAgentRuntimeDraft(agentSettingsDraft, agentSettings);
   const agentSaveRequiresEncryption = Boolean(
-    agentSettingsDraft.enabled || String(agentSettingsDraft.apiKey || '').trim()
+    agentSettingsDraft.enabled
+    || String(agentSettingsDraft.apiKey || '').trim()
+    || String(agentSettingsDraft.customRuntime?.apiKey || '').trim()
   );
   const currentAgentBudgetLimits = agentBudgetLimits(agentSettings);
   const agentBudgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings);
@@ -7716,8 +7740,9 @@ function TemplateConfig() {
       key: 'agent-review-settings',
       label: (
         <Space wrap>
-          <Text strong>Agent Review（Claude Code + DeepSeek）</Text>
+          <Text strong>Agent Review</Text>
           <Tag color={agentSettings?.enabled ? 'purple' : 'default'}>{agentSettings?.enabled ? '已启用' : '未启用'}</Tag>
+          <Tag>{agentSettings?.selectedRuntime === customAgentRuntime ? 'OpenAI Responses' : 'Claude + DeepSeek'}</Tag>
           <Tag color={agentWorkerPool.status === 'ONLINE' ? 'green' : 'red'}>Worker Pool {agentWorkerPool.status}</Tag>
           {agentQueueMetrics.queued > 0 && <Tag color="gold">排队 {agentQueueMetrics.queued}</Tag>}
         </Space>
@@ -7729,59 +7754,157 @@ function TemplateConfig() {
               <SettingsCardHeader
                 icon={<KeyOutlined />}
                 title="Agent Review 接入配置"
-                description="配置 Agent Review 开关、专用 API Key，并验证执行链路连通性。"
-                tags={<Tag color={agentSettings?.apiKeyConfigured ? 'green' : 'gold'}>Key {agentSettings?.apiKeyConfigured ? '已配置' : '未配置'}</Tag>}
+                description="选择 Agent 运行时并配置独立凭据；默认保持 Claude Code + DeepSeek。"
+                tags={<Tag color={selectedAgentRuntime?.apiKeyConfigured ? 'green' : 'gold'}>Key {selectedAgentRuntime?.apiKeyConfigured ? '已配置' : '未配置'}</Tag>}
               />
               {!agentSettings?.encryptionAvailable && (
               <Alert
                 type="error"
                 showIcon
                 message="需要配置 Agent 加密主密钥"
-                description="请在后端运行环境设置 AGENT_REVIEW_CONFIG_ENCRYPTION_KEY 并重启服务。该密钥只用于加密保存 Agent 专用 DeepSeek Key。"
+                description="请在后端运行环境设置 AGENT_REVIEW_CONFIG_ENCRYPTION_KEY 并重启服务。该密钥用于分别加密两个 Agent Key 槽位。"
               />
               )}
-              <Row gutter={[16, 16]} align="middle">
-              <Col xs={24} md={5}>
-                <Space direction="vertical">
-                  <Text strong>启用 Agent Review</Text>
-                  <Switch
-                    checked={agentSettingsDraft.enabled}
+              <Row gutter={[16, 16]} align="bottom">
+                <Col xs={24} md={5}>
+                  <Space direction="vertical">
+                    <Text strong>启用 Agent Review</Text>
+                    <Switch
+                      checked={agentSettingsDraft.enabled}
+                      disabled={agentSettingsSaving || (
+                        agentSettingsDraft.selectedRuntime === customAgentRuntime
+                        && !agentSettingsDraft.enabled
+                        && !agentSettings?.customRuntime?.workerSupported
+                      )}
+                      onChange={checked => setAgentSettingsDraft(current => ({ ...current, enabled: checked }))}
+                    />
+                  </Space>
+                </Col>
+                <Col xs={24} md={11}>
+                  <Text strong>Agent 运行时</Text>
+                  <Select
+                    className="full-width"
+                    value={agentSettingsDraft.selectedRuntime}
                     disabled={agentSettingsSaving}
-                    onChange={checked => setAgentSettingsDraft(current => ({ ...current, enabled: checked }))}
+                    options={(agentSettings?.runtimeOptions || []).map(item => ({ value: item.value, label: item.isDefault ? `${item.label}（默认）` : item.label }))}
+                    onChange={value => setAgentSettingsDraft(current => ({ ...current, selectedRuntime: value }))}
                   />
-                </Space>
-              </Col>
-              <Col xs={24} md={13}>
-                <Text strong>独立 DeepSeek API Key</Text>
-                <Input.Password
-                  value={agentSettingsDraft.apiKey}
-                  disabled={agentSettingsSaving}
-                  placeholder={agentSettings?.apiKeyConfigured ? `${agentSettings.apiKeyMasked || '已配置'}；留空保持原值` : '请输入 Agent 专用 API Key'}
-                  onChange={event => setAgentSettingsDraft(current => ({ ...current, apiKey: event.target.value }))}
-                />
-              </Col>
-              <Col xs={24} md={6}>
+                </Col>
+                <Col xs={24} md={8}>
                 <Space wrap>
                   <Button
                     type="primary"
                     loading={agentSettingsSaving}
                     onClick={() => saveAgentSettings()}
-                    disabled={Boolean(agentBudgetError) || (!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption)}
+                    disabled={Boolean(agentBudgetError || agentRuntimeError) || (!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption)}
                     title={!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption ? '请先初始化加密主密钥并重启后端' : undefined}
                   >
                     保存
                   </Button>
                   <Button loading={agentSettingsTesting} onClick={testAgentSettings}>测试配置</Button>
-                  <Button danger loading={agentSettingsSaving} disabled={!agentSettings?.apiKeyConfigured} onClick={() => saveAgentSettings({ clearApiKey: true })}>清除 Key</Button>
+                  <Button danger loading={agentSettingsSaving} disabled={!selectedAgentRuntime?.apiKeyConfigured} onClick={() => saveAgentSettings({ clearApiKey: true })}>清除当前 Key</Button>
                 </Space>
-              </Col>
+                </Col>
               </Row>
+              {agentSettingsDraft.selectedRuntime === customAgentRuntime ? (
+                <>
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24} md={8}>
+                      <Text strong>配置名称</Text>
+                      <Input
+                        value={agentSettingsDraft.customRuntime?.displayName}
+                        placeholder="Custom OpenAI Agent"
+                        onChange={event => setAgentSettingsDraft(current => ({ ...current, customRuntime: { ...current.customRuntime, displayName: event.target.value } }))}
+                      />
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Text strong>协议</Text>
+                      <Input value="OpenAI Responses" disabled />
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Text strong>推理强度</Text>
+                      <Select
+                        className="full-width"
+                        value={agentSettingsDraft.customRuntime?.reasoningEffort}
+                        options={(agentSettings?.customRuntime?.reasoningEffortOptions || ['low', 'medium', 'high']).map(value => ({ value, label: value }))}
+                        onChange={value => setAgentSettingsDraft(current => ({ ...current, customRuntime: { ...current.customRuntime, reasoningEffort: value } }))}
+                      />
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Text strong>Base URL</Text>
+                      <Input
+                        value={agentSettingsDraft.customRuntime?.baseUrl}
+                        placeholder="https://relay.example.com/v1"
+                        onChange={event => setAgentSettingsDraft(current => ({ ...current, customRuntime: { ...current.customRuntime, baseUrl: event.target.value } }))}
+                      />
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Text strong>模型</Text>
+                      <Input
+                        value={agentSettingsDraft.customRuntime?.model}
+                        placeholder="gpt-5.6-sol"
+                        onChange={event => setAgentSettingsDraft(current => ({ ...current, customRuntime: { ...current.customRuntime, model: event.target.value } }))}
+                      />
+                    </Col>
+                    <Col xs={24}>
+                      <Text strong>自定义中转站 API Key</Text>
+                      <Input.Password
+                        value={agentSettingsDraft.customRuntime?.apiKey}
+                        placeholder={agentSettings?.customRuntime?.apiKeyConfigured ? `${agentSettings.customRuntime.apiKeyMasked || '已配置'}；留空保持原值` : '请输入自定义 Agent API Key'}
+                        onChange={event => setAgentSettingsDraft(current => ({ ...current, customRuntime: { ...current.customRuntime, apiKey: event.target.value } }))}
+                      />
+                    </Col>
+                    <Col xs={24}>
+                      <Space>
+                        <Switch
+                          checked={agentSettingsDraft.customRuntime?.tlsVerify === false}
+                          onChange={checked => setAgentSettingsDraft(current => ({
+                            ...current,
+                            customRuntime: { ...current.customRuntime, tlsVerify: !checked }
+                          }))}
+                        />
+                        <Text strong type={agentSettingsDraft.customRuntime?.tlsVerify === false ? 'danger' : undefined}>
+                          跳过 TLS 证书校验（高风险）
+                        </Text>
+                      </Space>
+                    </Col>
+                  </Row>
+                  <Space wrap>
+                    <Tag color={agentSettings?.customRuntime?.urlSafetyValidated ? 'green' : 'gold'}>
+                      Base URL {agentSettings?.customRuntime?.urlSafetyValidated ? '安全校验通过' : '待配置'}
+                    </Tag>
+                    <Tag color={agentSettings?.customRuntime?.workerSupported ? 'green' : 'gold'}>
+                      Worker {agentSettings?.customRuntime?.workerSupported ? '支持 Responses' : '暂不支持'}
+                    </Tag>
+                    <Tag color={agentSettings?.customRuntime?.configurationComplete ? 'green' : 'gold'}>
+                      配置{agentSettings?.customRuntime?.configurationComplete ? '完整' : '未完成'}
+                    </Tag>
+                  </Space>
+                </>
+              ) : (
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} md={12}>
+                    <Text strong>DeepSeek 模型与 Endpoint</Text>
+                    <Input value={`${agentSettings?.defaultRuntime?.model || 'deepseek-v4-pro[1m]'} · ${agentSettings?.defaultRuntime?.endpoint || ''}`} disabled />
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Text strong>独立 DeepSeek API Key</Text>
+                    <Input.Password
+                      value={agentSettingsDraft.apiKey}
+                      disabled={agentSettingsSaving}
+                      placeholder={agentSettings?.defaultRuntime?.apiKeyConfigured ? `${agentSettings.defaultRuntime.apiKeyMasked || '已配置'}；留空保持原值` : '请输入 Agent 专用 API Key'}
+                      onChange={event => setAgentSettingsDraft(current => ({ ...current, apiKey: event.target.value }))}
+                    />
+                  </Col>
+                </Row>
+              )}
+              {agentRuntimeError && <Alert type="error" showIcon message="运行时配置无效" description={agentRuntimeError} />}
               {agentSettingsTestResult && !['NOT_RUN', 'SUCCESS'].includes(agentTestStatus) && (
                 <Alert
                   showIcon
                   type={agentTestAlertType}
                   message={agentTestMessage}
-                  description={agentSettingsTestResult.message || (agentTestPending ? 'Worker 正在执行 Claude Code + DeepSeek 最小连通性测试。' : undefined)}
+                  description={agentSettingsTestResult.message || (agentTestPending ? 'Worker 正在执行当前 Agent 运行时的 synthetic 最小连通性测试。' : undefined)}
                 />
               )}
             </div>

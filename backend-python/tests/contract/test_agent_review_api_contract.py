@@ -138,6 +138,290 @@ def test_agent_settings_encrypt_mask_replace_and_clear(
     assert cleared.json()["data"]["enabled"] is False
 
 
+def test_agent_settings_keep_default_and_custom_key_slots_independent(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "responses-worker",
+            "capabilities": ["CLAUDE_CODE_DEEPSEEK", "OPENAI_RESPONSES_CUSTOM"],
+            "responsesRunnerVersion": "openai-responses-agent-v1",
+        },
+    )
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"enabled": False, "apiKey": "deepseek-slot-secret"},
+    )
+
+    saved = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "enabled": True,
+            "selectedRuntime": "OPENAI_RESPONSES_CUSTOM",
+            "customRuntime": {
+                "displayName": "Relay A",
+                "baseUrl": "https://relay.example.com/v1/",
+                "apiKey": "custom-slot-secret",
+                "model": "gpt-5.6-sol",
+                "reasoningEffort": "high",
+                "tlsVerify": False,
+            },
+        },
+    )
+
+    assert saved.status_code == 200
+    data = saved.json()["data"]
+    assert data["selectedRuntime"] == "OPENAI_RESPONSES_CUSTOM"
+    assert data["runner"] == "OPENAI_RESPONSES_AGENT"
+    assert data["defaultRuntime"]["apiKeyConfigured"] is True
+    assert data["customRuntime"]["apiKeyConfigured"] is True
+    assert data["customRuntime"]["baseUrl"] == "https://relay.example.com/v1"
+    assert data["customRuntime"]["egressAllowed"] is True
+    assert data["customRuntime"]["urlSafetyValidated"] is True
+    assert data["customRuntime"]["workerSupported"] is True
+    assert data["customRuntime"]["tlsVerify"] is False
+    assert "deepseek-slot-secret" not in saved.text
+    assert "custom-slot-secret" not in saved.text
+    db_session.expire_all()
+    record = db_session.get(AgentReviewSettings, 1)
+    assert record.api_key_ciphertext != record.custom_api_key_ciphertext
+    default_ciphertext = record.api_key_ciphertext
+    custom_ciphertext = record.custom_api_key_ciphertext
+
+    rotated = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "selectedRuntime": "OPENAI_RESPONSES_CUSTOM",
+            "customRuntime": {"apiKey": "custom-slot-rotated"},
+        },
+    )
+    assert rotated.status_code == 200
+    db_session.expire_all()
+    rotated_record = db_session.get(AgentReviewSettings, 1)
+    assert rotated_record.api_key_ciphertext == default_ciphertext
+    assert rotated_record.custom_api_key_ciphertext != custom_ciphertext
+
+    cleared = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "selectedRuntime": "OPENAI_RESPONSES_CUSTOM",
+            "customRuntime": {"clearApiKey": True},
+        },
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["data"]["enabled"] is False
+    assert cleared.json()["data"]["customRuntime"]["apiKeyConfigured"] is False
+    assert cleared.json()["data"]["defaultRuntime"]["apiKeyConfigured"] is True
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://relay.example.com/v1",
+        "https://127.0.0.1/v1",
+        "https://user:secret@relay.example.com/v1",
+        "https://relay.example.com/v1?tenant=secret",
+    ],
+)
+def test_custom_agent_settings_reject_unsafe_base_urls(
+    client: TestClient, monkeypatch, base_url: str
+) -> None:
+    _configure(monkeypatch)
+    response = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "enabled": False,
+            "selectedRuntime": "OPENAI_RESPONSES_CUSTOM",
+            "customRuntime": {"baseUrl": base_url},
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+    assert "secret" not in response.text
+
+
+def test_custom_agent_settings_reject_non_boolean_tls_verify(
+    client: TestClient, monkeypatch
+) -> None:
+    _configure(monkeypatch)
+    response = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "enabled": False,
+            "selectedRuntime": "OPENAI_RESPONSES_CUSTOM",
+            "customRuntime": {"tlsVerify": "false"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_custom_agent_cannot_enable_until_responses_worker_is_ready(
+    client: TestClient, monkeypatch
+) -> None:
+    _configure(monkeypatch)
+    response = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "enabled": True,
+            "selectedRuntime": "OPENAI_RESPONSES_CUSTOM",
+            "customRuntime": {
+                "baseUrl": "https://relay.example.com/v1",
+                "apiKey": "custom-secret",
+                "model": "gpt-5.6-sol",
+                "reasoningEffort": "high",
+                "tlsVerify": False,
+            },
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "AGENT_REVIEW_UNAVAILABLE"
+
+
+def test_custom_job_snapshot_and_capability_filtered_claim(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={"workerId": "legacy-worker"},
+    )
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "responses-worker",
+            "capabilities": ["CLAUDE_CODE_DEEPSEEK", "OPENAI_RESPONSES_CUSTOM"],
+            "responsesRunnerVersion": "openai-responses-agent-v1",
+        },
+    )
+    configured = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "enabled": True,
+            "selectedRuntime": "OPENAI_RESPONSES_CUSTOM",
+            "customRuntime": {
+                "displayName": "Relay A",
+                "baseUrl": "https://relay.example.com/v1",
+                "apiKey": "custom-claim-secret",
+                "model": "gpt-5.6-sol",
+                "reasoningEffort": "high",
+                "tlsVerify": False,
+            },
+        },
+    )
+    assert configured.status_code == 200
+    db_session.expire_all()
+    settings = db_session.get(AgentReviewSettings, 1)
+    run = create_agent_job(
+        db_session,
+        task_id=991,
+        project_id=1,
+        input_payload={
+            "worktree": "tasks/991/head",
+            "case": {"changedFiles": ["src/service.py"]},
+            "budgets": default_agent_budgets(),
+        },
+        completion_context=None,
+        comparison_mode=False,
+        runtime=agent_repository.runtime_snapshot(settings),
+    )
+    db_session.commit()
+
+    changed_settings = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "selectedRuntime": "OPENAI_RESPONSES_CUSTOM",
+            "customRuntime": {"model": "relay-model-v2", "tlsVerify": True},
+        },
+    )
+    assert changed_settings.status_code == 200
+
+    legacy = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "legacy-worker"},
+    )
+    assert legacy.json()["data"] is None
+    claimed = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "responses-worker"},
+    ).json()["data"]
+    assert claimed["runId"] == run.id
+    assert claimed["reviewKey"] == "agent-openai-responses-custom"
+    assert claimed["runtime"]["runtimeType"] == "OPENAI_RESPONSES_CUSTOM"
+    assert claimed["runtime"]["model"] == "gpt-5.6-sol"
+    assert claimed["runtime"]["tlsVerify"] is False
+    assert claimed["runtime"]["apiKey"] == "custom-claim-secret"
+    db_session.expire_all()
+    stored_run = db_session.get(AgentReviewRun, run.id)
+    assert stored_run.runner_type == "OPENAI_RESPONSES_AGENT"
+    assert stored_run.provider == "CUSTOM_OPENAI"
+    assert "custom-claim-secret" not in str(stored_run.input_json)
+
+
+def test_custom_configuration_test_is_claimed_only_by_responses_worker(
+    client: TestClient, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    for worker_id, capabilities in (
+        ("legacy-worker", None),
+        ("responses-worker", ["CLAUDE_CODE_DEEPSEEK", "OPENAI_RESPONSES_CUSTOM"]),
+    ):
+        payload = {"workerId": worker_id}
+        if capabilities:
+            payload.update(
+                {
+                    "capabilities": capabilities,
+                    "responsesRunnerVersion": "openai-responses-agent-v1",
+                }
+            )
+        client.post(
+            "/internal/agent-review/workers/heartbeat",
+            headers=_worker_headers(token),
+            json=payload,
+        )
+    configured = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "enabled": True,
+            "selectedRuntime": "OPENAI_RESPONSES_CUSTOM",
+            "customRuntime": {
+                "baseUrl": "https://relay.example.com/v1",
+                "apiKey": "custom-test-secret",
+                "model": "gpt-5.6-sol",
+                "reasoningEffort": "high",
+                "tlsVerify": False,
+            },
+        },
+    )
+    assert configured.status_code == 200
+    assert client.post("/api/code-quality-reviews/agent-settings/test").status_code == 200
+
+    legacy_claim = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "legacy-worker"},
+    )
+    assert legacy_claim.json()["data"] is None
+    claimed = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "responses-worker"},
+    ).json()["data"]
+    assert claimed["kind"] == "CONFIG_TEST"
+    assert claimed["runtime"]["runtimeType"] == "OPENAI_RESPONSES_CUSTOM"
+    assert claimed["runtime"]["baseUrl"] == "https://relay.example.com/v1"
+    assert claimed["runtime"]["tlsVerify"] is False
+    assert claimed["runtime"]["apiKey"] == "custom-test-secret"
+
+
 def test_agent_settings_update_and_reset_runtime_budgets(
     client: TestClient, db_session: Session, monkeypatch
 ) -> None:
@@ -341,7 +625,9 @@ def test_agent_configuration_test_runs_through_worker_contract(
     job = claimed.json()["data"]
     assert job["kind"] == "CONFIG_TEST"
     assert job["apiKey"] == "sk-agent-secret-123456"
-    assert job["budgets"]["maxTurns"] == 4
+    assert job["budgets"]["maxTurns"] == 6
+    assert job["budgets"]["timeoutSeconds"] == 90
+    assert job["runtime"]["runtimeType"] == "CLAUDE_CODE_DEEPSEEK"
     duplicate_claim = client.post(
         "/internal/agent-review/jobs/claim",
         headers=_worker_headers(token),
@@ -415,7 +701,9 @@ def test_worker_pool_registers_state_capacity_and_safe_activity(
     assert set(nodes["agent-worker-b"]) == {
         "workerId",
         "workerVersion",
-        "cliVersion",
+            "cliVersion",
+            "capabilities",
+            "responsesRunnerVersion",
         "state",
         "capacity",
         "activeJobId",
@@ -558,6 +846,8 @@ def test_worker_pool_schema_contains_registration_columns_and_heartbeat_index(
         "worker_id",
         "worker_version",
         "cli_version",
+        "capabilities_json",
+        "responses_runner_version",
         "state",
         "capacity",
         "active_job_id",

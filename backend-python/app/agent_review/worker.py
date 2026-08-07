@@ -20,11 +20,18 @@ from app.agent_review_spike.budgets import (
     AgentBudgetValidationError,
     validate_agent_budgets,
 )
+from app.agent_review_spike.responses_runner import (
+    HttpxResponsesTransport,
+    OpenAIResponsesAgentRunner,
+    ResponsesRunnerConfig,
+)
 from app.agent_review_spike.runner import RunnerConfig, run_agent_candidate
-
-
 WORKER_VERSION = "agent-worker-v1"
 CLI_VERSION = "2.1.112"
+DEFAULT_RUNTIME = "CLAUDE_CODE_DEEPSEEK"
+CUSTOM_RUNTIME = "OPENAI_RESPONSES_CUSTOM"
+RESPONSES_RUNNER_VERSION = "openai-responses-agent-v1"
+WORKER_CAPABILITIES = [DEFAULT_RUNTIME, CUSTOM_RUNTIME]
 AGENT_WORKER_SHUTDOWN_GRACE_SECONDS = 930
 _LOGGER = logging.getLogger(__name__)
 
@@ -243,16 +250,40 @@ def _run_job(
     )
     heartbeat.start()
     try:
-        runner_config = _runner_config_from_budgets(job.get("budgets"))
         worktree = _resolve_worktree(workspace_root, str(job.get("worktree") or ""))
-        summary = run_agent_candidate(
-            job.get("input") or {},
-            worktree,
-            str(job.get("apiKey") or ""),
-            runner_config,
-            cancel_event=cancelled,
-            progress_callback=latest_audit.update,
-        )
+        runtime = job.get("runtime") if isinstance(job.get("runtime"), dict) else {}
+        runtime_type = str(runtime.get("runtimeType") or DEFAULT_RUNTIME).upper()
+        if runtime_type == CUSTOM_RUNTIME:
+            endpoint = f"{str(runtime.get('baseUrl') or '').rstrip('/')}/responses"
+            responses_result = OpenAIResponsesAgentRunner(
+                HttpxResponsesTransport(
+                    endpoint,
+                    str(runtime.get("apiKey") or ""),
+                    verify_tls=_custom_tls_verify(runtime),
+                ),
+                _responses_runner_config_from_budgets(
+                    job.get("budgets"),
+                    model=str(runtime.get("model") or "gpt-5.6-sol"),
+                    reasoning_effort=str(runtime.get("reasoningEffort") or "high"),
+                ),
+            ).run(
+                job.get("input") or {},
+                worktree,
+                cancel_event=cancelled,
+                progress_callback=latest_audit.update,
+            )
+            summary = _normalize_responses_summary(responses_result)
+        elif runtime_type == DEFAULT_RUNTIME:
+            summary = run_agent_candidate(
+                job.get("input") or {},
+                worktree,
+                str(runtime.get("apiKey") or job.get("apiKey") or ""),
+                _runner_config_from_budgets(job.get("budgets")),
+                cancel_event=cancelled,
+                progress_callback=latest_audit.update,
+            )
+        else:
+            raise ValueError("unsupported Agent runtime")
         final_audit = latest_audit.snapshot()
         if final_audit:
             summary["audit"] = final_audit
@@ -306,11 +337,12 @@ def _run_configuration_test(
     message = "Agent configuration test failed"
     try:
         budgets = job.get("budgets") or {}
+        runtime = job.get("runtime") if isinstance(job.get("runtime"), dict) else {}
+        runtime_type = str(runtime.get("runtimeType") or DEFAULT_RUNTIME).upper()
         with tempfile.TemporaryDirectory(prefix="agent-config-test-") as temporary_name:
             worktree = Path(temporary_name)
             (worktree / "healthcheck.txt").write_text("agent_review_healthcheck=true\n", encoding="utf-8")
-            summary = run_agent_candidate(
-                {
+            synthetic_case = {
                     "id": "configuration-test",
                     "title": "Agent Review configuration test; submit an empty review",
                     "baseRef": "none",
@@ -321,20 +353,43 @@ def _run_configuration_test(
                     "baselineContext": "No production source is included in this configuration test.",
                     "reviewInstructions": "This is a connectivity test. Report no findings and submit the Review Card.",
                     "targetFinding": {"filePath": "healthcheck.txt", "startLine": 1, "endLine": 1},
-                },
-                worktree,
-                str(job.get("apiKey") or ""),
-                RunnerConfig(
-                    timeout_seconds=int(budgets.get("timeoutSeconds") or 180),
-                    max_turns=int(budgets.get("maxTurns") or 4),
-                    max_tool_calls=int(budgets.get("maxToolCalls") or 8),
-                    max_source_bytes=int(budgets.get("maxSourceBytes") or 10_000),
-                ),
-            )
+                }
+            if runtime_type == CUSTOM_RUNTIME:
+                endpoint = f"{str(runtime.get('baseUrl') or '').rstrip('/')}/responses"
+                summary = OpenAIResponsesAgentRunner(
+                    HttpxResponsesTransport(
+                        endpoint,
+                        str(runtime.get("apiKey") or ""),
+                        verify_tls=_custom_tls_verify(runtime),
+                    ),
+                    _responses_runner_config_from_budgets(
+                        budgets,
+                        model=str(runtime.get("model") or "gpt-5.6-sol"),
+                        reasoning_effort=str(runtime.get("reasoningEffort") or "high"),
+                    ),
+                ).run(synthetic_case, worktree)
+            else:
+                summary = run_agent_candidate(
+                    synthetic_case,
+                    worktree,
+                    str(runtime.get("apiKey") or job.get("apiKey") or ""),
+                    _runner_config_from_budgets(budgets),
+                )
         status = "SUCCESS" if summary.get("status") == "SUCCESS" else "FAILED"
-        message = "Claude Code + DeepSeek + read-only MCP connectivity succeeded" if status == "SUCCESS" else str(summary.get("errorCode") or message)
+        if status == "SUCCESS":
+            message = (
+                "OpenAI Responses Agent + read-only tools connectivity succeeded"
+                if runtime_type == CUSTOM_RUNTIME
+                else "Claude Code + DeepSeek + read-only MCP connectivity succeeded"
+            )
+        else:
+            message = str(summary.get("errorCode") or message)
     except Exception as exception:
-        message = str(exception)[:500]
+        message = _failure_message(
+            "AGENT_INVALID_BUDGET_CONFIG"
+            if isinstance(exception, AgentBudgetValidationError)
+            else "AGENT_WORKER_ERROR"
+        )
     _post(
         backend_url,
         token,
@@ -367,6 +422,8 @@ def _worker_heartbeat_loop(
                     "workerId": worker_id,
                     "workerVersion": WORKER_VERSION,
                     "cliVersion": CLI_VERSION,
+                    "capabilities": WORKER_CAPABILITIES,
+                    "responsesRunnerVersion": RESPONSES_RUNNER_VERSION,
                     **activity.snapshot(),
                 },
             )
@@ -522,6 +579,37 @@ def _runner_config_from_budgets(value: Any) -> RunnerConfig:
         converge_at_calls=budgets["convergeAtCalls"],
         submit_by_turn=budgets["submitByTurn"],
     )
+
+
+def _custom_tls_verify(runtime: dict[str, Any]) -> bool:
+    """Only an explicit JSON false disables certificate verification."""
+    return runtime.get("tlsVerify") is not False
+
+
+def _responses_runner_config_from_budgets(
+    value: Any,
+    *,
+    model: str,
+    reasoning_effort: str,
+) -> ResponsesRunnerConfig:
+    return ResponsesRunnerConfig.from_budgets(
+        validate_agent_budgets(value),
+        model=model,
+        reasoning_effort=reasoning_effort,
+    )
+
+
+def _normalize_responses_summary(value: dict[str, Any]) -> dict[str, Any]:
+    result = dict(value)
+    card = result.pop("card", None)
+    audit = result.pop("toolAudit", None)
+    if isinstance(card, dict):
+        result["reviewCard"] = card
+    if isinstance(audit, dict):
+        result["audit"] = audit
+    result["runnerVersion"] = RESPONSES_RUNNER_VERSION
+    result["cliVersion"] = None
+    return result
 
 
 def _safe_exception_location(exception: Exception) -> str:
