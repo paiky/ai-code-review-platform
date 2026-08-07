@@ -251,7 +251,9 @@ test('desktop tablet and mobile layouts preserve the planned information hierarc
   assert.equal(styleSource.includes('flex-direction: column'), true);
   assert.equal(styleSource.includes('.command-center-task-queue { order: 1; width: min(100%, 520px);'), true);
   assert.equal(styleSource.includes('.command-center-result { order: 6; width: min(100%, 520px);'), true);
-  assert.equal(globalStyleSource.includes('@media (min-width: 761px) and (max-width: 1000px)'), true);
+  assert.equal(globalStyleSource.includes('--app-shell-sidebar-expanded: 224px'), true);
+  assert.equal(globalStyleSource.includes('--app-shell-sidebar-collapsed: 72px'), true);
+  assert.match(globalStyleSource, /@media \(max-width: 760px\)[\s\S]*\.app-header-action-label\s*\{\s*display:\s*none;/s);
   assert.equal(styleSource.includes('grid-template-columns: repeat(5, minmax(0, 1fr))'), true);
   assert.equal(styleSource.includes('grid-template-rows: clamp(255px, 31.5vh, 295px) clamp(88px, 9vh, 110px) clamp(122px, 15vh, 142px)'), true);
   assert.equal(styleSource.includes('.command-center-hud-card.is-running { order: 1; }'), true);

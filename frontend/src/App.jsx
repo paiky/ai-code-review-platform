@@ -23,6 +23,7 @@ import {
   Input,
   InputNumber,
   Layout,
+  Menu,
   message,
   Modal,
   Popover,
@@ -60,6 +61,9 @@ import {
   GlobalOutlined,
   KeyOutlined,
   LoadingOutlined,
+  MenuFoldOutlined,
+  MenuOutlined,
+  MenuUnfoldOutlined,
   PlusOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
@@ -103,6 +107,14 @@ import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-yaml';
 import { fetchApi, riskColor, statusColor } from './api.js';
 import { AppFrameOperationsContext } from './appFrameOperations.js';
+import {
+  buildAppShellNavigation,
+  readSidebarCollapsedPreference,
+  resolveAppShellOpenKeys,
+  resolveAppShellSelectedKey,
+  resolveAppShellViewport,
+  writeSidebarCollapsedPreference
+} from './appShell.js';
 import CommandCenterPage from './command-center/CommandCenterPage.jsx';
 import { createVisibilityRefreshLifecycle } from './visibilityRefreshLifecycle.js';
 import {
@@ -156,7 +168,7 @@ import {
 } from './agentReviewRuntime.js';
 import { releaseNotes } from './releaseNotes.js';
 
-const { Header, Content } = Layout;
+const { Header, Content, Sider } = Layout;
 const { Title, Text, Paragraph } = Typography;
 
 const ReviewWorkspaceModeContext = createContext({
@@ -1674,7 +1686,7 @@ function TaskWorkspaceShell({ title, description, actions, children, leading }) 
       sx={{
         px: { xs: 2, md: 3 },
         py: { xs: 2, md: 2.5 },
-        minHeight: 'calc(100vh - 64px)',
+        minHeight: 'calc(100dvh - 56px)',
         backgroundColor: '#f6f8fb'
       }}
     >
@@ -1866,6 +1878,7 @@ function TaskList({ onOpen }) {
           columns={columns}
           dataSource={tasks}
           tableLayout="fixed"
+          scroll={{ x: 1250 }}
           pagination={{
             current: pagination.pageNo,
             pageSize: pagination.pageSize,
@@ -8693,7 +8706,7 @@ function GovernanceDiagnosticsShell({ title, description, children, actions, bac
       sx={{
         px: { xs: 2, md: 3 },
         py: { xs: 2, md: 2.5 },
-        minHeight: 'calc(100vh - 64px)',
+        minHeight: 'calc(100dvh - 56px)',
         backgroundColor: '#f6f8fb'
       }}
     >
@@ -10188,7 +10201,7 @@ function ReviewQualityDashboardPage() {
       sx={{
         px: { xs: 2, md: 3 },
         py: { xs: 2, md: 2.5 },
-        minHeight: 'calc(100vh - 64px)',
+        minHeight: 'calc(100dvh - 56px)',
         backgroundColor: '#f6f8fb'
       }}
     >
@@ -10702,7 +10715,7 @@ function EvaluationCasesPage() {
       sx={{
         px: { xs: 2, md: 3 },
         py: { xs: 2, md: 2.5 },
-        minHeight: 'calc(100vh - 64px)',
+        minHeight: 'calc(100dvh - 56px)',
         backgroundColor: '#f6f8fb'
       }}
     >
@@ -11775,30 +11788,94 @@ function HomePage() {
   return <CommandCenterPage />;
 }
 
+const APP_SHELL_NAV_ICONS = {
+  overview: <DashboardOutlined />,
+  tasks: <FileSearchOutlined />,
+  governance: <ClusterOutlined />,
+  quality: <ClusterOutlined />,
+  samples: <CommentOutlined />,
+  gaps: <FileSearchOutlined />,
+  acceptance: <SafetyCertificateOutlined />,
+  replay: <ClockCircleOutlined />,
+  feedback: <CommentOutlined />,
+  settings: <SettingOutlined />
+};
+
+function appShellMenuItems(items) {
+  return items.map(item => ({
+    key: item.key,
+    icon: APP_SHELL_NAV_ICONS[item.icon],
+    label: item.label,
+    title: item.label,
+    children: item.children ? appShellMenuItems(item.children) : undefined
+  }));
+}
+
+function AppShellBrand({ compact = false, onClick }) {
+  return (
+    <button
+      aria-label="返回运行总览"
+      className={`app-shell-brand${compact ? ' app-shell-brand-compact' : ''}`}
+      type="button"
+      onClick={onClick}
+    >
+      <SafetyCertificateOutlined className="app-shell-brand-icon" />
+      {!compact && <span>AI代码质量审查平台</span>}
+    </button>
+  );
+}
+
+function AppShellMenu({ collapsed = false, items, openKeys, selectedKey, onNavigate }) {
+  return (
+    <Menu
+      className="app-shell-menu"
+      inlineCollapsed={collapsed}
+      items={appShellMenuItems(items)}
+      mode="inline"
+      selectedKeys={selectedKey ? [selectedKey] : []}
+      defaultOpenKeys={openKeys}
+      onClick={({ key }) => onNavigate(key)}
+    />
+  );
+}
+
+function useAppShellViewport() {
+  const [mode, setMode] = useState(() => (
+    typeof window === 'undefined' ? 'desktop' : resolveAppShellViewport(window.innerWidth)
+  ));
+
+  useEffect(() => {
+    const update = () => setMode(resolveAppShellViewport(window.innerWidth));
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+
+  return mode;
+}
+
+function appShellLocalStorage() {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 function AppFrame() {
   const location = useLocation();
   const navigate = useNavigate();
   const route = currentRoute(location);
   const isCommandCenterRoute = location.pathname === HOME_ROUTE;
-  const isTaskRoute = location.pathname.startsWith(TASK_LIST_ROUTE);
   const isTaskDetailRoute = /^\/tasks\/[^/]+\/?$/.test(location.pathname);
-  const isRuleGapRoute = location.pathname.startsWith(RULE_GAPS_ROUTE);
-  const isFeedbackRoute = location.pathname.startsWith(FEEDBACK_ROUTE);
-  const isReviewQualityRoute = location.pathname.startsWith(REVIEW_QUALITY_ROUTE);
-  const isAcceptanceGatesRoute = location.pathname.startsWith(ACCEPTANCE_GATES_ROUTE);
-  const isEvaluationCasesRoute = location.pathname.startsWith(EVALUATION_CASES_ROUTE);
-  const isEvaluationRunsRoute = location.pathname.startsWith(EVALUATION_RUNS_ROUTE);
-  const isSettingsRoute = location.pathname.startsWith(SETTINGS_ROUTE);
   const isReleaseRoute = location.pathname.startsWith(RELEASES_ROUTE);
   const isHelpRoute = location.pathname.startsWith(HELP_ROUTE);
-  const isGovernanceRoute = (
-    isReviewQualityRoute
-    || isEvaluationCasesRoute
-    || isRuleGapRoute
-    || isAcceptanceGatesRoute
-    || isEvaluationRunsRoute
-    || isFeedbackRoute
-  );
+  const viewportMode = useAppShellViewport();
+  const navigationTriggerRef = useRef(null);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(() => (
+    readSidebarCollapsedPreference(appShellLocalStorage())
+  ));
+  const [temporaryNavigationOpen, setTemporaryNavigationOpen] = useState(false);
   const [jobQueue, setJobQueue] = useState({ activeCount: 0, groups: [] });
   const [jobQueueOpen, setJobQueueOpen] = useState(false);
   const [failureNotifications, setFailureNotifications] = useState({ failureCount: 0, items: [] });
@@ -11818,61 +11895,12 @@ function AppFrame() {
     mode: reviewWorkspaceFrame.mode,
     reportMode: reportReviewWorkspaceMode
   }), [reviewWorkspaceFrame.mode, reportReviewWorkspaceMode]);
-  const governanceSelectedKey = isReviewQualityRoute
-    ? REVIEW_QUALITY_ROUTE
-    : isEvaluationCasesRoute
-      ? EVALUATION_CASES_ROUTE
-      : isRuleGapRoute
-        ? RULE_GAPS_ROUTE
-        : isAcceptanceGatesRoute
-          ? ACCEPTANCE_GATES_ROUTE
-          : isEvaluationRunsRoute
-            ? EVALUATION_RUNS_ROUTE
-            : isFeedbackRoute
-              ? FEEDBACK_ROUTE
-              : '';
-  const governanceMenuItems = [
-    {
-      key: REVIEW_QUALITY_ROUTE,
-      icon: <ClusterOutlined />,
-      label: '质量看板'
-    },
-    {
-      key: EVALUATION_CASES_ROUTE,
-      icon: <CommentOutlined />,
-      label: '评估样本'
-    },
-    {
-      key: RULE_GAPS_ROUTE,
-      icon: <FileSearchOutlined />,
-      label: '规则缺口'
-    },
-    {
-      type: 'divider'
-    },
-    {
-      key: ACCEPTANCE_GATES_ROUTE,
-      icon: <FileSearchOutlined />,
-      label: '验收记录'
-    },
-    {
-      key: EVALUATION_RUNS_ROUTE,
-      icon: <ClusterOutlined />,
-      label: '回放记录'
-    },
-    ...(REVIEW_LEARNING_UI_ENABLED
-      ? [
-          {
-            type: 'divider'
-          },
-          {
-            key: FEEDBACK_ROUTE,
-            icon: <CommentOutlined />,
-            label: '反馈池'
-          }
-        ]
-      : [])
-  ];
+  const navigationItems = useMemo(() => buildAppShellNavigation({
+    qualityGovernanceVisible: QUALITY_GOVERNANCE_NAV_VISIBLE,
+    reviewLearningVisible: REVIEW_LEARNING_UI_ENABLED
+  }), []);
+  const selectedNavigationKey = resolveAppShellSelectedKey(location.pathname, navigationItems);
+  const openNavigationKeys = resolveAppShellOpenKeys(selectedNavigationKey, navigationItems);
 
   const loadFrameResource = useCallback(kind => {
     if (
@@ -12060,6 +12088,41 @@ function AppFrame() {
     openJobQueue
   ]);
 
+  const restoreNavigationTriggerFocus = useCallback(() => {
+    window.setTimeout(() => navigationTriggerRef.current?.focus(), 0);
+  }, []);
+
+  const closeTemporaryNavigation = useCallback((restoreFocus = false) => {
+    setTemporaryNavigationOpen(false);
+    if (restoreFocus) restoreNavigationTriggerFocus();
+  }, [restoreNavigationTriggerFocus]);
+
+  const navigateFromShell = useCallback(key => {
+    closeTemporaryNavigation(viewportMode !== 'desktop');
+    navigate(key, { state: { from: route } });
+  }, [closeTemporaryNavigation, navigate, route, viewportMode]);
+
+  const toggleDesktopSidebar = useCallback(() => {
+    setDesktopSidebarCollapsed(collapsed => {
+      const next = !collapsed;
+      writeSidebarCollapsedPreference(appShellLocalStorage(), next);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    setTemporaryNavigationOpen(false);
+  }, [reviewWorkspaceFrame.immersive, viewportMode]);
+
+  useEffect(() => {
+    if (viewportMode !== 'tablet' || !temporaryNavigationOpen) return undefined;
+    const onKeyDown = event => {
+      if (event.key === 'Escape') closeTemporaryNavigation(true);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [closeTemporaryNavigation, temporaryNavigationOpen, viewportMode]);
+
   return (
     <AppFrameOperationsContext.Provider value={appFrameOperationsValue}>
       <ReviewWorkspaceModeContext.Provider value={reviewWorkspaceContextValue}>
@@ -12069,120 +12132,196 @@ function AppFrame() {
         data-app-frame-job-queue-open={jobQueueOpen ? 'true' : 'false'}
         data-app-frame-failure-open={failureNotificationsOpen ? 'true' : 'false'}
       >
-        {!reviewWorkspaceFrame.immersive && (
-          <Header className="app-header">
-        <button className="brand" type="button" onClick={() => navigate(HOME_ROUTE)}>
-          AI代码质量审查平台
-        </button>
-        <Space className="top-nav">
-          <Button
-            icon={<DashboardOutlined />}
-            type={isCommandCenterRoute ? 'primary' : 'default'}
-            onClick={() => navigate(HOME_ROUTE)}
+        {!reviewWorkspaceFrame.immersive && viewportMode !== 'mobile' && (
+          <Sider
+            className="app-sidebar"
+            collapsed={viewportMode === 'tablet' || desktopSidebarCollapsed}
+            collapsedWidth={72}
+            theme="light"
+            size={224}
           >
-            运行总览
-          </Button>
-          <Button
-            icon={<FileSearchOutlined />}
-            type={isTaskRoute ? 'primary' : 'default'}
-            onClick={() => navigate(TASK_LIST_ROUTE)}
-          >
-            任务
-          </Button>
-          {QUALITY_GOVERNANCE_NAV_VISIBLE && (
-            <Dropdown
-              trigger={['click']}
-              menu={{
-                items: governanceMenuItems,
-                selectedKeys: [governanceSelectedKey],
-                onClick: ({ key }) => navigate(key, { state: { from: route } })
-              }}
+            <AppShellBrand
+              compact={viewportMode === 'tablet' || desktopSidebarCollapsed}
+              onClick={() => navigate(HOME_ROUTE)}
+            />
+            <nav aria-label="主导航" className="app-sidebar-navigation">
+              <AppShellMenu
+                collapsed={viewportMode === 'tablet' || desktopSidebarCollapsed}
+                items={navigationItems}
+                openKeys={openNavigationKeys}
+                selectedKey={selectedNavigationKey}
+                onNavigate={navigateFromShell}
+              />
+            </nav>
+            <Tooltip
+              placement="right"
+              title={viewportMode === 'tablet'
+                ? '展开菜单'
+                : desktopSidebarCollapsed ? '展开菜单' : '收起菜单'}
             >
               <Button
-                icon={<ClusterOutlined />}
-                type={isGovernanceRoute ? 'primary' : 'default'}
-              >
-                质量治理
-              </Button>
-            </Dropdown>
-          )}
-          <Button
-            icon={<SettingOutlined />}
-            type={isSettingsRoute ? 'primary' : 'default'}
-            onClick={() => navigate(SETTINGS_ROUTE, { state: { from: route } })}
-          >
-            设置
-          </Button>
-          <Button
-            icon={<ClockCircleOutlined />}
-            type={isReleaseRoute ? 'primary' : 'default'}
-            onClick={() => navigate(RELEASES_ROUTE, { state: { from: route } })}
-          >
-            版本更新
-          </Button>
-          <Button
-            icon={<QuestionCircleOutlined />}
-            type={isHelpRoute ? 'primary' : 'default'}
-            onClick={() => navigate(HELP_ROUTE, { state: { from: route } })}
-          >
-            接入帮助
-          </Button>
-        </Space>
-        <div className="header-actions">
-          <Tooltip title="AI Review 失败通知">
-            <Button
-              danger={Boolean(failureNotifications?.failureCount)}
-              icon={<BellOutlined />}
-              type={failureNotifications?.failureCount ? 'primary' : 'default'}
-              onClick={openFailureNotifications}
-            />
-          </Tooltip>
-          <Tooltip title="AI Review 调度队列">
-            <Badge count={jobQueue?.activeCount || 0} size="small">
-              <Button
-                icon={<ClusterOutlined />}
-                type={jobQueue?.activeCount ? 'primary' : 'default'}
-                onClick={openJobQueue}
+                ref={viewportMode === 'tablet' ? navigationTriggerRef : undefined}
+                aria-label={viewportMode === 'tablet'
+                  ? '展开菜单'
+                  : desktopSidebarCollapsed ? '展开菜单' : '收起菜单'}
+                className="app-sidebar-toggle"
+                icon={viewportMode === 'tablet'
+                  ? <MenuUnfoldOutlined />
+                  : desktopSidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                type="text"
+                onClick={viewportMode === 'tablet'
+                  ? () => setTemporaryNavigationOpen(true)
+                  : toggleDesktopSidebar}
               />
-            </Badge>
-          </Tooltip>
-        </div>
-          </Header>
+            </Tooltip>
+          </Sider>
         )}
-        <Content className={reviewWorkspaceFrame.immersive ? 'app-content-review-immersive' : undefined}>
-        <Routes>
-          <Route path={HOME_ROUTE} element={<HomePage />} />
-          <Route path={TASK_LIST_ROUTE} element={<TaskListPage />} />
-          <Route path={`${TASK_LIST_ROUTE}/:taskId`} element={<TaskDetailPage />} />
-          <Route path={RULE_GAPS_ROUTE} element={<RuleGapDashboardPage />} />
-          <Route
-            path={FEEDBACK_ROUTE}
-            element={REVIEW_LEARNING_UI_ENABLED ? <RiskFeedbackPage /> : <Navigate to={TASK_LIST_ROUTE} replace />}
-          />
-          <Route path={REVIEW_QUALITY_ROUTE} element={<ReviewQualityDashboardPage />} />
-          <Route path={ACCEPTANCE_GATES_ROUTE} element={<AcceptanceGatesPage />} />
-          <Route path={`${ACCEPTANCE_GATES_ROUTE}/:gateId`} element={<AcceptanceGateDetailPage />} />
-          <Route path={EVALUATION_CASES_ROUTE} element={<EvaluationCasesPage />} />
-          <Route path={EVALUATION_RUNS_ROUTE} element={<EvaluationRunsPage />} />
-          <Route path={`${EVALUATION_RUNS_ROUTE}/:runId`} element={<EvaluationRunDetailPage />} />
-          <Route path={SETTINGS_ROUTE} element={<SettingsPage />} />
-          <Route path={RELEASES_ROUTE} element={<ReleaseNotesPage />} />
-          <Route path={HELP_ROUTE} element={<HelpPage />} />
-          <Route path="*" element={<Navigate to={HOME_ROUTE} replace />} />
-        </Routes>
-        </Content>
+
+        {!reviewWorkspaceFrame.immersive && viewportMode === 'tablet' && (
+          <Drawer
+            afterOpenChange={open => { if (!open) restoreNavigationTriggerFocus(); }}
+            className="app-sidebar-tablet-drawer"
+            closable={false}
+            keyboard
+            open={temporaryNavigationOpen}
+            placement="left"
+            rootStyle={{ left: 72 }}
+            title={<AppShellBrand onClick={() => navigateFromShell(HOME_ROUTE)} />}
+            width={224}
+            onClose={() => closeTemporaryNavigation(false)}
+          >
+            <nav aria-label="展开的主导航">
+              <AppShellMenu
+                items={navigationItems}
+                openKeys={openNavigationKeys}
+                selectedKey={selectedNavigationKey}
+                onNavigate={navigateFromShell}
+              />
+            </nav>
+          </Drawer>
+        )}
+
+        {!reviewWorkspaceFrame.immersive && viewportMode === 'mobile' && (
+          <Drawer
+            afterOpenChange={open => { if (!open) restoreNavigationTriggerFocus(); }}
+            className="app-sidebar-mobile-drawer"
+            closable
+            keyboard
+            open={temporaryNavigationOpen}
+            placement="left"
+            title={<AppShellBrand onClick={() => navigateFromShell(HOME_ROUTE)} />}
+            size="min(280px, 88vw)"
+            onClose={() => closeTemporaryNavigation(false)}
+          >
+            <nav aria-label="移动端主导航">
+              <AppShellMenu
+                items={navigationItems}
+                openKeys={openNavigationKeys}
+                selectedKey={selectedNavigationKey}
+                onNavigate={navigateFromShell}
+              />
+            </nav>
+          </Drawer>
+        )}
+
+        <Layout className="app-main-layout">
+          {!reviewWorkspaceFrame.immersive && (
+            <Header className="app-header">
+              <div className="app-global-header-leading">
+                {viewportMode === 'mobile' && (
+                  <>
+                    <Button
+                      ref={navigationTriggerRef}
+                      aria-label="打开主菜单"
+                      className="app-mobile-menu-trigger"
+                      icon={<MenuOutlined />}
+                      type="text"
+                      onClick={() => setTemporaryNavigationOpen(true)}
+                    />
+                    <AppShellBrand compact onClick={() => navigate(HOME_ROUTE)} />
+                  </>
+                )}
+              </div>
+              <div className="header-actions">
+                <Tooltip title="帮助">
+                  <Button
+                    aria-label="帮助"
+                    icon={<QuestionCircleOutlined />}
+                    type={isHelpRoute ? 'primary' : 'text'}
+                    onClick={() => navigateFromShell(HELP_ROUTE)}
+                  >
+                    <span className="app-header-action-label">帮助</span>
+                  </Button>
+                </Tooltip>
+                <Tooltip title="版本">
+                  <Button
+                    aria-label="版本"
+                    icon={<ClockCircleOutlined />}
+                    type={isReleaseRoute ? 'primary' : 'text'}
+                    onClick={() => navigateFromShell(RELEASES_ROUTE)}
+                  >
+                    <span className="app-header-action-label">版本</span>
+                  </Button>
+                </Tooltip>
+                <Tooltip title="AI Review 失败通知">
+                  <Badge count={failureNotifications?.failureCount || 0} size="small">
+                    <Button
+                      aria-label="AI Review 失败通知"
+                      danger={Boolean(failureNotifications?.failureCount)}
+                      icon={<BellOutlined />}
+                      type={failureNotifications?.failureCount ? 'primary' : 'text'}
+                      onClick={openFailureNotifications}
+                    />
+                  </Badge>
+                </Tooltip>
+                <Tooltip title="AI Review 调度队列">
+                  <Badge count={jobQueue?.activeCount || 0} size="small">
+                    <Button
+                      aria-label="AI Review 调度队列"
+                      icon={<ClusterOutlined />}
+                      type={jobQueue?.activeCount ? 'primary' : 'text'}
+                      onClick={openJobQueue}
+                    />
+                  </Badge>
+                </Tooltip>
+              </div>
+            </Header>
+          )}
+          <Content className={reviewWorkspaceFrame.immersive ? 'app-content-review-immersive' : 'app-content'}>
+            <Routes>
+              <Route path={HOME_ROUTE} element={<HomePage />} />
+              <Route path={TASK_LIST_ROUTE} element={<TaskListPage />} />
+              <Route path={`${TASK_LIST_ROUTE}/:taskId`} element={<TaskDetailPage />} />
+              <Route path={RULE_GAPS_ROUTE} element={<RuleGapDashboardPage />} />
+              <Route
+                path={FEEDBACK_ROUTE}
+                element={REVIEW_LEARNING_UI_ENABLED ? <RiskFeedbackPage /> : <Navigate to={TASK_LIST_ROUTE} replace />}
+              />
+              <Route path={REVIEW_QUALITY_ROUTE} element={<ReviewQualityDashboardPage />} />
+              <Route path={ACCEPTANCE_GATES_ROUTE} element={<AcceptanceGatesPage />} />
+              <Route path={`${ACCEPTANCE_GATES_ROUTE}/:gateId`} element={<AcceptanceGateDetailPage />} />
+              <Route path={EVALUATION_CASES_ROUTE} element={<EvaluationCasesPage />} />
+              <Route path={EVALUATION_RUNS_ROUTE} element={<EvaluationRunsPage />} />
+              <Route path={`${EVALUATION_RUNS_ROUTE}/:runId`} element={<EvaluationRunDetailPage />} />
+              <Route path={SETTINGS_ROUTE} element={<SettingsPage />} />
+              <Route path={RELEASES_ROUTE} element={<ReleaseNotesPage />} />
+              <Route path={HELP_ROUTE} element={<HelpPage />} />
+              <Route path="*" element={<Navigate to={HOME_ROUTE} replace />} />
+            </Routes>
+          </Content>
+        </Layout>
         <JobQueueModal
-        open={jobQueueOpen}
-        queue={jobQueue}
-        onClose={closeJobQueue}
-        onOpenTask={openTaskFromQueue}
-        onCancelJob={cancelJobFromQueue}
-      />
+          open={jobQueueOpen}
+          queue={jobQueue}
+          onClose={closeJobQueue}
+          onOpenTask={openTaskFromQueue}
+          onCancelJob={cancelJobFromQueue}
+        />
         <FailureNotificationsModal
-        open={failureNotificationsOpen}
-        notifications={failureNotifications}
-        onClose={closeFailureNotifications}
-        onOpenTask={openTaskFromQueue}
+          open={failureNotificationsOpen}
+          notifications={failureNotifications}
+          onClose={closeFailureNotifications}
+          onOpenTask={openTaskFromQueue}
         />
       </Layout>
       </ReviewWorkspaceModeContext.Provider>

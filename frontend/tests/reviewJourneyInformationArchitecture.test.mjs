@@ -68,7 +68,7 @@ test('temporarily hides deferred product entries without deleting their capabili
     'const EVALUATION_CASE_ACTION_VISIBLE = false',
     'const FINDING_REFINEMENT_ACTION_VISIBLE = false',
     'const STANDARD_REVIEW_COMPARISON_ACTION_VISIBLE = false',
-    'QUALITY_GOVERNANCE_NAV_VISIBLE &&',
+    'qualityGovernanceVisible: QUALITY_GOVERNANCE_NAV_VISIBLE',
     'EVALUATION_CASE_ACTION_VISIBLE &&',
     'FINDING_REFINEMENT_ACTION_VISIBLE &&',
     'STANDARD_REVIEW_COMPARISON_ACTION_VISIBLE'

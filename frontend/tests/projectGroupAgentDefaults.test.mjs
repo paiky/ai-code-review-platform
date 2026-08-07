@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
+const appShellSource = await readFile(new URL('../src/appShell.js', import.meta.url), 'utf8');
 const styleSource = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
 
 test('project group Agent Review fixed defaults stay out of the settings controls', () => {
@@ -52,11 +53,9 @@ test('settings cards expose consistent titles, descriptions, and semantic icons'
   assert.equal(appSource.includes('title="队列与 Worker Pool"'), false);
 });
 
-test('task navigation uses the same explicit icon contract as adjacent buttons', () => {
-  assert.match(
-    appSource,
-    /<Button\s+icon=\{<FileSearchOutlined \/>\}\s+type=\{isTaskRoute \? 'primary' : 'default'\}/
-  );
+test('task navigation keeps an explicit icon in the shared sidebar model', () => {
+  assert.match(appShellSource, /\{ key: '\/tasks', label: '任务', icon: 'tasks' \}/);
+  assert.match(appSource, /tasks: <FileSearchOutlined \/>/);
 });
 
 test('Agent settings keep spacious headers and compact budget controls without the raised-budget notice', () => {
