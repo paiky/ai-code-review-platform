@@ -154,18 +154,22 @@ import {
   normalizeAgentBudgets,
   validateAgentBudgets
 } from './agentReviewBudgets.js';
-import {
-  normalizeAgentQueueMetrics,
-  normalizeAgentWorkerPool
-} from './agentWorkerPool.js';
+import { normalizeAgentWorkerPool } from './agentWorkerPool.js';
 import {
   agentConfigurationTestPollTimeoutMs,
-  buildAgentSettingsPayload,
   customAgentRuntime,
+  defaultAgentRuntime,
   normalizeAgentRuntimeDraft,
   selectedRuntimeSettings,
   validateAgentRuntimeDraft
 } from './agentReviewRuntime.js';
+import {
+  agentReviewConnection,
+  buildReviewModelConnectionCatalog,
+  connectionConfigurationStatus,
+  resolveReviewModelConnectionSelection,
+  standardReviewConnection
+} from './reviewModelConnections.js';
 import { releaseNotes } from './releaseNotes.js';
 
 const { Header, Content, Sider } = Layout;
@@ -837,6 +841,47 @@ function sourceLabel(value) {
       return 'Anthropic API（历史）';
     default:
       return value || '-';
+  }
+}
+
+function reviewConnectionProtocolLabel(value) {
+  switch (value) {
+    case 'OPENAI_RESPONSES':
+      return 'OpenAI Responses';
+    case 'ANTHROPIC_COMPATIBLE':
+      return 'Anthropic Compatible';
+    case 'ANTHROPIC_MESSAGES':
+      return 'Anthropic Messages';
+    case 'OPENAI_CHAT_COMPATIBLE':
+      return 'OpenAI Chat Compatible';
+    default:
+      return value || '-';
+  }
+}
+
+function reviewConnectionStatusLabel(value) {
+  switch (value) {
+    case connectionConfigurationStatus.READY:
+      return '可用';
+    case connectionConfigurationStatus.DISABLED:
+      return '未启用';
+    case connectionConfigurationStatus.WORKER_UNSUPPORTED:
+      return 'Worker 不支持';
+    default:
+      return '配置不完整';
+  }
+}
+
+function reviewConnectionStatusColor(value) {
+  switch (value) {
+    case connectionConfigurationStatus.READY:
+      return 'green';
+    case connectionConfigurationStatus.WORKER_UNSUPPORTED:
+      return 'orange';
+    case connectionConfigurationStatus.INCOMPLETE:
+      return 'gold';
+    default:
+      return 'default';
   }
 }
 
@@ -6449,6 +6494,8 @@ function TemplateConfig() {
   const [providers, setProviders] = useState([]);
   const [selectedProviderCode, setSelectedProviderCode] = useState('DEEPSEEK');
   const [providerDraft, setProviderDraft] = useState(null);
+  const [selectedReviewConnectionId, setSelectedReviewConnectionId] = useState(null);
+  const [dirtyReviewConnectionId, setDirtyReviewConnectionId] = useState(null);
   const [selectedProfileCode, setSelectedProfileCode] = useState(null);
   const [profileDraft, setProfileDraft] = useState(null);
   const [selectedPushPolicyGroupId, setSelectedPushPolicyGroupId] = useState(null);
@@ -6554,6 +6601,7 @@ function TemplateConfig() {
       setSelectedProviderCode(nextSelectedProviderCode);
       setProviderDraft(providerItems.find(item => item.providerCode === nextSelectedProviderCode) || providerItems[0] || null);
       setProviderApiKeyDraft('');
+      setDirtyReviewConnectionId(null);
       setProfiles(profileItems);
       setSelectedProfileCode(nextSelectedProfileCode);
       setProfileDraft(profileItems.find(item => item.profileCode === nextSelectedProfileCode) || selectableProfileItems[0] || null);
@@ -7160,38 +7208,189 @@ function TemplateConfig() {
     saveAiSettings(nextSettings, successText);
   };
 
-  const saveAgentSettings = async ({ clearApiKey = false, showSuccess = true } = {}) => {
-    if (agentSettingsSaving) return null;
-    const runtimeError = validateAgentRuntimeDraft(agentSettingsDraft, agentSettings);
-    if (!clearApiKey && runtimeError) {
-      messageApi.error(runtimeError);
+  const saveAgentRuntimeSelection = async () => {
+    if (agentSettingsSaving || dirtyReviewConnectionId) return null;
+    const runtimeType = agentSettingsDraft.selectedRuntime;
+    const persistedRuntime = selectedRuntimeSettings(agentSettings, runtimeType);
+    if (agentSettingsDraft.enabled && !persistedRuntime?.apiKeyConfigured) {
+      setSelectedReviewConnectionId(`AGENT:${runtimeType}`);
+      messageApi.warning('请先在连接详情中保存当前 Agent Runtime 的独立 Key');
       return null;
     }
-    const budgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings);
-    if (!clearApiKey && budgetError) {
-      messageApi.error(budgetError);
+    if (runtimeType === customAgentRuntime && !persistedRuntime?.configurationComplete) {
+      setSelectedReviewConnectionId(`AGENT:${runtimeType}`);
+      messageApi.warning('请先补齐并保存自定义 Agent Runtime 配置');
+      return null;
+    }
+    if (
+      agentSettingsDraft.enabled
+      && runtimeType === customAgentRuntime
+      && !persistedRuntime?.workerSupported
+    ) {
+      setSelectedReviewConnectionId(`AGENT:${runtimeType}`);
+      messageApi.warning('当前没有支持 OpenAI Responses 的在线 Worker');
       return null;
     }
     setAgentSettingsSaving(true);
     try {
-      const body = buildAgentSettingsPayload(agentSettingsDraft, { clearKey: clearApiKey });
+      const settings = await fetchApi('/api/code-quality-reviews/agent-settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          enabled: Boolean(agentSettingsDraft.enabled),
+          selectedRuntime: runtimeType
+        })
+      });
+      setAgentSettings(settings);
+      setAgentSettingsDraft(current => ({
+        ...normalizeAgentRuntimeDraft(settings),
+        budgets: current.budgets
+      }));
+      setAgentSettingsTestResult(settings?.configurationTest || null);
+      messageApi.success('Agent Review 运行配置已保存');
+      return settings;
+    } catch (err) {
+      messageApi.error(err.message);
+      return null;
+    } finally {
+      setAgentSettingsSaving(false);
+    }
+  };
+
+  const validateAgentRuntimeDetail = runtimeType => {
+    if (runtimeType === defaultAgentRuntime) {
+      const hasKey = Boolean(
+        String(agentSettingsDraft.apiKey || '').trim()
+        || agentSettings?.defaultRuntime?.apiKeyConfigured
+      );
+      return hasKey ? null : '请填写 Agent 专用 DeepSeek API Key';
+    }
+    const settingsForValidation = {
+      ...agentSettings,
+      customRuntime: {
+        ...(agentSettings?.customRuntime || {}),
+        apiKeyConfigured: Boolean(
+          String(agentSettingsDraft.customRuntime?.apiKey || '').trim()
+          || agentSettings?.customRuntime?.apiKeyConfigured
+        )
+      }
+    };
+    return validateAgentRuntimeDraft({
+      ...agentSettingsDraft,
+      enabled: true,
+      selectedRuntime: customAgentRuntime
+    }, settingsForValidation);
+  };
+
+  const saveAgentRuntimeDetail = async (runtimeType, { showSuccess = true } = {}) => {
+    if (agentSettingsSaving) return null;
+    const runtimeError = validateAgentRuntimeDetail(runtimeType);
+    if (runtimeError) {
+      messageApi.error(runtimeError);
+      return null;
+    }
+    const body = {};
+    if (runtimeType === customAgentRuntime) {
+      const custom = agentSettingsDraft.customRuntime || {};
+      body.customRuntime = {
+        displayName: String(custom.displayName || '').trim(),
+        baseUrl: String(custom.baseUrl || '').trim(),
+        model: String(custom.model || '').trim(),
+        reasoningEffort: custom.reasoningEffort || 'high',
+        tlsVerify: custom.tlsVerify !== false
+      };
+      const apiKey = String(custom.apiKey || '').trim();
+      if (apiKey) body.customRuntime.apiKey = apiKey;
+    } else {
+      const apiKey = String(agentSettingsDraft.apiKey || '').trim();
+      if (apiKey) body.apiKey = apiKey;
+    }
+    setAgentSettingsSaving(true);
+    try {
       const settings = await fetchApi('/api/code-quality-reviews/agent-settings', {
         method: 'PUT',
         body: JSON.stringify(body)
       });
       setAgentSettings(settings);
-      setAgentSettingsDraft({
-        ...normalizeAgentRuntimeDraft(settings),
-        budgets: normalizeAgentBudgets(settings)
+      setAgentSettingsDraft(current => {
+        const normalized = normalizeAgentRuntimeDraft(settings);
+        return {
+          ...current,
+          enabled: settings?.enabled ?? current.enabled,
+          apiKey: runtimeType === defaultAgentRuntime ? '' : current.apiKey,
+          customRuntime: runtimeType === customAgentRuntime
+            ? normalized.customRuntime
+            : current.customRuntime,
+          budgets: current.budgets
+        };
       });
       setAgentSettingsTestResult(settings?.configurationTest || null);
-      if (showSuccess) {
-        messageApi.success(clearApiKey ? 'Agent API Key 已清除' : 'Agent Review 设置已保存');
-      }
+      setDirtyReviewConnectionId(current => (
+        current === `AGENT:${runtimeType}` ? null : current
+      ));
+      if (showSuccess) messageApi.success('Agent Runtime 配置已保存');
       return settings;
     } catch (err) {
       messageApi.error(err.message);
       return null;
+    } finally {
+      setAgentSettingsSaving(false);
+    }
+  };
+
+  const clearAgentRuntimeKey = async runtimeType => {
+    if (agentSettingsSaving) return;
+    const body = runtimeType === customAgentRuntime
+      ? { customRuntime: { clearApiKey: true } }
+      : { clearApiKey: true };
+    setAgentSettingsSaving(true);
+    try {
+      const settings = await fetchApi('/api/code-quality-reviews/agent-settings', {
+        method: 'PUT',
+        body: JSON.stringify(body)
+      });
+      setAgentSettings(settings);
+      setAgentSettingsDraft(current => ({
+        ...current,
+        enabled: settings?.enabled ?? current.enabled,
+        apiKey: runtimeType === defaultAgentRuntime ? '' : current.apiKey,
+        customRuntime: runtimeType === customAgentRuntime
+          ? normalizeAgentRuntimeDraft(settings).customRuntime
+          : current.customRuntime,
+        budgets: current.budgets
+      }));
+      setAgentSettingsTestResult(settings?.configurationTest || null);
+      setDirtyReviewConnectionId(current => (
+        current === `AGENT:${runtimeType}` ? null : current
+      ));
+      messageApi.success('Agent Runtime Key 已清除');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setAgentSettingsSaving(false);
+    }
+  };
+
+  const saveAgentBudgets = async () => {
+    if (agentSettingsSaving) return;
+    const budgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings);
+    if (budgetError) {
+      messageApi.error(budgetError);
+      return;
+    }
+    setAgentSettingsSaving(true);
+    try {
+      const settings = await fetchApi('/api/code-quality-reviews/agent-settings', {
+        method: 'PUT',
+        body: JSON.stringify({ budgets: agentSettingsDraft.budgets })
+      });
+      setAgentSettings(settings);
+      setAgentSettingsDraft(current => ({
+        ...current,
+        budgets: normalizeAgentBudgets(settings)
+      }));
+      messageApi.success('Agent 执行预算已保存');
+    } catch (err) {
+      messageApi.error(err.message);
     } finally {
       setAgentSettingsSaving(false);
     }
@@ -7229,9 +7428,13 @@ function TemplateConfig() {
     }));
   };
 
-  const testAgentSettings = async () => {
+  const testAgentSettings = async runtimeType => {
     if (agentSettingsTesting || agentSettingsSaving) return;
-    const savedSettings = await saveAgentSettings({ showSuccess: false });
+    if (agentSettings?.selectedRuntime !== runtimeType) {
+      messageApi.warning('请先在 Agent Review 运行配置中保存该 Runtime 为当前连接');
+      return;
+    }
+    const savedSettings = await saveAgentRuntimeDetail(runtimeType, { showSuccess: false });
     if (!savedSettings) return;
     const selectedRuntime = selectedRuntimeSettings(
       savedSettings,
@@ -7271,16 +7474,10 @@ function TemplateConfig() {
     }
   };
 
-  const selectProvider = (providerCode) => {
-    setSelectedProviderCode(providerCode);
-    setProviderDraft(providers.find(provider => provider.providerCode === providerCode) || null);
-    setProviderApiKeyDraft('');
-    setProviderTestResult(null);
-  };
-
   const updateProviderDraft = (field, value) => {
     setProviderDraft(current => current ? { ...current, [field]: value } : current);
     setProviderTestResult(null);
+    setDirtyReviewConnectionId(selectedReviewConnectionId);
   };
 
   const saveProviderSettings = async () => {
@@ -7296,20 +7493,19 @@ function TemplateConfig() {
         enabled: providerDraft.enabled
       };
       if (providerApiKeyDraft.trim()) body.apiKey = providerApiKeyDraft.trim();
-      await fetchApi(`/api/code-quality-review-providers/${providerCode}`, {
+      const providerData = await fetchApi(`/api/code-quality-review-providers/${providerCode}`, {
         method: 'PUT',
         body: JSON.stringify(body)
       });
-      const settings = await fetchApi(`/api/code-quality-review-providers/${providerCode}/set-default`, { method: 'POST' });
-      setAiSettings(current => current ? { ...current, ...settings } : settings);
-      const providerData = await fetchApi('/api/code-quality-review-providers');
       const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
       setProviders(providerItems);
-      setSelectedProviderCode(providerCode);
       setProviderDraft(providerItems.find(item => item.providerCode === providerCode) || null);
       setProviderApiKeyDraft('');
       setProviderTestResult(null);
-      messageApi.success(`${sourceLabel(providerCode)} Provider 已保存`);
+      setDirtyReviewConnectionId(current => (
+        current === `STANDARD:${providerCode}` ? null : current
+      ));
+      messageApi.success(`${sourceLabel(providerCode)} Provider 已保存，默认连接未改变`);
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -7330,7 +7526,31 @@ function TemplateConfig() {
       setProviderDraft(providerItems.find(item => item.providerCode === providerDraft.providerCode) || null);
       setProviderApiKeyDraft('');
       setProviderTestResult(null);
+      setDirtyReviewConnectionId(current => (
+        current === `STANDARD:${providerDraft.providerCode}` ? null : current
+      ));
       messageApi.success(`${sourceLabel(providerDraft.providerCode)} Key 已清除`);
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setProviderSaving(false);
+    }
+  };
+
+  const saveStandardDefaultProvider = async () => {
+    if (!selectedProviderCode || providerSaving || dirtyReviewConnectionId) return;
+    setProviderSaving(true);
+    try {
+      const settings = await fetchApi(
+        `/api/code-quality-review-providers/${selectedProviderCode}/set-default`,
+        { method: 'POST' }
+      );
+      setAiSettings(current => current ? { ...current, ...settings } : settings);
+      setProviders(current => current.map(provider => ({
+        ...provider,
+        defaultProvider: provider.providerCode === selectedProviderCode
+      })));
+      messageApi.success(`${sourceLabel(selectedProviderCode)} 已设为 Standard 默认连接`);
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -7645,6 +7865,100 @@ function TemplateConfig() {
     }
   ];
 
+  const reviewConnectionRows = useMemo(
+    () => buildReviewModelConnectionCatalog({
+      agentSettings,
+      providers,
+      defaultProviderCode: aiSettings?.defaultProviderCode
+    }),
+    [agentSettings, providers, aiSettings?.defaultProviderCode]
+  );
+  const activeReviewConnection = reviewConnectionRows.find(
+    item => item.id === selectedReviewConnectionId
+  ) || null;
+  const selectedStandardProvider = providers.find(
+    provider => provider.providerCode === selectedProviderCode
+  ) || null;
+
+  useEffect(() => {
+    if (!agentSettings || !aiSettings) return;
+    const nextSelection = resolveReviewModelConnectionSelection(
+      reviewConnectionRows,
+      selectedReviewConnectionId
+    );
+    if (nextSelection !== selectedReviewConnectionId) {
+      setSelectedReviewConnectionId(nextSelection);
+    }
+  }, [agentSettings, aiSettings, reviewConnectionRows, selectedReviewConnectionId]);
+
+  useEffect(() => {
+    if (!selectedReviewConnectionId?.startsWith('STANDARD:')) return;
+    const providerCode = selectedReviewConnectionId.slice('STANDARD:'.length);
+    setProviderDraft(providers.find(provider => provider.providerCode === providerCode) || null);
+    setProviderApiKeyDraft('');
+    setProviderTestResult(null);
+  }, [providers, selectedReviewConnectionId]);
+
+  const restoreReviewConnectionDraft = connectionId => {
+    if (connectionId === `AGENT:${defaultAgentRuntime}`) {
+      setAgentSettingsDraft(current => ({ ...current, apiKey: '' }));
+      return;
+    }
+    if (connectionId === `AGENT:${customAgentRuntime}`) {
+      const normalized = normalizeAgentRuntimeDraft(agentSettings);
+      setAgentSettingsDraft(current => ({
+        ...current,
+        customRuntime: normalized.customRuntime
+      }));
+      return;
+    }
+    if (connectionId?.startsWith('STANDARD:')) {
+      const providerCode = connectionId.slice('STANDARD:'.length);
+      setProviderDraft(providers.find(provider => provider.providerCode === providerCode) || null);
+      setProviderApiKeyDraft('');
+      setProviderTestResult(null);
+    }
+  };
+
+  const selectReviewConnection = connectionId => {
+    if (!connectionId || connectionId === selectedReviewConnectionId) return;
+    if (dirtyReviewConnectionId === selectedReviewConnectionId) {
+      Modal.confirm({
+        title: '放弃未保存的连接修改？',
+        content: '切换后将恢复当前连接最近一次服务端配置，未保存的字段和 Key 草稿不会保留。',
+        okText: '放弃并切换',
+        cancelText: '继续编辑',
+        okButtonProps: { danger: true },
+        onOk: () => {
+          restoreReviewConnectionDraft(selectedReviewConnectionId);
+          setDirtyReviewConnectionId(null);
+          setSelectedReviewConnectionId(connectionId);
+        }
+      });
+      return;
+    }
+    setSelectedReviewConnectionId(connectionId);
+  };
+
+  const updateAgentDefaultKeyDraft = value => {
+    setAgentSettingsDraft(current => ({ ...current, apiKey: value }));
+    setDirtyReviewConnectionId(selectedReviewConnectionId);
+  };
+
+  const updateAgentCustomRuntimeDraft = (field, value) => {
+    setAgentSettingsDraft(current => ({
+      ...current,
+      customRuntime: { ...current.customRuntime, [field]: value }
+    }));
+    setDirtyReviewConnectionId(selectedReviewConnectionId);
+  };
+
+  const updateProviderKeyDraft = value => {
+    setProviderApiKeyDraft(value);
+    setProviderTestResult(null);
+    setDirtyReviewConnectionId(selectedReviewConnectionId);
+  };
+
   const agentTestStatus = String(agentSettingsTestResult?.status || 'NOT_RUN').toUpperCase();
   const agentTestPending = ['QUEUED', 'RUNNING'].includes(agentTestStatus);
   const agentTestAlertType = agentTestPending
@@ -7659,7 +7973,6 @@ function TemplateConfig() {
     agentSettings,
     agentSettingsDraft.selectedRuntime
   );
-  const agentRuntimeError = validateAgentRuntimeDraft(agentSettingsDraft, agentSettings);
   const agentSaveRequiresEncryption = Boolean(
     agentSettingsDraft.enabled
     || String(agentSettingsDraft.apiKey || '').trim()
@@ -7671,10 +7984,6 @@ function TemplateConfig() {
     () => normalizeAgentWorkerPool(agentSettings),
     [agentSettings]
   );
-  const agentQueueMetrics = useMemo(
-    () => normalizeAgentQueueMetrics(agentSettings, agentWorkerPool),
-    [agentSettings, agentWorkerPool]
-  );
   const agentBudgetFields = [
     { key: 'maxTurns', label: '模型决策回合', unit: 'turns' },
     { key: 'maxToolCalls', label: 'MCP 工具调用', unit: '次' },
@@ -7685,6 +7994,390 @@ function TemplateConfig() {
     { key: 'convergeAtCalls', label: '收敛起点', unit: '次', advanced: true },
     { key: 'submitByTurn', label: '最迟提交回合', unit: 'turn', advanced: true }
   ];
+
+  const reviewConnectionColumns = [
+    {
+      title: '连接',
+      dataIndex: 'name',
+      key: 'name',
+      render: (_, row) => (
+        <div className="review-connection-name-cell">
+          <Text strong>{row.name}</Text>
+          <Text type="secondary" className="review-connection-mobile-meta">
+            {reviewConnectionProtocolLabel(row.protocol)} · {row.model || '未配置模型'}
+          </Text>
+        </div>
+      )
+    },
+    {
+      title: '所属 Review',
+      dataIndex: 'reviewType',
+      key: 'reviewType',
+      width: 118,
+      render: value => (
+        <Tag color={value === agentReviewConnection ? 'purple' : 'blue'}>
+          {value === agentReviewConnection ? 'Agent' : 'Standard'}
+        </Tag>
+      )
+    },
+    {
+      title: '协议',
+      dataIndex: 'protocol',
+      key: 'protocol',
+      width: 168,
+      responsive: ['lg'],
+      render: reviewConnectionProtocolLabel
+    },
+    {
+      title: 'Endpoint',
+      dataIndex: 'endpoint',
+      key: 'endpoint',
+      width: 230,
+      responsive: ['lg'],
+      ellipsis: true,
+      render: value => value || '-'
+    },
+    {
+      title: '模型',
+      dataIndex: 'model',
+      key: 'model',
+      width: 180,
+      responsive: ['md'],
+      ellipsis: true,
+      render: value => value || '-'
+    },
+    {
+      title: '状态',
+      dataIndex: 'configurationStatus',
+      key: 'configurationStatus',
+      width: 126,
+      render: (_, row) => (
+        <Space size={4} wrap>
+          <Tag color={reviewConnectionStatusColor(row.configurationStatus)}>
+            {reviewConnectionStatusLabel(row.configurationStatus)}
+          </Tag>
+          {row.isCurrent && <Tag color="purple">当前</Tag>}
+          {row.isDefault && row.reviewType === standardReviewConnection && <Tag color="blue">默认</Tag>}
+        </Space>
+      )
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updatedAt',
+      key: 'updatedAt',
+      width: 176,
+      responsive: ['xl'],
+      render: value => formatDateTime(value)
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 84,
+      responsive: ['md'],
+      render: (_, row) => (
+        <Button
+          type={row.id === selectedReviewConnectionId ? 'primary' : 'link'}
+          size="small"
+          onClick={event => {
+            event.stopPropagation();
+            selectReviewConnection(row.id);
+          }}
+        >
+          详情
+        </Button>
+      )
+    }
+  ];
+
+  const activeRuntimeType = activeReviewConnection?.reviewType === agentReviewConnection
+    ? activeReviewConnection.runtimeType
+    : null;
+  const activeRuntimeSettings = activeRuntimeType
+    ? selectedRuntimeSettings(agentSettings, activeRuntimeType)
+    : null;
+  const activeRuntimeError = activeRuntimeType
+    ? validateAgentRuntimeDetail(activeRuntimeType)
+    : null;
+
+  const reviewConnectionDetail = !activeReviewConnection ? (
+    <Empty description="暂无模型连接" />
+  ) : activeReviewConnection.reviewType === agentReviewConnection ? (
+    <Space orientation="vertical" size="middle" className="full-width">
+      <SettingsCardHeader
+        compact
+        icon={<KeyOutlined />}
+        title={activeReviewConnection.name}
+        description={activeRuntimeType === customAgentRuntime
+          ? '编辑自定义 OpenAI Responses Runtime；配置与默认 Agent Key 独立保存。'
+          : '默认 Agent Runtime 的 Endpoint 与模型固定，只维护独立 DeepSeek Key。'}
+        tags={(
+          <Space wrap>
+            <Tag color={activeReviewConnection.isCurrent ? 'purple' : 'default'}>
+              {activeReviewConnection.isCurrent ? '当前 Runtime' : '可选 Runtime'}
+            </Tag>
+            <Tag color={activeRuntimeSettings?.apiKeyConfigured ? 'green' : 'gold'}>
+              Key {activeRuntimeSettings?.apiKeyConfigured ? '已配置' : '未配置'}
+            </Tag>
+          </Space>
+        )}
+      />
+      {activeRuntimeType === customAgentRuntime ? (
+        <>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} md={12}>
+              <Text strong>配置名称</Text>
+              <Input
+                value={agentSettingsDraft.customRuntime?.displayName}
+                placeholder="Custom OpenAI Agent"
+                onChange={event => updateAgentCustomRuntimeDraft('displayName', event.target.value)}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>协议</Text>
+              <Input value="OpenAI Responses" disabled />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>Base URL</Text>
+              <Input
+                value={agentSettingsDraft.customRuntime?.baseUrl}
+                placeholder="https://relay.example.com/v1"
+                onChange={event => updateAgentCustomRuntimeDraft('baseUrl', event.target.value)}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>模型</Text>
+              <Input
+                value={agentSettingsDraft.customRuntime?.model}
+                placeholder="gpt-5.6-sol"
+                onChange={event => updateAgentCustomRuntimeDraft('model', event.target.value)}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>推理强度</Text>
+              <Select
+                className="full-width"
+                value={agentSettingsDraft.customRuntime?.reasoningEffort}
+                options={(agentSettings?.customRuntime?.reasoningEffortOptions || ['low', 'medium', 'high']).map(value => ({ value, label: value }))}
+                onChange={value => updateAgentCustomRuntimeDraft('reasoningEffort', value)}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>自定义 Agent API Key</Text>
+              <Input.Password
+                value={agentSettingsDraft.customRuntime?.apiKey}
+                placeholder={agentSettings?.customRuntime?.apiKeyConfigured
+                  ? `${agentSettings.customRuntime.apiKeyMasked || '已配置'}；留空保持原值`
+                  : '请输入自定义 Agent API Key'}
+                onChange={event => updateAgentCustomRuntimeDraft('apiKey', event.target.value)}
+              />
+            </Col>
+            <Col xs={24}>
+              <Space wrap>
+                <Switch
+                  checked={agentSettingsDraft.customRuntime?.tlsVerify === false}
+                  onChange={checked => updateAgentCustomRuntimeDraft('tlsVerify', !checked)}
+                />
+                <Text strong type={agentSettingsDraft.customRuntime?.tlsVerify === false ? 'danger' : undefined}>
+                  跳过 TLS 证书校验（高风险）
+                </Text>
+              </Space>
+            </Col>
+          </Row>
+          <Space wrap>
+            <Tag color={agentSettings?.customRuntime?.urlSafetyValidated ? 'green' : 'gold'}>
+              Base URL {agentSettings?.customRuntime?.urlSafetyValidated ? '安全校验通过' : '待配置'}
+            </Tag>
+            <Tag color={agentSettings?.customRuntime?.workerSupported ? 'green' : 'gold'}>
+              Worker {agentSettings?.customRuntime?.workerSupported ? '支持 Responses' : '暂不支持'}
+            </Tag>
+            <Tag color={agentSettings?.customRuntime?.configurationComplete ? 'green' : 'gold'}>
+              配置{agentSettings?.customRuntime?.configurationComplete ? '完整' : '未完成'}
+            </Tag>
+          </Space>
+        </>
+      ) : (
+        <Row gutter={[16, 16]}>
+          <Col xs={24} md={12}>
+            <Text strong>固定 Endpoint</Text>
+            <Input value={agentSettings?.defaultRuntime?.endpoint || ''} disabled />
+          </Col>
+          <Col xs={24} md={12}>
+            <Text strong>固定模型</Text>
+            <Input value={agentSettings?.defaultRuntime?.model || 'deepseek-v4-pro[1m]'} disabled />
+          </Col>
+          <Col xs={24}>
+            <Text strong>独立 DeepSeek API Key</Text>
+            <Input.Password
+              value={agentSettingsDraft.apiKey}
+              disabled={agentSettingsSaving}
+              placeholder={agentSettings?.defaultRuntime?.apiKeyConfigured
+                ? `${agentSettings.defaultRuntime.apiKeyMasked || '已配置'}；留空保持原值`
+                : '请输入 Agent 专用 API Key'}
+              onChange={event => updateAgentDefaultKeyDraft(event.target.value)}
+            />
+          </Col>
+        </Row>
+      )}
+      {activeRuntimeError && (
+        <Alert type="warning" showIcon title="Runtime 配置未完成" description={activeRuntimeError} />
+      )}
+      {agentSettingsTestResult && activeReviewConnection.isCurrent && !['NOT_RUN', 'SUCCESS'].includes(agentTestStatus) && (
+        <Alert
+          showIcon
+          type={agentTestAlertType}
+          title={agentTestMessage}
+          description={agentSettingsTestResult.message || (agentTestPending
+            ? 'Worker 正在执行当前 Agent 运行时的 synthetic 最小连通性测试。'
+            : undefined)}
+        />
+      )}
+      <div className="settings-action-row review-connection-actions">
+        <Space wrap>
+          <Button
+            loading={agentSettingsTesting}
+            disabled={!activeReviewConnection.isCurrent || agentSettingsSaving}
+            onClick={() => testAgentSettings(activeRuntimeType)}
+          >
+            测试配置
+          </Button>
+          <Button
+            danger
+            loading={agentSettingsSaving}
+            disabled={!activeRuntimeSettings?.apiKeyConfigured}
+            onClick={() => clearAgentRuntimeKey(activeRuntimeType)}
+          >
+            清除当前 Key
+          </Button>
+          <Button
+            type="primary"
+            loading={agentSettingsSaving}
+            disabled={Boolean(activeRuntimeError) || (!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption)}
+            onClick={() => saveAgentRuntimeDetail(activeRuntimeType)}
+          >
+            保存连接
+          </Button>
+        </Space>
+      </div>
+      {!activeReviewConnection.isCurrent && (
+        <Text type="secondary">联通性测试只针对当前 Agent Runtime；请先在上方运行配置中设为当前连接并保存。</Text>
+      )}
+    </Space>
+  ) : providerDraft ? (
+    <Space orientation="vertical" size="middle" className="full-width">
+      <SettingsCardHeader
+        compact
+        icon={<ApiOutlined />}
+        title={providerDraft.providerName || sourceLabel(providerDraft.providerCode)}
+        description="编辑 Standard Provider 原生配置；保存详情不会改变默认 Provider。"
+        tags={(
+          <Space wrap>
+            <Tag color={providerDraft.defaultProvider ? 'blue' : 'default'}>
+              {providerDraft.defaultProvider ? 'Standard 默认' : '可供 Standard 使用'}
+            </Tag>
+            <Tag color={providerDraft.apiKeyConfigured ? 'green' : 'gold'}>
+              Key {providerDraft.apiKeyConfigured ? '已配置' : '未配置'}
+            </Tag>
+          </Space>
+        )}
+      />
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={12}>
+          <Text strong>配置名称</Text>
+          <Input
+            value={providerDraft.providerName || ''}
+            onChange={event => updateProviderDraft('providerName', event.target.value)}
+          />
+        </Col>
+        <Col xs={24} md={12}>
+          <Text strong>协议</Text>
+          <Input value={reviewConnectionProtocolLabel(providerDraft.providerType)} disabled />
+        </Col>
+        <Col xs={24} md={12}>
+          <Text strong>Endpoint URL</Text>
+          <Input
+            value={providerDraft.endpointUrl || ''}
+            placeholder="https://api.example.com"
+            onChange={event => updateProviderDraft('endpointUrl', event.target.value)}
+          />
+        </Col>
+        <Col xs={24} md={12}>
+          <Text strong>模型名称</Text>
+          <Input
+            value={providerDraft.modelName || ''}
+            onChange={event => updateProviderDraft('modelName', event.target.value)}
+          />
+        </Col>
+        <Col xs={24} md={12}>
+          <Text strong>Review 超时秒数</Text>
+          <InputNumber
+            className="full-width"
+            min={1}
+            max={3600}
+            value={providerDraft.timeoutSeconds ?? null}
+            onChange={value => updateProviderDraft('timeoutSeconds', value || null)}
+          />
+        </Col>
+        <Col xs={24} md={12}>
+          <Text strong>{sourceLabel(providerDraft.providerCode)} Key</Text>
+          <Input.Password
+            value={providerApiKeyDraft}
+            placeholder={providerApiKeyPlaceholder}
+            onChange={event => updateProviderKeyDraft(event.target.value)}
+          />
+        </Col>
+        <Col xs={24}>
+          <Space wrap>
+            <Switch
+              checked={providerDraft.enabled ?? false}
+              checkedChildren="启用"
+              unCheckedChildren="停用"
+              onChange={checked => updateProviderDraft('enabled', checked)}
+            />
+            <Text type="secondary">Provider 启用状态仅影响 Standard Review 可用性。</Text>
+          </Space>
+        </Col>
+      </Row>
+      {providerTestResult && (
+        <Alert
+          showIcon
+          type={providerTestResult.success ? 'success' : 'error'}
+          title={providerTestResult.success ? 'Provider 联通性正常' : 'Provider 联通性失败'}
+          description={providerTestResult.success
+            ? `endpoint=${providerTestResult.endpointUrl || '-'}，model=${providerTestResult.modelName || '-'}，耗时 ${providerTestResult.latencyMs ?? '-'} ms`
+            : (providerTestResult.errorMessage || providerTestResult.responsePreview || '请检查 Key、Endpoint、模型和网络。')}
+        />
+      )}
+      <div className="settings-action-row review-connection-actions">
+        <Space wrap>
+          <Button
+            loading={providerTesting}
+            disabled={providerSaving}
+            onClick={testProviderConnection}
+          >
+            测试联通性
+          </Button>
+          <Button
+            danger
+            loading={providerSaving}
+            disabled={!providerDraft.apiKeyConfigured}
+            onClick={clearProviderApiKey}
+          >
+            清除当前 Key
+          </Button>
+          <Button
+            type="primary"
+            loading={providerSaving}
+            disabled={providerTesting}
+            onClick={saveProviderSettings}
+          >
+            保存 Provider
+          </Button>
+        </Space>
+      </div>
+    </Space>
+  ) : (
+    <Empty description="Standard Provider 不存在或已刷新" />
+  );
 
   const collapseItems = [
     {
@@ -7746,209 +8439,6 @@ function TemplateConfig() {
             </div>
             </Space>
           </div>
-        </Card>
-      )
-    },
-    {
-      key: 'agent-review-settings',
-      label: (
-        <Space wrap>
-          <Text strong>Agent Review</Text>
-          <Tag color={agentSettings?.enabled ? 'purple' : 'default'}>{agentSettings?.enabled ? '已启用' : '未启用'}</Tag>
-          <Tag>{agentSettings?.selectedRuntime === customAgentRuntime ? 'OpenAI Responses' : 'Claude + DeepSeek'}</Tag>
-          <Tag color={agentWorkerPool.status === 'ONLINE' ? 'green' : 'red'}>Worker Pool {agentWorkerPool.status}</Tag>
-          {agentQueueMetrics.queued > 0 && <Tag color="gold">排队 {agentQueueMetrics.queued}</Tag>}
-        </Space>
-      ),
-      children: (
-        <Card bordered={false} className="settings-inner-card">
-          <Space direction="vertical" size="middle" className="full-width">
-            <div className="settings-subsection">
-              <SettingsCardHeader
-                icon={<KeyOutlined />}
-                title="Agent Review 接入配置"
-                description="选择 Agent 运行时并配置独立凭据；默认保持 Claude Code + DeepSeek。"
-                tags={<Tag color={selectedAgentRuntime?.apiKeyConfigured ? 'green' : 'gold'}>Key {selectedAgentRuntime?.apiKeyConfigured ? '已配置' : '未配置'}</Tag>}
-              />
-              {!agentSettings?.encryptionAvailable && (
-              <Alert
-                type="error"
-                showIcon
-                message="需要配置 Agent 加密主密钥"
-                description="请在后端运行环境设置 AGENT_REVIEW_CONFIG_ENCRYPTION_KEY 并重启服务。该密钥用于分别加密两个 Agent Key 槽位。"
-              />
-              )}
-              <Row gutter={[16, 16]} align="bottom">
-                <Col xs={24} md={5}>
-                  <Space direction="vertical">
-                    <Text strong>启用 Agent Review</Text>
-                    <Switch
-                      checked={agentSettingsDraft.enabled}
-                      disabled={agentSettingsSaving || (
-                        agentSettingsDraft.selectedRuntime === customAgentRuntime
-                        && !agentSettingsDraft.enabled
-                        && !agentSettings?.customRuntime?.workerSupported
-                      )}
-                      onChange={checked => setAgentSettingsDraft(current => ({ ...current, enabled: checked }))}
-                    />
-                  </Space>
-                </Col>
-                <Col xs={24} md={11}>
-                  <Text strong>Agent 运行时</Text>
-                  <Select
-                    className="full-width"
-                    value={agentSettingsDraft.selectedRuntime}
-                    disabled={agentSettingsSaving}
-                    options={(agentSettings?.runtimeOptions || []).map(item => ({ value: item.value, label: item.isDefault ? `${item.label}（默认）` : item.label }))}
-                    onChange={value => setAgentSettingsDraft(current => ({ ...current, selectedRuntime: value }))}
-                  />
-                </Col>
-                <Col xs={24} md={8}>
-                <Space wrap>
-                  <Button
-                    type="primary"
-                    loading={agentSettingsSaving}
-                    onClick={() => saveAgentSettings()}
-                    disabled={Boolean(agentBudgetError || agentRuntimeError) || (!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption)}
-                    title={!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption ? '请先初始化加密主密钥并重启后端' : undefined}
-                  >
-                    保存
-                  </Button>
-                  <Button loading={agentSettingsTesting} onClick={testAgentSettings}>测试配置</Button>
-                  <Button danger loading={agentSettingsSaving} disabled={!selectedAgentRuntime?.apiKeyConfigured} onClick={() => saveAgentSettings({ clearApiKey: true })}>清除当前 Key</Button>
-                </Space>
-                </Col>
-              </Row>
-              {agentSettingsDraft.selectedRuntime === customAgentRuntime ? (
-                <>
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} md={8}>
-                      <Text strong>配置名称</Text>
-                      <Input
-                        value={agentSettingsDraft.customRuntime?.displayName}
-                        placeholder="Custom OpenAI Agent"
-                        onChange={event => setAgentSettingsDraft(current => ({ ...current, customRuntime: { ...current.customRuntime, displayName: event.target.value } }))}
-                      />
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Text strong>协议</Text>
-                      <Input value="OpenAI Responses" disabled />
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Text strong>推理强度</Text>
-                      <Select
-                        className="full-width"
-                        value={agentSettingsDraft.customRuntime?.reasoningEffort}
-                        options={(agentSettings?.customRuntime?.reasoningEffortOptions || ['low', 'medium', 'high']).map(value => ({ value, label: value }))}
-                        onChange={value => setAgentSettingsDraft(current => ({ ...current, customRuntime: { ...current.customRuntime, reasoningEffort: value } }))}
-                      />
-                    </Col>
-                    <Col xs={24} md={12}>
-                      <Text strong>Base URL</Text>
-                      <Input
-                        value={agentSettingsDraft.customRuntime?.baseUrl}
-                        placeholder="https://relay.example.com/v1"
-                        onChange={event => setAgentSettingsDraft(current => ({ ...current, customRuntime: { ...current.customRuntime, baseUrl: event.target.value } }))}
-                      />
-                    </Col>
-                    <Col xs={24} md={12}>
-                      <Text strong>模型</Text>
-                      <Input
-                        value={agentSettingsDraft.customRuntime?.model}
-                        placeholder="gpt-5.6-sol"
-                        onChange={event => setAgentSettingsDraft(current => ({ ...current, customRuntime: { ...current.customRuntime, model: event.target.value } }))}
-                      />
-                    </Col>
-                    <Col xs={24}>
-                      <Text strong>自定义中转站 API Key</Text>
-                      <Input.Password
-                        value={agentSettingsDraft.customRuntime?.apiKey}
-                        placeholder={agentSettings?.customRuntime?.apiKeyConfigured ? `${agentSettings.customRuntime.apiKeyMasked || '已配置'}；留空保持原值` : '请输入自定义 Agent API Key'}
-                        onChange={event => setAgentSettingsDraft(current => ({ ...current, customRuntime: { ...current.customRuntime, apiKey: event.target.value } }))}
-                      />
-                    </Col>
-                    <Col xs={24}>
-                      <Space>
-                        <Switch
-                          checked={agentSettingsDraft.customRuntime?.tlsVerify === false}
-                          onChange={checked => setAgentSettingsDraft(current => ({
-                            ...current,
-                            customRuntime: { ...current.customRuntime, tlsVerify: !checked }
-                          }))}
-                        />
-                        <Text strong type={agentSettingsDraft.customRuntime?.tlsVerify === false ? 'danger' : undefined}>
-                          跳过 TLS 证书校验（高风险）
-                        </Text>
-                      </Space>
-                    </Col>
-                  </Row>
-                  <Space wrap>
-                    <Tag color={agentSettings?.customRuntime?.urlSafetyValidated ? 'green' : 'gold'}>
-                      Base URL {agentSettings?.customRuntime?.urlSafetyValidated ? '安全校验通过' : '待配置'}
-                    </Tag>
-                    <Tag color={agentSettings?.customRuntime?.workerSupported ? 'green' : 'gold'}>
-                      Worker {agentSettings?.customRuntime?.workerSupported ? '支持 Responses' : '暂不支持'}
-                    </Tag>
-                    <Tag color={agentSettings?.customRuntime?.configurationComplete ? 'green' : 'gold'}>
-                      配置{agentSettings?.customRuntime?.configurationComplete ? '完整' : '未完成'}
-                    </Tag>
-                  </Space>
-                </>
-              ) : (
-                <Row gutter={[16, 16]}>
-                  <Col xs={24} md={12}>
-                    <Text strong>DeepSeek 模型与 Endpoint</Text>
-                    <Input value={`${agentSettings?.defaultRuntime?.model || 'deepseek-v4-pro[1m]'} · ${agentSettings?.defaultRuntime?.endpoint || ''}`} disabled />
-                  </Col>
-                  <Col xs={24} md={12}>
-                    <Text strong>独立 DeepSeek API Key</Text>
-                    <Input.Password
-                      value={agentSettingsDraft.apiKey}
-                      disabled={agentSettingsSaving}
-                      placeholder={agentSettings?.defaultRuntime?.apiKeyConfigured ? `${agentSettings.defaultRuntime.apiKeyMasked || '已配置'}；留空保持原值` : '请输入 Agent 专用 API Key'}
-                      onChange={event => setAgentSettingsDraft(current => ({ ...current, apiKey: event.target.value }))}
-                    />
-                  </Col>
-                </Row>
-              )}
-              {agentRuntimeError && <Alert type="error" showIcon message="运行时配置无效" description={agentRuntimeError} />}
-              {agentSettingsTestResult && !['NOT_RUN', 'SUCCESS'].includes(agentTestStatus) && (
-                <Alert
-                  showIcon
-                  type={agentTestAlertType}
-                  message={agentTestMessage}
-                  description={agentSettingsTestResult.message || (agentTestPending ? 'Worker 正在执行当前 Agent 运行时的 synthetic 最小连通性测试。' : undefined)}
-                />
-              )}
-            </div>
-            <div className="settings-subsection">
-              <SettingsCardHeader
-                icon={<ControlOutlined />}
-                title="Agent 执行预算"
-                description="控制任务回合数、工具调用、源码量、超时和证据调用上限。"
-                tags={<Tag color="blue">{agentSettings?.budgetConfigSource === 'CUSTOM' ? '自定义预算' : '默认预算'}</Tag>}
-                extra={<Button loading={agentSettingsSaving} onClick={resetAgentBudgets}>恢复默认运行参数</Button>}
-              />
-              <div className="agent-budget-toolbar">
-              <Text type="secondary">
-                参数只影响保存后新建的 Agent 任务；已排队和运行中的任务继续使用入队快照。KB 按 1000 bytes 计算。
-              </Text>
-              </div>
-              <div className="agent-budget-grid agent-budget-grid-basic">
-              {agentBudgetFields.map(item => (
-                <AgentBudgetFieldCard
-                  key={item.key}
-                  field={item}
-                  value={agentSettingsDraft.budgets?.[item.key]}
-                  defaultValue={agentSettings?.budgetDefaults?.[item.key]}
-                  limits={currentAgentBudgetLimits[item.key]}
-                  onChange={updateAgentBudget}
-                />
-              ))}
-              </div>
-              {agentBudgetError && <Alert type="error" showIcon message="运行参数无效" description={agentBudgetError} />}
-            </div>
-          </Space>
         </Card>
       )
     },
@@ -8196,138 +8686,199 @@ function TemplateConfig() {
       )
     },
     {
-      key: 'provider-settings',
+      key: 'review-model-settings',
       label: (
         <Space wrap>
-          <Text strong>模型 Provider 配置</Text>
-          <Tag color="blue">{sourceLabel(aiSettings?.defaultProviderCode || selectedProviderCode)}</Tag>
+          <Text strong>模型连接与 Review 配置</Text>
+          <Tag color="purple">Agent {agentSettings?.enabled ? '已启用' : '未启用'}</Tag>
+          <Tag color="blue">Standard {sourceLabel(aiSettings?.defaultProviderCode || selectedProviderCode)}</Tag>
         </Space>
       ),
       children: (
-        <Card
-          bordered={false}
-          className="settings-inner-card"
-        >
-          <SettingsCardHeader
-            icon={<ApiOutlined />}
-            title="AI 模型 Provider"
-            description="配置模型服务地址、模型名称、访问凭证、超时和启用状态。"
-            tags={(
-              <>
-                <Tag color="blue">{sourceLabel(aiSettings?.defaultProviderCode || selectedProviderCode)}</Tag>
-                <Tag color={providerDraft?.enabled ? 'green' : 'default'}>{providerDraft?.enabled ? '已启用' : '未启用'}</Tag>
-                <Tag color={providerDraft?.apiKeyConfigured ? 'green' : 'gold'}>Key {providerDraft?.apiKeyConfigured ? '已配置' : '未配置'}</Tag>
-              </>
-            )}
-          />
-          <Row gutter={[16, 16]} align="bottom">
-            <Col xs={24} md={8}>
-              <Text strong>Provider</Text>
-              <Select
-                className="full-width prompt-field"
-                value={selectedProviderCode}
-                options={providerOptions}
-                loading={settingsSaving}
-                onChange={selectProvider}
-              />
-              {providerDraft && !providerDraft.apiKeyConfigured && (
-                <Alert
-                  className="prompt-field"
-                  type="warning"
-                  showIcon
-                  message={`请先配置 ${sourceLabel(providerDraft.providerCode)} API Key`}
-                />
-              )}
-            </Col>
-            <Col xs={24} md={8}>
-              <Text strong>端点 URL</Text>
-              <Input
-                className="prompt-field"
-                placeholder="例如 https://api.deepseek.com"
-                value={providerDraft?.endpointUrl || ''}
-                onChange={event => updateProviderDraft('endpointUrl', event.target.value)}
-              />
-            </Col>
-            <Col xs={24} md={8}>
-              <Text strong>模型名称</Text>
-              <Input
-                className="prompt-field"
-                placeholder="例如 deepseek-v4-pro"
-                value={providerDraft?.modelName || ''}
-                onChange={event => updateProviderDraft('modelName', event.target.value)}
-              />
-            </Col>
-            <Col xs={24} md={8}>
-              <Text strong>Review 超时秒数</Text>
-              <InputNumber
-                className="full-width prompt-field"
-                min={1}
-                max={3600}
-                placeholder="默认 1000，留空使用系统默认"
-                value={providerDraft?.timeoutSeconds ?? null}
-                onChange={value => updateProviderDraft('timeoutSeconds', value || null)}
-              />
-            </Col>
-            <Col xs={24} md={10}>
-              <Space direction="vertical" className="full-width">
-                <Space wrap>
-                  <Text strong>{sourceLabel(providerDraft?.providerCode)} Key</Text>
-                  {providerDraft?.apiKeyConfigured ? (
-                    <Tag color="green">已配置 {providerDraft.apiKeyMasked}</Tag>
-                  ) : (
-                    <Tag>未配置</Tag>
-                  )}
-                  {providerDraft?.defaultProvider && <Tag color="blue">当前使用</Tag>}
-                </Space>
-                <Input.Password
-                  placeholder={providerApiKeyPlaceholder}
-                  value={providerApiKeyDraft}
-                  onChange={event => setProviderApiKeyDraft(event.target.value)}
-                />
-              </Space>
-            </Col>
-            <Col xs={24} md={6}>
-              <Space direction="vertical" size={4}>
-                <Switch
-                  checked={providerDraft?.enabled ?? false}
-                  checkedChildren="启用"
-                  unCheckedChildren="停用"
-                  onChange={checked => updateProviderDraft('enabled', checked)}
-                />
-              </Space>
-            </Col>
-            <Col xs={24} md={8}>
-              <Button danger disabled={!providerDraft?.apiKeyConfigured} loading={providerSaving} onClick={clearProviderApiKey}>
-                清除当前 Key
-              </Button>
-            </Col>
-          </Row>
-          <div className="settings-action-row">
-            <Space wrap>
-              <Button
-                icon={<ReloadOutlined />}
-                loading={providerTesting}
-                onClick={testProviderConnection}
-                disabled={!providerDraft || providerSaving}
-              >
-                测试联通性
-              </Button>
-              <Button type="primary" loading={providerSaving} onClick={saveProviderSettings} disabled={!providerDraft || providerTesting}>保存 Provider</Button>
-            </Space>
-          </div>
-          {providerTestResult && (
-            <Alert
-              className="prompt-field"
-              showIcon
-              type={providerTestResult.success ? 'success' : 'error'}
-              message={providerTestResult.success ? `${sourceLabel(providerTestResult.providerCode)} 联通性正常` : `${sourceLabel(providerTestResult.providerCode)} 联通性失败`}
-              description={
-                providerTestResult.success
-                  ? `endpoint=${providerTestResult.endpointUrl || '-'}，model=${providerTestResult.modelName || '-'}，耗时 ${providerTestResult.latencyMs ?? '-'} ms`
-                  : (providerTestResult.errorMessage || providerTestResult.responsePreview || '请检查 API Key、端点 URL、模型名称和网络连通性。')
-              }
+        <Card variant="borderless" className="settings-inner-card review-model-workspace-card">
+          <Space orientation="vertical" size="middle" className="full-width">
+            <SettingsCardHeader
+              icon={<ApiOutlined />}
+              title="模型连接与 Review 配置"
+              description="统一查看 Agent Runtime 与 Standard Provider；配置继续按 Review 域独立保存。"
+              tags={<Tag color="blue">统一视图 · 分域保存</Tag>}
             />
-          )}
+            <div className="review-runtime-card-grid">
+              <Card className="review-runtime-card" title="Agent Review 运行配置">
+                <Space orientation="vertical" size="middle" className="full-width">
+                  <div className="review-runtime-card-status">
+                    <Space wrap>
+                      <Tag color={agentSettings?.enabled ? 'purple' : 'default'}>
+                        {agentSettings?.enabled ? '已启用' : '未启用'}
+                      </Tag>
+                      <Tag color={agentWorkerPool.status === 'ONLINE' ? 'green' : 'red'}>
+                        Worker Pool {agentWorkerPool.status}
+                      </Tag>
+                      <Tag color={selectedAgentRuntime?.apiKeyConfigured ? 'green' : 'gold'}>
+                        Key {selectedAgentRuntime?.apiKeyConfigured ? '已配置' : '未配置'}
+                      </Tag>
+                    </Space>
+                    <Switch
+                      aria-label="启用 Agent Review"
+                      checked={agentSettingsDraft.enabled}
+                      disabled={agentSettingsSaving}
+                      onChange={checked => setAgentSettingsDraft(current => ({ ...current, enabled: checked }))}
+                    />
+                  </div>
+                  <div>
+                    <Text strong>当前 Runtime</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      value={agentSettingsDraft.selectedRuntime}
+                      disabled={agentSettingsSaving}
+                      options={(agentSettings?.runtimeOptions || []).map(item => ({
+                        value: item.value,
+                        label: item.isDefault ? `${item.label}（默认）` : item.label
+                      }))}
+                      onChange={value => setAgentSettingsDraft(current => ({ ...current, selectedRuntime: value }))}
+                    />
+                  </div>
+                  <Descriptions size="small" column={1} bordered>
+                    <Descriptions.Item label="模型">{selectedAgentRuntime?.model || '-'}</Descriptions.Item>
+                    <Descriptions.Item label="协议">
+                      {agentSettingsDraft.selectedRuntime === customAgentRuntime ? 'OpenAI Responses' : 'Anthropic Compatible'}
+                    </Descriptions.Item>
+                    {agentSettingsDraft.selectedRuntime === customAgentRuntime && (
+                      <Descriptions.Item label="推理强度">
+                        {agentSettingsDraft.customRuntime?.reasoningEffort || 'high'}
+                      </Descriptions.Item>
+                    )}
+                    <Descriptions.Item label="Fallback">失败后继承 Standard 动态解析链</Descriptions.Item>
+                  </Descriptions>
+                  {!agentSettings?.encryptionAvailable && (
+                    <Alert type="error" showIcon title="Agent 加密主密钥不可用" />
+                  )}
+                  <Button
+                    type="primary"
+                    loading={agentSettingsSaving}
+                    disabled={Boolean(dirtyReviewConnectionId) || (!agentSettings?.encryptionAvailable && agentSettingsDraft.enabled)}
+                    onClick={saveAgentRuntimeSelection}
+                  >
+                    保存 Agent 运行配置
+                  </Button>
+                </Space>
+              </Card>
+              <Card className="review-runtime-card" title="Standard Review 运行配置">
+                <Space orientation="vertical" size="middle" className="full-width">
+                  <Space wrap>
+                    <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>
+                      平台全局 {(settingsDraft?.reviewEnabled ?? false) ? '已开启' : '已关闭'}
+                    </Tag>
+                    <Tag color={selectedStandardProvider?.enabled ? 'green' : 'default'}>
+                      Provider {selectedStandardProvider?.enabled ? '已启用' : '未启用'}
+                    </Tag>
+                    <Tag color={selectedStandardProvider?.apiKeyConfigured ? 'green' : 'gold'}>
+                      Key {selectedStandardProvider?.apiKeyConfigured ? '已配置' : '未配置'}
+                    </Tag>
+                  </Space>
+                  <div>
+                    <Text strong>默认 Provider</Text>
+                    <Select
+                      className="full-width prompt-field"
+                      value={selectedProviderCode}
+                      options={providerOptions}
+                      loading={providerSaving}
+                      onChange={setSelectedProviderCode}
+                    />
+                  </div>
+                  <Descriptions size="small" column={1} bordered>
+                    <Descriptions.Item label="协议">
+                      {reviewConnectionProtocolLabel(selectedStandardProvider?.providerType)}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="模型">{selectedStandardProvider?.modelName || '-'}</Descriptions.Item>
+                    <Descriptions.Item label="超时">
+                      {selectedStandardProvider?.timeoutSeconds ? `${selectedStandardProvider.timeoutSeconds} 秒` : '系统默认'}
+                    </Descriptions.Item>
+                  </Descriptions>
+                  {selectedStandardProvider && (!selectedStandardProvider.enabled || !selectedStandardProvider.apiKeyConfigured) && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      title="当前选择尚不可用"
+                      description="可以保存为默认连接，但 Standard Review 执行前仍需启用 Provider 并配置 Key。"
+                    />
+                  )}
+                  <Button
+                    type="primary"
+                    loading={providerSaving}
+                    disabled={!selectedProviderCode || Boolean(dirtyReviewConnectionId)}
+                    onClick={saveStandardDefaultProvider}
+                  >
+                    保存默认连接
+                  </Button>
+                </Space>
+              </Card>
+            </div>
+            <div className="review-connection-workbench">
+              <section className="settings-subsection review-connection-directory" aria-label="模型连接目录">
+                <SettingsCardHeader
+                  compact
+                  icon={<ApiOutlined />}
+                  title="模型连接目录"
+                  description="Agent Runtime 与 Standard Provider 的统一只读索引；不代表共享 Key 或共享连接池。"
+                  tags={<Tag>{reviewConnectionRows.length} 条连接</Tag>}
+                />
+                <Table
+                  className="review-connection-table"
+                  rowKey="id"
+                  size="small"
+                  pagination={false}
+                  dataSource={reviewConnectionRows}
+                  columns={reviewConnectionColumns}
+                  scroll={{ x: 920 }}
+                  rowClassName={row => row.id === selectedReviewConnectionId ? 'is-selected' : ''}
+                  onRow={row => ({
+                    tabIndex: 0,
+                    'aria-selected': row.id === selectedReviewConnectionId,
+                    onClick: () => selectReviewConnection(row.id),
+                    onKeyDown: event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        selectReviewConnection(row.id);
+                      }
+                    }
+                  })}
+                />
+              </section>
+              <section className="settings-subsection review-connection-detail" aria-label="连接详情">
+                {reviewConnectionDetail}
+              </section>
+            </div>
+            <section className="settings-subsection review-agent-budget-section">
+              <SettingsCardHeader
+                icon={<ControlOutlined />}
+                title="Agent 执行预算"
+                description="预算独立于连接行，保存后只影响新建 Agent 任务。"
+                tags={<Tag color="blue">{agentSettings?.budgetConfigSource === 'CUSTOM' ? '自定义预算' : '默认预算'}</Tag>}
+                extra={(
+                  <Space wrap>
+                    <Button loading={agentSettingsSaving} onClick={resetAgentBudgets}>恢复默认运行参数</Button>
+                    <Button type="primary" loading={agentSettingsSaving} disabled={Boolean(agentBudgetError)} onClick={saveAgentBudgets}>
+                      保存执行预算
+                    </Button>
+                  </Space>
+                )}
+              />
+              <div className="agent-budget-grid agent-budget-grid-basic">
+                {agentBudgetFields.map(item => (
+                  <AgentBudgetFieldCard
+                    key={item.key}
+                    field={item}
+                    value={agentSettingsDraft.budgets?.[item.key]}
+                    defaultValue={agentSettings?.budgetDefaults?.[item.key]}
+                    limits={currentAgentBudgetLimits[item.key]}
+                    onChange={updateAgentBudget}
+                  />
+                ))}
+              </div>
+              {agentBudgetError && <Alert type="error" showIcon title="运行参数无效" description={agentBudgetError} />}
+            </section>
+          </Space>
         </Card>
       )
     },
@@ -8606,8 +9157,7 @@ function TemplateConfig() {
   const orderedCollapseItems = [
     'project-target-configs',
     'profile-settings',
-    'provider-settings',
-    'agent-review-settings',
+    'review-model-settings',
     'global-settings'
   ]
     .map(key => collapseItems.find(item => item.key === key))
@@ -8616,7 +9166,15 @@ function TemplateConfig() {
   return (
     <TaskWorkspaceShell>
       {contextHolder}
-      {error && <Alert className="section-gap" type="error" showIcon message={error} />}
+      {error && (
+        <Alert
+          className="section-gap"
+          type="error"
+          showIcon
+          title={error}
+          action={<Button size="small" loading={loading} onClick={load}>重试</Button>}
+        />
+      )}
       <Spin spinning={loading}>
         <Collapse className="settings-collapse" items={orderedCollapseItems} />
       </Spin>

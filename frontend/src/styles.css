@@ -1751,6 +1751,130 @@ body {
   margin-bottom: 24px;
 }
 
+.review-model-workspace-card {
+  min-width: 0;
+}
+
+.review-runtime-card-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.review-runtime-card {
+  min-width: 0;
+  height: 100%;
+  border-color: #dce6f2;
+  box-shadow: 0 4px 14px rgba(15, 31, 61, 0.04);
+}
+
+.review-runtime-card > .ant-card-body {
+  height: calc(100% - 57px);
+}
+
+.review-runtime-card > .ant-card-body > .ant-space {
+  height: 100%;
+}
+
+.review-runtime-card > .ant-card-body > .ant-space > .ant-space-item:last-child {
+  margin-top: auto;
+}
+
+.review-runtime-card-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-connection-workbench {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr);
+  gap: 16px;
+}
+
+.review-connection-directory,
+.review-connection-detail {
+  min-width: 0;
+}
+
+.review-connection-directory {
+  overflow: hidden;
+}
+
+.review-connection-table .ant-table-row {
+  cursor: pointer;
+}
+
+.review-connection-table .ant-table-row:focus-visible {
+  outline: 3px solid rgba(22, 119, 255, 0.35);
+  outline-offset: -3px;
+}
+
+.review-connection-table .ant-table-row.is-selected > .ant-table-cell {
+  background: #eaf3ff !important;
+}
+
+.review-connection-name-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.review-connection-name-cell > .ant-typography {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-connection-mobile-meta {
+  display: none;
+  font-size: 12px;
+}
+
+.review-connection-actions .ant-btn {
+  min-height: 40px;
+}
+
+.review-agent-budget-section .agent-budget-grid {
+  margin-top: 16px;
+}
+
+@media (max-width: 1199px) {
+  .review-connection-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .review-runtime-card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-runtime-card-status {
+    align-items: flex-start;
+  }
+
+  .review-connection-mobile-meta {
+    display: block;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+  }
+
+  .review-connection-actions,
+  .review-connection-actions .ant-space,
+  .review-connection-actions .ant-btn {
+    width: 100%;
+  }
+
+  .review-connection-actions .ant-btn {
+    min-height: 44px;
+  }
+}
+
 .settings-subcard {
   padding: 14px;
   background: #fafcff;

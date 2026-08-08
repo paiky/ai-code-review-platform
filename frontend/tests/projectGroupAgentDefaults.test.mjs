@@ -38,8 +38,9 @@ test('settings cards expose consistent titles, descriptions, and semantic icons'
     '端类型自动识别规则',
     '项目组 AI Review 通用策略',
     '普通 Review 初始 Prompt',
-    'AI 模型 Provider',
-    'Agent Review 接入配置',
+    'Agent Review 运行配置',
+    'Standard Review 运行配置',
+    '模型连接目录',
     'Agent 执行预算',
     '平台全局能力',
     '钉钉通知',
@@ -62,7 +63,7 @@ test('Agent settings keep spacious headers and compact budget controls without t
   assert.equal(styleSource.includes('.settings-subsection > .settings-card-header {\n  margin-bottom: 24px;'), true);
   assert.equal(styleSource.includes('grid-template-columns: repeat(auto-fill, minmax(190px, 212px));'), true);
   assert.equal(appSource.includes('message="当前配置高于默认预算"'), false);
-  assert.equal(appSource.includes('message="运行参数无效"'), true);
+  assert.equal(appSource.includes('title="运行参数无效"'), true);
 });
 
 test('Agent convergence budgets share the main grid and settings selects use content-sized columns', () => {
