@@ -12,6 +12,18 @@ from app.core.errors import AppError
 DEFAULT_RUNTIME = "CLAUDE_CODE_DEEPSEEK"
 CUSTOM_RUNTIME = "OPENAI_RESPONSES_CUSTOM"
 RUNTIME_TYPES = frozenset({DEFAULT_RUNTIME, CUSTOM_RUNTIME})
+CLAUDE_CODE_RUNNER = "CLAUDE_CODE"
+OPENAI_RESPONSES_RUNNER = "OPENAI_RESPONSES_AGENT"
+OPENAI_CHAT_RUNNER = "OPENAI_CHAT_AGENT"
+ANTHROPIC_MESSAGES_RUNNER = "ANTHROPIC_MESSAGES_AGENT"
+RUNNER_CAPABILITIES = frozenset(
+    {
+        CLAUDE_CODE_RUNNER,
+        OPENAI_RESPONSES_RUNNER,
+        OPENAI_CHAT_RUNNER,
+        ANTHROPIC_MESSAGES_RUNNER,
+    }
+)
 DEFAULT_REVIEW_KEY = "agent-claude-code-deepseek-v4-pro"
 CUSTOM_REVIEW_KEY = "agent-openai-responses-custom"
 DEFAULT_MODEL = "deepseek-v4-pro[1m]"
@@ -19,6 +31,8 @@ CUSTOM_DEFAULT_MODEL = "gpt-5.6-sol"
 CUSTOM_DEFAULT_DISPLAY_NAME = "Custom OpenAI Agent"
 CUSTOM_REASONING_EFFORTS = ("low", "medium", "high")
 RESPONSES_RUNNER_VERSION = "openai-responses-agent-v1"
+CHAT_COMPLETIONS_RUNNER_VERSION = "openai-chat-completions-agent-v1"
+ANTHROPIC_MESSAGES_RUNNER_VERSION = "anthropic-messages-agent-v1"
 _HOSTNAME = re.compile(
     r"^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
@@ -78,13 +92,65 @@ def normalize_worker_capabilities(value: Any, *, legacy_default: bool = True) ->
     capabilities = []
     for raw in source:
         item = str(raw or "").strip().upper()
-        if item in RUNTIME_TYPES and item not in capabilities:
+        if item in RUNTIME_TYPES | RUNNER_CAPABILITIES and item not in capabilities:
             capabilities.append(item)
     return capabilities or ([DEFAULT_RUNTIME] if legacy_default else [])
 
 
 def worker_supports(capabilities_json: Any, runtime_type: str) -> bool:
-    return normalize_runtime_type(runtime_type) in normalize_worker_capabilities(capabilities_json)
+    capabilities = normalize_worker_capabilities(capabilities_json)
+    requested = str(runtime_type or "").strip().upper()
+    if requested in {DEFAULT_RUNTIME, CLAUDE_CODE_RUNNER}:
+        return DEFAULT_RUNTIME in capabilities or CLAUDE_CODE_RUNNER in capabilities
+    if requested in {CUSTOM_RUNTIME, OPENAI_RESPONSES_RUNNER}:
+        return CUSTOM_RUNTIME in capabilities or OPENAI_RESPONSES_RUNNER in capabilities
+    return requested in capabilities
+
+
+def runtime_review_key(runtime_code: Any) -> str:
+    normalized = str(runtime_code or DEFAULT_RUNTIME).strip().upper()
+    if normalized == DEFAULT_RUNTIME:
+        return DEFAULT_REVIEW_KEY
+    if normalized == CUSTOM_RUNTIME:
+        return CUSTOM_REVIEW_KEY
+    suffix = normalized.casefold().replace("_", "-")
+    return f"agent-runtime-{suffix}"
+
+
+def runtime_record_snapshot(record: Any) -> dict[str, Any]:
+    runtime_code = str(getattr(record, "runtime_code", None) or DEFAULT_RUNTIME).strip().upper()
+    if runtime_code == DEFAULT_RUNTIME:
+        return {
+            "runtimeCode": DEFAULT_RUNTIME,
+            "runtimeType": DEFAULT_RUNTIME,
+            "protocol": "ANTHROPIC_COMPATIBLE",
+            "wireProtocol": "ANTHROPIC_COMPATIBLE",
+            "runnerType": CLAUDE_CODE_RUNNER,
+            "displayName": str(getattr(record, "display_name", None) or "Claude Code + DeepSeek"),
+            "baseUrl": str(getattr(record, "base_url", None) or "https://api.deepseek.com/anthropic"),
+            "model": str(getattr(record, "model_name", None) or DEFAULT_MODEL),
+            "reasoningEffort": str(getattr(record, "reasoning_effort", None) or "high"),
+            "tlsVerify": getattr(record, "tls_verify", None) is not False,
+            "credentialSlot": "DEEPSEEK",
+        }
+    protocol = str(getattr(record, "protocol", None) or "OPENAI_RESPONSES")
+    return {
+        "runtimeCode": runtime_code,
+        "runtimeType": runtime_code,
+        "protocol": protocol,
+        "wireProtocol": protocol,
+        "runnerType": str(getattr(record, "runner_type", None) or OPENAI_RESPONSES_RUNNER),
+        "displayName": str(getattr(record, "display_name", None) or CUSTOM_DEFAULT_DISPLAY_NAME),
+        "baseUrl": str(getattr(record, "base_url", None) or ""),
+        "model": str(getattr(record, "model_name", None) or CUSTOM_DEFAULT_MODEL),
+        "reasoningEffort": (
+            str(getattr(record, "reasoning_effort", None) or "high")
+            if protocol == "OPENAI_RESPONSES"
+            else None
+        ),
+        "tlsVerify": getattr(record, "tls_verify", None) is not False,
+        "credentialSlot": f"AGENT_RUNTIME:{runtime_code}",
+    }
 
 
 def runtime_snapshot(record: Any) -> dict[str, Any]:

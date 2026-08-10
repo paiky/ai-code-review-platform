@@ -246,7 +246,73 @@ def apply_pending_migrations(
 def _migration_statement_already_satisfied(
     connection, migration: MigrationFile, statement: str
 ) -> bool:
-    """Reconcile V48 when the legacy runtime compatibility layer added it early."""
+    """Reconcile columns that the legacy runtime compatibility layer added early."""
+    if migration.version == 50:
+        match = re.fullmatch(
+            r"\s*ALTER\s+TABLE\s+`?code_quality_model_providers`?\s+"
+            r"ADD\s+COLUMN\s+`?(catalog_visible|reasoning_effort)`?\s+"
+            r"(.+?)\s+AFTER\s+`?(timeout_seconds|catalog_visible)`?\s*",
+            statement,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return False
+        column_name = match.group(1).casefold()
+        inspector = inspect(connection)
+        columns = {
+            str(column.get("name") or ""): column
+            for column in inspector.get_columns("code_quality_model_providers")
+        }
+        existing = columns.get(column_name)
+        if existing is None:
+            return False
+        type_name = str(existing.get("type") or "").casefold().replace(" ", "")
+        if column_name == "catalog_visible":
+            default = str(existing.get("default") or "").strip("()'\"").casefold()
+            compatible = (
+                existing.get("nullable") is False
+                and any(marker in type_name for marker in ("bool", "tinyint"))
+                and default in {"0", "false"}
+            )
+        else:
+            compatible = (
+                existing.get("nullable") is not False
+                and "varchar(16)" in type_name
+            )
+        if not compatible:
+            raise MigrationError(
+                f"Existing code_quality_model_providers.{column_name} is incompatible with V50"
+            )
+        return True
+    if migration.version == 49:
+        match = re.fullmatch(
+            r"\s*ALTER\s+TABLE\s+`?code_quality_agent_settings`?\s+"
+            r"ADD\s+COLUMN\s+`?selected_runtime_code`?\s+VARCHAR\(40\)\s+"
+            r"NOT\s+NULL\s+DEFAULT\s+'CLAUDE_CODE_DEEPSEEK'\s+AFTER\s+runtime_type\s*",
+            statement,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return False
+        inspector = inspect(connection)
+        columns = {
+            str(column.get("name") or ""): column
+            for column in inspector.get_columns("code_quality_agent_settings")
+        }
+        existing = columns.get("selected_runtime_code")
+        if existing is None:
+            return False
+        type_name = str(existing.get("type") or "").casefold()
+        default = str(existing.get("default") or "").strip("()'\"").upper()
+        if (
+            existing.get("nullable") is not False
+            or "varchar(40)" not in type_name.replace(" ", "")
+            or default != "CLAUDE_CODE_DEEPSEEK"
+        ):
+            raise MigrationError(
+                "Existing code_quality_agent_settings.selected_runtime_code is incompatible with V49"
+            )
+        return True
     if migration.version != 48:
         return False
     match = re.fullmatch(

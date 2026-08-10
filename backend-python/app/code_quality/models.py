@@ -69,6 +69,8 @@ class CodeQualityModelProvider(Base):
     model_name: Mapped[str | None] = mapped_column(String(128))
     api_key: Mapped[str | None] = mapped_column(String(1024))
     timeout_seconds: Mapped[int | None] = mapped_column(Integer)
+    reasoning_effort: Mapped[str | None] = mapped_column(String(16))
+    catalog_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     built_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

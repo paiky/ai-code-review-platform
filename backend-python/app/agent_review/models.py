@@ -17,6 +17,9 @@ class AgentReviewSettings(Base):
     runtime_type: Mapped[str] = mapped_column(
         String(32), nullable=False, default="CLAUDE_CODE_DEEPSEEK"
     )
+    selected_runtime_code: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="CLAUDE_CODE_DEEPSEEK"
+    )
     custom_display_name: Mapped[str | None] = mapped_column(String(64))
     custom_base_url: Mapped[str | None] = mapped_column(String(1024))
     custom_model: Mapped[str | None] = mapped_column(String(128))
@@ -29,6 +32,40 @@ class AgentReviewSettings(Base):
     worker_version: Mapped[str | None] = mapped_column(String(64))
     cli_version: Mapped[str | None] = mapped_column(String(64))
     last_worker_heartbeat_at: Mapped[object | None] = mapped_column(DateTime)
+    test_request_id: Mapped[str | None] = mapped_column(String(128))
+    test_status: Mapped[str | None] = mapped_column(String(32))
+    test_message: Mapped[str | None] = mapped_column(String(512))
+    test_duration_ms: Mapped[int | None] = mapped_column(BigInteger)
+    test_started_at: Mapped[object | None] = mapped_column(DateTime)
+    test_finished_at: Mapped[object | None] = mapped_column(DateTime)
+    created_at: Mapped[object | None] = mapped_column(DateTime)
+    updated_at: Mapped[object | None] = mapped_column(DateTime)
+
+
+class AgentReviewRuntime(Base):
+    __tablename__ = "code_quality_agent_runtimes"
+    __table_args__ = (
+        Index(
+            "idx_code_quality_agent_runtimes_enabled_sort",
+            "enabled",
+            "sort_order",
+            "runtime_code",
+        ),
+    )
+
+    runtime_code: Mapped[str] = mapped_column(String(40), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    protocol: Mapped[str] = mapped_column(String(32), nullable=False)
+    runner_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    base_url: Mapped[str | None] = mapped_column(String(1024))
+    model_name: Mapped[str | None] = mapped_column(String(128))
+    reasoning_effort: Mapped[str | None] = mapped_column(String(16))
+    tls_verify: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    built_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    api_key_ciphertext: Mapped[str | None] = mapped_column(Text)
+    api_key_fingerprint: Mapped[str | None] = mapped_column(String(32))
     test_request_id: Mapped[str | None] = mapped_column(String(128))
     test_status: Mapped[str | None] = mapped_column(String(32))
     test_message: Mapped[str | None] = mapped_column(String(512))

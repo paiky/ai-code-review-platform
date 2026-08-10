@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import json
 import logging
+import re
 from threading import Lock
 from typing import Any
 from uuid import uuid4
@@ -11,20 +12,29 @@ from sqlalchemy import case, delete, func, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.agent_review.crypto import decrypt_api_key, encrypt_api_key, encryption_available, mask_fingerprint
-from app.agent_review.models import AgentReviewRun, AgentReviewSettings, AgentReviewWorker
+from app.agent_review.models import (
+    AgentReviewRun,
+    AgentReviewRuntime,
+    AgentReviewSettings,
+    AgentReviewWorker,
+)
 from app.agent_review.runtime import (
+    ANTHROPIC_MESSAGES_RUNNER_VERSION,
+    CHAT_COMPLETIONS_RUNNER_VERSION,
     CUSTOM_DEFAULT_DISPLAY_NAME,
     CUSTOM_DEFAULT_MODEL,
     CUSTOM_REASONING_EFFORTS,
-    CUSTOM_REVIEW_KEY,
     CUSTOM_RUNTIME,
     DEFAULT_REVIEW_KEY,
     DEFAULT_RUNTIME,
     RESPONSES_RUNNER_VERSION,
+    RUNTIME_TYPES,
     custom_base_url_host,
     normalize_custom_base_url,
     normalize_runtime_type,
     normalize_worker_capabilities,
+    runtime_record_snapshot,
+    runtime_review_key,
     runtime_snapshot,
     worker_supports,
 )
@@ -85,6 +95,15 @@ AGENT_TRACE_TOOLS = {
 _SCHEMA_LOCK = Lock()
 _SCHEMA_ENGINES: set[int] = set()
 _LOGGER = logging.getLogger(__name__)
+_RUNTIME_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,39}$")
+_PROTOCOL_RUNNERS = {
+    "OPENAI_RESPONSES": "OPENAI_RESPONSES_AGENT",
+    "OPENAI_CHAT_COMPLETIONS": "OPENAI_CHAT_AGENT",
+    "ANTHROPIC_MESSAGES": "ANTHROPIC_MESSAGES_AGENT",
+}
+_OPEN_AGENT_RUNTIME_PROTOCOLS = frozenset(
+    {"OPENAI_RESPONSES", "OPENAI_CHAT_COMPLETIONS", "ANTHROPIC_MESSAGES"}
+)
 
 
 def _supports_skip_locked(db: Session) -> bool:
@@ -110,6 +129,7 @@ def ensure_agent_review_schema(db: Session) -> None:
         connection = db.connection()
         inspector = inspect(connection)
         AgentReviewSettings.__table__.create(connection, checkfirst=True)
+        AgentReviewRuntime.__table__.create(connection, checkfirst=True)
         AgentReviewWorker.__table__.create(connection, checkfirst=True)
         AgentReviewRun.__table__.create(connection, checkfirst=True)
         _ensure_settings_columns(db, inspector)
@@ -131,7 +151,638 @@ def get_agent_settings_record(db: Session) -> AgentReviewSettings:
         record = AgentReviewSettings(id=1, enabled=False, created_at=now, updated_at=now)
         db.add(record)
         db.flush()
+    ensure_legacy_agent_runtime_records(db, record)
     return record
+
+
+def ensure_legacy_agent_runtime_records(
+    db: Session,
+    settings: AgentReviewSettings | None = None,
+) -> tuple[AgentReviewRuntime, AgentReviewRuntime | None]:
+    """Seed the two V47 runtimes without overwriting already migrated records."""
+    if settings is None:
+        settings = get_agent_settings_record(db)
+    existing_count = int(db.scalar(select(func.count()).select_from(AgentReviewRuntime)) or 0)
+    default_runtime = db.get(AgentReviewRuntime, DEFAULT_RUNTIME)
+    if default_runtime is None:
+        default_runtime = _legacy_runtime_record(settings, DEFAULT_RUNTIME)
+        db.add(default_runtime)
+    custom_runtime = db.get(AgentReviewRuntime, CUSTOM_RUNTIME)
+    if custom_runtime is None and (
+        existing_count == 0
+        or _legacy_custom_configuration_exists(settings)
+        or normalize_runtime_type(settings.runtime_type) == CUSTOM_RUNTIME
+        or str(settings.selected_runtime_code or "").strip().upper() == CUSTOM_RUNTIME
+    ):
+        custom_runtime = _legacy_runtime_record(settings, CUSTOM_RUNTIME)
+        db.add(custom_runtime)
+    db.flush()
+
+    selected_code = str(settings.selected_runtime_code or "").strip().upper()
+    if not _RUNTIME_CODE.fullmatch(selected_code) or db.get(AgentReviewRuntime, selected_code) is None:
+        selected_code = normalize_runtime_type(settings.runtime_type)
+    if db.get(AgentReviewRuntime, selected_code) is None:
+        selected_code = DEFAULT_RUNTIME
+    settings.selected_runtime_code = selected_code
+    settings.runtime_type = selected_code if selected_code in RUNTIME_TYPES else DEFAULT_RUNTIME
+    return default_runtime, custom_runtime
+
+
+def sync_legacy_agent_runtime_records(
+    db: Session,
+    settings: AgentReviewSettings,
+) -> tuple[AgentReviewRuntime, AgentReviewRuntime | None]:
+    """Dual-write legacy settings into the two compatibility runtime records."""
+    default_runtime, custom_runtime = ensure_legacy_agent_runtime_records(db, settings)
+    now = utc_now()
+    default_runtime.api_key_ciphertext = settings.api_key_ciphertext
+    default_runtime.api_key_fingerprint = settings.api_key_fingerprint
+    default_runtime.updated_at = now
+    if custom_runtime is not None:
+        custom_runtime.display_name = (
+            settings.custom_display_name or CUSTOM_DEFAULT_DISPLAY_NAME
+        )
+        custom_runtime.base_url = settings.custom_base_url
+        custom_runtime.model_name = settings.custom_model or CUSTOM_DEFAULT_MODEL
+        custom_runtime.reasoning_effort = settings.custom_reasoning_effort or "high"
+        custom_runtime.tls_verify = settings.custom_tls_verify is not False
+        custom_runtime.api_key_ciphertext = settings.custom_api_key_ciphertext
+        custom_runtime.api_key_fingerprint = settings.custom_api_key_fingerprint
+        custom_runtime.updated_at = now
+    db.flush()
+    return default_runtime, custom_runtime
+
+
+def list_agent_runtime_records(db: Session) -> list[AgentReviewRuntime]:
+    settings = get_agent_settings_record(db)
+    ensure_legacy_agent_runtime_records(db, settings)
+    return list(
+        db.scalars(
+            select(AgentReviewRuntime).order_by(
+                AgentReviewRuntime.sort_order,
+                AgentReviewRuntime.runtime_code,
+            )
+        ).all()
+    )
+
+
+def agent_runtime_record_response(runtime: AgentReviewRuntime) -> dict[str, Any]:
+    return {
+        "runtimeCode": runtime.runtime_code,
+        "displayName": runtime.display_name,
+        "protocol": runtime.protocol,
+        "runnerType": runtime.runner_type,
+        "baseUrl": runtime.base_url,
+        "model": runtime.model_name,
+        "reasoningEffort": runtime.reasoning_effort,
+        "tlsVerify": runtime.tls_verify is not False,
+        "enabled": bool(runtime.enabled),
+        "builtIn": bool(runtime.built_in),
+        "sortOrder": int(runtime.sort_order),
+        "apiKeyConfigured": bool(runtime.api_key_ciphertext),
+        "apiKeyMasked": mask_fingerprint(runtime.api_key_fingerprint),
+        "updatedAt": format_datetime(runtime.updated_at),
+    }
+
+
+def list_agent_runtime_responses(db: Session) -> list[dict[str, Any]]:
+    _expire_runtime_configuration_tests(db)
+    settings = get_agent_settings_record(db)
+    worker_pool = agent_worker_pool(db)
+    return [
+        _agent_runtime_response(runtime, settings=settings, worker_pool=worker_pool)
+        for runtime in list_agent_runtime_records(db)
+    ]
+
+
+def create_agent_runtime(db: Session, request: dict[str, Any]) -> dict[str, Any]:
+    settings = get_agent_settings_record(db)
+    runtime_code = _normalize_runtime_code(request.get("runtimeCode"))
+    if db.get(AgentReviewRuntime, runtime_code) is not None:
+        raise AppError(
+            "AGENT_RUNTIME_ALREADY_EXISTS",
+            f"Agent Runtime already exists: {runtime_code}",
+            409,
+        )
+    protocol = str(request.get("protocol") or "").strip().upper()
+    runner_type = _protocol_runner(protocol)
+    worker_pool = agent_worker_pool(db)
+    _assert_runtime_protocol_available(protocol, worker_pool, require_worker=True)
+    ciphertext = None
+    fingerprint = None
+    if request.get("apiKey") is not None:
+        ciphertext, fingerprint = encrypt_api_key(str(request.get("apiKey") or ""))
+    max_sort_order = db.scalar(select(func.max(AgentReviewRuntime.sort_order))) or 0
+    runtime = AgentReviewRuntime(
+        runtime_code=runtime_code,
+        display_name=str(request.get("displayName") or "").strip(),
+        protocol=protocol,
+        runner_type=runner_type,
+        base_url=normalize_custom_base_url(request.get("baseUrl")),
+        model_name=str(request.get("model") or "").strip(),
+        reasoning_effort=(
+            str(request.get("reasoningEffort") or "high").strip().lower()
+            if protocol == "OPENAI_RESPONSES"
+            else None
+        ),
+        tls_verify=request.get("tlsVerify") is not False,
+        enabled=bool(request.get("enabled", False)),
+        built_in=False,
+        sort_order=int(max_sort_order) + 10,
+        api_key_ciphertext=ciphertext,
+        api_key_fingerprint=fingerprint,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    if runtime.enabled:
+        _assert_runtime_configuration_complete(runtime)
+    db.add(runtime)
+    db.flush()
+    return _agent_runtime_response(runtime, settings=settings, worker_pool=worker_pool)
+
+
+def update_agent_runtime(
+    db: Session,
+    runtime_code: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    settings = get_agent_settings_record(db)
+    runtime = _get_agent_runtime(db, runtime_code, lock=True)
+    if runtime.built_in:
+        immutable_fields = {
+            "displayName",
+            "baseUrl",
+            "model",
+            "reasoningEffort",
+            "tlsVerify",
+        }
+        if immutable_fields.intersection(request):
+            raise AppError(
+                "AGENT_RUNTIME_BUILT_IN_IMMUTABLE",
+                f"Built-in Agent Runtime connection is immutable: {runtime.runtime_code}",
+                409,
+            )
+    if "displayName" in request:
+        runtime.display_name = str(request.get("displayName") or "").strip()
+    if "baseUrl" in request:
+        runtime.base_url = normalize_custom_base_url(request.get("baseUrl"))
+    if "model" in request:
+        runtime.model_name = str(request.get("model") or "").strip()
+    if "reasoningEffort" in request:
+        if runtime.protocol != "OPENAI_RESPONSES":
+            raise AppError(
+                "VALIDATION_ERROR",
+                "reasoningEffort is only supported by OPENAI_RESPONSES",
+                400,
+            )
+        runtime.reasoning_effort = str(request.get("reasoningEffort") or "").lower()
+    if "tlsVerify" in request:
+        runtime.tls_verify = request.get("tlsVerify") is not False
+    if request.get("clearApiKey") is True:
+        runtime.api_key_ciphertext = None
+        runtime.api_key_fingerprint = None
+        runtime.enabled = False
+        _fail_active_runtime_configuration_test(
+            runtime,
+            "Agent Runtime credential was cleared before configuration test completion",
+        )
+        if settings.selected_runtime_code == runtime.runtime_code:
+            settings.enabled = False
+    elif request.get("apiKey") is not None:
+        runtime.api_key_ciphertext, runtime.api_key_fingerprint = encrypt_api_key(
+            str(request.get("apiKey") or "")
+        )
+    if "enabled" in request:
+        runtime.enabled = bool(request.get("enabled"))
+        if not runtime.enabled:
+            _fail_active_runtime_configuration_test(
+                runtime,
+                "Agent Runtime was disabled before configuration test completion",
+            )
+        if not runtime.enabled and settings.selected_runtime_code == runtime.runtime_code:
+            settings.enabled = False
+    worker_pool = agent_worker_pool(db)
+    if runtime.enabled:
+        _assert_runtime_protocol_available(
+            runtime.protocol,
+            worker_pool,
+            require_worker=True,
+        )
+        _assert_runtime_configuration_complete(runtime)
+    runtime.updated_at = utc_now()
+    _sync_runtime_to_legacy_settings(settings, runtime)
+    if settings.selected_runtime_code == runtime.runtime_code:
+        _sync_runtime_test_to_legacy_settings(settings, runtime)
+    db.flush()
+    return _agent_runtime_response(runtime, settings=settings, worker_pool=worker_pool)
+
+
+def set_current_agent_runtime(db: Session, runtime_code: str) -> dict[str, Any]:
+    settings = db.scalars(
+        select(AgentReviewSettings)
+        .where(AgentReviewSettings.id == 1)
+        .with_for_update()
+    ).first()
+    if settings is None:
+        settings = get_agent_settings_record(db)
+    runtime = _get_agent_runtime(db, runtime_code, lock=True)
+    if not runtime.enabled:
+        raise AppError(
+            "AGENT_RUNTIME_DISABLED",
+            f"Disabled Agent Runtime cannot be selected: {runtime.runtime_code}",
+            409,
+        )
+    worker_pool = agent_worker_pool(db)
+    _assert_runtime_protocol_available(
+        runtime.protocol,
+        worker_pool,
+        require_worker=True,
+    )
+    _assert_runtime_configuration_complete(runtime)
+    settings.selected_runtime_code = runtime.runtime_code
+    settings.runtime_type = (
+        runtime.runtime_code
+        if runtime.runtime_code in RUNTIME_TYPES
+        else DEFAULT_RUNTIME
+    )
+    _sync_runtime_to_legacy_settings(settings, runtime)
+    settings.updated_at = utc_now()
+    db.flush()
+    return {
+        "selectedRuntimeCode": runtime.runtime_code,
+        "runtime": _agent_runtime_response(
+            runtime,
+            settings=settings,
+            worker_pool=worker_pool,
+        ),
+    }
+
+
+def selected_agent_runtime_record(db: Session) -> AgentReviewRuntime:
+    settings = get_agent_settings_record(db)
+    runtime_code = str(settings.selected_runtime_code or "").strip().upper()
+    runtime = db.get(AgentReviewRuntime, runtime_code)
+    if runtime is None:
+        runtime = db.get(AgentReviewRuntime, normalize_runtime_type(settings.runtime_type))
+    if runtime is None:
+        raise AppError("AGENT_RUNTIME_NOT_FOUND", "Selected Agent Runtime no longer exists", 409)
+    return runtime
+
+
+def selected_agent_runtime_snapshot(db: Session) -> dict[str, Any]:
+    return runtime_record_snapshot(selected_agent_runtime_record(db))
+
+
+def delete_agent_runtime(db: Session, runtime_code: str) -> dict[str, Any]:
+    settings = db.scalars(
+        select(AgentReviewSettings)
+        .where(AgentReviewSettings.id == 1)
+        .with_for_update()
+    ).first()
+    if settings is None:
+        settings = get_agent_settings_record(db)
+    runtime = _get_agent_runtime(db, runtime_code, lock=True)
+    if runtime.built_in:
+        raise AppError(
+            "AGENT_RUNTIME_BUILT_IN",
+            f"Built-in Agent Runtime cannot be deleted: {runtime.runtime_code}",
+            409,
+        )
+    if settings.selected_runtime_code == runtime.runtime_code:
+        raise AppError(
+            "AGENT_RUNTIME_IS_CURRENT",
+            f"Current Agent Runtime cannot be deleted: {runtime.runtime_code}",
+            409,
+        )
+    if str(runtime.test_status or "").upper() in {"QUEUED", "RUNNING"}:
+        raise AppError(
+            "AGENT_RUNTIME_TEST_ACTIVE",
+            f"Agent Runtime has an active configuration test: {runtime.runtime_code}",
+            409,
+        )
+    if _active_agent_run_references_runtime(db, runtime.runtime_code):
+        raise AppError(
+            "AGENT_RUNTIME_IN_USE",
+            f"Agent Runtime is referenced by an active task: {runtime.runtime_code}",
+            409,
+        )
+    if runtime.runtime_code == CUSTOM_RUNTIME:
+        settings.custom_display_name = None
+        settings.custom_base_url = None
+        settings.custom_model = None
+        settings.custom_reasoning_effort = None
+        settings.custom_tls_verify = True
+        settings.custom_api_key_ciphertext = None
+        settings.custom_api_key_fingerprint = None
+    db.delete(runtime)
+    db.flush()
+    return {"runtimeCode": runtime.runtime_code, "deleted": True}
+
+
+def _get_agent_runtime(
+    db: Session,
+    runtime_code: str,
+    *,
+    lock: bool = False,
+) -> AgentReviewRuntime:
+    normalized = _normalize_runtime_code(runtime_code)
+    statement = select(AgentReviewRuntime).where(
+        AgentReviewRuntime.runtime_code == normalized
+    )
+    if lock:
+        statement = statement.with_for_update()
+    runtime = db.scalars(statement).first()
+    if runtime is None:
+        raise AppError(
+            "RESOURCE_NOT_FOUND",
+            f"Agent Runtime not found: {normalized}",
+            404,
+        )
+    return runtime
+
+
+def _normalize_runtime_code(value: Any) -> str:
+    runtime_code = str(value or "").strip().upper()
+    if not _RUNTIME_CODE.fullmatch(runtime_code):
+        raise AppError("VALIDATION_ERROR", "runtimeCode is invalid", 400)
+    return runtime_code
+
+
+def _protocol_runner(protocol: str) -> str:
+    runner = _PROTOCOL_RUNNERS.get(protocol)
+    if runner is None:
+        raise AppError("VALIDATION_ERROR", f"Unsupported Agent Runtime protocol: {protocol}", 400)
+    return runner
+
+
+def _assert_runtime_protocol_available(
+    protocol: str,
+    worker_pool: dict[str, Any],
+    *,
+    require_worker: bool,
+) -> None:
+    if protocol not in _OPEN_AGENT_RUNTIME_PROTOCOLS:
+        raise AppError(
+            "AGENT_RUNTIME_PROTOCOL_UNAVAILABLE",
+            f"Agent Runtime protocol is not open: {protocol}",
+            409,
+        )
+    if require_worker and not _worker_pool_supports(
+        worker_pool, _protocol_runner(protocol)
+    ):
+        runner_type = _protocol_runner(protocol)
+        raise AppError(
+            "AGENT_RUNTIME_RUNNER_UNAVAILABLE",
+            f"No online Worker supports {runner_type}",
+            409,
+        )
+
+
+def _assert_runtime_configuration_complete(runtime: AgentReviewRuntime) -> None:
+    safe_url = custom_base_url_host(runtime.base_url) is not None
+    if not (
+        runtime.base_url
+        and runtime.model_name
+        and runtime.api_key_ciphertext
+        and safe_url
+    ):
+        raise AppError(
+            "AGENT_RUNTIME_CONFIGURATION_INCOMPLETE",
+            f"Agent Runtime configuration is incomplete: {runtime.runtime_code}",
+            409,
+        )
+
+
+def _runtime_protocol_availability(
+    runtime: AgentReviewRuntime,
+    worker_pool: dict[str, Any],
+) -> tuple[bool, str | None]:
+    if runtime.runner_type == "CLAUDE_CODE":
+        supported = _worker_pool_supports(worker_pool, runtime.runner_type)
+        return supported, None if supported else "No online Worker supports CLAUDE_CODE"
+    if runtime.protocol not in _OPEN_AGENT_RUNTIME_PROTOCOLS:
+        return False, f"Protocol {runtime.protocol} is not open"
+    supported = _worker_pool_supports(worker_pool, runtime.runner_type)
+    return (
+        supported,
+        None if supported else f"No online Worker supports {runtime.runner_type}",
+    )
+
+
+def _agent_runtime_response(
+    runtime: AgentReviewRuntime,
+    *,
+    settings: AgentReviewSettings,
+    worker_pool: dict[str, Any],
+) -> dict[str, Any]:
+    available, unavailable_reason = _runtime_protocol_availability(runtime, worker_pool)
+    response = agent_runtime_record_response(runtime)
+    response.update(
+        {
+            "selected": settings.selected_runtime_code == runtime.runtime_code,
+            "protocolAvailable": available,
+            "unavailableReason": unavailable_reason,
+            "configurationComplete": bool(
+                runtime.base_url
+                and runtime.model_name
+                and runtime.api_key_ciphertext
+                and custom_base_url_host(runtime.base_url) is not None
+            ),
+            "configurationTest": {
+                "requestId": runtime.test_request_id,
+                "status": runtime.test_status or "NOT_RUN",
+                "message": runtime.test_message,
+                "durationMs": runtime.test_duration_ms,
+                "startedAt": format_datetime(runtime.test_started_at),
+                "finishedAt": format_datetime(runtime.test_finished_at),
+            },
+        }
+    )
+    return response
+
+
+def _runtime_configuration_test_response(runtime: AgentReviewRuntime) -> dict[str, Any]:
+    return {
+        "runtimeCode": runtime.runtime_code,
+        "requestId": runtime.test_request_id,
+        "status": runtime.test_status or "NOT_RUN",
+        "message": runtime.test_message,
+        "durationMs": runtime.test_duration_ms,
+        "startedAt": format_datetime(runtime.test_started_at),
+        "finishedAt": format_datetime(runtime.test_finished_at),
+        "protocol": runtime.protocol,
+        "runnerType": runtime.runner_type,
+        "model": runtime.model_name,
+    }
+
+
+def _sync_runtime_test_to_legacy_settings(
+    settings: AgentReviewSettings,
+    runtime: AgentReviewRuntime,
+) -> None:
+    settings.test_request_id = runtime.test_request_id
+    settings.test_status = runtime.test_status
+    settings.test_message = runtime.test_message
+    settings.test_duration_ms = runtime.test_duration_ms
+    settings.test_started_at = runtime.test_started_at
+    settings.test_finished_at = runtime.test_finished_at
+    settings.updated_at = utc_now()
+
+
+def _fail_active_runtime_configuration_test(
+    runtime: AgentReviewRuntime,
+    message: str,
+) -> bool:
+    if str(runtime.test_status or "").upper() not in {"QUEUED", "RUNNING"}:
+        return False
+    now = utc_now()
+    runtime.test_status = "FAILED"
+    runtime.test_message = _bounded(message, 512)
+    runtime.test_duration_ms = None
+    runtime.test_finished_at = now
+    runtime.updated_at = now
+    return True
+
+
+def _expire_runtime_configuration_tests(db: Session) -> int:
+    now = utc_now()
+    cutoff = now - timedelta(seconds=CONFIGURATION_TEST_TIMEOUT_SECONDS)
+    runtimes = db.scalars(
+        select(AgentReviewRuntime).where(
+            AgentReviewRuntime.test_status.in_(["QUEUED", "RUNNING"])
+        )
+    ).all()
+    settings = get_agent_settings_record(db)
+    expired = 0
+    for runtime in runtimes:
+        reference = (
+            runtime.test_started_at
+            if runtime.test_status == "RUNNING"
+            else runtime.updated_at
+        )
+        if reference is None or reference > cutoff:
+            continue
+        if _fail_active_runtime_configuration_test(
+            runtime,
+            "Agent Runtime configuration test timed out",
+        ):
+            expired += 1
+            if settings.selected_runtime_code == runtime.runtime_code:
+                _sync_runtime_test_to_legacy_settings(settings, runtime)
+    if expired:
+        db.flush()
+    return expired
+
+
+def _sync_runtime_to_legacy_settings(
+    settings: AgentReviewSettings,
+    runtime: AgentReviewRuntime,
+) -> None:
+    if runtime.runtime_code == DEFAULT_RUNTIME:
+        settings.api_key_ciphertext = runtime.api_key_ciphertext
+        settings.api_key_fingerprint = runtime.api_key_fingerprint
+    elif runtime.runtime_code == CUSTOM_RUNTIME:
+        settings.custom_display_name = runtime.display_name
+        settings.custom_base_url = runtime.base_url
+        settings.custom_model = runtime.model_name
+        settings.custom_reasoning_effort = runtime.reasoning_effort
+        settings.custom_tls_verify = runtime.tls_verify is not False
+        settings.custom_api_key_ciphertext = runtime.api_key_ciphertext
+        settings.custom_api_key_fingerprint = runtime.api_key_fingerprint
+    settings.updated_at = utc_now()
+
+
+def _active_agent_run_references_runtime(db: Session, runtime_code: str) -> bool:
+    runs = db.scalars(
+        select(AgentReviewRun)
+        .where(AgentReviewRun.status.in_(["PENDING", "RUNNING"]))
+        .with_for_update()
+    ).all()
+    for run in runs:
+        payload = _read_json(run.input_json, {})
+        snapshot = payload.get("runtimeSnapshot") if isinstance(payload, dict) else None
+        if not isinstance(snapshot, dict):
+            continue
+        referenced = str(
+            snapshot.get("runtimeCode") or snapshot.get("runtimeType") or ""
+        ).strip().upper()
+        if referenced == runtime_code:
+            return True
+    return False
+
+
+def _legacy_custom_configuration_exists(settings: AgentReviewSettings) -> bool:
+    return any(
+        value not in {None, ""}
+        for value in (
+            settings.custom_display_name,
+            settings.custom_base_url,
+            settings.custom_model,
+            settings.custom_reasoning_effort,
+            settings.custom_api_key_ciphertext,
+            settings.custom_api_key_fingerprint,
+        )
+    )
+
+
+def _compatible_selected_runtime_code(settings: AgentReviewSettings) -> str:
+    selected = str(settings.selected_runtime_code or "").strip().upper()
+    if selected in RUNTIME_TYPES:
+        return selected
+    return normalize_runtime_type(settings.runtime_type)
+
+
+def _legacy_runtime_record(
+    settings: AgentReviewSettings,
+    runtime_code: str,
+) -> AgentReviewRuntime:
+    now = utc_now()
+    selected = _compatible_selected_runtime_code(settings)
+    test_fields = {
+        "test_request_id": settings.test_request_id if selected == runtime_code else None,
+        "test_status": settings.test_status if selected == runtime_code else None,
+        "test_message": settings.test_message if selected == runtime_code else None,
+        "test_duration_ms": settings.test_duration_ms if selected == runtime_code else None,
+        "test_started_at": settings.test_started_at if selected == runtime_code else None,
+        "test_finished_at": settings.test_finished_at if selected == runtime_code else None,
+    }
+    if runtime_code == CUSTOM_RUNTIME:
+        return AgentReviewRuntime(
+            runtime_code=CUSTOM_RUNTIME,
+            display_name=settings.custom_display_name or CUSTOM_DEFAULT_DISPLAY_NAME,
+            protocol="OPENAI_RESPONSES",
+            runner_type="OPENAI_RESPONSES_AGENT",
+            base_url=settings.custom_base_url,
+            model_name=settings.custom_model or CUSTOM_DEFAULT_MODEL,
+            reasoning_effort=settings.custom_reasoning_effort or "high",
+            tls_verify=settings.custom_tls_verify is not False,
+            enabled=True,
+            built_in=False,
+            sort_order=20,
+            api_key_ciphertext=settings.custom_api_key_ciphertext,
+            api_key_fingerprint=settings.custom_api_key_fingerprint,
+            created_at=now,
+            updated_at=now,
+            **test_fields,
+        )
+    return AgentReviewRuntime(
+        runtime_code=DEFAULT_RUNTIME,
+        display_name="Claude Code + DeepSeek",
+        protocol="ANTHROPIC_COMPATIBLE",
+        runner_type="CLAUDE_CODE",
+        base_url=AGENT_ENDPOINT,
+        model_name=AGENT_MODEL,
+        reasoning_effort="high",
+        tls_verify=True,
+        enabled=True,
+        built_in=True,
+        sort_order=10,
+        api_key_ciphertext=settings.api_key_ciphertext,
+        api_key_fingerprint=settings.api_key_fingerprint,
+        created_at=now,
+        updated_at=now,
+        **test_fields,
+    )
 
 
 def agent_settings_response(db: Session) -> dict[str, Any]:
@@ -290,8 +941,14 @@ def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any
             else json.dumps(next_budgets, ensure_ascii=False, sort_keys=True)
         )
 
+    selected_runtime_requested = "selectedRuntime" in request
     next_runtime = normalize_runtime_type(
         request.get("selectedRuntime", record.runtime_type), strict=True
+    )
+    next_selected_runtime_code = (
+        next_runtime
+        if selected_runtime_requested
+        else str(record.selected_runtime_code or next_runtime).strip().upper()
     )
     custom_request = request.get("customRuntime")
     if custom_request is not None and not isinstance(custom_request, dict):
@@ -346,13 +1003,24 @@ def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any
     if "enabled" in request:
         enabled = bool(request.get("enabled"))
         if enabled:
-            _assert_runtime_ready(db, record, next_runtime, require_worker=next_runtime == CUSTOM_RUNTIME)
+            if next_selected_runtime_code not in RUNTIME_TYPES:
+                _assert_selected_runtime_ready(db, next_selected_runtime_code, require_worker=True)
+            else:
+                _assert_runtime_ready(
+                    db, record, next_runtime, require_worker=next_runtime == CUSTOM_RUNTIME
+                )
         record.enabled = enabled
-    elif record.enabled and next_runtime != normalize_runtime_type(record.runtime_type):
+    elif (
+        record.enabled
+        and selected_runtime_requested
+        and next_runtime != normalize_runtime_type(record.runtime_type)
+    ):
         _assert_runtime_ready(db, record, next_runtime, require_worker=next_runtime == CUSTOM_RUNTIME)
     record.runtime_type = next_runtime
+    record.selected_runtime_code = next_selected_runtime_code
     record.budget_config_json = next_budget_json
     record.updated_at = utc_now()
+    sync_legacy_agent_runtime_records(db, record)
     db.commit()
     return agent_settings_response(db)
 
@@ -615,13 +1283,13 @@ def assert_agent_available(db: Session, *, require_worker: bool = True) -> Agent
     record = get_agent_settings_record(db)
     if not record.enabled:
         raise AppError("AGENT_REVIEW_UNAVAILABLE", "Agent Review is disabled", 409)
-    runtime_type = normalize_runtime_type(record.runtime_type)
-    _assert_runtime_ready(db, record, runtime_type, require_worker=False)
+    runtime = selected_agent_runtime_record(db)
+    _assert_selected_runtime_ready(db, runtime.runtime_code, require_worker=False)
     worker_pool = agent_worker_pool(db)
     legacy_online = worker_pool["totalCount"] == 0 and _worker_online(record)
-    runtime_online = _worker_pool_supports(worker_pool, runtime_type)
+    runtime_online = _worker_pool_supports(worker_pool, runtime.runner_type)
     if require_worker and not (
-        runtime_online or (runtime_type == DEFAULT_RUNTIME and legacy_online)
+        runtime_online or (runtime.runtime_code == DEFAULT_RUNTIME and legacy_online)
     ):
         raise AppError("AGENT_REVIEW_UNAVAILABLE", "Agent Review Worker is offline", 409)
     return record
@@ -629,51 +1297,93 @@ def assert_agent_available(db: Session, *, require_worker: bool = True) -> Agent
 
 def request_configuration_test(db: Session) -> dict[str, Any]:
     record = assert_agent_available(db, require_worker=True)
-    record.test_request_id = f"config-test:{uuid4().hex}"
-    record.test_status = "QUEUED"
-    record.test_message = None
-    record.test_duration_ms = None
-    record.test_started_at = None
-    record.test_finished_at = None
-    record.updated_at = utc_now()
+    runtime = selected_agent_runtime_record(db)
+    response = request_runtime_configuration_test(db, runtime.runtime_code)
+    _sync_runtime_test_to_legacy_settings(record, runtime)
     db.commit()
-    return agent_settings_response(db)["configurationTest"]
+    return {**response, "runtimeType": normalize_runtime_type(record.runtime_type)}
+
+
+def request_runtime_configuration_test(
+    db: Session,
+    runtime_code: str,
+) -> dict[str, Any]:
+    _expire_runtime_configuration_tests(db)
+    runtime = _get_agent_runtime(db, runtime_code, lock=True)
+    if str(runtime.test_status or "").upper() in {"QUEUED", "RUNNING"}:
+        raise AppError(
+            "AGENT_RUNTIME_TEST_ACTIVE",
+            f"Agent Runtime already has an active configuration test: {runtime.runtime_code}",
+            409,
+        )
+    _assert_selected_runtime_ready(db, runtime.runtime_code, require_worker=True)
+    now = utc_now()
+    runtime.test_request_id = f"runtime-test:{runtime.runtime_code}:{uuid4().hex}"
+    runtime.test_status = "QUEUED"
+    runtime.test_message = None
+    runtime.test_duration_ms = None
+    runtime.test_started_at = None
+    runtime.test_finished_at = None
+    runtime.updated_at = now
+    settings = get_agent_settings_record(db)
+    if settings.selected_runtime_code == runtime.runtime_code:
+        _sync_runtime_test_to_legacy_settings(settings, runtime)
+    db.flush()
+    return _runtime_configuration_test_response(runtime)
 
 
 def claim_configuration_test(db: Session, *, worker_id: str) -> dict[str, Any] | None:
-    available = assert_agent_available(db, require_worker=False)
-    record = db.scalars(
-        select(AgentReviewSettings)
-        .where(AgentReviewSettings.id == available.id)
-        .execution_options(populate_existing=True)
-        .with_for_update()
-    ).first()
-    if record is None:
-        return None
-    if record.test_status != "QUEUED" or not record.test_request_id:
-        return None
-    runtime_type = normalize_runtime_type(record.runtime_type)
+    ensure_agent_review_schema(db)
+    _expire_runtime_configuration_tests(db)
     worker = db.get(AgentReviewWorker, worker_id)
-    if runtime_type == CUSTOM_RUNTIME and (
-        worker is None or not worker_supports(worker.capabilities_json, runtime_type)
-    ):
+    capabilities = normalize_worker_capabilities(
+        worker.capabilities_json if worker is not None else None
+    )
+    supported_runners = [
+        runner
+        for runner in (
+            "CLAUDE_CODE",
+            "OPENAI_RESPONSES_AGENT",
+            "OPENAI_CHAT_AGENT",
+            "ANTHROPIC_MESSAGES_AGENT",
+        )
+        if worker_supports(capabilities, runner)
+    ]
+    statement = (
+        select(AgentReviewRuntime)
+        .where(AgentReviewRuntime.test_status == "QUEUED")
+        .where(AgentReviewRuntime.enabled.is_(True))
+        .where(AgentReviewRuntime.runner_type.in_(supported_runners))
+        .order_by(AgentReviewRuntime.updated_at.asc(), AgentReviewRuntime.runtime_code.asc())
+        .limit(1)
+    )
+    if _supports_skip_locked(db):
+        statement = statement.with_for_update(skip_locked=True)
+    else:
+        statement = statement.with_for_update()
+    runtime = db.scalars(statement).first()
+    if runtime is None or not runtime.test_request_id:
         return None
     now = utc_now()
-    record.test_status = "RUNNING"
-    record.test_started_at = now
-    record.test_finished_at = None
-    record.test_message = None
-    record.updated_at = now
+    runtime.test_status = "RUNNING"
+    runtime.test_started_at = now
+    runtime.test_finished_at = None
+    runtime.test_message = None
+    runtime.updated_at = now
+    settings = get_agent_settings_record(db)
+    if settings.selected_runtime_code == runtime.runtime_code:
+        _sync_runtime_test_to_legacy_settings(settings, runtime)
     db.commit()
-    snapshot = runtime_snapshot(record)
+    snapshot = runtime_record_snapshot(runtime)
+    api_key = _decrypt_runtime_code_api_key(db, settings, runtime.runtime_code)
     return {
         "kind": "CONFIG_TEST",
-        "requestId": record.test_request_id,
+        "requestId": runtime.test_request_id,
         "runtime": {
             **snapshot,
-            "apiKey": _decrypt_runtime_api_key(record, runtime_type),
+            "apiKey": api_key,
         },
-        "apiKey": _decrypt_runtime_api_key(record, runtime_type),
+        "apiKey": api_key,
         "budgets": {
             "maxTurns": 6,
             "maxToolCalls": 10,
@@ -690,19 +1400,28 @@ def claim_configuration_test(db: Session, *, worker_id: str) -> dict[str, Any] |
 def complete_configuration_test(
     db: Session, *, request_id: str, status: str, message: str | None, duration_ms: int | None
 ) -> dict[str, Any]:
-    record = get_agent_settings_record(db)
-    if record.test_request_id != request_id:
+    runtime = db.scalars(
+        select(AgentReviewRuntime)
+        .where(AgentReviewRuntime.test_request_id == request_id)
+        .with_for_update()
+    ).first()
+    if runtime is None:
         raise AppError("AGENT_CONFIG_TEST_STALE", "Agent configuration test request is stale", 409)
-    if record.test_status in {"SUCCESS", "FAILED"}:
-        return agent_settings_response(db)["configurationTest"]
+    if runtime.test_status in {"SUCCESS", "FAILED"}:
+        return _runtime_configuration_test_response(runtime)
+    if runtime.test_status != "RUNNING":
+        raise AppError("AGENT_CONFIG_TEST_STALE", "Agent configuration test request is stale", 409)
     normalized = str(status or "FAILED").upper()
-    record.test_status = "SUCCESS" if normalized == "SUCCESS" else "FAILED"
-    record.test_message = _bounded(message, 512)
-    record.test_duration_ms = _non_negative(duration_ms)
-    record.test_finished_at = utc_now()
-    record.updated_at = utc_now()
+    runtime.test_status = "SUCCESS" if normalized == "SUCCESS" else "FAILED"
+    runtime.test_message = _bounded(message, 512)
+    runtime.test_duration_ms = _non_negative(duration_ms)
+    runtime.test_finished_at = utc_now()
+    runtime.updated_at = utc_now()
+    settings = get_agent_settings_record(db)
+    if settings.selected_runtime_code == runtime.runtime_code:
+        _sync_runtime_test_to_legacy_settings(settings, runtime)
     db.commit()
-    return agent_settings_response(db)["configurationTest"]
+    return _runtime_configuration_test_response(runtime)
 
 
 def create_agent_job(
@@ -718,10 +1437,13 @@ def create_agent_job(
     ensure_agent_review_schema(db)
     now = utc_now()
     idempotency_key = f"agent:{task_id}:{uuid4().hex}"
-    snapshot = runtime or runtime_snapshot(get_agent_settings_record(db))
-    runtime_type = normalize_runtime_type(snapshot.get("runtimeType"))
-    custom = runtime_type == CUSTOM_RUNTIME
-    review_key = CUSTOM_REVIEW_KEY if custom else AGENT_REVIEW_KEY
+    snapshot = runtime or selected_agent_runtime_snapshot(db)
+    runtime_code = str(
+        snapshot.get("runtimeCode") or snapshot.get("runtimeType") or DEFAULT_RUNTIME
+    ).strip().upper()
+    runner_type = str(snapshot.get("runnerType") or "").strip().upper()
+    custom = runtime_code != DEFAULT_RUNTIME
+    review_key = runtime_review_key(runtime_code)
     model = str(snapshot.get("model") or (CUSTOM_DEFAULT_MODEL if custom else AGENT_MODEL))
     input_payload = {**input_payload, "runtimeSnapshot": snapshot}
     job = CodeQualitySchedulerJob(
@@ -759,8 +1481,16 @@ def create_agent_job(
         idempotency_key=idempotency_key,
         requested_engine="AGENT",
         effective_engine=None,
-        runner_version=RESPONSES_RUNNER_VERSION if custom else AGENT_RUNNER_VERSION,
-        runner_type="OPENAI_RESPONSES_AGENT" if custom else "CLAUDE_CODE",
+        runner_version=(
+            RESPONSES_RUNNER_VERSION
+            if runner_type == "OPENAI_RESPONSES_AGENT"
+            else CHAT_COMPLETIONS_RUNNER_VERSION
+            if runner_type == "OPENAI_CHAT_AGENT"
+            else ANTHROPIC_MESSAGES_RUNNER_VERSION
+            if runner_type == "ANTHROPIC_MESSAGES_AGENT"
+            else AGENT_RUNNER_VERSION
+        ),
+        runner_type=runner_type or ("OPENAI_RESPONSES_AGENT" if custom else "CLAUDE_CODE"),
         provider="CUSTOM_OPENAI" if custom else "DEEPSEEK",
         model=model,
         status="PENDING",
@@ -776,16 +1506,25 @@ def create_agent_job(
 
 
 def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
-    settings_record = assert_agent_available(db, require_worker=False)
+    # 已入队任务使用自己的不可变快照；全局开关只控制新任务，不阻断旧任务进入
+    # 凭据解析或稳定 fallback。
+    settings_record = get_agent_settings_record(db)
     ensure_agent_review_schema(db)
     now = utc_now()
     worker = db.get(AgentReviewWorker, worker_id)
     capabilities = normalize_worker_capabilities(
         worker.capabilities_json if worker is not None else None
     )
-    allowed_runner_types = ["CLAUDE_CODE"]
-    if CUSTOM_RUNTIME in capabilities:
-        allowed_runner_types.append("OPENAI_RESPONSES_AGENT")
+    allowed_runner_types = [
+        runner
+        for runner in (
+            "CLAUDE_CODE",
+            "OPENAI_RESPONSES_AGENT",
+            "OPENAI_CHAT_AGENT",
+            "ANTHROPIC_MESSAGES_AGENT",
+        )
+        if worker_supports(capabilities, runner)
+    ]
     stmt = (
         select(CodeQualitySchedulerJob)
         .join(AgentReviewRun, AgentReviewRun.scheduler_job_id == CodeQualitySchedulerJob.id)
@@ -835,7 +1574,9 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
     snapshot = input_payload.get("runtimeSnapshot")
     if not isinstance(snapshot, dict):
         snapshot = runtime_snapshot(object())
-    runtime_type = normalize_runtime_type(snapshot.get("runtimeType"))
+    runtime_code = str(
+        snapshot.get("runtimeCode") or snapshot.get("runtimeType") or DEFAULT_RUNTIME
+    ).strip().upper()
     raw_budgets = input_payload.get("budgets")
     if raw_budgets is None:
         # 兼容配置化上线前已排队的 Run；旧任务必须使用原默认值，而不是后来保存的全局配置。
@@ -846,8 +1587,13 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
         except AgentBudgetValidationError:
             # 不把损坏的持久化原文返回给 Worker；安全哨兵会触发 Worker 的严格拒绝。
             budgets = {"invalidBudgetContract": 1}
+    try:
+        api_key = _decrypt_runtime_code_api_key(db, settings_record, runtime_code)
+    except AppError as exception:
+        _fail_unclaimable_runtime_job(job, run, exception.code, exception.message, now)
+        db.commit()
+        return {"_fallbackRunId": run.id}
     db.commit()
-    api_key = _decrypt_runtime_api_key(settings_record, runtime_type)
     return {
         "jobId": job.id,
         "runId": run.id,
@@ -1292,7 +2038,7 @@ def _worker_pool_supports(worker_pool: dict[str, Any], runtime_type: str) -> boo
         isinstance(node, dict)
         and node.get("online") is True
         and str(node.get("state") or "IDLE").upper() != "DRAINING"
-        and runtime_type in normalize_worker_capabilities(node.get("capabilities"))
+        and worker_supports(node.get("capabilities"), runtime_type)
         for node in nodes
     )
 
@@ -1301,6 +2047,86 @@ def _decrypt_runtime_api_key(record: AgentReviewSettings, runtime_type: str) -> 
     if normalize_runtime_type(runtime_type) == CUSTOM_RUNTIME:
         return decrypt_api_key(record.custom_api_key_ciphertext)
     return decrypt_api_key(record.api_key_ciphertext)
+
+
+def _decrypt_runtime_code_api_key(
+    db: Session,
+    settings: AgentReviewSettings,
+    runtime_code: str,
+) -> str:
+    normalized = str(runtime_code or DEFAULT_RUNTIME).strip().upper()
+    if normalized in RUNTIME_TYPES:
+        runtime = db.get(AgentReviewRuntime, normalized)
+        if runtime is None:
+            return _decrypt_runtime_api_key(settings, normalized)
+    else:
+        runtime = db.get(AgentReviewRuntime, normalized)
+    if runtime is None:
+        raise AppError(
+            "AGENT_RUNTIME_NOT_FOUND",
+            f"Agent Runtime no longer exists: {normalized}",
+            409,
+        )
+    if not runtime.enabled:
+        raise AppError(
+            "AGENT_RUNTIME_DISABLED",
+            f"Agent Runtime is disabled: {normalized}",
+            409,
+        )
+    try:
+        return decrypt_api_key(runtime.api_key_ciphertext)
+    except AppError as exception:
+        raise AppError(
+            "AGENT_RUNTIME_CREDENTIAL_UNAVAILABLE",
+            f"Agent Runtime credential is unavailable: {normalized}",
+            409,
+        ) from exception
+
+
+def _assert_selected_runtime_ready(
+    db: Session,
+    runtime_code: str,
+    *,
+    require_worker: bool,
+) -> None:
+    runtime = _get_agent_runtime(db, runtime_code)
+    if not runtime.enabled:
+        raise AppError("AGENT_RUNTIME_DISABLED", f"Agent Runtime is disabled: {runtime.runtime_code}", 409)
+    if runtime.runtime_code == DEFAULT_RUNTIME:
+        _assert_runtime_ready(
+            db,
+            get_agent_settings_record(db),
+            DEFAULT_RUNTIME,
+            require_worker=require_worker,
+        )
+        return
+    _assert_runtime_protocol_available(
+        runtime.protocol,
+        agent_worker_pool(db),
+        require_worker=require_worker,
+    )
+    _assert_runtime_configuration_complete(runtime)
+    _decrypt_runtime_code_api_key(db, get_agent_settings_record(db), runtime.runtime_code)
+
+
+def _fail_unclaimable_runtime_job(
+    job: CodeQualitySchedulerJob,
+    run: AgentReviewRun,
+    failure_code: str,
+    failure_message: str,
+    now: datetime,
+) -> None:
+    message = _bounded(failure_message, 512)
+    job.status = "FAILED"
+    job.error_message = failure_code
+    job.finished_at = now
+    job.updated_at = now
+    run.status = "FAILED"
+    run.effective_engine = "STANDARD_FALLBACK"
+    run.failure_code = _bounded(failure_code, 64)
+    run.failure_message = message
+    run.finished_at = now
+    run.updated_at = now
 
 
 def _assert_runtime_ready(
@@ -1346,12 +2172,15 @@ def _ensure_result_columns(db: Session, inspector) -> None:
 
 def _ensure_settings_columns(db: Session, inspector) -> None:
     columns = {column["name"] for column in inspector.get_columns("code_quality_agent_settings")}
+    selected_runtime_missing = "selected_runtime_code" not in columns
     definitions = {
         "runtime_type": "VARCHAR(32) NOT NULL DEFAULT 'CLAUDE_CODE_DEEPSEEK'",
+        "selected_runtime_code": "VARCHAR(40) NOT NULL DEFAULT 'CLAUDE_CODE_DEEPSEEK'",
         "custom_display_name": "VARCHAR(64) NULL",
         "custom_base_url": "VARCHAR(1024) NULL",
         "custom_model": "VARCHAR(128) NULL",
         "custom_reasoning_effort": "VARCHAR(16) NULL",
+        "custom_tls_verify": "BOOLEAN NOT NULL DEFAULT TRUE",
         "custom_api_key_ciphertext": "TEXT NULL",
         "custom_api_key_fingerprint": "VARCHAR(32) NULL",
         "budget_config_json": "TEXT NULL",
@@ -1364,6 +2193,17 @@ def _ensure_settings_columns(db: Session, inspector) -> None:
     }
     for name, definition in definitions.items():
         _add_column(db, columns, "code_quality_agent_settings", name, definition)
+    if selected_runtime_missing:
+        db.execute(
+            text(
+                "UPDATE code_quality_agent_settings "
+                "SET selected_runtime_code = CASE "
+                "WHEN runtime_type = 'OPENAI_RESPONSES_CUSTOM' "
+                "THEN 'OPENAI_RESPONSES_CUSTOM' "
+                "ELSE 'CLAUDE_CODE_DEEPSEEK' END"
+            )
+        )
+        db.flush()
 
 
 def _ensure_worker_columns(db: Session, inspector) -> None:

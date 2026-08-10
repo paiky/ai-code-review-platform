@@ -114,6 +114,44 @@ function buildAgentRows(agentSettings) {
   ];
 }
 
+function buildDynamicAgentRows(agentRuntimes) {
+  const seen = new Set();
+  return agentRuntimes.flatMap(runtime => {
+    const runtimeCode = text(runtime?.runtimeCode).toUpperCase();
+    if (!runtimeCode || seen.has(runtimeCode)) return [];
+    seen.add(runtimeCode);
+    const configurationComplete = runtime?.configurationComplete === true;
+    const protocolAvailable = optionalBoolean(runtime?.protocolAvailable);
+    return [{
+      id: agentConnectionId(runtimeCode),
+      reviewType: agentReviewConnection,
+      connectionType: 'RUNTIME',
+      runtimeType: runtimeCode,
+      runtimeCode,
+      providerCode: null,
+      name: text(runtime?.displayName) || runtimeCode,
+      protocol: text(runtime?.protocol) || null,
+      endpoint: text(runtime?.baseUrl) || null,
+      model: text(runtime?.model) || null,
+      isDefault: runtime?.builtIn === true,
+      isCurrent: runtime?.selected === true,
+      enabled: runtime?.enabled === true,
+      builtIn: runtime?.builtIn === true,
+      apiKeyConfigured: runtime?.apiKeyConfigured === true,
+      configurationComplete,
+      workerSupported: protocolAvailable,
+      unavailableReason: text(runtime?.unavailableReason) || null,
+      configurationTest: runtime?.configurationTest || null,
+      configurationStatus: statusFor({
+        enabled: runtime?.enabled === true,
+        configurationComplete,
+        workerSupported: protocolAvailable
+      }),
+      updatedAt: text(runtime?.updatedAt) || null
+    }];
+  });
+}
+
 function effectiveDefaultProviderCode(providers, defaultProviderCode) {
   const explicit = text(defaultProviderCode).toUpperCase();
   if (explicit) return explicit;
@@ -164,12 +202,14 @@ function buildStandardRows(providers, defaultProviderCode) {
 
 export function buildReviewModelConnectionCatalog({
   agentSettings = null,
+  agentRuntimes = null,
   providers = [],
   defaultProviderCode = null
 } = {}) {
   const providerItems = Array.isArray(providers) ? providers : [];
+  const runtimeItems = Array.isArray(agentRuntimes) ? agentRuntimes : null;
   return [
-    ...buildAgentRows(agentSettings),
+    ...(runtimeItems ? buildDynamicAgentRows(runtimeItems) : buildAgentRows(agentSettings)),
     ...buildStandardRows(providerItems, defaultProviderCode)
   ];
 }

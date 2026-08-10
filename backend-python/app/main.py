@@ -9,7 +9,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent_review.api import router as agent_review_worker_router
+from app.agent_review.api import runtime_router as agent_review_runtime_router
 from app.code_quality.api import profile_router as code_quality_profile_router
+from app.code_quality.api import model_preset_router as review_model_preset_router
 from app.code_quality.api import provider_router as code_quality_provider_router
 from app.code_quality.api import review_router as code_quality_review_router
 from app.code_quality.service import recover_stale_running_reviews_on_startup
@@ -91,6 +93,8 @@ def create_app() -> FastAPI:
     app.include_router(code_quality_review_router)
     app.include_router(code_quality_profile_router)
     app.include_router(code_quality_provider_router)
+    app.include_router(review_model_preset_router)
+    app.include_router(agent_review_runtime_router)
     app.include_router(agent_review_worker_router)
     app.include_router(evaluation_router)
     app.include_router(evaluation_run_router)

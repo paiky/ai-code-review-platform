@@ -16,6 +16,7 @@ from app.code_quality.models import (
     CodeQualityReviewResult,
     CodeQualitySchedulerJob,
 )
+from app.code_quality.repository import ensure_provider_schema
 from app.project_integration.models import (
     GitLabMergeRequestEvent,
     Project,
@@ -236,6 +237,8 @@ def test_create_custom_provider_normalizes_fields_and_masks_key(
         "endpointUrl": "https://models.example.com/v1",
         "modelName": "review-model",
         "timeoutSeconds": 120,
+        "reasoningEffort": None,
+        "catalogVisible": True,
         "enabled": False,
         "builtIn": False,
         "defaultProvider": False,
@@ -255,7 +258,134 @@ def test_create_custom_provider_normalizes_fields_and_masks_key(
     )
     assert stored is not None
     assert stored.built_in is False
+    assert stored.catalog_visible is True
     assert stored.sort_order == int(before_max_sort_order or 0) + 10
+
+
+def test_provider_catalog_visibility_survives_api_key_clear(
+    client: TestClient,
+) -> None:
+    initial = client.get("/api/code-quality-review-providers")
+    assert initial.status_code == 200
+    initial_providers = {
+        item["providerCode"]: item for item in initial.json()["data"]
+    }
+    assert initial_providers["OPENAI"]["catalogVisible"] is False
+    assert initial_providers["OPENAI"]["reasoningEffort"] == "high"
+
+    configured = client.put(
+        "/api/code-quality-review-providers/OPENAI",
+        json={"apiKey": "sk-visible-123456"},
+    )
+    assert configured.status_code == 200
+    openai = next(
+        item for item in configured.json()["data"]
+        if item["providerCode"] == "OPENAI"
+    )
+    assert openai["catalogVisible"] is True
+    assert openai["apiKeyConfigured"] is True
+
+    cleared = client.put(
+        "/api/code-quality-review-providers/OPENAI",
+        json={"clearApiKey": True},
+    )
+    assert cleared.status_code == 200
+    openai = next(
+        item for item in cleared.json()["data"]
+        if item["providerCode"] == "OPENAI"
+    )
+    assert openai["catalogVisible"] is True
+    assert openai["apiKeyConfigured"] is False
+
+
+def test_provider_reasoning_effort_is_protocol_scoped(client: TestClient) -> None:
+    openai = client.put(
+        "/api/code-quality-review-providers/OPENAI",
+        json={"reasoningEffort": "medium"},
+    )
+    unsupported = client.put(
+        "/api/code-quality-review-providers/DEEPSEEK",
+        json={"reasoningEffort": "high"},
+    )
+
+    assert openai.status_code == 200
+    selected = next(
+        item for item in openai.json()["data"]
+        if item["providerCode"] == "OPENAI"
+    )
+    assert selected["reasoningEffort"] == "medium"
+    assert unsupported.status_code == 400
+    assert unsupported.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_provider_schema_upgrade_backfills_catalog_visibility_once(
+    db_session: Session,
+) -> None:
+    db_session.execute(text("DROP TABLE code_quality_model_providers"))
+    db_session.execute(
+        text(
+            """
+            CREATE TABLE code_quality_model_providers (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              provider_code VARCHAR(64) NOT NULL UNIQUE,
+              provider_name VARCHAR(128) NOT NULL,
+              provider_type VARCHAR(64) NOT NULL,
+              endpoint_url VARCHAR(512) NULL,
+              model_name VARCHAR(128) NULL,
+              api_key VARCHAR(1024) NULL,
+              timeout_seconds INT NULL,
+              enabled BOOLEAN NOT NULL DEFAULT TRUE,
+              built_in BOOLEAN NOT NULL DEFAULT TRUE,
+              sort_order INT NOT NULL DEFAULT 0,
+              created_at DATETIME NULL,
+              updated_at DATETIME NULL
+            )
+            """
+        )
+    )
+    db_session.execute(
+        text(
+            """
+            INSERT INTO code_quality_model_providers (
+              provider_code, provider_name, provider_type, api_key, built_in
+            ) VALUES
+              ('KEYED', 'Keyed', 'OPENAI_RESPONSES', 'stored-secret', TRUE),
+              ('PLACEHOLDER', 'Placeholder', 'ANTHROPIC_MESSAGES', NULL, TRUE),
+              ('USER_CREATED', 'User created', 'OPENAI_CHAT_COMPATIBLE', NULL, FALSE)
+            """
+        )
+    )
+
+    ensure_provider_schema(db_session)
+
+    columns = {
+        column["name"]
+        for column in inspect(db_session.connection()).get_columns(
+            "code_quality_model_providers"
+        )
+    }
+    rows = {
+        row.provider_code: row
+        for row in db_session.scalars(select(CodeQualityModelProvider)).all()
+    }
+    assert {"catalog_visible", "reasoning_effort"} <= columns
+    assert rows["KEYED"].catalog_visible is True
+    assert rows["KEYED"].reasoning_effort == "high"
+    assert rows["PLACEHOLDER"].catalog_visible is False
+    assert rows["USER_CREATED"].catalog_visible is True
+
+    rows["KEYED"].api_key = None
+    db_session.flush()
+    ensure_provider_schema(db_session)
+
+    db_session.expire_all()
+    keyed = db_session.scalar(
+        select(CodeQualityModelProvider).where(
+            CodeQualityModelProvider.provider_code == "KEYED"
+        )
+    )
+    assert keyed is not None
+    assert keyed.catalog_visible is True
 
 
 def test_create_enabled_custom_provider_requires_complete_configuration(

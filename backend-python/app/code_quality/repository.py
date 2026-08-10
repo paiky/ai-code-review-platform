@@ -437,6 +437,38 @@ def ensure_provider_schema(db: Session) -> None:
         return
     columns = {column["name"] for column in inspector.get_columns("code_quality_model_providers")}
     _add_column_if_missing(db, columns, "code_quality_model_providers", "timeout_seconds", "INT NULL")
+    catalog_visible_missing = "catalog_visible" not in columns
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_model_providers",
+        "catalog_visible",
+        "BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+    reasoning_effort_missing = "reasoning_effort" not in columns
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_model_providers",
+        "reasoning_effort",
+        "VARCHAR(16) NULL",
+    )
+    if catalog_visible_missing:
+        db.execute(
+            text(
+                "UPDATE code_quality_model_providers "
+                "SET catalog_visible = CASE "
+                "WHEN built_in = FALSE OR TRIM(COALESCE(api_key, '')) <> '' THEN TRUE "
+                "ELSE FALSE END"
+            )
+        )
+    if reasoning_effort_missing:
+        db.execute(
+            text(
+                "UPDATE code_quality_model_providers SET reasoning_effort = 'high' "
+                "WHERE provider_type = 'OPENAI_RESPONSES' AND reasoning_effort IS NULL"
+            )
+        )
     db.flush()
 
 
@@ -676,6 +708,8 @@ def _upsert_default_provider(
                 model_name=_blank_to_none(model_name),
                 api_key=_blank_to_none(api_key),
                 timeout_seconds=None,
+                reasoning_effort="high" if provider_type == "OPENAI_RESPONSES" else None,
+                catalog_visible=bool(_blank_to_none(api_key)),
                 enabled=enabled,
                 built_in=True,
                 sort_order=sort_order,
@@ -689,6 +723,10 @@ def _upsert_default_provider(
     provider.endpoint_url = provider.endpoint_url or _blank_to_none(endpoint_url)
     provider.model_name = provider.model_name or _blank_to_none(model_name)
     provider.api_key = provider.api_key or _blank_to_none(api_key)
+    if provider.provider_type == "OPENAI_RESPONSES" and not provider.reasoning_effort:
+        provider.reasoning_effort = "high"
+    if provider.api_key:
+        provider.catalog_visible = True
     provider.built_in = True
     provider.sort_order = sort_order
 
@@ -973,6 +1011,10 @@ def create_provider(db: Session, request: dict[str, Any]) -> dict[str, Any]:
         model_name=_blank_to_none(request.get("modelName")),
         api_key=_blank_to_none(request.get("apiKey")),
         timeout_seconds=_normalize_provider_timeout(request.get("timeoutSeconds")),
+        reasoning_effort=_normalize_provider_reasoning_effort(
+            request.get("reasoningEffort"), str(request["providerType"])
+        ),
+        catalog_visible=True,
         enabled=bool(request.get("enabled", False)),
         built_in=False,
         sort_order=int(max_sort_order) + 10,
@@ -1078,6 +1120,8 @@ def provider_to_response(
         "endpointUrl": provider.endpoint_url,
         "modelName": provider.model_name,
         "timeoutSeconds": provider.timeout_seconds,
+        "reasoningEffort": provider.reasoning_effort,
+        "catalogVisible": provider.catalog_visible,
         "enabled": provider.enabled,
         "builtIn": provider.built_in,
         "defaultProvider": provider.provider_code == default_provider_code,
@@ -1100,10 +1144,16 @@ def update_provider(db: Session, provider_code: str, request: dict[str, Any]) ->
         values["model_name"] = _blank_to_none(request["modelName"])
     if "timeoutSeconds" in request:
         values["timeout_seconds"] = _normalize_provider_timeout(request["timeoutSeconds"])
+    if "reasoningEffort" in request:
+        values["reasoning_effort"] = _normalize_provider_reasoning_effort(
+            request["reasoningEffort"], provider.provider_type
+        )
     if request.get("clearApiKey") is True:
         values["api_key"] = None
     elif "apiKey" in request:
         values["api_key"] = _blank_to_none(request["apiKey"])
+        if values["api_key"]:
+            values["catalog_visible"] = True
     if "enabled" in request:
         values["enabled"] = bool(request["enabled"])
     values["updated_at"] = datetime.now()
@@ -1127,6 +1177,25 @@ def _normalize_provider_timeout(value: Any) -> int | None:
     if timeout < 1 or timeout > 3600:
         raise AppError("BAD_REQUEST", "timeoutSeconds must be between 1 and 3600", 400)
     return timeout
+
+
+def _normalize_provider_reasoning_effort(value: Any, provider_type: str) -> str | None:
+    if value is None or value == "":
+        return None
+    normalized = str(value).strip().lower()
+    if provider_type != "OPENAI_RESPONSES":
+        raise AppError(
+            "VALIDATION_ERROR",
+            "reasoningEffort is only supported by OPENAI_RESPONSES",
+            400,
+        )
+    if normalized not in {"low", "medium", "high"}:
+        raise AppError(
+            "VALIDATION_ERROR",
+            "reasoningEffort must be one of: low, medium, high",
+            400,
+        )
+    return normalized
 
 
 def set_default_provider(db: Session, provider_code: str) -> dict[str, Any]:

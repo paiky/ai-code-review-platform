@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.code_quality import service
-from app.code_quality.schemas import CreateProviderRequest
+from app.code_quality.model_presets import list_review_model_presets
+from app.code_quality.schemas import CreateProviderRequest, ReviewType
 from app.core.database import get_db
 from app.core.response import ok
 
@@ -14,6 +15,16 @@ profile_router = APIRouter(
 provider_router = APIRouter(
     prefix="/api/code-quality-review-providers", tags=["code-quality-review-providers"]
 )
+model_preset_router = APIRouter(
+    prefix="/api/review-model-presets", tags=["review-model-presets"]
+)
+
+
+@model_preset_router.get("")
+async def list_model_presets(
+    review_type: ReviewType = Query(alias="reviewType"),
+) -> dict:
+    return ok(list_review_model_presets(review_type))
 
 
 @review_router.post("/manual")

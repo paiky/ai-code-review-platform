@@ -39,6 +39,37 @@ function fixtures() {
         workerSupported: true
       }
     },
+    agentRuntimes: [
+      {
+        runtimeCode: 'CLAUDE_CODE_DEEPSEEK',
+        displayName: 'Claude Code + DeepSeek',
+        protocol: 'ANTHROPIC_COMPATIBLE',
+        baseUrl: 'https://agent.example/v1',
+        model: 'deepseek-v4-pro[1m]',
+        enabled: true,
+        builtIn: true,
+        selected: false,
+        apiKeyConfigured: true,
+        configurationComplete: true,
+        protocolAvailable: true,
+        updatedAt: '2026-08-08T08:00:00Z'
+      },
+      {
+        runtimeCode: 'TEAM_RELAY',
+        displayName: 'Review Relay',
+        protocol: 'OPENAI_RESPONSES',
+        baseUrl: 'https://relay.example/v1',
+        model: 'gpt-5.6-sol',
+        enabled: true,
+        builtIn: false,
+        selected: true,
+        apiKeyConfigured: true,
+        configurationComplete: true,
+        protocolAvailable: true,
+        configurationTest: { status: 'SUCCESS' },
+        updatedAt: '2026-08-08T08:01:00Z'
+      }
+    ],
     providers: [
       {
         providerCode: 'DEEPSEEK',
@@ -72,7 +103,7 @@ test('maps Agent runtimes before Standard providers with stable domain IDs', () 
 
   assert.deepEqual(rows.map(item => item.id), [
     'AGENT:CLAUDE_CODE_DEEPSEEK',
-    'AGENT:OPENAI_RESPONSES_CUSTOM',
+    'AGENT:TEAM_RELAY',
     'STANDARD:DEEPSEEK',
     'STANDARD:ANTHROPIC'
   ]);
@@ -89,7 +120,7 @@ test('maps Agent runtimes before Standard providers with stable domain IDs', () 
   assert.equal(custom.endpoint, 'https://relay.example/v1');
   assert.equal(custom.isCurrent, true);
   assert.equal(custom.workerSupported, true);
-  assert.equal(custom.updatedAt, '2026-08-08T08:00:00Z');
+  assert.equal(custom.updatedAt, '2026-08-08T08:01:00Z');
 
   const standard = rows[2];
   assert.equal(standard.name, 'DeepSeek V4 Pro');
@@ -109,8 +140,8 @@ test('uses the explicit Settings default instead of a stale Provider flag', () =
 
 test('derives truthful incomplete disabled and worker-unsupported states', () => {
   const input = fixtures();
-  input.agentSettings.defaultRuntime.apiKeyConfigured = false;
-  input.agentSettings.customRuntime.workerSupported = false;
+  input.agentRuntimes[0].configurationComplete = false;
+  input.agentRuntimes[1].protocolAvailable = false;
   input.providers[0].modelName = '';
 
   const rows = buildReviewModelConnectionCatalog(input);
@@ -165,7 +196,7 @@ test('selects the previous row, then Standard default, Agent current, and finall
   const withoutDefault = rows.filter(item => item.reviewType === agentReviewConnection);
   assert.equal(
     resolveReviewModelConnectionSelection(withoutDefault, 'STANDARD:REMOVED'),
-    'AGENT:OPENAI_RESPONSES_CUSTOM'
+    'AGENT:TEAM_RELAY'
   );
 
   const noCurrent = withoutDefault.map(item => ({ ...item, isCurrent: false }));
@@ -183,11 +214,11 @@ test('returns safe Agent placeholders when responses are missing', () => {
   assert.equal(rows[1].workerSupported, null);
 });
 
-test('falls back an invalid Agent runtime to the backward-compatible default', () => {
+test('uses explicit dynamic selected flags instead of the legacy projected setting', () => {
   const input = fixtures();
   input.agentSettings.selectedRuntime = 'DAMAGED_RUNTIME';
 
   const rows = buildReviewModelConnectionCatalog(input);
-  assert.equal(rows[0].isCurrent, true);
-  assert.equal(rows[1].isCurrent, false);
+  assert.equal(rows[0].isCurrent, false);
+  assert.equal(rows[1].isCurrent, true);
 });

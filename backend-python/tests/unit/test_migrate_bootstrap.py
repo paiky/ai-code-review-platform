@@ -130,6 +130,45 @@ def test_custom_agent_tls_migration_defaults_to_strict_verification() -> None:
     assert "custom_tls_verify BOOLEAN NOT NULL DEFAULT TRUE" in statements[0]
 
 
+def test_dynamic_agent_runtime_migration_preserves_legacy_slots_and_selection() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    sql = (
+        repository_root
+        / "backend-python/migrations/bootstrap_sql/V49__dynamic_agent_review_runtimes.sql"
+    ).read_text(encoding="utf-8")
+
+    statements = split_sql_statements(sql)
+
+    assert len(statements) == 5
+    assert "CREATE TABLE IF NOT EXISTS code_quality_agent_runtimes" in statements[0]
+    assert "selected_runtime_code VARCHAR(40)" in statements[1]
+    assert "settings.api_key_ciphertext" in statements[2]
+    assert "settings.custom_api_key_ciphertext" in statements[3]
+    assert "NOT EXISTS" in statements[2]
+    assert "NOT EXISTS" in statements[3]
+    assert "OPENAI_RESPONSES_CUSTOM" in statements[4]
+    assert "ELSE 'CLAUDE_CODE_DEEPSEEK'" in statements[4]
+    assert "DECRYPT" not in sql.upper()
+
+
+def test_review_model_provider_preset_migration_backfills_visibility_and_reasoning() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    sql = (
+        repository_root
+        / "backend-python/migrations/bootstrap_sql/V50__review_model_provider_presets.sql"
+    ).read_text(encoding="utf-8")
+
+    statements = split_sql_statements(sql)
+
+    assert len(statements) == 4
+    assert "catalog_visible BOOLEAN NOT NULL DEFAULT FALSE" in statements[0]
+    assert "reasoning_effort VARCHAR(16) NULL" in statements[1]
+    assert "catalog_visible = TRUE" in statements[2]
+    assert "built_in = FALSE" in statements[2]
+    assert "TRIM(COALESCE(api_key, '')) <> ''" in statements[2]
+    assert "provider_type = 'OPENAI_RESPONSES'" in statements[3]
+
+
 def test_v48_reconciles_compatible_column_added_by_runtime_layer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -147,6 +186,72 @@ def test_v48_reconciles_compatible_column_added_by_runtime_layer(
                     "default": "1",
                 }
             ]
+
+    monkeypatch.setattr("app.migrate.inspect", lambda _connection: Inspector())
+
+    assert _migration_statement_already_satisfied(object(), migration, statement) is True
+
+
+def test_v49_reconciles_compatible_selected_runtime_column(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration = next(item for item in discover_migrations() if item.version == 49)
+    statement = split_sql_statements(migration.path.read_text(encoding="utf-8"))[1]
+
+    class Inspector:
+        @staticmethod
+        def get_columns(_table_name):
+            return [
+                {
+                    "name": "selected_runtime_code",
+                    "type": mysql.VARCHAR(length=40),
+                    "nullable": False,
+                    "default": "CLAUDE_CODE_DEEPSEEK",
+                }
+            ]
+
+    monkeypatch.setattr("app.migrate.inspect", lambda _connection: Inspector())
+
+    assert _migration_statement_already_satisfied(object(), migration, statement) is True
+
+
+@pytest.mark.parametrize(
+    ("statement_index", "column"),
+    [
+        (
+            0,
+            {
+                "name": "catalog_visible",
+                "type": mysql.TINYINT(display_width=1),
+                "nullable": False,
+                "default": "0",
+            },
+        ),
+        (
+            1,
+            {
+                "name": "reasoning_effort",
+                "type": mysql.VARCHAR(length=16),
+                "nullable": True,
+                "default": None,
+            },
+        ),
+    ],
+)
+def test_v50_reconciles_compatible_provider_columns(
+    monkeypatch: pytest.MonkeyPatch,
+    statement_index: int,
+    column: dict,
+) -> None:
+    migration = next(item for item in discover_migrations() if item.version == 50)
+    statement = split_sql_statements(migration.path.read_text(encoding="utf-8"))[
+        statement_index
+    ]
+
+    class Inspector:
+        @staticmethod
+        def get_columns(_table_name):
+            return [column]
 
     monkeypatch.setattr("app.migrate.inspect", lambda _connection: Inspector())
 
@@ -189,8 +294,8 @@ def test_discover_migrations_is_contiguous_and_includes_checksums() -> None:
     migrations = discover_migrations()
 
     assert migrations[0].version == 1
-    assert migrations[-1].version == 48
-    assert [item.version for item in migrations] == list(range(1, 49))
+    assert migrations[-1].version == 50
+    assert [item.version for item in migrations] == list(range(1, 51))
     assert all(len(item.checksum) == 64 for item in migrations)
 
 
@@ -202,6 +307,13 @@ def test_baseline_requirements_cover_latest_agent_runtime_schema() -> None:
     assert "runtime_type" in requirements.columns["code_quality_agent_settings"]
     assert "custom_api_key_ciphertext" in requirements.columns["code_quality_agent_settings"]
     assert "custom_tls_verify" in requirements.columns["code_quality_agent_settings"]
+    assert "selected_runtime_code" in requirements.columns["code_quality_agent_settings"]
+    assert "code_quality_agent_runtimes" in requirements.tables
+    assert "runtime_code" in requirements.columns["code_quality_agent_runtimes"]
+    assert (
+        "idx_code_quality_agent_runtimes_enabled_sort"
+        in requirements.indexes["code_quality_agent_runtimes"]
+    )
     assert "capabilities_json" in requirements.columns["code_quality_agent_workers"]
     assert "runner_type" in requirements.columns["agent_review_runs"]
     assert "idx_agent_review_runs_cc_status_updated" in requirements.indexes["agent_review_runs"]

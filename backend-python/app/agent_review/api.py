@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Header
 from sqlalchemy.orm import Session
 
 from app.agent_review import service
+from app.agent_review.schemas import CreateAgentRuntimeRequest, UpdateAgentRuntimeRequest
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import AppError
@@ -11,6 +12,62 @@ from app.core.response import ok
 
 
 router = APIRouter(prefix="/internal/agent-review", tags=["internal-agent-review"])
+runtime_router = APIRouter(
+    prefix="/api/code-quality-agent-runtimes",
+    tags=["code-quality-agent-runtimes"],
+)
+
+
+@runtime_router.get("")
+async def list_agent_runtimes(db: Session = Depends(get_db)) -> dict:
+    return ok(service.list_runtimes(db))
+
+
+@runtime_router.post("")
+async def create_agent_runtime(
+    request: CreateAgentRuntimeRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(service.create_runtime(db, request.model_dump(by_alias=True)))
+
+
+@runtime_router.put("/{runtime_code}")
+async def update_agent_runtime(
+    runtime_code: str,
+    request: UpdateAgentRuntimeRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(
+        service.update_runtime(
+            db,
+            runtime_code,
+            request.model_dump(by_alias=True, exclude_unset=True),
+        )
+    )
+
+
+@runtime_router.delete("/{runtime_code}")
+async def delete_agent_runtime(
+    runtime_code: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(service.delete_runtime(db, runtime_code))
+
+
+@runtime_router.post("/{runtime_code}/set-current")
+async def set_current_agent_runtime(
+    runtime_code: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(service.set_current_runtime(db, runtime_code))
+
+
+@runtime_router.post("/{runtime_code}/test")
+async def test_agent_runtime(
+    runtime_code: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(service.test_runtime(db, runtime_code))
 
 
 def require_worker_token(

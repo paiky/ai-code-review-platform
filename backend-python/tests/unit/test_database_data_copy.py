@@ -76,7 +76,10 @@ def test_local_sanitization_clears_credentials_workers_jobs_and_side_effects(
     assert "DELETE FROM code_quality_agent_workers" in sql
     assert "DELETE FROM code_quality_scheduler_jobs" in sql
     assert "runtime_type = 'CLAUDE_CODE_DEEPSEEK'" in sql
+    assert "selected_runtime_code = 'CLAUDE_CODE_DEEPSEEK'" in sql
     assert "custom_tls_verify = TRUE" in sql
+    assert "UPDATE code_quality_agent_runtimes SET api_key_ciphertext = NULL" in sql
+    assert "code_quality_agent_runtimes" in affected
     assert "agent_review_runs" in affected
 
 
@@ -138,6 +141,7 @@ class _SanitizeInspector:
             "code_quality_review_settings",
             "project_groups",
             "code_quality_agent_settings",
+            "code_quality_agent_runtimes",
             "code_quality_agent_workers",
             "code_quality_scheduler_jobs",
             "agent_review_runs",

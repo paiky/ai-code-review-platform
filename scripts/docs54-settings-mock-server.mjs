@@ -66,7 +66,17 @@ let agentSettings = {
     onlineCapacity: 1,
     busyCapacity: 0,
     totalCount: 1,
-    nodes: []
+    nodes: [{
+      workerId: 'safe-mock-worker',
+      online: true,
+      state: 'IDLE',
+      capabilities: [
+        'CLAUDE_CODE_DEEPSEEK',
+        'OPENAI_RESPONSES_AGENT',
+        'OPENAI_CHAT_AGENT',
+        'ANTHROPIC_MESSAGES_AGENT'
+      ]
+    }]
   },
   queueMetrics: {
     queued: 0,
@@ -89,6 +99,11 @@ let agentSettings = {
   updatedAt: '2026-08-08T08:00:00Z'
 };
 
+let agentRuntimes = [
+  agentRuntime('CLAUDE_CODE_DEEPSEEK', 'Claude Code + DeepSeek', 'ANTHROPIC_COMPATIBLE', true, true),
+  agentRuntime('OPENAI_RESPONSES_CUSTOM', 'Safe Mock Relay', 'OPENAI_RESPONSES', false, false)
+];
+
 let providers = [
   provider('DEEPSEEK', 'DeepSeek V4 Pro', 'OPENAI_CHAT_COMPATIBLE', 'deepseek-v4-pro', true, true),
   provider('OPENAI', 'OpenAI', 'OPENAI_CHAT_COMPATIBLE', 'gpt-5.6-sol', true, false),
@@ -107,6 +122,9 @@ if (scenario === 'AGENT_INCOMPLETE') {
       workerSupported: false
     }
   };
+  agentRuntimes = agentRuntimes.map(item => item.runtimeCode === 'OPENAI_RESPONSES_CUSTOM'
+    ? { ...item, apiKeyConfigured: false, configurationComplete: false, protocolAvailable: false }
+    : item);
 }
 
 const server = http.createServer(async (request, reply) => {
@@ -176,6 +194,97 @@ const server = http.createServer(async (request, reply) => {
     };
     agentTestPollCount = 0;
     send(reply, 200, agentSettings.configurationTest);
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/api/code-quality-agent-runtimes') {
+    if (scenario === 'AGENT_READ_FAILED') {
+      sendError(reply, 503, 'Synthetic Agent Runtime read failure');
+      return;
+    }
+    advanceAgentTestScenario();
+    send(reply, 200, agentRuntimes);
+    return;
+  }
+  if (request.method === 'POST' && url.pathname === '/api/code-quality-agent-runtimes') {
+    if (scenario === 'MUTATION_FAILED') {
+      sendError(reply, 503, 'Synthetic Agent Runtime create failure');
+      return;
+    }
+    const body = await readJson(request);
+    const runtimeCode = String(body.runtimeCode || '').trim().toUpperCase();
+    if (agentRuntimes.some(item => item.runtimeCode === runtimeCode)) {
+      sendError(reply, 409, 'Synthetic duplicate Agent Runtime');
+      return;
+    }
+    const created = {
+      ...agentRuntime(runtimeCode, body.displayName, body.protocol, false, false),
+      baseUrl: body.baseUrl,
+      model: body.model,
+      reasoningEffort: body.reasoningEffort,
+      tlsVerify: body.tlsVerify !== false,
+      enabled: body.enabled === true,
+      apiKeyConfigured: Boolean(body.apiKey),
+      configurationComplete: Boolean(body.baseUrl && body.model && body.apiKey),
+      updatedAt: new Date().toISOString()
+    };
+    agentRuntimes = [...agentRuntimes, created];
+    send(reply, 200, created);
+    return;
+  }
+  const agentRuntimeMatch = /^\/api\/code-quality-agent-runtimes\/([^/]+)$/.exec(url.pathname);
+  if (request.method === 'PUT' && agentRuntimeMatch) {
+    const body = await readJson(request);
+    let updated = null;
+    agentRuntimes = agentRuntimes.map(item => {
+      if (item.runtimeCode !== agentRuntimeMatch[1]) return item;
+      updated = { ...item, ...body, updatedAt: new Date().toISOString() };
+      if (body.apiKey) updated.apiKeyConfigured = true;
+      if (body.clearApiKey) {
+        updated.apiKeyConfigured = false;
+        updated.enabled = false;
+      }
+      updated.configurationComplete = Boolean(updated.baseUrl && updated.model && updated.apiKeyConfigured);
+      delete updated.apiKey;
+      delete updated.clearApiKey;
+      return updated;
+    });
+    send(reply, 200, updated);
+    return;
+  }
+  if (request.method === 'DELETE' && agentRuntimeMatch) {
+    const target = agentRuntimes.find(item => item.runtimeCode === agentRuntimeMatch[1]);
+    if (!target || target.builtIn || target.selected) {
+      sendError(reply, 409, 'Synthetic protected Agent Runtime');
+      return;
+    }
+    agentRuntimes = agentRuntimes.filter(item => item.runtimeCode !== target.runtimeCode);
+    send(reply, 200, { runtimeCode: target.runtimeCode, deleted: true });
+    return;
+  }
+  const runtimeTestMatch = /^\/api\/code-quality-agent-runtimes\/([^/]+)\/test$/.exec(url.pathname);
+  if (request.method === 'POST' && runtimeTestMatch) {
+    const asyncScenario = ['AGENT_ASYNC_SUCCESS', 'AGENT_ASYNC_FAILED'].includes(scenario);
+    const configurationTest = {
+      runtimeCode: runtimeTestMatch[1],
+      requestId: `safe-mock-runtime-test:${runtimeTestMatch[1]}`,
+      status: asyncScenario ? 'QUEUED' : 'SUCCESS',
+      message: asyncScenario ? '本地安全 mock 测试已排队' : '本地安全 mock 测试成功',
+      durationMs: asyncScenario ? null : 12
+    };
+    agentRuntimes = agentRuntimes.map(item => item.runtimeCode === runtimeTestMatch[1]
+      ? { ...item, configurationTest }
+      : item);
+    agentTestPollCount = 0;
+    send(reply, 200, configurationTest);
+    return;
+  }
+  const runtimeCurrentMatch = /^\/api\/code-quality-agent-runtimes\/([^/]+)\/set-current$/.exec(url.pathname);
+  if (request.method === 'POST' && runtimeCurrentMatch) {
+    agentRuntimes = agentRuntimes.map(item => ({
+      ...item,
+      selected: item.runtimeCode === runtimeCurrentMatch[1]
+    }));
+    send(reply, 200, { selectedRuntimeCode: runtimeCurrentMatch[1] });
     return;
   }
   if (request.method === 'GET' && url.pathname === '/api/code-quality-review-providers') {
@@ -332,6 +441,32 @@ function provider(code, name, type, model, enabled, isDefault) {
   };
 }
 
+function agentRuntime(code, name, protocol, builtIn, selected) {
+  const responses = protocol === 'OPENAI_RESPONSES';
+  const chat = protocol === 'OPENAI_CHAT_COMPLETIONS';
+  const anthropic = protocol === 'ANTHROPIC_MESSAGES';
+  return {
+    runtimeCode: code,
+    displayName: name,
+    protocol,
+    runnerType: responses ? 'OPENAI_RESPONSES_AGENT' : chat ? 'OPENAI_CHAT_AGENT' : anthropic ? 'ANTHROPIC_MESSAGES_AGENT' : 'CLAUDE_CODE',
+    baseUrl: responses || chat || anthropic ? 'https://safe-mock.invalid/v1' : 'https://safe-mock.invalid/agent',
+    model: responses ? 'gpt-5.6-sol' : chat ? 'synthetic-chat-model' : anthropic ? 'synthetic-anthropic-model' : 'deepseek-v4-pro[1m]',
+    reasoningEffort: responses ? 'high' : null,
+    tlsVerify: true,
+    enabled: true,
+    builtIn,
+    selected,
+    apiKeyConfigured: true,
+    apiKeyMasked: 'mock...only',
+    configurationComplete: true,
+    protocolAvailable: true,
+    unavailableReason: null,
+    configurationTest: { status: 'NOT_RUN' },
+    updatedAt: '2026-08-08T08:00:00Z'
+  };
+}
+
 function updateAgentSettings(body) {
   const next = { ...agentSettings };
   if ('enabled' in body) next.enabled = Boolean(body.enabled);
@@ -383,9 +518,26 @@ function updateProvider(code, body) {
 
 function advanceAgentTestScenario() {
   if (!['AGENT_ASYNC_SUCCESS', 'AGENT_ASYNC_FAILED'].includes(scenario)) return;
-  if (!['QUEUED', 'RUNNING'].includes(agentSettings.configurationTest?.status)) return;
+  const activeRuntime = agentRuntimes.find(item => (
+    ['QUEUED', 'RUNNING'].includes(item.configurationTest?.status)
+  ));
+  const legacyActive = ['QUEUED', 'RUNNING'].includes(agentSettings.configurationTest?.status);
+  if (!activeRuntime && !legacyActive) return;
   agentTestPollCount += 1;
   if (agentTestPollCount === 1) {
+    if (activeRuntime) {
+      agentRuntimes = agentRuntimes.map(item => item.runtimeCode === activeRuntime.runtimeCode
+        ? {
+          ...item,
+          configurationTest: {
+            ...item.configurationTest,
+            status: 'RUNNING',
+            message: '本地安全 mock Worker 正在执行'
+          }
+        }
+        : item);
+    }
+    if (!legacyActive) return;
     agentSettings = {
       ...agentSettings,
       configurationTest: {
@@ -397,6 +549,20 @@ function advanceAgentTestScenario() {
     return;
   }
   const success = scenario === 'AGENT_ASYNC_SUCCESS';
+  if (activeRuntime) {
+    agentRuntimes = agentRuntimes.map(item => item.runtimeCode === activeRuntime.runtimeCode
+      ? {
+        ...item,
+        configurationTest: {
+          ...item.configurationTest,
+          status: success ? 'SUCCESS' : 'FAILED',
+          message: success ? '本地安全 mock 异步测试成功' : '本地安全 mock 异步测试失败',
+          durationMs: 24
+        }
+      }
+      : item);
+  }
+  if (!legacyActive) return;
   agentSettings = {
     ...agentSettings,
     configurationTest: {
@@ -464,6 +630,11 @@ function setScenario(value) {
     ...agentSettings,
     configurationTest: { status: 'NOT_RUN' }
   };
+  agentRuntimes = agentRuntimes.map(item => ({
+    ...item,
+    protocolAvailable: true,
+    configurationTest: { status: 'NOT_RUN' }
+  }));
   if (scenario === 'AGENT_INCOMPLETE') {
     agentSettings = {
       ...agentSettings,
@@ -476,5 +647,8 @@ function setScenario(value) {
         workerSupported: false
       }
     };
+    agentRuntimes = agentRuntimes.map(item => item.runtimeCode === 'OPENAI_RESPONSES_CUSTOM'
+      ? { ...item, apiKeyConfigured: false, configurationComplete: false, protocolAvailable: false }
+      : item);
   }
 }

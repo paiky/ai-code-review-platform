@@ -6,10 +6,11 @@ from pathlib import Path
 import re
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.agent_review import repository
-from app.agent_review.runtime import CUSTOM_RUNTIME
+from app.agent_review.runtime import DEFAULT_RUNTIME, runtime_review_key
 from app.agent_review_spike.schema import ReviewSchemaError, validate_review_card
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
 from app.code_quality.repository import append_progress, save_result
@@ -45,6 +46,74 @@ def update_settings(db: Session, request: dict[str, Any]) -> dict[str, Any]:
 
 def test_settings(db: Session) -> dict[str, Any]:
     return repository.request_configuration_test(db)
+
+
+def list_runtimes(db: Session) -> list[dict[str, Any]]:
+    response = repository.list_agent_runtime_responses(db)
+    db.commit()
+    return response
+
+
+def create_runtime(db: Session, request: dict[str, Any]) -> dict[str, Any]:
+    try:
+        response = repository.create_agent_runtime(db, request)
+        db.commit()
+        return response
+    except IntegrityError as exception:
+        db.rollback()
+        runtime_code = str(request.get("runtimeCode") or "").strip().upper()
+        raise AppError(
+            "AGENT_RUNTIME_ALREADY_EXISTS",
+            f"Agent Runtime already exists: {runtime_code}",
+            409,
+        ) from exception
+    except Exception:
+        db.rollback()
+        raise
+
+
+def update_runtime(
+    db: Session,
+    runtime_code: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        response = repository.update_agent_runtime(db, runtime_code, request)
+        db.commit()
+        return response
+    except Exception:
+        db.rollback()
+        raise
+
+
+def delete_runtime(db: Session, runtime_code: str) -> dict[str, Any]:
+    try:
+        response = repository.delete_agent_runtime(db, runtime_code)
+        db.commit()
+        return response
+    except Exception:
+        db.rollback()
+        raise
+
+
+def set_current_runtime(db: Session, runtime_code: str) -> dict[str, Any]:
+    try:
+        response = repository.set_current_agent_runtime(db, runtime_code)
+        db.commit()
+        return response
+    except Exception:
+        db.rollback()
+        raise
+
+
+def test_runtime(db: Session, runtime_code: str) -> dict[str, Any]:
+    try:
+        response = repository.request_runtime_configuration_test(db, runtime_code)
+        db.commit()
+        return response
+    except Exception:
+        db.rollback()
+        raise
 
 
 def resolve_review_engine(
@@ -92,11 +161,10 @@ def enqueue_agent_review(
     completion_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings_record = repository.assert_agent_available(db, require_worker=False)
-    runtime = repository.runtime_snapshot(settings_record)
-    custom_runtime = runtime["runtimeType"] == CUSTOM_RUNTIME
-    review_key = (
-        repository.CUSTOM_REVIEW_KEY if custom_runtime else repository.AGENT_REVIEW_KEY
-    )
+    runtime = repository.selected_agent_runtime_snapshot(db)
+    runtime_code = str(runtime.get("runtimeCode") or DEFAULT_RUNTIME)
+    custom_runtime = runtime_code != DEFAULT_RUNTIME
+    review_key = runtime_review_key(runtime_code)
     provider = "CUSTOM_OPENAI" if custom_runtime else "DEEPSEEK"
     model = str(runtime.get("model") or repository.AGENT_MODEL)
     display_name = (
@@ -298,12 +366,30 @@ def claim_job(db: Session, request: dict[str, Any]) -> dict[str, Any] | None:
     worker_id = _required_worker_id(request)
     if not repository.worker_accepts_claim(db, worker_id=worker_id):
         return None
-    config_test = repository.claim_configuration_test(db, worker_id=worker_id)
+    try:
+        config_test = repository.claim_configuration_test(db, worker_id=worker_id)
+    except AppError as exception:
+        if exception.code not in {
+            "AGENT_REVIEW_UNAVAILABLE",
+            "AGENT_RUNTIME_DISABLED",
+            "AGENT_RUNTIME_NOT_FOUND",
+            "AGENT_RUNTIME_CREDENTIAL_UNAVAILABLE",
+        }:
+            raise
+        # 全局开关或当前 Runtime 在任务入队后发生变化时，配置测试不可领取，
+        # 但已排队 Review 仍须进入凭据解析并稳定失败/fallback。
+        db.rollback()
+        config_test = None
     if config_test is not None:
         return config_test
     expired_run_ids = repository.expire_exhausted_agent_jobs(db)
     claimed = repository.claim_agent_job(db, worker_id=worker_id)
     db.commit()
+    if claimed is not None and claimed.get("_fallbackRunId") is not None:
+        from app.code_quality.service import schedule_agent_standard_fallback
+
+        schedule_agent_standard_fallback(db, int(claimed["_fallbackRunId"]))
+        return None
     if expired_run_ids:
         from app.code_quality.service import schedule_agent_standard_fallback
 

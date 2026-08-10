@@ -8,6 +8,30 @@ ProviderType = Literal[
     "OPENAI_RESPONSES",
     "ANTHROPIC_MESSAGES",
 ]
+ReasoningEffort = Literal["low", "medium", "high"]
+ReviewType = Literal["AGENT", "STANDARD"]
+
+
+class ReviewModelPresetVariant(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    protocol: str
+    base_url: str | None = Field(alias="baseUrl")
+    models: list[str]
+    default_model: str | None = Field(alias="defaultModel")
+    reasoning_efforts: list[ReasoningEffort] = Field(alias="reasoningEfforts")
+    default_reasoning_effort: ReasoningEffort | None = Field(alias="defaultReasoningEffort")
+
+
+class ReviewModelPreset(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    preset_code: str = Field(alias="presetCode")
+    review_type: ReviewType = Field(alias="reviewType")
+    vendor_code: str = Field(alias="vendorCode")
+    vendor_name: str = Field(alias="vendorName")
+    custom: bool
+    variants: list[ReviewModelPresetVariant]
 
 
 class CreateProviderRequest(BaseModel):
@@ -19,6 +43,7 @@ class CreateProviderRequest(BaseModel):
     endpoint_url: str | None = Field(default=None, alias="endpointUrl", max_length=512)
     model_name: str | None = Field(default=None, alias="modelName", max_length=128)
     timeout_seconds: int | None = Field(default=None, alias="timeoutSeconds", ge=1, le=3600)
+    reasoning_effort: ReasoningEffort | None = Field(default=None, alias="reasoningEffort")
     api_key: str | None = Field(default=None, alias="apiKey", max_length=1024)
     enabled: bool = False
 
@@ -42,6 +67,8 @@ class CreateProviderRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_enabled_configuration(self) -> "CreateProviderRequest":
+        if self.reasoning_effort is not None and self.provider_type != "OPENAI_RESPONSES":
+            raise ValueError("reasoningEffort is only supported by OPENAI_RESPONSES")
         if self.enabled and not self.endpoint_url:
             raise ValueError("endpointUrl is required when enabled is true")
         if self.enabled and not self.model_name:

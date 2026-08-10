@@ -148,7 +148,7 @@ def test_worker_completion_carries_final_callback_snapshot(tmp_path, monkeypatch
     assert payload["runSummary"]["audit"] == _safe_audit()
 
 
-def test_worker_routes_custom_runtime_to_responses_runner(tmp_path, monkeypatch):
+def test_worker_routes_dynamic_responses_runtime_by_runner_capability(tmp_path, monkeypatch):
     requests = []
     captured = {}
 
@@ -199,7 +199,9 @@ def test_worker_routes_custom_runtime_to_responses_runner(tmp_path, monkeypatch)
             "worktree": "worktrees/88/head",
             "input": {"id": "custom-case", "changedFiles": ["src/service.py"]},
             "runtime": {
-                "runtimeType": "OPENAI_RESPONSES_CUSTOM",
+                "runtimeCode": "TEAM_RELAY",
+                "runtimeType": "TEAM_RELAY",
+                "runnerType": "OPENAI_RESPONSES_AGENT",
                 "baseUrl": "https://relay.example/v1",
                 "model": "gpt-5.6-sol",
                 "reasoningEffort": "high",
@@ -221,6 +223,343 @@ def test_worker_routes_custom_runtime_to_responses_runner(tmp_path, monkeypatch)
     assert payload["reviewCard"]["findings"] == []
     assert payload["runSummary"]["runnerVersion"] == "openai-responses-agent-v1"
     assert payload["runSummary"]["cliVersion"] is None
+
+
+def test_worker_routes_dynamic_chat_runtime_by_runner_capability(tmp_path, monkeypatch):
+    requests = []
+    captured = {}
+
+    class FakeChatRunner:
+        def __init__(self, transport, config):
+            captured["transport"] = transport
+            captured["config"] = config
+
+        def run(self, case, worktree, *, cancel_event, progress_callback):
+            captured["case"] = case
+            captured["worktree"] = worktree
+            progress_callback(_safe_audit())
+            return {
+                "status": "SUCCESS",
+                "card": {"summary": "未发现问题", "overallLevel": "LOW", "findings": []},
+                "toolAudit": _safe_audit(),
+            }
+
+    monkeypatch.setattr(worker, "Thread", _NoopThread)
+    monkeypatch.setattr(worker, "_resolve_worktree", lambda _root, _relative: tmp_path)
+    monkeypatch.setattr(
+        worker,
+        "HttpxChatCompletionsTransport",
+        lambda endpoint, key, *, verify_tls: (endpoint, key, verify_tls),
+    )
+    monkeypatch.setattr(worker, "OpenAIChatCompletionsAgentRunner", FakeChatRunner)
+    monkeypatch.setattr(
+        worker,
+        "run_agent_candidate",
+        lambda *_args, **_kwargs: pytest.fail("Claude runner must not handle Chat jobs"),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_post",
+        lambda _url, _token, path, payload: requests.append((path, payload)) or {},
+    )
+
+    worker._run_job(
+        "http://backend",
+        "token",
+        "worker-1",
+        tmp_path,
+        {
+            "jobId": 89,
+            "runId": 99,
+            "claimAttempt": 1,
+            "idempotencyKey": "agent:89",
+            "worktree": "worktrees/89/head",
+            "input": {"id": "chat-case", "changedFiles": ["src/service.py"]},
+            "runtime": {
+                "runtimeCode": "CHAT_AGENT",
+                "runtimeType": "CHAT_AGENT",
+                "runnerType": "OPENAI_CHAT_AGENT",
+                "baseUrl": "https://relay.example/v1",
+                "model": "chat-model",
+                "tlsVerify": False,
+                "apiKey": "chat-secret",
+            },
+            "budgets": default_agent_budgets(),
+        },
+    )
+
+    assert captured["transport"] == (
+        "https://relay.example/v1/chat/completions",
+        "chat-secret",
+        False,
+    )
+    assert captured["config"].model == "chat-model"
+    path, payload = requests[-1]
+    assert path == "/internal/agent-review/jobs/89/complete"
+    assert payload["reviewCard"]["findings"] == []
+    assert payload["runSummary"]["runnerVersion"] == "openai-chat-completions-agent-v1"
+    assert payload["runSummary"]["cliVersion"] is None
+
+
+def test_worker_routes_dynamic_anthropic_runtime_by_runner_capability(
+    tmp_path, monkeypatch
+):
+    requests = []
+    captured = {}
+
+    class FakeAnthropicRunner:
+        def __init__(self, transport, config):
+            captured["transport"] = transport
+            captured["config"] = config
+
+        def run(self, case, worktree, *, cancel_event, progress_callback):
+            progress_callback(_safe_audit())
+            return {
+                "status": "SUCCESS",
+                "card": {"summary": "未发现问题", "overallLevel": "LOW", "findings": []},
+                "toolAudit": _safe_audit(),
+            }
+
+    monkeypatch.setattr(worker, "Thread", _NoopThread)
+    monkeypatch.setattr(worker, "_resolve_worktree", lambda _root, _relative: tmp_path)
+    monkeypatch.setattr(
+        worker,
+        "HttpxAnthropicMessagesTransport",
+        lambda endpoint, key, *, verify_tls: (endpoint, key, verify_tls),
+    )
+    monkeypatch.setattr(worker, "AnthropicMessagesAgentRunner", FakeAnthropicRunner)
+    monkeypatch.setattr(
+        worker,
+        "run_agent_candidate",
+        lambda *_args, **_kwargs: pytest.fail("Claude runner must not handle Anthropic jobs"),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_post",
+        lambda _url, _token, path, payload: requests.append((path, payload)) or {},
+    )
+
+    worker._run_job(
+        "http://backend",
+        "token",
+        "worker-1",
+        tmp_path,
+        {
+            "jobId": 90,
+            "runId": 100,
+            "claimAttempt": 1,
+            "idempotencyKey": "agent:90",
+            "worktree": "worktrees/90/head",
+            "input": {"id": "anthropic-case", "changedFiles": ["src/service.py"]},
+            "runtime": {
+                "runtimeCode": "ANTHROPIC_AGENT",
+                "runtimeType": "ANTHROPIC_AGENT",
+                "runnerType": "ANTHROPIC_MESSAGES_AGENT",
+                "baseUrl": "https://relay.example/v1",
+                "model": "claude-sonnet",
+                "tlsVerify": False,
+                "apiKey": "anthropic-secret",
+            },
+            "budgets": default_agent_budgets(),
+        },
+    )
+
+    assert captured["transport"] == (
+        "https://relay.example/v1/messages",
+        "anthropic-secret",
+        False,
+    )
+    assert captured["config"].model == "claude-sonnet"
+    path, payload = requests[-1]
+    assert path == "/internal/agent-review/jobs/90/complete"
+    assert payload["reviewCard"]["findings"] == []
+    assert payload["runSummary"]["runnerVersion"] == "anthropic-messages-agent-v1"
+    assert payload["runSummary"]["cliVersion"] is None
+
+
+def test_dynamic_runtime_configuration_test_uses_synthetic_workspace(monkeypatch):
+    requests = []
+    captured = {}
+
+    class FakeResponsesRunner:
+        def __init__(self, transport, config):
+            captured["transport"] = transport
+            captured["config"] = config
+
+        def run(self, case, worktree):
+            captured["case"] = case
+            captured["worktreeFiles"] = sorted(path.name for path in worktree.iterdir())
+            return {"status": "SUCCESS"}
+
+    monkeypatch.setattr(
+        worker,
+        "HttpxResponsesTransport",
+        lambda endpoint, key, *, verify_tls: (endpoint, key, verify_tls),
+    )
+    monkeypatch.setattr(worker, "OpenAIResponsesAgentRunner", FakeResponsesRunner)
+    monkeypatch.setattr(
+        worker,
+        "run_agent_candidate",
+        lambda *_args, **_kwargs: pytest.fail("Claude runner must not handle Responses tests"),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_post",
+        lambda _url, _token, path, payload: requests.append((path, payload)) or {},
+    )
+
+    worker._run_configuration_test(
+        "http://backend",
+        "token",
+        "worker-1",
+        {
+            "kind": "CONFIG_TEST",
+            "requestId": "runtime-test:TEAM_RELAY:1",
+            "runtime": {
+                "runtimeCode": "TEAM_RELAY",
+                "runtimeType": "TEAM_RELAY",
+                "runnerType": "OPENAI_RESPONSES_AGENT",
+                "baseUrl": "https://relay.example/v1",
+                "model": "gpt-5.6-sol",
+                "reasoningEffort": "high",
+                "tlsVerify": True,
+                "apiKey": "synthetic-secret",
+            },
+            "budgets": default_agent_budgets(),
+        },
+    )
+
+    assert captured["transport"] == (
+        "https://relay.example/v1/responses",
+        "synthetic-secret",
+        True,
+    )
+    assert captured["case"]["id"] == "configuration-test"
+    assert captured["case"]["changedFiles"] == ["healthcheck.txt"]
+    assert captured["worktreeFiles"] == ["healthcheck.txt"]
+    path, payload = requests[-1]
+    assert path == "/internal/agent-review/configuration-test/complete"
+    assert payload["requestId"] == "runtime-test:TEAM_RELAY:1"
+    assert payload["status"] == "SUCCESS"
+
+
+def test_chat_runtime_configuration_test_uses_chat_runner(monkeypatch):
+    requests = []
+    captured = {}
+
+    class FakeChatRunner:
+        def __init__(self, transport, config):
+            captured["transport"] = transport
+            captured["config"] = config
+
+        def run(self, case, worktree):
+            captured["case"] = case
+            captured["worktreeFiles"] = sorted(path.name for path in worktree.iterdir())
+            return {"status": "SUCCESS"}
+
+    monkeypatch.setattr(
+        worker,
+        "HttpxChatCompletionsTransport",
+        lambda endpoint, key, *, verify_tls: (endpoint, key, verify_tls),
+    )
+    monkeypatch.setattr(worker, "OpenAIChatCompletionsAgentRunner", FakeChatRunner)
+    monkeypatch.setattr(
+        worker,
+        "_post",
+        lambda _url, _token, path, payload: requests.append((path, payload)) or {},
+    )
+
+    worker._run_configuration_test(
+        "http://backend",
+        "token",
+        "worker-1",
+        {
+            "kind": "CONFIG_TEST",
+            "requestId": "runtime-test:CHAT_AGENT:1",
+            "runtime": {
+                "runtimeCode": "CHAT_AGENT",
+                "runtimeType": "CHAT_AGENT",
+                "runnerType": "OPENAI_CHAT_AGENT",
+                "baseUrl": "https://relay.example/v1",
+                "model": "chat-model",
+                "tlsVerify": True,
+                "apiKey": "synthetic-chat-secret",
+            },
+            "budgets": default_agent_budgets(),
+        },
+    )
+
+    assert captured["transport"] == (
+        "https://relay.example/v1/chat/completions",
+        "synthetic-chat-secret",
+        True,
+    )
+    assert captured["case"]["changedFiles"] == ["healthcheck.txt"]
+    assert captured["worktreeFiles"] == ["healthcheck.txt"]
+    path, payload = requests[-1]
+    assert path == "/internal/agent-review/configuration-test/complete"
+    assert payload["status"] == "SUCCESS"
+    assert "Chat Completions" in payload["message"]
+
+
+def test_anthropic_runtime_configuration_test_uses_messages_runner(monkeypatch):
+    requests = []
+    captured = {}
+
+    class FakeAnthropicRunner:
+        def __init__(self, transport, config):
+            captured["transport"] = transport
+            captured["config"] = config
+
+        def run(self, case, worktree):
+            captured["case"] = case
+            captured["worktreeFiles"] = sorted(path.name for path in worktree.iterdir())
+            return {"status": "SUCCESS"}
+
+    monkeypatch.setattr(
+        worker,
+        "HttpxAnthropicMessagesTransport",
+        lambda endpoint, key, *, verify_tls: (endpoint, key, verify_tls),
+    )
+    monkeypatch.setattr(worker, "AnthropicMessagesAgentRunner", FakeAnthropicRunner)
+    monkeypatch.setattr(
+        worker,
+        "_post",
+        lambda _url, _token, path, payload: requests.append((path, payload)) or {},
+    )
+
+    worker._run_configuration_test(
+        "http://backend",
+        "token",
+        "worker-1",
+        {
+            "kind": "CONFIG_TEST",
+            "requestId": "runtime-test:ANTHROPIC_AGENT:1",
+            "runtime": {
+                "runtimeCode": "ANTHROPIC_AGENT",
+                "runtimeType": "ANTHROPIC_AGENT",
+                "runnerType": "ANTHROPIC_MESSAGES_AGENT",
+                "baseUrl": "https://relay.example/v1",
+                "model": "claude-sonnet",
+                "tlsVerify": True,
+                "apiKey": "synthetic-anthropic-secret",
+            },
+            "budgets": default_agent_budgets(),
+        },
+    )
+
+    assert captured["transport"] == (
+        "https://relay.example/v1/messages",
+        "synthetic-anthropic-secret",
+        True,
+    )
+    assert captured["config"].model == "claude-sonnet"
+    assert captured["case"]["changedFiles"] == ["healthcheck.txt"]
+    assert captured["worktreeFiles"] == ["healthcheck.txt"]
+    path, payload = requests[-1]
+    assert path == "/internal/agent-review/configuration-test/complete"
+    assert payload["status"] == "SUCCESS"
+    assert "Anthropic Messages" in payload["message"]
 
 
 @pytest.mark.parametrize(

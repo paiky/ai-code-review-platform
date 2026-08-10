@@ -20,6 +20,16 @@ from app.agent_review_spike.budgets import (
     AgentBudgetValidationError,
     validate_agent_budgets,
 )
+from app.agent_review_spike.anthropic_messages_runner import (
+    AnthropicMessagesAgentRunner,
+    AnthropicMessagesRunnerConfig,
+    HttpxAnthropicMessagesTransport,
+)
+from app.agent_review_spike.chat_completions_runner import (
+    ChatCompletionsRunnerConfig,
+    HttpxChatCompletionsTransport,
+    OpenAIChatCompletionsAgentRunner,
+)
 from app.agent_review_spike.responses_runner import (
     HttpxResponsesTransport,
     OpenAIResponsesAgentRunner,
@@ -30,8 +40,19 @@ WORKER_VERSION = "agent-worker-v1"
 CLI_VERSION = "2.1.112"
 DEFAULT_RUNTIME = "CLAUDE_CODE_DEEPSEEK"
 CUSTOM_RUNTIME = "OPENAI_RESPONSES_CUSTOM"
+OPENAI_RESPONSES_RUNNER = "OPENAI_RESPONSES_AGENT"
+OPENAI_CHAT_RUNNER = "OPENAI_CHAT_AGENT"
+ANTHROPIC_MESSAGES_RUNNER = "ANTHROPIC_MESSAGES_AGENT"
 RESPONSES_RUNNER_VERSION = "openai-responses-agent-v1"
-WORKER_CAPABILITIES = [DEFAULT_RUNTIME, CUSTOM_RUNTIME]
+CHAT_COMPLETIONS_RUNNER_VERSION = "openai-chat-completions-agent-v1"
+ANTHROPIC_MESSAGES_RUNNER_VERSION = "anthropic-messages-agent-v1"
+WORKER_CAPABILITIES = [
+    DEFAULT_RUNTIME,
+    CUSTOM_RUNTIME,
+    OPENAI_RESPONSES_RUNNER,
+    OPENAI_CHAT_RUNNER,
+    ANTHROPIC_MESSAGES_RUNNER,
+]
 AGENT_WORKER_SHUTDOWN_GRACE_SECONDS = 930
 _LOGGER = logging.getLogger(__name__)
 
@@ -253,7 +274,46 @@ def _run_job(
         worktree = _resolve_worktree(workspace_root, str(job.get("worktree") or ""))
         runtime = job.get("runtime") if isinstance(job.get("runtime"), dict) else {}
         runtime_type = str(runtime.get("runtimeType") or DEFAULT_RUNTIME).upper()
-        if runtime_type == CUSTOM_RUNTIME:
+        runner_type = str(runtime.get("runnerType") or "").upper()
+        if runner_type == ANTHROPIC_MESSAGES_RUNNER:
+            endpoint = f"{str(runtime.get('baseUrl') or '').rstrip('/')}/messages"
+            anthropic_result = AnthropicMessagesAgentRunner(
+                HttpxAnthropicMessagesTransport(
+                    endpoint,
+                    str(runtime.get("apiKey") or ""),
+                    verify_tls=_custom_tls_verify(runtime),
+                ),
+                _anthropic_runner_config_from_budgets(
+                    job.get("budgets"),
+                    model=str(runtime.get("model") or "synthetic-anthropic-model"),
+                ),
+            ).run(
+                job.get("input") or {},
+                worktree,
+                cancel_event=cancelled,
+                progress_callback=latest_audit.update,
+            )
+            summary = _normalize_anthropic_summary(anthropic_result)
+        elif runner_type == OPENAI_CHAT_RUNNER:
+            endpoint = f"{str(runtime.get('baseUrl') or '').rstrip('/')}/chat/completions"
+            chat_result = OpenAIChatCompletionsAgentRunner(
+                HttpxChatCompletionsTransport(
+                    endpoint,
+                    str(runtime.get("apiKey") or ""),
+                    verify_tls=_custom_tls_verify(runtime),
+                ),
+                _chat_runner_config_from_budgets(
+                    job.get("budgets"),
+                    model=str(runtime.get("model") or "synthetic-chat-model"),
+                ),
+            ).run(
+                job.get("input") or {},
+                worktree,
+                cancel_event=cancelled,
+                progress_callback=latest_audit.update,
+            )
+            summary = _normalize_chat_summary(chat_result)
+        elif runner_type == OPENAI_RESPONSES_RUNNER or runtime_type == CUSTOM_RUNTIME:
             endpoint = f"{str(runtime.get('baseUrl') or '').rstrip('/')}/responses"
             responses_result = OpenAIResponsesAgentRunner(
                 HttpxResponsesTransport(
@@ -354,7 +414,36 @@ def _run_configuration_test(
                     "reviewInstructions": "This is a connectivity test. Report no findings and submit the Review Card.",
                     "targetFinding": {"filePath": "healthcheck.txt", "startLine": 1, "endLine": 1},
                 }
-            if runtime_type == CUSTOM_RUNTIME:
+            runner_type = str(runtime.get("runnerType") or "").upper()
+            if runner_type == ANTHROPIC_MESSAGES_RUNNER:
+                endpoint = f"{str(runtime.get('baseUrl') or '').rstrip('/')}/messages"
+                summary = AnthropicMessagesAgentRunner(
+                    HttpxAnthropicMessagesTransport(
+                        endpoint,
+                        str(runtime.get("apiKey") or ""),
+                        verify_tls=_custom_tls_verify(runtime),
+                    ),
+                    _anthropic_runner_config_from_budgets(
+                        budgets,
+                        model=str(runtime.get("model") or "synthetic-anthropic-model"),
+                    ),
+                ).run(synthetic_case, worktree)
+            elif runner_type == OPENAI_CHAT_RUNNER:
+                endpoint = (
+                    f"{str(runtime.get('baseUrl') or '').rstrip('/')}/chat/completions"
+                )
+                summary = OpenAIChatCompletionsAgentRunner(
+                    HttpxChatCompletionsTransport(
+                        endpoint,
+                        str(runtime.get("apiKey") or ""),
+                        verify_tls=_custom_tls_verify(runtime),
+                    ),
+                    _chat_runner_config_from_budgets(
+                        budgets,
+                        model=str(runtime.get("model") or "synthetic-chat-model"),
+                    ),
+                ).run(synthetic_case, worktree)
+            elif runner_type == OPENAI_RESPONSES_RUNNER or runtime_type == CUSTOM_RUNTIME:
                 endpoint = f"{str(runtime.get('baseUrl') or '').rstrip('/')}/responses"
                 summary = OpenAIResponsesAgentRunner(
                     HttpxResponsesTransport(
@@ -378,8 +467,13 @@ def _run_configuration_test(
         status = "SUCCESS" if summary.get("status") == "SUCCESS" else "FAILED"
         if status == "SUCCESS":
             message = (
-                "OpenAI Responses Agent + read-only tools connectivity succeeded"
-                if runtime_type == CUSTOM_RUNTIME
+                "Anthropic Messages Agent + read-only tools connectivity succeeded"
+                if runner_type == ANTHROPIC_MESSAGES_RUNNER
+                else "OpenAI Chat Completions Agent + read-only tools connectivity succeeded"
+                if runner_type == OPENAI_CHAT_RUNNER
+                else "OpenAI Responses Agent + read-only tools connectivity succeeded"
+                if runner_type == OPENAI_RESPONSES_RUNNER
+                or runtime_type == CUSTOM_RUNTIME
                 else "Claude Code + DeepSeek + read-only MCP connectivity succeeded"
             )
         else:
@@ -599,6 +693,28 @@ def _responses_runner_config_from_budgets(
     )
 
 
+def _chat_runner_config_from_budgets(
+    value: Any,
+    *,
+    model: str,
+) -> ChatCompletionsRunnerConfig:
+    return ChatCompletionsRunnerConfig.from_budgets(
+        validate_agent_budgets(value),
+        model=model,
+    )
+
+
+def _anthropic_runner_config_from_budgets(
+    value: Any,
+    *,
+    model: str,
+) -> AnthropicMessagesRunnerConfig:
+    return AnthropicMessagesRunnerConfig.from_budgets(
+        validate_agent_budgets(value),
+        model=model,
+    )
+
+
 def _normalize_responses_summary(value: dict[str, Any]) -> dict[str, Any]:
     result = dict(value)
     card = result.pop("card", None)
@@ -608,6 +724,32 @@ def _normalize_responses_summary(value: dict[str, Any]) -> dict[str, Any]:
     if isinstance(audit, dict):
         result["audit"] = audit
     result["runnerVersion"] = RESPONSES_RUNNER_VERSION
+    result["cliVersion"] = None
+    return result
+
+
+def _normalize_chat_summary(value: dict[str, Any]) -> dict[str, Any]:
+    result = dict(value)
+    card = result.pop("card", None)
+    audit = result.pop("toolAudit", None)
+    if isinstance(card, dict):
+        result["reviewCard"] = card
+    if isinstance(audit, dict):
+        result["audit"] = audit
+    result["runnerVersion"] = CHAT_COMPLETIONS_RUNNER_VERSION
+    result["cliVersion"] = None
+    return result
+
+
+def _normalize_anthropic_summary(value: dict[str, Any]) -> dict[str, Any]:
+    result = dict(value)
+    card = result.pop("card", None)
+    audit = result.pop("toolAudit", None)
+    if isinstance(card, dict):
+        result["reviewCard"] = card
+    if isinstance(audit, dict):
+        result["audit"] = audit
+    result["runnerVersion"] = ANTHROPIC_MESSAGES_RUNNER_VERSION
     result["cliVersion"] = None
     return result
 

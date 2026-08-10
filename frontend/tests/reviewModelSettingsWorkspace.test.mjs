@@ -36,27 +36,25 @@ test('decouples Provider detail save from Standard default selection', () => {
   assert.match(defaultSave, /method: 'POST'/);
 });
 
-test('keeps Agent runtime selection details and budgets on separate PUT paths', () => {
+test('keeps dynamic Agent selection, details and budgets on separate mutation paths', () => {
   const runtimeSelection = appSource.slice(
-    appSource.indexOf('const saveAgentRuntimeSelection = async'),
-    appSource.indexOf('const validateAgentRuntimeDetail =')
+    appSource.indexOf('const saveDynamicAgentRuntimeSelection = async'),
+    appSource.indexOf('const requestDeleteAgentRuntime =')
   );
   const runtimeDetail = appSource.slice(
-    appSource.indexOf('const saveAgentRuntimeDetail = async'),
-    appSource.indexOf('const clearAgentRuntimeKey =')
+    appSource.indexOf('const saveDynamicAgentRuntimeDetail = async'),
+    appSource.indexOf('const clearDynamicAgentRuntimeKey =')
   );
   const budgetSave = appSource.slice(
     appSource.indexOf('const saveAgentBudgets = async'),
     appSource.indexOf('const resetAgentBudgets =')
   );
 
-  assert.match(
-    runtimeSelection,
-    /body: JSON\.stringify\(\{\s*enabled: Boolean\(agentSettingsDraft\.enabled\),\s*selectedRuntime: runtimeType\s*\}\)/
-  );
-  assert.match(runtimeDetail, /body\.customRuntime/);
-  assert.match(runtimeDetail, /body\.apiKey/);
-  assert.doesNotMatch(runtimeDetail, /selectedRuntime: runtimeType/);
+  assert.match(runtimeSelection, /code-quality-agent-runtimes\/\$\{runtime\.runtimeCode\}\/set-current/);
+  assert.match(runtimeSelection, /JSON\.stringify\(\{ enabled: Boolean\(agentSettingsDraft\.enabled\) \}\)/);
+  assert.doesNotMatch(runtimeSelection, /selectedRuntime:/);
+  assert.match(runtimeDetail, /code-quality-agent-runtimes\/\$\{runtime\.runtimeCode\}/);
+  assert.match(runtimeDetail, /buildUpdateAgentRuntimeRequest/);
   assert.match(budgetSave, /JSON\.stringify\(\{ budgets: agentSettingsDraft\.budgets \}\)/);
 });
 
@@ -79,6 +77,8 @@ test('keeps directory rows keyboard-selectable and the three planned layouts bou
   );
   assert.match(directoryColumns, /title: '操作'/);
   assert.match(directoryColumns, /providerDeleteAvailability\(provider\)/);
+  assert.match(directoryColumns, /agentRuntimeDeleteAvailability\(runtime\)/);
+  assert.match(directoryColumns, /className: 'review-connection-directory-actions'/);
   assert.match(directoryColumns, /icon=\{<DeleteOutlined \/>\}/);
   assert.doesNotMatch(directoryColumns, />\s*详情\s*<\/Button>/);
   assert.match(styleSource, /grid-template-columns: minmax\(0, 3fr\) minmax\(360px, 2fr\)/);
@@ -86,17 +86,23 @@ test('keeps directory rows keyboard-selectable and the three planned layouts bou
   assert.match(styleSource, /@media \(max-width: 760px\)[\s\S]*\.review-runtime-card-grid[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(styleSource, /\.review-connection-actions \.ant-btn \{\s*min-height: 44px;/);
   assert.match(styleSource, /@media \(max-width: 760px\)[\s\S]*\.review-provider-danger-zone[\s\S]*display: flex/);
+  assert.match(styleSource, /@media \(max-width: 760px\)[\s\S]*\.review-connection-directory-actions[\s\S]*display: none/);
 });
 
-test('creates custom Standard Providers without changing defaults or testing connectivity', () => {
+test('creates Agent or Standard connections without selecting defaults or testing connectivity', () => {
   const createFlow = appSource.slice(
-    appSource.indexOf('const createCustomProvider = async'),
+    appSource.indexOf('const createReviewConnection = async'),
     appSource.indexOf('const closeDeleteProviderModal =')
   );
   assert.match(appSource, /title="新增模型连接"/);
   assert.match(appSource, />\s*新增模型连接\s*<\/Button>/);
+  assert.match(createFlow, /code-quality-agent-runtimes', \{\s*method: 'POST'/);
   assert.match(createFlow, /code-quality-review-providers', \{\s*method: 'POST'/);
   assert.match(createFlow, /setSelectedReviewConnectionId\(connectionId\)/);
+  assert.match(createFlow, /setSelectedReviewConnectionId\(`AGENT:\$\{created\.runtimeCode\}`\)/);
+  assert.match(appSource, /title: '切换 Review 类型并丢弃当前输入？'/);
+  assert.match(appSource, /Agent Review'[\s\S]*Standard Review'/);
+  assert.match(appSource, /agentProtocolOptionsForWorkerPool\(agentSettings\?\.workerPool\)\.map/);
   assert.doesNotMatch(createFlow, /set-default/);
   assert.doesNotMatch(createFlow, /\/test/);
 });
@@ -113,6 +119,15 @@ test('deletes only confirmed custom Providers and preserves selection on failure
   assert.match(deleteFlow, /setProviderDeleteError\(err\.message\)/);
   assert.match(appSource, /className="review-provider-danger-zone"/);
   assert.match(appSource, /runAfterDiscardingConnectionDraft/);
+});
+
+test('supports native Runtime edit, test and protected delete without exposing key state', () => {
+  assert.match(appSource, /const saveDynamicAgentRuntimeDetail = async/);
+  assert.match(appSource, /const testDynamicAgentRuntime = async/);
+  assert.match(appSource, /code-quality-agent-runtimes\/\$\{runtime\.runtimeCode\}\/test/);
+  assert.match(appSource, /title="永久删除自定义 Agent Runtime"/);
+  assert.match(appSource, /matchesAgentRuntimeDeleteConfirmation/);
+  assert.match(appSource, /className="review-provider-danger-zone"/);
 });
 
 test('does not invent a Standard switch or a fixed Agent fallback selector', () => {
@@ -158,6 +173,8 @@ test('safe mock exposes only fixed local regression scenarios', () => {
   assert.match(mockSource, /Unsupported safe mock scenario/);
   assert.match(mockSource, /advanceAgentTestScenario\(\)/);
   assert.match(mockSource, /request\.method === 'POST' && url\.pathname === '\/api\/code-quality-review-providers'/);
+  assert.match(mockSource, /request\.method === 'POST' && url\.pathname === '\/api\/code-quality-agent-runtimes'/);
+  assert.match(mockSource, /runtimeTestMatch/);
   assert.match(mockSource, /request\.method === 'DELETE' && providerMatch/);
 });
 

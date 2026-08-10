@@ -711,6 +711,10 @@ body {
 }
 
 @media (max-width: 760px) {
+  .review-connection-directory-actions {
+    display: none;
+  }
+
   .agent-trace-overview-head {
     align-items: flex-start;
     flex-direction: column;

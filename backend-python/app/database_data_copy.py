@@ -165,7 +165,8 @@ def sanitize_local_database(engine) -> dict[str, int]:
         execute_if_table(
             "code_quality_agent_settings",
             "UPDATE code_quality_agent_settings SET enabled = FALSE, "
-            "runtime_type = 'CLAUDE_CODE_DEEPSEEK', api_key_ciphertext = NULL, "
+            "runtime_type = 'CLAUDE_CODE_DEEPSEEK', "
+            "selected_runtime_code = 'CLAUDE_CODE_DEEPSEEK', api_key_ciphertext = NULL, "
             "api_key_fingerprint = NULL, custom_display_name = NULL, "
             "custom_base_url = NULL, custom_model = NULL, "
             "custom_reasoning_effort = NULL, custom_tls_verify = TRUE, "
@@ -174,6 +175,13 @@ def sanitize_local_database(engine) -> dict[str, int]:
             "worker_version = NULL, cli_version = NULL, last_worker_heartbeat_at = NULL, "
             "test_request_id = NULL, test_status = NULL, test_message = NULL, "
             "test_duration_ms = NULL, test_started_at = NULL, test_finished_at = NULL",
+        )
+        execute_if_table(
+            "code_quality_agent_runtimes",
+            "UPDATE code_quality_agent_runtimes SET api_key_ciphertext = NULL, "
+            "api_key_fingerprint = NULL, test_request_id = NULL, test_status = NULL, "
+            "test_message = NULL, test_duration_ms = NULL, test_started_at = NULL, "
+            "test_finished_at = NULL",
         )
         execute_if_table("code_quality_agent_workers", "DELETE FROM code_quality_agent_workers")
         execute_if_table("code_quality_scheduler_jobs", "DELETE FROM code_quality_scheduler_jobs")
