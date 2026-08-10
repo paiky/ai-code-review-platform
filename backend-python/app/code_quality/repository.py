@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, func, inspect, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.code_quality.models import (
@@ -27,6 +28,12 @@ from app.notification.repository import (
     list_webhooks,
     upsert_webhooks,
     webhook_to_dict,
+)
+from app.project_integration.models import (
+    Project,
+    ProjectGroup,
+    ProjectGroupAiReviewModel,
+    ProjectTargetConfig,
 )
 from app.review_feedback.service import attach_ai_finding_feedbacks
 
@@ -939,6 +946,115 @@ def list_provider_responses(db: Session) -> list[dict[str, Any]]:
         provider_to_response(provider, settings.default_provider_code)
         for provider in providers
     ]
+
+
+def create_provider(db: Session, request: dict[str, Any]) -> dict[str, Any]:
+    ensure_defaults(db)
+    provider_code = str(request["providerCode"]).strip().upper()
+    existing = db.scalars(
+        select(CodeQualityModelProvider).where(
+            CodeQualityModelProvider.provider_code == provider_code
+        )
+    ).first()
+    if existing is not None:
+        raise AppError(
+            "PROVIDER_ALREADY_EXISTS",
+            f"Model provider already exists: {provider_code}",
+            409,
+        )
+
+    max_sort_order = db.scalar(select(func.max(CodeQualityModelProvider.sort_order))) or 0
+    now = datetime.now()
+    provider = CodeQualityModelProvider(
+        provider_code=provider_code,
+        provider_name=str(request["providerName"]).strip(),
+        provider_type=str(request["providerType"]),
+        endpoint_url=_blank_to_none(request.get("endpointUrl")),
+        model_name=_blank_to_none(request.get("modelName")),
+        api_key=_blank_to_none(request.get("apiKey")),
+        timeout_seconds=_normalize_provider_timeout(request.get("timeoutSeconds")),
+        enabled=bool(request.get("enabled", False)),
+        built_in=False,
+        sort_order=int(max_sort_order) + 10,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(provider)
+    try:
+        db.flush()
+    except IntegrityError as exception:
+        db.rollback()
+        raise AppError(
+            "PROVIDER_ALREADY_EXISTS",
+            f"Model provider already exists: {provider_code}",
+            409,
+        ) from exception
+    return provider_to_response(provider, get_settings_record(db).default_provider_code)
+
+
+def delete_provider(db: Session, provider_code: str) -> dict[str, Any]:
+    ensure_defaults(db)
+    normalized_code = str(provider_code or "").strip().upper()
+    provider = db.scalars(
+        select(CodeQualityModelProvider)
+        .where(CodeQualityModelProvider.provider_code == normalized_code)
+        .with_for_update()
+    ).first()
+    if provider is None:
+        raise AppError(
+            "RESOURCE_NOT_FOUND",
+            f"Model provider not found: {normalized_code}",
+            404,
+        )
+    if provider.built_in:
+        raise AppError(
+            "PROVIDER_BUILT_IN",
+            f"Built-in model provider cannot be deleted: {normalized_code}",
+            409,
+        )
+
+    settings = db.scalars(
+        select(CodeQualityReviewSettings).where(CodeQualityReviewSettings.id == 1).with_for_update()
+    ).first()
+    if settings is not None and settings.default_provider_code == normalized_code:
+        raise AppError(
+            "PROVIDER_IS_DEFAULT",
+            f"Default model provider cannot be deleted: {normalized_code}",
+            409,
+        )
+
+    reference_counts = _locking_provider_reference_counts(db, normalized_code)
+    if reference_counts:
+        summary = ", ".join(
+            f"{domain}={count}" for domain, count in reference_counts.items()
+        )
+        raise AppError(
+            "PROVIDER_IN_USE",
+            f"Model provider is referenced by active configuration: {summary}",
+            409,
+        )
+
+    db.delete(provider)
+    db.flush()
+    return {"providerCode": normalized_code, "deleted": True}
+
+
+def _locking_provider_reference_counts(db: Session, provider_code: str) -> dict[str, int]:
+    references = (
+        ("profiles", CodeQualityReviewProfile, CodeQualityReviewProfile.provider_code),
+        ("projects", Project, Project.default_code_quality_provider_code),
+        ("projectGroups", ProjectGroup, ProjectGroup.default_provider_code),
+        ("projectGroupModels", ProjectGroupAiReviewModel, ProjectGroupAiReviewModel.provider_code),
+        ("projectTargets", ProjectTargetConfig, ProjectTargetConfig.provider_code),
+    )
+    counts: dict[str, int] = {}
+    for domain, model, column in references:
+        matched_ids = db.scalars(
+            select(model.id).where(column == provider_code).with_for_update()
+        ).all()
+        if matched_ids:
+            counts[domain] = len(matched_ids)
+    return counts
 
 
 def get_provider(db: Session, provider_code: str) -> CodeQualityModelProvider:

@@ -6,11 +6,23 @@ import httpx
 import respx
 from fastapi.testclient import TestClient
 from httpx import Response
-from sqlalchemy import inspect, text
+from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
 
-from app.code_quality.models import CodeQualityFixPreview, CodeQualityReviewResult, CodeQualitySchedulerJob
-from app.project_integration.models import GitLabMergeRequestEvent, Project
+from app.code_quality.models import (
+    CodeQualityFixPreview,
+    CodeQualityModelProvider,
+    CodeQualityReviewProfile,
+    CodeQualityReviewResult,
+    CodeQualitySchedulerJob,
+)
+from app.project_integration.models import (
+    GitLabMergeRequestEvent,
+    Project,
+    ProjectGroup,
+    ProjectGroupAiReviewModel,
+    ProjectTargetConfig,
+)
 from app.project_review_policy.models import ProjectReviewPolicy
 from app.review_context import local_repo
 from app.review_feedback.models import ReviewItemFeedback
@@ -193,6 +205,313 @@ def test_manual_review_disabled_returns_clear_error(
 
     assert response.status_code == 400
     assert response.json()["message"] == "Code quality review is disabled"
+
+
+def test_create_custom_provider_normalizes_fields_and_masks_key(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    before = client.get("/api/code-quality-reviews/settings").json()["data"]
+    before_max_sort_order = db_session.scalar(select(func.max(CodeQualityModelProvider.sort_order)))
+
+    response = client.post(
+        "/api/code-quality-review-providers",
+        json={
+            "providerCode": " custom_team ",
+            "providerName": " Team Gateway ",
+            "providerType": "OPENAI_CHAT_COMPATIBLE",
+            "endpointUrl": " https://models.example.com/v1 ",
+            "modelName": " review-model ",
+            "timeoutSeconds": 120,
+            "apiKey": " custom-secret-123456 ",
+        },
+    )
+
+    assert response.status_code == 200
+    provider = response.json()["data"]
+    assert provider == {
+        "providerCode": "CUSTOM_TEAM",
+        "providerName": "Team Gateway",
+        "providerType": "OPENAI_CHAT_COMPATIBLE",
+        "endpointUrl": "https://models.example.com/v1",
+        "modelName": "review-model",
+        "timeoutSeconds": 120,
+        "enabled": False,
+        "builtIn": False,
+        "defaultProvider": False,
+        "apiKeyConfigured": True,
+        "apiKeyMasked": "cust...3456",
+        "updatedAt": provider["updatedAt"],
+    }
+    assert provider["updatedAt"] is not None
+    assert "custom-secret-123456" not in json.dumps(response.json(), ensure_ascii=False)
+    after = client.get("/api/code-quality-reviews/settings").json()["data"]
+    assert after["defaultProviderCode"] == before["defaultProviderCode"]
+
+    stored = db_session.scalar(
+        select(CodeQualityModelProvider).where(
+            CodeQualityModelProvider.provider_code == "CUSTOM_TEAM"
+        )
+    )
+    assert stored is not None
+    assert stored.built_in is False
+    assert stored.sort_order == int(before_max_sort_order or 0) + 10
+
+
+def test_create_enabled_custom_provider_requires_complete_configuration(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/code-quality-review-providers",
+        json={
+            "providerCode": "ACTIVE_CUSTOM",
+            "providerName": "Active Custom",
+            "providerType": "OPENAI_RESPONSES",
+            "endpointUrl": "https://responses.example.com/v1",
+            "modelName": "gpt-custom",
+            "apiKey": "active-secret",
+            "enabled": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["enabled"] is True
+
+
+def test_create_enabled_custom_provider_rejects_incomplete_configuration(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/code-quality-review-providers",
+        json={
+            "providerCode": "INCOMPLETE",
+            "providerName": "Incomplete",
+            "providerType": "ANTHROPIC_MESSAGES",
+            "enabled": True,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+    assert "endpointUrl is required" in response.json()["message"]
+
+
+def test_create_custom_provider_rejects_invalid_contract_fields(
+    client: TestClient,
+) -> None:
+    invalid_requests = [
+        {
+            "providerCode": "1INVALID",
+            "providerName": "Invalid code",
+            "providerType": "OPENAI_RESPONSES",
+        },
+        {
+            "providerCode": "BAD_TYPE",
+            "providerName": "Invalid type",
+            "providerType": "UNSUPPORTED",
+        },
+        {
+            "providerCode": "BAD_TIMEOUT",
+            "providerName": "Invalid timeout",
+            "providerType": "OPENAI_CHAT_COMPATIBLE",
+            "timeoutSeconds": 3601,
+        },
+    ]
+
+    for request in invalid_requests:
+        response = client.post("/api/code-quality-review-providers", json=request)
+        assert response.status_code == 400
+        assert response.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_create_custom_provider_rejects_duplicate_code(
+    client: TestClient,
+) -> None:
+    request = {
+        "providerCode": "DUPLICATE",
+        "providerName": "Duplicate",
+        "providerType": "OPENAI_CHAT_COMPATIBLE",
+    }
+    assert client.post("/api/code-quality-review-providers", json=request).status_code == 200
+
+    response = client.post(
+        "/api/code-quality-review-providers",
+        json={**request, "providerCode": " duplicate "},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "PROVIDER_ALREADY_EXISTS"
+
+
+def test_delete_custom_provider_and_repeat_returns_not_found(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    create = client.post(
+        "/api/code-quality-review-providers",
+        json={
+            "providerCode": "DELETE_ME",
+            "providerName": "Delete Me",
+            "providerType": "OPENAI_CHAT_COMPATIBLE",
+            "apiKey": "delete-secret",
+        },
+    )
+    assert create.status_code == 200
+
+    response = client.delete("/api/code-quality-review-providers/delete_me")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"providerCode": "DELETE_ME", "deleted": True}
+    assert db_session.scalar(
+        select(CodeQualityModelProvider).where(
+            CodeQualityModelProvider.provider_code == "DELETE_ME"
+        )
+    ) is None
+
+    repeated = client.delete("/api/code-quality-review-providers/DELETE_ME")
+    assert repeated.status_code == 404
+    assert repeated.json()["code"] == "RESOURCE_NOT_FOUND"
+
+
+def test_delete_provider_rejects_built_in_and_default_provider(
+    client: TestClient,
+) -> None:
+    built_in = client.delete("/api/code-quality-review-providers/DEEPSEEK")
+    assert built_in.status_code == 409
+    assert built_in.json()["code"] == "PROVIDER_BUILT_IN"
+
+    create = client.post(
+        "/api/code-quality-review-providers",
+        json={
+            "providerCode": "CUSTOM_DEFAULT",
+            "providerName": "Custom Default",
+            "providerType": "OPENAI_RESPONSES",
+        },
+    )
+    assert create.status_code == 200
+    assert client.post(
+        "/api/code-quality-review-providers/CUSTOM_DEFAULT/set-default"
+    ).status_code == 200
+
+    default_provider = client.delete(
+        "/api/code-quality-review-providers/CUSTOM_DEFAULT"
+    )
+    assert default_provider.status_code == 409
+    assert default_provider.json()["code"] == "PROVIDER_IS_DEFAULT"
+
+
+def test_delete_provider_reports_each_blocking_configuration_domain(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    provider_codes = (
+        "REF_PROFILE",
+        "REF_PROJECT",
+        "REF_GROUP",
+        "REF_GROUP_MODEL",
+        "REF_TARGET",
+    )
+    for provider_code in provider_codes:
+        response = client.post(
+            "/api/code-quality-review-providers",
+            json={
+                "providerCode": provider_code,
+                "providerName": provider_code,
+                "providerType": "OPENAI_CHAT_COMPATIBLE",
+            },
+        )
+        assert response.status_code == 200
+
+    profile = db_session.scalar(select(CodeQualityReviewProfile).limit(1))
+    assert profile is not None
+    profile.provider_code = "REF_PROFILE"
+    seed_project(db_session, "REF_PROJECT")
+    group = ProjectGroup(
+        group_name="Reference group",
+        group_code="reference-group",
+        default_provider_code="REF_GROUP",
+        review_engine="STANDARD",
+        status="ENABLED",
+    )
+    db_session.add(group)
+    db_session.flush()
+    db_session.add(
+        ProjectGroupAiReviewModel(
+            group_id=group.id,
+            review_key="secondary",
+            provider_code="REF_GROUP_MODEL",
+            enabled=True,
+            sort_order=10,
+        )
+    )
+    db_session.add(
+        ProjectTargetConfig(
+            project_id=1,
+            target_type="BACKEND",
+            template_code="backend-default",
+            provider_code="REF_TARGET",
+            path_patterns='["backend/**"]',
+            reminder_card_enabled=True,
+            enabled=True,
+        )
+    )
+    db_session.commit()
+
+    expected_domains = {
+        "REF_PROFILE": "profiles=1",
+        "REF_PROJECT": "projects=1",
+        "REF_GROUP": "projectGroups=1",
+        "REF_GROUP_MODEL": "projectGroupModels=1",
+        "REF_TARGET": "projectTargets=1",
+    }
+    for provider_code, expected_domain in expected_domains.items():
+        response = client.delete(
+            f"/api/code-quality-review-providers/{provider_code}"
+        )
+        assert response.status_code == 409
+        assert response.json()["code"] == "PROVIDER_IN_USE"
+        assert expected_domain in response.json()["message"]
+
+
+def test_delete_provider_does_not_remove_or_block_historical_result(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    create = client.post(
+        "/api/code-quality-review-providers",
+        json={
+            "providerCode": "HISTORICAL",
+            "providerName": "Historical",
+            "providerType": "ANTHROPIC_MESSAGES",
+        },
+    )
+    assert create.status_code == 200
+    historical = CodeQualityReviewResult(
+        task_id=901,
+        review_key="historical",
+        project_id=902,
+        profile_code="historical-profile",
+        provider="HISTORICAL",
+        model="historical-model",
+        status="SUCCESS",
+        finding_count=0,
+        findings_json="[]",
+        requested_engine="STANDARD",
+        effective_engine="STANDARD",
+        created_at=datetime(2026, 8, 9, 12, 0, 0),
+        updated_at=datetime(2026, 8, 9, 12, 0, 0),
+    )
+    db_session.add(historical)
+    db_session.commit()
+    historical_id = historical.id
+
+    response = client.delete("/api/code-quality-review-providers/HISTORICAL")
+
+    assert response.status_code == 200
+    persisted = db_session.get(CodeQualityReviewResult, historical_id)
+    assert persisted is not None
+    assert persisted.provider == "HISTORICAL"
+    assert persisted.model == "historical-model"
 
 
 def test_provider_update_masks_api_key(

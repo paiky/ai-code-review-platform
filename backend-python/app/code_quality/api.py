@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.code_quality import service
+from app.code_quality.schemas import CreateProviderRequest
 from app.core.database import get_db
 from app.core.response import ok
 
@@ -131,6 +132,16 @@ async def reset_default_prompt(profile_code: str, db: Session = Depends(get_db))
 @provider_router.get("")
 async def list_providers(db: Session = Depends(get_db)) -> dict:
     return ok(service.list_provider_response(db))
+
+
+@provider_router.post("")
+async def create_provider(request: CreateProviderRequest, db: Session = Depends(get_db)) -> dict:
+    return ok(service.create_provider_response(db, request.model_dump(by_alias=True)))
+
+
+@provider_router.delete("/{provider_code}")
+async def delete_provider(provider_code: str, db: Session = Depends(get_db)) -> dict:
+    return ok(service.delete_provider_response(db, provider_code))
 
 
 @provider_router.put("/{provider_code}")

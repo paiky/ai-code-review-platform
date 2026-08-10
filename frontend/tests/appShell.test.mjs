@@ -17,9 +17,15 @@ test('navigation keeps the public routes and maps detail routes to their parent'
   assert.equal(resolveAppShellSelectedKey('/', items), '/');
   assert.equal(resolveAppShellSelectedKey('/tasks', items), '/tasks');
   assert.equal(resolveAppShellSelectedKey('/tasks/42', items), '/tasks');
-  assert.equal(resolveAppShellSelectedKey('/settings', items), '/settings');
+  assert.equal(resolveAppShellSelectedKey('/settings', items), '');
+  assert.equal(resolveAppShellSelectedKey('/settings/project-targets', items), '/settings/project-targets');
+  assert.equal(resolveAppShellSelectedKey('/settings/review-profiles', items), '/settings/review-profiles');
+  assert.equal(resolveAppShellSelectedKey('/settings/model-connections', items), '/settings/model-connections');
+  assert.equal(resolveAppShellSelectedKey('/settings/global', items), '/settings/global');
+  assert.deepEqual(resolveAppShellOpenKeys('/settings/model-connections', items), ['/settings']);
   assert.equal(resolveAppShellSelectedKey('/releases', items), '');
   assert.equal(resolveAppShellSelectedKey('/unknown', items), '');
+  assert.deepEqual(resolveAppShellOpenKeys('/tasks', items), ['/settings']);
 });
 
 test('governance navigation remains behind its existing feature flags', () => {
@@ -30,7 +36,7 @@ test('governance navigation remains behind its existing feature flags', () => {
   const governance = visible.find(item => item.key === 'quality-governance');
   assert.equal(governance.children.some(item => item.key === '/risk-feedback'), false);
   assert.equal(resolveAppShellSelectedKey('/acceptance-gates/8', visible), '/acceptance-gates');
-  assert.deepEqual(resolveAppShellOpenKeys('/acceptance-gates', visible), ['quality-governance']);
+  assert.deepEqual(resolveAppShellOpenKeys('/acceptance-gates', visible), ['quality-governance', '/settings']);
 
   const learning = buildAppShellNavigation({
     qualityGovernanceVisible: true,

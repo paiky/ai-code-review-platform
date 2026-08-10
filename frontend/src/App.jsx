@@ -54,6 +54,7 @@ import {
   ControlOutlined,
   CopyOutlined,
   DashboardOutlined,
+  DeleteOutlined,
   ExportOutlined,
   EyeOutlined,
   FileTextOutlined,
@@ -115,6 +116,13 @@ import {
   resolveAppShellViewport,
   writeSidebarCollapsedPreference
 } from './appShell.js';
+import {
+  DEFAULT_SETTINGS_ROUTE,
+  registerSettingsNavigationGuard,
+  requestSettingsNavigation,
+  resolveSettingsSection,
+  settingsSectionHasDirtyDraft
+} from './settingsNavigation.js';
 import CommandCenterPage from './command-center/CommandCenterPage.jsx';
 import { createVisibilityRefreshLifecycle } from './visibilityRefreshLifecycle.js';
 import {
@@ -170,6 +178,15 @@ import {
   resolveReviewModelConnectionSelection,
   standardReviewConnection
 } from './reviewModelConnections.js';
+import {
+  buildCreateProviderRequest,
+  createProviderDraft,
+  matchesProviderDeleteConfirmation,
+  normalizeProviderCode,
+  providerDeleteAvailability,
+  providerTypeOptions,
+  validateCreateProviderDraft
+} from './providerLifecycle.js';
 import { releaseNotes } from './releaseNotes.js';
 
 const { Header, Content, Sider } = Layout;
@@ -6471,6 +6488,8 @@ function AgentBudgetFieldCard({
 }
 
 function TemplateConfig() {
+  const location = useLocation();
+  const activeSettingsSection = resolveSettingsSection(location.pathname);
   const [groups, setGroups] = useState([]);
   const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, aiReviewModels: [], dingtalkWebhooks: [] });
   const [editingGroupId, setEditingGroupId] = useState(null);
@@ -6496,6 +6515,7 @@ function TemplateConfig() {
   const [providerDraft, setProviderDraft] = useState(null);
   const [selectedReviewConnectionId, setSelectedReviewConnectionId] = useState(null);
   const [dirtyReviewConnectionId, setDirtyReviewConnectionId] = useState(null);
+  const [dirtySettingsDraftTokens, setDirtySettingsDraftTokens] = useState(() => new Set());
   const [selectedProfileCode, setSelectedProfileCode] = useState(null);
   const [profileDraft, setProfileDraft] = useState(null);
   const [selectedPushPolicyGroupId, setSelectedPushPolicyGroupId] = useState(null);
@@ -6512,6 +6532,14 @@ function TemplateConfig() {
   const [agentSettingsTesting, setAgentSettingsTesting] = useState(false);
   const [agentSettingsTestResult, setAgentSettingsTestResult] = useState(null);
   const [providerApiKeyDraft, setProviderApiKeyDraft] = useState('');
+  const [providerCreateModalOpen, setProviderCreateModalOpen] = useState(false);
+  const [providerCreateDraft, setProviderCreateDraft] = useState(createProviderDraft);
+  const [providerCreateError, setProviderCreateError] = useState(null);
+  const [providerCreating, setProviderCreating] = useState(false);
+  const [providerDeleteTarget, setProviderDeleteTarget] = useState(null);
+  const [providerDeleteConfirmation, setProviderDeleteConfirmation] = useState('');
+  const [providerDeleteError, setProviderDeleteError] = useState(null);
+  const [providerDeleting, setProviderDeleting] = useState(false);
   const [loading, setLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [projectGroupCreating, setProjectGroupCreating] = useState(false);
@@ -6529,6 +6557,26 @@ function TemplateConfig() {
   const [promptPreviewLoading, setPromptPreviewLoading] = useState(false);
   const [error, setError] = useState(null);
   const [messageApi, contextHolder] = message.useMessage();
+  const dirtySettingsRef = useRef(false);
+  const loadSettingsRef = useRef(null);
+  const currentSettingsUrlRef = useRef(`${location.pathname}${location.search}${location.hash}`);
+
+  const markSettingsDraftDirty = useCallback(token => {
+    setDirtySettingsDraftTokens(current => {
+      const next = new Set(current);
+      next.add(token);
+      return next;
+    });
+  }, []);
+
+  const clearSettingsDraftDirty = useCallback(token => {
+    setDirtySettingsDraftTokens(current => {
+      if (!current.has(token)) return current;
+      const next = new Set(current);
+      next.delete(token);
+      return next;
+    });
+  }, []);
 
   const load = async () => {
     setLoading(true);
@@ -6602,6 +6650,7 @@ function TemplateConfig() {
       setProviderDraft(providerItems.find(item => item.providerCode === nextSelectedProviderCode) || providerItems[0] || null);
       setProviderApiKeyDraft('');
       setDirtyReviewConnectionId(null);
+      setDirtySettingsDraftTokens(new Set());
       setProfiles(profileItems);
       setSelectedProfileCode(nextSelectedProfileCode);
       setProfileDraft(profileItems.find(item => item.profileCode === nextSelectedProfileCode) || selectableProfileItems[0] || null);
@@ -6612,6 +6661,62 @@ function TemplateConfig() {
       setLoading(false);
     }
   };
+
+  loadSettingsRef.current = load;
+  currentSettingsUrlRef.current = `${location.pathname}${location.search}${location.hash}`;
+  dirtySettingsRef.current = settingsSectionHasDirtyDraft(
+    dirtySettingsDraftTokens,
+    activeSettingsSection?.key,
+    dirtyReviewConnectionId
+  );
+
+  const discardCurrentSettingsDrafts = useCallback(async () => {
+    dirtySettingsRef.current = false;
+    setDirtyReviewConnectionId(null);
+    setDirtySettingsDraftTokens(new Set());
+    setProviderCreateModalOpen(false);
+    setProviderCreateDraft(createProviderDraft());
+    setProviderCreateError(null);
+    setProviderDeleteTarget(null);
+    setProviderDeleteConfirmation('');
+    setProviderDeleteError(null);
+    await loadSettingsRef.current?.();
+  }, []);
+
+  useEffect(() => registerSettingsNavigationGuard({
+    isDirty: () => dirtySettingsRef.current,
+    currentUrl: () => currentSettingsUrlRef.current,
+    discard: discardCurrentSettingsDrafts,
+    requestNavigation: next => {
+      if (!dirtySettingsRef.current) {
+        next();
+        return;
+      }
+      const focusTarget = document.activeElement;
+      Modal.confirm({
+        title: '放弃当前设置模块的未保存修改？',
+        content: '离开后将恢复最近一次服务端配置，未保存字段和 Key 草稿不会保留。',
+        okText: '放弃并离开',
+        cancelText: '继续编辑',
+        okButtonProps: { danger: true },
+        onOk: async () => {
+          await discardCurrentSettingsDrafts();
+          next();
+        },
+        onCancel: () => window.setTimeout(() => focusTarget?.focus?.(), 0)
+      });
+    }
+  }), [discardCurrentSettingsDrafts]);
+
+  useEffect(() => {
+    const onBeforeUnload = event => {
+      if (!dirtySettingsRef.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
 
   useEffect(() => {
     load();
@@ -6765,6 +6870,7 @@ function TemplateConfig() {
 
   const updateProjectConfigDraft = (field, value) => {
     setProjectConfigDraft(current => ({ ...(current || {}), [field]: value }));
+    markSettingsDraftDirty('project-target-configs:project-config');
     if (field === 'targetType' && value) {
       selectTargetTypeForConfig(value);
     }
@@ -6785,10 +6891,12 @@ function TemplateConfig() {
 
   const updateTargetConfigDraft = (field, value) => {
     setTargetConfigDraft(current => current ? { ...current, [field]: value } : current);
+    markSettingsDraftDirty('project-target-configs:project-config');
   };
 
   const updateGroupDraft = (field, value) => {
     setGroupDraft(current => ({ ...current, [field]: value }));
+    markSettingsDraftDirty('project-target-configs:group-create');
   };
 
   const startEditGroup = (group) => {
@@ -6798,6 +6906,7 @@ function TemplateConfig() {
 
   const updateEditingGroupDraft = (field, value) => {
     setEditingGroupDraft(current => current ? { ...current, [field]: value } : current);
+    markSettingsDraftDirty('project-target-configs:group-edit');
   };
 
   const normalizeWebhookPayload = (webhooks = []) => webhooks.map(item => ({
@@ -6840,8 +6949,10 @@ function TemplateConfig() {
     };
     if (target === 'editing') {
       setEditingGroupDraft(updater);
+      markSettingsDraftDirty('project-target-configs:group-edit');
     } else {
       setGroupDraft(updater);
+      markSettingsDraftDirty('project-target-configs:group-create');
     }
   };
 
@@ -6855,8 +6966,10 @@ function TemplateConfig() {
     });
     if (target === 'editing') {
       setEditingGroupDraft(updater);
+      markSettingsDraftDirty('project-target-configs:group-edit');
     } else {
       setGroupDraft(updater);
+      markSettingsDraftDirty('project-target-configs:group-create');
     }
   };
 
@@ -6937,8 +7050,10 @@ function TemplateConfig() {
     } : current;
     if (target === 'editing') {
       setEditingGroupDraft(updater);
+      markSettingsDraftDirty('project-target-configs:group-edit');
     } else {
       setGroupDraft(updater);
+      markSettingsDraftDirty('project-target-configs:group-create');
     }
   };
 
@@ -6981,6 +7096,7 @@ function TemplateConfig() {
         })
       });
       setGroupDraft({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, aiReviewModels: [], dingtalkWebhooks: [] });
+      clearSettingsDraftDirty('project-target-configs:group-create');
       await reloadProjectGroupsAndProjects();
       messageApi.success('项目组已创建');
     } catch (err) {
@@ -7020,6 +7136,7 @@ function TemplateConfig() {
       });
       setEditingGroupId(null);
       setEditingGroupDraft(null);
+      clearSettingsDraftDirty('project-target-configs:group-edit');
       await reloadProjectGroupsAndProjects();
       messageApi.success('项目组已保存');
     } catch (err) {
@@ -7075,6 +7192,7 @@ function TemplateConfig() {
       setProjectConfigDraft({ groupId: updatedProject.groupId || null, targetType: normalizedTargetType });
       setProjectGroupFilter(updatedProject.groupId || null);
       await reloadProjectGroupsAndProjects(selectedProjectId, normalizedTargetType, updatedProject.groupId || null);
+      clearSettingsDraftDirty('project-target-configs:project-config');
       messageApi.success('项目配置已保存');
     } catch (err) {
       messageApi.error(err.message);
@@ -7085,6 +7203,7 @@ function TemplateConfig() {
 
   const updateProjectDraft = (field, value) => {
     setProjectDraft(current => ({ ...current, [field]: value }));
+    markSettingsDraftDirty('project-target-configs:project-create');
   };
 
   const createProjectRecord = async () => {
@@ -7108,6 +7227,7 @@ function TemplateConfig() {
         })
       });
       setProjectDraft({ name: '', gitProjectId: '', repositoryUrl: '', groupId: created.groupId || null, targetType: 'BACKEND' });
+      clearSettingsDraftDirty('project-target-configs:project-create');
       await reloadProjectGroupsAndProjects(created.id);
       messageApi.success('项目已预创建，后续 webhook 会复用该 GitLab 项目 ID');
     } catch (err) {
@@ -7135,6 +7255,7 @@ function TemplateConfig() {
       const drafts = buildTargetPathMappingDrafts(current);
       return drafts.map(item => item.targetType === targetType ? { ...item, [field]: value } : item);
     });
+    markSettingsDraftDirty('project-target-configs:path-mappings');
   };
 
   const resetTargetPathMappingDraft = (targetType) => {
@@ -7146,6 +7267,7 @@ function TemplateConfig() {
         enabled: true
       } : item);
     });
+    markSettingsDraftDirty('project-target-configs:path-mappings');
     messageApi.info(`已恢复 ${targetTypeLabel(targetType)} 的默认匹配路径，请点击“保存路径映射”生效`);
   };
 
@@ -7165,6 +7287,7 @@ function TemplateConfig() {
         })
       });
       setTargetPathMappings(Array.isArray(updated) ? updated : []);
+      clearSettingsDraftDirty('project-target-configs:path-mappings');
       messageApi.success('端类型路径映射已保存');
     } catch (err) {
       messageApi.error(err.message);
@@ -7246,6 +7369,7 @@ function TemplateConfig() {
         budgets: current.budgets
       }));
       setAgentSettingsTestResult(settings?.configurationTest || null);
+      clearSettingsDraftDirty('review-model-settings:runtime-selection');
       messageApi.success('Agent Review 运行配置已保存');
       return settings;
     } catch (err) {
@@ -7388,6 +7512,7 @@ function TemplateConfig() {
         ...current,
         budgets: normalizeAgentBudgets(settings)
       }));
+      clearSettingsDraftDirty('review-model-settings:budgets');
       messageApi.success('Agent 执行预算已保存');
     } catch (err) {
       messageApi.error(err.message);
@@ -7409,6 +7534,7 @@ function TemplateConfig() {
         ...current,
         budgets: normalizeAgentBudgets(settings)
       }));
+      clearSettingsDraftDirty('review-model-settings:budgets');
       messageApi.success('Agent Review 运行参数已恢复默认');
     } catch (err) {
       messageApi.error(err.message);
@@ -7426,6 +7552,12 @@ function TemplateConfig() {
         [field]: Number(value)
       }
     }));
+    markSettingsDraftDirty('review-model-settings:budgets');
+  };
+
+  const updateAgentRuntimeSelectionDraft = (field, value) => {
+    setAgentSettingsDraft(current => ({ ...current, [field]: value }));
+    markSettingsDraftDirty('review-model-settings:runtime-selection');
   };
 
   const testAgentSettings = async runtimeType => {
@@ -7593,6 +7725,7 @@ function TemplateConfig() {
 
   const updateProfileDraft = (field, value) => {
     setProfileDraft(current => current ? { ...current, [field]: value } : current);
+    markSettingsDraftDirty('profile-settings:profile');
   };
 
   const selectPushPolicyGroup = (groupId) => {
@@ -7602,6 +7735,7 @@ function TemplateConfig() {
 
   const updatePushPolicyDraft = (field, value) => {
     setPushPolicyDraft(current => current ? { ...current, [field]: value } : current);
+    markSettingsDraftDirty('profile-settings:push-policy');
   };
 
   const saveProfilePrompt = async () => {
@@ -7619,6 +7753,7 @@ function TemplateConfig() {
       setProfiles(current => current.map(item => item.profileCode === updated.profileCode ? updated : item));
       setProfileDraft(updated);
       setPromptPreview(null);
+      clearSettingsDraftDirty('profile-settings:profile');
       messageApi.success('AI Review 配置已保存');
     } catch (err) {
       messageApi.error(err.message);
@@ -7654,6 +7789,7 @@ function TemplateConfig() {
       });
       setGroups(current => current.map(item => item.id === updated.id ? updated : item));
       setPushPolicyDraft(pushPolicyFromGroup(updated));
+      clearSettingsDraftDirty('profile-settings:push-policy');
       messageApi.success('项目组 AI Review 策略已保存');
     } catch (err) {
       messageApi.error(err.message);
@@ -7687,6 +7823,7 @@ function TemplateConfig() {
       setSelectedProfileCode(updated.profileCode);
       setProfileDraft(updated);
       setPromptPreview(null);
+      clearSettingsDraftDirty('profile-settings:profile');
       messageApi.success(`${updated.profileName || updated.profileCode} 已恢复默认 Prompt`);
     } catch (err) {
       messageApi.error(err.message);
@@ -7846,7 +7983,11 @@ function TemplateConfig() {
       render: (_, group) => editingGroupId === group.id ? (
         <Space wrap>
           <Button type="primary" size="small" loading={projectGroupSavingId === group.id} onClick={saveEditingProjectGroup}>保存</Button>
-          <Button size="small" onClick={() => { setEditingGroupId(null); setEditingGroupDraft(null); }}>取消</Button>
+          <Button size="small" onClick={() => {
+            setEditingGroupId(null);
+            setEditingGroupDraft(null);
+            clearSettingsDraftDirty('project-target-configs:group-edit');
+          }}>取消</Button>
         </Space>
       ) : (
         <Space wrap>
@@ -7938,6 +8079,169 @@ function TemplateConfig() {
       return;
     }
     setSelectedReviewConnectionId(connectionId);
+  };
+
+  const runAfterDiscardingConnectionDraft = action => {
+    if (dirtyReviewConnectionId !== selectedReviewConnectionId) {
+      action();
+      return;
+    }
+    Modal.confirm({
+      title: '放弃未保存的连接修改？',
+      content: '继续后将恢复当前连接最近一次服务端配置，未保存的字段和 Key 草稿不会保留。',
+      okText: '放弃并继续',
+      cancelText: '继续编辑',
+      okButtonProps: { danger: true },
+      onOk: () => {
+        restoreReviewConnectionDraft(selectedReviewConnectionId);
+        setDirtyReviewConnectionId(null);
+        action();
+      }
+    });
+  };
+
+  const closeCreateProviderModal = () => {
+    if (providerCreating) return;
+    setProviderCreateModalOpen(false);
+    setProviderCreateDraft(createProviderDraft());
+    setProviderCreateError(null);
+    clearSettingsDraftDirty('review-model-settings:provider-create');
+  };
+
+  const openCreateProviderModal = () => {
+    runAfterDiscardingConnectionDraft(() => {
+      setProviderCreateDraft(createProviderDraft());
+      setProviderCreateError(null);
+      clearSettingsDraftDirty('review-model-settings:provider-create');
+      setProviderCreateModalOpen(true);
+    });
+  };
+
+  const updateProviderCreateDraft = (field, value) => {
+    setProviderCreateDraft(current => ({ ...current, [field]: value }));
+    setProviderCreateError(null);
+    markSettingsDraftDirty('review-model-settings:provider-create');
+  };
+
+  const createCustomProvider = async () => {
+    const validationError = validateCreateProviderDraft(providerCreateDraft);
+    if (validationError) {
+      setProviderCreateError(validationError);
+      return;
+    }
+    setProviderCreating(true);
+    setProviderCreateError(null);
+    try {
+      const created = await fetchApi('/api/code-quality-review-providers', {
+        method: 'POST',
+        body: JSON.stringify(buildCreateProviderRequest(providerCreateDraft))
+      });
+      let providerItems;
+      try {
+        const refreshed = await fetchApi('/api/code-quality-review-providers');
+        providerItems = Array.isArray(refreshed) ? refreshed : (refreshed.items || []);
+      } catch {
+        providerItems = [
+          ...providers.filter(item => item.providerCode !== created.providerCode),
+          created
+        ];
+        messageApi.warning('Provider 已创建，但目录刷新失败；当前页面已使用创建响应更新');
+      }
+      const connectionId = `STANDARD:${created.providerCode}`;
+      setProviders(providerItems);
+      setSelectedReviewConnectionId(connectionId);
+      setProviderDraft(providerItems.find(item => item.providerCode === created.providerCode) || created);
+      setProviderApiKeyDraft('');
+      setProviderTestResult(null);
+      setDirtyReviewConnectionId(null);
+      setProviderCreateModalOpen(false);
+      setProviderCreateDraft(createProviderDraft());
+      clearSettingsDraftDirty('review-model-settings:provider-create');
+      messageApi.success(`${created.providerName || created.providerCode} 已创建；默认连接和联通性测试未改变`);
+    } catch (err) {
+      setProviderCreateError(err.message);
+    } finally {
+      setProviderCreating(false);
+    }
+  };
+
+  const closeDeleteProviderModal = () => {
+    if (providerDeleting) return;
+    setProviderDeleteTarget(null);
+    setProviderDeleteConfirmation('');
+    setProviderDeleteError(null);
+  };
+
+  const requestDeleteProvider = (provider, event) => {
+    event?.stopPropagation?.();
+    const availability = providerDeleteAvailability(provider);
+    if (!availability.visible || availability.disabled) return;
+    runAfterDiscardingConnectionDraft(() => {
+      setProviderDeleteTarget(provider);
+      setProviderDeleteConfirmation('');
+      setProviderDeleteError(null);
+    });
+  };
+
+  const deleteCustomProvider = async () => {
+    if (!providerDeleteTarget || !matchesProviderDeleteConfirmation(
+      providerDeleteTarget.providerCode,
+      providerDeleteConfirmation
+    )) return;
+    setProviderDeleting(true);
+    setProviderDeleteError(null);
+    try {
+      await fetchApi(`/api/code-quality-review-providers/${providerDeleteTarget.providerCode}`, {
+        method: 'DELETE'
+      });
+      let providerItems;
+      try {
+        const refreshed = await fetchApi('/api/code-quality-review-providers');
+        providerItems = Array.isArray(refreshed) ? refreshed : (refreshed.items || []);
+      } catch {
+        providerItems = providers.filter(
+          item => item.providerCode !== providerDeleteTarget.providerCode
+        );
+        messageApi.warning('Provider 已删除，但目录刷新失败；当前页面已移除该连接');
+      }
+      const deletedConnectionId = `STANDARD:${providerDeleteTarget.providerCode}`;
+      const nextRows = buildReviewModelConnectionCatalog({
+        agentSettings,
+        providers: providerItems,
+        defaultProviderCode: aiSettings?.defaultProviderCode
+      });
+      const previousSelection = selectedReviewConnectionId === deletedConnectionId
+        ? null
+        : selectedReviewConnectionId;
+      const nextSelection = resolveReviewModelConnectionSelection(nextRows, previousSelection);
+      const fallbackProviderCode = providerItems.some(
+        item => item.providerCode === aiSettings?.defaultProviderCode
+      )
+        ? aiSettings.defaultProviderCode
+        : providerItems[0]?.providerCode || null;
+      setProviders(providerItems);
+      setSelectedReviewConnectionId(nextSelection);
+      if (selectedProviderCode === providerDeleteTarget.providerCode) {
+        setSelectedProviderCode(fallbackProviderCode);
+      }
+      if (nextSelection?.startsWith('STANDARD:')) {
+        const nextProviderCode = nextSelection.slice('STANDARD:'.length);
+        setProviderDraft(providerItems.find(item => item.providerCode === nextProviderCode) || null);
+      } else {
+        setProviderDraft(null);
+      }
+      setProviderApiKeyDraft('');
+      setProviderTestResult(null);
+      setDirtyReviewConnectionId(null);
+      const deletedCode = providerDeleteTarget.providerCode;
+      setProviderDeleteTarget(null);
+      setProviderDeleteConfirmation('');
+      messageApi.success(`${deletedCode} 已永久删除`);
+    } catch (err) {
+      setProviderDeleteError(err.message);
+    } finally {
+      setProviderDeleting(false);
+    }
   };
 
   const updateAgentDefaultKeyDraft = value => {
@@ -8071,21 +8375,29 @@ function TemplateConfig() {
     },
     {
       title: '操作',
-      key: 'action',
-      width: 84,
+      key: 'actions',
+      width: 72,
       responsive: ['md'],
-      render: (_, row) => (
-        <Button
-          type={row.id === selectedReviewConnectionId ? 'primary' : 'link'}
-          size="small"
-          onClick={event => {
-            event.stopPropagation();
-            selectReviewConnection(row.id);
-          }}
-        >
-          详情
-        </Button>
-      )
+      render: (_, row) => {
+        if (row.reviewType !== standardReviewConnection) return null;
+        const provider = providers.find(item => item.providerCode === row.providerCode);
+        const availability = providerDeleteAvailability(provider);
+        if (!availability.visible) return null;
+        const button = (
+          <Button
+            danger
+            type="text"
+            size="small"
+            aria-label={`删除 ${row.providerCode}`}
+            disabled={availability.disabled}
+            icon={<DeleteOutlined />}
+            onClick={event => requestDeleteProvider(provider, event)}
+          />
+        );
+        return availability.reason
+          ? <Tooltip title={availability.reason}><span>{button}</span></Tooltip>
+          : button;
+      }
     }
   ];
 
@@ -8374,6 +8686,28 @@ function TemplateConfig() {
           </Button>
         </Space>
       </div>
+      {providerDraft.builtIn === false && (
+        <div className="review-provider-danger-zone">
+          <Divider />
+          <Alert
+            type="warning"
+            showIcon
+            title="危险操作"
+            description={providerDraft.defaultProvider
+              ? '当前 Provider 是 Standard 默认连接，必须先切换默认连接后才能删除。'
+              : '删除会永久移除该 Provider 及其凭据，且无法恢复。'}
+          />
+          <Button
+            danger
+            block
+            icon={<DeleteOutlined />}
+            disabled={providerDraft.defaultProvider === true}
+            onClick={event => requestDeleteProvider(providerDraft, event)}
+          >
+            删除自定义 Provider
+          </Button>
+        </div>
+      )}
     </Space>
   ) : (
     <Empty description="Standard Provider 不存在或已刷新" />
@@ -8677,7 +9011,7 @@ function TemplateConfig() {
                       )
                     }
                   ]}
-                  scroll={{ x: 920 }}
+                  scroll={{ x: 836 }}
                 />
               </Space>
             </div>
@@ -8722,7 +9056,7 @@ function TemplateConfig() {
                       aria-label="启用 Agent Review"
                       checked={agentSettingsDraft.enabled}
                       disabled={agentSettingsSaving}
-                      onChange={checked => setAgentSettingsDraft(current => ({ ...current, enabled: checked }))}
+                      onChange={checked => updateAgentRuntimeSelectionDraft('enabled', checked)}
                     />
                   </div>
                   <div>
@@ -8735,7 +9069,7 @@ function TemplateConfig() {
                         value: item.value,
                         label: item.isDefault ? `${item.label}（默认）` : item.label
                       }))}
-                      onChange={value => setAgentSettingsDraft(current => ({ ...current, selectedRuntime: value }))}
+                      onChange={value => updateAgentRuntimeSelectionDraft('selectedRuntime', value)}
                     />
                   </div>
                   <Descriptions size="small" column={1} bordered>
@@ -8820,8 +9154,13 @@ function TemplateConfig() {
                   compact
                   icon={<ApiOutlined />}
                   title="模型连接目录"
-                  description="Agent Runtime 与 Standard Provider 的统一只读索引；不代表共享 Key 或共享连接池。"
+                  description="Agent Runtime 与 Standard Provider 的统一目录；只允许增删自定义 Standard Provider。"
                   tags={<Tag>{reviewConnectionRows.length} 条连接</Tag>}
+                  extra={(
+                    <Button type="primary" icon={<PlusOutlined />} onClick={openCreateProviderModal}>
+                      新增模型连接
+                    </Button>
+                  )}
                 />
                 <Table
                   className="review-connection-table"
@@ -9154,14 +9493,7 @@ function TemplateConfig() {
     }
   ];
 
-  const orderedCollapseItems = [
-    'project-target-configs',
-    'profile-settings',
-    'review-model-settings',
-    'global-settings'
-  ]
-    .map(key => collapseItems.find(item => item.key === key))
-    .filter(Boolean);
+  const activeSettingsItem = collapseItems.find(item => item.key === activeSettingsSection?.key) || null;
 
   return (
     <TaskWorkspaceShell>
@@ -9176,8 +9508,155 @@ function TemplateConfig() {
         />
       )}
       <Spin spinning={loading}>
-        <Collapse className="settings-collapse" items={orderedCollapseItems} />
+        <section
+          className="settings-route-panel"
+          aria-label={activeSettingsSection?.label || '设置'}
+          data-settings-section={activeSettingsSection?.key || ''}
+        >
+          {activeSettingsItem?.children || <Empty description="设置模块不存在" />}
+        </section>
       </Spin>
+      <Modal
+        title="新增模型连接"
+        open={providerCreateModalOpen}
+        okText="创建 Provider"
+        cancelText="取消"
+        confirmLoading={providerCreating}
+        maskClosable={!providerCreating}
+        keyboard={!providerCreating}
+        onOk={createCustomProvider}
+        onCancel={closeCreateProviderModal}
+        width={720}
+      >
+        <Space orientation="vertical" size="middle" className="full-width">
+          <Alert
+            type="info"
+            showIcon
+            title="仅创建自定义 Standard Provider"
+            description="创建后不会自动设为默认连接、不会触发联通性测试，也不会影响 Agent Runtime。"
+          />
+          {providerCreateError && <Alert type="error" showIcon title={providerCreateError} />}
+          <Row gutter={[16, 16]}>
+            <Col xs={24} md={12}>
+              <Text strong>Provider Code</Text>
+              <Input
+                value={providerCreateDraft.providerCode}
+                maxLength={64}
+                placeholder="TEAM_GATEWAY"
+                onChange={event => updateProviderCreateDraft(
+                  'providerCode',
+                  normalizeProviderCode(event.target.value)
+                )}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>配置名称</Text>
+              <Input
+                value={providerCreateDraft.providerName}
+                maxLength={128}
+                placeholder="团队模型网关"
+                onChange={event => updateProviderCreateDraft('providerName', event.target.value)}
+              />
+            </Col>
+            <Col xs={24}>
+              <Text strong>协议</Text>
+              <Select
+                className="full-width"
+                value={providerCreateDraft.providerType}
+                options={providerTypeOptions}
+                onChange={value => updateProviderCreateDraft('providerType', value)}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>Endpoint URL</Text>
+              <Input
+                value={providerCreateDraft.endpointUrl}
+                maxLength={512}
+                placeholder="https://api.example.com/v1"
+                onChange={event => updateProviderCreateDraft('endpointUrl', event.target.value)}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>模型名称</Text>
+              <Input
+                value={providerCreateDraft.modelName}
+                maxLength={128}
+                onChange={event => updateProviderCreateDraft('modelName', event.target.value)}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>Review 超时秒数</Text>
+              <InputNumber
+                className="full-width"
+                min={1}
+                max={3600}
+                value={providerCreateDraft.timeoutSeconds}
+                onChange={value => updateProviderCreateDraft('timeoutSeconds', value)}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>API Key</Text>
+              <Input.Password
+                value={providerCreateDraft.apiKey}
+                maxLength={1024}
+                placeholder="仅保留在当前页面内存"
+                onChange={event => updateProviderCreateDraft('apiKey', event.target.value)}
+              />
+            </Col>
+            <Col xs={24}>
+              <Space wrap>
+                <Switch
+                  checked={providerCreateDraft.enabled}
+                  checkedChildren="启用"
+                  unCheckedChildren="停用"
+                  onChange={checked => updateProviderCreateDraft('enabled', checked)}
+                />
+                <Text type="secondary">启用时必须同时填写 Endpoint、模型和 Key。</Text>
+              </Space>
+            </Col>
+          </Row>
+        </Space>
+      </Modal>
+      <Modal
+        title="永久删除自定义 Provider"
+        open={Boolean(providerDeleteTarget)}
+        okText="永久删除"
+        cancelText="取消"
+        okButtonProps={{
+          danger: true,
+          disabled: !matchesProviderDeleteConfirmation(
+            providerDeleteTarget?.providerCode,
+            providerDeleteConfirmation
+          )
+        }}
+        confirmLoading={providerDeleting}
+        maskClosable={!providerDeleting}
+        keyboard={!providerDeleting}
+        onOk={deleteCustomProvider}
+        onCancel={closeDeleteProviderModal}
+      >
+        <Space orientation="vertical" size="middle" className="full-width">
+          <Alert
+            type="error"
+            showIcon
+            title="此操作不可恢复"
+            description="Provider 配置和凭据将被永久删除；Backend 仍会阻止删除默认、内置或被配置引用的 Provider。"
+          />
+          {providerDeleteError && <Alert type="error" showIcon title={providerDeleteError} />}
+          <Text>
+            请输入完整 Provider Code <Text code>{providerDeleteTarget?.providerCode}</Text> 以确认删除：
+          </Text>
+          <Input
+            value={providerDeleteConfirmation}
+            disabled={providerDeleting}
+            placeholder={providerDeleteTarget?.providerCode || ''}
+            onChange={event => {
+              setProviderDeleteConfirmation(event.target.value);
+              setProviderDeleteError(null);
+            }}
+          />
+        </Space>
+      </Modal>
     </TaskWorkspaceShell>
   );
 }
@@ -10356,6 +10835,13 @@ function RiskFeedbackPage() {
 }
 
 function SettingsPage() {
+  const location = useLocation();
+  if (location.pathname === SETTINGS_ROUTE || location.pathname === `${SETTINGS_ROUTE}/`) {
+    return <Navigate to={DEFAULT_SETTINGS_ROUTE} replace />;
+  }
+  if (!resolveSettingsSection(location.pathname)) {
+    return <Navigate to={DEFAULT_SETTINGS_ROUTE} replace />;
+  }
   return <TemplateConfig />;
 }
 
@@ -12391,7 +12877,7 @@ function AppShellMenu({ collapsed = false, items, openKeys, selectedKey, onNavig
       items={appShellMenuItems(items)}
       mode="inline"
       selectedKeys={selectedKey ? [selectedKey] : []}
-      defaultOpenKeys={openKeys}
+      openKeys={collapsed ? undefined : openKeys}
       onClick={({ key }) => onNavigate(key)}
     />
   );
@@ -12656,8 +13142,11 @@ function AppFrame() {
   }, [restoreNavigationTriggerFocus]);
 
   const navigateFromShell = useCallback(key => {
-    closeTemporaryNavigation(viewportMode !== 'desktop');
-    navigate(key, { state: { from: route } });
+    const performNavigation = () => {
+      closeTemporaryNavigation(viewportMode !== 'desktop');
+      navigate(key, { state: { from: route } });
+    };
+    requestSettingsNavigation(performNavigation);
   }, [closeTemporaryNavigation, navigate, route, viewportMode]);
 
   const toggleDesktopSidebar = useCallback(() => {
@@ -12700,7 +13189,7 @@ function AppFrame() {
           >
             <AppShellBrand
               compact={viewportMode === 'tablet' || desktopSidebarCollapsed}
-              onClick={() => navigate(HOME_ROUTE)}
+              onClick={() => navigateFromShell(HOME_ROUTE)}
             />
             <nav aria-label="主导航" className="app-sidebar-navigation">
               <AppShellMenu
@@ -12796,7 +13285,7 @@ function AppFrame() {
                       type="text"
                       onClick={() => setTemporaryNavigationOpen(true)}
                     />
-                    <AppShellBrand compact onClick={() => navigate(HOME_ROUTE)} />
+                    <AppShellBrand compact onClick={() => navigateFromShell(HOME_ROUTE)} />
                   </>
                 )}
               </div>
@@ -12861,7 +13350,7 @@ function AppFrame() {
               <Route path={EVALUATION_CASES_ROUTE} element={<EvaluationCasesPage />} />
               <Route path={EVALUATION_RUNS_ROUTE} element={<EvaluationRunsPage />} />
               <Route path={`${EVALUATION_RUNS_ROUTE}/:runId`} element={<EvaluationRunDetailPage />} />
-              <Route path={SETTINGS_ROUTE} element={<SettingsPage />} />
+              <Route path={`${SETTINGS_ROUTE}/*`} element={<SettingsPage />} />
               <Route path={RELEASES_ROUTE} element={<ReleaseNotesPage />} />
               <Route path={HELP_ROUTE} element={<HelpPage />} />
               <Route path="*" element={<Navigate to={HOME_ROUTE} replace />} />

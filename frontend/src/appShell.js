@@ -13,6 +13,13 @@ const GOVERNANCE_ROUTES = Object.freeze([
   { key: '/evaluation-runs', label: '回放记录', icon: 'replay' }
 ]);
 
+export const SETTINGS_NAVIGATION_ROUTES = Object.freeze([
+  { key: '/settings/project-targets', label: '项目组 / 端类型配置' },
+  { key: '/settings/review-profiles', label: 'AI Review 配置' },
+  { key: '/settings/model-connections', label: '模型连接与 Review 配置' },
+  { key: '/settings/global', label: '全局设置' }
+]);
+
 function routeMatches(pathname, route, exact = false) {
   if (exact) return pathname === route;
   return pathname === route || pathname.startsWith(`${route}/`);
@@ -34,7 +41,12 @@ export function buildAppShellNavigation({
     items.push({ key: 'quality-governance', label: '质量治理', icon: 'governance', children: [...children] });
   }
 
-  items.push({ key: '/settings', label: '设置', icon: 'settings' });
+  items.push({
+    key: '/settings',
+    label: '设置',
+    icon: 'settings',
+    children: SETTINGS_NAVIGATION_ROUTES.map(item => ({ ...item }))
+  });
   return items;
 }
 
@@ -51,7 +63,10 @@ export function resolveAppShellSelectedKey(pathname, items) {
 
 export function resolveAppShellOpenKeys(selectedKey, items) {
   const parent = items.find(item => item.children?.some(child => child.key === selectedKey));
-  return parent ? [parent.key] : [];
+  const openKeys = parent ? [parent.key] : [];
+  const settingsParent = items.find(item => item.key === '/settings' && item.children?.length);
+  if (settingsParent && !openKeys.includes(settingsParent.key)) openKeys.push(settingsParent.key);
+  return openKeys;
 }
 
 export function readSidebarCollapsedPreference(storage) {

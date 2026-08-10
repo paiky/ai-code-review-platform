@@ -75,14 +75,14 @@ test('Agent convergence budgets share the main grid and settings selects use con
   assert.match(appSource, /<Col xs=\{24\} md=\{4\}>\s*<div className="settings-action-row project-config-save-row">/);
 });
 
-test('settings collapse fills the page and all business cards use compact framed surfaces', () => {
+test('settings route panel fills the page and all business cards use compact framed surfaces', () => {
   assert.doesNotMatch(
     appSource,
     /<Paper[^>]*>\s*<Spin spinning=\{loading\}>\s*<Collapse className="settings-collapse"/
   );
-  assert.match(appSource, /<Spin spinning=\{loading\}>\s*<Collapse className="settings-collapse" items=\{orderedCollapseItems\} \/>/);
+  assert.match(appSource, /<Spin spinning=\{loading\}>\s*<section[\s\S]*className="settings-route-panel"/);
   assert.match(appSource, /<div className="settings-subsection">\s*<Space direction="vertical" size="middle" className="global-settings-stack">/);
-  assert.equal(styleSource.includes('.settings-collapse .ant-collapse-body,\n.settings-collapse .ant-collapse-content-box {\n  padding: 8px !important;'), true);
+  assert.equal(styleSource.includes('.settings-route-panel {\n  min-width: 0;'), true);
   assert.equal(styleSource.includes('.settings-inner-card .ant-card-body {\n  padding: 8px;'), true);
   assert.equal(styleSource.includes('.settings-subsection {\n  padding: 16px;'), true);
 });

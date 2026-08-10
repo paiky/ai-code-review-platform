@@ -176,6 +176,10 @@ body {
   padding: 8px;
 }
 
+.settings-route-panel {
+  min-width: 0;
+}
+
 .settings-inner-card > .ant-card-body > .settings-card-header {
   margin-bottom: 20px;
 }
@@ -1808,6 +1812,10 @@ body {
   cursor: pointer;
 }
 
+.review-connection-table .ant-table-row > .ant-table-cell {
+  min-height: 44px;
+}
+
 .review-connection-table .ant-table-row:focus-visible {
   outline: 3px solid rgba(22, 119, 255, 0.35);
   outline-offset: -3px;
@@ -1837,6 +1845,10 @@ body {
 
 .review-connection-actions .ant-btn {
   min-height: 40px;
+}
+
+.review-provider-danger-zone {
+  display: none;
 }
 
 .review-agent-budget-section .agent-budget-grid {
@@ -1872,6 +1884,12 @@ body {
 
   .review-connection-actions .ant-btn {
     min-height: 44px;
+  }
+
+  .review-provider-danger-zone {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
 }
 

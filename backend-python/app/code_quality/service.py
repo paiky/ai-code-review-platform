@@ -26,7 +26,9 @@ from app.code_quality.repository import (
     append_progress,
     cancel_active_scheduler_jobs_for_task,
     cancel_scheduler_job,
+    create_provider,
     create_scheduler_job,
+    delete_provider,
     delete_fix_previews,
     delete_progress,
     find_push_gate_decision,
@@ -1872,6 +1874,18 @@ def rendered_prompt(db: Session, profile_code: str, project_id: int | None = Non
 
 def list_provider_response(db: Session) -> list[dict[str, Any]]:
     return list_provider_responses(db)
+
+
+def create_provider_response(db: Session, request: dict[str, Any]) -> dict[str, Any]:
+    response = create_provider(db, request)
+    db.commit()
+    return response
+
+
+def delete_provider_response(db: Session, provider_code: str) -> dict[str, Any]:
+    response = delete_provider(db, provider_code)
+    db.commit()
+    return response
 
 
 def update_provider_response(db: Session, provider_code: str, request: dict[str, Any]) -> list[dict[str, Any]]:

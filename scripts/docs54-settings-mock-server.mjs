@@ -186,6 +186,35 @@ const server = http.createServer(async (request, reply) => {
     send(reply, 200, providers);
     return;
   }
+  if (request.method === 'POST' && url.pathname === '/api/code-quality-review-providers') {
+    if (scenario === 'MUTATION_FAILED') {
+      sendError(reply, 503, 'Synthetic Provider create failure');
+      return;
+    }
+    const body = await readJson(request);
+    const providerCode = String(body.providerCode || '').trim().toUpperCase();
+    if (providers.some(item => item.providerCode === providerCode)) {
+      sendError(reply, 409, `Synthetic duplicate Provider: ${providerCode}`);
+      return;
+    }
+    const created = {
+      providerCode,
+      providerName: String(body.providerName || providerCode).trim(),
+      providerType: body.providerType,
+      endpointUrl: body.endpointUrl || null,
+      modelName: body.modelName || null,
+      timeoutSeconds: body.timeoutSeconds || null,
+      enabled: body.enabled === true,
+      builtIn: false,
+      defaultProvider: false,
+      apiKeyConfigured: Boolean(body.apiKey),
+      apiKeyMasked: body.apiKey ? 'mock...only' : null,
+      updatedAt: new Date().toISOString()
+    };
+    providers = [...providers, created];
+    send(reply, 200, created);
+    return;
+  }
 
   const providerMatch = /^\/api\/code-quality-review-providers\/([^/]+)$/.exec(url.pathname);
   if (request.method === 'PUT' && providerMatch) {
@@ -195,6 +224,33 @@ const server = http.createServer(async (request, reply) => {
     }
     updateProvider(providerMatch[1], await readJson(request));
     send(reply, 200, providers);
+    return;
+  }
+  if (request.method === 'DELETE' && providerMatch) {
+    if (scenario === 'MUTATION_FAILED') {
+      sendError(reply, 503, 'Synthetic Provider delete failure');
+      return;
+    }
+    const providerCode = providerMatch[1];
+    const target = providers.find(item => item.providerCode === providerCode);
+    if (!target) {
+      sendError(reply, 404, `Synthetic Provider not found: ${providerCode}`);
+      return;
+    }
+    if (target.builtIn) {
+      sendError(reply, 409, `Synthetic built-in Provider cannot be deleted: ${providerCode}`);
+      return;
+    }
+    if (target.defaultProvider) {
+      sendError(reply, 409, `Synthetic default Provider cannot be deleted: ${providerCode}`);
+      return;
+    }
+    if (scenario === 'PROVIDER_DELETE_IN_USE') {
+      sendError(reply, 409, `Synthetic Provider is in use: ${providerCode}`);
+      return;
+    }
+    providers = providers.filter(item => item.providerCode !== providerCode);
+    send(reply, 200, { providerCode, deleted: true });
     return;
   }
   const providerTestMatch = /^\/api\/code-quality-review-providers\/([^/]+)\/test$/.exec(url.pathname);
@@ -394,6 +450,7 @@ function normalizeScenario(value) {
     'SETTINGS_READ_FAILED',
     'AGENT_READ_FAILED',
     'PROVIDERS_READ_FAILED',
+    'PROVIDER_DELETE_IN_USE',
     'MUTATION_FAILED'
   ]);
   if (!allowed.has(value)) throw new Error(`Unsupported safe mock scenario: ${value}`);

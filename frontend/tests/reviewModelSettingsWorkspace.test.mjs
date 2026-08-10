@@ -16,13 +16,8 @@ test('renders one visible unified Review model settings workspace', () => {
   assert.doesNotMatch(appSource, /key: 'provider-settings'/);
   assert.doesNotMatch(appSource, /key: 'agent-review-settings'/);
 
-  const orderedItems = appSource.slice(
-    appSource.indexOf('const orderedCollapseItems = ['),
-    appSource.indexOf('return (', appSource.indexOf('const orderedCollapseItems = ['))
-  );
-  assert.match(orderedItems, /'review-model-settings'/);
-  assert.doesNotMatch(orderedItems, /'provider-settings'/);
-  assert.doesNotMatch(orderedItems, /'agent-review-settings'/);
+  assert.match(appSource, /const activeSettingsItem = collapseItems\.find\(item => item\.key === activeSettingsSection\?\.key\)/);
+  assert.match(appSource, /data-settings-section=\{activeSettingsSection\?\.key \|\| ''\}/);
 });
 
 test('decouples Provider detail save from Standard default selection', () => {
@@ -78,10 +73,46 @@ test('keeps directory rows keyboard-selectable and the three planned layouts bou
   assert.match(appSource, /tabIndex: 0/);
   assert.match(appSource, /event\.key === 'Enter' \|\| event\.key === ' '/);
   assert.match(appSource, /scroll=\{\{ x: 920 \}\}/);
+  const directoryColumns = appSource.slice(
+    appSource.indexOf('const reviewConnectionColumns = ['),
+    appSource.indexOf('const activeRuntimeType =', appSource.indexOf('const reviewConnectionColumns = ['))
+  );
+  assert.match(directoryColumns, /title: '操作'/);
+  assert.match(directoryColumns, /providerDeleteAvailability\(provider\)/);
+  assert.match(directoryColumns, /icon=\{<DeleteOutlined \/>\}/);
+  assert.doesNotMatch(directoryColumns, />\s*详情\s*<\/Button>/);
   assert.match(styleSource, /grid-template-columns: minmax\(0, 3fr\) minmax\(360px, 2fr\)/);
   assert.match(styleSource, /@media \(max-width: 1199px\)[\s\S]*\.review-connection-workbench[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(styleSource, /@media \(max-width: 760px\)[\s\S]*\.review-runtime-card-grid[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(styleSource, /\.review-connection-actions \.ant-btn \{\s*min-height: 44px;/);
+  assert.match(styleSource, /@media \(max-width: 760px\)[\s\S]*\.review-provider-danger-zone[\s\S]*display: flex/);
+});
+
+test('creates custom Standard Providers without changing defaults or testing connectivity', () => {
+  const createFlow = appSource.slice(
+    appSource.indexOf('const createCustomProvider = async'),
+    appSource.indexOf('const closeDeleteProviderModal =')
+  );
+  assert.match(appSource, /title="新增模型连接"/);
+  assert.match(appSource, />\s*新增模型连接\s*<\/Button>/);
+  assert.match(createFlow, /code-quality-review-providers', \{\s*method: 'POST'/);
+  assert.match(createFlow, /setSelectedReviewConnectionId\(connectionId\)/);
+  assert.doesNotMatch(createFlow, /set-default/);
+  assert.doesNotMatch(createFlow, /\/test/);
+});
+
+test('deletes only confirmed custom Providers and preserves selection on failures', () => {
+  const deleteFlow = appSource.slice(
+    appSource.indexOf('const deleteCustomProvider = async'),
+    appSource.indexOf('const updateAgentDefaultKeyDraft =')
+  );
+  assert.match(appSource, /title="永久删除自定义 Provider"/);
+  assert.match(appSource, /matchesProviderDeleteConfirmation/);
+  assert.match(deleteFlow, /method: 'DELETE'/);
+  assert.match(deleteFlow, /resolveReviewModelConnectionSelection\(nextRows, previousSelection\)/);
+  assert.match(deleteFlow, /setProviderDeleteError\(err\.message\)/);
+  assert.match(appSource, /className="review-provider-danger-zone"/);
+  assert.match(appSource, /runAfterDiscardingConnectionDraft/);
 });
 
 test('does not invent a Standard switch or a fixed Agent fallback selector', () => {
@@ -121,21 +152,19 @@ test('safe mock exposes only fixed local regression scenarios', () => {
     'SETTINGS_READ_FAILED',
     'AGENT_READ_FAILED',
     'PROVIDERS_READ_FAILED',
+    'PROVIDER_DELETE_IN_USE',
     'MUTATION_FAILED'
   ].forEach(scenario => assert.match(mockSource, new RegExp(`'${scenario}'`)));
   assert.match(mockSource, /Unsupported safe mock scenario/);
   assert.match(mockSource, /advanceAgentTestScenario\(\)/);
+  assert.match(mockSource, /request\.method === 'POST' && url\.pathname === '\/api\/code-quality-review-providers'/);
+  assert.match(mockSource, /request\.method === 'DELETE' && providerMatch/);
 });
 
 test('preserves surrounding Settings domains and Provider override controls', () => {
-  const orderedItems = appSource.slice(
-    appSource.indexOf('const orderedCollapseItems = ['),
-    appSource.indexOf('return (', appSource.indexOf('const orderedCollapseItems = ['))
-  );
-
-  assert.match(orderedItems, /'project-target-configs'/);
-  assert.match(orderedItems, /'profile-settings'/);
-  assert.match(orderedItems, /'global-settings'/);
+  assert.match(appSource, /key: 'project-target-configs'/);
+  assert.match(appSource, /key: 'profile-settings'/);
+  assert.match(appSource, /key: 'global-settings'/);
   assert.match(appSource, /<Text strong>Provider 覆盖<\/Text>/);
   assert.match(appSource, /commitSettingsChange\('reviewEnabled'/);
 });
