@@ -151,6 +151,26 @@ test('derives truthful incomplete disabled and worker-unsupported states', () =>
   assert.equal(rows[3].configurationStatus, connectionConfigurationStatus.DISABLED);
 });
 
+test('hides never-configured Standard placeholders and keeps cleared connections unavailable', () => {
+  const input = fixtures();
+  input.providers.push({
+    providerCode: 'GLM',
+    providerName: 'GLM placeholder',
+    catalogVisible: false,
+    apiKeyConfigured: false
+  });
+  input.providers[0].apiKeyConfigured = false;
+  input.providers[0].enabled = false;
+
+  const rows = buildReviewModelConnectionCatalog(input);
+  assert.equal(rows.some(item => item.id === 'STANDARD:GLM'), false);
+  assert.equal(
+    rows.find(item => item.id === 'STANDARD:DEEPSEEK').configurationStatus,
+    connectionConfigurationStatus.UNAVAILABLE
+  );
+  assert.equal(rows.find(item => item.id === 'STANDARD:DEEPSEEK').isDefault, true);
+});
+
 test('keeps only safe catalog fields and never serializes key material', () => {
   const rows = buildReviewModelConnectionCatalog(fixtures());
   const serialized = JSON.stringify(rows);
@@ -210,7 +230,7 @@ test('returns safe Agent placeholders when responses are missing', () => {
   assert.equal(rows.length, 2);
   assert.equal(rows[0].isCurrent, true);
   assert.equal(rows[0].endpoint, null);
-  assert.equal(rows[0].configurationStatus, connectionConfigurationStatus.INCOMPLETE);
+  assert.equal(rows[0].configurationStatus, connectionConfigurationStatus.UNAVAILABLE);
   assert.equal(rows[1].workerSupported, null);
 });
 

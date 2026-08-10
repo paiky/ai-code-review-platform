@@ -27,6 +27,7 @@ from app.code_quality.repository import (
     cancel_active_scheduler_jobs_for_task,
     cancel_scheduler_job,
     create_provider,
+    create_standard_model_connection,
     create_scheduler_job,
     delete_provider,
     delete_fix_previews,
@@ -1880,6 +1881,19 @@ def create_provider_response(db: Session, request: dict[str, Any]) -> dict[str, 
     response = create_provider(db, request)
     db.commit()
     return response
+
+
+def create_standard_model_connection_response(
+    db: Session,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        response = create_standard_model_connection(db, request)
+        db.commit()
+        return response
+    except Exception:
+        db.rollback()
+        raise
 
 
 def delete_provider_response(db: Session, provider_code: str) -> dict[str, Any]:

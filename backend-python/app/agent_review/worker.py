@@ -40,6 +40,7 @@ WORKER_VERSION = "agent-worker-v1"
 CLI_VERSION = "2.1.112"
 DEFAULT_RUNTIME = "CLAUDE_CODE_DEEPSEEK"
 CUSTOM_RUNTIME = "OPENAI_RESPONSES_CUSTOM"
+CLAUDE_CODE_RUNNER = "CLAUDE_CODE"
 OPENAI_RESPONSES_RUNNER = "OPENAI_RESPONSES_AGENT"
 OPENAI_CHAT_RUNNER = "OPENAI_CHAT_AGENT"
 ANTHROPIC_MESSAGES_RUNNER = "ANTHROPIC_MESSAGES_AGENT"
@@ -48,6 +49,7 @@ CHAT_COMPLETIONS_RUNNER_VERSION = "openai-chat-completions-agent-v1"
 ANTHROPIC_MESSAGES_RUNNER_VERSION = "anthropic-messages-agent-v1"
 WORKER_CAPABILITIES = [
     DEFAULT_RUNTIME,
+    CLAUDE_CODE_RUNNER,
     CUSTOM_RUNTIME,
     OPENAI_RESPONSES_RUNNER,
     OPENAI_CHAT_RUNNER,
@@ -333,12 +335,12 @@ def _run_job(
                 progress_callback=latest_audit.update,
             )
             summary = _normalize_responses_summary(responses_result)
-        elif runtime_type == DEFAULT_RUNTIME:
+        elif runner_type == CLAUDE_CODE_RUNNER or runtime_type == DEFAULT_RUNTIME:
             summary = run_agent_candidate(
                 job.get("input") or {},
                 worktree,
                 str(runtime.get("apiKey") or job.get("apiKey") or ""),
-                _runner_config_from_budgets(job.get("budgets")),
+                _runner_config_from_budgets(job.get("budgets"), runtime=runtime),
                 cancel_event=cancelled,
                 progress_callback=latest_audit.update,
             )
@@ -457,13 +459,15 @@ def _run_configuration_test(
                         reasoning_effort=str(runtime.get("reasoningEffort") or "high"),
                     ),
                 ).run(synthetic_case, worktree)
-            else:
+            elif runner_type == CLAUDE_CODE_RUNNER or runtime_type == DEFAULT_RUNTIME:
                 summary = run_agent_candidate(
                     synthetic_case,
                     worktree,
                     str(runtime.get("apiKey") or job.get("apiKey") or ""),
-                    _runner_config_from_budgets(budgets),
+                    _runner_config_from_budgets(budgets, runtime=runtime),
                 )
+            else:
+                raise ValueError("unsupported Agent runtime")
         status = "SUCCESS" if summary.get("status") == "SUCCESS" else "FAILED"
         if status == "SUCCESS":
             message = (
@@ -661,8 +665,13 @@ def _failure_message(error_code: str) -> str:
     return "Agent Review did not produce a valid submitted Review Card"
 
 
-def _runner_config_from_budgets(value: Any) -> RunnerConfig:
+def _runner_config_from_budgets(
+    value: Any,
+    *,
+    runtime: dict[str, Any] | None = None,
+) -> RunnerConfig:
     budgets = validate_agent_budgets(value)
+    runtime = runtime or {}
     return RunnerConfig(
         timeout_seconds=budgets["timeoutSeconds"],
         max_turns=budgets["maxTurns"],
@@ -672,6 +681,10 @@ def _runner_config_from_budgets(value: Any) -> RunnerConfig:
         max_evidence_calls=budgets["maxEvidenceCalls"],
         converge_at_calls=budgets["convergeAtCalls"],
         submit_by_turn=budgets["submitByTurn"],
+        base_url=str(runtime.get("baseUrl") or "https://api.deepseek.com/anthropic"),
+        model=str(runtime.get("model") or "deepseek-v4-pro[1m]"),
+        reasoning_effort=str(runtime.get("reasoningEffort") or "high"),
+        tls_verify=_custom_tls_verify(runtime),
     )
 
 

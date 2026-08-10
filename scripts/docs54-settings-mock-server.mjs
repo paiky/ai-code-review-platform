@@ -4,6 +4,41 @@ const host = '127.0.0.1';
 const port = parsePort(process.argv);
 let scenario = parseScenario(process.argv);
 let agentTestPollCount = 0;
+let connectionSequence = 0;
+
+const reviewModelPresets = {
+  AGENT: [
+    preset('AGENT_CLAUDE_CODE_DEEPSEEK', 'AGENT', 'DEEPSEEK', 'Claude Code + DeepSeek', [
+      variant('ANTHROPIC_COMPATIBLE', 'https://safe-mock.invalid/anthropic', 'deepseek-v4-pro[1m]', true)
+    ]),
+    preset('AGENT_OPENAI', 'AGENT', 'OPENAI', 'OpenAI', [
+      variant('OPENAI_RESPONSES', 'https://safe-mock.invalid/v1', 'gpt-5.6-sol', true),
+      variant('OPENAI_CHAT_COMPLETIONS', 'https://safe-mock.invalid/v1', 'synthetic-chat-model')
+    ]),
+    preset('AGENT_ANTHROPIC', 'AGENT', 'ANTHROPIC', 'Anthropic / Claude', [
+      variant('ANTHROPIC_MESSAGES', 'https://safe-mock.invalid/v1', 'synthetic-anthropic-model')
+    ]),
+    preset('AGENT_CUSTOM', 'AGENT', 'CUSTOM', '自定义', [], true)
+  ],
+  STANDARD: [
+    preset('STANDARD_OPENAI', 'STANDARD', 'OPENAI', 'OpenAI', [
+      variant('OPENAI_RESPONSES', 'https://safe-mock.invalid/responses', 'gpt-5.6-sol', true)
+    ]),
+    preset('STANDARD_ANTHROPIC', 'STANDARD', 'ANTHROPIC', 'Anthropic / Claude', [
+      variant('ANTHROPIC_MESSAGES', 'https://safe-mock.invalid/messages', 'claude-sonnet')
+    ]),
+    preset('STANDARD_DEEPSEEK', 'STANDARD', 'DEEPSEEK', 'DeepSeek', [
+      variant('OPENAI_CHAT_COMPATIBLE', 'https://safe-mock.invalid/deepseek', 'deepseek-v4-pro')
+    ]),
+    preset('STANDARD_XIAOMIMO', 'STANDARD', 'XIAOMIMO', 'XiaoMIMO / Xiaomi MiMo', [
+      variant('OPENAI_CHAT_COMPATIBLE', 'https://safe-mock.invalid/mimo', 'mimo-v2.5-pro')
+    ]),
+    preset('STANDARD_GLM', 'STANDARD', 'GLM', '智谱 GLM', [
+      variant('OPENAI_CHAT_COMPATIBLE', 'https://safe-mock.invalid/glm', 'glm-4.5')
+    ]),
+    preset('STANDARD_CUSTOM', 'STANDARD', 'CUSTOM', '自定义', [], true)
+  ]
+};
 
 const defaultBudgets = {
   maxTurns: 12,
@@ -107,7 +142,8 @@ let agentRuntimes = [
 let providers = [
   provider('DEEPSEEK', 'DeepSeek V4 Pro', 'OPENAI_CHAT_COMPATIBLE', 'deepseek-v4-pro', true, true),
   provider('OPENAI', 'OpenAI', 'OPENAI_CHAT_COMPATIBLE', 'gpt-5.6-sol', true, false),
-  provider('ANTHROPIC', 'Claude Sonnet', 'ANTHROPIC_MESSAGES', 'claude-sonnet', false, false)
+  provider('ANTHROPIC', 'Claude Sonnet', 'ANTHROPIC_MESSAGES', 'claude-sonnet', false, false),
+  { ...provider('GLM', '智谱 GLM', 'OPENAI_CHAT_COMPATIBLE', 'glm-4.5', false, false), catalogVisible: false, apiKeyConfigured: false }
 ];
 
 if (scenario === 'AGENT_INCOMPLETE') {
@@ -126,6 +162,12 @@ if (scenario === 'AGENT_INCOMPLETE') {
     ? { ...item, apiKeyConfigured: false, configurationComplete: false, protocolAvailable: false }
     : item);
 }
+if (scenario === 'NO_WORKER_CAPABILITY') {
+  agentSettings.workerPool.nodes = agentSettings.workerPool.nodes.map(node => ({
+    ...node,
+    capabilities: []
+  }));
+}
 
 const server = http.createServer(async (request, reply) => {
   const url = new URL(request.url, `http://${host}:${port}`);
@@ -139,6 +181,11 @@ const server = http.createServer(async (request, reply) => {
   if (request.method === 'POST' && url.pathname === '/api/__docs54__/scenario') {
     setScenario((await readJson(request)).scenario);
     send(reply, 200, { service: 'docs54-settings-safe-mock', scenario });
+    return;
+  }
+  if (request.method === 'GET' && url.pathname === '/api/review-model-presets') {
+    const reviewType = String(url.searchParams.get('reviewType') || '').toUpperCase();
+    send(reply, 200, reviewModelPresets[reviewType] || []);
     return;
   }
   if (request.method === 'GET' && url.pathname === '/api/code-quality-reviews/settings') {
@@ -203,6 +250,69 @@ const server = http.createServer(async (request, reply) => {
     }
     advanceAgentTestScenario();
     send(reply, 200, agentRuntimes);
+    return;
+  }
+  if (request.method === 'POST' && url.pathname === '/api/review-model-connections') {
+    if (scenario === 'MUTATION_FAILED') {
+      sendError(reply, 503, 'Synthetic model connection create failure');
+      return;
+    }
+    const body = await readJson(request);
+    if (!String(body.apiKey || '').trim()) {
+      sendError(reply, 400, 'API Key 为必填项');
+      return;
+    }
+    if (body.reviewType === 'AGENT' && scenario === 'NO_WORKER_CAPABILITY') {
+      sendError(reply, 409, 'Synthetic Worker capability unavailable');
+      return;
+    }
+    const presets = reviewModelPresets[body.reviewType] || [];
+    const selectedPreset = presets.find(item => item.presetCode === body.presetCode);
+    if (!selectedPreset) {
+      sendError(reply, 400, 'Synthetic preset not found');
+      return;
+    }
+    connectionSequence += 1;
+    const baseName = `${selectedPreset.vendorName} · ${body.model}`;
+    if (body.reviewType === 'AGENT') {
+      const duplicateCount = agentRuntimes.filter(item => item.displayName === baseName || item.displayName.startsWith(`${baseName}（`)).length;
+      const runtimeCode = `AGENT_${selectedPreset.vendorCode}_${String(connectionSequence).padStart(4, '0')}`;
+      const created = {
+        ...agentRuntime(runtimeCode, duplicateCount ? `${baseName}（${duplicateCount + 1}）` : baseName, body.protocol, false, false),
+        baseUrl: body.baseUrl,
+        model: body.model,
+        reasoningEffort: body.reasoningEffort || null,
+        tlsVerify: body.tlsVerify !== false,
+        enabled: true,
+        apiKeyConfigured: true,
+        configurationComplete: true,
+        updatedAt: new Date().toISOString()
+      };
+      agentRuntimes = [...agentRuntimes, created];
+      send(reply, 200, created);
+      return;
+    }
+    const duplicateCount = providers.filter(item => item.providerName === baseName || item.providerName.startsWith(`${baseName}（`)).length;
+    const providerCode = `STANDARD_${selectedPreset.vendorCode}_${String(connectionSequence).padStart(4, '0')}`;
+    const created = {
+      providerCode,
+      providerName: duplicateCount ? `${baseName}（${duplicateCount + 1}）` : baseName,
+      providerType: body.protocol,
+      endpointUrl: body.baseUrl,
+      modelName: body.model,
+      reasoningEffort: body.reasoningEffort || null,
+      tlsVerify: body.tlsVerify !== false,
+      timeoutSeconds: null,
+      enabled: true,
+      builtIn: false,
+      defaultProvider: false,
+      catalogVisible: true,
+      apiKeyConfigured: true,
+      apiKeyMasked: 'mock...only',
+      updatedAt: new Date().toISOString()
+    };
+    providers = [...providers, created];
+    send(reply, 200, created);
     return;
   }
   if (request.method === 'POST' && url.pathname === '/api/code-quality-agent-runtimes') {
@@ -432,6 +542,9 @@ function provider(code, name, type, model, enabled, isDefault) {
     endpointUrl: `https://safe-mock.invalid/${code.toLowerCase()}`,
     modelName: model,
     timeoutSeconds: 1000,
+    reasoningEffort: type === 'OPENAI_RESPONSES' ? 'high' : null,
+    tlsVerify: true,
+    catalogVisible: true,
     enabled,
     builtIn: true,
     defaultProvider: isDefault,
@@ -509,6 +622,7 @@ function updateProvider(code, body) {
     if (body.clearApiKey) {
       next.apiKeyConfigured = false;
       next.apiKeyMasked = null;
+      next.enabled = false;
     }
     delete next.apiKey;
     delete next.clearApiKey;
@@ -617,6 +731,7 @@ function normalizeScenario(value) {
     'AGENT_READ_FAILED',
     'PROVIDERS_READ_FAILED',
     'PROVIDER_DELETE_IN_USE',
+    'NO_WORKER_CAPABILITY',
     'MUTATION_FAILED'
   ]);
   if (!allowed.has(value)) throw new Error(`Unsupported safe mock scenario: ${value}`);
@@ -628,7 +743,19 @@ function setScenario(value) {
   agentTestPollCount = 0;
   agentSettings = {
     ...agentSettings,
-    configurationTest: { status: 'NOT_RUN' }
+    configurationTest: { status: 'NOT_RUN' },
+    workerPool: {
+      ...agentSettings.workerPool,
+      nodes: agentSettings.workerPool.nodes.map(node => ({
+        ...node,
+        capabilities: [
+          'CLAUDE_CODE_DEEPSEEK',
+          'OPENAI_RESPONSES_AGENT',
+          'OPENAI_CHAT_AGENT',
+          'ANTHROPIC_MESSAGES_AGENT'
+        ]
+      }))
+    }
   };
   agentRuntimes = agentRuntimes.map(item => ({
     ...item,
@@ -651,4 +778,28 @@ function setScenario(value) {
       ? { ...item, apiKeyConfigured: false, configurationComplete: false, protocolAvailable: false }
       : item);
   }
+  if (scenario === 'NO_WORKER_CAPABILITY') {
+    agentSettings = {
+      ...agentSettings,
+      workerPool: {
+        ...agentSettings.workerPool,
+        nodes: agentSettings.workerPool.nodes.map(node => ({ ...node, capabilities: [] }))
+      }
+    };
+  }
+}
+
+function preset(presetCode, reviewType, vendorCode, vendorName, variants, custom = false) {
+  return { presetCode, reviewType, vendorCode, vendorName, custom, variants };
+}
+
+function variant(protocol, baseUrl, model, reasoning = false) {
+  return {
+    protocol,
+    baseUrl,
+    models: [model],
+    defaultModel: model,
+    reasoningEfforts: reasoning ? ['low', 'medium', 'high'] : [],
+    defaultReasoningEffort: reasoning ? 'high' : null
+  };
 }

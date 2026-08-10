@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import delete, func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
@@ -453,6 +454,13 @@ def ensure_provider_schema(db: Session) -> None:
         "reasoning_effort",
         "VARCHAR(16) NULL",
     )
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_model_providers",
+        "tls_verify",
+        "BOOLEAN NOT NULL DEFAULT TRUE",
+    )
     if catalog_visible_missing:
         db.execute(
             text(
@@ -723,10 +731,6 @@ def _upsert_default_provider(
     provider.endpoint_url = provider.endpoint_url or _blank_to_none(endpoint_url)
     provider.model_name = provider.model_name or _blank_to_none(model_name)
     provider.api_key = provider.api_key or _blank_to_none(api_key)
-    if provider.provider_type == "OPENAI_RESPONSES" and not provider.reasoning_effort:
-        provider.reasoning_effort = "high"
-    if provider.api_key:
-        provider.catalog_visible = True
     provider.built_in = True
     provider.sort_order = sort_order
 
@@ -1014,6 +1018,7 @@ def create_provider(db: Session, request: dict[str, Any]) -> dict[str, Any]:
         reasoning_effort=_normalize_provider_reasoning_effort(
             request.get("reasoningEffort"), str(request["providerType"])
         ),
+        tls_verify=request.get("tlsVerify") is not False,
         catalog_visible=True,
         enabled=bool(request.get("enabled", False)),
         built_in=False,
@@ -1032,6 +1037,137 @@ def create_provider(db: Session, request: dict[str, Any]) -> dict[str, Any]:
             409,
         ) from exception
     return provider_to_response(provider, get_settings_record(db).default_provider_code)
+
+
+def create_standard_model_connection(
+    db: Session,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    from app.agent_review.runtime import normalize_custom_base_url
+    from app.code_quality.model_presets import list_review_model_presets
+
+    preset_code = str(request.get("presetCode") or "").strip().upper()
+    preset = next(
+        (
+            item
+            for item in list_review_model_presets("STANDARD")
+            if item["presetCode"] == preset_code
+        ),
+        None,
+    )
+    if preset is None:
+        raise AppError(
+            "REVIEW_MODEL_PRESET_NOT_FOUND",
+            f"Standard Review model preset does not exist: {preset_code}",
+            400,
+        )
+    protocol = str(request.get("protocol") or "").strip().upper()
+    matching_variant = next(
+        (
+            item
+            for item in preset["variants"]
+            if str(item.get("protocol") or "").upper() == protocol
+        ),
+        None,
+    )
+    if not preset["custom"] and matching_variant is None:
+        raise AppError(
+            "REVIEW_MODEL_PRESET_PROTOCOL_MISMATCH",
+            f"Protocol {protocol} does not belong to preset {preset_code}",
+            400,
+        )
+    provider_type = {
+        "OPENAI_RESPONSES": "OPENAI_RESPONSES",
+        "ANTHROPIC_MESSAGES": "ANTHROPIC_MESSAGES",
+        "OPENAI_CHAT_COMPATIBLE": "OPENAI_CHAT_COMPATIBLE",
+    }.get(protocol)
+    if provider_type is None:
+        raise AppError(
+            "VALIDATION_ERROR",
+            f"Protocol {protocol} is not supported by Standard Review",
+            400,
+        )
+    reasoning_effort = request.get("reasoningEffort")
+    supported_efforts = (
+        list(matching_variant.get("reasoningEfforts") or [])
+        if matching_variant is not None
+        else (["low", "medium", "high"] if protocol == "OPENAI_RESPONSES" else [])
+    )
+    if reasoning_effort is None and matching_variant is not None:
+        reasoning_effort = matching_variant.get("defaultReasoningEffort")
+    if reasoning_effort is not None and reasoning_effort not in supported_efforts:
+        raise AppError(
+            "VALIDATION_ERROR",
+            f"reasoningEffort is not supported by protocol {protocol}",
+            400,
+        )
+    try:
+        endpoint_url = normalize_custom_base_url(request.get("baseUrl"))
+    except AppError as exception:
+        raise AppError(
+            "VALIDATION_ERROR",
+            "baseUrl must be a safe HTTPS URL without credentials, query, fragment, IP, or custom port",
+            400,
+        ) from exception
+    model_name = str(request.get("model") or "").strip()
+    api_key = str(request.get("apiKey") or "").strip()
+    if not api_key:
+        raise AppError("VALIDATION_ERROR", "apiKey is required", 400)
+    if len(api_key) > 1024:
+        raise AppError("VALIDATION_ERROR", "apiKey must not exceed 1024 characters", 400)
+    provider_code = _generated_provider_code(db, str(preset["vendorCode"]))
+    provider_name = _generated_provider_display_name(
+        db,
+        str(preset["vendorName"]),
+        model_name,
+    )
+    return create_provider(
+        db,
+        {
+            "providerCode": provider_code,
+            "providerName": provider_name,
+            "providerType": provider_type,
+            "endpointUrl": endpoint_url,
+            "modelName": model_name,
+            "reasoningEffort": reasoning_effort,
+            "tlsVerify": request.get("tlsVerify") is not False,
+            "apiKey": api_key,
+            "enabled": True,
+        },
+    )
+
+
+def _generated_provider_code(db: Session, vendor_code: str) -> str:
+    prefix = f"STANDARD_{str(vendor_code or 'CUSTOM').strip().upper()}"[:47].rstrip("_")
+    for _ in range(10):
+        provider_code = f"{prefix}_{uuid4().hex[:12].upper()}"
+        exists = db.scalar(
+            select(CodeQualityModelProvider.id).where(
+                CodeQualityModelProvider.provider_code == provider_code
+            )
+        )
+        if exists is None:
+            return provider_code
+    raise AppError("PROVIDER_CODE_GENERATION_FAILED", "Could not generate provider code", 409)
+
+
+def _generated_provider_display_name(
+    db: Session,
+    vendor_name: str,
+    model_name: str,
+) -> str:
+    base_name = f"{vendor_name.strip()} · {model_name.strip()}"[:128]
+    existing = set(db.scalars(select(CodeQualityModelProvider.provider_name)).all())
+    if base_name not in existing:
+        return base_name
+    index = 2
+    suffix = f"（{index}）"
+    candidate = f"{base_name[: 128 - len(suffix)]}{suffix}"
+    while candidate in existing:
+        index += 1
+        suffix = f"（{index}）"
+        candidate = f"{base_name[: 128 - len(suffix)]}{suffix}"
+    return candidate
 
 
 def delete_provider(db: Session, provider_code: str) -> dict[str, Any]:
@@ -1120,8 +1256,14 @@ def provider_to_response(
         "endpointUrl": provider.endpoint_url,
         "modelName": provider.model_name,
         "timeoutSeconds": provider.timeout_seconds,
-        "reasoningEffort": provider.reasoning_effort,
-        "catalogVisible": provider.catalog_visible,
+        "reasoningEffort": (
+            provider.reasoning_effort
+            or ("high" if provider.provider_type == "OPENAI_RESPONSES" else None)
+        ),
+        "tlsVerify": provider.tls_verify is not False,
+        "catalogVisible": bool(
+            provider.catalog_visible or provider.api_key or not provider.built_in
+        ),
         "enabled": provider.enabled,
         "builtIn": provider.built_in,
         "defaultProvider": provider.provider_code == default_provider_code,
@@ -1148,13 +1290,16 @@ def update_provider(db: Session, provider_code: str, request: dict[str, Any]) ->
         values["reasoning_effort"] = _normalize_provider_reasoning_effort(
             request["reasoningEffort"], provider.provider_type
         )
+    if "tlsVerify" in request:
+        values["tls_verify"] = request.get("tlsVerify") is not False
     if request.get("clearApiKey") is True:
         values["api_key"] = None
+        values["enabled"] = False
     elif "apiKey" in request:
         values["api_key"] = _blank_to_none(request["apiKey"])
         if values["api_key"]:
             values["catalog_visible"] = True
-    if "enabled" in request:
+    if "enabled" in request and request.get("clearApiKey") is not True:
         values["enabled"] = bool(request["enabled"])
     values["updated_at"] = datetime.now()
     db.execute(

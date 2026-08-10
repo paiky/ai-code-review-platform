@@ -247,6 +247,36 @@ def _migration_statement_already_satisfied(
     connection, migration: MigrationFile, statement: str
 ) -> bool:
     """Reconcile columns that the legacy runtime compatibility layer added early."""
+    if migration.version == 51:
+        match = re.fullmatch(
+            r"\s*ALTER\s+TABLE\s+`?code_quality_model_providers`?\s+"
+            r"ADD\s+COLUMN\s+`?tls_verify`?\s+BOOLEAN\s+NOT\s+NULL\s+"
+            r"DEFAULT\s+TRUE\s+AFTER\s+reasoning_effort\s*",
+            statement,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return False
+        inspector = inspect(connection)
+        columns = {
+            str(column.get("name") or ""): column
+            for column in inspector.get_columns("code_quality_model_providers")
+        }
+        existing = columns.get("tls_verify")
+        if existing is None:
+            return False
+        type_name = str(existing.get("type") or "").casefold().replace(" ", "")
+        default = str(existing.get("default") or "").strip("()'\"").casefold()
+        compatible = (
+            existing.get("nullable") is False
+            and any(marker in type_name for marker in ("bool", "tinyint"))
+            and default in {"1", "true"}
+        )
+        if not compatible:
+            raise MigrationError(
+                "Existing code_quality_model_providers.tls_verify is incompatible with V51"
+            )
+        return True
     if migration.version == 50:
         match = re.fullmatch(
             r"\s*ALTER\s+TABLE\s+`?code_quality_model_providers`?\s+"

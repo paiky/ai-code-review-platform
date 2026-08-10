@@ -223,6 +223,11 @@ EPERM: operation not permitted, open 'C:\Users\<user>\AppData\Local\npm-cache\_c
 
   这通常不是 `package.json` 或 lockfile 本身损坏，而是命令需要写入沙箱外 npm cache 或访问 registry。若本次任务确实需要新增依赖，应按权限规则请求用户授权后重跑同一条 `npm.cmd install ...`；不要手工改 lockfile 伪造安装结果。
 
+- Windows 沙箱中通过 Vite JavaScript API 构建时，若加载 `vite.config.js` 报
+  `EPERM ... node_modules/.vite-temp/vite.config.*.mjs`，通常是 Vite 的临时配置 bundle 目录继承了不可写权限，并非 JSX
+  或配置语法错误。无需读取构建期 dev-server 代理时，可让受控构建脚本使用 `configFile: false` 并显式传入 React plugin，
+  避免生成 `.vite-temp`；开发服务器仍继续使用原 `vite.config.js`。不要删除或重建整个 `node_modules` 来绕过。
+
 - `scripts/package-docker-deploy.cmd` 依赖 Docker CLI 和 Docker Engine。执行前先启动 Docker Desktop，并确认：
 
 ```powershell

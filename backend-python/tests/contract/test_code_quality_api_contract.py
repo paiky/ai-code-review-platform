@@ -238,6 +238,7 @@ def test_create_custom_provider_normalizes_fields_and_masks_key(
         "modelName": "review-model",
         "timeoutSeconds": 120,
         "reasoningEffort": None,
+        "tlsVerify": True,
         "catalogVisible": True,
         "enabled": False,
         "builtIn": False,
@@ -296,6 +297,37 @@ def test_provider_catalog_visibility_survives_api_key_clear(
     )
     assert openai["catalogVisible"] is True
     assert openai["apiKeyConfigured"] is False
+
+
+def test_provider_catalog_get_uses_compatibility_defaults_without_writing(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    seeded = client.get("/api/code-quality-review-providers")
+    assert seeded.status_code == 200
+    openai = db_session.scalar(
+        select(CodeQualityModelProvider).where(
+            CodeQualityModelProvider.provider_code == "OPENAI"
+        )
+    )
+    assert openai is not None
+    openai.reasoning_effort = None
+    openai.catalog_visible = False
+    openai.api_key = "sk-read-only-123456"
+    db_session.commit()
+
+    response = client.get("/api/code-quality-review-providers")
+
+    assert response.status_code == 200
+    selected = next(
+        item for item in response.json()["data"]
+        if item["providerCode"] == "OPENAI"
+    )
+    assert selected["reasoningEffort"] == "high"
+    assert selected["catalogVisible"] is True
+    db_session.refresh(openai)
+    assert openai.reasoning_effort is None
+    assert openai.catalog_visible is False
 
 
 def test_provider_reasoning_effort_is_protocol_scoped(client: TestClient) -> None:
@@ -368,9 +400,10 @@ def test_provider_schema_upgrade_backfills_catalog_visibility_once(
         row.provider_code: row
         for row in db_session.scalars(select(CodeQualityModelProvider)).all()
     }
-    assert {"catalog_visible", "reasoning_effort"} <= columns
+    assert {"catalog_visible", "reasoning_effort", "tls_verify"} <= columns
     assert rows["KEYED"].catalog_visible is True
     assert rows["KEYED"].reasoning_effort == "high"
+    assert rows["KEYED"].tls_verify is True
     assert rows["PLACEHOLDER"].catalog_visible is False
     assert rows["USER_CREATED"].catalog_visible is True
 

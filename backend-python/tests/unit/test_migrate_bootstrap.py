@@ -169,6 +169,19 @@ def test_review_model_provider_preset_migration_backfills_visibility_and_reasoni
     assert "provider_type = 'OPENAI_RESPONSES'" in statements[3]
 
 
+def test_standard_provider_tls_verify_migration_defaults_securely() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    sql = (
+        repository_root
+        / "backend-python/migrations/bootstrap_sql/V51__standard_provider_tls_verify.sql"
+    ).read_text(encoding="utf-8")
+
+    statements = split_sql_statements(sql)
+
+    assert len(statements) == 1
+    assert "tls_verify BOOLEAN NOT NULL DEFAULT TRUE" in statements[0]
+
+
 def test_v48_reconciles_compatible_column_added_by_runtime_layer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -258,6 +271,29 @@ def test_v50_reconciles_compatible_provider_columns(
     assert _migration_statement_already_satisfied(object(), migration, statement) is True
 
 
+def test_v51_reconciles_compatible_provider_tls_column(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration = next(item for item in discover_migrations() if item.version == 51)
+    statement = split_sql_statements(migration.path.read_text(encoding="utf-8"))[0]
+
+    class Inspector:
+        @staticmethod
+        def get_columns(_table_name):
+            return [
+                {
+                    "name": "tls_verify",
+                    "type": mysql.TINYINT(display_width=1),
+                    "nullable": False,
+                    "default": "1",
+                }
+            ]
+
+    monkeypatch.setattr("app.migrate.inspect", lambda _connection: Inspector())
+
+    assert _migration_statement_already_satisfied(object(), migration, statement) is True
+
+
 def test_existing_schema_upgrade_is_idempotent_and_groups_indexes_by_table() -> None:
     inspector = _InspectorStub()
     statements = build_command_center_index_upgrade_statements(
@@ -294,8 +330,8 @@ def test_discover_migrations_is_contiguous_and_includes_checksums() -> None:
     migrations = discover_migrations()
 
     assert migrations[0].version == 1
-    assert migrations[-1].version == 50
-    assert [item.version for item in migrations] == list(range(1, 51))
+    assert migrations[-1].version == 51
+    assert [item.version for item in migrations] == list(range(1, 52))
     assert all(len(item.checksum) == 64 for item in migrations)
 
 
@@ -310,6 +346,7 @@ def test_baseline_requirements_cover_latest_agent_runtime_schema() -> None:
     assert "selected_runtime_code" in requirements.columns["code_quality_agent_settings"]
     assert "code_quality_agent_runtimes" in requirements.tables
     assert "runtime_code" in requirements.columns["code_quality_agent_runtimes"]
+    assert "tls_verify" in requirements.columns["code_quality_model_providers"]
     assert (
         "idx_code_quality_agent_runtimes_enabled_sort"
         in requirements.indexes["code_quality_agent_runtimes"]

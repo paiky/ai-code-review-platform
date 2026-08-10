@@ -2,13 +2,12 @@
 
 ## 1. 状态、结论与停止点
 
-- 文档状态：**阶段 55A 至 55H1 已完成并进入当前工作区基线；55G 桌面档验收已完成、其余验收由新交互计划接管；55H2 至 55H4 尚未实施（2026-08-10）**。
+- 文档状态：**阶段 55A 至 55H4 已完成并已提交推送；55G 剩余验收已由 55H4 完成接管（2026-08-10）**。
 - 可行性结论：**可行，但整体改动量为大**。统一新增弹窗本身属于前端交互调整，真正支持新增多条 Agent Runtime
   还会影响数据库、Backend 公共接口、Worker 能力与 Runner、任务快照、配置测试、历史兼容和安全出站边界，因此必须
   拆分为多个改动量为“中”的独立推进阶段。
 - 本文是后续工作的唯一专题推进依据，不再扩写旧布局计划或历史路线文档。
-- 当前停止点：**阶段 55H1 已完成并停止，等待 55H2 明确授权**。不得提前修改 Worker 或前端，也不得自动提交、
-  推送或部署。
+- 当前状态：**阶段 55H4 已完成并提交推送**。未部署，也未发送真实 Provider 请求。
 
 ## 2. 目标与产品边界
 
@@ -457,6 +456,8 @@ Worker 按 Runner 能力而不是具体 Runtime Code 领取任务：
 
 改动量等级：**中**。扩展 Agent 创建服务、Claude Code Runtime 参数化和 Worker 路由，不开放前端。
 
+实施状态：**已完成（2026-08-10）**。
+
 - 目标：统一创建接口支持 Agent 预设、多条 Claude Code + DeepSeek、OpenAI、Anthropic 和自定义连接；
 - 范围：服务端隐藏 Code/名称生成、必填 Key、安全连接校验、Runner 映射、Claude Code 多实例、快照、配置测试与 fallback；
 - 非目标：不修改 Standard 创建和前端；
@@ -464,26 +465,79 @@ Worker 按 Runner 能力而不是具体 Runtime Code 领取任务：
 - 浏览器：不执行；
 - 授权边界与停止点：完成 Agent Backend/Worker 自动化后停止，等待 55H3 授权。
 
+实施结果：
+
+- 新增 `POST /api/review-model-connections` 的 Agent 分支；请求不接受 Code、显示名、启停或选中状态，Backend 根据
+  预设生成唯一 Runtime Code 和“供应商 · 模型”显示名，重名追加全角序号；Key 必填，新连接固定启用且不自动设为当前；
+- Agent 预设支持 Claude Code + DeepSeek、OpenAI Responses / Chat、Anthropic Messages 和自定义；允许修改预填 URL、
+  模型和适用推理强度，同时执行预设协议归属、安全 HTTPS、非 IP、模型长度、推理强度及在线 Worker capability 门禁；
+- `ANTHROPIC_COMPATIBLE` 映射 `runnerType=CLAUDE_CODE`，支持多条普通动态 Runtime；内置
+  `CLAUDE_CODE_DEEPSEEK` 继续不可删除，预设创建实例沿用动态 Runtime 的受保护删除；
+- Claude Worker 改为按 `runnerType=CLAUDE_CODE` 路由；`run_agent_candidate` 的 Runtime 配置新增 Base URL、模型、
+  推理强度和 TLS 校验并写入受控 Claude CLI 参数/环境，损坏快照在执行前拒绝；任务快照不保存 Key，Claim 按 Runtime
+  Code 解密当前 Key；
+- 动态 Claude 配置测试、设为当前、任务领取、最新 Key、清 Key fallback、历史摘要和删除保护通过；旧动态 Runtime
+  Provider 语义保持兼容，新预设 Runtime 按供应商记录历史 Provider；
+- Agent Backend/Worker 联合回归 `143 passed`，统一连接/预设/旧 Standard Provider 兼容回归 `37 passed`，受影响文件
+  Ruff 与差异检查通过；未执行真实 Provider 请求、前端修改、提交、推送或部署；现停止等待 55H3 明确授权。
+
 ### 55H3：Standard 供应商创建与推理强度
 
 改动量等级：**中**。扩展 Standard 统一创建和 Responses 推理参数，保留旧 Provider API。
 
+实施状态：**已完成（2026-08-10）**。
+
 - 目标：支持同供应商多连接、服务端身份生成、必填 Key、默认启用且不自动设为默认；
-- 范围：统一创建接口 Standard 分支、重复显示名序号、`reasoningEffort` 保存与 Responses 执行透传、清 Key 停用；
+- 范围：统一创建接口 Standard 分支、重复显示名序号、`reasoningEffort` 保存与 Responses 执行透传、Standard TLS 配置
+  持久化与 transport 透传、清 Key 停用；
 - 非目标：不切换前端；
 - 验收：多供应商、多模型、重复创建、推理参数适用性、旧接口兼容和清 Key 状态通过；
 - 浏览器：不执行；
 - 授权边界与停止点：完成 Standard Backend 自动化后停止，等待 55H4 授权。
 
+实施结果：
+
+- `POST /api/review-model-connections` 已开放 Standard 分支；Backend 校验预设/协议归属、安全 HTTPS、模型、Key 长度和
+  reasoning 适用范围，生成唯一 Provider Code 与“供应商 · 模型”递增显示名；
+- OpenAI Responses、Anthropic Messages、OpenAI-compatible 三类 Standard 连接均可按预设或自定义创建；新连接固定启用、
+  目录可见且不改变默认 Provider，响应只返回 Key 配置状态和掩码；
+- Standard Provider 新增 `tls_verify` 与 V51 兼容迁移，旧库运行时补列和正式迁移可幂等衔接；Review、修复预览和配置测试
+  均按连接 TLS 设置创建 transport；
+- OpenAI Responses 的 `reasoningEffort` 已保存并透传 Review、修复预览和配置测试请求体，非支持协议继续明确拒绝；
+- 清 Key 会保留 `catalogVisible` 和默认 Provider 指针，同时强制停用；即使请求同时携带 `enabled=true` 也不能覆盖停用；
+  旧 `POST /api/code-quality-review-providers` 保持可用并默认启用 TLS 校验；
+- Agent/Standard/Worker/迁移组合回归 `176 passed`，Standard Provider 其余回归 `89 passed, 3 deselected`，数据复制
+  `3 passed`，受影响 Ruff（无缓存）和 `git diff --check` 通过；Standard 全文件中另有 3 个与本轮无关且可独立复现的
+  既有失败（缺失任务 404、项目 Provider 二次切换、Push Gate 首次决策），本阶段未越界修改；
+- 未发送真实 Provider 请求、未修改前端、未提交、推送或部署；现停止等待 55H4 明确授权。
+
 ### 55H4：供应商优先弹窗、目录精简与最终验收
 
 改动量等级：**中**。前端消费稳定接口并执行完整响应式回归，不再改变 Backend 主契约。
+
+实施状态：**已完成（2026-08-10）**。
 
 - 目标：按参考图将供应商设为新增弹窗第一选择，移除 Code、名称、启停和顶部 Alert，API Key 必填；
 - 范围：预置联动、自定义手填、模型可搜索/可输入、目录过滤、移除 Endpoint 列、清 Key 不可用状态和安全 mock；
 - 自动化：完整 Backend、Frontend、Ruff、生产 build、迁移和数据复制验证；
 - 浏览器：`1440px`、`1024px`、`390px` 使用本机安全 mock 完成唯一最终验收；
 - 授权边界与停止点：完成后回填结果并停止，不自动提交、推送或部署。
+
+实施结果：
+
+- 统一新增弹窗已切换为 Review 类型、供应商优先、协议/Base URL/模型/推理强度、必填 API Key 和 TLS 风险项；移除
+  Code、配置名称、启停开关与顶部说明 Alert，预设值来自 Backend，模型支持搜索和自定义输入；
+- Agent 与 Standard 均通过统一创建接口落地，创建后默认启用但不改变当前 Runtime 或默认 Provider；重复连接由 Backend
+  生成唯一隐藏身份和“（2）”序号名称；Worker capability 在规范化后保留并用于前端禁用提示，Backend 门禁继续兜底；
+- 目录移除 Endpoint 列，隐藏从未配置的 Standard 占位项；清 Key 后保留历史可见行并显示“不可用”，不改变当前/默认指针；
+- 本机安全 mock 覆盖全部供应商、重复创建、清 Key、无 Worker capability 和失败恢复，固定使用虚构 Key，不调用真实模型；
+- 自动化：前端 `208/208`、迁移与数据复制 `24/24`、受影响 Ruff（无缓存）、生产 build 与 `git diff --check` 均通过；
+  完整 Backend 为 `622 passed, 1 skipped, 4 failed`，4 个失败均可独立复现且与本阶段无关（缺失任务 404、项目 Provider
+  二次切换、Push Gate 首次决策、无匹配 Profile 的 GENERAL 任务状态），未越界修改；
+- 浏览器：`1440px` 完成供应商联动、Agent/Standard 创建、API Key 必填、重复命名、目录过滤和当前/默认不自动切换；
+  `1024px` 完成双列弹窗及页面上下布局；`390px` 完成单列表单、模型可搜索输入、TLS 风险项、44px 操作按钮与精简目录；
+  三档均无横向溢出，仅观察到既有 Ant Design 弃用告警；
+- 未提交、推送、部署或发送真实 Provider 请求；现按 55H4 停止点停止。
 
 ## 7. 统一验证、开放与安全约束
 
@@ -527,4 +581,20 @@ Worker 按 Runner 能力而不是具体 Runtime Code 领取任务：
 - 2026-08-10：确认供应商优先新增交互、Backend 预设目录、服务端隐藏身份、多连接、配置过即保留和清 Key 不可用语义；
 - 2026-08-10：阶段 55H1 已完成。新增 Agent / Standard 供应商预设目录、Standard Provider 目录可见性与可选推理强度、
   V50 和旧数据兼容回填；精确契约与迁移 `27/27`、Provider 回归 `30/30`、数据复制 `3/3` 及受影响 Ruff 通过；
-- 当前停止等待 55H2 明确授权；既有工作区改动尚未提交或推送，未执行真实 Provider 请求或部署。
+- 2026-08-10：阶段 55A 至 55H1 已以 `e8c16c9` 提交并推送到 `origin/main`；
+- 2026-08-10：阶段 55H2 已完成。统一连接 Agent 分支、服务端身份、多供应商映射、Claude Code 多实例、参数化
+  Runner、配置测试、快照、fallback、历史和删除保护已落地；联合回归 `143/143`、兼容回归 `37/37` 及受影响 Ruff 通过；
+- 2026-08-10：阶段 55H3 已完成。统一连接 Standard 分支、服务端身份、多供应商映射、Responses reasoning、Standard TLS
+  与 V51、清 Key 强制停用和旧 Provider API 兼容已落地；联合回归 `176/176`、其余 Standard Provider 回归 `89/89`、
+  数据复制 `3/3` 及受影响 Ruff 通过；
+- 2026-08-10：阶段 55H4 已完成。供应商优先统一弹窗、Backend 预设联动、必填 Key、目录过滤与不可用状态已落地；前端
+  `208/208`、迁移与数据复制 `24/24`、受影响 Ruff、生产 build、差异检查和三档安全 mock 浏览器验收通过；完整 Backend
+  的 4 个无关既有失败已记录且未越界修改；
+- 2026-08-10：阶段 55H2 至 55H4 与联调收尾修复已整体提交推送；未执行真实 Provider 请求或部署。
+- 2026-08-10：55H4 页面联调后修复 Provider 列表 GET 的只读性缺陷。旧实现会在读取内补写缺失的 Responses
+  `reasoning_effort` 与目录可见性，并发请求可能触发 MySQL 1205 锁等待；现改为响应与执行层兼容默认值，不在 GET
+  中回写该状态。精确契约 `3/3`、Provider 代理 `3/3`、受影响 Ruff 通过，本地 8090 Provider 接口恢复 `200`。
+- 2026-08-10：55H4 交互收尾将上方 Agent / Standard 运行卡改为只读当前连接摘要，Agent 总开关、Agent 当前 Runtime
+  与 Standard 当前 Provider 切换统一下沉到连接详情；新建连接继续不自动切换，保存非当前 Standard 连接时给出明确引导。
+  同时替换 Ant Design 已弃用的 InputNumber addon、Modal `maskClosable` 与 Card `bordered` 属性；前端 `210/210`、
+  生产 build 和实际页面控制台验收通过，控制台无应用 warning/error。

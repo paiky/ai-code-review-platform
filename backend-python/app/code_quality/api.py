@@ -3,7 +3,11 @@ from sqlalchemy.orm import Session
 
 from app.code_quality import service
 from app.code_quality.model_presets import list_review_model_presets
-from app.code_quality.schemas import CreateProviderRequest, ReviewType
+from app.code_quality.schemas import (
+    CreateProviderRequest,
+    CreateReviewModelConnectionRequest,
+    ReviewType,
+)
 from app.core.database import get_db
 from app.core.response import ok
 
@@ -18,6 +22,9 @@ provider_router = APIRouter(
 model_preset_router = APIRouter(
     prefix="/api/review-model-presets", tags=["review-model-presets"]
 )
+model_connection_router = APIRouter(
+    prefix="/api/review-model-connections", tags=["review-model-connections"]
+)
 
 
 @model_preset_router.get("")
@@ -25,6 +32,19 @@ async def list_model_presets(
     review_type: ReviewType = Query(alias="reviewType"),
 ) -> dict:
     return ok(list_review_model_presets(review_type))
+
+
+@model_connection_router.post("")
+async def create_model_connection(
+    request: CreateReviewModelConnectionRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    payload = request.model_dump(by_alias=True)
+    if request.review_type == "STANDARD":
+        return ok(service.create_standard_model_connection_response(db, payload))
+    from app.agent_review.service import create_model_connection as create_agent_connection
+
+    return ok(create_agent_connection(db, payload))
 
 
 @review_router.post("/manual")

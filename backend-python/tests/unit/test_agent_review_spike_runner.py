@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from app.agent_review_spike.prompting import agent_system_prompt
 from app.agent_review_spike.runner import (
     AGENT_MODEL,
@@ -115,6 +117,41 @@ def test_candidate_environment_does_not_forward_platform_credentials(tmp_path, m
     assert "top_p" not in environment
     assert "presence_penalty" not in environment
     assert "frequency_penalty" not in environment
+
+
+def test_claude_runtime_configuration_controls_command_and_environment(tmp_path):
+    config = RunnerConfig(
+        base_url="https://team-deepseek.example.com/anthropic",
+        model="team-deepseek-model",
+        reasoning_effort="medium",
+        tls_verify=False,
+    )
+
+    command = _claude_command(_manifest()["cases"][0], tmp_path / "mcp.json", config)
+    environment = _candidate_environment("team-secret", tmp_path, config)
+
+    assert command[command.index("--model") + 1] == "team-deepseek-model"
+    assert environment["ANTHROPIC_BASE_URL"] == (
+        "https://team-deepseek.example.com/anthropic"
+    )
+    assert environment["ANTHROPIC_MODEL"] == "team-deepseek-model"
+    assert environment["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "team-deepseek-model"
+    assert environment["CLAUDE_CODE_EFFORT_LEVEL"] == "medium"
+    assert environment["NODE_TLS_REJECT_UNAUTHORIZED"] == "0"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"base_url": "http://team-deepseek.example.com/anthropic"},
+        {"base_url": "https://127.0.0.1/anthropic"},
+        {"model": " "},
+        {"reasoning_effort": "max"},
+    ],
+)
+def test_claude_runtime_configuration_rejects_unsafe_values(overrides):
+    with pytest.raises(ValueError):
+        RunnerConfig(**overrides)
 
 
 def test_agent_prompt_requires_bounded_hypotheses_and_timely_submission():

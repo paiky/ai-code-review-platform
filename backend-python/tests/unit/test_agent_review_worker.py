@@ -377,6 +377,86 @@ def test_worker_routes_dynamic_anthropic_runtime_by_runner_capability(
     assert payload["runSummary"]["cliVersion"] is None
 
 
+def test_worker_routes_dynamic_claude_runtime_with_snapshot_configuration(
+    tmp_path,
+    monkeypatch,
+):
+    requests = []
+    captured = []
+
+    def fake_run(case, worktree, api_key, config, **kwargs):
+        captured.append((case, worktree, api_key, config))
+        progress_callback = kwargs.get("progress_callback")
+        if progress_callback is not None:
+            progress_callback(_safe_audit())
+        return {
+            "status": "SUCCESS",
+            "reviewCard": {
+                "summary": "未发现问题",
+                "overallLevel": "LOW",
+                "findings": [],
+            },
+        }
+
+    runtime = {
+        "runtimeCode": "AGENT_DEEPSEEK_DYNAMIC",
+        "runtimeType": "AGENT_DEEPSEEK_DYNAMIC",
+        "runnerType": "CLAUDE_CODE",
+        "baseUrl": "https://team-deepseek.example.com/anthropic",
+        "model": "team-deepseek-model",
+        "reasoningEffort": "medium",
+        "tlsVerify": False,
+        "apiKey": "team-deepseek-secret",
+    }
+    monkeypatch.setattr(worker, "Thread", _NoopThread)
+    monkeypatch.setattr(worker, "_resolve_worktree", lambda _root, _relative: tmp_path)
+    monkeypatch.setattr(worker, "run_agent_candidate", fake_run)
+    monkeypatch.setattr(
+        worker,
+        "_post",
+        lambda _url, _token, path, payload: requests.append((path, payload)) or {},
+    )
+
+    worker._run_job(
+        "http://backend",
+        "token",
+        "worker-1",
+        tmp_path,
+        {
+            "jobId": 91,
+            "runId": 101,
+            "claimAttempt": 1,
+            "idempotencyKey": "agent:91",
+            "worktree": "worktrees/91/head",
+            "input": {"id": "claude-case", "changedFiles": ["src/service.py"]},
+            "runtime": runtime,
+            "budgets": default_agent_budgets(),
+        },
+    )
+    worker._run_configuration_test(
+        "http://backend",
+        "token",
+        "worker-1",
+        {
+            "kind": "CONFIG_TEST",
+            "requestId": "runtime-test:AGENT_DEEPSEEK_DYNAMIC:1",
+            "runtime": runtime,
+            "budgets": default_agent_budgets(),
+        },
+    )
+
+    assert len(captured) == 2
+    for _case, _worktree, api_key, config in captured:
+        assert api_key == "team-deepseek-secret"
+        assert config.base_url == "https://team-deepseek.example.com/anthropic"
+        assert config.model == "team-deepseek-model"
+        assert config.reasoning_effort == "medium"
+        assert config.tls_verify is False
+    assert requests[0][0] == "/internal/agent-review/jobs/91/complete"
+    assert requests[-1][0] == "/internal/agent-review/configuration-test/complete"
+    assert requests[-1][1]["status"] == "SUCCESS"
+
+
 def test_dynamic_runtime_configuration_test_uses_synthetic_workspace(monkeypatch):
     requests = []
     captured = {}

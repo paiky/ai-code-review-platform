@@ -5,6 +5,7 @@ export const standardReviewConnection = 'STANDARD';
 
 export const connectionConfigurationStatus = Object.freeze({
   READY: 'READY',
+  UNAVAILABLE: 'UNAVAILABLE',
   DISABLED: 'DISABLED',
   INCOMPLETE: 'INCOMPLETE',
   WORKER_UNSUPPORTED: 'WORKER_UNSUPPORTED'
@@ -26,7 +27,8 @@ function standardConnectionId(providerCode) {
   return `${standardReviewConnection}:${providerCode}`;
 }
 
-function statusFor({ enabled, configurationComplete, workerSupported }) {
+function statusFor({ enabled, apiKeyConfigured, configurationComplete, workerSupported }) {
+  if (apiKeyConfigured === false) return connectionConfigurationStatus.UNAVAILABLE;
   if (!configurationComplete) return connectionConfigurationStatus.INCOMPLETE;
   if (workerSupported === false) return connectionConfigurationStatus.WORKER_UNSUPPORTED;
   if (!enabled) return connectionConfigurationStatus.DISABLED;
@@ -82,6 +84,7 @@ function buildAgentRows(agentSettings) {
       workerSupported: defaultWorkerSupported,
       configurationStatus: statusFor({
         enabled,
+        apiKeyConfigured: defaultKeyConfigured,
         configurationComplete: defaultComplete,
         workerSupported: defaultWorkerSupported
       }),
@@ -106,6 +109,7 @@ function buildAgentRows(agentSettings) {
       workerSupported: customWorkerSupported,
       configurationStatus: statusFor({
         enabled,
+        apiKeyConfigured: customKeyConfigured,
         configurationComplete: customComplete,
         workerSupported: customWorkerSupported
       }),
@@ -144,6 +148,7 @@ function buildDynamicAgentRows(agentRuntimes) {
       configurationTest: runtime?.configurationTest || null,
       configurationStatus: statusFor({
         enabled: runtime?.enabled === true,
+        apiKeyConfigured: runtime?.apiKeyConfigured === true,
         configurationComplete,
         workerSupported: protocolAvailable
       }),
@@ -165,6 +170,7 @@ function buildStandardRows(providers, defaultProviderCode) {
   const rows = [];
 
   providers.forEach(provider => {
+    if (provider?.catalogVisible === false) return;
     const providerCode = text(provider?.providerCode).toUpperCase();
     if (!providerCode || seen.has(providerCode)) return;
     seen.add(providerCode);
@@ -192,7 +198,12 @@ function buildStandardRows(providers, defaultProviderCode) {
       apiKeyConfigured,
       configurationComplete,
       workerSupported: null,
-      configurationStatus: statusFor({ enabled, configurationComplete, workerSupported: null }),
+      configurationStatus: statusFor({
+        enabled,
+        apiKeyConfigured,
+        configurationComplete,
+        workerSupported: null
+      }),
       updatedAt: text(provider?.updatedAt) || null
     });
   });

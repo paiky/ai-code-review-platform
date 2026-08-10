@@ -180,24 +180,30 @@ import {
   standardReviewConnection
 } from './reviewModelConnections.js';
 import {
-  agentProtocolOptionsForWorkerPool,
   agentRuntimeDeleteAvailability,
-  buildCreateAgentRuntimeRequest,
   buildUpdateAgentRuntimeRequest,
   createAgentRuntimeDraft,
   matchesAgentRuntimeDeleteConfirmation,
-  normalizeAgentRuntimeCode,
   validateAgentRuntimeDraft as validateDynamicAgentRuntimeDraft
 } from './agentRuntimeLifecycle.js';
 import {
-  buildCreateProviderRequest,
-  createProviderDraft,
   matchesProviderDeleteConfirmation,
-  normalizeProviderCode,
   providerDeleteAvailability,
-  providerTypeOptions,
-  validateCreateProviderDraft
 } from './providerLifecycle.js';
+import {
+  applyReviewModelPreset,
+  applyReviewModelVariant,
+  buildReviewModelConnectionRequest,
+  connectionProtocolOptions,
+  createReviewModelConnectionDraft,
+  draftModelOptions,
+  draftReasoningEfforts,
+  normalizeReviewModelPresets,
+  presetForDraft,
+  presetProtocolOptions,
+  reviewModelConnectionDraftHasInput,
+  validateReviewModelConnectionDraft
+} from './reviewModelPresetLifecycle.js';
 import { releaseNotes } from './releaseNotes.js';
 
 const { Header, Content, Sider } = Layout;
@@ -891,6 +897,8 @@ function reviewConnectionStatusLabel(value) {
   switch (value) {
     case connectionConfigurationStatus.READY:
       return '可用';
+    case connectionConfigurationStatus.UNAVAILABLE:
+      return '不可用';
     case connectionConfigurationStatus.DISABLED:
       return '未启用';
     case connectionConfigurationStatus.WORKER_UNSUPPORTED:
@@ -906,6 +914,8 @@ function reviewConnectionStatusColor(value) {
       return 'green';
     case connectionConfigurationStatus.WORKER_UNSUPPORTED:
       return 'orange';
+    case connectionConfigurationStatus.UNAVAILABLE:
+      return 'red';
     case connectionConfigurationStatus.INCOMPLETE:
       return 'gold';
     default:
@@ -6469,21 +6479,30 @@ function AgentBudgetFieldCard({
       <div className="agent-budget-field-title">
         <Text strong>{field.label}</Text>
       </div>
-      <InputNumber
-        aria-label={field.label}
-        className="agent-budget-field-input"
-        size="large"
-        min={displayMinimum}
-        max={displayMaximum}
-        step={1}
-        precision={0}
-        addonAfter={field.unit}
-        value={toDisplayValue(value)}
-        onChange={nextValue => onChange(
-          field.key,
-          field.bytes ? kilobytesToBytes(nextValue) : nextValue
-        )}
-      />
+      <Space.Compact block className="agent-budget-field-input">
+        <InputNumber
+          aria-label={field.label}
+          className="agent-budget-field-number"
+          size="large"
+          min={displayMinimum}
+          max={displayMaximum}
+          step={1}
+          precision={0}
+          value={toDisplayValue(value)}
+          onChange={nextValue => onChange(
+            field.key,
+            field.bytes ? kilobytesToBytes(nextValue) : nextValue
+          )}
+        />
+        <Input
+          aria-hidden="true"
+          className="agent-budget-field-unit"
+          size="large"
+          tabIndex={-1}
+          value={field.unit}
+          readOnly
+        />
+      </Space.Compact>
       <div className="agent-budget-field-meta">
         <div>
           <Text type="secondary">默认值</Text>
@@ -6536,7 +6555,6 @@ function TemplateConfig() {
   const [settingsDraft, setSettingsDraft] = useState(null);
   const [agentSettings, setAgentSettings] = useState(null);
   const [agentRuntimes, setAgentRuntimes] = useState([]);
-  const [selectedAgentRuntimeCodeDraft, setSelectedAgentRuntimeCodeDraft] = useState(defaultAgentRuntime);
   const [agentRuntimeDraft, setAgentRuntimeDraft] = useState(createAgentRuntimeDraft);
   const [agentSettingsDraft, setAgentSettingsDraft] = useState({
     ...normalizeAgentRuntimeDraft(null),
@@ -6548,8 +6566,10 @@ function TemplateConfig() {
   const [providerApiKeyDraft, setProviderApiKeyDraft] = useState('');
   const [providerCreateModalOpen, setProviderCreateModalOpen] = useState(false);
   const [connectionCreateReviewType, setConnectionCreateReviewType] = useState(agentReviewConnection);
-  const [agentRuntimeCreateDraft, setAgentRuntimeCreateDraft] = useState(createAgentRuntimeDraft);
-  const [providerCreateDraft, setProviderCreateDraft] = useState(createProviderDraft);
+  const [reviewModelPresets, setReviewModelPresets] = useState({ AGENT: [], STANDARD: [] });
+  const [connectionCreateDraft, setConnectionCreateDraft] = useState(
+    () => createReviewModelConnectionDraft(agentReviewConnection, [])
+  );
   const [providerCreateError, setProviderCreateError] = useState(null);
   const [providerCreating, setProviderCreating] = useState(false);
   const [providerDeleteTarget, setProviderDeleteTarget] = useState(null);
@@ -6602,7 +6622,7 @@ function TemplateConfig() {
     setLoading(true);
     setError(null);
     try {
-      const [settingsData, agentSettingsData, agentRuntimeData, profileData, providerData, groupData, projectData, pathMappingData] = await Promise.all([
+      const [settingsData, agentSettingsData, agentRuntimeData, profileData, providerData, groupData, projectData, pathMappingData, agentPresetData, standardPresetData] = await Promise.all([
         fetchApi('/api/code-quality-reviews/settings'),
         fetchApi('/api/code-quality-reviews/agent-settings'),
         fetchApi('/api/code-quality-agent-runtimes'),
@@ -6610,13 +6630,16 @@ function TemplateConfig() {
         fetchApi('/api/code-quality-review-providers'),
         fetchApi('/api/project-groups'),
         fetchApi('/api/projects?includeDisabled=true'),
-        fetchApi('/api/target-type-path-mappings')
+        fetchApi('/api/target-type-path-mappings'),
+        fetchApi('/api/review-model-presets?reviewType=AGENT'),
+        fetchApi('/api/review-model-presets?reviewType=STANDARD')
       ]);
       const profileItems = Array.isArray(profileData) ? profileData : (profileData.items || []);
       const selectableProfileItems = selectableReviewProfiles(profileItems);
       const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
       const runtimeItems = Array.isArray(agentRuntimeData) ? agentRuntimeData : (agentRuntimeData.items || []);
-      const selectedRuntimeCode = runtimeItems.find(item => item.selected)?.runtimeCode || defaultAgentRuntime;
+      const agentPresetItems = normalizeReviewModelPresets(agentPresetData, agentReviewConnection);
+      const standardPresetItems = normalizeReviewModelPresets(standardPresetData, standardReviewConnection);
       const nextSelectedProfileCode = (
         selectedProfileCode && selectableProfileItems.some(profile => profile.profileCode === selectedProfileCode)
       )
@@ -6636,7 +6659,6 @@ function TemplateConfig() {
       setAiSettings(settingsData);
       setAgentSettings(agentSettingsData);
       setAgentRuntimes(runtimeItems);
-      setSelectedAgentRuntimeCodeDraft(selectedRuntimeCode);
       setAgentSettingsDraft({
         ...normalizeAgentRuntimeDraft(agentSettingsData),
         budgets: normalizeAgentBudgets(agentSettingsData)
@@ -6671,6 +6693,11 @@ function TemplateConfig() {
         setTargetConfigDraft(null);
       }
       setProviders(providerItems);
+      setReviewModelPresets({ AGENT: agentPresetItems, STANDARD: standardPresetItems });
+      setConnectionCreateDraft(createReviewModelConnectionDraft(
+        agentReviewConnection,
+        agentPresetItems
+      ));
       setSelectedProviderCode(nextSelectedProviderCode);
       setProviderDraft(providerItems.find(item => item.providerCode === nextSelectedProviderCode) || providerItems[0] || null);
       setProviderApiKeyDraft('');
@@ -6701,8 +6728,10 @@ function TemplateConfig() {
     setDirtySettingsDraftTokens(new Set());
     setProviderCreateModalOpen(false);
     setConnectionCreateReviewType(agentReviewConnection);
-    setAgentRuntimeCreateDraft(createAgentRuntimeDraft());
-    setProviderCreateDraft(createProviderDraft());
+    setConnectionCreateDraft(createReviewModelConnectionDraft(
+      agentReviewConnection,
+      reviewModelPresets.AGENT
+    ));
     setProviderCreateError(null);
     setProviderDeleteTarget(null);
     setProviderDeleteConfirmation('');
@@ -6711,7 +6740,7 @@ function TemplateConfig() {
     setAgentRuntimeDeleteConfirmation('');
     setAgentRuntimeDeleteError(null);
     await loadSettingsRef.current?.();
-  }, []);
+  }, [reviewModelPresets.AGENT]);
 
   useEffect(() => registerSettingsNavigationGuard({
     isDirty: () => dirtySettingsRef.current,
@@ -7594,11 +7623,6 @@ function TemplateConfig() {
     markSettingsDraftDirty('review-model-settings:budgets');
   };
 
-  const updateAgentRuntimeSelectionDraft = (field, value) => {
-    setAgentSettingsDraft(current => ({ ...current, [field]: value }));
-    markSettingsDraftDirty('review-model-settings:runtime-selection');
-  };
-
   const testAgentSettings = async runtimeType => {
     if (agentSettingsTesting || agentSettingsSaving) return;
     if (agentSettings?.selectedRuntime !== runtimeType) {
@@ -7676,7 +7700,11 @@ function TemplateConfig() {
       setDirtyReviewConnectionId(current => (
         current === `STANDARD:${providerCode}` ? null : current
       ));
-      messageApi.success(`${sourceLabel(providerCode)} Provider 已保存，默认连接未改变`);
+      messageApi.success(
+        providerDraft.defaultProvider
+          ? `${providerDraft.providerName || sourceLabel(providerCode)} 当前连接已保存`
+          : `${providerDraft.providerName || sourceLabel(providerCode)} 已保存；如需执行请设为 Standard 当前连接`
+      );
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -7708,20 +7736,25 @@ function TemplateConfig() {
     }
   };
 
-  const saveStandardDefaultProvider = async () => {
-    if (!selectedProviderCode || providerSaving || dirtyReviewConnectionId) return;
+  const saveStandardDefaultProvider = async provider => {
+    const providerCode = provider?.providerCode || selectedProviderCode;
+    if (!providerCode || providerSaving || dirtyReviewConnectionId) return;
     setProviderSaving(true);
     try {
       const settings = await fetchApi(
-        `/api/code-quality-review-providers/${selectedProviderCode}/set-default`,
+        `/api/code-quality-review-providers/${providerCode}/set-default`,
         { method: 'POST' }
       );
       setAiSettings(current => current ? { ...current, ...settings } : settings);
       setProviders(current => current.map(provider => ({
         ...provider,
-        defaultProvider: provider.providerCode === selectedProviderCode
+        defaultProvider: provider.providerCode === providerCode
       })));
-      messageApi.success(`${sourceLabel(selectedProviderCode)} 已设为 Standard 默认连接`);
+      setProviderDraft(current => current ? {
+        ...current,
+        defaultProvider: current.providerCode === providerCode
+      } : current);
+      messageApi.success(`${provider?.providerName || sourceLabel(providerCode)} 已设为 Standard 当前连接`);
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -8057,8 +8090,9 @@ function TemplateConfig() {
   const activeReviewConnection = reviewConnectionRows.find(
     item => item.id === selectedReviewConnectionId
   ) || null;
-  const selectedStandardProvider = providers.find(
-    provider => provider.providerCode === selectedProviderCode
+  const currentStandardProvider = providers.find(
+    provider => provider.providerCode === aiSettings?.defaultProviderCode
+      || provider.defaultProvider === true
   ) || null;
 
   useEffect(() => {
@@ -8147,8 +8181,10 @@ function TemplateConfig() {
     if (providerCreating) return;
     setProviderCreateModalOpen(false);
     setConnectionCreateReviewType(agentReviewConnection);
-    setAgentRuntimeCreateDraft(createAgentRuntimeDraft());
-    setProviderCreateDraft(createProviderDraft());
+    setConnectionCreateDraft(createReviewModelConnectionDraft(
+      agentReviewConnection,
+      reviewModelPresets.AGENT
+    ));
     setProviderCreateError(null);
     clearSettingsDraftDirty('review-model-settings:provider-create');
   };
@@ -8156,43 +8192,58 @@ function TemplateConfig() {
   const openCreateProviderModal = () => {
     runAfterDiscardingConnectionDraft(() => {
       setConnectionCreateReviewType(agentReviewConnection);
-      setAgentRuntimeCreateDraft(createAgentRuntimeDraft());
-      setProviderCreateDraft(createProviderDraft());
+      setConnectionCreateDraft(createReviewModelConnectionDraft(
+        agentReviewConnection,
+        reviewModelPresets.AGENT
+      ));
       setProviderCreateError(null);
       clearSettingsDraftDirty('review-model-settings:provider-create');
       setProviderCreateModalOpen(true);
     });
   };
 
-  const updateProviderCreateDraft = (field, value) => {
-    setProviderCreateDraft(current => ({ ...current, [field]: value }));
+  const updateConnectionCreateDraft = (field, value) => {
+    setConnectionCreateDraft(current => ({ ...current, [field]: value }));
     setProviderCreateError(null);
     markSettingsDraftDirty('review-model-settings:provider-create');
   };
 
-  const updateAgentRuntimeCreateDraft = (field, value) => {
-    setAgentRuntimeCreateDraft(current => ({ ...current, [field]: value }));
+  const selectConnectionCreatePreset = presetCode => {
+    setConnectionCreateDraft(current => applyReviewModelPreset(
+      current,
+      reviewModelPresets[connectionCreateReviewType],
+      presetCode
+    ));
+    setProviderCreateError(null);
+    markSettingsDraftDirty('review-model-settings:provider-create');
+  };
+
+  const selectConnectionCreateProtocol = protocol => {
+    const preset = presetForDraft(
+      reviewModelPresets[connectionCreateReviewType],
+      connectionCreateDraft
+    );
+    setConnectionCreateDraft(current => applyReviewModelVariant(current, preset, protocol));
     setProviderCreateError(null);
     markSettingsDraftDirty('review-model-settings:provider-create');
   };
 
   const switchConnectionCreateReviewType = reviewType => {
     if (reviewType === connectionCreateReviewType) return;
-    const agentHasInput = Object.entries(agentRuntimeCreateDraft).some(([key, value]) => (
-      !['protocol', 'model', 'reasoningEffort', 'tlsVerify', 'enabled'].includes(key)
-      && Boolean(String(value || '').trim())
-    ));
-    const standardHasInput = Object.entries(providerCreateDraft).some(([key, value]) => (
-      !['providerType', 'enabled'].includes(key) && Boolean(String(value || '').trim())
-    ));
+    const hasInput = reviewModelConnectionDraftHasInput(
+      connectionCreateDraft,
+      reviewModelPresets[connectionCreateReviewType]
+    );
     const switchDraft = () => {
       setConnectionCreateReviewType(reviewType);
-      setAgentRuntimeCreateDraft(createAgentRuntimeDraft());
-      setProviderCreateDraft(createProviderDraft());
+      setConnectionCreateDraft(createReviewModelConnectionDraft(
+        reviewType,
+        reviewModelPresets[reviewType]
+      ));
       setProviderCreateError(null);
       clearSettingsDraftDirty('review-model-settings:provider-create');
     };
-    if (agentHasInput || standardHasInput) {
+    if (hasInput) {
       Modal.confirm({
         title: '切换 Review 类型并丢弃当前输入？',
         content: 'Agent 与 Standard 使用独立连接配置；切换后当前弹窗中的字段和 Key 草稿不会保留。',
@@ -8208,9 +8259,10 @@ function TemplateConfig() {
 
   const createReviewConnection = async () => {
     const creatingAgent = connectionCreateReviewType === agentReviewConnection;
-    const validationError = creatingAgent
-      ? validateDynamicAgentRuntimeDraft(agentRuntimeCreateDraft, { creating: true })
-      : validateCreateProviderDraft(providerCreateDraft);
+    const validationError = validateReviewModelConnectionDraft(
+      connectionCreateDraft,
+      reviewModelPresets[connectionCreateReviewType]
+    );
     if (validationError) {
       setProviderCreateError(validationError);
       return;
@@ -8218,11 +8270,11 @@ function TemplateConfig() {
     setProviderCreating(true);
     setProviderCreateError(null);
     try {
+      const created = await fetchApi('/api/review-model-connections', {
+        method: 'POST',
+        body: JSON.stringify(buildReviewModelConnectionRequest(connectionCreateDraft))
+      });
       if (creatingAgent) {
-        const created = await fetchApi('/api/code-quality-agent-runtimes', {
-          method: 'POST',
-          body: JSON.stringify(buildCreateAgentRuntimeRequest(agentRuntimeCreateDraft))
-        });
         let runtimeItems;
         try {
           const refreshed = await fetchApi('/api/code-quality-agent-runtimes');
@@ -8240,34 +8292,32 @@ function TemplateConfig() {
         setAgentSettingsTestResult(created.configurationTest || null);
         messageApi.success(`${created.displayName || created.runtimeCode} 已创建；当前连接和配置测试未改变`);
       } else {
-      const created = await fetchApi('/api/code-quality-review-providers', {
-        method: 'POST',
-        body: JSON.stringify(buildCreateProviderRequest(providerCreateDraft))
-      });
-      let providerItems;
-      try {
-        const refreshed = await fetchApi('/api/code-quality-review-providers');
-        providerItems = Array.isArray(refreshed) ? refreshed : (refreshed.items || []);
-      } catch {
-        providerItems = [
-          ...providers.filter(item => item.providerCode !== created.providerCode),
-          created
-        ];
-        messageApi.warning('Provider 已创建，但目录刷新失败；当前页面已使用创建响应更新');
-      }
-      const connectionId = `STANDARD:${created.providerCode}`;
-      setProviders(providerItems);
-      setSelectedReviewConnectionId(connectionId);
-      setProviderDraft(providerItems.find(item => item.providerCode === created.providerCode) || created);
-      setProviderApiKeyDraft('');
-      setProviderTestResult(null);
-      messageApi.success(`${created.providerName || created.providerCode} 已创建；默认连接和联通性测试未改变`);
+        let providerItems;
+        try {
+          const refreshed = await fetchApi('/api/code-quality-review-providers');
+          providerItems = Array.isArray(refreshed) ? refreshed : (refreshed.items || []);
+        } catch {
+          providerItems = [
+            ...providers.filter(item => item.providerCode !== created.providerCode),
+            created
+          ];
+          messageApi.warning('Provider 已创建，但目录刷新失败；当前页面已使用创建响应更新');
+        }
+        const connectionId = `STANDARD:${created.providerCode}`;
+        setProviders(providerItems);
+        setSelectedReviewConnectionId(connectionId);
+        setProviderDraft(providerItems.find(item => item.providerCode === created.providerCode) || created);
+        setProviderApiKeyDraft('');
+        setProviderTestResult(null);
+        messageApi.success(`${created.providerName || created.providerCode} 已创建；默认连接和联通性测试未改变`);
       }
       setDirtyReviewConnectionId(null);
       setProviderCreateModalOpen(false);
       setConnectionCreateReviewType(agentReviewConnection);
-      setAgentRuntimeCreateDraft(createAgentRuntimeDraft());
-      setProviderCreateDraft(createProviderDraft());
+      setConnectionCreateDraft(createReviewModelConnectionDraft(
+        agentReviewConnection,
+        reviewModelPresets.AGENT
+      ));
       clearSettingsDraftDirty('review-model-settings:provider-create');
     } catch (err) {
       setProviderCreateError(err.message);
@@ -8456,28 +8506,41 @@ function TemplateConfig() {
     }
   };
 
-  const saveDynamicAgentRuntimeSelection = async () => {
-    if (agentSettingsSaving || dirtyReviewConnectionId) return;
-    const runtime = agentRuntimes.find(
-      item => item.runtimeCode === selectedAgentRuntimeCodeDraft
-    );
-    if (!runtime) return;
+  const setCurrentDynamicAgentRuntime = async runtime => {
+    if (!runtime || runtime.selected || agentSettingsSaving || dirtyReviewConnectionId) return;
     setAgentSettingsSaving(true);
     try {
-      if (!runtime.selected) {
-        await fetchApi(`/api/code-quality-agent-runtimes/${runtime.runtimeCode}/set-current`, {
-          method: 'POST'
-        });
-      }
+      await fetchApi(`/api/code-quality-agent-runtimes/${runtime.runtimeCode}/set-current`, {
+        method: 'POST'
+      });
+      const [, settings] = await Promise.all([
+        refreshAgentRuntimeCatalog(),
+        fetchApi('/api/code-quality-reviews/agent-settings')
+      ]);
+      setAgentSettings(settings);
+      setAgentSettingsDraft(current => ({
+        ...current,
+        enabled: settings?.enabled ?? current.enabled
+      }));
+      messageApi.success(`${runtime.displayName || runtime.runtimeCode} 已设为 Agent 当前连接`);
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setAgentSettingsSaving(false);
+    }
+  };
+
+  const updateAgentReviewEnabled = async enabled => {
+    if (agentSettingsSaving || dirtyReviewConnectionId) return;
+    setAgentSettingsSaving(true);
+    try {
       const settings = await fetchApi('/api/code-quality-reviews/agent-settings', {
         method: 'PUT',
-        body: JSON.stringify({ enabled: Boolean(agentSettingsDraft.enabled) })
+        body: JSON.stringify({ enabled: Boolean(enabled) })
       });
       setAgentSettings(settings);
       setAgentSettingsDraft(current => ({ ...current, enabled: settings?.enabled ?? current.enabled }));
-      await refreshAgentRuntimeCatalog();
-      clearSettingsDraftDirty('review-model-settings:runtime-selection');
-      messageApi.success('Agent Review 运行配置已保存');
+      messageApi.success(`Agent Review 已${settings?.enabled ? '启用' : '停用'}`);
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -8508,9 +8571,6 @@ function TemplateConfig() {
         method: 'DELETE'
       });
       const runtimeItems = await refreshAgentRuntimeCatalog();
-      setSelectedAgentRuntimeCodeDraft(
-        runtimeItems.find(item => item.selected)?.runtimeCode || defaultAgentRuntime
-      );
       const nextRows = buildReviewModelConnectionCatalog({
         agentRuntimes: runtimeItems,
         providers,
@@ -8558,9 +8618,7 @@ function TemplateConfig() {
   const agentTestMessage = agentTestPending
     ? 'Agent 配置测试进行中'
     : 'Agent 配置不可用';
-  const selectedAgentRuntime = agentRuntimes.find(
-    item => item.runtimeCode === selectedAgentRuntimeCodeDraft
-  ) || null;
+  const currentAgentRuntime = agentRuntimes.find(item => item.selected) || null;
   const agentSaveRequiresEncryption = Boolean(
     agentSettingsDraft.enabled
     || String(agentRuntimeDraft.apiKey || '').trim()
@@ -8614,15 +8672,6 @@ function TemplateConfig() {
       width: 168,
       responsive: ['lg'],
       render: reviewConnectionProtocolLabel
-    },
-    {
-      title: 'Endpoint',
-      dataIndex: 'endpoint',
-      key: 'endpoint',
-      width: 230,
-      responsive: ['lg'],
-      ellipsis: true,
-      render: value => value || '-'
     },
     {
       title: '模型',
@@ -8743,6 +8792,33 @@ function TemplateConfig() {
           </Space>
         )}
       />
+      <div className="review-connection-runtime-controls">
+        <Space wrap>
+          <Text strong>Agent Review</Text>
+          <Switch
+            aria-label="启用 Agent Review"
+            checked={agentSettings?.enabled === true}
+            loading={agentSettingsSaving}
+            disabled={agentSettingsSaving || (!agentSettings?.encryptionAvailable && agentSettings?.enabled !== true)}
+            checkedChildren="启用"
+            unCheckedChildren="停用"
+            onChange={updateAgentReviewEnabled}
+          />
+          <Button
+            disabled={
+              activeReviewConnection.isCurrent
+              || Boolean(dirtyReviewConnectionId)
+              || !activeRuntimeSettings?.enabled
+              || !activeRuntimeSettings?.configurationComplete
+              || !activeRuntimeSettings?.protocolAvailable
+            }
+            loading={agentSettingsSaving}
+            onClick={() => setCurrentDynamicAgentRuntime(activeRuntimeSettings)}
+          >
+            {activeReviewConnection.isCurrent ? 'Agent 当前连接' : '设为 Agent 当前连接'}
+          </Button>
+        </Space>
+      </div>
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12}>
           <Text strong>配置名称</Text>
@@ -8960,6 +9036,18 @@ function TemplateConfig() {
       <div className="settings-action-row review-connection-actions">
         <Space wrap>
           <Button
+            disabled={
+              providerDraft.defaultProvider === true
+              || Boolean(dirtyReviewConnectionId)
+              || !providerDraft.enabled
+              || !providerDraft.apiKeyConfigured
+            }
+            loading={providerSaving}
+            onClick={() => saveStandardDefaultProvider(providerDraft)}
+          >
+            {providerDraft.defaultProvider ? 'Standard 当前连接' : '设为 Standard 当前连接'}
+          </Button>
+          <Button
             loading={providerTesting}
             disabled={providerSaving}
             onClick={testProviderConnection}
@@ -9023,7 +9111,7 @@ function TemplateConfig() {
       ),
       children: (
         <Card
-          bordered={false}
+          variant="borderless"
           className="settings-inner-card"
         >
           <div className="settings-subsection">
@@ -9083,7 +9171,7 @@ function TemplateConfig() {
         </Space>
       ),
       children: (
-        <Card bordered={false} className="settings-inner-card">
+        <Card variant="borderless" className="settings-inner-card">
           <Space direction="vertical" size="middle" className="full-width">
             <div className="settings-subsection">
               <Space direction="vertical" size="middle" className="full-width">
@@ -9337,116 +9425,69 @@ function TemplateConfig() {
             />
             <div className="review-runtime-card-grid">
               <Card className="review-runtime-card" title="Agent Review 运行配置">
-                <Space orientation="vertical" size="middle" className="full-width">
-                  <div className="review-runtime-card-status">
-                    <Space wrap>
-                      <Tag color={agentSettings?.enabled ? 'purple' : 'default'}>
-                        {agentSettings?.enabled ? '已启用' : '未启用'}
-                      </Tag>
-                      <Tag color={agentWorkerPool.status === 'ONLINE' ? 'green' : 'red'}>
-                        Worker Pool {agentWorkerPool.status}
-                      </Tag>
-                      <Tag color={selectedAgentRuntime?.apiKeyConfigured ? 'green' : 'gold'}>
-                        Key {selectedAgentRuntime?.apiKeyConfigured ? '已配置' : '未配置'}
-                      </Tag>
-                    </Space>
-                    <Switch
-                      aria-label="启用 Agent Review"
-                      checked={agentSettingsDraft.enabled}
-                      disabled={agentSettingsSaving}
-                      onChange={checked => updateAgentRuntimeSelectionDraft('enabled', checked)}
-                    />
-                  </div>
-                  <div>
-                    <Text strong>当前 Runtime</Text>
-                    <Select
-                      className="full-width prompt-field"
-                      value={selectedAgentRuntimeCodeDraft}
-                      disabled={agentSettingsSaving}
-                      options={agentRuntimes.map(item => ({
-                        value: item.runtimeCode,
-                        label: item.builtIn ? `${item.displayName}（内置）` : item.displayName,
-                        disabled: !item.enabled || !item.configurationComplete || !item.protocolAvailable
-                      }))}
-                      onChange={value => {
-                        setSelectedAgentRuntimeCodeDraft(value);
-                        markSettingsDraftDirty('review-model-settings:runtime-selection');
-                      }}
-                    />
-                  </div>
-                  <Descriptions size="small" column={1} bordered>
-                    <Descriptions.Item label="模型">{selectedAgentRuntime?.model || '-'}</Descriptions.Item>
-                    <Descriptions.Item label="协议">
-                      {reviewConnectionProtocolLabel(selectedAgentRuntime?.protocol)}
+                <Space orientation="vertical" size="small" className="full-width">
+                  <Space wrap>
+                    <Tag color={agentSettings?.enabled ? 'purple' : 'default'}>
+                      Agent {agentSettings?.enabled ? '已启用' : '未启用'}
+                    </Tag>
+                    <Tag color={agentWorkerPool.status === 'ONLINE' ? 'green' : 'red'}>
+                      Worker Pool {agentWorkerPool.status}
+                    </Tag>
+                    <Tag color={currentAgentRuntime?.apiKeyConfigured ? 'green' : 'gold'}>
+                      Key {currentAgentRuntime?.apiKeyConfigured ? '已配置' : '未配置'}
+                    </Tag>
+                  </Space>
+                  <Descriptions size="small" column={1}>
+                    <Descriptions.Item label="当前连接">
+                      <Space size={6} wrap>
+                        <Text strong>{currentAgentRuntime?.displayName || '-'}</Text>
+                        {currentAgentRuntime && <Tag color="purple">当前</Tag>}
+                      </Space>
                     </Descriptions.Item>
-                    {selectedAgentRuntime?.protocol === 'OPENAI_RESPONSES' && (
-                      <Descriptions.Item label="推理强度">
-                        {selectedAgentRuntime?.reasoningEffort || 'high'}
-                      </Descriptions.Item>
-                    )}
+                    <Descriptions.Item label="协议 / 模型">
+                      {reviewConnectionProtocolLabel(currentAgentRuntime?.protocol)} / {currentAgentRuntime?.model || '-'}
+                    </Descriptions.Item>
                     <Descriptions.Item label="Fallback">失败后继承 Standard 动态解析链</Descriptions.Item>
                   </Descriptions>
                   {!agentSettings?.encryptionAvailable && (
-                    <Alert type="error" showIcon title="Agent 加密主密钥不可用" />
+                    <Text type="danger">Agent 加密主密钥不可用</Text>
                   )}
-                  <Button
-                    type="primary"
-                    loading={agentSettingsSaving}
-                    disabled={Boolean(dirtyReviewConnectionId) || (!agentSettings?.encryptionAvailable && agentSettingsDraft.enabled)}
-                    onClick={saveDynamicAgentRuntimeSelection}
-                  >
-                    保存 Agent 运行配置
-                  </Button>
                 </Space>
               </Card>
               <Card className="review-runtime-card" title="Standard Review 运行配置">
-                <Space orientation="vertical" size="middle" className="full-width">
+                <Space orientation="vertical" size="small" className="full-width">
                   <Space wrap>
                     <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>
                       平台全局 {(settingsDraft?.reviewEnabled ?? false) ? '已开启' : '已关闭'}
                     </Tag>
-                    <Tag color={selectedStandardProvider?.enabled ? 'green' : 'default'}>
-                      Provider {selectedStandardProvider?.enabled ? '已启用' : '未启用'}
+                    <Tag color={currentStandardProvider?.enabled ? 'green' : 'default'}>
+                      Provider {currentStandardProvider?.enabled ? '已启用' : '未启用'}
                     </Tag>
-                    <Tag color={selectedStandardProvider?.apiKeyConfigured ? 'green' : 'gold'}>
-                      Key {selectedStandardProvider?.apiKeyConfigured ? '已配置' : '未配置'}
+                    <Tag color={currentStandardProvider?.apiKeyConfigured ? 'green' : 'gold'}>
+                      Key {currentStandardProvider?.apiKeyConfigured ? '已配置' : '未配置'}
                     </Tag>
                   </Space>
-                  <div>
-                    <Text strong>默认 Provider</Text>
-                    <Select
-                      className="full-width prompt-field"
-                      value={selectedProviderCode}
-                      options={providerOptions}
-                      loading={providerSaving}
-                      onChange={setSelectedProviderCode}
-                    />
-                  </div>
-                  <Descriptions size="small" column={1} bordered>
-                    <Descriptions.Item label="协议">
-                      {reviewConnectionProtocolLabel(selectedStandardProvider?.providerType)}
+                  <Descriptions size="small" column={1}>
+                    <Descriptions.Item label="当前连接">
+                      <Space size={6} wrap>
+                        <Text strong>
+                          {currentStandardProvider?.providerName
+                            || sourceLabel(aiSettings?.defaultProviderCode)
+                            || '-'}
+                        </Text>
+                        {currentStandardProvider && <Tag color="blue">当前</Tag>}
+                      </Space>
                     </Descriptions.Item>
-                    <Descriptions.Item label="模型">{selectedStandardProvider?.modelName || '-'}</Descriptions.Item>
+                    <Descriptions.Item label="协议 / 模型">
+                      {reviewConnectionProtocolLabel(currentStandardProvider?.providerType)} / {currentStandardProvider?.modelName || '-'}
+                    </Descriptions.Item>
                     <Descriptions.Item label="超时">
-                      {selectedStandardProvider?.timeoutSeconds ? `${selectedStandardProvider.timeoutSeconds} 秒` : '系统默认'}
+                      {currentStandardProvider?.timeoutSeconds ? `${currentStandardProvider.timeoutSeconds} 秒` : '系统默认'}
                     </Descriptions.Item>
                   </Descriptions>
-                  {selectedStandardProvider && (!selectedStandardProvider.enabled || !selectedStandardProvider.apiKeyConfigured) && (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      title="当前选择尚不可用"
-                      description="可以保存为默认连接，但 Standard Review 执行前仍需启用 Provider 并配置 Key。"
-                    />
+                  {currentStandardProvider && (!currentStandardProvider.enabled || !currentStandardProvider.apiKeyConfigured) && (
+                    <Text type="warning">当前连接不可用，请在下方选择可用连接并设为当前。</Text>
                   )}
-                  <Button
-                    type="primary"
-                    loading={providerSaving}
-                    disabled={!selectedProviderCode || Boolean(dirtyReviewConnectionId)}
-                    onClick={saveStandardDefaultProvider}
-                  >
-                    保存默认连接
-                  </Button>
                 </Space>
               </Card>
             </div>
@@ -9456,7 +9497,7 @@ function TemplateConfig() {
                   compact
                   icon={<ApiOutlined />}
                   title="模型连接目录"
-                  description="Agent Runtime 与 Standard Provider 的统一目录；两类自定义连接均可新增和受保护删除。"
+                  description="仅展示已配置或历史可见连接；清除 Key 后保留目录记录并标记为不可用。"
                   tags={<Tag>{reviewConnectionRows.length} 条连接</Tag>}
                   extra={(
                     <Button type="primary" icon={<PlusOutlined />} onClick={openCreateProviderModal}>
@@ -9471,7 +9512,7 @@ function TemplateConfig() {
                   pagination={false}
                   dataSource={reviewConnectionRows}
                   columns={reviewConnectionColumns}
-                  scroll={{ x: 920 }}
+                  scroll={{ x: 760 }}
                   rowClassName={row => row.id === selectedReviewConnectionId ? 'is-selected' : ''}
                   onRow={row => ({
                     tabIndex: 0,
@@ -9533,7 +9574,7 @@ function TemplateConfig() {
       ),
       children: (
         <Card
-          bordered={false}
+          variant="borderless"
           className="settings-inner-card"
         >
           {profileDraft ? (
@@ -9796,6 +9837,24 @@ function TemplateConfig() {
   ];
 
   const activeSettingsItem = collapseItems.find(item => item.key === activeSettingsSection?.key) || null;
+  const connectionCreatePresets = reviewModelPresets[connectionCreateReviewType] || [];
+  const connectionCreatePreset = presetForDraft(
+    connectionCreatePresets,
+    connectionCreateDraft
+  );
+  const connectionCreateProtocolOptions = presetProtocolOptions(
+    connectionCreatePreset,
+    connectionCreateReviewType,
+    agentWorkerPool
+  ).map(item => ({
+    value: item.value,
+    label: item.reason ? `${item.label}（${item.reason}）` : item.label,
+    disabled: item.disabled
+  }));
+  const connectionCreateReasoningEfforts = draftReasoningEfforts(
+    connectionCreatePreset,
+    connectionCreateDraft
+  );
 
   return (
     <TaskWorkspaceShell>
@@ -9821,14 +9880,15 @@ function TemplateConfig() {
       <Modal
         title="新增模型连接"
         open={providerCreateModalOpen}
-        okText={connectionCreateReviewType === agentReviewConnection ? '创建 Runtime' : '创建 Provider'}
+        okText="创建连接"
         cancelText="取消"
         confirmLoading={providerCreating}
-        maskClosable={!providerCreating}
+        mask={{ closable: !providerCreating }}
         keyboard={!providerCreating}
         onOk={createReviewConnection}
         onCancel={closeCreateProviderModal}
-        width={720}
+        width={920}
+        className="review-model-create-modal"
       >
         <Space orientation="vertical" size="middle" className="full-width">
           <div>
@@ -9845,189 +9905,111 @@ function TemplateConfig() {
               onChange={event => switchConnectionCreateReviewType(event.target.value)}
             />
           </div>
-          <Alert
-            type="info"
-            showIcon
-            title={connectionCreateReviewType === agentReviewConnection
-              ? '创建独立 Agent Runtime'
-              : '创建自定义 Standard Provider'}
-            description={connectionCreateReviewType === agentReviewConnection
-              ? '创建后只选中目录记录，不会自动设为当前、启用或触发配置测试。'
-              : '创建后不会自动设为默认连接，也不会触发联通性测试。'}
-          />
           {providerCreateError && <Alert type="error" showIcon title={providerCreateError} />}
-          {connectionCreateReviewType === agentReviewConnection ? (
-            <Row gutter={[16, 16]}>
-              <Col xs={24} md={12}>
-                <Text strong>Runtime Code</Text>
-                <Input
-                  value={agentRuntimeCreateDraft.runtimeCode}
-                  maxLength={40}
-                  placeholder="TEAM_RELAY"
-                  onChange={event => updateAgentRuntimeCreateDraft(
-                    'runtimeCode',
-                    normalizeAgentRuntimeCode(event.target.value)
-                  )}
-                />
-              </Col>
-              <Col xs={24} md={12}>
-                <Text strong>配置名称</Text>
-                <Input
-                  value={agentRuntimeCreateDraft.displayName}
-                  maxLength={64}
-                  placeholder="团队 Agent 网关"
-                  onChange={event => updateAgentRuntimeCreateDraft('displayName', event.target.value)}
-                />
-              </Col>
-              <Col xs={24}>
-                <Text strong>协议</Text>
-                <Select
-                  className="full-width"
-                  value={agentRuntimeCreateDraft.protocol}
-                  options={agentProtocolOptionsForWorkerPool(agentSettings?.workerPool).map(item => ({
-                    value: item.value,
-                    label: item.reason ? `${item.label}（${item.reason}）` : item.label,
-                    disabled: item.disabled
-                  }))}
-                  onChange={value => updateAgentRuntimeCreateDraft('protocol', value)}
-                />
-              </Col>
-              <Col xs={24} md={12}>
-                <Text strong>Base URL</Text>
-                <Input
-                  value={agentRuntimeCreateDraft.baseUrl}
-                  maxLength={1024}
-                  placeholder="https://relay.example.com/v1"
-                  onChange={event => updateAgentRuntimeCreateDraft('baseUrl', event.target.value)}
-                />
-              </Col>
-              <Col xs={24} md={12}>
-                <Text strong>模型名称</Text>
-                <Input
-                  value={agentRuntimeCreateDraft.model}
-                  maxLength={128}
-                  onChange={event => updateAgentRuntimeCreateDraft('model', event.target.value)}
-                />
-              </Col>
-              {agentRuntimeCreateDraft.protocol === 'OPENAI_RESPONSES' && (
-                <Col xs={24} md={12}>
-                  <Text strong>推理强度</Text>
-                  <Select
-                    className="full-width"
-                    value={agentRuntimeCreateDraft.reasoningEffort}
-                    options={['low', 'medium', 'high'].map(value => ({ value, label: value }))}
-                    onChange={value => updateAgentRuntimeCreateDraft('reasoningEffort', value)}
-                  />
-                </Col>
-              )}
-              <Col xs={24} md={12}>
-                <Text strong>API Key</Text>
-                <Input.Password
-                  value={agentRuntimeCreateDraft.apiKey}
-                  maxLength={1024}
-                  placeholder="仅保留在当前页面内存"
-                  onChange={event => updateAgentRuntimeCreateDraft('apiKey', event.target.value)}
-                />
-              </Col>
-              <Col xs={24}>
-                <Space wrap>
-                  <Switch
-                    checked={agentRuntimeCreateDraft.enabled}
-                    checkedChildren="启用"
-                    unCheckedChildren="停用"
-                    onChange={checked => updateAgentRuntimeCreateDraft('enabled', checked)}
-                  />
-                  <Switch
-                    checked={agentRuntimeCreateDraft.tlsVerify === false}
-                    onChange={checked => updateAgentRuntimeCreateDraft('tlsVerify', !checked)}
-                  />
-                  <Text type={agentRuntimeCreateDraft.tlsVerify === false ? 'danger' : 'secondary'}>
-                    跳过 TLS 证书校验（高风险）
-                  </Text>
-                </Space>
-              </Col>
-            </Row>
-          ) : (
-          <Row gutter={[16, 16]}>
+          <div>
+            <Text strong>供应商</Text>
+            <Select
+              aria-label="供应商"
+              className="full-width prompt-field"
+              value={connectionCreateDraft.presetCode || undefined}
+              placeholder="选择供应商"
+              options={connectionCreatePresets.map(item => ({
+                value: item.presetCode,
+                label: item.vendorName
+              }))}
+              onChange={selectConnectionCreatePreset}
+            />
+            <Text type="secondary" className="review-model-create-help">
+              选择供应商后自动填充协议、Base URL、模型与推理强度；所有预填值均可修改。
+            </Text>
+          </div>
+          <Divider className="review-model-create-divider" />
+          <Row gutter={[24, 18]}>
             <Col xs={24} md={12}>
-              <Text strong>Provider Code</Text>
+              <Text strong>协议</Text>
+              <Select
+                aria-label="协议"
+                className="full-width"
+                value={connectionCreateDraft.protocol || undefined}
+                placeholder="选择协议"
+                options={connectionCreateProtocolOptions}
+                onChange={selectConnectionCreateProtocol}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>Base URL</Text>
               <Input
-                value={providerCreateDraft.providerCode}
-                maxLength={64}
-                placeholder="TEAM_GATEWAY"
-                onChange={event => updateProviderCreateDraft(
-                  'providerCode',
-                  normalizeProviderCode(event.target.value)
+                aria-label="Base URL"
+                value={connectionCreateDraft.baseUrl}
+                maxLength={1024}
+                placeholder="https://api.example.com/v1"
+                onChange={event => updateConnectionCreateDraft('baseUrl', event.target.value)}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Text strong>模型</Text>
+              <Select
+                aria-label="模型"
+                mode="tags"
+                maxCount={1}
+                showSearch
+                className="full-width"
+                value={connectionCreateDraft.model ? [connectionCreateDraft.model] : []}
+                placeholder="搜索或输入模型名称"
+                options={draftModelOptions(connectionCreatePreset, connectionCreateDraft)}
+                onChange={values => updateConnectionCreateDraft(
+                  'model',
+                  values[values.length - 1] || ''
                 )}
               />
             </Col>
-            <Col xs={24} md={12}>
-              <Text strong>配置名称</Text>
-              <Input
-                value={providerCreateDraft.providerName}
-                maxLength={128}
-                placeholder="团队模型网关"
-                onChange={event => updateProviderCreateDraft('providerName', event.target.value)}
-              />
-            </Col>
-            <Col xs={24}>
-              <Text strong>协议</Text>
-              <Select
-                className="full-width"
-                value={providerCreateDraft.providerType}
-                options={providerTypeOptions}
-                onChange={value => updateProviderCreateDraft('providerType', value)}
-              />
-            </Col>
-            <Col xs={24} md={12}>
-              <Text strong>Endpoint URL</Text>
-              <Input
-                value={providerCreateDraft.endpointUrl}
-                maxLength={512}
-                placeholder="https://api.example.com/v1"
-                onChange={event => updateProviderCreateDraft('endpointUrl', event.target.value)}
-              />
-            </Col>
-            <Col xs={24} md={12}>
-              <Text strong>模型名称</Text>
-              <Input
-                value={providerCreateDraft.modelName}
-                maxLength={128}
-                onChange={event => updateProviderCreateDraft('modelName', event.target.value)}
-              />
-            </Col>
-            <Col xs={24} md={12}>
-              <Text strong>Review 超时秒数</Text>
-              <InputNumber
-                className="full-width"
-                min={1}
-                max={3600}
-                value={providerCreateDraft.timeoutSeconds}
-                onChange={value => updateProviderCreateDraft('timeoutSeconds', value)}
-              />
-            </Col>
-            <Col xs={24} md={12}>
-              <Text strong>API Key</Text>
-              <Input.Password
-                value={providerCreateDraft.apiKey}
-                maxLength={1024}
-                placeholder="仅保留在当前页面内存"
-                onChange={event => updateProviderCreateDraft('apiKey', event.target.value)}
-              />
-            </Col>
-            <Col xs={24}>
-              <Space wrap>
-                <Switch
-                  checked={providerCreateDraft.enabled}
-                  checkedChildren="启用"
-                  unCheckedChildren="停用"
-                  onChange={checked => updateProviderCreateDraft('enabled', checked)}
+            {connectionCreateReasoningEfforts.length > 0 && (
+              <Col xs={24} md={12}>
+                <Text strong>推理强度</Text>
+                <Select
+                  aria-label="推理强度"
+                  className="full-width"
+                  value={connectionCreateDraft.reasoningEffort || undefined}
+                  placeholder="选择推理强度"
+                  options={connectionCreateReasoningEfforts.map(value => ({ value, label: value }))}
+                  onChange={value => updateConnectionCreateDraft('reasoningEffort', value)}
                 />
-                <Text type="secondary">启用时必须同时填写 Endpoint、模型和 Key。</Text>
+              </Col>
+            )}
+            <Col xs={24}>
+              <Text strong>
+                API Key <Text type="danger">*</Text>
+              </Text>
+              <Input.Password
+                aria-label="API Key"
+                value={connectionCreateDraft.apiKey}
+                maxLength={connectionCreateReviewType === standardReviewConnection ? 1024 : 4096}
+                placeholder="请输入 API Key"
+                status={providerCreateError?.includes('API Key') ? 'error' : undefined}
+                onChange={event => updateConnectionCreateDraft('apiKey', event.target.value)}
+              />
+              {providerCreateError?.includes('API Key') && (
+                <Text type="danger" className="review-model-create-field-error">
+                  API Key 为必填项，请输入有效的 Key 以完成创建。
+                </Text>
+              )}
+            </Col>
+            <Col xs={24}>
+              <Space wrap className="review-model-create-tls">
+                <Switch
+                  aria-label="跳过 TLS 证书校验"
+                  checked={connectionCreateDraft.tlsVerify === false}
+                  onChange={checked => updateConnectionCreateDraft('tlsVerify', !checked)}
+                />
+                <Text type={connectionCreateDraft.tlsVerify === false ? 'danger' : 'secondary'}>
+                  跳过 TLS 证书校验（高风险）
+                </Text>
+                <Tooltip title="仅用于受控自签名网关；关闭校验会降低传输安全性。">
+                  <QuestionCircleOutlined />
+                </Tooltip>
               </Space>
             </Col>
           </Row>
-          )}
         </Space>
       </Modal>
       <Modal
@@ -10043,7 +10025,7 @@ function TemplateConfig() {
           )
         }}
         confirmLoading={agentRuntimeDeleting}
-        maskClosable={!agentRuntimeDeleting}
+        mask={{ closable: !agentRuntimeDeleting }}
         keyboard={!agentRuntimeDeleting}
         onOk={deleteCustomAgentRuntime}
         onCancel={() => {
@@ -10084,7 +10066,7 @@ function TemplateConfig() {
           )
         }}
         confirmLoading={providerDeleting}
-        maskClosable={!providerDeleting}
+        mask={{ closable: !providerDeleting }}
         keyboard={!providerDeleting}
         onOk={deleteCustomProvider}
         onCancel={closeDeleteProviderModal}
@@ -10552,21 +10534,25 @@ function RuleGapDashboardPage() {
             onChange={event => updateFilter('signal', event.target.value)}
             onPressEnter={applyFilters}
           />
-          <InputNumber
-            min={1}
-            max={3650}
-            value={filters.recentDays}
-            addonBefore="最近"
-            addonAfter="天"
-            onChange={value => updateFilter('recentDays', value || 30)}
-          />
-          <InputNumber
-            min={1}
-            max={500}
-            value={filters.limit}
-            addonBefore="Limit"
-            onChange={value => updateFilter('limit', value || 50)}
-          />
+          <Space.Compact>
+            <Input className="rule-gap-number-prefix" value="最近" readOnly tabIndex={-1} />
+            <InputNumber
+              min={1}
+              max={3650}
+              value={filters.recentDays}
+              onChange={value => updateFilter('recentDays', value || 30)}
+            />
+            <Input className="rule-gap-number-suffix" value="天" readOnly tabIndex={-1} />
+          </Space.Compact>
+          <Space.Compact>
+            <Input className="rule-gap-number-prefix" value="Limit" readOnly tabIndex={-1} />
+            <InputNumber
+              min={1}
+              max={500}
+              value={filters.limit}
+              onChange={value => updateFilter('limit', value || 50)}
+            />
+          </Space.Compact>
           <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={applyFilters}>筛选</Button>
           <Button onClick={resetFilters}>重置</Button>
         </Space>

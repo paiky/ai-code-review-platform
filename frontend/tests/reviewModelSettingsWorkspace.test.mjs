@@ -32,13 +32,14 @@ test('decouples Provider detail save from Standard default selection', () => {
 
   assert.match(providerSave, /method: 'PUT'/);
   assert.doesNotMatch(providerSave, /set-default/);
-  assert.match(defaultSave, /code-quality-review-providers\/\$\{selectedProviderCode\}\/set-default/);
+  assert.match(defaultSave, /code-quality-review-providers\/\$\{providerCode\}\/set-default/);
   assert.match(defaultSave, /method: 'POST'/);
+  assert.match(appSource, /设为 Standard 当前连接/);
 });
 
 test('keeps dynamic Agent selection, details and budgets on separate mutation paths', () => {
   const runtimeSelection = appSource.slice(
-    appSource.indexOf('const saveDynamicAgentRuntimeSelection = async'),
+    appSource.indexOf('const setCurrentDynamicAgentRuntime = async'),
     appSource.indexOf('const requestDeleteAgentRuntime =')
   );
   const runtimeDetail = appSource.slice(
@@ -51,11 +52,34 @@ test('keeps dynamic Agent selection, details and budgets on separate mutation pa
   );
 
   assert.match(runtimeSelection, /code-quality-agent-runtimes\/\$\{runtime\.runtimeCode\}\/set-current/);
-  assert.match(runtimeSelection, /JSON\.stringify\(\{ enabled: Boolean\(agentSettingsDraft\.enabled\) \}\)/);
+  assert.match(runtimeSelection, /JSON\.stringify\(\{ enabled: Boolean\(enabled\) \}\)/);
   assert.doesNotMatch(runtimeSelection, /selectedRuntime:/);
+  assert.match(appSource, /设为 Agent 当前连接/);
   assert.match(runtimeDetail, /code-quality-agent-runtimes\/\$\{runtime\.runtimeCode\}/);
   assert.match(runtimeDetail, /buildUpdateAgentRuntimeRequest/);
   assert.match(budgetSave, /JSON\.stringify\(\{ budgets: agentSettingsDraft\.budgets \}\)/);
+});
+
+test('keeps the upper runtime cards read-only and moves mutations into connection details', () => {
+  const runtimeCards = appSource.slice(
+    appSource.indexOf('<div className="review-runtime-card-grid">'),
+    appSource.indexOf('<div className="review-connection-workbench">')
+  );
+
+  assert.match(runtimeCards, /<Descriptions\.Item label="当前连接">/);
+  assert.match(runtimeCards, /currentAgentRuntime/);
+  assert.match(runtimeCards, /currentStandardProvider/);
+  assert.doesNotMatch(runtimeCards, /<Select/);
+  assert.doesNotMatch(runtimeCards, /<Switch/);
+  assert.doesNotMatch(runtimeCards, /<Button/);
+});
+
+test('does not use removed Ant Design props that emit console deprecation warnings', () => {
+  assert.doesNotMatch(appSource, /\baddonAfter=/);
+  assert.doesNotMatch(appSource, /\baddonBefore=/);
+  assert.doesNotMatch(appSource, /\bmaskClosable=/);
+  assert.doesNotMatch(appSource, /<Card[^>]*\bbordered=/);
+  assert.match(appSource, /mask=\{\{ closable: !providerCreating \}\}/);
 });
 
 test('protects dirty connection drafts before directory selection changes', () => {
@@ -70,10 +94,10 @@ test('protects dirty connection drafts before directory selection changes', () =
 test('keeps directory rows keyboard-selectable and the three planned layouts bounded', () => {
   assert.match(appSource, /tabIndex: 0/);
   assert.match(appSource, /event\.key === 'Enter' \|\| event\.key === ' '/);
-  assert.match(appSource, /scroll=\{\{ x: 920 \}\}/);
+  assert.match(appSource, /scroll=\{\{ x: 760 \}\}/);
   const directoryColumns = appSource.slice(
     appSource.indexOf('const reviewConnectionColumns = ['),
-    appSource.indexOf('const activeRuntimeType =', appSource.indexOf('const reviewConnectionColumns = ['))
+    appSource.indexOf('const activeRuntimeCode =', appSource.indexOf('const reviewConnectionColumns = ['))
   );
   assert.match(directoryColumns, /title: '操作'/);
   assert.match(directoryColumns, /providerDeleteAvailability\(provider\)/);
@@ -81,6 +105,7 @@ test('keeps directory rows keyboard-selectable and the three planned layouts bou
   assert.match(directoryColumns, /className: 'review-connection-directory-actions'/);
   assert.match(directoryColumns, /icon=\{<DeleteOutlined \/>\}/);
   assert.doesNotMatch(directoryColumns, />\s*详情\s*<\/Button>/);
+  assert.doesNotMatch(directoryColumns, /title: 'Endpoint'/);
   assert.match(styleSource, /grid-template-columns: minmax\(0, 3fr\) minmax\(360px, 2fr\)/);
   assert.match(styleSource, /@media \(max-width: 1199px\)[\s\S]*\.review-connection-workbench[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(styleSource, /@media \(max-width: 760px\)[\s\S]*\.review-runtime-card-grid[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
@@ -89,20 +114,29 @@ test('keeps directory rows keyboard-selectable and the three planned layouts bou
   assert.match(styleSource, /@media \(max-width: 760px\)[\s\S]*\.review-connection-directory-actions[\s\S]*display: none/);
 });
 
-test('creates Agent or Standard connections without selecting defaults or testing connectivity', () => {
+test('creates Agent or Standard connections from Backend presets without client identities', () => {
   const createFlow = appSource.slice(
     appSource.indexOf('const createReviewConnection = async'),
     appSource.indexOf('const closeDeleteProviderModal =')
   );
   assert.match(appSource, /title="新增模型连接"/);
   assert.match(appSource, />\s*新增模型连接\s*<\/Button>/);
-  assert.match(createFlow, /code-quality-agent-runtimes', \{\s*method: 'POST'/);
-  assert.match(createFlow, /code-quality-review-providers', \{\s*method: 'POST'/);
+  assert.match(createFlow, /review-model-connections', \{\s*method: 'POST'/);
+  assert.match(createFlow, /buildReviewModelConnectionRequest\(connectionCreateDraft\)/);
+  assert.doesNotMatch(createFlow, /code-quality-agent-runtimes', \{\s*method: 'POST'/);
+  assert.doesNotMatch(createFlow, /code-quality-review-providers', \{\s*method: 'POST'/);
   assert.match(createFlow, /setSelectedReviewConnectionId\(connectionId\)/);
   assert.match(createFlow, /setSelectedReviewConnectionId\(`AGENT:\$\{created\.runtimeCode\}`\)/);
   assert.match(appSource, /title: '切换 Review 类型并丢弃当前输入？'/);
   assert.match(appSource, /Agent Review'[\s\S]*Standard Review'/);
-  assert.match(appSource, /agentProtocolOptionsForWorkerPool\(agentSettings\?\.workerPool\)\.map/);
+  assert.match(appSource, /fetchApi\('\/api\/review-model-presets\?reviewType=AGENT'\)/);
+  assert.match(appSource, /fetchApi\('\/api\/review-model-presets\?reviewType=STANDARD'\)/);
+  assert.match(appSource, /selectConnectionCreatePreset/);
+  assert.match(appSource, /mode="tags"/);
+  assert.match(appSource, /API Key <Text type="danger">\*<\/Text>/);
+  assert.doesNotMatch(appSource, />Runtime Code<\/Text>/);
+  assert.doesNotMatch(appSource, />Provider Code<\/Text>/);
+  assert.doesNotMatch(appSource, /创建自定义 Standard Provider/);
   assert.doesNotMatch(createFlow, /set-default/);
   assert.doesNotMatch(createFlow, /\/test/);
 });
@@ -168,12 +202,15 @@ test('safe mock exposes only fixed local regression scenarios', () => {
     'AGENT_READ_FAILED',
     'PROVIDERS_READ_FAILED',
     'PROVIDER_DELETE_IN_USE',
+    'NO_WORKER_CAPABILITY',
     'MUTATION_FAILED'
   ].forEach(scenario => assert.match(mockSource, new RegExp(`'${scenario}'`)));
   assert.match(mockSource, /Unsupported safe mock scenario/);
   assert.match(mockSource, /advanceAgentTestScenario\(\)/);
   assert.match(mockSource, /request\.method === 'POST' && url\.pathname === '\/api\/code-quality-review-providers'/);
   assert.match(mockSource, /request\.method === 'POST' && url\.pathname === '\/api\/code-quality-agent-runtimes'/);
+  assert.match(mockSource, /request\.method === 'POST' && url\.pathname === '\/api\/review-model-connections'/);
+  assert.match(mockSource, /url\.pathname === '\/api\/review-model-presets'/);
   assert.match(mockSource, /runtimeTestMatch/);
   assert.match(mockSource, /request\.method === 'DELETE' && providerMatch/);
 });

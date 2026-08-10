@@ -1706,6 +1706,17 @@ body {
   width: 100%;
 }
 
+.agent-budget-field-number {
+  width: calc(100% - 64px);
+}
+
+.agent-budget-field-unit {
+  width: 64px;
+  color: #64748b;
+  text-align: center;
+  pointer-events: none;
+}
+
 .agent-budget-field-meta {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1777,23 +1788,25 @@ body {
   box-shadow: 0 4px 14px rgba(15, 31, 61, 0.04);
 }
 
-.review-runtime-card > .ant-card-body {
-  height: calc(100% - 57px);
+.review-connection-runtime-controls {
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f8fafc;
 }
 
-.review-runtime-card > .ant-card-body > .ant-space {
-  height: 100%;
+.rule-gap-number-prefix {
+  width: 58px;
+  color: #64748b;
+  text-align: center;
+  pointer-events: none;
 }
 
-.review-runtime-card > .ant-card-body > .ant-space > .ant-space-item:last-child {
-  margin-top: auto;
-}
-
-.review-runtime-card-status {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+.rule-gap-number-suffix {
+  width: 42px;
+  color: #64748b;
+  text-align: center;
+  pointer-events: none;
 }
 
 .review-connection-workbench {
@@ -1855,6 +1868,34 @@ body {
   display: none;
 }
 
+.review-model-create-modal .ant-modal-body {
+  max-height: min(72vh, 760px);
+  overflow-y: auto;
+}
+
+.review-model-create-modal .ant-radio-group {
+  display: flex;
+}
+
+.review-model-create-modal .ant-radio-button-wrapper {
+  min-width: 170px;
+  text-align: center;
+}
+
+.review-model-create-help,
+.review-model-create-field-error {
+  display: block;
+  margin-top: 6px;
+}
+
+.review-model-create-divider {
+  margin: 2px 0 0;
+}
+
+.review-model-create-tls {
+  min-height: 36px;
+}
+
 .review-agent-budget-section .agent-budget-grid {
   margin-top: 16px;
 }
@@ -1868,10 +1909,6 @@ body {
 @media (max-width: 760px) {
   .review-runtime-card-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .review-runtime-card-status {
-    align-items: flex-start;
   }
 
   .review-connection-mobile-meta {
@@ -1894,6 +1931,29 @@ body {
     display: flex;
     flex-direction: column;
     gap: 12px;
+  }
+
+  .review-model-create-modal {
+    max-width: calc(100vw - 24px);
+  }
+
+  .review-model-create-modal .ant-modal-content {
+    padding: 18px 16px;
+  }
+
+  .review-model-create-modal .ant-radio-group,
+  .review-model-create-modal .ant-radio-button-wrapper {
+    width: 100%;
+  }
+
+  .review-model-create-modal .ant-modal-footer {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .review-model-create-modal .ant-modal-footer .ant-btn {
+    min-height: 44px;
+    margin-inline-start: 0 !important;
   }
 }
 

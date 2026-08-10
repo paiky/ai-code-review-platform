@@ -134,23 +134,44 @@ def runtime_record_snapshot(record: Any) -> dict[str, Any]:
             "credentialSlot": "DEEPSEEK",
         }
     protocol = str(getattr(record, "protocol", None) or "OPENAI_RESPONSES")
+    runner_type = str(
+        getattr(record, "runner_type", None) or OPENAI_RESPONSES_RUNNER
+    )
     return {
         "runtimeCode": runtime_code,
         "runtimeType": runtime_code,
         "protocol": protocol,
         "wireProtocol": protocol,
-        "runnerType": str(getattr(record, "runner_type", None) or OPENAI_RESPONSES_RUNNER),
+        "runnerType": runner_type,
         "displayName": str(getattr(record, "display_name", None) or CUSTOM_DEFAULT_DISPLAY_NAME),
         "baseUrl": str(getattr(record, "base_url", None) or ""),
         "model": str(getattr(record, "model_name", None) or CUSTOM_DEFAULT_MODEL),
         "reasoningEffort": (
             str(getattr(record, "reasoning_effort", None) or "high")
-            if protocol == "OPENAI_RESPONSES"
+            if protocol == "OPENAI_RESPONSES" or runner_type == CLAUDE_CODE_RUNNER
             else None
         ),
         "tlsVerify": getattr(record, "tls_verify", None) is not False,
         "credentialSlot": f"AGENT_RUNTIME:{runtime_code}",
     }
+
+
+def runtime_provider(snapshot: dict[str, Any]) -> str:
+    runtime_code = str(snapshot.get("runtimeCode") or snapshot.get("runtimeType") or "").upper()
+    runner_type = str(snapshot.get("runnerType") or "").upper()
+    if runtime_code == CUSTOM_RUNTIME:
+        return "CUSTOM_OPENAI"
+    if runtime_code.startswith("AGENT_CUSTOM_"):
+        return "CUSTOM_AGENT"
+    if runtime_code.startswith("AGENT_DEEPSEEK_"):
+        return "DEEPSEEK"
+    if runtime_code.startswith("AGENT_ANTHROPIC_"):
+        return "ANTHROPIC"
+    if runtime_code.startswith("AGENT_OPENAI_"):
+        return "OPENAI"
+    if runtime_code == DEFAULT_RUNTIME or runner_type == CLAUDE_CODE_RUNNER:
+        return "DEEPSEEK"
+    return "CUSTOM_OPENAI"
 
 
 def runtime_snapshot(record: Any) -> dict[str, Any]:

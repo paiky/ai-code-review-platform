@@ -76,9 +76,10 @@ def test_agent_model_presets_include_production_runner_variants(
         "OPENAI_RESPONSES",
         "OPENAI_CHAT_COMPLETIONS",
     ]
-    assert openai_variants[0]["baseUrl"] == "https://api.openai.com/v1/responses"
-    assert openai_variants[1]["baseUrl"] == "https://api.openai.com/v1/chat/completions"
+    assert openai_variants[0]["baseUrl"] == "https://api.openai.com/v1"
+    assert openai_variants[1]["baseUrl"] == "https://api.openai.com/v1"
     assert presets[2]["variants"][0]["protocol"] == "ANTHROPIC_MESSAGES"
+    assert presets[2]["variants"][0]["baseUrl"] == "https://api.anthropic.com/v1"
 
 
 def test_model_presets_require_supported_review_type(client: TestClient) -> None:

@@ -34,6 +34,7 @@ from app.agent_review.runtime import (
     normalize_runtime_type,
     normalize_worker_capabilities,
     runtime_record_snapshot,
+    runtime_provider,
     runtime_review_key,
     runtime_snapshot,
     worker_supports,
@@ -97,12 +98,18 @@ _SCHEMA_ENGINES: set[int] = set()
 _LOGGER = logging.getLogger(__name__)
 _RUNTIME_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,39}$")
 _PROTOCOL_RUNNERS = {
+    "ANTHROPIC_COMPATIBLE": "CLAUDE_CODE",
     "OPENAI_RESPONSES": "OPENAI_RESPONSES_AGENT",
     "OPENAI_CHAT_COMPLETIONS": "OPENAI_CHAT_AGENT",
     "ANTHROPIC_MESSAGES": "ANTHROPIC_MESSAGES_AGENT",
 }
 _OPEN_AGENT_RUNTIME_PROTOCOLS = frozenset(
-    {"OPENAI_RESPONSES", "OPENAI_CHAT_COMPLETIONS", "ANTHROPIC_MESSAGES"}
+    {
+        "ANTHROPIC_COMPATIBLE",
+        "OPENAI_RESPONSES",
+        "OPENAI_CHAT_COMPLETIONS",
+        "ANTHROPIC_MESSAGES",
+    }
 )
 
 
@@ -301,6 +308,76 @@ def create_agent_runtime(db: Session, request: dict[str, Any]) -> dict[str, Any]
     return _agent_runtime_response(runtime, settings=settings, worker_pool=worker_pool)
 
 
+def create_agent_model_connection(db: Session, request: dict[str, Any]) -> dict[str, Any]:
+    from app.code_quality.model_presets import list_review_model_presets
+
+    preset_code = str(request.get("presetCode") or "").strip().upper()
+    preset = next(
+        (
+            item
+            for item in list_review_model_presets("AGENT")
+            if item["presetCode"] == preset_code
+        ),
+        None,
+    )
+    if preset is None:
+        raise AppError(
+            "REVIEW_MODEL_PRESET_NOT_FOUND",
+            f"Agent Review model preset does not exist: {preset_code}",
+            400,
+        )
+    protocol = str(request.get("protocol") or "").strip().upper()
+    matching_variant = next(
+        (
+            item
+            for item in preset["variants"]
+            if str(item.get("protocol") or "").upper() == protocol
+        ),
+        None,
+    )
+    if not preset["custom"] and matching_variant is None:
+        raise AppError(
+            "REVIEW_MODEL_PRESET_PROTOCOL_MISMATCH",
+            f"Protocol {protocol} does not belong to preset {preset_code}",
+            400,
+        )
+    _protocol_runner(protocol)
+    reasoning_effort = request.get("reasoningEffort")
+    supported_efforts = (
+        list(matching_variant.get("reasoningEfforts") or [])
+        if matching_variant is not None
+        else (["low", "medium", "high"] if protocol in {"ANTHROPIC_COMPATIBLE", "OPENAI_RESPONSES"} else [])
+    )
+    if reasoning_effort is None and matching_variant is not None:
+        reasoning_effort = matching_variant.get("defaultReasoningEffort")
+    if reasoning_effort is not None and reasoning_effort not in supported_efforts:
+        raise AppError(
+            "VALIDATION_ERROR",
+            f"reasoningEffort is not supported by protocol {protocol}",
+            400,
+        )
+    runtime_code = _generated_runtime_code(db, str(preset["vendorCode"]))
+    display_name = _generated_runtime_display_name(
+        db,
+        str(preset["vendorName"]),
+        str(request.get("model") or "").strip(),
+    )
+    return create_agent_runtime(
+        db,
+        {
+            "runtimeCode": runtime_code,
+            "displayName": display_name,
+            "protocol": protocol,
+            "baseUrl": request.get("baseUrl"),
+            "model": request.get("model"),
+            "reasoningEffort": reasoning_effort,
+            "tlsVerify": request.get("tlsVerify") is not False,
+            "apiKey": request.get("apiKey"),
+            "enabled": True,
+        },
+    )
+
+
 def update_agent_runtime(
     db: Session,
     runtime_code: str,
@@ -329,10 +406,10 @@ def update_agent_runtime(
     if "model" in request:
         runtime.model_name = str(request.get("model") or "").strip()
     if "reasoningEffort" in request:
-        if runtime.protocol != "OPENAI_RESPONSES":
+        if runtime.protocol not in {"ANTHROPIC_COMPATIBLE", "OPENAI_RESPONSES"}:
             raise AppError(
                 "VALIDATION_ERROR",
-                "reasoningEffort is only supported by OPENAI_RESPONSES",
+                "reasoningEffort is only supported by ANTHROPIC_COMPATIBLE or OPENAI_RESPONSES",
                 400,
             )
         runtime.reasoning_effort = str(request.get("reasoningEffort") or "").lower()
@@ -506,6 +583,46 @@ def _normalize_runtime_code(value: Any) -> str:
     if not _RUNTIME_CODE.fullmatch(runtime_code):
         raise AppError("VALIDATION_ERROR", "runtimeCode is invalid", 400)
     return runtime_code
+
+
+def _generated_runtime_code(db: Session, vendor_code: str) -> str:
+    vendor = re.sub(r"[^A-Z0-9]+", "_", vendor_code.strip().upper()).strip("_")
+    prefix = f"AGENT_{vendor or 'CUSTOM'}"[:27].rstrip("_")
+    for _attempt in range(10):
+        runtime_code = f"{prefix}_{uuid4().hex[:12].upper()}"
+        if db.get(AgentReviewRuntime, runtime_code) is None:
+            return runtime_code
+    raise AppError(
+        "AGENT_RUNTIME_ID_GENERATION_FAILED",
+        "Unable to allocate a unique Agent Runtime identifier",
+        409,
+    )
+
+
+def _generated_runtime_display_name(
+    db: Session,
+    vendor_name: str,
+    model_name: str,
+) -> str:
+    base_name = f"{vendor_name.strip()} · {model_name.strip()}"
+    existing_names = set(
+        db.scalars(select(AgentReviewRuntime.display_name).with_for_update()).all()
+    )
+    first_candidate = base_name[:64]
+    if first_candidate not in existing_names:
+        return first_candidate
+    index = 2
+    while index <= 10_000:
+        suffix = f"（{index}）"
+        candidate = f"{base_name[:64 - len(suffix)]}{suffix}"
+        if candidate not in existing_names:
+            return candidate
+        index += 1
+    raise AppError(
+        "AGENT_RUNTIME_NAME_GENERATION_FAILED",
+        "Unable to allocate a unique Agent Runtime display name",
+        409,
+    )
 
 
 def _protocol_runner(protocol: str) -> str:
@@ -1442,8 +1559,8 @@ def create_agent_job(
         snapshot.get("runtimeCode") or snapshot.get("runtimeType") or DEFAULT_RUNTIME
     ).strip().upper()
     runner_type = str(snapshot.get("runnerType") or "").strip().upper()
-    custom = runtime_code != DEFAULT_RUNTIME
     review_key = runtime_review_key(runtime_code)
+    custom = runtime_code != DEFAULT_RUNTIME
     model = str(snapshot.get("model") or (CUSTOM_DEFAULT_MODEL if custom else AGENT_MODEL))
     input_payload = {**input_payload, "runtimeSnapshot": snapshot}
     job = CodeQualitySchedulerJob(
@@ -1491,7 +1608,7 @@ def create_agent_job(
             else AGENT_RUNNER_VERSION
         ),
         runner_type=runner_type or ("OPENAI_RESPONSES_AGENT" if custom else "CLAUDE_CODE"),
-        provider="CUSTOM_OPENAI" if custom else "DEEPSEEK",
+        provider=runtime_provider(snapshot),
         model=model,
         status="PENDING",
         input_json=json.dumps(input_payload, ensure_ascii=False),

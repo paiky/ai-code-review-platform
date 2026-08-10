@@ -36,17 +36,19 @@ def list_review_model_presets(review_type: str) -> list[dict]:
                 [
                     _variant(
                         "OPENAI_RESPONSES",
-                        settings.openai_responses_url,
+                        _remove_endpoint_suffix(
+                            settings.openai_responses_url,
+                            "/responses",
+                        ),
                         CUSTOM_DEFAULT_MODEL,
                         reasoning_efforts=REASONING_EFFORTS,
                         default_reasoning_effort="high",
                     ),
                     _variant(
                         "OPENAI_CHAT_COMPLETIONS",
-                        _replace_endpoint_suffix(
+                        _remove_endpoint_suffix(
                             settings.openai_responses_url,
                             "/responses",
-                            "/chat/completions",
                         ),
                         CUSTOM_DEFAULT_MODEL,
                     ),
@@ -60,7 +62,10 @@ def list_review_model_presets(review_type: str) -> list[dict]:
                 [
                     _variant(
                         "ANTHROPIC_MESSAGES",
-                        settings.anthropic_messages_url,
+                        _remove_endpoint_suffix(
+                            settings.anthropic_messages_url,
+                            "/messages",
+                        ),
                         settings.anthropic_code_review_model,
                     )
                 ],
@@ -181,8 +186,8 @@ def _variant(
     }
 
 
-def _replace_endpoint_suffix(value: str, old_suffix: str, new_suffix: str) -> str:
+def _remove_endpoint_suffix(value: str, suffix: str) -> str:
     normalized = value.rstrip("/")
-    if normalized.endswith(old_suffix):
-        return f"{normalized[:-len(old_suffix)]}{new_suffix}"
-    return f"{normalized}{new_suffix}"
+    if normalized.endswith(suffix):
+        return normalized[: -len(suffix)]
+    return normalized

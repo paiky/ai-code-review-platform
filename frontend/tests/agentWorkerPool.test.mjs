@@ -31,6 +31,7 @@ test('normalizes registered worker pool counts and safe node fields', () => {
           capacity: 1,
           activeJobId: 8,
           activeRunId: 9,
+          capabilities: ['CLAUDE_CODE_DEEPSEEK', '', 'CLAUDE_CODE_DEEPSEEK'],
           lastHeartbeatAt: '2026-07-29T12:00:00Z',
           online: true,
           source: 'SECRET_SOURCE'
@@ -52,6 +53,7 @@ test('normalizes registered worker pool counts and safe node fields', () => {
   assert.equal(pool.busyCapacity, 1);
   assert.equal(pool.utilizationPercent, 50);
   assert.equal(formatWorkerActivity(pool.nodes[0]), 'Job #8 / Run #9');
+  assert.deepEqual(pool.nodes[0].capabilities, ['CLAUDE_CODE_DEEPSEEK']);
   assert.equal(JSON.stringify(pool).includes('SECRET_SOURCE'), false);
   assert.deepEqual(Object.keys(pool.nodes[0]), [
     'workerId',
@@ -61,6 +63,7 @@ test('normalizes registered worker pool counts and safe node fields', () => {
     'capacity',
     'activeJobId',
     'activeRunId',
+    'capabilities',
     'startedAt',
     'lastHeartbeatAt',
     'online',

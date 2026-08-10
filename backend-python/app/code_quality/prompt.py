@@ -77,23 +77,37 @@ def render_fix_input(request: dict[str, Any]) -> str:
     )
 
 
-def openai_responses_request(model: str, request: dict[str, Any]) -> dict[str, Any]:
-    return {
+def openai_responses_request(
+    model: str,
+    request: dict[str, Any],
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
+    body = {
         "model": model,
         "instructions": render_instructions(request),
         "input": render_input(request),
         "text": {"format": json_schema_format()},
         "store": False,
     }
+    if reasoning_effort:
+        body["reasoning"] = {"effort": reasoning_effort}
+    return body
 
 
-def openai_responses_fix_request(model: str, request: dict[str, Any]) -> dict[str, Any]:
-    return {
+def openai_responses_fix_request(
+    model: str,
+    request: dict[str, Any],
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
+    body = {
         "model": model,
         "instructions": render_fix_instructions(request),
         "input": render_fix_input(request),
         "store": False,
     }
+    if reasoning_effort:
+        body["reasoning"] = {"effort": reasoning_effort}
+    return body
 
 
 def anthropic_messages_request(model: str, request: dict[str, Any]) -> dict[str, Any]:

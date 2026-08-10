@@ -84,7 +84,10 @@ def test_provider_connection(
     try:
         prepared = _provider_connection_request(provider, request)
         started = perf_counter()
-        with _provider_http_client(prepared["timeout_seconds"]) as client:
+        with _provider_http_client(
+            prepared["timeout_seconds"],
+            verify_tls=prepared.get("tls_verify", True),
+        ) as client:
             response = client.post(
                 prepared["endpoint"],
                 json=prepared["body"],
@@ -153,7 +156,11 @@ def _run_openai_responses(
         raise AppError("BAD_REQUEST", validation_error, 400)
     _validation_passed(db, task_id, provider.provider_code, endpoint, model, review_request)
 
-    body = prompt.openai_responses_request(model, review_request)
+    body = prompt.openai_responses_request(
+        model,
+        review_request,
+        provider.reasoning_effort or "high",
+    )
     return _run_json_http_provider(
         db,
         task_id,
@@ -168,6 +175,7 @@ def _run_openai_responses(
             provider,
             settings.openai_code_review_timeout_seconds,
         ),
+        verify_tls=provider.tls_verify is not False,
         output_extractor=_extract_openai_output,
         review_request=review_request,
     )
@@ -203,12 +211,17 @@ def _run_openai_responses_fix(
         response_message="OpenAI API 已返回修复预览响应",
         endpoint=endpoint,
         model=model,
-        body=prompt.openai_responses_fix_request(model, fix_request),
+        body=prompt.openai_responses_fix_request(
+            model,
+            fix_request,
+            provider.reasoning_effort or "high",
+        ),
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         timeout_seconds=_provider_timeout_seconds(
             provider,
             settings.openai_code_review_timeout_seconds,
         ),
+        verify_tls=provider.tls_verify is not False,
         output_extractor=_extract_openai_output,
         request=fix_request,
     )
@@ -256,6 +269,7 @@ def _run_anthropic_messages(
             provider,
             settings.anthropic_code_review_timeout_seconds,
         ),
+        verify_tls=provider.tls_verify is not False,
         output_extractor=_extract_anthropic_output,
         review_request=review_request,
     )
@@ -301,6 +315,7 @@ def _run_anthropic_messages_fix(
             provider,
             settings.anthropic_code_review_timeout_seconds,
         ),
+        verify_tls=provider.tls_verify is not False,
         output_extractor=_extract_anthropic_output,
         request=fix_request,
     )
@@ -343,6 +358,7 @@ def _run_openai_compatible(
         body=body,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         timeout_seconds=_openai_compatible_timeout_seconds(provider),
+        verify_tls=provider.tls_verify is not False,
         output_extractor=_extract_openai_compatible_output,
         review_request=review_request,
     )
@@ -383,6 +399,7 @@ def _run_openai_compatible_fix(
         body=prompt.openai_chat_compatible_fix_request(model, fix_request),
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         timeout_seconds=_openai_compatible_timeout_seconds(provider),
+        verify_tls=provider.tls_verify is not False,
         output_extractor=_extract_openai_compatible_output,
         request=fix_request,
     )
@@ -442,14 +459,23 @@ def _provider_connection_request(
         )
         if validation_error:
             raise ValueError(validation_error)
+        reasoning_effort = _request_value(
+            request,
+            "reasoningEffort",
+            provider.reasoning_effort or "high",
+        )
+        body = {"model": model, "input": "Reply with the single word pong.", "store": False}
+        if reasoning_effort:
+            body["reasoning"] = {"effort": reasoning_effort}
         return {
             "endpoint": endpoint,
             "model": model,
+            "tls_verify": provider.tls_verify is not False,
             "timeout_seconds": _connection_timeout_seconds(
                 request,
                 _provider_timeout_seconds(provider, settings.openai_code_review_timeout_seconds),
             ),
-            "body": {"model": model, "input": "Reply with the single word pong.", "store": False},
+            "body": body,
             "headers": {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             "output_extractor": _extract_openai_output,
         }
@@ -476,6 +502,7 @@ def _provider_connection_request(
         return {
             "endpoint": endpoint,
             "model": model,
+            "tls_verify": provider.tls_verify is not False,
             "timeout_seconds": _connection_timeout_seconds(
                 request,
                 _provider_timeout_seconds(provider, settings.anthropic_code_review_timeout_seconds),
@@ -512,6 +539,7 @@ def _provider_connection_request(
         return {
             "endpoint": endpoint,
             "model": model,
+            "tls_verify": provider.tls_verify is not False,
             "timeout_seconds": _connection_timeout_seconds(
                 request,
                 _openai_compatible_timeout_seconds(provider),
@@ -579,6 +607,7 @@ def _provider_connection_result(
         "providerType": provider.provider_type,
         "endpointUrl": prepared.get("endpoint"),
         "modelName": prepared.get("model"),
+        "tlsVerify": prepared.get("tls_verify", True),
         "status": status,
         "success": status == "SUCCESS",
         "latencyMs": latency_ms,
@@ -608,6 +637,7 @@ def _run_json_http_provider(
     timeout_seconds: int,
     output_extractor: Callable[[str], str],
     review_request: dict[str, Any],
+    verify_tls: bool = True,
 ) -> dict[str, Any]:
     request_json = json.dumps(body, ensure_ascii=False)
     started_at = datetime.now()
@@ -639,7 +669,7 @@ def _run_json_http_provider(
         )
         db.commit()
 
-        with _provider_http_client(timeout_seconds) as client:
+        with _provider_http_client(timeout_seconds, verify_tls=verify_tls) as client:
             response = client.post(endpoint, json=body, headers=headers)
         raw = response.text
         append_progress(
@@ -754,6 +784,7 @@ def _run_text_http_provider(
     timeout_seconds: int,
     output_extractor: Callable[[str], str],
     request: dict[str, Any],
+    verify_tls: bool = True,
 ) -> dict[str, Any]:
     request_json = json.dumps(body, ensure_ascii=False)
     started_at = datetime.now()
@@ -769,7 +800,7 @@ def _run_text_http_provider(
         )
         append_progress(db, task_id, "FIX_HTTP_REQUEST_START", "INFO", "已发起修复预览 Provider HTTP 请求", f"provider={source}, url={endpoint}, model={model}, timeoutSeconds={timeout_seconds}")
         db.commit()
-        with _provider_http_client(timeout_seconds) as client:
+        with _provider_http_client(timeout_seconds, verify_tls=verify_tls) as client:
             response = client.post(endpoint, json=body, headers=headers)
         raw = response.text
         append_progress(
@@ -1130,9 +1161,18 @@ def _provider_error_message(exception: Exception, timeout_seconds: int) -> str:
     return scrub_sensitive(str(exception))
 
 
-def _provider_http_client(timeout_seconds: int) -> httpx.Client:
+def _provider_http_client(
+    timeout_seconds: int,
+    *,
+    verify_tls: bool = True,
+) -> httpx.Client:
     proxy = get_settings().code_quality_review_proxy or None
-    return httpx.Client(timeout=timeout_seconds, proxy=proxy, trust_env=False)
+    return httpx.Client(
+        timeout=timeout_seconds,
+        proxy=proxy,
+        trust_env=False,
+        verify=verify_tls,
+    )
 
 
 def _response_summary(response: httpx.Response, raw: str) -> str:

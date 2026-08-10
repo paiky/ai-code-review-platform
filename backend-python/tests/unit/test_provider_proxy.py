@@ -37,4 +37,5 @@ def test_provider_http_client_uses_only_dedicated_proxy(monkeypatch) -> None:
         "timeout": 45,
         "proxy": "http://provider-proxy:7897",
         "trust_env": False,
+        "verify": True,
     }

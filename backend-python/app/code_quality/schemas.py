@@ -10,6 +10,13 @@ ProviderType = Literal[
 ]
 ReasoningEffort = Literal["low", "medium", "high"]
 ReviewType = Literal["AGENT", "STANDARD"]
+ReviewModelConnectionProtocol = Literal[
+    "ANTHROPIC_COMPATIBLE",
+    "OPENAI_RESPONSES",
+    "OPENAI_CHAT_COMPLETIONS",
+    "OPENAI_CHAT_COMPATIBLE",
+    "ANTHROPIC_MESSAGES",
+]
 
 
 class ReviewModelPresetVariant(BaseModel):
@@ -34,6 +41,41 @@ class ReviewModelPreset(BaseModel):
     variants: list[ReviewModelPresetVariant]
 
 
+class CreateReviewModelConnectionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    review_type: ReviewType = Field(alias="reviewType")
+    preset_code: str = Field(alias="presetCode", min_length=1, max_length=64)
+    protocol: ReviewModelConnectionProtocol
+    base_url: str = Field(alias="baseUrl", min_length=1, max_length=1024)
+    model_name: str = Field(alias="model", min_length=1, max_length=128)
+    reasoning_effort: ReasoningEffort | None = Field(
+        default=None,
+        alias="reasoningEffort",
+    )
+    api_key: str = Field(alias="apiKey", min_length=1, max_length=4096)
+    tls_verify: bool = Field(default=True, alias="tlsVerify")
+
+    @field_validator("review_type", "preset_code", "protocol", mode="before")
+    @classmethod
+    def normalize_uppercase(cls, value: object) -> object:
+        return value.strip().upper() if isinstance(value, str) else value
+
+    @field_validator("base_url", "model_name", "api_key", mode="before")
+    @classmethod
+    def normalize_required_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_reasoning_effort(self) -> "CreateReviewModelConnectionRequest":
+        supported = {"ANTHROPIC_COMPATIBLE", "OPENAI_RESPONSES"}
+        if self.reasoning_effort is not None and self.protocol not in supported:
+            raise ValueError(
+                "reasoningEffort is only supported by ANTHROPIC_COMPATIBLE or OPENAI_RESPONSES"
+            )
+        return self
+
+
 class CreateProviderRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -44,6 +86,7 @@ class CreateProviderRequest(BaseModel):
     model_name: str | None = Field(default=None, alias="modelName", max_length=128)
     timeout_seconds: int | None = Field(default=None, alias="timeoutSeconds", ge=1, le=3600)
     reasoning_effort: ReasoningEffort | None = Field(default=None, alias="reasoningEffort")
+    tls_verify: bool = Field(default=True, alias="tlsVerify")
     api_key: str | None = Field(default=None, alias="apiKey", max_length=1024)
     enabled: bool = False
 

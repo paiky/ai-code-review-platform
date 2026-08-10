@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.agent_review import repository
-from app.agent_review.runtime import DEFAULT_RUNTIME, runtime_review_key
+from app.agent_review.runtime import DEFAULT_RUNTIME, runtime_provider, runtime_review_key
 from app.agent_review_spike.schema import ReviewSchemaError, validate_review_card
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
 from app.code_quality.repository import append_progress, save_result
@@ -67,6 +67,16 @@ def create_runtime(db: Session, request: dict[str, Any]) -> dict[str, Any]:
             f"Agent Runtime already exists: {runtime_code}",
             409,
         ) from exception
+    except Exception:
+        db.rollback()
+        raise
+
+
+def create_model_connection(db: Session, request: dict[str, Any]) -> dict[str, Any]:
+    try:
+        response = repository.create_agent_model_connection(db, request)
+        db.commit()
+        return response
     except Exception:
         db.rollback()
         raise
@@ -163,15 +173,10 @@ def enqueue_agent_review(
     settings_record = repository.assert_agent_available(db, require_worker=False)
     runtime = repository.selected_agent_runtime_snapshot(db)
     runtime_code = str(runtime.get("runtimeCode") or DEFAULT_RUNTIME)
-    custom_runtime = runtime_code != DEFAULT_RUNTIME
     review_key = runtime_review_key(runtime_code)
-    provider = "CUSTOM_OPENAI" if custom_runtime else "DEEPSEEK"
+    provider = runtime_provider(runtime)
     model = str(runtime.get("model") or repository.AGENT_MODEL)
-    display_name = (
-        f"Agent · {runtime.get('displayName') or 'Custom OpenAI Agent'}"
-        if custom_runtime
-        else "Agent · Claude Code + DeepSeek"
-    )
+    display_name = f"Agent · {runtime.get('displayName') or 'Claude Code + DeepSeek'}"
     budgets, _ = repository.effective_agent_budgets(settings_record)
     requested_files = _changed_file_paths(request)
     if not requested_files:
@@ -473,7 +478,9 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         return {"accepted": True, "idempotent": True, "run": repository.run_to_summary(run)}
     input_payload = _json_object(run.input_json)
     runtime_snapshot = (
-        input_payload.get("runtime") if isinstance(input_payload.get("runtime"), dict) else {}
+        input_payload.get("runtimeSnapshot")
+        if isinstance(input_payload.get("runtimeSnapshot"), dict)
+        else {}
     )
     changed_files = ((input_payload.get("case") or {}).get("changedFiles") or [])
     try:
@@ -526,11 +533,7 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         profile_code=task.code_quality_profile_code or "backend-default-ai-review",
         provider=str(run.provider or "DEEPSEEK"),
         model=str(run.model or repository.AGENT_MODEL),
-        display_name=(
-            f"Agent · {runtime_snapshot.get('displayName') or '自定义 OpenAI Agent'}"
-            if str(run.runner_type or "") == "OPENAI_RESPONSES_AGENT"
-            else "Agent · Claude Code + DeepSeek"
-        ),
+        display_name=f"Agent · {runtime_snapshot.get('displayName') or 'Claude Code + DeepSeek'}",
         sort_order=5,
         result=result,
     )

@@ -70,6 +70,7 @@ class CodeQualityModelProvider(Base):
     api_key: Mapped[str | None] = mapped_column(String(1024))
     timeout_seconds: Mapped[int | None] = mapped_column(Integer)
     reasoning_effort: Mapped[str | None] = mapped_column(String(16))
+    tls_verify: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     catalog_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     built_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

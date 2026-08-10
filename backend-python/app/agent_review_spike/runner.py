@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import ipaddress
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -55,6 +56,34 @@ class RunnerConfig:
     max_evidence_calls: int = 10
     converge_at_calls: int = 8
     submit_by_turn: int = 9
+    base_url: str = DEEPSEEK_ANTHROPIC_URL
+    model: str = AGENT_MODEL
+    reasoning_effort: str = "high"
+    tls_verify: bool = True
+
+    def __post_init__(self) -> None:
+        parsed = urlparse(self.base_url)
+        hostname = str(parsed.hostname or "").casefold()
+        if (
+            parsed.scheme != "https"
+            or not hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.port not in {None, 443}
+        ):
+            raise ValueError("Claude Code base URL must be a safe HTTPS URL")
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("Claude Code base URL must not use an IP address")
+        if not self.model.strip() or len(self.model.strip()) > 128:
+            raise ValueError("Claude Code model is invalid")
+        if self.reasoning_effort not in {"low", "medium", "high"}:
+            raise ValueError("Claude Code reasoning effort is invalid")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -262,7 +291,7 @@ def _run_candidate(
             }
             mcp_path.write_text(json.dumps(mcp_config), encoding="utf-8")
             command = _claude_command(case, mcp_path, config)
-            environment = _candidate_environment(api_key, home)
+            environment = _candidate_environment(api_key, home, config)
             progress_state: dict[str, Any] = {"sequence": -1, "phase": None}
             _notify_progress_callback(
                 progress_callback,
@@ -393,7 +422,7 @@ def _claude_command(
         "--max-turns",
         str(config.max_turns),
         "--model",
-        AGENT_MODEL,
+        config.model,
         "--mcp-config",
         str(mcp_path),
         "--strict-mcp-config",
@@ -462,26 +491,32 @@ def _split_diff_by_file(case: dict[str, Any]) -> dict[str, str]:
     return {path: "\n".join(lines) for path, lines in result.items()}
 
 
-def _candidate_environment(api_key: str, home: Path) -> dict[str, str]:
+def _candidate_environment(
+    api_key: str,
+    home: Path,
+    config: RunnerConfig | None = None,
+) -> dict[str, str]:
+    effective_config = config or RunnerConfig()
     result = {
         "PATH": os.environ.get("PATH", ""),
         "HOME": str(home),
         "CLAUDE_CONFIG_DIR": str(home / ".claude"),
         "LANG": os.environ.get("LANG", "C.UTF-8"),
-        "ANTHROPIC_BASE_URL": DEEPSEEK_ANTHROPIC_URL,
+        "ANTHROPIC_BASE_URL": effective_config.base_url.rstrip("/"),
         "ANTHROPIC_AUTH_TOKEN": api_key,
-        "ANTHROPIC_MODEL": AGENT_MODEL,
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": AGENT_MODEL,
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": AGENT_MODEL,
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
-        # DeepSeek 会把 Claude Code 类请求自动识别为 max，标准 Agent Review 必须显式固定 high。
-        "CLAUDE_CODE_EFFORT_LEVEL": "high",
+        "ANTHROPIC_MODEL": effective_config.model,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": effective_config.model,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": effective_config.model,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": effective_config.model,
+        "CLAUDE_CODE_EFFORT_LEVEL": effective_config.reasoning_effort,
         "DISABLE_AUTOUPDATER": "1",
         "DISABLE_TELEMETRY": "1",
         "DISABLE_ERROR_REPORTING": "1",
         "DISABLE_BUG_COMMAND": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     }
+    if not effective_config.tls_verify:
+        result["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
     for proxy_variable in (
         "HTTP_PROXY",
         "HTTPS_PROXY",

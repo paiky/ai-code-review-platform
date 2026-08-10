@@ -208,6 +208,11 @@ function normalizeWorkerNode(value) {
     capacity: value.capacity === 1 ? 1 : 0,
     activeJobId: safePositiveInteger(value.activeJobId),
     activeRunId: safePositiveInteger(value.activeRunId),
+    capabilities: Array.from(new Set(
+      (Array.isArray(value.capabilities) ? value.capabilities : [])
+        .map(item => safeText(item, 64))
+        .filter(Boolean)
+    )),
     startedAt: safeText(value.startedAt, 64),
     lastHeartbeatAt: safeText(value.lastHeartbeatAt, 64),
     online: value.online === true,
