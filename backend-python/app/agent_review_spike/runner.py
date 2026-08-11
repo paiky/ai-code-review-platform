@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import signal
 import subprocess
 import sys
@@ -324,6 +325,17 @@ def _run_candidate(
                         error_code="AGENT_CANCELLED",
                         audit=audit,
                     )
+                audit = _load_safe_audit_snapshot(audit_path)
+                if _audit_requests_schema_termination(audit):
+                    _terminate_process_group(process)
+                    _notify_progress_callback(progress_callback, audit, progress_state)
+                    return execution_summary(
+                        case,
+                        status="FAILED",
+                        duration_ms=_duration_ms(started),
+                        error_code="AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED",
+                        audit=audit,
+                    )
                 remaining = deadline - perf_counter()
                 if remaining <= 0:
                     _terminate_process_group(process)
@@ -343,13 +355,44 @@ def _run_candidate(
                     break
                 except subprocess.TimeoutExpired:
                     prompt_input = None
-                    _notify_progress_callback(
-                        progress_callback,
-                        _load_safe_audit_snapshot(audit_path),
-                        progress_state,
-                    )
+                    audit = _load_safe_audit_snapshot(audit_path)
+                    _notify_progress_callback(progress_callback, audit, progress_state)
+                    if cancel_event is not None and cancel_event.is_set():
+                        _terminate_process_group(process)
+                        return execution_summary(
+                            case,
+                            status="FAILED",
+                            duration_ms=_duration_ms(started),
+                            error_code="AGENT_CANCELLED",
+                            audit=audit,
+                        )
+                    if _audit_requests_schema_termination(audit):
+                        _terminate_process_group(process)
+                        return execution_summary(
+                            case,
+                            status="FAILED",
+                            duration_ms=_duration_ms(started),
+                            error_code="AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED",
+                            audit=audit,
+                        )
             audit = _load_safe_audit_snapshot(audit_path)
             _notify_progress_callback(progress_callback, audit, progress_state)
+            if cancel_event is not None and cancel_event.is_set():
+                return execution_summary(
+                    case,
+                    status="FAILED",
+                    duration_ms=_duration_ms(started),
+                    error_code="AGENT_CANCELLED",
+                    audit=audit,
+                )
+            if _audit_requests_schema_termination(audit):
+                return execution_summary(
+                    case,
+                    status="FAILED",
+                    duration_ms=_duration_ms(started),
+                    error_code="AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED",
+                    audit=audit,
+                )
             session = _parse_claude_session(stdout)
             if process.returncode != 0:
                 return execution_summary(
@@ -739,6 +782,18 @@ def _sanitize_audit_snapshot(value: Any) -> dict[str, Any]:
         error_code = str(raw_event.get("errorCode") or "")
         if error_code and error_code.replace("_", "").isalnum():
             event["errorCode"] = error_code[:80]
+        if tool == "submit_review":
+            event["attempt"] = _bounded_non_negative(raw_event.get("attempt"), 3)
+            event["maxAttempts"] = 3
+            event["violations"] = _safe_schema_failures(
+                raw_event.get("violations")
+            )
+            event["violationCount"] = _bounded_non_negative(
+                raw_event.get("violationCount"), 50
+            )
+            event["violationsTruncated"] = bool(
+                raw_event.get("violationsTruncated")
+            )
         query_hash = str(raw_event.get("queryHash") or "")
         if len(query_hash) == 16 and all(character in "0123456789abcdef" for character in query_hash):
             event["queryHash"] = query_hash
@@ -747,6 +802,20 @@ def _sanitize_audit_snapshot(value: Any) -> dict[str, Any]:
     review_submitted = bool(source.get("reviewSubmitted"))
     review_budget = _safe_review_budget(source.get("reviewBudget"))
     phase = _audit_phase(events, review_submitted, review_budget)
+    submit_attempt_count = _bounded_non_negative(source.get("submitAttemptCount"), 3)
+    schema_failure_count = _bounded_non_negative(source.get("schemaFailureCount"), 3)
+    output_repair_exhausted = bool(source.get("outputRepairExhausted"))
+    output_termination_requested = bool(source.get("outputTerminationRequested"))
+    last_schema_failures = _safe_schema_failures(source.get("lastSchemaFailures"))
+    failure_chain: list[dict[str, Any]] = []
+    if schema_failure_count:
+        failure_chain.append(
+            {"code": "REVIEW_SCHEMA_INVALID", "count": schema_failure_count}
+        )
+    if output_repair_exhausted:
+        failure_chain.append(
+            {"code": "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED", "count": 1}
+        )
     return {
         "phase": phase,
         "toolCallCount": _bounded_non_negative(
@@ -768,10 +837,51 @@ def _sanitize_audit_snapshot(value: Any) -> dict[str, Any]:
             source.get("blockedAccessCount"), AGENT_BUDGET_LIMITS["maxToolCalls"]["max"]
         ),
         "reviewSubmitted": review_submitted,
+        "submitAttemptCount": submit_attempt_count,
+        "schemaFailureCount": schema_failure_count,
+        "lastSchemaFailures": last_schema_failures,
+        "outputRepairExhausted": output_repair_exhausted,
+        "outputTerminationRequested": output_termination_requested,
+        "failureChain": failure_chain,
         "reviewBudget": review_budget,
         "topPathSummaries": _safe_path_summaries(source.get("topPathSummaries"), 20),
         "events": events,
     }
+
+
+def _audit_requests_schema_termination(audit: dict[str, Any]) -> bool:
+    return bool(
+        audit.get("outputRepairExhausted")
+        and audit.get("outputTerminationRequested")
+    )
+
+
+def _safe_schema_failures(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    allowed_reasons = {
+        "REQUIRED",
+        "TYPE",
+        "ENUM",
+        "UNSAFE_PATH",
+        "PATH_OUTSIDE_CHANGED_FILES",
+        "LINE_RANGE",
+        "LENGTH",
+        "CARD_SHAPE",
+    }
+    failures: list[dict[str, str]] = []
+    for raw in value[:5]:
+        if not isinstance(raw, dict):
+            continue
+        reason_code = str(raw.get("reasonCode") or "")
+        field = str(raw.get("field") or "")[:120]
+        if reason_code not in allowed_reasons or not re.fullmatch(
+            r"\$|[A-Za-z][A-Za-z0-9]*(?:\[\d+\]|\.[A-Za-z][A-Za-z0-9]*)*",
+            field,
+        ):
+            continue
+        failures.append({"reasonCode": reason_code, "field": field})
+    return failures
 
 
 def _notify_progress_callback(

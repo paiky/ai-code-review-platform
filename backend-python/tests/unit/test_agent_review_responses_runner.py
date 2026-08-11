@@ -136,6 +136,31 @@ def test_responses_runner_replays_reasoning_and_completes_three_tool_rounds(work
     assert "unsafe_detail" not in safe_text
 
 
+def test_responses_runner_stops_after_third_schema_failure_without_next_model_turn(
+    worktree,
+):
+    invalid = {"summary": "missing fields"}
+    transport = ScriptedTransport(
+        [
+            _response(
+                turn,
+                _reasoning(turn),
+                _call(turn, "submit_review", invalid),
+            )
+            for turn in range(1, 5)
+        ]
+    )
+
+    result = OpenAIResponsesAgentRunner(transport).run(_case(), worktree)
+
+    assert result["status"] == "FAILED"
+    assert result["errorCode"] == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED"
+    assert len(transport.payloads) == 3
+    assert result["toolAudit"]["submitAttemptCount"] == 3
+    assert result["toolAudit"]["schemaFailureCount"] == 3
+    assert result["toolAudit"]["outputRepairExhausted"] is True
+
+
 def test_responses_runner_pages_diff_above_inline_budget(worktree):
     budgets = dict(DEFAULT_AGENT_BUDGETS)
     budgets["inlineDiffBytes"] = 10_000

@@ -32,6 +32,7 @@ SAFE_ERROR_MESSAGES = {
     "AGENT_MAX_TURNS_EXCEEDED": "Agent Review 已达到最大决策回合数",
     "AGENT_SUBMIT_DEADLINE_EXCEEDED": "Agent Review 未在规定回合进入提交阶段",
     "AGENT_REVIEW_NOT_SUBMITTED": "Agent Review 未调用 submit_review",
+    "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED": "Review Card 结构修正已达到安全上限",
 }
 
 
@@ -248,9 +249,7 @@ class OpenAIChatCompletionsAgentRunner:
                             )
                         arguments = _parse_tool_arguments(function["arguments"])
                         result = executor.execute(tool_name, arguments)
-                        audit = executor.budget.summary() | {
-                            "reviewSubmitted": executor.submitted
-                        }
+                        audit = executor.audit_summary()
                         messages.append(
                             {
                                 "role": "tool",
@@ -263,6 +262,12 @@ class OpenAIChatCompletionsAgentRunner:
                             }
                         )
                         self._notify_progress(progress_callback, executor)
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise ChatCompletionsAgentError("AGENT_CANCELLED")
+                        if executor.output_repair_exhausted:
+                            raise ChatCompletionsAgentError(
+                                "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED"
+                            )
                         if executor.submitted:
                             return _safe_summary(
                                 status="SUCCESS",
@@ -372,7 +377,7 @@ class OpenAIChatCompletionsAgentRunner:
         if callback is None:
             return
         try:
-            callback(executor.budget.summary() | {"reviewSubmitted": executor.submitted})
+            callback(executor.audit_summary())
         except Exception:
             return
 

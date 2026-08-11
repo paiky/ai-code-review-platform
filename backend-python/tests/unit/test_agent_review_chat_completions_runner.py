@@ -191,6 +191,54 @@ def test_chat_runner_reports_evidence_budget_exhaustion_then_allows_submit(workt
     )
 
 
+def test_chat_runner_stops_after_third_schema_failure_without_next_model_turn(worktree):
+    invalid = {"summary": "missing fields"}
+    transport = ScriptedTransport(
+        [
+            _response(turn, _call(f"call-{turn}", "submit_review", invalid))
+            for turn in range(1, 5)
+        ]
+    )
+
+    result = OpenAIChatCompletionsAgentRunner(transport).run(_case(), worktree)
+
+    assert result["status"] == "FAILED"
+    assert result["errorCode"] == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED"
+    assert len(transport.payloads) == 3
+    assert result["toolAudit"]["submitAttemptCount"] == 3
+    assert result["toolAudit"]["schemaFailureCount"] == 3
+    assert result["toolAudit"]["outputTerminationRequested"] is True
+    assert result["toolAudit"]["failureChain"][-1]["code"] == (
+        "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED"
+    )
+
+
+def test_chat_runner_cancellation_has_priority_over_schema_exhaustion(worktree):
+    cancelled = Event()
+    transport = ScriptedTransport(
+        [
+            _response(
+                turn,
+                _call(f"call-{turn}", "submit_review", {"summary": "missing"}),
+            )
+            for turn in range(1, 4)
+        ]
+    )
+
+    def cancel_when_exhausted(audit):
+        if audit.get("outputRepairExhausted"):
+            cancelled.set()
+
+    result = OpenAIChatCompletionsAgentRunner(transport).run(
+        _case(),
+        worktree,
+        cancel_event=cancelled,
+        progress_callback=cancel_when_exhausted,
+    )
+
+    assert result["errorCode"] == "AGENT_CANCELLED"
+
+
 def test_chat_runner_cancels_before_network(worktree):
     cancelled = Event()
     cancelled.set()

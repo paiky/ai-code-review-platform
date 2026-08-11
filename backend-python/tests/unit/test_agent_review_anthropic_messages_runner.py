@@ -120,6 +120,27 @@ def test_messages_runner_continues_tool_results_and_submits_review(worktree):
     assert "unsafe_detail" not in serialized
 
 
+def test_messages_runner_stops_after_third_schema_failure_without_next_model_turn(
+    worktree,
+):
+    invalid = {"summary": "missing fields"}
+    transport = ScriptedTransport(
+        [
+            _message(turn, _tool_use(f"tool-{turn}", "submit_review", invalid))
+            for turn in range(1, 5)
+        ]
+    )
+
+    result = AnthropicMessagesAgentRunner(transport).run(_case(), worktree)
+
+    assert result["status"] == "FAILED"
+    assert result["errorCode"] == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED"
+    assert len(transport.payloads) == 3
+    assert result["toolAudit"]["submitAttemptCount"] == 3
+    assert result["toolAudit"]["schemaFailureCount"] == 3
+    assert result["toolAudit"]["outputRepairExhausted"] is True
+
+
 @pytest.mark.parametrize(
     "bad_response",
     [

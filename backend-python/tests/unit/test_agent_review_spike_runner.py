@@ -285,10 +285,13 @@ class _FakeClaudeProcess:
         self.result_path = Path(environment["REVIEW_RESULT_PATH"])
         self.audit_path = Path(environment["REVIEW_AUDIT_PATH"])
         self.mode = mode
-        self.returncode = 1 if mode == "max-turns" else 0
+        self.returncode = 1 if mode in {"max-turns", "schema-exhausted"} else 0
         self.pid = 12345
+        self.communicate_calls = 0
+        self.terminated = False
 
     def communicate(self, input=None, timeout=None):
+        self.communicate_calls += 1
         self.audit_path.write_text(
             json.dumps(
                 {
@@ -298,6 +301,15 @@ class _FakeClaudeProcess:
                     "diffBytesReturned": 0,
                     "blockedAccessCount": 0,
                     "reviewSubmitted": self.mode == "success",
+                    "submitAttemptCount": 3 if "schema" in self.mode else 0,
+                    "schemaFailureCount": 3 if "schema" in self.mode else 0,
+                    "lastSchemaFailures": (
+                        [{"reasonCode": "REQUIRED", "field": "summary"}]
+                        if "schema" in self.mode
+                        else []
+                    ),
+                    "outputRepairExhausted": "schema" in self.mode,
+                    "outputTerminationRequested": "schema" in self.mode,
                     "reviewBudget": {
                         "phase": "DISCOVERY",
                         "evidenceCallsUsed": 0,
@@ -308,8 +320,8 @@ class _FakeClaudeProcess:
                     "events": [
                         {
                             "sequence": 1,
-                            "tool": "submit_review" if self.mode == "success" else "list_files",
-                            "status": "SUCCESS",
+                            "tool": "submit_review" if self.mode in {"success", "schema-exhausted", "schema-poll"} else "list_files",
+                            "status": "FAILED" if "schema" in self.mode else "SUCCESS",
                             "durationMs": 1,
                             "itemCount": 0,
                             "sourceBytes": 0,
@@ -327,6 +339,8 @@ class _FakeClaudeProcess:
             ),
             encoding="utf-8",
         )
+        if self.mode == "schema-poll":
+            raise subprocess.TimeoutExpired("claude", timeout or 5)
         if self.mode == "success":
             self.result_path.write_text(
                 json.dumps(
@@ -336,8 +350,8 @@ class _FakeClaudeProcess:
             )
         event = {
             "type": "result",
-            "subtype": "error_max_turns" if self.mode == "max-turns" else "success",
-            "is_error": self.mode == "max-turns",
+            "subtype": "error_max_turns" if self.mode in {"max-turns", "schema-exhausted"} else "success",
+            "is_error": self.mode in {"max-turns", "schema-exhausted"},
             "session_id": "safe-session",
             "num_turns": 13 if self.mode == "max-turns" else 2,
             "usage": {"input_tokens": 1},
@@ -346,7 +360,21 @@ class _FakeClaudeProcess:
         return json.dumps(event), "discarded stderr"
 
     def poll(self):
+        if self.mode == "schema-poll" and not self.terminated:
+            return None
         return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = -15
+
+    def wait(self, timeout=None):
+        del timeout
+        return self.returncode
+
+    def kill(self):
+        self.terminated = True
+        self.returncode = -9
 
 
 def test_runner_passes_custom_evidence_budget_to_mcp(tmp_path, monkeypatch):
@@ -458,3 +486,42 @@ def test_runner_turn_exhaustion_keeps_stable_failure(tmp_path, monkeypatch):
 
     assert summary["status"] == "FAILED"
     assert summary["errorCode"] == "AGENT_MAX_TURNS_EXCEEDED"
+
+
+def test_runner_schema_exhaustion_overrides_natural_max_turns(tmp_path, monkeypatch):
+    summary = _run_with_fake_process(tmp_path, monkeypatch, "schema-exhausted")
+
+    assert summary["status"] == "FAILED"
+    assert summary["errorCode"] == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED"
+    assert summary["toolAudit"]["failureChain"] == [
+        {"code": "REVIEW_SCHEMA_INVALID", "count": 3},
+        {"code": "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED", "count": 1},
+    ]
+    assert _failure_message("AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED") == (
+        "Review Card schema repair attempts reached the safety limit"
+    )
+
+
+def test_runner_terminates_within_poll_cycle_after_schema_exhaustion(
+    tmp_path, monkeypatch
+):
+    process = None
+
+    def factory(command, **_kwargs):
+        nonlocal process
+        process = _FakeClaudeProcess(command, mode="schema-poll")
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", factory)
+
+    summary = _run_candidate(
+        _manifest()["cases"][0],
+        tmp_path,
+        "fake-key",
+        RunnerConfig(),
+    )
+
+    assert summary["errorCode"] == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED"
+    assert process is not None
+    assert process.communicate_calls == 1
+    assert process.terminated is True

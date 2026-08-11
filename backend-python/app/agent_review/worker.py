@@ -658,6 +658,8 @@ def _failure_message(error_code: str) -> str:
         return "Agent Review rejected an invalid runtime budget contract"
     if error_code == "AGENT_MAX_TURNS_EXCEEDED":
         return "Agent Review reached the turn budget before submitting a Review Card"
+    if error_code == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED":
+        return "Review Card schema repair attempts reached the safety limit"
     if error_code == "AGENT_CLI_FAILED":
         return "Claude CLI exited with a non-zero status before submitting a Review Card"
     if error_code == "AGENT_WORKER_ERROR":

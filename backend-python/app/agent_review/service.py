@@ -742,6 +742,7 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
     failure_code = str(request.get("failureCode") or "AGENT_RUN_FAILED")[:64]
     failure_message = str(request.get("failureMessage") or "Agent Review failed")[:1024]
     run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
+    safe_audit = repository.sanitize_agent_audit(run_summary.get("audit"))
     _persist_agent_trace_safely(
         db,
         run,
@@ -760,6 +761,27 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
         failure_message=failure_message,
         clear_input=cancelled,
     )
+    if failure_code == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED":
+        append_progress(
+            db,
+            run.task_id,
+            "AGENT_OUTPUT_CONVERGENCE_FAILED",
+            "WARN",
+            "Review Card 结构修正已达到安全上限",
+            json.dumps(
+                {
+                    "runId": int(run.id),
+                    "claimAttempt": claim_attempt,
+                    "failureCode": failure_code,
+                    "submitAttemptCount": safe_audit.get("submitAttemptCount", 0),
+                    "schemaFailureCount": safe_audit.get("schemaFailureCount", 0),
+                    "lastSchemaFailures": safe_audit.get("lastSchemaFailures") or [],
+                    "failureChain": safe_audit.get("failureChain") or [],
+                },
+                ensure_ascii=False,
+            ),
+            review_key=run.review_key,
+        )
     append_progress(
         db,
         run.task_id,
@@ -770,6 +792,7 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
             {
                 **repository.run_to_summary(run),
                 "claimAttempt": claim_attempt,
+                "failureChain": safe_audit.get("failureChain") or [],
             },
             ensure_ascii=False,
         ),
@@ -858,6 +881,35 @@ def _persist_agent_trace_safely(
             }
             if event.get("errorCode"):
                 detail["errorCode"] = event["errorCode"]
+            if str(event.get("tool") or "") == "submit_review":
+                detail.update(
+                    {
+                        "attempt": event.get("attempt", 0),
+                        "maxAttempts": event.get("maxAttempts", 3),
+                        "violations": event.get("violations") or [],
+                        "violationCount": event.get("violationCount", 0),
+                        "violationsTruncated": bool(
+                            event.get("violationsTruncated")
+                        ),
+                    }
+                )
+            if str(event.get("tool") or "") == "submit_review":
+                append_progress(
+                    db,
+                    int(locked_run.task_id),
+                    "AGENT_SUBMITTING",
+                    "INFO",
+                    "Agent 正在提交 Review Card",
+                    json.dumps(
+                        {
+                            **detail,
+                            "status": "STARTED",
+                            "submitAttemptCount": event.get("attempt", 0),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    review_key=locked_run.review_key,
+                )
             append_progress(
                 db,
                 int(locked_run.task_id),
@@ -1007,6 +1059,13 @@ def _safe_heartbeat_sequence(value: Any) -> int | None:
 def _agent_trace_phase_and_message(event: dict[str, Any]) -> tuple[str, str]:
     tool = str(event.get("tool") or "")
     budget_phase = str((event.get("reviewBudget") or {}).get("phase") or "")
+    if tool == "submit_review" and event.get("status") == "SUCCESS":
+        return "AGENT_REVIEW_SUBMITTED", "Agent 已提交 Review Card"
+    if (
+        tool == "submit_review"
+        and event.get("errorCode") == "REVIEW_SCHEMA_INVALID"
+    ):
+        return "AGENT_SUBMIT_VALIDATION_FAILED", "Review Card 结构校验失败"
     if tool == "submit_review" or budget_phase == "SUBMIT":
         return "AGENT_SUBMITTING", "Agent 正在提交 Review Card"
     if budget_phase == "CONVERGE":

@@ -105,13 +105,41 @@ def test_backend_agent_audit_whitelist_caps_events_and_drops_raw_content() -> No
         for sequence in range(1, 62)
     ]
 
-    safe = sanitize_agent_audit(_trace_audit(events))
+    raw_audit = _trace_audit(events)
+    raw_audit.update(
+        {
+            "submitAttemptCount": 999,
+            "schemaFailureCount": 999,
+            "lastSchemaFailures": [
+                {"reasonCode": "REQUIRED", "field": "findings[0].title"},
+                {
+                    "reasonCode": "SECRET_REASON",
+                    "field": "SECRET_FIELD_VALUE",
+                    "value": "SECRET_CARD_VALUE",
+                },
+            ],
+            "outputRepairExhausted": True,
+            "outputTerminationRequested": True,
+            "failureChain": [{"code": "SECRET_CHAIN", "count": 999}],
+        }
+    )
+    safe = sanitize_agent_audit(raw_audit)
     text = json.dumps(safe, ensure_ascii=False)
 
     assert len(safe["events"]) == 60
     assert "SECRET_" not in text
     assert "D:/private" not in text
     assert '"query"' not in text
+    assert safe["submitAttemptCount"] == 3
+    assert safe["schemaFailureCount"] == 3
+    assert safe["lastSchemaFailures"] == [
+        {"reasonCode": "REQUIRED", "field": "findings[0].title"}
+    ]
+    assert safe["failureChain"] == [
+        {"code": "REVIEW_SCHEMA_INVALID", "count": 3},
+        {"code": "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED", "count": 1},
+    ]
+    assert "SECRET_" not in text
 
 
 def test_agent_settings_encrypt_mask_replace_and_clear(
@@ -1890,6 +1918,7 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
             "AGENT_TOOL_ACTIVITY",
             "AGENT_CONVERGING",
             "AGENT_SUBMITTING",
+            "AGENT_REVIEW_SUBMITTED",
         }
     ]
     assert [event["phase"] for event in trace] == [
@@ -1897,6 +1926,7 @@ def test_agent_trace_is_incremental_idempotent_and_sanitized(
         "AGENT_TOOL_ACTIVITY",
         "AGENT_CONVERGING",
         "AGENT_SUBMITTING",
+        "AGENT_REVIEW_SUBMITTED",
     ]
     heartbeats = [
         event
@@ -2018,6 +2048,111 @@ def test_worker_failure_records_explicit_standard_fallback(
         for event in list_progress(db_session, 299)
         if event["phase"] in {"AGENT_ANALYZING", "AGENT_TOOL_ACTIVITY"}
     ] == ["AGENT_ANALYZING", "AGENT_TOOL_ACTIVITY"]
+
+
+def test_schema_retry_exhaustion_persists_safe_failure_chain_and_progress(
+    client: TestClient, db_session: Session, monkeypatch
+) -> None:
+    _encryption_key, token = _configure(monkeypatch)
+    scheduled: list[int] = []
+    monkeypatch.setattr(
+        "app.code_quality.service.schedule_agent_standard_fallback",
+        lambda _db, run_id: scheduled.append(run_id),
+    )
+    client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={"enabled": True, "apiKey": "sk-agent-secret-123456"},
+    )
+    client.post(
+        "/internal/agent-review/workers/heartbeat",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-schema"},
+    )
+    run = create_agent_job(
+        db_session,
+        task_id=1299,
+        project_id=100,
+        input_payload={
+            "worktree": "worktrees/1299/head",
+            "case": {"changedFiles": ["src/a.py"], "diff": "+x"},
+        },
+        completion_context={},
+        comparison_mode=False,
+    )
+    db_session.commit()
+    job = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers=_worker_headers(token),
+        json={"workerId": "worker-schema"},
+    ).json()["data"]
+    budget = {
+        "phase": "SUBMIT",
+        "evidenceCallsUsed": 10,
+        "evidenceCallsRemaining": 0,
+        "sourceBytesRemaining": 100,
+        "mustSubmit": True,
+    }
+    audit = _trace_audit(
+        [
+            {
+                "sequence": sequence,
+                "tool": "submit_review",
+                "status": "FAILED",
+                "durationMs": 1,
+                "itemCount": 0,
+                "sourceBytes": 0,
+                "pathSummary": [],
+                "reviewBudget": budget,
+                "errorCode": "REVIEW_SCHEMA_INVALID",
+            }
+            for sequence in range(1, 4)
+        ]
+    )
+    audit.update(
+        {
+            "reviewSubmitted": False,
+            "submitAttemptCount": 3,
+            "schemaFailureCount": 3,
+            "lastSchemaFailures": [
+                {"reasonCode": "REQUIRED", "field": "findings[0].title"}
+            ],
+            "outputRepairExhausted": True,
+            "outputTerminationRequested": True,
+        }
+    )
+
+    failed = client.post(
+        f"/internal/agent-review/jobs/{job['jobId']}/fail",
+        headers=_worker_headers(token),
+        json={
+            "workerId": "worker-schema",
+            "claimAttempt": job["claimAttempt"],
+            "idempotencyKey": job["idempotencyKey"],
+            "failureCode": "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED",
+            "failureMessage": "safe convergence failure",
+            "runSummary": {"audit": audit},
+        },
+    )
+
+    assert failed.status_code == 200
+    db_session.refresh(run)
+    assert run.failure_code == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED"
+    assert run.effective_engine == "STANDARD_FALLBACK"
+    assert scheduled == [run.id]
+    stored = json.loads(run.tool_summary_json or "{}")
+    assert stored["failureChain"] == [
+        {"code": "REVIEW_SCHEMA_INVALID", "count": 3},
+        {"code": "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED", "count": 1},
+    ]
+    progress = list_progress(db_session, 1299)
+    phases = [event["phase"] for event in progress]
+    assert phases.count("AGENT_SUBMITTING") == 3
+    assert phases.count("AGENT_SUBMIT_VALIDATION_FAILED") == 3
+    assert "AGENT_OUTPUT_CONVERGENCE_FAILED" in phases
+    assert phases[-1] == "AGENT_FALLBACK"
+    progress_text = json.dumps(progress, ensure_ascii=False)
+    assert "SECRET_" not in progress_text
+    assert "safe convergence failure" not in progress_text
 
 
 def test_offline_worker_queue_grace_expires_to_explicit_fallback(db_session: Session) -> None:

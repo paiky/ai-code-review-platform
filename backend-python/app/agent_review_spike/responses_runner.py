@@ -33,6 +33,7 @@ SAFE_ERROR_MESSAGES = {
     "AGENT_MAX_TURNS_EXCEEDED": "Agent Review 已达到最大决策回合数",
     "AGENT_SUBMIT_DEADLINE_EXCEEDED": "Agent Review 未在规定回合进入提交阶段",
     "AGENT_REVIEW_NOT_SUBMITTED": "Agent Review 未调用 submit_review",
+    "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED": "Review Card 结构修正已达到安全上限",
 }
 
 
@@ -243,9 +244,7 @@ class OpenAIResponsesAgentRunner:
                             raise ResponsesAgentError("AGENT_CUSTOM_TOOL_CALL_INVALID")
                         arguments = _parse_tool_arguments(item.get("arguments"))
                         result = executor.execute(name, arguments)
-                        audit = executor.budget.summary() | {
-                            "reviewSubmitted": executor.submitted
-                        }
+                        audit = executor.audit_summary()
                         history.append(
                             {
                                 "type": "function_call_output",
@@ -258,6 +257,12 @@ class OpenAIResponsesAgentRunner:
                             }
                         )
                         self._notify_progress(progress_callback, executor)
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise ResponsesAgentError("AGENT_CANCELLED")
+                        if executor.output_repair_exhausted:
+                            raise ResponsesAgentError(
+                                "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED"
+                            )
                         if executor.submitted:
                             card = json.loads(result_path.read_text(encoding="utf-8"))
                             return _safe_summary(
@@ -365,7 +370,7 @@ class OpenAIResponsesAgentRunner:
         if callback is None:
             return
         try:
-            callback(executor.budget.summary() | {"reviewSubmitted": executor.submitted})
+            callback(executor.audit_summary())
         except Exception:
             return
 

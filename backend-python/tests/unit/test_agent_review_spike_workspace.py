@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 import app.agent_review_spike.workspace as workspace_module
+import app.agent_review_spike.tool_executor as tool_executor_module
 from app.agent_review_spike.mcp_server import ReviewMcpServer
 from app.agent_review_spike.workspace import ReviewToolError, ReviewWorkspace, ToolBudget, validate_review_path
 
@@ -129,6 +130,70 @@ def test_mcp_rejects_invalid_review_schema(tmp_path):
 
     assert response["isError"] is True
     assert "REVIEW_SCHEMA_INVALID" in response["content"][0]["text"]
+
+
+def test_submit_schema_third_attempt_can_succeed_without_false_exhaustion(tmp_path):
+    server = ReviewMcpServer(
+        ReviewWorkspace(tmp_path),
+        ["src/service.py"],
+        tmp_path / "result.json",
+        tmp_path / "audit.json",
+        ToolBudget(),
+    )
+
+    first = _tool_value(server.call_tool("submit_review", {"summary": "missing"}))
+    second = _tool_value(server.call_tool("submit_review", {"summary": "missing"}))
+    third = server.call_tool("submit_review", _card())
+    audit = json.loads((tmp_path / "audit.json").read_text(encoding="utf-8"))
+
+    assert first["attempt"] == 1 and first["retryable"] is True
+    assert second["attempt"] == 2 and second["retryable"] is True
+    assert third["isError"] is False
+    assert audit["submitAttemptCount"] == 3
+    assert audit["schemaFailureCount"] == 2
+    assert audit["outputRepairExhausted"] is False
+
+
+def test_submit_schema_exhaustion_permanently_short_circuits_all_tools(
+    tmp_path, monkeypatch
+):
+    workspace = ReviewWorkspace(tmp_path)
+    workspace.list_files = Mock(wraps=workspace.list_files)
+    validate = Mock(wraps=tool_executor_module.validate_review_card)
+    monkeypatch.setattr(tool_executor_module, "validate_review_card", validate)
+    server = ReviewMcpServer(
+        workspace,
+        ["src/service.py"],
+        tmp_path / "result.json",
+        tmp_path / "audit.json",
+        ToolBudget(),
+    )
+
+    responses = [
+        _tool_value(server.call_tool("submit_review", {"summary": "SECRET_DRAFT"}))
+        for _ in range(3)
+    ]
+    refused_evidence = _tool_value(server.call_tool("list_files", {}))
+    refused_submit = _tool_value(server.call_tool("submit_review", _card()))
+    audit_text = (tmp_path / "audit.json").read_text(encoding="utf-8")
+    audit = json.loads(audit_text)
+
+    assert responses[-1]["retryable"] is False
+    assert refused_evidence["errorCode"] == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED"
+    assert refused_submit["errorCode"] == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED"
+    assert validate.call_count == 3
+    assert workspace.list_files.call_count == 0
+    assert audit["toolCallCount"] == 3
+    assert audit["schemaFailureCount"] == 3
+    assert audit["outputTerminationRequested"] is True
+    assert [event["attempt"] for event in audit["events"]] == [1, 2, 3]
+    assert all(event["maxAttempts"] == 3 for event in audit["events"])
+    assert all(len(event["violations"]) <= 5 for event in audit["events"])
+    assert audit["failureChain"] == [
+        {"code": "REVIEW_SCHEMA_INVALID", "count": 3},
+        {"code": "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED", "count": 1},
+    ]
+    assert "SECRET_DRAFT" not in audit_text
 
 
 def test_search_rejects_high_risk_regex(tmp_path):

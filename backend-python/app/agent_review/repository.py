@@ -2064,11 +2064,36 @@ def sanitize_agent_audit(value: Any) -> dict[str, Any]:
         error_code = str(raw_event.get("errorCode") or "")
         if error_code and error_code.replace("_", "").isalnum():
             event["errorCode"] = error_code[:80]
+        if tool == "submit_review":
+            event["attempt"] = _limited_non_negative(raw_event.get("attempt"), 3)
+            event["maxAttempts"] = 3
+            event["violations"] = _safe_schema_failures(
+                raw_event.get("violations")
+            )
+            event["violationCount"] = _limited_non_negative(
+                raw_event.get("violationCount"), 50
+            )
+            event["violationsTruncated"] = bool(
+                raw_event.get("violationsTruncated")
+            )
         events.append(event)
     events.sort(key=lambda item: item["sequence"])
     phase = str(source.get("phase") or "ANALYZING").upper()
     if phase not in {"ANALYZING", "TOOL_ACTIVITY", "CONVERGING", "SUBMITTING"}:
         phase = "ANALYZING"
+    submit_attempt_count = _limited_non_negative(source.get("submitAttemptCount"), 3)
+    schema_failure_count = _limited_non_negative(source.get("schemaFailureCount"), 3)
+    output_repair_exhausted = bool(source.get("outputRepairExhausted"))
+    output_termination_requested = bool(source.get("outputTerminationRequested"))
+    failure_chain: list[dict[str, Any]] = []
+    if schema_failure_count:
+        failure_chain.append(
+            {"code": "REVIEW_SCHEMA_INVALID", "count": schema_failure_count}
+        )
+    if output_repair_exhausted:
+        failure_chain.append(
+            {"code": "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED", "count": 1}
+        )
     return {
         "phase": phase,
         "toolCallCount": _limited_non_negative(
@@ -2087,10 +2112,46 @@ def sanitize_agent_audit(value: Any) -> dict[str, Any]:
             source.get("blockedAccessCount"), ABSOLUTE_MAX_TOOL_CALLS
         ),
         "reviewSubmitted": bool(source.get("reviewSubmitted")),
+        "submitAttemptCount": submit_attempt_count,
+        "schemaFailureCount": schema_failure_count,
+        "lastSchemaFailures": _safe_schema_failures(
+            source.get("lastSchemaFailures")
+        ),
+        "outputRepairExhausted": output_repair_exhausted,
+        "outputTerminationRequested": output_termination_requested,
+        "failureChain": failure_chain,
         "reviewBudget": _safe_review_budget(source.get("reviewBudget")),
         "topPathSummaries": _safe_path_summaries(source.get("topPathSummaries"), 20),
         "events": events,
     }
+
+
+def _safe_schema_failures(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    allowed_reasons = {
+        "REQUIRED",
+        "TYPE",
+        "ENUM",
+        "UNSAFE_PATH",
+        "PATH_OUTSIDE_CHANGED_FILES",
+        "LINE_RANGE",
+        "LENGTH",
+        "CARD_SHAPE",
+    }
+    failures: list[dict[str, str]] = []
+    for raw in value[:5]:
+        if not isinstance(raw, dict):
+            continue
+        reason_code = str(raw.get("reasonCode") or "")
+        field = str(raw.get("field") or "")[:120]
+        if reason_code not in allowed_reasons or not re.fullmatch(
+            r"\$|[A-Za-z][A-Za-z0-9]*(?:\[\d+\]|\.[A-Za-z][A-Za-z0-9]*)*",
+            field,
+        ):
+            continue
+        failures.append({"reasonCode": reason_code, "field": field})
+    return failures
 
 
 def lock_agent_run_for_trace(db: Session, run_id: int) -> AgentReviewRun | None:

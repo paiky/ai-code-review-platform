@@ -4,10 +4,10 @@
 
 - 文档日期：`2026-08-11`
 - 来源专项：`docs/56-agent-review-dispatch-observability-and-command-center-preparation-motion-plan.md`
-- 当前阶段：`D4C 已完成`
-- 当前状态：`D4C COMPLETED — WAITING FOR D4D AUTHORIZATION`
-- 当前授权：D4A、D4B、D4C 已完成；未经后续授权不修改 Agent 输出收敛、前端或测试环境数据。
-- 当前停止点：等待用户明确确认“继续 D4D”。未经确认不得进入 Review Card 输出硬收敛实现。
+- 当前阶段：`D4D 已完成`
+- 当前状态：`D4D COMPLETED — WAITING FOR D4E AUTHORIZATION`
+- 当前授权：D4A、D4B、D4C、D4D 已完成；未经后续授权不修改前端或测试环境数据。
+- 当前停止点：等待用户明确确认“继续 D4E”。未经确认不得进入任务详情展示实现。
 
 ---
 
@@ -713,14 +713,24 @@ Task `1253/1256/1257/1263/1267` 不自动重跑。运维清理仅允许在用户
 
 ### D4D：Review Card 输出硬收敛与安全失败链
 
-- 阶段状态：`WAITING FOR AUTHORIZATION`
+- 阶段状态：`COMPLETED`
 - 改动量等级：`中`。跨 schema、Tool Executor、Claude Code 与三类进程内 Runner、Worker 失败上报，但不改变公开 API 或数据库结构。
 - 目标：schema 修正最多 3 次，形成 accepted Card 或快速给出准确失败码，不再消耗到 max turns 才降级。
 - 范围：结构化 schema 错误、安全规范化、提交计数、audit 终止信号、Runner 硬停止、错误优先级、failureChain 和后端测试。
 - 非目标：不重写 Claude CLI 流式协议，不改变证据预算，不修改前端，不部署。
 - 验收：单次最多返回 5 个安全 violation；前两次失败、第三次成功不误熔断；连续 3 次失败后无第 4 次 schema 校验或 worktree 访问，并在一个轮询周期内终止；主失败码和 failureChain 正确；不记录 Card 内容；三类 Runner 行为一致。
-- 授权边界：允许修改第 7.4 节后端模块和对应测试；不进入 D4E、不部署、不提交或推送。
+- 授权边界：允许修改第 7.4 节后端模块和对应测试并单独提交；不进入 D4E、不部署或推送。
 - 停止点：汇报 D4D 结果并等待“继续 D4E”。
+
+实施结果（`2026-08-11`）：
+
+- `validate_review_card()` 已改为稳定顺序的有界 collector，固定输出 8 类 reasonCode、最多 5 条安全 violation，`violationCount` 上限为 50，且不保存字段值或 Card 草稿；
+- 保留枚举大写、路径分隔符、首尾空白、整数字符串和 finding 去重兼容行为；缺失内容、路径、行号及枚举值不做猜测或静默删除；
+- `ReviewToolExecutor` 固定最多 3 次提交，第三次成功可正常落盘；连续三次失败后原子写入 audit 熔断标记，后续所有工具在预算计数、schema 校验和 worktree 访问前短路；
+- Claude Code Runner 在等待前、轮询超时后和自然退出后三处检查终止信号；schema 熔断优先覆盖 timeout/max turns/CLI 错误，取消保持最高优先级；
+- Anthropic Messages、Chat Completions、Responses 三类进程内 Runner 在第三次失败后直接返回 `AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED`，不再发起下一模型回合；
+- Worker 与 Backend 已持久化安全的提交计数、最后 violation、`failureChain` 及 `AGENT_SUBMITTING`、`AGENT_SUBMIT_VALIDATION_FAILED`、`AGENT_REVIEW_SUBMITTED`、`AGENT_OUTPUT_CONVERGENCE_FAILED` Progress，自动任务继续进入 Standard fallback；
+- schema、Tool Executor、四类 Runner、Worker 与完整 Agent Review contract 共 `219 passed, 1 skipped`；目标文件 Ruff（`--no-cache`）和 `git diff --check` 通过。
 
 ### D4E：任务详情提交状态与失败链展示
 

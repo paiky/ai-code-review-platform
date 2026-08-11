@@ -87,6 +87,7 @@ def execution_summary(
             }
         )
     if audit:
+        result["toolAudit"] = audit
         result["toolCallCount"] = int(audit.get("toolCallCount") or 0)
         result["sourceBytesReturned"] = int(audit.get("sourceBytesReturned") or 0)
         result["diffBytesReturned"] = int(audit.get("diffBytesReturned") or 0)
