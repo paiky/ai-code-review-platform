@@ -8,7 +8,8 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import func, inspect, select
-from sqlalchemy.orm import Session
+from sqlalchemy.exc import DataError
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.agent_review import repository as agent_repository
 from app.agent_review.models import AgentReviewRun, AgentReviewSettings, AgentReviewWorker
@@ -20,6 +21,7 @@ from app.agent_review.repository import (
 )
 from app.agent_review.service import (
     _ensure_worktree,
+    _persist_dispatch_failure,
     _prepare_agent_worktree_with_progress,
     enqueue_agent_review,
 )
@@ -30,6 +32,7 @@ from app.code_quality.service import (
     _agent_preflight_fallback_metadata,
     run_agent_standard_fallback_job,
     schedule_agent_standard_fallback,
+    trigger_auto_review,
 )
 from app.core.errors import AppError
 from app.core.json_utils import utc_now
@@ -2715,6 +2718,7 @@ def test_agent_job_failure_rolls_back_partial_job_and_keeps_auto_review_for_fall
     db_session: Session,
     monkeypatch,
     tmp_path,
+    caplog,
 ) -> None:
     task, project, profile, request, _run = _stub_agent_dispatch_case(
         db_session,
@@ -2741,11 +2745,31 @@ def test_agent_job_failure_rolls_back_partial_job_and_keeps_auto_review_for_fall
             )
         )
         db.flush()
-        raise RuntimeError("job-secret-error")
+        raise DataError(
+            "INSERT INTO agent_review_runs (...) VALUES (...) ",
+            {"completion_context_json": "job-secret-large-json"},
+            ValueError("1406 completion_context_json too long"),
+        )
+
+    failure_sessions = []
+    failure_session_factory = sessionmaker(
+        bind=db_session.get_bind(),
+        autocommit=False,
+        autoflush=False,
+    )
+
+    def open_failure_session(**kwargs):
+        failure_session = failure_session_factory(**kwargs)
+        failure_sessions.append(failure_session)
+        return failure_session
 
     monkeypatch.setattr(
         "app.agent_review.service.repository.create_agent_job",
         fail_after_partial_job,
+    )
+    monkeypatch.setattr(
+        "app.agent_review.service.SessionLocal",
+        open_failure_session,
     )
 
     with pytest.raises(AppError) as captured:
@@ -2771,7 +2795,206 @@ def test_agent_job_failure_rolls_back_partial_job_and_keeps_auto_review_for_fall
     assert "AGENT_QUEUED" not in [event["phase"] for event in events]
     failure = json.loads(events[-1]["detail"])
     assert failure["failureCode"] == "AGENT_JOB_CREATE_FAILED"
-    assert "job-secret-error" not in events[-1]["detail"]
+    assert failure_sessions and all(session is not db_session for session in failure_sessions)
+    assert "job-secret-large-json" not in events[-1]["detail"]
+    assert "job-secret-large-json" not in caplog.text
+    assert "completion_context_json too long" not in caplog.text
+
+
+def test_dispatch_failure_returns_stable_error_when_independent_session_is_unavailable(
+    db_session: Session,
+    monkeypatch,
+    caplog,
+) -> None:
+    def fail_session_factory(**_kwargs):
+        raise RuntimeError("failure-session-secret")
+
+    monkeypatch.setattr("app.agent_review.service.SessionLocal", fail_session_factory)
+
+    wrapped = _persist_dispatch_failure(
+        db_session,
+        task_id=512,
+        phase="AGENT_JOB_CREATE_FAILED",
+        message="Agent Review Scheduler Job 持久化失败",
+        base_detail={
+            "schemaVersion": "agent-dispatch-progress-v1",
+            "dispatchAttemptId": "agent-dispatch-512-test",
+            "reviewKey": "agent-claude-code-deepseek-v4-pro",
+            "requestedEngine": "AGENT",
+        },
+        started_at=0.0,
+        exception=RuntimeError("original-job-secret"),
+        fallback_code="AGENT_JOB_CREATE_FAILED",
+        fallback_message="Agent Review scheduler job persistence failed",
+        mark_review_failed=False,
+    )
+
+    assert wrapped is not None
+    assert wrapped.code == "AGENT_JOB_CREATE_FAILED"
+    assert wrapped.message == "Agent Review scheduler job persistence failed"
+    assert db_session.scalar(select(1)) == 1
+    assert "failure-session-secret" not in caplog.text
+    assert "original-job-secret" not in caplog.text
+
+
+def test_manual_agent_job_data_error_marks_review_failed_in_independent_transaction(
+    db_session: Session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    task, project, profile, request, _run = _stub_agent_dispatch_case(
+        db_session,
+        monkeypatch,
+        tmp_path,
+        task_id=514,
+    )
+
+    def fail_job_persistence(_db, **_kwargs):
+        raise DataError(
+            "INSERT INTO agent_review_runs (...) VALUES (...) ",
+            {"input_json": "manual-secret-large-json"},
+            ValueError("1406 input_json too long"),
+        )
+
+    monkeypatch.setattr(
+        "app.agent_review.service.repository.create_agent_job",
+        fail_job_persistence,
+    )
+
+    with pytest.raises(AppError) as captured:
+        enqueue_agent_review(
+            db_session,
+            task=task,
+            project=project,
+            profile=profile,
+            request=request,
+        )
+
+    assert captured.value.code == "AGENT_JOB_CREATE_FAILED"
+    assert db_session.get(ReviewTask, task.id).review_status == "REVIEW_FAILED"
+    events = list_progress(db_session, task.id)
+    assert events[-1]["phase"] == "AGENT_JOB_CREATE_FAILED"
+    assert "manual-secret-large-json" not in events[-1]["detail"]
+
+
+def test_auto_trigger_agent_enqueue_failure_enters_standard_fallback(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    now = datetime.now()
+    task = ReviewTask(
+        id=513,
+        project_id=513,
+        trigger_type="GITLAB_MR_WEBHOOK",
+        external_source_id="513",
+        template_code="backend-default",
+        target_type="BACKEND",
+        code_quality_profile_code="backend-default-ai-review",
+        status="SUCCESS",
+        review_status="REVIEWING",
+        created_at=now,
+        updated_at=now,
+    )
+    project = Project(
+        id=513,
+        name="auto-fallback-project",
+        git_provider="GITLAB",
+        git_project_id="513",
+        default_template_code="backend-default",
+        status="ENABLED",
+        created_at=now,
+        updated_at=now,
+    )
+    profile = SimpleNamespace(
+        enabled=True,
+        profile_code="backend-default-ai-review",
+        review_instructions="只报告可验证问题",
+        model="deepseek-chat",
+    )
+    provider = SimpleNamespace(
+        provider_code="DEEPSEEK",
+        model_name="deepseek-chat",
+    )
+    target = {
+        "provider": provider,
+        "model": "deepseek-chat",
+        "reviewKey": "deepseek-standard",
+        "displayName": "DeepSeek Standard",
+        "sortOrder": 10,
+    }
+    db_session.add_all([task, project])
+    db_session.commit()
+
+    monkeypatch.setattr("app.code_quality.service._enabled", lambda _db: True)
+    monkeypatch.setattr(
+        "app.code_quality.service.list_result_responses",
+        lambda _db, _task_id: [],
+    )
+    monkeypatch.setattr(
+        "app.code_quality.service._resolve_auto_profile_or_save_failure",
+        lambda *_args: profile,
+    )
+    monkeypatch.setattr(
+        "app.code_quality.service.get_project_group_ai_review_policy",
+        lambda *_args: {"aiReviewEnabled": True, "triggerOnMr": True},
+    )
+    monkeypatch.setattr(
+        "app.code_quality.service._resolve_review_targets",
+        lambda *_args: [target],
+    )
+    monkeypatch.setattr(
+        "app.code_quality.service.ensure_deterministic_preflight",
+        lambda *_args, **_kwargs: {"status": "COMPLETED"},
+    )
+    monkeypatch.setattr(
+        "app.agent_review.service.resolve_review_engine",
+        lambda *_args, **_kwargs: "AGENT",
+    )
+
+    def fail_agent_enqueue(*_args, **_kwargs):
+        raise AppError(
+            "AGENT_JOB_CREATE_FAILED",
+            "Agent Review scheduler job persistence failed",
+            500,
+        )
+
+    monkeypatch.setattr(
+        "app.agent_review.service.enqueue_agent_review",
+        fail_agent_enqueue,
+    )
+    monkeypatch.setattr("app.code_quality.service._inline_enabled", lambda: True)
+    fallback_requests = []
+
+    def run_standard_fallback(_db, _task_id, _project, _profile, _provider, request, _target):
+        fallback_requests.append(dict(request))
+        return {"status": "SUCCESS", "overallLevel": "LOW", "findings": []}
+
+    monkeypatch.setattr("app.code_quality.service._run_review", run_standard_fallback)
+    monkeypatch.setattr(
+        "app.code_quality.service._send_auto_review_notification",
+        lambda *_args, **_kwargs: None,
+    )
+
+    scheduled = trigger_auto_review(
+        db_session,
+        task_id=task.id,
+        project=project,
+        changed_files=[{"path": "src/a.py", "diffText": "+safe()"}],
+        diff_text="+safe()",
+        rule_result_id=1513,
+        risk_card={"riskLevel": "LOW", "riskItems": []},
+        focus_change_types=[],
+        focus_rule_codes=[],
+        notification_context={"title": "GITLAB_MR_WEBHOOK 513"},
+    )
+
+    assert scheduled is True
+    assert len(fallback_requests) == 1
+    assert fallback_requests[0]["requestedEngine"] == "AGENT"
+    assert fallback_requests[0]["effectiveEngine"] == "STANDARD_FALLBACK"
+    assert fallback_requests[0]["agentRunSummary"]["failureCode"] == (
+        "AGENT_JOB_CREATE_FAILED"
+    )
 
 
 def test_agent_preflight_fallback_persists_failure_detail(

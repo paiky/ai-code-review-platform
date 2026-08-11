@@ -4,10 +4,10 @@
 
 - 文档日期：`2026-08-11`
 - 来源专项：`docs/56-agent-review-dispatch-observability-and-command-center-preparation-motion-plan.md`
-- 当前阶段：`D4B 已完成`
-- 当前状态：`D4B COMPLETED — WAITING FOR D4C AUTHORIZATION`
-- 当前授权：D4A、D4B 已完成；未经后续授权不修改失败事务、Agent 输出收敛、前端或测试环境数据。
-- 当前停止点：等待用户明确确认“继续 D4C”。未经确认不得进入 Job 创建失败独立事务实现。
+- 当前阶段：`D4C 已完成`
+- 当前状态：`D4C COMPLETED — WAITING FOR D4D AUTHORIZATION`
+- 当前授权：D4A、D4B、D4C 已完成；未经后续授权不修改 Agent 输出收敛、前端或测试环境数据。
+- 当前停止点：等待用户明确确认“继续 D4D”。未经确认不得进入 Review Card 输出硬收敛实现。
 
 ---
 
@@ -692,7 +692,7 @@ Task `1253/1256/1257/1263/1267` 不自动重跑。运维清理仅允许在用户
 
 ### D4C：Job 创建失败独立事务闭环
 
-- 阶段状态：`WAITING FOR AUTHORIZATION`
+- 阶段状态：`COMPLETED`
 - 改动量等级：`中`。调整主链路异常事务和自动 fallback 交界，需要 DataError 注入与手动/自动两类 contract 验证。
 - 目标：任何普通持久化异常都留下失败事实，不再出现永久 `REVIEWING`。
 - 范围：独立失败 Session、Task 状态、稳定 AppError、fallback、日志脱敏和测试。
@@ -701,9 +701,19 @@ Task `1253/1256/1257/1263/1267` 不自动重跑。运维清理仅允许在用户
 - 授权边界：允许修改 Agent/Code Quality 服务与测试；不部署、不进入 D4D。
 - 停止点：汇报 D4C 结果并等待“继续 D4D”。
 
+实施结果（`2026-08-11`）：
+
+- `_persist_dispatch_failure()` 捕获普通异常后第一项 Session 操作为原 Session `rollback()`，不再使用原 Session 写失败事实；
+- 失败 Progress 与手动任务 `REVIEW_FAILED` 状态改由同一数据库 bind 上新建的独立 `SessionLocal` 提交，并在结束后关闭；
+- 自动 MR/Push 保持 `REVIEWING` 供既有 Standard fallback 接管，手动显式 Agent 在独立事务中落为 `REVIEW_FAILED`；
+- 独立失败 Session 自身创建、提交、rollback 或 close 失败时只记录 taskId、phase、attemptId 和异常类型，调用方仍收到稳定 AppError；
+- 日志与 Progress 不包含 DataError SQL parameters、`input_json`、`completion_context_json` 或注入的大 JSON 内容；
+- 已覆盖 DataError、部分 Job rollback、独立 Session、自动 fallback、手动失败状态、第二失败事务异常和进程级中断兼容；
+- 完整 Agent Review contract 与 fallback guard 共 `77 passed`，目标文件 Ruff 与 `git diff --check` 通过。
+
 ### D4D：Review Card 输出硬收敛与安全失败链
 
-- 阶段状态：`NOT STARTED`
+- 阶段状态：`WAITING FOR AUTHORIZATION`
 - 改动量等级：`中`。跨 schema、Tool Executor、Claude Code 与三类进程内 Runner、Worker 失败上报，但不改变公开 API 或数据库结构。
 - 目标：schema 修正最多 3 次，形成 accepted Card 或快速给出准确失败码，不再消耗到 max turns 才降级。
 - 范围：结构化 schema 错误、安全规范化、提交计数、audit 终止信号、Runner 硬停止、错误优先级、failureChain 和后端测试。

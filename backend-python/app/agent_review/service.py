@@ -18,6 +18,7 @@ from app.agent_review_spike.schema import ReviewSchemaError, validate_review_car
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
 from app.code_quality.repository import append_progress, save_result, scrub_sensitive
 from app.core.config import get_settings
+from app.core.database import SessionLocal
 from app.core.errors import AppError
 from app.core.json_utils import utc_now
 from app.project_integration.models import Project
@@ -578,8 +579,6 @@ def complete_configuration_test(db: Session, request: dict[str, Any]) -> dict[st
 
 
 def recover_unavailable_agent_jobs() -> int:
-    from app.core.database import SessionLocal
-
     db = SessionLocal()
     try:
         expired_run_ids = repository.expire_exhausted_agent_jobs(db)
@@ -1179,7 +1178,27 @@ def _persist_dispatch_failure(
     mark_review_failed: bool,
     extra: dict[str, Any] | None = None,
 ) -> AppError | None:
-    db.rollback()
+    try:
+        db.rollback()
+    except Exception as rollback_exception:
+        _LOGGER.error(
+            "Agent dispatch rollback failed taskId=%s phase=%s attemptId=%s "
+            "exceptionType=%s",
+            task_id,
+            phase,
+            base_detail.get("dispatchAttemptId"),
+            type(rollback_exception).__name__,
+        )
+        return (
+            None
+            if isinstance(exception, AppError)
+            else AppError(fallback_code, fallback_message, 500)
+        )
+    stable_error = (
+        None
+        if isinstance(exception, AppError)
+        else AppError(fallback_code, fallback_message, 500)
+    )
     raw_message = (
         exception.message if isinstance(exception, AppError) else fallback_message
     )
@@ -1189,14 +1208,16 @@ def _persist_dispatch_failure(
     failure_code = (
         str(exception.code) if isinstance(exception, AppError) else fallback_code
     )[:64]
+    failure_db: Session | None = None
     try:
+        failure_db = SessionLocal(bind=db.get_bind())
         if mark_review_failed:
-            persisted_task = db.get(ReviewTask, task_id)
+            persisted_task = failure_db.get(ReviewTask, task_id)
             if persisted_task is not None:
                 persisted_task.review_status = "REVIEW_FAILED"
                 persisted_task.updated_at = datetime.now()
         _append_dispatch_progress(
-            db,
+            failure_db,
             task_id=task_id,
             phase=phase,
             level="ERROR",
@@ -1210,16 +1231,41 @@ def _persist_dispatch_failure(
                 "failureMessage": failure_message,
             },
         )
-        db.commit()
-    except Exception:
-        db.rollback()
-        _LOGGER.exception(
-            "Agent dispatch failure progress persistence failed taskId=%s phase=%s attemptId=%s",
+        failure_db.commit()
+    except Exception as persistence_exception:
+        if failure_db is not None:
+            try:
+                failure_db.rollback()
+            except Exception as failure_rollback_exception:
+                _LOGGER.error(
+                    "Agent dispatch failure session rollback failed taskId=%s phase=%s "
+                    "attemptId=%s exceptionType=%s",
+                    task_id,
+                    phase,
+                    base_detail.get("dispatchAttemptId"),
+                    type(failure_rollback_exception).__name__,
+                )
+        _LOGGER.error(
+            "Agent dispatch failure progress persistence failed taskId=%s phase=%s "
+            "attemptId=%s exceptionType=%s",
             task_id,
             phase,
             base_detail.get("dispatchAttemptId"),
+            type(persistence_exception).__name__,
         )
-        return None
+    finally:
+        if failure_db is not None:
+            try:
+                failure_db.close()
+            except Exception as close_exception:
+                _LOGGER.error(
+                    "Agent dispatch failure session close failed taskId=%s phase=%s "
+                    "attemptId=%s exceptionType=%s",
+                    task_id,
+                    phase,
+                    base_detail.get("dispatchAttemptId"),
+                    type(close_exception).__name__,
+                )
     _LOGGER.error(
         "Agent dispatch stage failed taskId=%s phase=%s failureCode=%s exceptionType=%s",
         task_id,
@@ -1227,9 +1273,7 @@ def _persist_dispatch_failure(
         failure_code,
         type(exception).__name__,
     )
-    if isinstance(exception, AppError):
-        return None
-    return AppError(fallback_code, fallback_message, 500)
+    return stable_error
 
 
 def _policy_progress_summary(policy_context: dict[str, Any]) -> dict[str, Any]:
