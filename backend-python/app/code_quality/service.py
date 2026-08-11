@@ -90,7 +90,9 @@ from app.review_record.repository import (
     create_review_task,
     mark_task_failed,
     mark_task_success,
+    parse_agent_completion_context,
     refresh_review_status,
+    resolve_agent_completion_notification,
     save_notification_records,
 )
 from app.review_feedback.service import ai_finding_fingerprint
@@ -901,6 +903,27 @@ def _save_agent_sensitive_path_skip(
     db.commit()
 
 
+def _build_agent_completion_context(
+    *,
+    rule_result_id: int | None,
+    focus_change_types: list[str] | None,
+    focus_rule_codes: list[str] | None,
+    notification_context: dict | None,
+    reminder_card_enabled: bool,
+) -> dict[str, Any]:
+    from app.agent_review.repository import AGENT_COMPLETION_CONTEXT_SCHEMA_VERSION
+
+    return {
+        "schemaVersion": AGENT_COMPLETION_CONTEXT_SCHEMA_VERSION,
+        "autoNotification": True,
+        "ruleResultId": rule_result_id,
+        "focusChangeTypes": focus_change_types or [],
+        "focusRuleCodes": focus_rule_codes or [],
+        "notificationContext": notification_context or {},
+        "reminderCardEnabled": reminder_card_enabled,
+    }
+
+
 def trigger_auto_review(
     db: Session,
     *,
@@ -983,15 +1006,13 @@ def trigger_auto_review(
                 project=project,
                 profile=profile,
                 request=agent_request,
-                completion_context={
-                    "autoNotification": True,
-                    "ruleResultId": rule_result_id,
-                    "riskCard": risk_card,
-                    "focusChangeTypes": focus_change_types,
-                    "focusRuleCodes": focus_rule_codes,
-                    "notificationContext": notification_context,
-                    "reminderCardEnabled": reminder_card_enabled,
-                },
+                completion_context=_build_agent_completion_context(
+                    rule_result_id=rule_result_id,
+                    focus_change_types=focus_change_types,
+                    focus_rule_codes=focus_rule_codes,
+                    notification_context=notification_context,
+                    reminder_card_enabled=reminder_card_enabled,
+                ),
             )
             return True
         except AppError as exception:
@@ -1162,15 +1183,13 @@ def _trigger_push_auto_review(
                 project=project,
                 profile=profile,
                 request=agent_request,
-                completion_context={
-                    "autoNotification": True,
-                    "ruleResultId": rule_result_id,
-                    "riskCard": risk_card,
-                    "focusChangeTypes": focus_change_types,
-                    "focusRuleCodes": focus_rule_codes,
-                    "notificationContext": notification_context,
-                    "reminderCardEnabled": reminder_card_enabled,
-                },
+                completion_context=_build_agent_completion_context(
+                    rule_result_id=rule_result_id,
+                    focus_change_types=focus_change_types,
+                    focus_rule_codes=focus_rule_codes,
+                    notification_context=notification_context,
+                    reminder_card_enabled=reminder_card_enabled,
+                ),
             )
             return True
         except AppError as exception:
@@ -1428,18 +1447,28 @@ def run_agent_standard_fallback_job(run_id: int) -> dict[str, Any]:
             request,
             {**target, "reviewKey": run.review_key, "displayName": "Agent 降级 · Standard"},
         )
-        context = read_json(run.completion_context_json, {})
+        context = parse_agent_completion_context(
+            run.completion_context_json,
+            task_id=task.id,
+        )
         if not run.comparison_mode and context.get("autoNotification"):
+            rule_result_id, risk_card, reminder_card_enabled = (
+                resolve_agent_completion_notification(
+                    db,
+                    task_id=task.id,
+                    context=context,
+                )
+            )
             _send_auto_review_notification(
                 db,
                 task.id,
                 result,
-                context.get("ruleResultId"),
-                context.get("riskCard"),
+                rule_result_id,
+                risk_card,
                 context.get("focusChangeTypes") or [],
                 context.get("focusRuleCodes") or [],
                 context.get("notificationContext") or {},
-                bool(context.get("reminderCardEnabled", True)),
+                reminder_card_enabled,
             )
         run.input_json = None
         db.commit()

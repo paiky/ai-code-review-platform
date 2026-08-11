@@ -1,5 +1,7 @@
 import json
+import logging
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import and_, case, func, inspect, or_, select, text
 from sqlalchemy.orm import Session
@@ -29,6 +31,120 @@ AI_REVIEW_STATUS_VALUES = {
     "REVIEW_FAILED",
     "TASK_FAILED",
 }
+_LOGGER = logging.getLogger(__name__)
+
+
+def parse_agent_completion_context(
+    value: Any,
+    *,
+    task_id: int,
+) -> dict[str, Any]:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return {}
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else None
+    except json.JSONDecodeError:
+        _LOGGER.warning(
+            "Agent completion context JSON invalid taskId=%s",
+            task_id,
+        )
+        return {}
+    if not isinstance(parsed, dict):
+        _LOGGER.warning(
+            "Agent completion context shape invalid taskId=%s",
+            task_id,
+        )
+        return {}
+    return parsed
+
+
+def find_review_result_for_notification(
+    db: Session,
+    result_id: int | None,
+    task_id: int,
+) -> dict[str, Any] | None:
+    if (
+        not isinstance(result_id, int)
+        or isinstance(result_id, bool)
+        or result_id <= 0
+    ):
+        return None
+    result = db.scalars(
+        select(ReviewResult)
+        .where(ReviewResult.id == result_id, ReviewResult.task_id == task_id)
+        .limit(1)
+    ).first()
+    if result is None:
+        _LOGGER.warning(
+            "Agent completion risk card reference unavailable taskId=%s resultId=%s",
+            task_id,
+            result_id,
+        )
+        return None
+    try:
+        risk_card = json.loads(result.risk_card_json)
+    except (TypeError, json.JSONDecodeError):
+        _LOGGER.warning(
+            "Agent completion risk card JSON invalid taskId=%s resultId=%s",
+            task_id,
+            result_id,
+        )
+        return None
+    if not isinstance(risk_card, dict):
+        _LOGGER.warning(
+            "Agent completion risk card shape invalid taskId=%s resultId=%s",
+            task_id,
+            result_id,
+        )
+        return None
+    return {
+        "riskCard": risk_card,
+        "reminderCardEnabled": (
+            bool(result.reminder_card_enabled)
+            if result.reminder_card_enabled is not None
+            else True
+        ),
+    }
+
+
+def resolve_agent_completion_notification(
+    db: Session,
+    *,
+    task_id: int,
+    context: dict[str, Any],
+) -> tuple[int | None, dict[str, Any] | None, bool]:
+    raw_result_id = context.get("ruleResultId")
+    result_id = (
+        raw_result_id
+        if isinstance(raw_result_id, int)
+        and not isinstance(raw_result_id, bool)
+        and raw_result_id > 0
+        else None
+    )
+    reminder_value = context.get("reminderCardEnabled")
+    legacy_risk_card = context.get("riskCard")
+    if isinstance(legacy_risk_card, dict):
+        return (
+            result_id,
+            legacy_risk_card,
+            reminder_value if isinstance(reminder_value, bool) else True,
+        )
+    referenced = find_review_result_for_notification(db, result_id, task_id)
+    if isinstance(reminder_value, bool):
+        reminder_card_enabled = reminder_value
+    elif referenced is not None:
+        reminder_card_enabled = bool(referenced.get("reminderCardEnabled", True))
+    else:
+        reminder_card_enabled = True
+    return (
+        result_id,
+        referenced.get("riskCard") if referenced is not None else None,
+        reminder_card_enabled,
+    )
+
+
 AI_FINDING_WEIGHT = {"MINOR": 1, "MAJOR": 2, "CRITICAL": 3}
 
 

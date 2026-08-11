@@ -25,6 +25,10 @@ from app.project_integration.repository import get_project_group_ai_review_polic
 from app.project_review_policy.service import build_project_review_policy_prompt_context
 from app.review_context.local_repo import prepare_local_repository_context, task_head_worktree_path
 from app.review_record.models import ReviewTask
+from app.review_record.repository import (
+    parse_agent_completion_context,
+    resolve_agent_completion_notification,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -784,19 +788,27 @@ def _finish_existing_review_flow(db: Session, run: Any, result: dict[str, Any]) 
     from app.code_quality.service import _send_auto_review_notification, _sync_task_status_after_review
 
     _sync_task_status_after_review(db, run.task_id, result)
-    context = _json_object(run.completion_context_json)
+    context = parse_agent_completion_context(
+        run.completion_context_json,
+        task_id=run.task_id,
+    )
     if run.comparison_mode or not context.get("autoNotification"):
         return
+    rule_result_id, risk_card, reminder_card_enabled = resolve_agent_completion_notification(
+        db,
+        task_id=run.task_id,
+        context=context,
+    )
     _send_auto_review_notification(
         db,
         run.task_id,
         result,
-        context.get("ruleResultId"),
-        context.get("riskCard"),
+        rule_result_id,
+        risk_card,
         context.get("focusChangeTypes") or [],
         context.get("focusRuleCodes") or [],
         context.get("notificationContext") or {},
-        bool(context.get("reminderCardEnabled", True)),
+        reminder_card_enabled,
     )
 
 

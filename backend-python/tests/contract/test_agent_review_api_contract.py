@@ -28,12 +28,13 @@ from app.code_quality.models import CodeQualitySchedulerJob
 from app.code_quality.repository import list_progress, list_result_responses, save_result
 from app.code_quality.service import (
     _agent_preflight_fallback_metadata,
+    run_agent_standard_fallback_job,
     schedule_agent_standard_fallback,
 )
 from app.core.errors import AppError
 from app.core.json_utils import utc_now
 from app.project_integration.models import Project, ProjectGroup
-from app.review_record.models import ReviewTask
+from app.review_record.models import ReviewResult, ReviewTask
 
 
 def _configure(monkeypatch) -> tuple[str, str]:
@@ -1586,10 +1587,46 @@ def test_worker_completion_is_idempotent_and_saves_engine_metadata(
             updated_at=now,
         )
     )
+    risk_card = {"riskLevel": "HIGH", "riskItems": [{"ruleCode": "CACHE_CHANGED"}]}
+    db_session.add(
+        ReviewResult(
+            id=1199,
+            task_id=199,
+            project_id=100,
+            template_code="backend-default",
+            target_type="BACKEND",
+            reminder_card_enabled=True,
+            risk_level="HIGH",
+            risk_item_count=1,
+            change_analysis_json="{}",
+            risk_card_json=json.dumps(risk_card, ensure_ascii=False),
+            summary="规则风险",
+            created_at=now,
+            updated_at=now,
+        )
+    )
     sent_notifications = []
+
+    def capture_notification(
+        _db,
+        _task_id,
+        result,
+        rule_result_id,
+        resolved_risk_card,
+        *_args,
+        **_kwargs,
+    ):
+        sent_notifications.append(
+            {
+                "result": dict(result),
+                "ruleResultId": rule_result_id,
+                "riskCard": resolved_risk_card,
+            }
+        )
+
     monkeypatch.setattr(
         "app.code_quality.service._send_auto_review_notification",
-        lambda _db, _task_id, result, *_args, **_kwargs: sent_notifications.append(dict(result)),
+        capture_notification,
     )
     run = create_agent_job(
         db_session,
@@ -1599,7 +1636,11 @@ def test_worker_completion_is_idempotent_and_saves_engine_metadata(
             "worktree": "worktrees/199/head",
             "case": {"id": "task-199", "changedFiles": ["src/a.py"], "diff": "+safe()"},
         },
-        completion_context={"autoNotification": True},
+        completion_context={
+            "autoNotification": True,
+            "ruleResultId": 1199,
+            "focusChangeTypes": ["CACHE"],
+        },
         comparison_mode=False,
     )
     db_session.commit()
@@ -1654,11 +1695,18 @@ def test_worker_completion_is_idempotent_and_saves_engine_metadata(
     assert result["agentRunSummary"]["runId"] == run.id
     assert result["agentRunSummary"]["effectiveBudgets"] == default_agent_budgets()
     assert len(sent_notifications) == 1
-    assert sent_notifications[0]["provider"] == "DEEPSEEK"
-    assert sent_notifications[0]["model"] == "deepseek-v4-pro[1m]"
-    assert sent_notifications[0]["reviewKey"] == "agent-claude-code-deepseek-v4-pro"
+    notified_result = sent_notifications[0]["result"]
+    assert notified_result["provider"] == "DEEPSEEK"
+    assert notified_result["model"] == "deepseek-v4-pro[1m]"
+    assert notified_result["reviewKey"] == "agent-claude-code-deepseek-v4-pro"
+    assert sent_notifications[0]["ruleResultId"] == 1199
+    assert sent_notifications[0]["riskCard"] == risk_card
     persisted = db_session.get(AgentReviewRun, run.id)
     assert persisted is not None
+    persisted_context = json.loads(persisted.completion_context_json)
+    assert persisted_context["schemaVersion"] == "agent-completion-context-v2"
+    assert "riskCard" not in persisted_context
+    assert len(persisted.completion_context_json.encode("utf-8")) <= 16 * 1024
     persisted_text = persisted.tool_summary_json or ""
     assert "SECRET_" not in persisted_text
 
@@ -2039,6 +2087,116 @@ def test_expired_agent_run_schedules_standard_fallback_with_task_project(
     assert fallback_job.project_id == 105
     assert fallback_job.status == "QUEUED"
     assert fallback_job.review_key == run.review_key
+
+
+def test_standard_fallback_reads_v2_risk_card_reference(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    now = datetime.now()
+    task = ReviewTask(
+        id=306,
+        project_id=106,
+        trigger_type="GITLAB_MR_WEBHOOK",
+        template_code="backend-default",
+        target_type="BACKEND",
+        code_quality_profile_code="backend-default-ai-review",
+        status="SUCCESS",
+        review_status="RUNNING",
+        created_at=now,
+        updated_at=now,
+    )
+    project = Project(
+        id=106,
+        name="fallback-project",
+        git_provider="GITLAB",
+        git_project_id="fallback-106",
+        default_template_code="backend-default",
+        status="ENABLED",
+        created_at=now,
+        updated_at=now,
+    )
+    risk_card = {"riskLevel": "HIGH", "riskItems": [{"ruleCode": "DB_CHANGED"}]}
+    db_session.add_all(
+        [
+            task,
+            project,
+            ReviewResult(
+                id=1306,
+                task_id=306,
+                project_id=106,
+                template_code="backend-default",
+                target_type="BACKEND",
+                reminder_card_enabled=True,
+                risk_level="HIGH",
+                risk_item_count=1,
+                change_analysis_json="{}",
+                risk_card_json=json.dumps(risk_card, ensure_ascii=False),
+                summary="规则风险",
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
+    )
+    db_session.flush()
+    run = create_agent_job(
+        db_session,
+        task_id=306,
+        project_id=106,
+        input_payload={
+            "worktree": "worktrees/306/head",
+            "case": {"changedFiles": ["src/a.py"], "diff": "+safe()"},
+        },
+        completion_context={
+            "autoNotification": True,
+            "ruleResultId": 1306,
+            "focusChangeTypes": ["DB"],
+        },
+        comparison_mode=False,
+    )
+    db_session.commit()
+
+    fallback_session = Session(bind=db_session.get_bind())
+    monkeypatch.setattr("app.code_quality.service.SessionLocal", lambda: fallback_session)
+    monkeypatch.setattr("app.code_quality.service.find_project_by_id", lambda *_args: project)
+    monkeypatch.setattr(
+        "app.code_quality.service._resolve_profile",
+        lambda *_args: SimpleNamespace(profile_code="backend-default-ai-review"),
+    )
+    monkeypatch.setattr(
+        "app.code_quality.service._resolve_review_targets",
+        lambda *_args: [
+            {
+                "provider": SimpleNamespace(provider_code="deepseek"),
+                "model": "deepseek-chat",
+                "reviewKey": run.review_key,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.code_quality.service._build_review_request",
+        lambda _profile, request: dict(request),
+    )
+    monkeypatch.setattr(
+        "app.code_quality.service._run_review",
+        lambda *_args, **_kwargs: {
+            "status": "SUCCESS",
+            "provider": "DEEPSEEK",
+            "model": "deepseek-chat",
+        },
+    )
+    sent_notifications = []
+    monkeypatch.setattr(
+        "app.code_quality.service._send_auto_review_notification",
+        lambda _db, _task_id, _result, result_id, resolved_card, *_args: (
+            sent_notifications.append((result_id, resolved_card))
+        ),
+    )
+
+    result = run_agent_standard_fallback_job(run.id)
+
+    assert result["status"] == "SUCCESS"
+    assert sent_notifications == [(1306, risk_card)]
 
 
 def test_running_agent_job_cancel_is_observed_by_worker_and_clears_input(

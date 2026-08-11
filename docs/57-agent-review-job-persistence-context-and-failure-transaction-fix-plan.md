@@ -4,10 +4,10 @@
 
 - 文档日期：`2026-08-11`
 - 来源专项：`docs/56-agent-review-dispatch-observability-and-command-center-preparation-motion-plan.md`
-- 当前阶段：`D4A 已完成`
-- 当前状态：`D4A COMPLETED — WAITING FOR D4B AUTHORIZATION`
-- 当前授权：D4A 已完成；未经后续授权不修改 completion context、失败事务、Agent 输出收敛、前端或测试环境数据。
-- 当前停止点：等待用户明确确认“继续 D4B”。未经确认不得进入 completion context v2 实现。
+- 当前阶段：`D4B 已完成`
+- 当前状态：`D4B COMPLETED — WAITING FOR D4C AUTHORIZATION`
+- 当前授权：D4A、D4B 已完成；未经后续授权不修改失败事务、Agent 输出收敛、前端或测试环境数据。
+- 当前停止点：等待用户明确确认“继续 D4C”。未经确认不得进入 Job 创建失败独立事务实现。
 
 ---
 
@@ -672,7 +672,7 @@ Task `1253/1256/1257/1263/1267` 不自动重跑。运维清理仅允许在用户
 
 ### D4B：Completion Context v2 去重与有界化
 
-- 阶段状态：`WAITING FOR AUTHORIZATION`
+- 阶段状态：`COMPLETED`
 - 改动量等级：`中`。跨 Code Quality、Agent Review、Review Record 三个后端模块，需验证旧 context 和通知兼容，但不改变公开 API。
 - 目标：移除完整 riskCard 副本，固定 16KB 白名单契约并按 ruleResultId 回读。
 - 范围：context builder/normalizer、riskCard repository lookup、成功/fallback 兼容、contract 测试。
@@ -681,9 +681,18 @@ Task `1253/1256/1257/1263/1267` 不自动重跑。运维清理仅允许在用户
 - 授权边界：允许修改列出的 Python 模块与测试；不进入 D4C。
 - 停止点：汇报 D4B 结果并等待“继续 D4C”。
 
+实施结果（`2026-08-11`）：
+
+- 自动 MR/Push 新写入统一生成 `agent-completion-context-v2`，不再包含完整 `riskCard`；
+- Agent repository 在持久化前执行字段白名单、稳定去重、单值裁剪和 UTF-8 16KB 总预算，超限时退化为关闭自动通知的最小引用对象；
+- Agent 成功与 Standard fallback 共用 `ruleResultId + taskId` 查询，拒绝跨任务引用；历史 v1 继续优先读取内嵌 `riskCard`；
+- completion context、riskCard JSON 损坏或顶层结构错误时只记录脱敏 WARN，不回滚已经完成的 AI Result；
+- 已覆盖大 riskCard 去重、敏感字段排除、UTF-8 总预算、v1/v2 兼容、跨任务拒绝、损坏 JSON、Agent 成功通知和 Standard fallback 回读；
+- 相关 unit/contract 共 `92 passed`，目标文件 Ruff 与 `git diff --check` 通过。
+
 ### D4C：Job 创建失败独立事务闭环
 
-- 阶段状态：`NOT STARTED`
+- 阶段状态：`WAITING FOR AUTHORIZATION`
 - 改动量等级：`中`。调整主链路异常事务和自动 fallback 交界，需要 DataError 注入与手动/自动两类 contract 验证。
 - 目标：任何普通持久化异常都留下失败事实，不再出现永久 `REVIEWING`。
 - 范围：独立失败 Session、Task 状态、稳定 AppError、fallback、日志脱敏和测试。

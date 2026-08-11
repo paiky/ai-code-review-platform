@@ -79,6 +79,17 @@ ABSOLUTE_MAX_SOURCE_BYTES = AGENT_BUDGET_LIMITS["maxSourceBytes"]["max"]
 ABSOLUTE_MAX_INLINE_DIFF_BYTES = AGENT_BUDGET_LIMITS["inlineDiffBytes"]["max"]
 ABSOLUTE_MAX_TIMEOUT_SECONDS = AGENT_BUDGET_LIMITS["timeoutSeconds"]["max"]
 ABSOLUTE_MAX_EVIDENCE_CALLS = AGENT_BUDGET_LIMITS["maxEvidenceCalls"]["max"]
+AGENT_COMPLETION_CONTEXT_SCHEMA_VERSION = "agent-completion-context-v2"
+AGENT_COMPLETION_CONTEXT_MAX_BYTES = 16 * 1024
+_COMPLETION_CONTEXT_NOTIFICATION_KEYS = (
+    "title",
+    "projectName",
+    "triggerType",
+    "authorName",
+    "authorUsername",
+    "sourceBranch",
+    "targetBranch",
+)
 AGENT_TRACE_PHASES = {
     "AGENT_ANALYZING",
     "AGENT_TOOL_ACTIVITY",
@@ -1563,6 +1574,10 @@ def create_agent_job(
     custom = runtime_code != DEFAULT_RUNTIME
     model = str(snapshot.get("model") or (CUSTOM_DEFAULT_MODEL if custom else AGENT_MODEL))
     input_payload = {**input_payload, "runtimeSnapshot": snapshot}
+    normalized_completion_context = normalize_completion_context(
+        completion_context,
+        task_id=task_id,
+    )
     job = CodeQualitySchedulerJob(
         job_type="AGENT_REVIEW",
         task_id=task_id,
@@ -1612,7 +1627,11 @@ def create_agent_job(
         model=model,
         status="PENDING",
         input_json=json.dumps(input_payload, ensure_ascii=False),
-        completion_context_json=json.dumps(completion_context or {}, ensure_ascii=False),
+        completion_context_json=json.dumps(
+            normalized_completion_context,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
         comparison_mode=bool(comparison_mode),
         created_at=now,
         updated_at=now,
@@ -1620,6 +1639,131 @@ def create_agent_job(
     db.add(run)
     db.flush()
     return run
+
+
+def normalize_completion_context(
+    completion_context: dict[str, Any] | None,
+    *,
+    task_id: int | None = None,
+) -> dict[str, Any]:
+    source = completion_context if isinstance(completion_context, dict) else {}
+    truncated_fields: list[str] = []
+    focus_change_types, change_types_truncated = _bounded_completion_context_list(
+        source.get("focusChangeTypes"),
+        max_items=32,
+    )
+    focus_rule_codes, rule_codes_truncated = _bounded_completion_context_list(
+        source.get("focusRuleCodes"),
+        max_items=64,
+    )
+    if change_types_truncated:
+        truncated_fields.append("focusChangeTypes")
+    if rule_codes_truncated:
+        truncated_fields.append("focusRuleCodes")
+
+    notification_source = source.get("notificationContext")
+    notification_context: dict[str, str] = {}
+    notification_truncated = False
+    if isinstance(notification_source, dict):
+        for key in _COMPLETION_CONTEXT_NOTIFICATION_KEYS:
+            raw_value = notification_source.get(key)
+            if raw_value is None:
+                continue
+            if not isinstance(raw_value, str):
+                notification_truncated = True
+                continue
+            value = raw_value.strip()
+            if len(value) > 512:
+                value = value[:512]
+                notification_truncated = True
+            if value:
+                notification_context[key] = value
+    elif notification_source is not None:
+        notification_truncated = True
+    if notification_truncated:
+        truncated_fields.append("notificationContext")
+
+    raw_result_id = source.get("ruleResultId")
+    rule_result_id = (
+        raw_result_id
+        if isinstance(raw_result_id, int)
+        and not isinstance(raw_result_id, bool)
+        and raw_result_id > 0
+        else None
+    )
+    context = {
+        "schemaVersion": AGENT_COMPLETION_CONTEXT_SCHEMA_VERSION,
+        "autoNotification": (
+            source.get("autoNotification")
+            if isinstance(source.get("autoNotification"), bool)
+            else False
+        ),
+        "ruleResultId": rule_result_id,
+        "focusChangeTypes": focus_change_types,
+        "focusRuleCodes": focus_rule_codes,
+        "notificationContext": notification_context,
+        "reminderCardEnabled": (
+            source.get("reminderCardEnabled")
+            if isinstance(source.get("reminderCardEnabled"), bool)
+            else True
+        ),
+    }
+    serialized_bytes = len(
+        json.dumps(context, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+    if serialized_bytes > AGENT_COMPLETION_CONTEXT_MAX_BYTES:
+        _LOGGER.warning(
+            "Agent completion context truncated code=AGENT_COMPLETION_CONTEXT_TRUNCATED "
+            "taskId=%s serializedBytes=%s maxBytes=%s",
+            task_id,
+            serialized_bytes,
+            AGENT_COMPLETION_CONTEXT_MAX_BYTES,
+        )
+        return {
+            "schemaVersion": AGENT_COMPLETION_CONTEXT_SCHEMA_VERSION,
+            "autoNotification": False,
+            "ruleResultId": rule_result_id,
+            "reminderCardEnabled": context["reminderCardEnabled"],
+        }
+    if truncated_fields:
+        _LOGGER.warning(
+            "Agent completion context fields truncated taskId=%s fields=%s serializedBytes=%s",
+            task_id,
+            ",".join(truncated_fields),
+            serialized_bytes,
+        )
+    return context
+
+
+def _bounded_completion_context_list(
+    value: Any,
+    *,
+    max_items: int,
+) -> tuple[list[str], bool]:
+    if value is None:
+        return [], False
+    if not isinstance(value, list):
+        return [], True
+    normalized: list[str] = []
+    seen: set[str] = set()
+    truncated = len(value) > max_items
+    for raw_item in value:
+        if len(normalized) >= max_items:
+            break
+        if not isinstance(raw_item, str):
+            truncated = True
+            continue
+        item = raw_item.strip()
+        if len(item) > 64:
+            item = item[:64]
+            truncated = True
+        if not item or item in seen:
+            if not item:
+                truncated = True
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized, truncated
 
 
 def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:

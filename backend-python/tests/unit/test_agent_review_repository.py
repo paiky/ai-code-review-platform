@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -7,12 +8,15 @@ from sqlalchemy.orm import Session
 
 from app.agent_review.models import AgentReviewRuntime, AgentReviewSettings
 from app.agent_review.repository import (
+    AGENT_COMPLETION_CONTEXT_MAX_BYTES,
+    AGENT_COMPLETION_CONTEXT_SCHEMA_VERSION,
     _supports_skip_locked,
     _ensure_settings_columns,
     agent_runtime_record_response,
     ensure_legacy_agent_runtime_records,
     get_agent_settings_record,
     list_agent_runtime_records,
+    normalize_completion_context,
     sync_legacy_agent_runtime_records,
 )
 from app.agent_review.runtime import CUSTOM_RUNTIME, DEFAULT_RUNTIME
@@ -51,6 +55,75 @@ class _Session:
 )
 def test_skip_locked_support_is_enabled_only_for_mysql_8_or_newer(session: _Session, expected: bool) -> None:
     assert _supports_skip_locked(session) is expected
+
+
+def test_completion_context_v2_drops_large_and_sensitive_payloads() -> None:
+    context = normalize_completion_context(
+        {
+            "autoNotification": True,
+            "ruleResultId": 1270,
+            "riskCard": {"summary": "R" * 90_000},
+            "diff": "SECRET_DIFF",
+            "webhookPayload": {"token": "SECRET_TOKEN"},
+            "focusChangeTypes": ["CACHE", "CACHE", "X" * 80],
+            "focusRuleCodes": ["CACHE_WRITE_DELETE_CHANGED"],
+            "notificationContext": {
+                "title": "GITLAB_MR_WEBHOOK 432",
+                "projectName": "client/example",
+                "unexpectedSecret": "SECRET_VALUE",
+            },
+            "reminderCardEnabled": False,
+        },
+        task_id=1270,
+    )
+
+    serialized = json.dumps(context, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    assert len(serialized) <= AGENT_COMPLETION_CONTEXT_MAX_BYTES
+    assert context["schemaVersion"] == AGENT_COMPLETION_CONTEXT_SCHEMA_VERSION
+    assert context["focusChangeTypes"] == ["CACHE", "X" * 64]
+    assert context["notificationContext"] == {
+        "title": "GITLAB_MR_WEBHOOK 432",
+        "projectName": "client/example",
+    }
+    assert context["reminderCardEnabled"] is False
+    assert "riskCard" not in context
+    assert "SECRET_" not in serialized.decode("utf-8")
+
+
+def test_completion_context_v2_falls_back_to_minimal_object_when_utf8_budget_exceeded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    context = normalize_completion_context(
+        {
+            "autoNotification": True,
+            "ruleResultId": 1271,
+            "focusRuleCodes": [f"{index:02d}" + "审" * 62 for index in range(64)],
+            "notificationContext": {
+                key: "查" * 512
+                for key in (
+                    "title",
+                    "projectName",
+                    "triggerType",
+                    "authorName",
+                    "authorUsername",
+                    "sourceBranch",
+                    "targetBranch",
+                )
+            },
+            "reminderCardEnabled": True,
+        },
+        task_id=1271,
+    )
+
+    assert context == {
+        "schemaVersion": AGENT_COMPLETION_CONTEXT_SCHEMA_VERSION,
+        "autoNotification": False,
+        "ruleResultId": 1271,
+        "reminderCardEnabled": True,
+    }
+    assert "AGENT_COMPLETION_CONTEXT_TRUNCATED" in caplog.text
 
 
 def test_empty_database_seeds_two_legacy_runtimes(db_session: Session) -> None:
