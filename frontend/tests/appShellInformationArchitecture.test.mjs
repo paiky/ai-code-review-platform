@@ -39,5 +39,12 @@ test('shell styling fixes the shared dimensions without introducing content scro
   assert.match(styleSource, /--app-shell-sidebar-collapsed:\s*72px/);
   assert.match(styleSource, /\.app-main-layout\s*\{[^}]*min-width:\s*0;/s);
   assert.match(styleSource, /\.app-header\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;/s);
+  assert.match(appSource, /<Sider[\s\S]*collapsedWidth=\{72\}[\s\S]*width=\{224\}/s);
   assert.doesNotMatch(styleSource, /\.app-content\s*\{[^}]*overflow-y:/s);
+});
+
+test('expanded shell menus expose controlled submenu state changes', () => {
+  assert.match(appSource, /openKeys=\{collapsed \? undefined : openKeys\}/);
+  assert.match(appSource, /onOpenChange=\{collapsed \? undefined : onOpenChange\}/);
+  assert.match(appSource, /onOpenChange=\{setOpenNavigationKeys\}/);
 });

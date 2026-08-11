@@ -63,10 +63,7 @@ export function resolveAppShellSelectedKey(pathname, items) {
 
 export function resolveAppShellOpenKeys(selectedKey, items) {
   const parent = items.find(item => item.children?.some(child => child.key === selectedKey));
-  const openKeys = parent ? [parent.key] : [];
-  const settingsParent = items.find(item => item.key === '/settings' && item.children?.length);
-  if (settingsParent && !openKeys.includes(settingsParent.key)) openKeys.push(settingsParent.key);
-  return openKeys;
+  return parent ? [parent.key] : [];
 }
 
 export function readSidebarCollapsedPreference(storage) {

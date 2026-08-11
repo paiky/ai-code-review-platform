@@ -13331,7 +13331,14 @@ function AppShellBrand({ compact = false, onClick }) {
   );
 }
 
-function AppShellMenu({ collapsed = false, items, openKeys, selectedKey, onNavigate }) {
+function AppShellMenu({
+  collapsed = false,
+  items,
+  openKeys,
+  selectedKey,
+  onNavigate,
+  onOpenChange
+}) {
   return (
     <Menu
       className="app-shell-menu"
@@ -13341,6 +13348,7 @@ function AppShellMenu({ collapsed = false, items, openKeys, selectedKey, onNavig
       selectedKeys={selectedKey ? [selectedKey] : []}
       openKeys={collapsed ? undefined : openKeys}
       onClick={({ key }) => onNavigate(key)}
+      onOpenChange={collapsed ? undefined : onOpenChange}
     />
   );
 }
@@ -13406,7 +13414,16 @@ function AppFrame() {
     reviewLearningVisible: REVIEW_LEARNING_UI_ENABLED
   }), []);
   const selectedNavigationKey = resolveAppShellSelectedKey(location.pathname, navigationItems);
-  const openNavigationKeys = resolveAppShellOpenKeys(selectedNavigationKey, navigationItems);
+  const [openNavigationKeys, setOpenNavigationKeys] = useState(['/settings']);
+
+  useEffect(() => {
+    const activeParentKeys = resolveAppShellOpenKeys(selectedNavigationKey, navigationItems);
+    if (!activeParentKeys.length) return;
+    setOpenNavigationKeys(current => {
+      const missingKeys = activeParentKeys.filter(key => !current.includes(key));
+      return missingKeys.length ? [...current, ...missingKeys] : current;
+    });
+  }, [navigationItems, selectedNavigationKey]);
 
   const loadFrameResource = useCallback(kind => {
     if (
@@ -13647,7 +13664,7 @@ function AppFrame() {
             collapsed={viewportMode === 'tablet' || desktopSidebarCollapsed}
             collapsedWidth={72}
             theme="light"
-            size={224}
+            width={224}
           >
             <AppShellBrand
               compact={viewportMode === 'tablet' || desktopSidebarCollapsed}
@@ -13660,6 +13677,7 @@ function AppFrame() {
                 openKeys={openNavigationKeys}
                 selectedKey={selectedNavigationKey}
                 onNavigate={navigateFromShell}
+                onOpenChange={setOpenNavigationKeys}
               />
             </nav>
             <Tooltip
@@ -13705,6 +13723,7 @@ function AppFrame() {
                 openKeys={openNavigationKeys}
                 selectedKey={selectedNavigationKey}
                 onNavigate={navigateFromShell}
+                onOpenChange={setOpenNavigationKeys}
               />
             </nav>
           </Drawer>
@@ -13728,6 +13747,7 @@ function AppFrame() {
                 openKeys={openNavigationKeys}
                 selectedKey={selectedNavigationKey}
                 onNavigate={navigateFromShell}
+                onOpenChange={setOpenNavigationKeys}
               />
             </nav>
           </Drawer>
