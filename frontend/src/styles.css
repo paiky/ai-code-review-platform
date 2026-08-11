@@ -72,8 +72,10 @@ body {
 }
 
 .app-shell-brand-icon {
-  color: #1677ff;
-  font-size: 22px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  object-fit: contain;
 }
 
 .app-sidebar-navigation {

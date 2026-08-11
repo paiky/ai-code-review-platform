@@ -13303,7 +13303,7 @@ function AppShellBrand({ compact = false, onClick }) {
       type="button"
       onClick={onClick}
     >
-      <SafetyCertificateOutlined className="app-shell-brand-icon" />
+      <img alt="" className="app-shell-brand-icon" src="/favicon.png" />
       {!compact && <span>AI代码质量审查平台</span>}
     </button>
   );

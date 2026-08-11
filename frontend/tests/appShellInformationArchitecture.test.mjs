@@ -27,6 +27,12 @@ test('global header exposes only real operations in the planned order', () => {
   assert.doesNotMatch(headerActions, /管理员|头像|退出/);
 });
 
+test('shell brand uses the site favicon as its visible logo', () => {
+  assert.match(appSource, /<img alt="" className="app-shell-brand-icon" src="\/favicon\.png" \/>/);
+  assert.match(styleSource, /\.app-shell-brand-icon\s*\{[^}]*width:\s*28px;[^}]*height:\s*28px;/s);
+  assert.match(appSource, /SafetyCertificateOutlined,[\s\S]*} from '@ant-design\/icons';/);
+});
+
 test('shell styling fixes the shared dimensions without introducing content scrolling', () => {
   assert.match(styleSource, /--app-shell-header-height:\s*56px/);
   assert.match(styleSource, /--app-shell-sidebar-expanded:\s*224px/);
