@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   collectAgentTraceEvents,
+  formatAgentFailureChain,
   formatAgentTraceDetail,
   groupAgentTraceEvents,
   summarizeAgentTrace
@@ -268,4 +269,148 @@ test('shows only the latest claim attempt and safely formats lease recovery', ()
   assert.match(visible, /第 2 次/);
   assert.match(visible, /上一租约已过期/);
   assert.doesNotMatch(visible, /SECRET_WORKER/);
+});
+
+
+test('keeps submit start and validation result with the same sequence and exposes a safe exhausted chain', () => {
+  const events = [
+    { id: 1, phase: 'AGENT_ANALYZING', detail: '{"runId":1271,"claimAttempt":1,"sequence":0}' },
+    ...[1, 2, 3].flatMap(attempt => ([
+      {
+        id: attempt * 10,
+        phase: 'AGENT_SUBMITTING',
+        detail: JSON.stringify({
+          runId: 1271,
+          claimAttempt: 1,
+          sequence: attempt,
+          attempt,
+          maxAttempts: 3
+        })
+      },
+      {
+        id: attempt * 10 + 1,
+        phase: 'AGENT_SUBMIT_VALIDATION_FAILED',
+        level: 'WARN',
+        detail: JSON.stringify({
+          runId: 1271,
+          claimAttempt: 1,
+          sequence: attempt,
+          attempt,
+          maxAttempts: 3,
+          violations: [
+            { reasonCode: 'REQUIRED', field: 'findings[0].title', value: 'SECRET_CARD_VALUE' },
+            { reasonCode: 'SECRET_REASON', field: 'SECRET_FIELD' }
+          ],
+          errorCode: 'SECRET error detail',
+          rawCard: 'SECRET_CARD_DRAFT'
+        })
+      }
+    ])),
+    {
+      id: 40,
+      phase: 'AGENT_OUTPUT_CONVERGENCE_FAILED',
+      level: 'WARN',
+      detail: JSON.stringify({
+        runId: 1271,
+        claimAttempt: 1,
+        submitAttemptCount: 3,
+        schemaFailureCount: 3,
+        maxAttempts: 3,
+        lastSchemaFailures: [{ reasonCode: 'REQUIRED', field: 'findings[0].title' }],
+        failureChain: [
+          { code: 'REVIEW_SCHEMA_INVALID', count: 3 },
+          { code: 'AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED', count: 1 },
+          { code: 'not safe', count: 99 }
+        ]
+      })
+    },
+    {
+      id: 50,
+      phase: 'AGENT_FALLBACK',
+      detail: '{"runId":1271,"claimAttempt":1}'
+    }
+  ];
+
+  const collected = collectAgentTraceEvents(events);
+  assert.equal(collected.filter(event => event.phase === 'AGENT_SUBMITTING').length, 3);
+  assert.equal(
+    collected.filter(event => event.phase === 'AGENT_SUBMIT_VALIDATION_FAILED').length,
+    3
+  );
+  assert.equal(collected.at(-2).phase, 'AGENT_OUTPUT_CONVERGENCE_FAILED');
+  const summary = summarizeAgentTrace(events);
+  assert.equal(summary.submissionState, 'CONVERGENCE_FAILED');
+  assert.equal(summary.reviewSubmitted, false);
+  assert.equal(summary.submitAttemptCount, 3);
+  assert.equal(summary.schemaFailureCount, 3);
+  assert.equal(summary.maxSubmitAttempts, 3);
+  assert.deepEqual(summary.lastSchemaFailures, [
+    { reasonCode: 'REQUIRED', field: 'findings[0].title' }
+  ]);
+  assert.equal(
+    formatAgentFailureChain(summary.failureChain),
+    'REVIEW_SCHEMA_INVALID × 3 -> AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED × 1'
+  );
+  const visible = formatAgentTraceDetail(
+    events[2].detail,
+    'AGENT_SUBMIT_VALIDATION_FAILED'
+  );
+  assert.match(visible, /第 1 \/ 3 次/);
+  assert.match(visible, /REQUIRED\(findings\[0\]\.title\)/);
+  assert.doesNotMatch(visible, /SECRET_/);
+  assert.doesNotMatch(JSON.stringify(summary), /SECRET_/);
+});
+
+
+test('marks only accepted or compatible historical Agent completion as submitted', () => {
+  const accepted = summarizeAgentTrace([
+    {
+      id: 1,
+      phase: 'AGENT_SUBMITTING',
+      detail: '{"runId":8,"claimAttempt":1,"sequence":1,"attempt":1,"maxAttempts":3}'
+    },
+    {
+      id: 2,
+      phase: 'AGENT_REVIEW_SUBMITTED',
+      detail: '{"runId":8,"claimAttempt":1,"sequence":1,"attempt":1,"maxAttempts":3}'
+    },
+    { id: 3, phase: 'AGENT_FINISHED', detail: '{"runId":8,"claimAttempt":1}' }
+  ]);
+  assert.equal(accepted.submissionState, 'SUBMITTED');
+  assert.equal(accepted.reviewSubmitted, true);
+
+  const waiting = summarizeAgentTrace([
+    {
+      id: 4,
+      phase: 'AGENT_HEARTBEAT',
+      detail: JSON.stringify({
+        runId: 9,
+        claimAttempt: 1,
+        reviewBudget: { phase: 'SUBMIT', mustSubmit: true }
+      })
+    }
+  ]);
+  assert.equal(waiting.submissionState, 'WAITING');
+  assert.equal(waiting.reviewSubmitted, false);
+
+  const historical = summarizeAgentTrace([
+    {
+      id: 5,
+      phase: 'AGENT_SUBMITTING',
+      detail: '{"runId":10,"claimAttempt":1,"sequence":2}'
+    },
+    { id: 6, phase: 'AGENT_FINISHED', detail: '{"runId":10,"claimAttempt":1}' }
+  ]);
+  assert.equal(historical.submissionState, 'SUBMITTED');
+  assert.equal(historical.reviewSubmitted, true);
+
+  const acceptedFlag = summarizeAgentTrace([
+    {
+      id: 7,
+      phase: 'AGENT_SUBMITTING',
+      detail: '{"runId":11,"claimAttempt":1,"sequence":1,"reviewSubmitted":true}'
+    }
+  ]);
+  assert.equal(acceptedFlag.submissionState, 'SUBMITTED');
+  assert.equal(acceptedFlag.reviewSubmitted, true);
 });

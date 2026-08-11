@@ -165,6 +165,118 @@ test('keeps Agent to Standard fallback explicit without reporting Agent success'
   assert.equal(JSON.stringify(journey).includes('Agent Review 完成'), false);
 });
 
+test('keeps Task 1271 equivalent schema exhaustion from marking submit as complete', () => {
+  const reviewKey = 'task-1271-equivalent';
+  const events = [
+    progress(1, reviewKey, 'AGENT_ANALYZING', '2026-07-29T09:00:00Z', '{"runId":1271,"claimAttempt":1,"sequence":0}'),
+    ...[1, 2, 3].flatMap(attempt => ([
+      progress(
+        attempt * 10,
+        reviewKey,
+        'AGENT_SUBMITTING',
+        `2026-07-29T09:0${attempt}:00Z`,
+        JSON.stringify({ runId: 1271, claimAttempt: 1, sequence: attempt, attempt, maxAttempts: 3 })
+      ),
+      progress(
+        attempt * 10 + 1,
+        reviewKey,
+        'AGENT_SUBMIT_VALIDATION_FAILED',
+        `2026-07-29T09:0${attempt}:01Z`,
+        JSON.stringify({
+          runId: 1271,
+          claimAttempt: 1,
+          sequence: attempt,
+          attempt,
+          maxAttempts: 3,
+          violations: [{ reasonCode: 'REQUIRED', field: 'findings[0].title', value: 'DO_NOT_RENDER' }]
+        }),
+        'WARN'
+      )
+    ])),
+    progress(
+      40,
+      reviewKey,
+      'AGENT_OUTPUT_CONVERGENCE_FAILED',
+      '2026-07-29T09:04:00Z',
+      JSON.stringify({
+        runId: 1271,
+        claimAttempt: 1,
+        submitAttemptCount: 3,
+        schemaFailureCount: 3,
+        maxAttempts: 3,
+        failureChain: [
+          { code: 'REVIEW_SCHEMA_INVALID', count: 3 },
+          { code: 'AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED', count: 1 }
+        ]
+      }),
+      'WARN'
+    ),
+    progress(41, reviewKey, 'AGENT_FALLBACK', '2026-07-29T09:04:01Z', '{"runId":1271,"claimAttempt":1}'),
+    progress(42, reviewKey, 'AGENT_FALLBACK_QUEUED', '2026-07-29T09:05:00Z'),
+    progress(43, reviewKey, 'DEEPSEEK_RESPONSE', '2026-07-29T09:06:00Z'),
+    progress(44, reviewKey, 'RESULT_SAVED', '2026-07-29T09:07:00Z'),
+    progress(45, reviewKey, 'FINISHED', '2026-07-29T09:08:00Z')
+  ];
+  const journey = buildReviewJourney({
+    ...review('AGENT', 'SUCCESS', reviewKey),
+    effectiveEngine: 'STANDARD_FALLBACK'
+  }, events, { now: NOW });
+  const submitStage = stage(journey, 'model-review').subStages.find(
+    item => item.id === 'submitting'
+  );
+
+  assert.equal(journey.agentSummary.submissionState, 'CONVERGENCE_FAILED');
+  assert.equal(journey.agentSummary.reviewSubmitted, false);
+  assert.equal(submitStage.status, 'FAILED');
+  assert.equal(submitStage.title, 'Review Card 输出收敛失败');
+  assert.equal(stage(journey, 'model-review').status, 'WARNING');
+  assert.deepEqual(journey.agentSummary.failureChain, [
+    { code: 'REVIEW_SCHEMA_INVALID', count: 3 },
+    { code: 'AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED', count: 1 }
+  ]);
+  assert.equal(JSON.stringify(journey).includes('DO_NOT_RENDER'), false);
+});
+
+test('marks submit complete only after acceptance and distinguishes waiting submit', () => {
+  const acceptedKey = 'agent-accepted';
+  const accepted = buildReviewJourney(
+    review('AGENT', 'SUCCESS', acceptedKey),
+    [
+      progress(1, acceptedKey, 'AGENT_ANALYZING', '2026-07-29T09:00:00Z', '{"runId":12,"claimAttempt":1,"sequence":0}'),
+      progress(2, acceptedKey, 'AGENT_SUBMITTING', '2026-07-29T09:01:00Z', '{"runId":12,"claimAttempt":1,"sequence":1,"attempt":1,"maxAttempts":3}'),
+      progress(3, acceptedKey, 'AGENT_REVIEW_SUBMITTED', '2026-07-29T09:01:01Z', '{"runId":12,"claimAttempt":1,"sequence":1,"attempt":1,"maxAttempts":3}'),
+      progress(4, acceptedKey, 'AGENT_FINISHED', '2026-07-29T09:02:00Z', '{"runId":12,"claimAttempt":1}')
+    ],
+    { now: NOW }
+  );
+  const acceptedSubmit = stage(accepted, 'model-review').subStages.find(
+    item => item.id === 'submitting'
+  );
+  assert.equal(acceptedSubmit.status, 'SUCCESS');
+  assert.equal(accepted.agentSummary.reviewSubmitted, true);
+
+  const waitingKey = 'agent-waiting-submit';
+  const waiting = buildReviewJourney(
+    review('AGENT', 'RUNNING', waitingKey),
+    [
+      progress(5, waitingKey, 'AGENT_CONVERGING', '2026-07-29T09:03:00Z', '{"runId":13,"claimAttempt":1,"sequence":2}'),
+      progress(6, waitingKey, 'AGENT_HEARTBEAT', '2026-07-29T09:03:01Z', JSON.stringify({
+        runId: 13,
+        claimAttempt: 1,
+        heartbeatSequence: 2,
+        reviewBudget: { phase: 'SUBMIT', mustSubmit: true }
+      }))
+    ],
+    { now: NOW }
+  );
+  const waitingSubmit = stage(waiting, 'model-review').subStages.find(
+    item => item.id === 'submitting'
+  );
+  assert.equal(waiting.agentSummary.submissionState, 'WAITING');
+  assert.equal(waitingSubmit.status, 'ACTIVE');
+  assert.equal(waitingSubmit.title, '等待提交 Review Card');
+});
+
 test('isolates reviewKey events and merges only task-level AUTO_PREFLIGHT allowlist events', () => {
   const reviews = [
     review('STANDARD', 'SUCCESS', 'review-a'),

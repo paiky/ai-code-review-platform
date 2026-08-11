@@ -145,3 +145,18 @@ test('the migrated context and preflight drawers render only safe derived fields
     assert.equal(preflightSource.includes(field), false, `preflight: ${field}`);
   });
 });
+
+test('renders only bounded Agent submission diagnostics in both fallback alerts', () => {
+  const diagnosticSource = sourceBetween(
+    'function agentFallbackDiagnostic',
+    'function StageAlertPopoverContent'
+  );
+
+  assert.equal(diagnosticSource.includes('formatAgentFailureChain'), true);
+  assert.equal(diagnosticSource.includes('submitAttemptCount'), true);
+  assert.equal(diagnosticSource.includes('maxSubmitAttempts'), true);
+  assert.equal(diagnosticSource.includes('safeReviewErrorCode'), true);
+  assert.equal(diagnosticSource.includes('rawCard'), false);
+  assert.equal(diagnosticSource.includes('violations'), false);
+  assert.equal((appSource.match(/agentFallbackDiagnostic\(/g) || []).length, 3);
+});

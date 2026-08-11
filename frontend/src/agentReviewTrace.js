@@ -4,6 +4,9 @@ export const agentTracePhases = new Set([
   'AGENT_TOOL_ACTIVITY',
   'AGENT_CONVERGING',
   'AGENT_SUBMITTING',
+  'AGENT_SUBMIT_VALIDATION_FAILED',
+  'AGENT_REVIEW_SUBMITTED',
+  'AGENT_OUTPUT_CONVERGENCE_FAILED',
   'AGENT_FINISHED',
   'AGENT_FALLBACK',
   'AGENT_CANCELLED'
@@ -19,6 +22,24 @@ const agentTerminalPhases = new Set([
   'AGENT_FINISHED',
   'AGENT_FALLBACK',
   'AGENT_CANCELLED'
+]);
+
+const agentSubmissionPhases = new Set([
+  'AGENT_SUBMITTING',
+  'AGENT_SUBMIT_VALIDATION_FAILED',
+  'AGENT_REVIEW_SUBMITTED',
+  'AGENT_OUTPUT_CONVERGENCE_FAILED'
+]);
+
+const safeSchemaReasonCodes = new Set([
+  'REQUIRED',
+  'TYPE',
+  'ENUM',
+  'UNSAFE_PATH',
+  'PATH_OUTSIDE_CHANGED_FILES',
+  'LINE_RANGE',
+  'LENGTH',
+  'CARD_SHAPE'
 ]);
 
 export function isAgentTraceProgressEvent(event) {
@@ -41,7 +62,10 @@ export function collectAgentTraceEvents(events) {
       if (!matchesScope(detail, latestScope)) return;
       const terminalKey = agentTerminalPhases.has(event?.phase) ? event.phase : null;
       const reclaimedKey = event?.phase === 'AGENT_RECLAIMED' ? event.phase : null;
-      const key = `${detail?.runId ?? 'run'}:${scopeAttempt(detail)}:${terminalKey ?? reclaimedKey ?? detail?.sequence ?? event?.id}`;
+      const sequenceKey = agentSubmissionPhases.has(event?.phase)
+        ? `${event.phase}:${detail?.sequence ?? event?.id}`
+        : detail?.sequence ?? event?.id;
+      const key = `${detail?.runId ?? 'run'}:${scopeAttempt(detail)}:${terminalKey ?? reclaimedKey ?? sequenceKey}`;
       if (!byKey.has(key)) byKey.set(key, event);
     });
   return [...byKey.values()].sort((left, right) => {
@@ -152,6 +176,7 @@ export function summarizeAgentTrace(events, now = Date.now()) {
   );
   const lastHeartbeatAt = latestHeartbeat?.createdAt || null;
   const heartbeatTime = Date.parse(lastHeartbeatAt || '');
+  const submission = summarizeAgentSubmission(trace, reviewBudget);
   return {
     runId: latestScope.runId,
     claimAttempt: latestScope.claimAttempt,
@@ -173,7 +198,8 @@ export function summarizeAgentTrace(events, now = Date.now()) {
     diffBytesReturned: safeNumber(metrics.diffBytesReturned),
     turnCount: terminal ? safeNumber(traceDetail.turnCount) : null,
     effectiveBudgets,
-    reviewBudget
+    reviewBudget,
+    ...submission
   };
 }
 
@@ -219,7 +245,23 @@ export function formatAgentTraceDetail(detail, eventPhase = '') {
   if (Number.isFinite(Number(value.durationMs))) lines.push(`耗时：${Number(value.durationMs)} ms`);
   if (Number.isFinite(Number(value.itemCount))) lines.push(`条目数：${Number(value.itemCount)}`);
   if (Number.isFinite(Number(value.sourceBytes))) lines.push(`返回字节：${Number(value.sourceBytes)}`);
-  if (value.errorCode) lines.push(`错误码：${value.errorCode}`);
+  const errorCode = safeErrorCode(value.errorCode);
+  if (errorCode) lines.push(`错误码：${errorCode}`);
+  if (agentSubmissionPhases.has(eventPhase)) {
+    const attempt = safeNumber(value.attempt || value.submitAttemptCount);
+    const maxAttempts = safeNumber(value.maxAttempts);
+    if (attempt > 0) {
+      lines.push(`提交尝试：第 ${attempt}${maxAttempts > 0 ? ` / ${maxAttempts}` : ''} 次`);
+    }
+    const violations = safeSchemaFailures(value.violations || value.lastSchemaFailures);
+    if (violations.length > 0) {
+      lines.push(`Schema 问题：${violations.map(item => `${item.reasonCode}(${item.field})`).join('、')}`);
+    }
+    const failureChain = safeFailureChain(value.failureChain);
+    if (failureChain.length > 0) {
+      lines.push(`失败链：${formatAgentFailureChain(failureChain)}`);
+    }
+  }
   const pathSummary = Array.isArray(value.pathSummary) ? value.pathSummary : [];
   const fileTypes = [...new Set(pathSummary.map(item => {
     const suffix = String(item?.suffix || '无后缀');
@@ -236,6 +278,12 @@ export function formatAgentTraceDetail(detail, eventPhase = '') {
     if (budget.mustSubmit) lines.push('提交要求：必须立即提交 Review Card');
   }
   return lines.join('\n');
+}
+
+export function formatAgentFailureChain(value) {
+  return safeFailureChain(value)
+    .map(item => `${item.code} × ${item.count}`)
+    .join(' -> ');
 }
 
 export function getLatestAgentTraceScope(events) {
@@ -275,7 +323,115 @@ function traceSortValue(event, detail) {
   if (event?.phase === 'AGENT_FINISHED') return 10_001;
   if (event?.phase === 'AGENT_FALLBACK') return 10_002;
   if (event?.phase === 'AGENT_CANCELLED') return 10_003;
+  if (
+    event?.phase === 'AGENT_OUTPUT_CONVERGENCE_FAILED'
+    && !Number.isFinite(Number(detail?.sequence))
+  ) {
+    return 9_000;
+  }
   return Number(detail?.sequence || 0);
+}
+
+function summarizeAgentSubmission(trace, reviewBudget) {
+  const events = Array.isArray(trace) ? trace : [];
+  const submissionEvents = events.filter(event => agentSubmissionPhases.has(event?.phase));
+  const details = submissionEvents.map(event => parseDetail(event?.detail) || {});
+  const traceDetails = events.map(event => parseDetail(event?.detail) || {});
+  const latestDetail = details.at(-1) || {};
+  const accepted = submissionEvents.some(event => event.phase === 'AGENT_REVIEW_SUBMITTED')
+    || traceDetails.some(detail => detail.reviewSubmitted === true);
+  const exhausted = submissionEvents.some(
+    event => event.phase === 'AGENT_OUTPUT_CONVERGENCE_FAILED'
+  );
+  const validationFailures = submissionEvents.filter(
+    event => event.phase === 'AGENT_SUBMIT_VALIDATION_FAILED'
+  );
+  const hasNewSubmissionOutcome = submissionEvents.some(event => (
+    event.phase === 'AGENT_SUBMIT_VALIDATION_FAILED'
+    || event.phase === 'AGENT_REVIEW_SUBMITTED'
+    || event.phase === 'AGENT_OUTPUT_CONVERGENCE_FAILED'
+  ));
+  const legacyAccepted = !hasNewSubmissionOutcome
+    && events.some(event => event.phase === 'AGENT_FINISHED');
+  const submitAttemptCount = Math.min(3, Math.max(
+    0,
+    ...details.map(detail => safeNumber(detail.submitAttemptCount || detail.attempt))
+  ));
+  const schemaFailureCount = Math.min(3, Math.max(
+    validationFailures.length,
+    ...details.map(detail => safeNumber(detail.schemaFailureCount))
+  ));
+  const maxAttempts = Math.min(3, Math.max(
+    0,
+    ...details.map(detail => safeNumber(detail.maxAttempts))
+  ));
+  const failureDetail = [...details].reverse().find(detail => (
+    Array.isArray(detail.failureChain)
+    || Array.isArray(detail.lastSchemaFailures)
+    || Array.isArray(detail.violations)
+  )) || latestDetail;
+  const lastSchemaFailures = safeSchemaFailures(
+    failureDetail.lastSchemaFailures || failureDetail.violations
+  );
+  let failureChain = safeFailureChain(failureDetail.failureChain);
+  if (failureChain.length === 0 && schemaFailureCount > 0) {
+    failureChain = [{ code: 'REVIEW_SCHEMA_INVALID', count: schemaFailureCount }];
+    if (exhausted) {
+      failureChain.push({ code: 'AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED', count: 1 });
+    }
+  }
+  const submissionState = accepted || legacyAccepted
+    ? 'SUBMITTED'
+    : exhausted
+      ? 'CONVERGENCE_FAILED'
+      : validationFailures.length > 0
+        ? 'VALIDATION_FAILED'
+        : submissionEvents.some(event => event.phase === 'AGENT_SUBMITTING')
+          ? 'SUBMITTING'
+          : reviewBudget?.mustSubmit || reviewBudget?.phase === 'SUBMIT'
+            ? 'WAITING'
+            : 'NOT_STARTED';
+  return {
+    submissionState,
+    reviewSubmitted: accepted || legacyAccepted,
+    submitAttemptCount,
+    schemaFailureCount,
+    maxSubmitAttempts: maxAttempts,
+    lastSchemaFailures,
+    failureChain,
+    failureCode: exhausted
+      ? 'AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED'
+      : safeErrorCode(failureDetail.failureCode)
+  };
+}
+
+function safeSchemaFailures(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 5).flatMap(item => {
+    const reasonCode = String(item?.reasonCode || '').toUpperCase();
+    const field = String(item?.field || '').slice(0, 120);
+    if (
+      !safeSchemaReasonCodes.has(reasonCode)
+      || !/^(?:\$|[A-Za-z][A-Za-z0-9]*(?:\[\d+\]|\.[A-Za-z][A-Za-z0-9]*)*)$/.test(field)
+    ) {
+      return [];
+    }
+    return [{ reasonCode, field }];
+  });
+}
+
+function safeFailureChain(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 5).flatMap(item => {
+    const code = safeErrorCode(item?.code);
+    const count = Math.min(Math.floor(safeNumber(item?.count)), 50);
+    return code && count > 0 ? [{ code, count }] : [];
+  });
+}
+
+function safeErrorCode(value) {
+  const code = String(value || '').toUpperCase();
+  return /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : null;
 }
 
 function validNumberMap(value, allowedKeys) {

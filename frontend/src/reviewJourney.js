@@ -73,6 +73,9 @@ export const REVIEW_JOURNEY_STAGE_DEFINITIONS = Object.freeze([
       'AGENT_TOOL_ACTIVITY',
       'AGENT_CONVERGING',
       'AGENT_SUBMITTING',
+      'AGENT_SUBMIT_VALIDATION_FAILED',
+      'AGENT_REVIEW_SUBMITTED',
+      'AGENT_OUTPUT_CONVERGENCE_FAILED',
       'AGENT_HEARTBEAT',
       'PROVIDER_START',
       'HTTP_REQUEST_START'
@@ -129,6 +132,8 @@ const warningPhases = new Set([
   'AGENT_INPUT_BUILD_FAILED',
   'AGENT_JOB_CREATE_FAILED',
   'LOCAL_CONTEXT_RETRIEVE_FAILED',
+  'AGENT_SUBMIT_VALIDATION_FAILED',
+  'AGENT_OUTPUT_CONVERGENCE_FAILED',
   'AGENT_FALLBACK',
   'AGENT_FALLBACK_QUEUED'
 ]);
@@ -222,6 +227,9 @@ const safePhaseLabels = Object.freeze({
   AGENT_TOOL_ACTIVITY: 'Agent 正在受控只读取证',
   AGENT_CONVERGING: 'Agent 正在收敛结论',
   AGENT_SUBMITTING: 'Agent 正在提交 Review Card',
+  AGENT_SUBMIT_VALIDATION_FAILED: 'Review Card 结构校验失败',
+  AGENT_REVIEW_SUBMITTED: 'Agent 已提交 Review Card',
+  AGENT_OUTPUT_CONVERGENCE_FAILED: 'Review Card 输出收敛失败',
   AGENT_HEARTBEAT: 'Agent 最新安全心跳',
   PROVIDER_START: 'Provider 调用已启动',
   HTTP_REQUEST_START: 'Provider 请求已发起',
@@ -720,7 +728,16 @@ function buildStageSafeMetrics(stageId, events, context = {}) {
           : budgets.maxTurns == null
             ? '完成后可见'
             : `完成后可见 / ${budgets.maxTurns}`
-      )
+      ),
+      summary.submitAttemptCount > 0
+        ? safeMetric(
+            '提交尝试',
+            `${summary.submitAttemptCount}${summary.maxSubmitAttempts > 0 ? ` / ${summary.maxSubmitAttempts}` : ''}`
+          )
+        : null,
+      summary.schemaFailureCount > 0
+        ? safeMetric('Schema 失败', summary.schemaFailureCount)
+        : null
     ].filter(Boolean);
   }
   if (stageId === 'parse-save') {
@@ -1139,15 +1156,44 @@ function buildAgentSubStages(events, agentSummary, reviewStatus) {
   const activePhase = reviewStatus === 'RUNNING' ? agentSummary.phase : null;
   const hasOperationalPhase = agentSubStageDefinitions.some(item => phases.has(item.phase));
   if (!hasOperationalPhase) return [];
-  return agentSubStageDefinitions.map(item => ({
-    id: item.id,
-    title: item.title,
-    status: activePhase === item.phase
-      ? 'ACTIVE'
-      : phases.has(item.phase)
-        ? 'SUCCESS'
-        : 'WAITING'
-  }));
+  return agentSubStageDefinitions.map(item => {
+    if (item.id === 'submitting') {
+      const presentation = agentSubmissionSubStage(agentSummary, reviewStatus);
+      return { ...item, ...presentation };
+    }
+    return {
+      id: item.id,
+      title: item.title,
+      status: activePhase === item.phase
+        ? 'ACTIVE'
+        : phases.has(item.phase)
+          ? 'SUCCESS'
+          : 'WAITING'
+    };
+  });
+}
+
+function agentSubmissionSubStage(agentSummary, reviewStatus) {
+  switch (agentSummary?.submissionState) {
+    case 'SUBMITTED':
+      return { title: '提交 Review Card', status: 'SUCCESS' };
+    case 'CONVERGENCE_FAILED':
+      return { title: 'Review Card 输出收敛失败', status: 'FAILED' };
+    case 'VALIDATION_FAILED':
+      return { title: 'Review Card 校验失败', status: 'WARNING' };
+    case 'SUBMITTING':
+      return {
+        title: '正在提交 Review Card',
+        status: reviewStatus === 'RUNNING' ? 'ACTIVE' : 'WARNING'
+      };
+    case 'WAITING':
+      return {
+        title: '等待提交 Review Card',
+        status: reviewStatus === 'RUNNING' ? 'ACTIVE' : 'WAITING'
+      };
+    default:
+      return { title: '提交 Review Card', status: 'WAITING' };
+  }
 }
 
 function safeAgentSummary(summary, nowMs) {
@@ -1167,6 +1213,23 @@ function safeAgentSummary(summary, nowMs) {
     sourceBytesReturned: nonNegativeNumber(summary.sourceBytesReturned) ?? 0,
     diffBytesReturned: nonNegativeNumber(summary.diffBytesReturned) ?? 0,
     turnCount: summary.terminal ? nonNegativeNumber(summary.turnCount) : null,
+    submissionState: [
+      'NOT_STARTED',
+      'WAITING',
+      'SUBMITTING',
+      'VALIDATION_FAILED',
+      'SUBMITTED',
+      'CONVERGENCE_FAILED'
+    ].includes(normalizeEnum(summary.submissionState))
+      ? normalizeEnum(summary.submissionState)
+      : 'NOT_STARTED',
+    reviewSubmitted: Boolean(summary.reviewSubmitted),
+    submitAttemptCount: boundedNonNegative(summary.submitAttemptCount, 3),
+    schemaFailureCount: boundedNonNegative(summary.schemaFailureCount, 3),
+    maxSubmitAttempts: boundedNonNegative(summary.maxSubmitAttempts, 3),
+    lastSchemaFailures: safeAgentSchemaFailures(summary.lastSchemaFailures),
+    failureChain: safeAgentFailureChain(summary.failureChain),
+    failureCode: safeEnumToken(summary.failureCode),
     effectiveBudgets: safeNumberMap(summary.effectiveBudgets, agentEffectiveBudgetKeys),
     reviewBudget: {
       phase: ['DISCOVERY', 'CONVERGE', 'SUBMIT'].includes(normalizeEnum(summary.reviewBudget?.phase))
@@ -1178,6 +1241,41 @@ function safeAgentSummary(summary, nowMs) {
       mustSubmit: Boolean(summary.reviewBudget?.mustSubmit)
     }
   };
+}
+
+function safeAgentSchemaFailures(value) {
+  const allowed = new Set([
+    'REQUIRED',
+    'TYPE',
+    'ENUM',
+    'UNSAFE_PATH',
+    'PATH_OUTSIDE_CHANGED_FILES',
+    'LINE_RANGE',
+    'LENGTH',
+    'CARD_SHAPE'
+  ]);
+  return arrayValue(value).slice(0, 5).flatMap(item => {
+    const reasonCode = safeEnumToken(item?.reasonCode);
+    const field = String(item?.field || '').slice(0, 120);
+    return reasonCode
+      && allowed.has(reasonCode)
+      && /^(?:\$|[A-Za-z][A-Za-z0-9]*(?:\[\d+\]|\.[A-Za-z][A-Za-z0-9]*)*)$/.test(field)
+      ? [{ reasonCode, field }]
+      : [];
+  });
+}
+
+function safeAgentFailureChain(value) {
+  return arrayValue(value).slice(0, 5).flatMap(item => {
+    const code = safeEnumToken(item?.code);
+    const count = boundedNonNegative(item?.count, 50);
+    return code && count > 0 ? [{ code, count }] : [];
+  });
+}
+
+function boundedNonNegative(value, maximum) {
+  const number = nonNegativeNumber(value);
+  return number === null ? 0 : Math.min(Math.floor(number), maximum);
 }
 
 function safeNumberMap(value, allowedKeys) {

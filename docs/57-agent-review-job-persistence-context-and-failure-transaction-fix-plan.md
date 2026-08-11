@@ -4,10 +4,10 @@
 
 - 文档日期：`2026-08-11`
 - 来源专项：`docs/56-agent-review-dispatch-observability-and-command-center-preparation-motion-plan.md`
-- 当前阶段：`D4D 已完成`
-- 当前状态：`D4D COMPLETED — WAITING FOR D4E AUTHORIZATION`
-- 当前授权：D4A、D4B、D4C、D4D 已完成；未经后续授权不修改前端或测试环境数据。
-- 当前停止点：等待用户明确确认“继续 D4E”。未经确认不得进入任务详情展示实现。
+- 当前阶段：`D4E 已完成`
+- 当前状态：`D4E COMPLETED — WAITING FOR D4F AUTHORIZATION`
+- 当前授权：D4A、D4B、D4C、D4D、D4E 已完成；未经后续授权不修改测试环境数据。
+- 当前停止点：等待用户明确确认“继续 D4F”。
 
 ---
 
@@ -734,14 +734,22 @@ Task `1253/1256/1257/1263/1267` 不自动重跑。运维清理仅允许在用户
 
 ### D4E：任务详情提交状态与失败链展示
 
-- 阶段状态：`NOT STARTED`
+- 阶段状态：`COMPLETED`
 - 改动量等级：`中`。跨 Agent trace、Review journey 和任务详情展示，需要兼容历史 Progress，但不调整 Command Center 和公开接口。
 - 目标：用户能区分等待提交、schema 校验失败、提交成功、输出收敛失败和 fallback。
 - 范围：第 7.5 节前端模块、任务详情 fixture 和最小前端测试/build。
 - 非目标：不调整运行总览拓扑、动画、颜色系统或设置页，不修改后端行为。
 - 验收：Task `1271` 等价数据不再显示“提交 Review Card 已完成”；正常 Agent Card 仍显示完成；历史任务可加载。
-- 授权边界：允许修改列出的前端文件和测试；不进入 D4F、不部署、不提交或推送。
+- 授权边界：允许修改列出的前端文件和测试并单独提交；不进入 D4F、不部署或推送。
 - 停止点：汇报 D4E 结果并等待“继续 D4F”。
+
+#### D4E 实施与验收结果（2026-08-11）
+
+- Agent trace 保留同一提交序号下的 `AGENT_SUBMITTING` 与校验结果，按安全字段归纳等待提交、提交中、校验失败、提交成功和输出收敛失败；无提交序号的收敛失败事件仍稳定排在提交尝试之后。
+- Review journey 仅在 `AGENT_REVIEW_SUBMITTED`、安全的 `reviewSubmitted=true`，或没有新提交结果事件的历史 `AGENT_FINISHED` 任务中将“提交 Review Card”标为成功；Task `1271` 等价的三次校验失败、输出收敛失败和 fallback 链路显示为失败。
+- 任务详情仅展示有界的提交次数、最大尝试次数、schema 失败次数、安全错误码与安全 `failureChain`，不渲染原始 Card、字段值或 violation 内容。
+- 新增正常提交、等待提交预算、连续 schema 失败后 fallback、旧事件历史兼容和安全展示回归；前端完整测试 `220 passed`。
+- `scripts/run-frontend.ps1 build` 通过；Vite 仅保留既有的大 chunk 提示，未影响构建产物。
 
 ### D4F：测试环境迁移与真实任务验收
 

@@ -127,6 +127,7 @@ import {
 import CommandCenterPage from './command-center/CommandCenterPage.jsx';
 import { createVisibilityRefreshLifecycle } from './visibilityRefreshLifecycle.js';
 import {
+  formatAgentFailureChain,
   formatAgentTraceDetail,
   groupAgentTraceEvents,
   isAgentHeartbeatProgressEvent,
@@ -2410,6 +2411,9 @@ function phaseLabel(phase) {
     AGENT_TOOL_ACTIVITY: 'Agent 补充证据',
     AGENT_CONVERGING: 'Agent 收敛结论',
     AGENT_SUBMITTING: 'Agent 提交结果',
+    AGENT_SUBMIT_VALIDATION_FAILED: 'Review Card 校验失败',
+    AGENT_REVIEW_SUBMITTED: 'Review Card 已提交',
+    AGENT_OUTPUT_CONVERGENCE_FAILED: 'Review Card 输出收敛失败',
     AGENT_HEARTBEAT: 'Agent 运行心跳',
     AGENT_FINISHED: 'Agent 审查完成',
     AGENT_FALLBACK: 'Agent 失败降级',
@@ -2504,6 +2508,9 @@ const keyProgressPhases = new Set([
   'AGENT_TOOL_ACTIVITY',
   'AGENT_CONVERGING',
   'AGENT_SUBMITTING',
+  'AGENT_SUBMIT_VALIDATION_FAILED',
+  'AGENT_REVIEW_SUBMITTED',
+  'AGENT_OUTPUT_CONVERGENCE_FAILED',
   'AGENT_FINISHED',
   'AGENT_FALLBACK',
   'AGENT_CANCELLED',
@@ -2603,6 +2610,12 @@ function progressStepDescription(event) {
       return 'Agent 已停止扩大检索范围，正在收敛 Review 结论。';
     case 'AGENT_SUBMITTING':
       return 'Agent 正在提交结构化 Review Card。';
+    case 'AGENT_SUBMIT_VALIDATION_FAILED':
+      return 'Review Card 未通过结构校验，Agent 正在按安全错误摘要修正。';
+    case 'AGENT_REVIEW_SUBMITTED':
+      return 'Review Card 已通过结构校验并被正式接受。';
+    case 'AGENT_OUTPUT_CONVERGENCE_FAILED':
+      return 'Review Card 连续三次未通过结构校验，Agent 输出已停止并进入降级。';
     case 'AGENT_FINISHED':
       return 'Agent 已成功提交 Review Card，并保存正式审查结果。';
     case 'AGENT_FALLBACK':
@@ -3282,6 +3295,9 @@ function HighAccuracyFlowView({ progress, review }) {
   const requestedEngine = String(review?.requestedEngine || 'STANDARD').toUpperCase();
   const effectiveEngine = String(review?.effectiveEngine || requestedEngine).toUpperCase();
   const agentRunSummary = review?.agentRunSummary || null;
+  const agentTraceSummary = summarizeAgentTrace(
+    selectReviewJourneyEvents(review, progress)
+  );
   const gapText = value => {
     const text = value || '-';
     return (
@@ -3363,7 +3379,7 @@ function HighAccuracyFlowView({ progress, review }) {
               type="warning"
               showIcon
               message="Agent Review 已显式降级为普通 Review"
-              description={agentRunSummary?.failureMessage || agentRunSummary?.failureCode || 'Agent Worker 或执行链路不可用'}
+              description={agentFallbackDiagnostic(agentRunSummary, agentTraceSummary)}
             />
           )}
         </Card>
@@ -3744,17 +3760,25 @@ function AgentTraceOverview({ summary }) {
   if (!summary) return null;
   const budgets = summary.effectiveBudgets || {};
   const budgetPhase = summary.reviewBudget?.phase || '';
-  const phaseReason = summary.phase === 'AGENT_FINISHED'
-    ? 'Review Card 已成功提交并保存。'
-    : summary.phase === 'AGENT_FALLBACK'
-      ? 'Agent 未能提交有效结果，已进入普通 Review 降级。'
-      : summary.phase === 'AGENT_CANCELLED'
-        ? 'Agent Review 已取消。'
-        : budgetPhase === 'SUBMIT' || summary.phase === 'AGENT_SUBMITTING'
-          ? '证据收集已经结束，当前只允许提交 Review Card。'
-          : budgetPhase === 'CONVERGE' || summary.phase === 'AGENT_CONVERGING'
-            ? '已达到收敛起点，不再扩大风险假设或检索范围。'
-            : '仍处于有限取证阶段，只围绕既有风险假设补充证据。';
+  const phaseReason = summary.submissionState === 'CONVERGENCE_FAILED'
+    ? 'Review Card 结构修正已达到安全上限，Agent 输出已停止。'
+    : summary.submissionState === 'SUBMITTED'
+      ? 'Review Card 已通过结构校验并被正式接受。'
+      : summary.submissionState === 'VALIDATION_FAILED'
+        ? 'Review Card 结构校验失败，等待下一次有界修正。'
+        : summary.submissionState === 'SUBMITTING'
+          ? 'Agent 正在提交结构化 Review Card。'
+          : summary.submissionState === 'WAITING'
+            ? '证据收集已经结束，正在等待提交 Review Card。'
+            : summary.phase === 'AGENT_FINISHED'
+              ? 'Review Card 已成功提交并保存。'
+              : summary.phase === 'AGENT_FALLBACK'
+                ? 'Agent 未能提交有效结果，已进入普通 Review 降级。'
+                : summary.phase === 'AGENT_CANCELLED'
+                  ? 'Agent Review 已取消。'
+                  : budgetPhase === 'CONVERGE' || summary.phase === 'AGENT_CONVERGING'
+                    ? '已达到收敛起点，不再扩大风险假设或检索范围。'
+                    : '仍处于有限取证阶段，只围绕既有风险假设补充证据。';
   const metrics = [
     {
       key: 'turns',
@@ -3801,6 +3825,20 @@ function AgentTraceOverview({ summary }) {
         </Text>
       </div>
       <Text type="secondary">{phaseReason}</Text>
+      {summary.submitAttemptCount > 0 && (
+        <Space wrap>
+          <Tag>
+            提交 {summary.submitAttemptCount}
+            {summary.maxSubmitAttempts > 0 ? ` / ${summary.maxSubmitAttempts}` : ''}
+          </Tag>
+          {summary.schemaFailureCount > 0 && (
+            <Tag color="orange">Schema 失败 {summary.schemaFailureCount} 次</Tag>
+          )}
+          {formatAgentFailureChain(summary.failureChain) && (
+            <Text type="secondary">{formatAgentFailureChain(summary.failureChain)}</Text>
+          )}
+        </Space>
+      )}
       <div className="agent-trace-budget-grid">
         {metrics.map(metric => {
           const used = Number(metric.used ?? 0);
@@ -4563,6 +4601,28 @@ function safeProgressLevelLabel(level) {
 function safeReviewErrorCode(value) {
   const code = String(value || '').trim().toUpperCase();
   return /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : null;
+}
+
+function agentFallbackDiagnostic(agentRunSummary, agentTraceSummary) {
+  const trace = agentTraceSummary && typeof agentTraceSummary === 'object'
+    ? agentTraceSummary
+    : {};
+  const chain = formatAgentFailureChain(trace.failureChain);
+  const attempt = Number(trace.submitAttemptCount || 0);
+  const maxAttempts = Number(trace.maxSubmitAttempts || 0);
+  const failureCode = safeReviewErrorCode(
+    trace.failureCode || agentRunSummary?.failureCode
+  );
+  return [
+    failureCode ? `错误码：${failureCode}` : null,
+    attempt > 0
+      ? `提交尝试：${attempt}${maxAttempts > 0 ? ` / ${maxAttempts}` : ''}`
+      : null,
+    chain ? `失败链：${chain}` : null,
+    !failureCode && !chain
+      ? agentRunSummary?.failureMessage || 'Agent Worker 或执行链路不可用'
+      : null
+  ].filter(Boolean).join('；');
 }
 
 function StageAlertPopoverContent({ stage }) {
@@ -5647,9 +5707,7 @@ function CodeQualityReviewView({
               message="本次 Agent Review 已降级为普通 Review"
               description={[
                 'Agent 未形成有效终态，任务已按既有策略由 Standard Review 接管。',
-                safeReviewErrorCode(agentRunSummary?.failureCode)
-                  ? `错误码：${safeReviewErrorCode(agentRunSummary.failureCode)}`
-                  : null
+                agentFallbackDiagnostic(agentRunSummary, journey?.agentSummary)
               ].filter(Boolean).join(' ')}
             />
           )}
