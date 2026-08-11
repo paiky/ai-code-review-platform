@@ -4,10 +4,10 @@
 
 - 文档日期：`2026-08-11`
 - 来源专项：`docs/56-agent-review-dispatch-observability-and-command-center-preparation-motion-plan.md`
-- 当前阶段：`D4 设计完成`
-- 当前状态：`DESIGN COMPLETED — WAITING FOR D4A AUTHORIZATION`
-- 当前授权：仅允许落地本设计文档；不修改 Python、数据库迁移、测试、部署配置或测试环境数据。
-- 当前停止点：等待用户明确确认“继续 D4A”。未经确认不得创建 V52、修改模型或执行数据库变更。
+- 当前阶段：`D4A 已完成`
+- 当前状态：`D4A COMPLETED — WAITING FOR D4B AUTHORIZATION`
+- 当前授权：D4A 已完成；未经后续授权不修改 completion context、失败事务、Agent 输出收敛、前端或测试环境数据。
+- 当前停止点：等待用户明确确认“继续 D4B”。未经确认不得进入 completion context v2 实现。
 
 ---
 
@@ -515,6 +515,7 @@ Task `1271` 已证明直接根因是“10 次 schema 校验失败”，不是证
 
 - 新增 `backend-python/migrations/bootstrap_sql/V52__agent_review_run_payload_capacity.sql`；
 - 修改 `backend-python/app/agent_review/models.py` 的大 JSON 文本类型；
+- 修改 `backend-python/app/migrate.py`，兼容数据库已手工扩容但迁移台账尚未记录 V52 的场景；
 - 更新 `backend-python/tests/unit/test_migrate_bootstrap.py`：版本连续到 V52、SQL 类型断言、已满足迁移判断；
 - 不更新 README，迁移步骤和验收结果写入本专题。
 
@@ -652,7 +653,7 @@ Task `1253/1256/1257/1263/1267` 不自动重跑。运维清理仅允许在用户
 
 ### D4A：字段扩容与模型一致性
 
-- 阶段状态：`WAITING FOR AUTHORIZATION`
+- 阶段状态：`COMPLETED`
 - 改动量等级：`中`。涉及 MySQL 迁移、SQLAlchemy 模型和迁移框架测试，但不改变业务流程或公开接口。
 - 目标：先解除 90KB completion context 和 200KB input 的持久化容量风险。
 - 范围：V52、模型类型、迁移 unit 测试、迁移操作说明。
@@ -661,9 +662,17 @@ Task `1253/1256/1257/1263/1267` 不自动重跑。运维清理仅允许在用户
 - 授权边界：允许修改 migration、模型和对应测试；不执行测试环境迁移、提交、推送或进入 D4B。
 - 停止点：汇报 D4A 结果并等待“继续 D4B”。
 
+实施结果（`2026-08-11`）：
+
+- 已新增 V52，将 `input_json`、`completion_context_json` 统一为可空 `LONGTEXT`；
+- SQLAlchemy 模型在 MySQL 使用 `LONGTEXT`，SQLite 与其它方言继续使用通用 `Text`；
+- V52 能识别两列已由人工扩容为可空 `LONGTEXT` 的数据库，只补记迁移台账；任一列未满足时仍执行标准 ALTER；
+- 用户已说明目标数据库字段完成手工扩容；本阶段未由 Agent 执行数据库迁移或修改测试环境数据；
+- 迁移与模型单测、目标文件 Ruff 检查和 `git diff --check` 均通过。
+
 ### D4B：Completion Context v2 去重与有界化
 
-- 阶段状态：`NOT STARTED`
+- 阶段状态：`WAITING FOR AUTHORIZATION`
 - 改动量等级：`中`。跨 Code Quality、Agent Review、Review Record 三个后端模块，需验证旧 context 和通知兼容，但不改变公开 API。
 - 目标：移除完整 riskCard 副本，固定 16KB 白名单契约并按 ruleResultId 回读。
 - 范围：context builder/normalizer、riskCard repository lookup、成功/fallback 兼容、contract 测试。

@@ -246,7 +246,31 @@ def apply_pending_migrations(
 def _migration_statement_already_satisfied(
     connection, migration: MigrationFile, statement: str
 ) -> bool:
-    """Reconcile columns that the legacy runtime compatibility layer added early."""
+    """Reconcile migration effects that already exist outside the migration ledger."""
+    if migration.version == 52:
+        match = re.fullmatch(
+            r"\s*ALTER\s+TABLE\s+`?agent_review_runs`?\s+"
+            r"MODIFY\s+COLUMN\s+`?input_json`?\s+LONGTEXT\s+NULL\s*,\s*"
+            r"MODIFY\s+COLUMN\s+`?completion_context_json`?\s+LONGTEXT\s+NULL\s*",
+            statement,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return False
+        inspector = inspect(connection)
+        columns = {
+            str(column.get("name") or ""): column
+            for column in inspector.get_columns("agent_review_runs")
+        }
+        return all(
+            column is not None
+            and "longtext" in str(column.get("type") or "").casefold().replace(" ", "")
+            and column.get("nullable") is not False
+            for column in (
+                columns.get("input_json"),
+                columns.get("completion_context_json"),
+            )
+        )
     if migration.version == 51:
         match = re.fullmatch(
             r"\s*ALTER\s+TABLE\s+`?code_quality_model_providers`?\s+"

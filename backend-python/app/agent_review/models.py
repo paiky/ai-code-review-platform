@@ -1,10 +1,12 @@
 from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
 
 ID_TYPE = BigInteger().with_variant(Integer, "sqlite")
+LARGE_JSON_TEXT_TYPE = Text().with_variant(LONGTEXT(), "mysql")
 
 
 class AgentReviewSettings(Base):
@@ -129,8 +131,8 @@ class AgentReviewRun(Base):
     duration_ms: Mapped[int | None] = mapped_column(BigInteger)
     usage_json: Mapped[str | None] = mapped_column(Text)
     tool_summary_json: Mapped[str | None] = mapped_column(Text)
-    input_json: Mapped[str | None] = mapped_column(Text)
-    completion_context_json: Mapped[str | None] = mapped_column(Text)
+    input_json: Mapped[str | None] = mapped_column(LARGE_JSON_TEXT_TYPE)
+    completion_context_json: Mapped[str | None] = mapped_column(LARGE_JSON_TEXT_TYPE)
     comparison_mode: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     failure_code: Mapped[str | None] = mapped_column(String(64))
     failure_message: Mapped[str | None] = mapped_column(String(1024))

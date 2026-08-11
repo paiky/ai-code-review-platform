@@ -3,8 +3,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from sqlalchemy.dialects import mysql
+from sqlalchemy.dialects import mysql, sqlite
+from sqlalchemy.sql.sqltypes import Text
 
+from app.agent_review.models import AgentReviewRun
 from app.migrate import (
     AppliedMigration,
     BaselineRequirements,
@@ -182,6 +184,32 @@ def test_standard_provider_tls_verify_migration_defaults_securely() -> None:
     assert "tls_verify BOOLEAN NOT NULL DEFAULT TRUE" in statements[0]
 
 
+def test_agent_review_run_payload_capacity_migration_uses_longtext() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    sql = (
+        repository_root
+        / "backend-python/migrations/bootstrap_sql/V52__agent_review_run_payload_capacity.sql"
+    ).read_text(encoding="utf-8")
+
+    statements = split_sql_statements(sql)
+
+    assert len(statements) == 1
+    assert "MODIFY COLUMN input_json LONGTEXT NULL" in statements[0]
+    assert "MODIFY COLUMN completion_context_json LONGTEXT NULL" in statements[0]
+
+
+def test_agent_review_run_large_json_columns_use_mysql_longtext_variant() -> None:
+    input_type = AgentReviewRun.__table__.c.input_json.type
+    completion_context_type = AgentReviewRun.__table__.c.completion_context_json.type
+
+    assert isinstance(input_type, Text)
+    assert isinstance(completion_context_type, Text)
+    assert isinstance(input_type.dialect_impl(mysql.dialect()), mysql.LONGTEXT)
+    assert isinstance(completion_context_type.dialect_impl(mysql.dialect()), mysql.LONGTEXT)
+    assert isinstance(input_type.dialect_impl(sqlite.dialect()), Text)
+    assert isinstance(completion_context_type.dialect_impl(sqlite.dialect()), Text)
+
+
 def test_v48_reconciles_compatible_column_added_by_runtime_layer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -294,6 +322,64 @@ def test_v51_reconciles_compatible_provider_tls_column(
     assert _migration_statement_already_satisfied(object(), migration, statement) is True
 
 
+def test_v52_reconciles_columns_already_expanded_manually(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration = next(item for item in discover_migrations() if item.version == 52)
+    statement = split_sql_statements(migration.path.read_text(encoding="utf-8"))[0]
+
+    class Inspector:
+        @staticmethod
+        def get_columns(_table_name):
+            return [
+                {
+                    "name": "input_json",
+                    "type": mysql.LONGTEXT(),
+                    "nullable": True,
+                    "default": None,
+                },
+                {
+                    "name": "completion_context_json",
+                    "type": mysql.LONGTEXT(),
+                    "nullable": True,
+                    "default": None,
+                },
+            ]
+
+    monkeypatch.setattr("app.migrate.inspect", lambda _connection: Inspector())
+
+    assert _migration_statement_already_satisfied(object(), migration, statement) is True
+
+
+def test_v52_executes_when_any_payload_column_still_needs_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration = next(item for item in discover_migrations() if item.version == 52)
+    statement = split_sql_statements(migration.path.read_text(encoding="utf-8"))[0]
+
+    class Inspector:
+        @staticmethod
+        def get_columns(_table_name):
+            return [
+                {
+                    "name": "input_json",
+                    "type": mysql.LONGTEXT(),
+                    "nullable": True,
+                    "default": None,
+                },
+                {
+                    "name": "completion_context_json",
+                    "type": mysql.TEXT(),
+                    "nullable": True,
+                    "default": None,
+                },
+            ]
+
+    monkeypatch.setattr("app.migrate.inspect", lambda _connection: Inspector())
+
+    assert _migration_statement_already_satisfied(object(), migration, statement) is False
+
+
 def test_existing_schema_upgrade_is_idempotent_and_groups_indexes_by_table() -> None:
     inspector = _InspectorStub()
     statements = build_command_center_index_upgrade_statements(
@@ -330,8 +416,8 @@ def test_discover_migrations_is_contiguous_and_includes_checksums() -> None:
     migrations = discover_migrations()
 
     assert migrations[0].version == 1
-    assert migrations[-1].version == 51
-    assert [item.version for item in migrations] == list(range(1, 52))
+    assert migrations[-1].version == 52
+    assert [item.version for item in migrations] == list(range(1, 53))
     assert all(len(item.checksum) == 64 for item in migrations)
 
 
