@@ -275,8 +275,16 @@ test('M3 drives measured routes from truthful state and preserves reduced-motion
   assert.equal(styleSource.includes('[data-flow-state="running"]'), true);
   assert.equal(styleSource.includes('cc-engine-orbit-clockwise'), true);
   assert.equal(styleSource.includes('cc-engine-orbit-counterclockwise'), true);
-  assert.equal(styleSource.includes('cc-review-neon'), true);
   assert.equal(canvasSource.includes('command-center-review-neon'), true);
+  assert.match(
+    styleSource,
+    /\.command-center-review-neon\s*\{[^}]*background:\s*currentColor;[^}]*transition:\s*opacity 220ms ease-out, filter 260ms ease-out;/s
+  );
+  assert.match(styleSource, /\[data-activity="queued"\] \.command-center-review-neon\s*\{[^}]*animation:\s*cc-review-beat 2\.4s ease-in-out infinite;/s);
+  assert.match(styleSource, /\[data-activity="running"\] \.command-center-review-neon\s*\{[^}]*animation:\s*cc-review-beat 1\.35s ease-in-out infinite;/s);
+  assert.match(styleSource, /@keyframes cc-review-beat\s*\{[\s\S]*8%[\s\S]*24%[\s\S]*var\(--cc-neon-peak-glow\)/s);
+  assert.equal(styleSource.includes('.command-center-review-neon::before'), false);
+  assert.equal(styleSource.includes('@keyframes cc-review-neon'), false);
   assert.equal(styleSource.includes('@property --cc-neon-angle'), false);
   assert.equal(styleSource.includes('.command-center-static-connections,'), true);
   assert.equal(styleSource.includes('.command-center-port { display: none; }'), true);
@@ -386,8 +394,8 @@ test('A6 creates a measured desktop fallback corridor and compact responsive han
   assert.match(styleSource, /@keyframes cc-fallback-chevron-flow\s*\{[^}]*translateY\(-2px\)[\s\S]*translateY\(4px\);/s);
   assert.match(styleSource, /\.command-center-responsive-handoff\[data-active="true"\] > span > i\s*\{[^}]*animation:\s*cc-responsive-fallback-chevron-flow 1\.15s ease-in-out infinite;/s);
   assert.match(styleSource, /\.command-center-port\.is-fallback\s*\{\s*color:\s*var\(--cc-standard\);/s);
-  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-activity="running"\] \.command-center-review-neon\s*\{[^}]*color:\s*var\(--cc-standard\);[^}]*drop-shadow\(0 0 3px var\(--cc-standard\)\);/s);
-  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-fallback-active="true"\] \.command-center-review-neon\s*\{[^}]*color:\s*var\(--cc-standard\);[^}]*drop-shadow\(0 0 4px var\(--cc-standard\)\);/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-activity="running"\] \.command-center-review-neon\s*\{[^}]*--cc-neon-peak-glow:\s*4px;[^}]*color:\s*var\(--cc-standard\);/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-fallback-active="true"\] \.command-center-review-neon\s*\{[^}]*--cc-neon-peak-glow:\s*5px;[^}]*animation:\s*cc-review-beat 1\.45s ease-in-out infinite;[^}]*color:\s*var\(--cc-standard\);/s);
   assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-fallback-active="true"\]\s*\{[^}]*border-color:\s*rgba\(240, 120, 24, 0\.58\);[^}]*rgba\(240, 120, 24, 0\.82\);/s);
   const standardActivityStyles = [...styleSource.matchAll(
     /\.command-center-review-module\.is-standard\[data-(?:activity="(?:queued|running)"|fallback-active="true")\][^{]*\{[^}]*\}/g
