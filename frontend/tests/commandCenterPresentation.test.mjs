@@ -48,6 +48,7 @@ test('I2 presentation exposes current status and quality output without duplicat
     'qualityOutput',
     'hud',
     'taskQueue',
+    'dispatchPreparation',
     'engineSelection',
     'agentLane',
     'standardLane',
@@ -381,6 +382,89 @@ test('retained snapshots remain available and expose independent error states', 
 });
 
 
+test('derives fresh Agent dispatch preparation and separates delayed flows at 180 seconds', () => {
+  const now = Date.parse('2026-08-10T10:03:00Z');
+  const presentation = buildCommandCenterPresentation({
+    now,
+    runtime: runtime({
+      activeFlows: [
+        activeFlow({
+          reviewKey: 'agent-fresh',
+          updatedAt: '2026-08-10T10:00:00.001Z'
+        }),
+        activeFlow({
+          reviewKey: 'agent-delayed',
+          stage: 'PREFLIGHT',
+          updatedAt: '2026-08-10T09:59:59.999Z'
+        })
+      ]
+    })
+  });
+
+  assert.deepEqual(presentation.dispatchPreparation, {
+    activeCount: 1,
+    delayedCount: 1,
+    latestReviewKey: 'agent-fresh',
+    latestStage: 'CONTEXT_BUILDING',
+    latestUpdatedAt: '2026-08-10T10:00:00.001Z',
+    activity: 'preparing'
+  });
+
+  const boundary = buildCommandCenterPresentation({
+    now,
+    runtime: runtime({
+      activeFlows: [activeFlow({ updatedAt: '2026-08-10T10:00:00.000Z' })]
+    })
+  });
+  assert.equal(boundary.dispatchPreparation.activity, 'preparing');
+
+  const delayed = buildCommandCenterPresentation({
+    now,
+    runtime: runtime({
+      activeFlows: [activeFlow({ updatedAt: '2026-08-10T09:59:59.999Z' })]
+    })
+  });
+  assert.equal(delayed.dispatchPreparation.activity, 'delayed');
+  assert.equal(delayed.dispatchPreparation.activeCount, 0);
+  assert.equal(delayed.dispatchPreparation.delayedCount, 1);
+});
+
+
+test('dispatch preparation rejects non-progress facts and pauses retained or stale snapshots', () => {
+  const now = Date.parse('2026-08-10T10:00:10Z');
+  const invalid = buildCommandCenterPresentation({
+    now,
+    runtime: runtime({
+      activeFlows: [
+        activeFlow({ requestedEngine: 'STANDARD' }),
+        activeFlow({ status: 'FAILED' }),
+        activeFlow({ stage: 'MODEL_CALLING' }),
+        activeFlow({ stageSource: 'SCHEDULER_JOB' }),
+        activeFlow({ updatedAt: 'not-a-time' })
+      ]
+    })
+  });
+  assert.equal(invalid.dispatchPreparation.activity, 'idle');
+
+  const stale = buildCommandCenterPresentation({
+    now,
+    runtime: runtime({
+      freshness: 'STALE',
+      activeFlows: [activeFlow()]
+    })
+  });
+  assert.equal(stale.dispatchPreparation.activity, 'idle');
+
+  const retained = buildCommandCenterPresentation({
+    now,
+    runtime: runtime({ activeFlows: [activeFlow()] }),
+    runtimeError: 'HTTP 503'
+  });
+  assert.equal(retained.resources.runtime.state, 'ERROR_RETAINED');
+  assert.equal(retained.dispatchPreparation.activity, 'idle');
+});
+
+
 test('primary H1 contract omits unsupported KPI and blended utilization fields', () => {
   const presentation = buildCommandCenterPresentation({ runtime: runtime() });
   const primary = Object.fromEntries(
@@ -645,6 +729,21 @@ function item(overrides = {}) {
     stage: 'MODEL_CALLING',
     provider: 'deepseek',
     model: 'v4',
+    ...overrides
+  };
+}
+
+
+function activeFlow(overrides = {}) {
+  return {
+    taskId: 1253,
+    reviewKey: 'agent-main',
+    requestedEngine: 'AGENT',
+    effectiveEngine: 'AGENT',
+    status: 'RUNNING',
+    stage: 'CONTEXT_BUILDING',
+    stageSource: 'PROGRESS',
+    updatedAt: '2026-08-10T10:00:00Z',
     ...overrides
   };
 }

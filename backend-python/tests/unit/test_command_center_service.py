@@ -20,6 +20,44 @@ NOW = datetime(2026, 7, 31, 2, 0, tzinfo=timezone.utc)
 DB_NOW = NOW.replace(tzinfo=None)
 
 
+def _dispatch_progress_detail(
+    review_key: str,
+    *,
+    schema_version: str = "agent-dispatch-progress-v1",
+    requested_engine: str = "AGENT",
+) -> str:
+    return json.dumps(
+        {
+            "schemaVersion": schema_version,
+            "operation": "AGENT_ENQUEUE",
+            "dispatchAttemptId": "dispatch-attempt-1",
+            "reviewKey": review_key,
+            "requestedEngine": requested_engine,
+            "status": "STARTED",
+            "durationMs": 0,
+        }
+    )
+
+
+def _dispatch_progress(
+    event_id: int,
+    task_id: int,
+    review_key: str,
+    phase: str,
+    *,
+    created_at: datetime = DB_NOW,
+) -> dict:
+    return {
+        "id": event_id,
+        "task_id": task_id,
+        "review_key": None,
+        "phase": phase,
+        "level": "ERROR" if phase.endswith("_FAILED") else "INFO",
+        "detail": _dispatch_progress_detail(review_key),
+        "created_at": created_at,
+    }
+
+
 def test_runtime_snapshot_groups_review_keys_and_keeps_explicit_fallback() -> None:
     data = _runtime_data(
         tasks=[_task(101)],
@@ -302,6 +340,14 @@ def test_agent_failure_plus_standard_result_is_not_inferred_as_fallback() -> Non
     [
         ("DETERMINISTIC_PRECHECK_STARTED", "PREFLIGHT"),
         ("CONTEXT_PACK_BUILT", "CONTEXT_BUILDING"),
+        ("LOCAL_REPO_PREPARE_STARTED", "CONTEXT_BUILDING"),
+        ("PROJECT_POLICY_BUILD_COMPLETED", "CONTEXT_BUILDING"),
+        ("AGENT_INPUT_BUILD_STARTED", "CONTEXT_BUILDING"),
+        ("AGENT_JOB_CREATE_COMPLETED", "CONTEXT_BUILDING"),
+        ("LOCAL_REPO_PREPARE_FAILED", "FAILED"),
+        ("PROJECT_POLICY_BUILD_FAILED", "FAILED"),
+        ("AGENT_INPUT_BUILD_FAILED", "FAILED"),
+        ("AGENT_JOB_CREATE_FAILED", "FAILED"),
         ("LOCAL_CONTEXT_RETRIEVED", "CONTEXT_BUILDING"),
         ("SAVE_RESULT", "MODEL_CALLING"),
         ("AGENT_ANALYZING", "AGENT_ANALYZING"),
@@ -316,6 +362,229 @@ def test_agent_failure_plus_standard_result_is_not_inferred_as_fallback() -> Non
 )
 def test_progress_phase_mapping(phase: str, stage: str) -> None:
     assert _map_progress_phase(phase) == stage
+
+
+def test_task_level_dispatch_progress_projects_single_agent_flow() -> None:
+    task_id = 106
+    review_key = "agent:claude-code:deepseek-v4-pro"
+    data = _runtime_data(
+        counts=RuntimeBaseCounts(
+            intake_task_count=1,
+            active_task_count=1,
+            queued_job_count=0,
+            running_job_count=0,
+            agent_queued_job_count=0,
+            agent_running_job_count=0,
+        ),
+        tasks=[_task(task_id)],
+        progress_events=[
+            {
+                "id": 61,
+                "task_id": task_id,
+                "review_key": None,
+                "phase": "DETERMINISTIC_PRECHECK_STARTED",
+                "level": "INFO",
+                "detail": None,
+                "created_at": DB_NOW - timedelta(seconds=2),
+            },
+            _dispatch_progress(
+                62,
+                task_id,
+                review_key,
+                "LOCAL_REPO_PREPARE_STARTED",
+            ),
+        ],
+    )
+
+    snapshot = _runtime_snapshot(data)
+
+    assert len(snapshot["activeFlows"]) == 1
+    flow = snapshot["activeFlows"][0]
+    assert flow["id"] == f"{task_id}:{review_key}"
+    assert flow["reviewKey"] == review_key
+    assert flow["requestedEngine"] == "AGENT"
+    assert flow["effectiveEngine"] == "AGENT"
+    assert flow["status"] == "RUNNING"
+    assert flow["stage"] == "CONTEXT_BUILDING"
+    assert flow["stageSource"] == "PROGRESS"
+    assert flow["queuedAt"] is None
+    assert flow["startedAt"] is None
+    assert snapshot["activeTasks"][0]["flowCount"] == 1
+    assert snapshot["reviewLanes"]["standard"]["queuedCount"] == 0
+    assert snapshot["reviewLanes"]["standard"]["runningCount"] == 0
+    assert snapshot["reviewLanes"]["agent"]["queuedCount"] == 0
+    assert snapshot["reviewLanes"]["agent"]["runningCount"] == 0
+    assert snapshot["reviewLanes"]["agent"]["nextQueued"] is None
+
+
+def test_dispatch_failure_projects_failed_agent_flow() -> None:
+    task_id = 107
+    review_key = "agent-main"
+    snapshot = _runtime_snapshot(
+        _runtime_data(
+            tasks=[_task(task_id)],
+            progress_events=[
+                _dispatch_progress(
+                    63,
+                    task_id,
+                    review_key,
+                    "AGENT_JOB_CREATE_FAILED",
+                )
+            ],
+        )
+    )
+
+    flow = snapshot["activeFlows"][0]
+    assert flow["reviewKey"] == review_key
+    assert flow["requestedEngine"] == "AGENT"
+    assert flow["status"] == "FAILED"
+    assert flow["stage"] == "FAILED"
+    assert flow["stageSource"] == "PROGRESS"
+
+
+@pytest.mark.parametrize(
+    "phase,detail",
+    [
+        ("LOCAL_REPO_PREPARE_STARTED", "{broken-json"),
+        (
+            "LOCAL_REPO_PREPARE_STARTED",
+            _dispatch_progress_detail("x" * 65),
+        ),
+        (
+            "LOCAL_REPO_PREPARE_STARTED",
+            _dispatch_progress_detail(
+                "agent-main",
+                schema_version="future-dispatch-v2",
+            ),
+        ),
+        (
+            "LOCAL_REPO_PREPARE_STARTED",
+            _dispatch_progress_detail("agent-main", requested_engine="STANDARD"),
+        ),
+        (
+            "LOCAL_REPO_PREPARE_STARTED",
+            json.dumps(
+                {
+                    **json.loads(_dispatch_progress_detail("agent-main")),
+                    "operation": "UNKNOWN_OPERATION",
+                }
+            ),
+        ),
+        (
+            "LOCAL_REPO_PREPARE_STARTED",
+            json.dumps(
+                {
+                    **json.loads(_dispatch_progress_detail("agent-main")),
+                    "durationMs": -1,
+                }
+            ),
+        ),
+        ("FUTURE_DISPATCH_PHASE", _dispatch_progress_detail("agent-main")),
+    ],
+)
+def test_invalid_dispatch_detail_does_not_infer_agent_flow(
+    phase: str,
+    detail: str,
+) -> None:
+    task_id = 108
+    snapshot = _runtime_snapshot(
+        _runtime_data(
+            tasks=[_task(task_id)],
+            progress_events=[
+                {
+                    "id": 64,
+                    "task_id": task_id,
+                    "review_key": None,
+                    "phase": phase,
+                    "level": "INFO",
+                    "detail": detail,
+                    "created_at": DB_NOW,
+                }
+            ],
+        )
+    )
+
+    assert len(snapshot["activeFlows"]) == 1
+    flow = snapshot["activeFlows"][0]
+    assert flow["reviewKey"] == "default"
+    assert flow["requestedEngine"] == "STANDARD"
+    assert snapshot["agent"]["activeFlowCount"] == 0
+
+
+def test_multiple_dispatch_targets_keep_unscoped_default_flow() -> None:
+    task_id = 109
+    snapshot = _runtime_snapshot(
+        _runtime_data(
+            tasks=[_task(task_id)],
+            progress_events=[
+                {
+                    "id": 65,
+                    "task_id": task_id,
+                    "review_key": None,
+                    "phase": "DETERMINISTIC_PRECHECK_STARTED",
+                    "level": "INFO",
+                    "detail": None,
+                    "created_at": DB_NOW - timedelta(seconds=2),
+                },
+                _dispatch_progress(
+                    66,
+                    task_id,
+                    "agent-one",
+                    "PROJECT_POLICY_BUILD_STARTED",
+                    created_at=DB_NOW - timedelta(seconds=1),
+                ),
+                _dispatch_progress(
+                    67,
+                    task_id,
+                    "agent-two",
+                    "AGENT_INPUT_BUILD_STARTED",
+                ),
+            ],
+        )
+    )
+
+    flows = {flow["reviewKey"]: flow for flow in snapshot["activeFlows"]}
+    assert set(flows) == {"default", "agent-one", "agent-two"}
+    assert flows["default"]["requestedEngine"] == "STANDARD"
+    assert flows["agent-one"]["requestedEngine"] == "AGENT"
+    assert flows["agent-two"]["requestedEngine"] == "AGENT"
+
+
+def test_real_agent_job_reuses_dispatch_flow_and_wins_stage_precedence() -> None:
+    task_id = 110
+    review_key = "agent-main"
+    snapshot = _runtime_snapshot(
+        _runtime_data(
+            tasks=[_task(task_id)],
+            active_jobs=[
+                _job(68, task_id, review_key, "AGENT_REVIEW", "RUNNING")
+            ],
+            progress_events=[
+                {
+                    "id": 69,
+                    "task_id": task_id,
+                    "review_key": None,
+                    "phase": "DETERMINISTIC_PRECHECK_STARTED",
+                    "level": "INFO",
+                    "detail": None,
+                    "created_at": DB_NOW - timedelta(seconds=1),
+                },
+                _dispatch_progress(
+                    70,
+                    task_id,
+                    review_key,
+                    "AGENT_JOB_CREATE_COMPLETED",
+                ),
+            ],
+        )
+    )
+
+    assert len(snapshot["activeFlows"]) == 1
+    flow = snapshot["activeFlows"][0]
+    assert flow["reviewKey"] == review_key
+    assert flow["requestedEngine"] == "AGENT"
+    assert flow["stage"] == "AGENT_ANALYZING"
+    assert flow["stageSource"] == "SCHEDULER_JOB"
 
 
 def test_unknown_progress_uses_safe_running_stage_without_thinking() -> None:

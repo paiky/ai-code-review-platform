@@ -73,6 +73,39 @@ GOVERNANCE_COVERAGE = {
 }
 
 DEFAULT_REVIEW_KEY = "default"
+DISPATCH_PROGRESS_SCHEMA_VERSION = "agent-dispatch-progress-v1"
+DISPATCH_PROGRESS_OPERATION = "AGENT_ENQUEUE"
+DISPATCH_PROGRESS_ENGINE = "AGENT"
+DISPATCH_PROGRESS_STATUSES = frozenset({"STARTED", "COMPLETED", "FAILED"})
+REVIEW_KEY_MAX_LENGTH = 64
+DISPATCH_PROGRESS_PHASES = frozenset(
+    {
+        "LOCAL_REPO_PREPARE_STARTED",
+        "LOCAL_REPO_PREPARED",
+        "LOCAL_REPO_PREPARE_FAILED",
+        "PROJECT_POLICY_BUILD_STARTED",
+        "PROJECT_POLICY_BUILD_COMPLETED",
+        "PROJECT_POLICY_BUILD_FAILED",
+        "AGENT_INPUT_BUILD_STARTED",
+        "AGENT_INPUT_BUILD_COMPLETED",
+        "AGENT_INPUT_BUILD_FAILED",
+        "AGENT_JOB_CREATE_STARTED",
+        "AGENT_JOB_CREATE_COMPLETED",
+        "AGENT_JOB_CREATE_FAILED",
+        "AGENT_QUEUED",
+    }
+)
+DISPATCH_PROGRESS_FAILED_PHASES = frozenset(
+    {
+        "LOCAL_REPO_PREPARE_FAILED",
+        "PROJECT_POLICY_BUILD_FAILED",
+        "AGENT_INPUT_BUILD_FAILED",
+        "AGENT_JOB_CREATE_FAILED",
+    }
+)
+DISPATCH_PROGRESS_CONTEXT_PHASES = DISPATCH_PROGRESS_PHASES - (
+    DISPATCH_PROGRESS_FAILED_PHASES | {"AGENT_QUEUED"}
+)
 WORKER_HEARTBEAT_SECONDS = 60
 SAMPLE_GATE_REQUIRED = 30
 FAILED_STATUSES = {"FAILED", "TIMED_OUT"}
@@ -723,9 +756,20 @@ def _build_flow_rows(
             result
         )
     for event in data.progress_events:
-        group(int(event["task_id"]), event.get("review_key"))["progress"].append(
-            event
-        )
+        task_id = int(event["task_id"])
+        review_key = event.get("review_key")
+        dispatch_identity = _dispatch_progress_identity(event)
+        projected_event = event
+        if dispatch_identity is not None:
+            dispatch_review_key, requested_engine = dispatch_identity
+            if review_key is None:
+                review_key = dispatch_review_key
+            if str(review_key) == dispatch_review_key:
+                projected_event = {
+                    **event,
+                    "_dispatch_requested_engine": requested_engine,
+                }
+        group(task_id, review_key)["progress"].append(projected_event)
     for run in data.agent_runs:
         group(int(run["task_id"]), run.get("review_key"))["runs"].append(run)
 
@@ -745,6 +789,8 @@ def _build_flow_rows(
             key = task_keys[0] if len(task_keys) == 1 else (task_id, DEFAULT_REVIEW_KEY)
         group(*key)["notifications"].append(notification)
 
+    _merge_single_dispatch_default_flows(groups)
+
     deterministic_by_task = _group_rows(data.deterministic_runs, "task_id")
     for (task_id, _review_key), flow in groups.items():
         flow["deterministic"] = deterministic_by_task.get(task_id, [])
@@ -757,6 +803,52 @@ def _build_flow_rows(
             flow["deterministic"] = deterministic_by_task.get(task_id, [])
             keys_by_task[task_id].append(flow)
     return keys_by_task
+
+
+def _merge_single_dispatch_default_flows(
+    groups: dict[tuple[int, str], dict[str, Any]],
+) -> None:
+    task_ids = {task_id for task_id, _review_key in groups}
+    for task_id in task_ids:
+        candidate_keys = {
+            review_key
+            for (group_task_id, review_key), flow in groups.items()
+            if group_task_id == task_id
+            and review_key != DEFAULT_REVIEW_KEY
+            and _is_agent_dispatch_flow(flow)
+        }
+        if len(candidate_keys) != 1:
+            continue
+        target_key = next(iter(candidate_keys))
+        default_group_key = (task_id, DEFAULT_REVIEW_KEY)
+        target_group_key = (task_id, target_key)
+        default_flow = groups.get(default_group_key)
+        target_flow = groups.get(target_group_key)
+        if default_flow is None or target_flow is None:
+            continue
+        if any(
+            default_flow[field]
+            for field in ("jobs", "results", "runs", "notifications")
+        ):
+            continue
+        target_flow["progress"].extend(default_flow["progress"])
+        del groups[default_group_key]
+
+
+def _is_agent_dispatch_flow(flow: dict[str, Any]) -> bool:
+    return any(
+        event.get("_dispatch_requested_engine") == DISPATCH_PROGRESS_ENGINE
+        for event in flow["progress"]
+    ) or any(
+        _safe_enum(job.get("job_type")) == "AGENT_REVIEW"
+        for job in flow["jobs"]
+    ) or any(
+        _safe_enum(run.get("requested_engine")) == DISPATCH_PROGRESS_ENGINE
+        for run in flow["runs"]
+    ) or any(
+        _safe_enum(result.get("requested_engine")) == DISPATCH_PROGRESS_ENGINE
+        for result in flow["results"]
+    )
 
 
 def _build_active_flow(
@@ -772,11 +864,26 @@ def _build_active_flow(
     run = _latest(flow["runs"])
     notification = _latest(flow["notifications"])
     deterministic = _latest(flow["deterministic"])
+    dispatch_progress = _latest(
+        [
+            event
+            for event in flow["progress"]
+            if event.get("_dispatch_requested_engine")
+            == DISPATCH_PROGRESS_ENGINE
+        ],
+        timestamp_key="created_at",
+    )
 
     requested_engine = str(
         (result or {}).get("requested_engine")
         or (run or {}).get("requested_engine")
-        or ("AGENT" if (job or {}).get("job_type") == "AGENT_REVIEW" else "STANDARD")
+        or (
+            "AGENT"
+            if job and job.get("job_type") == "AGENT_REVIEW"
+            else "STANDARD" if job else None
+        )
+        or (dispatch_progress or {}).get("_dispatch_requested_engine")
+        or "STANDARD"
     ).upper()
     effective_engine = str(
         (result or {}).get("effective_engine")
@@ -911,9 +1018,20 @@ def _derive_stage(
 
     if progress:
         mapped = _map_progress_phase(progress.get("phase"))
-        if mapped:
+        is_dispatch_progress = (
+            _safe_enum(progress.get("phase")) in DISPATCH_PROGRESS_PHASES
+        )
+        actual_review_fact = job is not None or run is not None or result is not None
+        if mapped and not (
+            actual_review_fact
+            and is_dispatch_progress
+        ):
             return mapped, "PROGRESS"
-        if job or run or (result and _safe_enum(result.get("status")) == "RUNNING"):
+        if not is_dispatch_progress and (
+            job
+            or run
+            or (result and _safe_enum(result.get("status")) == "RUNNING")
+        ):
             return (
                 "AGENT_ANALYZING"
                 if requested_engine == "AGENT"
@@ -967,12 +1085,14 @@ def _map_progress_phase(value: object) -> str | None:
         return "QUEUED"
     if phase.startswith("DETERMINISTIC_"):
         return "PREFLIGHT"
+    if phase in DISPATCH_PROGRESS_FAILED_PHASES:
+        return "FAILED"
+    if phase in DISPATCH_PROGRESS_CONTEXT_PHASES:
+        return "CONTEXT_BUILDING"
     if phase in {
         "REQUEST_BUILT",
         "CONTEXT_PACK_BUILT",
         "PROJECT_POLICIES_INJECTED",
-        "LOCAL_REPO_PREPARED",
-        "LOCAL_REPO_PREPARE_FAILED",
         "LOCAL_CONTEXT_RETRIEVED",
         "LOCAL_CONTEXT_RETRIEVE_FAILED",
     }:
@@ -996,6 +1116,38 @@ def _map_progress_phase(value: object) -> str | None:
     if phase in {"JOB_INTERRUPTED", "AGENT_CANCELLED"}:
         return "SKIPPED"
     return None
+
+
+def _dispatch_progress_identity(event: dict[str, Any]) -> tuple[str, str] | None:
+    if _safe_enum(event.get("phase")) not in DISPATCH_PROGRESS_PHASES:
+        return None
+    detail = _safe_json_object(event.get("detail"))
+    if detail.get("schemaVersion") != DISPATCH_PROGRESS_SCHEMA_VERSION:
+        return None
+    if detail.get("operation") != DISPATCH_PROGRESS_OPERATION:
+        return None
+    dispatch_attempt_id = detail.get("dispatchAttemptId")
+    if (
+        not isinstance(dispatch_attempt_id, str)
+        or not dispatch_attempt_id.strip()
+        or len(dispatch_attempt_id) > 128
+    ):
+        return None
+    requested_engine = _safe_enum(detail.get("requestedEngine"))
+    if requested_engine != DISPATCH_PROGRESS_ENGINE:
+        return None
+    if _safe_enum(detail.get("status")) not in DISPATCH_PROGRESS_STATUSES:
+        return None
+    duration_ms = detail.get("durationMs")
+    if not isinstance(duration_ms, int) or isinstance(duration_ms, bool) or duration_ms < 0:
+        return None
+    review_key_value = detail.get("reviewKey")
+    if not isinstance(review_key_value, str):
+        return None
+    review_key = review_key_value.strip()
+    if not review_key or len(review_key) > REVIEW_KEY_MAX_LENGTH:
+        return None
+    return review_key, requested_engine
 
 
 def _build_worker_pool(
@@ -1293,6 +1445,18 @@ def _safe_json_list(value: object) -> list[Any]:
     except (TypeError, ValueError):
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def _safe_json_object(value: object) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _normalize_severity(value: object) -> str | None:

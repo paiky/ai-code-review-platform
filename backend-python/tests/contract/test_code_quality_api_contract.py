@@ -3,12 +3,14 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 import respx
 from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
 
+from app.code_quality import service as code_quality_service
 from app.code_quality.models import (
     CodeQualityFixPreview,
     CodeQualityModelProvider,
@@ -3205,6 +3207,17 @@ def test_mr_auto_review_sends_combined_review_summary(
     monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
     monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "auto-secret")
+    observed_preflight_statuses = []
+    original_preflight = code_quality_service.ensure_deterministic_preflight
+
+    def observe_dispatch_status(db, task_id, **kwargs):
+        observed_preflight_statuses.append(db.get(ReviewTask, task_id).review_status)
+        return original_preflight(db, task_id, **kwargs)
+
+    monkeypatch.setattr(
+        "app.code_quality.service.ensure_deterministic_preflight",
+        observe_dispatch_status,
+    )
     legacy_mr_switch = client.put(
         "/api/code-quality-review-profiles/backend-default-ai-review",
         json={"triggerOnMr": False},
@@ -3241,6 +3254,7 @@ def test_mr_auto_review_sends_combined_review_summary(
 
     assert created.status_code == 200
     task_id = created.json()["data"]["taskId"]
+    assert observed_preflight_statuses == ["REVIEWING"]
     result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
     assert result["status"] == "SUCCESS"
     notifications = client.get(f"/api/review-tasks/{task_id}/notifications").json()["data"]
@@ -3255,6 +3269,103 @@ def test_mr_auto_review_sends_combined_review_summary(
     assert [item["phase"] for item in progress].index("DETERMINISTIC_PRECHECK_COMPLETED") < [
         item["phase"] for item in progress
     ].index("PROVIDER_SELECTED")
+
+
+def test_auto_fallback_failure_guard_rolls_back_partial_job_and_marks_review_failed(
+    db_session: Session,
+) -> None:
+    now = datetime.now()
+    task = ReviewTask(
+        id=32060,
+        project_id=1,
+        trigger_type="GITLAB_MR_WEBHOOK",
+        template_code="backend-default",
+        code_quality_profile_code="backend-default-ai-review",
+        status="SUCCESS",
+        review_status="REVIEWING",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    with pytest.raises(RuntimeError, match="fallback scheduling failed"):
+        with code_quality_service._auto_fallback_failure_guard(
+            db_session,
+            task,
+            enabled=True,
+        ):
+            db_session.add(
+                CodeQualitySchedulerJob(
+                    job_type="AI_REVIEW",
+                    task_id=task.id,
+                    review_key="standard-fallback",
+                    project_id=task.project_id,
+                    status="QUEUED",
+                    priority=100,
+                    attempt=0,
+                    max_attempts=2,
+                    idempotency_key="partial-standard-fallback",
+                    queued_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db_session.flush()
+            raise RuntimeError("fallback scheduling failed")
+
+    assert db_session.get(ReviewTask, task.id).review_status == "REVIEW_FAILED"
+    assert db_session.scalar(
+        select(func.count())
+        .select_from(CodeQualitySchedulerJob)
+        .where(CodeQualitySchedulerJob.task_id == task.id)
+    ) == 0
+
+
+def test_auto_fallback_failure_guard_preserves_status_when_fallback_result_is_durable(
+    db_session: Session,
+) -> None:
+    now = datetime.now()
+    task = ReviewTask(
+        id=32061,
+        project_id=1,
+        trigger_type="GITLAB_MR_WEBHOOK",
+        template_code="backend-default",
+        code_quality_profile_code="backend-default-ai-review",
+        status="SUCCESS",
+        review_status="REVIEWING",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(task)
+    db_session.commit()
+    code_quality_service.save_result(
+        db_session,
+        task_id=task.id,
+        review_key="standard-fallback",
+        project_id=task.project_id,
+        profile_code="backend-default-ai-review",
+        provider="DEEPSEEK",
+        model="deepseek-chat",
+        result={
+            "status": "RUNNING",
+            "findings": [],
+            "requestedEngine": "AGENT",
+            "effectiveEngine": "STANDARD_FALLBACK",
+            "startedAt": now,
+        },
+    )
+    db_session.commit()
+
+    with pytest.raises(RuntimeError, match="second fallback target failed"):
+        with code_quality_service._auto_fallback_failure_guard(
+            db_session,
+            task,
+            enabled=True,
+        ):
+            raise RuntimeError("second fallback target failed")
+
+    assert db_session.get(ReviewTask, task.id).review_status == "REVIEWING"
 
 
 @respx.mock

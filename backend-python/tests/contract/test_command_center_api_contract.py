@@ -175,6 +175,82 @@ def test_runtime_returns_real_task_flow_worker_provider_and_alert_data(
     }
 
 
+def test_runtime_projects_task_level_dispatch_progress_without_lane_counts(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    project = _project(7501, 7001, "dispatch-preparing")
+    task = _task(7502, project.id, now)
+    review_key = "agent:claude-code:deepseek-v4-pro"
+    dispatch_detail = json.dumps(
+        {
+            "schemaVersion": "agent-dispatch-progress-v1",
+            "operation": "AGENT_ENQUEUE",
+            "dispatchAttemptId": "dispatch-contract-1",
+            "reviewKey": review_key,
+            "requestedEngine": "AGENT",
+            "status": "STARTED",
+            "durationMs": 0,
+        }
+    )
+    db_session.add_all(
+        [
+            project,
+            task,
+            CodeQualityReviewProgressEvent(
+                id=7503,
+                task_id=task.id,
+                review_key=None,
+                phase="DETERMINISTIC_PRECHECK_STARTED",
+                level="INFO",
+                message="Preflight started",
+                created_at=now - timedelta(seconds=2),
+            ),
+            CodeQualityReviewProgressEvent(
+                id=7504,
+                task_id=task.id,
+                review_key=None,
+                phase="AGENT_JOB_CREATE_STARTED",
+                level="INFO",
+                message="Agent job persistence started",
+                detail=dispatch_detail,
+                created_at=now,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/command-center/runtime",
+        params={"projectId": project.id},
+    )
+
+    assert response.status_code == 200
+    runtime = response.json()["data"]
+    assert runtime["schemaVersion"] == "command-center-runtime-v2"
+    assert len(runtime["activeFlows"]) == 1
+    flow = runtime["activeFlows"][0]
+    assert flow["id"] == f"{task.id}:{review_key}"
+    assert flow["reviewKey"] == review_key
+    assert flow["requestedEngine"] == "AGENT"
+    assert flow["effectiveEngine"] == "AGENT"
+    assert flow["status"] == "RUNNING"
+    assert flow["stage"] == "CONTEXT_BUILDING"
+    assert flow["stageSource"] == "PROGRESS"
+    assert flow["queuedAt"] is None
+    assert flow["startedAt"] is None
+    assert runtime["activeTasks"][0]["flowCount"] == 1
+    assert runtime["scheduler"]["queuedJobCount"] == 0
+    assert runtime["scheduler"]["runningJobCount"] == 0
+    assert runtime["reviewLanes"]["standard"]["queuedCount"] == 0
+    assert runtime["reviewLanes"]["standard"]["runningCount"] == 0
+    assert runtime["reviewLanes"]["agent"]["queuedCount"] == 0
+    assert runtime["reviewLanes"]["agent"]["runningCount"] == 0
+    assert runtime["reviewLanes"]["agent"]["nextQueued"] is None
+    assert "dispatchAttemptId" not in json.dumps(runtime)
+
+
 def test_runtime_today_results_use_beijing_boundary_and_group_filter(
     db_session: Session,
 ) -> None:
@@ -478,13 +554,13 @@ def test_command_center_query_bounds_read_only_and_sensitive_fields(
     assert "review_tasks.review_status in" in sql
     assert "code_quality_scheduler_jobs.job_type in" in sql
     assert "code_quality_scheduler_jobs.status in" in sql
+    assert "progress_events.detail" in sql
     for prohibited_column in [
         "api_key",
         "endpoint_url",
         "raw_output",
         "response_body",
         "notification_records.target",
-        "progress_events.detail",
         "input_json",
         "completion_context_json",
         "policy.content",

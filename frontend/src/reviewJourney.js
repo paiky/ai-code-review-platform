@@ -47,8 +47,18 @@ export const REVIEW_JOURNEY_STAGE_DEFINITIONS = Object.freeze([
     detailKind: 'CONTEXT',
     phases: Object.freeze([
       'CONTEXT_PACK_BUILT',
+      'LOCAL_REPO_PREPARE_STARTED',
       'LOCAL_REPO_PREPARED',
       'LOCAL_REPO_PREPARE_FAILED',
+      'PROJECT_POLICY_BUILD_STARTED',
+      'PROJECT_POLICY_BUILD_COMPLETED',
+      'PROJECT_POLICY_BUILD_FAILED',
+      'AGENT_INPUT_BUILD_STARTED',
+      'AGENT_INPUT_BUILD_COMPLETED',
+      'AGENT_INPUT_BUILD_FAILED',
+      'AGENT_JOB_CREATE_STARTED',
+      'AGENT_JOB_CREATE_COMPLETED',
+      'AGENT_JOB_CREATE_FAILED',
       'LOCAL_CONTEXT_RETRIEVED',
       'LOCAL_CONTEXT_RETRIEVE_FAILED'
     ])
@@ -115,12 +125,29 @@ const cancellationPhases = new Set(['AGENT_CANCELLED', 'JOB_INTERRUPTED']);
 const warningPhases = new Set([
   'DETERMINISTIC_PRECHECK_FAILED',
   'LOCAL_REPO_PREPARE_FAILED',
+  'PROJECT_POLICY_BUILD_FAILED',
+  'AGENT_INPUT_BUILD_FAILED',
+  'AGENT_JOB_CREATE_FAILED',
   'LOCAL_CONTEXT_RETRIEVE_FAILED',
   'AGENT_FALLBACK',
   'AGENT_FALLBACK_QUEUED'
 ]);
 const terminalSuccessPhases = new Set(['AGENT_FINISHED', 'FINISHED']);
 const runtimeQueuePhases = new Set(['QUEUED', 'AGENT_QUEUED']);
+const dispatchInFlightPhases = new Set([
+  'DETERMINISTIC_PRECHECK_STARTED',
+  'DETERMINISTIC_PRECHECK_COMPLETED',
+  'DETERMINISTIC_PRECHECK_FAILED',
+  'LOCAL_REPO_PREPARE_STARTED',
+  'LOCAL_REPO_PREPARED',
+  'PROJECT_POLICY_BUILD_STARTED',
+  'PROJECT_POLICY_BUILD_COMPLETED',
+  'AGENT_INPUT_BUILD_STARTED',
+  'AGENT_INPUT_BUILD_COMPLETED',
+  'AGENT_JOB_CREATE_STARTED',
+  'AGENT_JOB_CREATE_COMPLETED',
+  'AGENT_PREFLIGHT_FAILED'
+]);
 const stageStatusPriority = Object.freeze({
   WAITING: 0,
   SKIPPED: 1,
@@ -176,8 +203,18 @@ const safePhaseLabels = Object.freeze({
   DETERMINISTIC_PRECHECK_FAILED: '确定性预检不可用',
   DETERMINISTIC_PRECHECK_REUSED: '已复用本次调度的确定性预检',
   CONTEXT_PACK_BUILT: 'Context Pack 已构建',
+  LOCAL_REPO_PREPARE_STARTED: '本地仓库正在准备',
   LOCAL_REPO_PREPARED: '本地上下文已准备',
   LOCAL_REPO_PREPARE_FAILED: '本地上下文准备不可用',
+  PROJECT_POLICY_BUILD_STARTED: '项目 Review 策略上下文正在构建',
+  PROJECT_POLICY_BUILD_COMPLETED: '项目 Review 策略上下文已构建',
+  PROJECT_POLICY_BUILD_FAILED: '项目 Review 策略上下文构建失败',
+  AGENT_INPUT_BUILD_STARTED: 'Agent 安全输入正在组装',
+  AGENT_INPUT_BUILD_COMPLETED: 'Agent 安全输入已组装',
+  AGENT_INPUT_BUILD_FAILED: 'Agent 安全输入组装失败',
+  AGENT_JOB_CREATE_STARTED: 'Agent 调度任务正在创建',
+  AGENT_JOB_CREATE_COMPLETED: 'Agent 调度任务已持久化',
+  AGENT_JOB_CREATE_FAILED: 'Agent 调度任务创建失败',
   LOCAL_CONTEXT_RETRIEVED: '受控上下文检索已完成',
   LOCAL_CONTEXT_RETRIEVE_FAILED: '受控上下文检索不可用',
   AGENT_RECLAIMED: '租约过期后重新领取',
@@ -493,6 +530,7 @@ function deriveReviewStatus(review, events) {
   if ([...phases].some(phase => cancellationPhases.has(phase))) return 'CANCELLED';
   if ([...phases].some(phase => terminalSuccessPhases.has(phase))) return 'SUCCESS';
   if (phases.has('FAILED')) return 'FAILED';
+  if ([...phases].some(phase => dispatchInFlightPhases.has(phase))) return 'RUNNING';
   return 'UNKNOWN';
 }
 
@@ -730,7 +768,7 @@ export function buildReviewJourneyContextDetails(events, review, now = Date.now(
   const contextEvent = latestJourneyEvent(source, ['CONTEXT_PACK_BUILT'], nowMs);
   const repositoryEvent = latestJourneyEvent(
     source,
-    ['LOCAL_REPO_PREPARED', 'LOCAL_REPO_PREPARE_FAILED'],
+    ['LOCAL_REPO_PREPARE_STARTED', 'LOCAL_REPO_PREPARED', 'LOCAL_REPO_PREPARE_FAILED'],
     nowMs
   );
   const retrieverEvent = latestJourneyEvent(
@@ -1057,6 +1095,7 @@ function safeRefinementSummary(review) {
 
 function deriveRepositoryStatus(event, detail, enabled) {
   const phase = normalizeEnum(event?.phase);
+  if (phase === 'LOCAL_REPO_PREPARE_STARTED') return 'PREPARING';
   if (phase === 'LOCAL_REPO_PREPARED') return 'PREPARED';
   if (phase === 'LOCAL_REPO_PREPARE_FAILED') return 'UNAVAILABLE';
   const status = safeEnumToken(detail?.status);

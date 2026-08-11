@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 import re
+from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -13,7 +16,7 @@ from app.agent_review import repository
 from app.agent_review.runtime import DEFAULT_RUNTIME, runtime_provider, runtime_review_key
 from app.agent_review_spike.schema import ReviewSchemaError, validate_review_card
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
-from app.code_quality.repository import append_progress, save_result
+from app.code_quality.repository import append_progress, save_result, scrub_sensitive
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.json_utils import utc_now
@@ -25,6 +28,8 @@ from app.review_record.models import ReviewTask
 
 
 _LOGGER = logging.getLogger(__name__)
+_DISPATCH_PROGRESS_SCHEMA_VERSION = "agent-dispatch-progress-v1"
+_DISPATCH_OPERATION = "AGENT_ENQUEUE"
 _AGENT_ACTIVITY_NAMES = {
     "list_files": "LIST_FILES",
     "search_code": "SEARCH_CODE",
@@ -207,110 +212,264 @@ def enqueue_agent_review(
             f"Agent Review diff exceeds {repository.MAX_DIFF_BYTES} bytes",
             409,
         )
-    worktree = _ensure_worktree(task, project)
-    policy_context = build_project_review_policy_prompt_context(db, int(project.id))
-    review_instructions = "\n\n".join(
-        value
-        for value in (
-            getattr(profile, "review_instructions", None),
-            policy_context.get("promptText"),
-        )
-        if str(value or "").strip()
+    dispatch_attempt_id = f"agent-dispatch-{task.id}-{uuid4().hex}"
+    mark_review_failed = not bool((completion_context or {}).get("autoNotification"))
+    worktree = _prepare_agent_worktree_with_progress(
+        db,
+        task=task,
+        project=project,
+        review_key=review_key,
+        dispatch_attempt_id=dispatch_attempt_id,
+        changed_file_count=len(changed_files),
+        diff_bytes=diff_bytes,
+        mark_review_failed=mark_review_failed,
     )
-    input_case = {
-        "id": f"task-{task.id}",
-        "title": request.get("title") or f"{task.trigger_type} {task.external_source_id or ''}".strip(),
-        "baseRef": request.get("baseRef") or task.target_branch,
-        "commitSha": request.get("commitSha") or task.after_sha or task.commit_sha,
-        "changedFiles": changed_files,
-        "diff": diff_text,
-        "diffMode": "INLINE" if diff_bytes <= budgets["inlineDiffBytes"] else "TOOL_PAGED",
-        "reviewInstructions": review_instructions,
-        "baselineContext": _bounded_context(request),
-        "reviewCoverage": {
-            "totalChangedFileCount": len(requested_files),
-            "includedFileCount": len(changed_files),
-            "excludedFileCount": len(excluded_files),
-            "excludedPaths": excluded_files,
-        },
-    }
-    workspace_root = Path(get_settings().local_repo_workspace_root).expanduser().resolve(strict=False)
-    try:
-        worktree_relative = str(worktree.resolve(strict=True).relative_to(workspace_root)).replace("\\", "/")
-    except (FileNotFoundError, ValueError) as exception:
-        raise AppError(
-            "AGENT_WORKTREE_UNAVAILABLE",
-            "Agent Review worktree is outside the configured workspace root",
-            409,
-        ) from exception
-    run = repository.create_agent_job(
+    dispatch_detail = _dispatch_progress_base(
+        review_key=review_key,
+        dispatch_attempt_id=dispatch_attempt_id,
+    )
+    policy_started = perf_counter()
+    _append_dispatch_progress(
         db,
         task_id=int(task.id),
-        project_id=int(project.id),
-        input_payload={
-            "worktree": worktree_relative,
-            "case": input_case,
-            "budgets": budgets,
-        },
-        completion_context=completion_context,
-        comparison_mode=comparison_mode,
-        runtime=runtime,
-    )
-    result_payload = {
-        "status": "RUNNING",
-        "overallLevel": None,
-        "summary": None,
-        "findings": [],
-        "rawOutput": None,
-        "exitCode": None,
-        "errorMessage": None,
-        "startedAt": utc_now(),
-        "finishedAt": None,
-        "requestedEngine": "AGENT",
-        "effectiveEngine": "AGENT",
-        "agentRunId": run.id,
-        "agentRunSummary": repository.run_to_summary(run),
-    }
-    save_result(
-        db,
-        task_id=int(task.id),
-        review_key=review_key,
-        project_id=int(project.id),
-        profile_code=profile.profile_code,
-        provider=provider,
-        model=model,
-        display_name=display_name,
-        sort_order=5,
-        result=result_payload,
-    )
-    if excluded_files:
-        append_progress(
-            db,
-            int(task.id),
-            "AGENT_SENSITIVE_PATHS_EXCLUDED",
-            "WARN",
-            "Agent Review 已排除敏感路径，其余文件继续审查",
-            json.dumps(input_case["reviewCoverage"], ensure_ascii=False),
-            review_key=review_key,
-        )
-    append_progress(
-        db,
-        int(task.id),
-        "AGENT_QUEUED",
-        "INFO",
-        "Agent Review 已进入独立 Worker 队列",
-        json.dumps(
-            {
-                "runId": run.id,
-                "diffMode": input_case["diffMode"],
-                "diffBytes": diff_bytes,
-                **input_case["reviewCoverage"],
-            },
-            ensure_ascii=False,
-        ),
-        review_key=review_key,
+        phase="PROJECT_POLICY_BUILD_STARTED",
+        level="INFO",
+        message="Agent Review 正在构建项目 Review 策略上下文",
+        base_detail=dispatch_detail,
+        status="STARTED",
+        started_at=policy_started,
     )
     db.commit()
+    try:
+        policy_context = build_project_review_policy_prompt_context(db, int(project.id))
+    except Exception as exception:
+        wrapped = _persist_dispatch_failure(
+            db,
+            task_id=int(task.id),
+            phase="PROJECT_POLICY_BUILD_FAILED",
+            message="Agent Review 项目 Review 策略上下文构建失败",
+            base_detail=dispatch_detail,
+            started_at=policy_started,
+            exception=exception,
+            fallback_code="AGENT_POLICY_BUILD_FAILED",
+            fallback_message="Agent Review project policy context build failed",
+            mark_review_failed=mark_review_failed,
+        )
+        if wrapped is not None:
+            raise wrapped from exception
+        raise
+
+    input_started = perf_counter()
+    _append_dispatch_progress(
+        db,
+        task_id=int(task.id),
+        phase="PROJECT_POLICY_BUILD_COMPLETED",
+        level="INFO",
+        message="Agent Review 项目 Review 策略上下文已构建",
+        base_detail=dispatch_detail,
+        status="COMPLETED",
+        started_at=policy_started,
+        extra=_policy_progress_summary(policy_context),
+    )
+    _append_dispatch_progress(
+        db,
+        task_id=int(task.id),
+        phase="AGENT_INPUT_BUILD_STARTED",
+        level="INFO",
+        message="Agent Review 正在组装安全输入并校验 Worktree",
+        base_detail=dispatch_detail,
+        status="STARTED",
+        started_at=input_started,
+    )
+    db.commit()
+
+    try:
+        review_instructions = "\n\n".join(
+            value
+            for value in (
+                getattr(profile, "review_instructions", None),
+                policy_context.get("promptText"),
+            )
+            if str(value or "").strip()
+        )
+        diff_mode = "INLINE" if diff_bytes <= budgets["inlineDiffBytes"] else "TOOL_PAGED"
+        input_case = {
+            "id": f"task-{task.id}",
+            "title": request.get("title")
+            or f"{task.trigger_type} {task.external_source_id or ''}".strip(),
+            "baseRef": request.get("baseRef") or task.target_branch,
+            "commitSha": request.get("commitSha") or task.after_sha or task.commit_sha,
+            "changedFiles": changed_files,
+            "diff": diff_text,
+            "diffMode": diff_mode,
+            "reviewInstructions": review_instructions,
+            "baselineContext": _bounded_context(request),
+            "reviewCoverage": {
+                "totalChangedFileCount": len(requested_files),
+                "includedFileCount": len(changed_files),
+                "excludedFileCount": len(excluded_files),
+                "excludedPaths": excluded_files,
+            },
+        }
+        workspace_root = (
+            Path(get_settings().local_repo_workspace_root).expanduser().resolve(strict=False)
+        )
+        try:
+            worktree_relative = str(
+                worktree.resolve(strict=True).relative_to(workspace_root)
+            ).replace("\\", "/")
+        except (FileNotFoundError, ValueError) as exception:
+            raise AppError(
+                "AGENT_WORKTREE_UNAVAILABLE",
+                "Agent Review worktree is outside the configured workspace root",
+                409,
+            ) from exception
+    except Exception as exception:
+        wrapped = _persist_dispatch_failure(
+            db,
+            task_id=int(task.id),
+            phase="AGENT_INPUT_BUILD_FAILED",
+            message="Agent Review 安全输入组装或 Worktree 校验失败",
+            base_detail=dispatch_detail,
+            started_at=input_started,
+            exception=exception,
+            fallback_code="AGENT_INPUT_BUILD_FAILED",
+            fallback_message="Agent Review input build failed",
+            mark_review_failed=mark_review_failed,
+        )
+        if wrapped is not None:
+            raise wrapped from exception
+        raise
+
+    job_started = perf_counter()
+    input_progress = {
+        "changedFileCount": len(requested_files),
+        "includedFileCount": len(changed_files),
+        "excludedFileCount": len(excluded_files),
+        "diffBytes": diff_bytes,
+        "diffMode": input_case["diffMode"],
+    }
+    _append_dispatch_progress(
+        db,
+        task_id=int(task.id),
+        phase="AGENT_INPUT_BUILD_COMPLETED",
+        level="INFO",
+        message="Agent Review 安全输入已组装",
+        base_detail=dispatch_detail,
+        status="COMPLETED",
+        started_at=input_started,
+        extra=input_progress,
+    )
+    _append_dispatch_progress(
+        db,
+        task_id=int(task.id),
+        phase="AGENT_JOB_CREATE_STARTED",
+        level="INFO",
+        message="Agent Review 正在持久化 Scheduler Job",
+        base_detail=dispatch_detail,
+        status="STARTED",
+        started_at=job_started,
+    )
+    db.commit()
+
+    try:
+        run = repository.create_agent_job(
+            db,
+            task_id=int(task.id),
+            project_id=int(project.id),
+            input_payload={
+                "worktree": worktree_relative,
+                "case": input_case,
+                "budgets": budgets,
+            },
+            completion_context=completion_context,
+            comparison_mode=comparison_mode,
+            runtime=runtime,
+        )
+        result_payload = {
+            "status": "RUNNING",
+            "overallLevel": None,
+            "summary": None,
+            "findings": [],
+            "rawOutput": None,
+            "exitCode": None,
+            "errorMessage": None,
+            "startedAt": utc_now(),
+            "finishedAt": None,
+            "requestedEngine": "AGENT",
+            "effectiveEngine": "AGENT",
+            "agentRunId": run.id,
+            "agentRunSummary": repository.run_to_summary(run),
+        }
+        save_result(
+            db,
+            task_id=int(task.id),
+            review_key=review_key,
+            project_id=int(project.id),
+            profile_code=profile.profile_code,
+            provider=provider,
+            model=model,
+            display_name=display_name,
+            sort_order=5,
+            result=result_payload,
+        )
+        if excluded_files:
+            append_progress(
+                db,
+                int(task.id),
+                "AGENT_SENSITIVE_PATHS_EXCLUDED",
+                "WARN",
+                "Agent Review 已排除敏感路径，其余文件继续审查",
+                json.dumps(input_case["reviewCoverage"], ensure_ascii=False),
+                review_key=review_key,
+            )
+        _append_dispatch_progress(
+            db,
+            task_id=int(task.id),
+            phase="AGENT_JOB_CREATE_COMPLETED",
+            level="INFO",
+            message="Agent Review Scheduler Job 已持久化",
+            base_detail=dispatch_detail,
+            status="COMPLETED",
+            started_at=job_started,
+            extra={
+                "jobId": int(run.scheduler_job_id),
+                "runId": int(run.id),
+            },
+        )
+        _append_dispatch_progress(
+            db,
+            task_id=int(task.id),
+            phase="AGENT_QUEUED",
+            level="INFO",
+            message="Agent Review 已进入独立 Worker 队列",
+            base_detail=dispatch_detail,
+            status="COMPLETED",
+            started_at=job_started,
+            extra={
+                "jobId": int(run.scheduler_job_id),
+                "runId": int(run.id),
+                **input_progress,
+            },
+            review_key=review_key,
+        )
+        db.commit()
+    except Exception as exception:
+        wrapped = _persist_dispatch_failure(
+            db,
+            task_id=int(task.id),
+            phase="AGENT_JOB_CREATE_FAILED",
+            message="Agent Review Scheduler Job 持久化失败",
+            base_detail=dispatch_detail,
+            started_at=job_started,
+            exception=exception,
+            fallback_code="AGENT_JOB_CREATE_FAILED",
+            fallback_message="Agent Review scheduler job persistence failed",
+            mark_review_failed=mark_review_failed,
+        )
+        if wrapped is not None:
+            raise wrapped from exception
+        raise
     return {
         "taskId": task.id,
         "projectId": project.id,
@@ -881,6 +1040,203 @@ def _ensure_worktree(task: ReviewTask, project: Project) -> Path:
         f"{reason} (failurePhase={failure_phase}, attempts={len(summaries)})"[:500],
         409,
     )
+
+
+def _prepare_agent_worktree_with_progress(
+    db: Session,
+    *,
+    task: ReviewTask,
+    project: Project,
+    review_key: str,
+    dispatch_attempt_id: str,
+    changed_file_count: int,
+    diff_bytes: int,
+    mark_review_failed: bool = False,
+) -> Path:
+    started = perf_counter()
+    base_detail = _dispatch_progress_base(
+        review_key=review_key,
+        dispatch_attempt_id=dispatch_attempt_id,
+    )
+    worktree_detail = {
+        "changedFileCount": max(int(changed_file_count), 0),
+        "diffBytes": max(int(diff_bytes), 0),
+        "maxAttempts": 2,
+    }
+    _append_dispatch_progress(
+        db,
+        task_id=int(task.id),
+        phase="LOCAL_REPO_PREPARE_STARTED",
+        level="INFO",
+        message="Agent Review 正在准备本地仓库 Worktree",
+        base_detail=base_detail,
+        status="STARTED",
+        started_at=started,
+        extra=worktree_detail,
+    )
+    db.commit()
+    try:
+        worktree = _ensure_worktree(task, project)
+    except Exception as exception:
+        wrapped = _persist_dispatch_failure(
+            db,
+            task_id=int(task.id),
+            phase="LOCAL_REPO_PREPARE_FAILED",
+            message="Agent Review 本地仓库 Worktree 准备失败",
+            base_detail=base_detail,
+            started_at=started,
+            exception=exception,
+            fallback_code="AGENT_WORKTREE_PREPARE_FAILED",
+            fallback_message="Agent Review worktree preparation failed",
+            mark_review_failed=mark_review_failed,
+            extra=worktree_detail,
+        )
+        if wrapped is not None:
+            raise wrapped from exception
+        raise
+    _append_dispatch_progress(
+        db,
+        task_id=int(task.id),
+        phase="LOCAL_REPO_PREPARED",
+        level="INFO",
+        message="Agent Review 本地仓库 Worktree 已准备",
+        base_detail=base_detail,
+        status="COMPLETED",
+        started_at=started,
+        extra=worktree_detail,
+    )
+    db.commit()
+    return worktree
+
+
+def _dispatch_progress_base(
+    *,
+    review_key: str,
+    dispatch_attempt_id: str,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": _DISPATCH_PROGRESS_SCHEMA_VERSION,
+        "operation": _DISPATCH_OPERATION,
+        "dispatchAttemptId": str(dispatch_attempt_id)[:128],
+        "reviewKey": str(review_key)[:64],
+        "requestedEngine": "AGENT",
+    }
+
+
+def _append_dispatch_progress(
+    db: Session,
+    *,
+    task_id: int,
+    phase: str,
+    level: str,
+    message: str,
+    base_detail: dict[str, Any],
+    status: str,
+    started_at: float,
+    extra: dict[str, Any] | None = None,
+    review_key: str | None = None,
+) -> None:
+    detail = {
+        **base_detail,
+        **(extra or {}),
+        "status": status,
+        "durationMs": _elapsed_ms(started_at),
+    }
+    append_progress(
+        db,
+        task_id,
+        phase,
+        level,
+        message,
+        json.dumps(detail, ensure_ascii=False),
+        review_key=review_key,
+    )
+
+
+def _persist_dispatch_failure(
+    db: Session,
+    *,
+    task_id: int,
+    phase: str,
+    message: str,
+    base_detail: dict[str, Any],
+    started_at: float,
+    exception: Exception,
+    fallback_code: str,
+    fallback_message: str,
+    mark_review_failed: bool,
+    extra: dict[str, Any] | None = None,
+) -> AppError | None:
+    db.rollback()
+    raw_message = (
+        exception.message if isinstance(exception, AppError) else fallback_message
+    )
+    failure_message = (
+        scrub_sensitive(str(raw_message or fallback_message)) or fallback_message
+    )[:1000]
+    failure_code = (
+        str(exception.code) if isinstance(exception, AppError) else fallback_code
+    )[:64]
+    try:
+        if mark_review_failed:
+            persisted_task = db.get(ReviewTask, task_id)
+            if persisted_task is not None:
+                persisted_task.review_status = "REVIEW_FAILED"
+                persisted_task.updated_at = datetime.now()
+        _append_dispatch_progress(
+            db,
+            task_id=task_id,
+            phase=phase,
+            level="ERROR",
+            message=message,
+            base_detail=base_detail,
+            status="FAILED",
+            started_at=started_at,
+            extra={
+                **(extra or {}),
+                "failureCode": failure_code,
+                "failureMessage": failure_message,
+            },
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        _LOGGER.exception(
+            "Agent dispatch failure progress persistence failed taskId=%s phase=%s attemptId=%s",
+            task_id,
+            phase,
+            base_detail.get("dispatchAttemptId"),
+        )
+        return None
+    _LOGGER.error(
+        "Agent dispatch stage failed taskId=%s phase=%s failureCode=%s exceptionType=%s",
+        task_id,
+        phase,
+        failure_code,
+        type(exception).__name__,
+    )
+    if isinstance(exception, AppError):
+        return None
+    return AppError(fallback_code, fallback_message, 500)
+
+
+def _policy_progress_summary(policy_context: dict[str, Any]) -> dict[str, Any]:
+    meta = policy_context.get("meta") if isinstance(policy_context, dict) else {}
+    safe_meta = meta if isinstance(meta, dict) else {}
+    return {
+        "totalAvailable": max(int(safe_meta.get("totalAvailable") or 0), 0),
+        "injectedCount": max(int(safe_meta.get("injectedCount") or 0), 0),
+        "promptLength": max(int(safe_meta.get("promptLength") or 0), 0),
+        "truncated": bool(safe_meta.get("truncated")),
+        "contentTruncatedCount": max(
+            int(safe_meta.get("contentTruncatedCount") or 0),
+            0,
+        ),
+    }
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(int((perf_counter() - started_at) * 1000), 0)
 
 
 def _changed_file_paths(request: dict[str, Any]) -> list[str]:

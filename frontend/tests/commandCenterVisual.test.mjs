@@ -15,9 +15,9 @@ test('fresh Runtime derives idle queued and running activity from the two lanes'
 
 
 test('loading stale empty and failed Runtime resources pause every motion owner', () => {
-  assert.equal(commandCenterMotionState(presentation(), true), 'paused');
+  assert.equal(commandCenterMotionState(presentation({ preparation: 'preparing' }), true), 'paused');
   for (const state of ['STALE', 'EMPTY', 'ERROR_RETAINED', 'ERROR_EMPTY']) {
-    const scene = commandCenterMotionScene(presentation({ state }), false);
+    const scene = commandCenterMotionScene(presentation({ state, preparation: 'preparing' }), false);
     assert.equal(scene.activity, 'paused', state);
     assert.equal(Object.values(scene.connections).some(connection => connection.active), false, state);
     assert.equal(scene.fallbackActive, false, state);
@@ -35,6 +35,43 @@ test('queued Agent activates intake and Agent branch without pretending executio
   assert.deepEqual(scene.connections['engine-agent'], { activity: 'queued', active: true });
   assert.equal(scene.connections['agent-result'].active, false);
   assert.equal(scene.connections['engine-standard'].active, false);
+});
+
+
+test('fresh preparation activates only intake and Agent handoff with weaker preparing state', () => {
+  const scene = commandCenterMotionScene(presentation({ preparation: 'preparing' }));
+
+  assert.equal(scene.activity, 'preparing');
+  assert.deepEqual(scene.lanes.agent, { activity: 'idle', queued: false, running: false });
+  assert.deepEqual(scene.lanes.standard, { activity: 'idle', queued: false, running: false });
+  assert.deepEqual(scene.connections['queue-engine'], { activity: 'preparing', active: true });
+  assert.deepEqual(scene.connections['engine-agent'], { activity: 'preparing', active: true });
+  assert.equal(scene.connections['agent-result'].active, false);
+  assert.equal(scene.connections['standard-result'].active, false);
+  assert.equal(scene.connections['agent-standard'].active, false);
+});
+
+
+test('real queued or running lanes outrank preparation and delayed preparation remains idle', () => {
+  const queued = commandCenterMotionScene(presentation({
+    preparation: 'preparing',
+    agentQueued: 1
+  }));
+  assert.equal(queued.activity, 'queued');
+  assert.equal(queued.connections['queue-engine'].activity, 'queued');
+  assert.equal(queued.connections['engine-agent'].activity, 'queued');
+
+  const running = commandCenterMotionScene(presentation({
+    preparation: 'preparing',
+    standardRunning: 1
+  }));
+  assert.equal(running.activity, 'running');
+  assert.equal(running.connections['engine-agent'].active, false);
+  assert.equal(running.connections['engine-standard'].activity, 'running');
+
+  const delayed = commandCenterMotionScene(presentation({ preparation: 'delayed' }));
+  assert.equal(delayed.activity, 'idle');
+  assert.equal(Object.values(delayed.connections).some(connection => connection.active), false);
 });
 
 
@@ -96,10 +133,12 @@ function presentation({
   standardQueued = 0,
   standardRunning = 0,
   standardRunningItems = [],
-  standardNextQueued = null
+  standardNextQueued = null,
+  preparation = 'idle'
 } = {}) {
   return {
     resources: { runtime: { state } },
+    dispatchPreparation: { activity: preparation },
     agentLane: {
       queued: agentQueued,
       running: agentRunning,

@@ -1,6 +1,11 @@
 import { presentSnapshotResource } from './commandCenterResourceState.js';
 
 
+const DISPATCH_PREPARATION_DELAY_MS = 180_000;
+const DISPATCH_PREPARATION_STAGES = new Set(['PREFLIGHT', 'CONTEXT_BUILDING']);
+const DISPATCH_PREPARATION_STATUSES = new Set(['PENDING', 'CLAIMED', 'RUNNING']);
+
+
 const ENGINE_ROUTES = Object.freeze([
   Object.freeze({
     key: 'AGENT',
@@ -52,7 +57,8 @@ export function buildCommandCenterPresentation({
   runtimeError = '',
   governance,
   governanceLoading = false,
-  governanceError = ''
+  governanceError = '',
+  now = Date.now()
 } = {}) {
   const resources = {
     runtime: presentSnapshotResource({
@@ -99,6 +105,11 @@ export function buildCommandCenterPresentation({
   const resourceState = resources.runtime.state;
   const taskQueue = presentTaskQueue(safeRuntime, resources.runtime);
   const todayResults = presentTodayResults(safeRuntime, resources.runtime);
+  const dispatchPreparation = presentDispatchPreparation(
+    safeRuntime?.activeFlows,
+    resourceState,
+    now
+  );
 
   return {
     resources,
@@ -119,6 +130,7 @@ export function buildCommandCenterPresentation({
       error: text(runtimeError) || null
     },
     taskQueue,
+    dispatchPreparation,
     engineSelection: {
       zoneKey: 'engine-selection',
       mode: 'AGENT_FIRST',
@@ -148,6 +160,60 @@ export function buildCommandCenterPresentation({
       freshness,
       generatedAt
     })
+  };
+}
+
+
+function presentDispatchPreparation(activeFlows, resourceState, now) {
+  const empty = {
+    activeCount: 0,
+    delayedCount: 0,
+    latestReviewKey: null,
+    latestStage: null,
+    latestUpdatedAt: null,
+    activity: 'idle'
+  };
+  if (resourceState !== 'FRESH' || !Array.isArray(activeFlows)) return empty;
+
+  const nowTimestamp = now instanceof Date ? now.getTime() : Number(now);
+  const effectiveNow = Number.isFinite(nowTimestamp) ? nowTimestamp : Date.now();
+  const candidates = activeFlows
+    .map(flow => {
+      const updatedAt = flow?.updatedAt;
+      const updatedTimestamp = Date.parse(updatedAt);
+      const requestedEngine = String(flow?.requestedEngine || '').trim().toUpperCase();
+      const status = String(flow?.status || '').trim().toUpperCase();
+      const stage = String(flow?.stage || '').trim().toUpperCase();
+      const stageSource = String(flow?.stageSource || '').trim().toUpperCase();
+      if (
+        requestedEngine !== 'AGENT'
+        || !DISPATCH_PREPARATION_STATUSES.has(status)
+        || !DISPATCH_PREPARATION_STAGES.has(stage)
+        || stageSource !== 'PROGRESS'
+        || !Number.isFinite(updatedTimestamp)
+      ) return null;
+      return {
+        reviewKey: text(flow?.reviewKey) || null,
+        stage,
+        updatedAt,
+        updatedTimestamp,
+        delayed: Math.max(effectiveNow - updatedTimestamp, 0) > DISPATCH_PREPARATION_DELAY_MS
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.updatedTimestamp - left.updatedTimestamp);
+
+  if (candidates.length === 0) return empty;
+  const activeCount = candidates.filter(item => !item.delayed).length;
+  const delayedCount = candidates.length - activeCount;
+  const latest = candidates[0];
+  return {
+    activeCount,
+    delayedCount,
+    latestReviewKey: latest.reviewKey,
+    latestStage: latest.stage,
+    latestUpdatedAt: latest.updatedAt,
+    activity: activeCount > 0 ? 'preparing' : 'delayed'
   };
 }
 

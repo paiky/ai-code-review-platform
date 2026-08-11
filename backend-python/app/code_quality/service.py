@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime
 from fnmatch import fnmatchcase
 import hashlib
@@ -800,6 +801,42 @@ def _agent_preflight_fallback_metadata(
     }
 
 
+@contextmanager
+def _auto_fallback_failure_guard(
+    db: Session,
+    task: ReviewTask,
+    *,
+    enabled: bool,
+):
+    try:
+        yield
+    except Exception:
+        if enabled:
+            _mark_auto_fallback_schedule_failed(db, int(task.id))
+        raise
+
+
+def _mark_auto_fallback_schedule_failed(db: Session, task_id: int) -> None:
+    db.rollback()
+    try:
+        persisted_fallback_result = db.scalar(
+            select(CodeQualityReviewResult.id)
+            .where(CodeQualityReviewResult.task_id == task_id)
+            .where(CodeQualityReviewResult.requested_engine == "AGENT")
+            .where(CodeQualityReviewResult.effective_engine == "STANDARD_FALLBACK")
+            .limit(1)
+        )
+        if persisted_fallback_result is not None:
+            return
+        task = db.get(ReviewTask, task_id)
+        if task is not None:
+            task.review_status = "REVIEW_FAILED"
+            task.updated_at = datetime.now()
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 def _save_agent_sensitive_path_skip(
     db: Session,
     *,
@@ -929,6 +966,8 @@ def trigger_auto_review(
         "changedFileDetails": changed_files,
     }
     delete_progress(db, task.id)
+    task.review_status = "REVIEWING"
+    task.updated_at = datetime.now()
     preflight_summary = ensure_deterministic_preflight(db, task.id, changed_files=changed_files)
     from app.agent_review.service import enqueue_agent_review, resolve_review_engine
 
@@ -971,69 +1010,73 @@ def trigger_auto_review(
                 task_id=task.id,
                 exception=exception,
             )
-    for target in targets:
-        provider = target["provider"]
-        request = _build_review_request(profile, {**base_request, "model": target["model"]})
-        request["reviewKey"] = target["reviewKey"]
-        request["_deterministicPreflightSummary"] = preflight_summary
-        request.update(fallback_metadata)
-        append_progress(
-            db,
-            task.id,
-            "QUEUED",
-            "INFO",
-            "AI Review 已进入执行队列",
-            f"provider={provider.provider_code}, profile={profile.profile_code}",
-            review_key=target["reviewKey"],
-        )
-        save_result(
-            db,
-            task_id=task.id,
-            review_key=target["reviewKey"],
-            project_id=project.id,
-            profile_code=profile.profile_code,
-            provider=provider.provider_code,
-            model=request.get("model") or provider.model_name,
-            display_name=target["displayName"],
-            sort_order=target["sortOrder"],
-            result=_running_result_payload(),
-        )
-        if _inline_enabled():
-            result = _run_review(db, task.id, project, profile, provider, request, target)
-            _send_auto_review_notification(
+    with _auto_fallback_failure_guard(db, task, enabled=bool(fallback_metadata)):
+        for target in targets:
+            provider = target["provider"]
+            request = _build_review_request(
+                profile,
+                {**base_request, "model": target["model"]},
+            )
+            request["reviewKey"] = target["reviewKey"]
+            request["_deterministicPreflightSummary"] = preflight_summary
+            request.update(fallback_metadata)
+            append_progress(
                 db,
                 task.id,
-                result,
+                "QUEUED",
+                "INFO",
+                "AI Review 已进入执行队列",
+                f"provider={provider.provider_code}, profile={profile.profile_code}",
+                review_key=target["reviewKey"],
+            )
+            save_result(
+                db,
+                task_id=task.id,
+                review_key=target["reviewKey"],
+                project_id=project.id,
+                profile_code=profile.profile_code,
+                provider=provider.provider_code,
+                model=request.get("model") or provider.model_name,
+                display_name=target["displayName"],
+                sort_order=target["sortOrder"],
+                result=_running_result_payload(),
+            )
+            if _inline_enabled():
+                result = _run_review(db, task.id, project, profile, provider, request, target)
+                _send_auto_review_notification(
+                    db,
+                    task.id,
+                    result,
+                    rule_result_id,
+                    risk_card,
+                    focus_change_types,
+                    focus_rule_codes,
+                    notification_context,
+                    reminder_card_enabled,
+                )
+                continue
+            _submit_provider_job(
+                db,
+                run_auto_review_job,
+                task.id,
+                project.id,
+                profile.profile_code,
+                provider.provider_code,
+                request,
                 rule_result_id,
                 risk_card,
-                focus_change_types,
-                focus_rule_codes,
-                notification_context,
+                focus_change_types or [],
+                focus_rule_codes or [],
+                notification_context or {},
                 reminder_card_enabled,
+                target,
+                job_type="AI_REVIEW",
+                task_id=task.id,
+                project_id=project.id,
+                priority=REVIEW_JOB_PRIORITY,
+                label=f"MR AI Review - {target['displayName']}",
+                review_key=target["reviewKey"],
             )
-            continue
-        _submit_provider_job(
-            db,
-            run_auto_review_job,
-            task.id,
-            project.id,
-            profile.profile_code,
-            provider.provider_code,
-            request,
-            rule_result_id,
-            risk_card,
-            focus_change_types or [],
-            focus_rule_codes or [],
-            notification_context or {},
-            reminder_card_enabled,
-            target,
-            job_type="AI_REVIEW",
-            task_id=task.id,
-            project_id=project.id,
-            priority=REVIEW_JOB_PRIORITY,
-            label=f"MR AI Review - {target['displayName']}",
-            review_key=target["reviewKey"],
-        )
     return True
 
 
@@ -1100,6 +1143,8 @@ def _trigger_push_auto_review(
         "changedFileDetails": changed_files,
     }
     delete_progress(db, task.id)
+    task.review_status = "REVIEWING"
+    task.updated_at = datetime.now()
     preflight_summary = ensure_deterministic_preflight(db, task.id, changed_files=changed_files)
     gate["ai_review_scheduled"] = True
     save_push_gate_decision(db, **gate)
@@ -1144,69 +1189,73 @@ def _trigger_push_auto_review(
                 task_id=task.id,
                 exception=exception,
             )
-    for target in targets:
-        provider = target["provider"]
-        request = _build_review_request(profile, {**base_request, "model": target["model"]})
-        request["reviewKey"] = target["reviewKey"]
-        request["_deterministicPreflightSummary"] = preflight_summary
-        request.update(fallback_metadata)
-        append_progress(
-            db,
-            task.id,
-            "QUEUED",
-            "INFO",
-            "Push AI Review 已通过自动审核并进入队列",
-            f"reasonCode={gate['reason_code']}, provider={provider.provider_code}, profile={profile.profile_code}",
-            review_key=target["reviewKey"],
-        )
-        save_result(
-            db,
-            task_id=task.id,
-            review_key=target["reviewKey"],
-            project_id=project.id,
-            profile_code=profile.profile_code,
-            provider=provider.provider_code,
-            model=request.get("model") or provider.model_name,
-            display_name=target["displayName"],
-            sort_order=target["sortOrder"],
-            result=_running_result_payload(),
-        )
-        if _inline_enabled():
-            result = _run_review(db, task.id, project, profile, provider, request, target)
-            _send_auto_review_notification(
+    with _auto_fallback_failure_guard(db, task, enabled=bool(fallback_metadata)):
+        for target in targets:
+            provider = target["provider"]
+            request = _build_review_request(
+                profile,
+                {**base_request, "model": target["model"]},
+            )
+            request["reviewKey"] = target["reviewKey"]
+            request["_deterministicPreflightSummary"] = preflight_summary
+            request.update(fallback_metadata)
+            append_progress(
                 db,
                 task.id,
-                result,
+                "QUEUED",
+                "INFO",
+                "Push AI Review 已通过自动审核并进入队列",
+                f"reasonCode={gate['reason_code']}, provider={provider.provider_code}, profile={profile.profile_code}",
+                review_key=target["reviewKey"],
+            )
+            save_result(
+                db,
+                task_id=task.id,
+                review_key=target["reviewKey"],
+                project_id=project.id,
+                profile_code=profile.profile_code,
+                provider=provider.provider_code,
+                model=request.get("model") or provider.model_name,
+                display_name=target["displayName"],
+                sort_order=target["sortOrder"],
+                result=_running_result_payload(),
+            )
+            if _inline_enabled():
+                result = _run_review(db, task.id, project, profile, provider, request, target)
+                _send_auto_review_notification(
+                    db,
+                    task.id,
+                    result,
+                    rule_result_id,
+                    risk_card,
+                    focus_change_types,
+                    focus_rule_codes,
+                    notification_context,
+                    reminder_card_enabled,
+                )
+                continue
+            _submit_provider_job(
+                db,
+                run_auto_review_job,
+                task.id,
+                project.id,
+                profile.profile_code,
+                provider.provider_code,
+                request,
                 rule_result_id,
                 risk_card,
                 focus_change_types,
                 focus_rule_codes,
                 notification_context,
                 reminder_card_enabled,
+                target,
+                job_type="AI_REVIEW",
+                task_id=task.id,
+                project_id=project.id,
+                priority=REVIEW_JOB_PRIORITY,
+                label=f"Push AI Review - {target['displayName']}",
+                review_key=target["reviewKey"],
             )
-            continue
-        _submit_provider_job(
-            db,
-            run_auto_review_job,
-            task.id,
-            project.id,
-            profile.profile_code,
-            provider.provider_code,
-            request,
-            rule_result_id,
-            risk_card,
-            focus_change_types,
-            focus_rule_codes,
-            notification_context,
-            reminder_card_enabled,
-            target,
-            job_type="AI_REVIEW",
-            task_id=task.id,
-            project_id=project.id,
-            priority=REVIEW_JOB_PRIORITY,
-            label=f"Push AI Review - {target['displayName']}",
-            review_key=target["reviewKey"],
-        )
     return True
 
 

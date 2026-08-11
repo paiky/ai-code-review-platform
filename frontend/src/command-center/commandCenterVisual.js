@@ -7,11 +7,14 @@ export function commandCenterMotionScene(presentation, runtimeLoading = false) {
 
   const agent = laneActivity(presentation?.agentLane);
   const standard = laneActivity(presentation?.standardLane);
-  const activity = agent.running || standard.running
+  const laneActivityState = agent.running || standard.running
     ? 'running'
     : agent.queued || standard.queued
       ? 'queued'
       : 'idle';
+  const preparing = laneActivityState === 'idle'
+    && presentation?.dispatchPreparation?.activity === 'preparing';
+  const activity = preparing ? 'preparing' : laneActivityState;
   const fallbackActivity = realFallbackActivity(presentation?.standardLane);
   const fallbackActive = fallbackActivity !== 'idle';
 
@@ -21,7 +24,9 @@ export function commandCenterMotionScene(presentation, runtimeLoading = false) {
     lanes: { agent, standard },
     connections: {
       'queue-engine': connectionActivity(activity),
-      'engine-agent': connectionActivity(fallbackActive ? fallbackActivity : agent.activity),
+      'engine-agent': connectionActivity(
+        fallbackActive ? fallbackActivity : preparing ? 'preparing' : agent.activity
+      ),
       'engine-standard': connectionActivity(fallbackActive ? 'idle' : standard.activity),
       'agent-result': connectionActivity(agent.running ? 'running' : 'idle'),
       'standard-result': connectionActivity(standard.running ? 'running' : 'idle'),
@@ -78,7 +83,7 @@ function realFallbackActivity(standardLane) {
 function connectionActivity(activity) {
   return {
     activity,
-    active: activity === 'queued' || activity === 'running'
+    active: activity === 'preparing' || activity === 'queued' || activity === 'running'
   };
 }
 

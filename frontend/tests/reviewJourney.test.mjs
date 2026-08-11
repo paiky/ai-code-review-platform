@@ -406,7 +406,10 @@ test('keeps repository and retriever failures as context warnings and safely han
     review('STANDARD', 'SUCCESS', 'context-failed'),
     [
       progress(1, 'context-failed', 'LOCAL_REPO_PREPARE_FAILED', '2026-07-29T08:00:00Z', '{damaged'),
-      progress(2, 'context-failed', 'LOCAL_CONTEXT_RETRIEVE_FAILED', '2026-07-29T08:01:00Z', '{damaged')
+      progress(2, 'context-failed', 'PROJECT_POLICY_BUILD_FAILED', '2026-07-29T08:01:00Z', '{}', 'ERROR'),
+      progress(3, 'context-failed', 'AGENT_INPUT_BUILD_FAILED', '2026-07-29T08:02:00Z', '{}', 'ERROR'),
+      progress(4, 'context-failed', 'AGENT_JOB_CREATE_FAILED', '2026-07-29T08:03:00Z', '{}', 'ERROR'),
+      progress(5, 'context-failed', 'LOCAL_CONTEXT_RETRIEVE_FAILED', '2026-07-29T08:04:00Z', '{damaged')
     ],
     { now: NOW }
   );
@@ -425,6 +428,54 @@ test('keeps repository and retriever failures as context warnings and safely han
   );
   assert.equal(stage(absent, 'context').visible, false);
   assert.equal(stage(absent, 'context').details.context, null);
+});
+
+test('keeps policy input and job creation phases in safe chronological task detail labels', () => {
+  const preparing = buildReviewJourney(
+    {},
+    [
+      progress(1, null, 'PROJECT_POLICY_BUILD_STARTED', '2026-07-29T08:00:00Z'),
+      progress(2, null, 'PROJECT_POLICY_BUILD_COMPLETED', '2026-07-29T08:01:00Z'),
+      progress(3, null, 'AGENT_INPUT_BUILD_STARTED', '2026-07-29T08:02:00Z'),
+      progress(4, null, 'AGENT_INPUT_BUILD_COMPLETED', '2026-07-29T08:03:00Z'),
+      progress(5, null, 'AGENT_JOB_CREATE_STARTED', '2026-07-29T08:04:00Z'),
+      progress(6, null, 'AGENT_JOB_CREATE_COMPLETED', '2026-07-29T08:05:00Z')
+    ],
+    { now: NOW }
+  );
+  const contextStage = stage(preparing, 'context');
+
+  assert.equal(preparing.status, 'RUNNING');
+  assert.equal(contextStage.status, 'ACTIVE');
+  assert.deepEqual(contextStage.events.map(event => event.safeLabel), [
+    '项目 Review 策略上下文正在构建',
+    '项目 Review 策略上下文已构建',
+    'Agent 安全输入正在组装',
+    'Agent 安全输入已组装',
+    'Agent 调度任务正在创建',
+    'Agent 调度任务已持久化'
+  ]);
+});
+
+test('shows worktree preparation as an active context stage before an Agent job exists', () => {
+  const preparing = buildReviewJourney(
+    {},
+    [
+      progress(
+        1,
+        null,
+        'LOCAL_REPO_PREPARE_STARTED',
+        '2026-07-29T08:00:00Z',
+        '{"status":"PREPARING","changedFileCount":103,"diffBytes":206245}'
+      )
+    ],
+    { now: NOW }
+  );
+  const contextStage = stage(preparing, 'context');
+
+  assert.equal(contextStage.visible, true);
+  assert.equal(contextStage.status, 'ACTIVE');
+  assert.equal(contextStage.details.context.repository.status, 'PREPARING');
 });
 
 test('separates AUTO_PREFLIGHT from the task-level latest record and preserves reuse isolation', () => {

@@ -271,6 +271,7 @@ test('M3 drives measured routes from truthful state and preserves reduced-motion
   assert.equal(canvasSource.includes("data-active={state.active ? 'true' : 'false'}"), true);
   assert.equal(canvasSource.includes('data-fallback-active'), true);
   assert.equal(styleSource.includes('[data-flow-state="queued"]'), true);
+  assert.equal(styleSource.includes('[data-flow-state="preparing"]'), true);
   assert.equal(styleSource.includes('[data-flow-state="running"]'), true);
   assert.equal(styleSource.includes('cc-engine-orbit-clockwise'), true);
   assert.equal(styleSource.includes('cc-engine-orbit-counterclockwise'), true);
@@ -281,6 +282,43 @@ test('M3 drives measured routes from truthful state and preserves reduced-motion
   assert.equal(styleSource.includes('.command-center-port { display: none; }'), true);
   assert.equal(styleSource.includes('@media (prefers-reduced-motion: reduce)'), true);
   assert.equal(styleSource.includes('animation: none !important'), true);
+  assert.equal(canvasSource.includes('准备派发 · 正在构建 Agent 上下文'), true);
+  assert.equal(canvasSource.includes('派发进度延迟 · 请查看任务详情最后阶段'), true);
+  assert.equal(canvasSource.includes('command-center-dispatch-status'), true);
+  assert.equal(presentationSource.includes('DISPATCH_PREPARATION_DELAY_MS = 180_000'), true);
+  assert.equal(presentationSource.includes('setInterval'), false);
+  assert.equal(presentationSource.includes('requestAnimationFrame'), false);
+  assert.equal(visualSource.includes("activity === 'preparing'"), true);
+  assert.match(
+    styleSource,
+    /@media \(max-width: 1199px\)[\s\S]*\.command-center-dispatch-status\.is-preparing > i,[\s\S]*animation: none !important;/s
+  );
+  assert.match(
+    styleSource,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation: none !important;/s
+  );
+});
+
+
+test('D2B exposes every dispatch phase with safe task-detail labels', () => {
+  for (const phase of [
+    'LOCAL_REPO_PREPARE_STARTED',
+    'LOCAL_REPO_PREPARED',
+    'LOCAL_REPO_PREPARE_FAILED',
+    'PROJECT_POLICY_BUILD_STARTED',
+    'PROJECT_POLICY_BUILD_COMPLETED',
+    'PROJECT_POLICY_BUILD_FAILED',
+    'AGENT_INPUT_BUILD_STARTED',
+    'AGENT_INPUT_BUILD_COMPLETED',
+    'AGENT_INPUT_BUILD_FAILED',
+    'AGENT_JOB_CREATE_STARTED',
+    'AGENT_JOB_CREATE_COMPLETED',
+    'AGENT_JOB_CREATE_FAILED'
+  ]) {
+    assert.equal(appSource.includes(`${phase}:`), true, phase);
+  }
+  assert.equal(appSource.includes('Agent 调度任务创建中'), true);
+  assert.equal(appSource.includes('Agent 调度任务已持久化'), true);
 });
 
 

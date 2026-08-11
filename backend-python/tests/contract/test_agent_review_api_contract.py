@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 import json
+from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import Session
 
 from app.agent_review import repository as agent_repository
@@ -17,7 +18,11 @@ from app.agent_review.repository import (
     expire_exhausted_agent_jobs,
     sanitize_agent_audit,
 )
-from app.agent_review.service import _ensure_worktree
+from app.agent_review.service import (
+    _ensure_worktree,
+    _prepare_agent_worktree_with_progress,
+    enqueue_agent_review,
+)
 from app.agent_review_spike.budgets import default_agent_budgets
 from app.code_quality.models import CodeQualitySchedulerJob
 from app.code_quality.repository import list_progress, list_result_responses, save_result
@@ -2233,6 +2238,382 @@ def test_agent_worktree_preflight_preserves_nested_failure_detail(
 
     assert captured.value.code == "AGENT_WORKTREE_UNAVAILABLE"
     assert captured.value.message == "git worktree add failed (failurePhase=WORKTREE, attempts=2)"
+
+
+def test_agent_worktree_preparation_persists_started_and_completed_progress(
+    db_session: Session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "worktrees" / "505" / "head"
+    workspace.mkdir(parents=True)
+    task = ReviewTask(id=505)
+    project = Project(id=505)
+    monkeypatch.setattr(
+        "app.agent_review.service._ensure_worktree",
+        lambda _task, _project: workspace,
+    )
+
+    result = _prepare_agent_worktree_with_progress(
+        db_session,
+        task=task,
+        project=project,
+        review_key="agent-observable",
+        dispatch_attempt_id="agent-dispatch-505-test",
+        changed_file_count=103,
+        diff_bytes=206245,
+    )
+
+    assert result == workspace
+    events = list_progress(db_session, 505)
+    assert [event["phase"] for event in events] == [
+        "LOCAL_REPO_PREPARE_STARTED",
+        "LOCAL_REPO_PREPARED",
+    ]
+    started = json.loads(events[0]["detail"])
+    completed = json.loads(events[1]["detail"])
+    assert started["schemaVersion"] == "agent-dispatch-progress-v1"
+    assert started["status"] == "STARTED"
+    assert started["reviewKey"] == "agent-observable"
+    assert started["requestedEngine"] == "AGENT"
+    assert started["dispatchAttemptId"] == "agent-dispatch-505-test"
+    assert completed["status"] == "COMPLETED"
+
+
+def test_agent_worktree_preparation_persists_failure_before_reraising(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    task = ReviewTask(id=506)
+    project = Project(id=506)
+
+    def fail(_task, _project):
+        raise AppError(
+            "AGENT_WORKTREE_UNAVAILABLE",
+            "git worktree add failed (failurePhase=WORKTREE, attempts=2)",
+            409,
+        )
+
+    monkeypatch.setattr("app.agent_review.service._ensure_worktree", fail)
+
+    with pytest.raises(AppError) as captured:
+        _prepare_agent_worktree_with_progress(
+            db_session,
+            task=task,
+            project=project,
+            review_key="agent-observable-failed",
+            dispatch_attempt_id="agent-dispatch-506-test",
+            changed_file_count=103,
+            diff_bytes=206245,
+        )
+
+    assert captured.value.code == "AGENT_WORKTREE_UNAVAILABLE"
+    events = list_progress(db_session, 506)
+    assert [event["phase"] for event in events] == [
+        "LOCAL_REPO_PREPARE_STARTED",
+        "LOCAL_REPO_PREPARE_FAILED",
+    ]
+    failure = json.loads(events[-1]["detail"])
+    assert failure["reviewKey"] == "agent-observable-failed"
+    assert failure["status"] == "FAILED"
+    assert failure["failureCode"] == "AGENT_WORKTREE_UNAVAILABLE"
+    assert failure["failureMessage"].endswith("attempts=2)")
+
+
+def test_agent_worktree_preparation_does_not_convert_process_level_interrupt(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    task = ReviewTask(id=511)
+    project = Project(id=511)
+
+    def interrupt(_task, _project):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr("app.agent_review.service._ensure_worktree", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        _prepare_agent_worktree_with_progress(
+            db_session,
+            task=task,
+            project=project,
+            review_key="agent-interrupted",
+            dispatch_attempt_id="agent-dispatch-511-test",
+            changed_file_count=1,
+            diff_bytes=128,
+        )
+
+    events = list_progress(db_session, 511)
+    assert [event["phase"] for event in events] == ["LOCAL_REPO_PREPARE_STARTED"]
+
+
+def _stub_agent_dispatch_case(
+    db_session: Session,
+    monkeypatch,
+    tmp_path,
+    *,
+    task_id: int,
+) -> tuple[ReviewTask, Project, SimpleNamespace, dict, object]:
+    workspace_root = tmp_path / f"workspace-{task_id}"
+    worktree = workspace_root / "worktrees" / str(task_id) / "head"
+    worktree.mkdir(parents=True)
+    task = ReviewTask(
+        id=task_id,
+        project_id=task_id,
+        trigger_type="MANUAL",
+        external_source_id=f"manual-{task_id}",
+        template_code="backend-default",
+        code_quality_profile_code="backend-default-ai-review",
+        status="SUCCESS",
+        review_status="REVIEWING",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    db_session.add(task)
+    db_session.commit()
+    project = Project(id=task_id)
+    profile = SimpleNamespace(
+        profile_code="backend-default-ai-review",
+        review_instructions="只报告可验证问题",
+    )
+    runtime = {
+        "runtimeCode": "CLAUDE_CODE_DEEPSEEK",
+        "runnerType": "CLAUDE_CODE",
+        "displayName": "Claude Code + DeepSeek",
+        "model": "deepseek-v4-pro[1m]",
+    }
+    budgets = default_agent_budgets()
+    monkeypatch.setattr(
+        "app.agent_review.service.repository.assert_agent_available",
+        lambda _db, require_worker=False: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "app.agent_review.service.repository.selected_agent_runtime_snapshot",
+        lambda _db: runtime,
+    )
+    monkeypatch.setattr(
+        "app.agent_review.service.repository.effective_agent_budgets",
+        lambda _settings: (budgets, {}),
+    )
+    monkeypatch.setattr(
+        "app.agent_review.service._ensure_worktree",
+        lambda _task, _project: worktree,
+    )
+    monkeypatch.setattr(
+        "app.agent_review.service.get_settings",
+        lambda: SimpleNamespace(local_repo_workspace_root=str(workspace_root)),
+    )
+    monkeypatch.setattr(
+        "app.agent_review.service.build_project_review_policy_prompt_context",
+        lambda _db, _project_id: {
+            "promptText": "policy-secret-content",
+            "meta": {
+                "totalAvailable": 2,
+                "injectedCount": 1,
+                "promptLength": 21,
+                "truncated": True,
+                "contentTruncatedCount": 1,
+            },
+        },
+    )
+    run = SimpleNamespace(id=task_id + 2000, scheduler_job_id=task_id + 1000)
+    monkeypatch.setattr(
+        "app.agent_review.service.repository.create_agent_job",
+        lambda _db, **_kwargs: run,
+    )
+    monkeypatch.setattr(
+        "app.agent_review.service.repository.run_to_summary",
+        lambda _run: {"status": "PENDING"},
+    )
+    monkeypatch.setattr("app.agent_review.service.save_result", lambda *_args, **_kwargs: None)
+    request = {
+        "title": f"Manual {task_id}",
+        "changedFiles": ["src/service.py"],
+        "diffText": "diff --git a/src/service.py b/src/service.py\n+dispatch-secret-source",
+    }
+    return task, project, profile, request, run
+
+
+def test_agent_dispatch_persists_safe_stage_sequence_and_final_queue_evidence(
+    db_session: Session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    task, project, profile, request, run = _stub_agent_dispatch_case(
+        db_session,
+        monkeypatch,
+        tmp_path,
+        task_id=507,
+    )
+
+    response = enqueue_agent_review(
+        db_session,
+        task=task,
+        project=project,
+        profile=profile,
+        request=request,
+    )
+
+    assert response["agentRunId"] == run.id
+    events = list_progress(db_session, task.id)
+    assert [event["phase"] for event in events] == [
+        "LOCAL_REPO_PREPARE_STARTED",
+        "LOCAL_REPO_PREPARED",
+        "PROJECT_POLICY_BUILD_STARTED",
+        "PROJECT_POLICY_BUILD_COMPLETED",
+        "AGENT_INPUT_BUILD_STARTED",
+        "AGENT_INPUT_BUILD_COMPLETED",
+        "AGENT_JOB_CREATE_STARTED",
+        "AGENT_JOB_CREATE_COMPLETED",
+        "AGENT_QUEUED",
+    ]
+    details = [json.loads(event["detail"]) for event in events]
+    assert len({detail["dispatchAttemptId"] for detail in details}) == 1
+    assert all(detail["schemaVersion"] == "agent-dispatch-progress-v1" for detail in details)
+    assert all(detail["requestedEngine"] == "AGENT" for detail in details)
+    assert details[-2]["jobId"] == run.scheduler_job_id
+    assert details[-2]["runId"] == run.id
+    assert events[-1]["reviewKey"] == "agent-claude-code-deepseek-v4-pro"
+    serialized = json.dumps(events, ensure_ascii=False)
+    assert "policy-secret-content" not in serialized
+    assert "dispatch-secret-source" not in serialized
+    assert str(tmp_path) not in serialized
+
+
+def test_agent_policy_unexpected_failure_is_durable_and_marks_manual_review_failed(
+    db_session: Session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    task, project, profile, request, _run = _stub_agent_dispatch_case(
+        db_session,
+        monkeypatch,
+        tmp_path,
+        task_id=508,
+    )
+
+    def fail_policy(_db, _project_id):
+        raise RuntimeError("policy-secret-error")
+
+    monkeypatch.setattr(
+        "app.agent_review.service.build_project_review_policy_prompt_context",
+        fail_policy,
+    )
+
+    with pytest.raises(AppError) as captured:
+        enqueue_agent_review(
+            db_session,
+            task=task,
+            project=project,
+            profile=profile,
+            request=request,
+        )
+
+    assert captured.value.code == "AGENT_POLICY_BUILD_FAILED"
+    assert db_session.get(ReviewTask, task.id).review_status == "REVIEW_FAILED"
+    events = list_progress(db_session, task.id)
+    assert events[-1]["phase"] == "PROJECT_POLICY_BUILD_FAILED"
+    failure = json.loads(events[-1]["detail"])
+    assert failure["status"] == "FAILED"
+    assert failure["failureCode"] == "AGENT_POLICY_BUILD_FAILED"
+    assert "policy-secret-error" not in events[-1]["detail"]
+
+
+def test_agent_input_failure_preserves_app_error_and_marks_manual_review_failed(
+    db_session: Session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    task, project, profile, request, _run = _stub_agent_dispatch_case(
+        db_session,
+        monkeypatch,
+        tmp_path,
+        task_id=509,
+    )
+    monkeypatch.setattr(
+        "app.agent_review.service.get_settings",
+        lambda: SimpleNamespace(local_repo_workspace_root=str(tmp_path / "other-root")),
+    )
+
+    with pytest.raises(AppError) as captured:
+        enqueue_agent_review(
+            db_session,
+            task=task,
+            project=project,
+            profile=profile,
+            request=request,
+        )
+
+    assert captured.value.code == "AGENT_WORKTREE_UNAVAILABLE"
+    assert db_session.get(ReviewTask, task.id).review_status == "REVIEW_FAILED"
+    events = list_progress(db_session, task.id)
+    assert events[-1]["phase"] == "AGENT_INPUT_BUILD_FAILED"
+    failure = json.loads(events[-1]["detail"])
+    assert failure["failureCode"] == "AGENT_WORKTREE_UNAVAILABLE"
+    assert str(tmp_path) not in events[-1]["detail"]
+
+
+def test_agent_job_failure_rolls_back_partial_job_and_keeps_auto_review_for_fallback(
+    db_session: Session,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    task, project, profile, request, _run = _stub_agent_dispatch_case(
+        db_session,
+        monkeypatch,
+        tmp_path,
+        task_id=510,
+    )
+
+    def fail_after_partial_job(db, **_kwargs):
+        db.add(
+            CodeQualitySchedulerJob(
+                job_type="AGENT_REVIEW",
+                task_id=task.id,
+                review_key="agent-claude-code-deepseek-v4-pro",
+                project_id=project.id,
+                status="QUEUED",
+                priority=80,
+                attempt=0,
+                max_attempts=2,
+                idempotency_key="partial-agent-job",
+                queued_at=datetime.now(),
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+        db.flush()
+        raise RuntimeError("job-secret-error")
+
+    monkeypatch.setattr(
+        "app.agent_review.service.repository.create_agent_job",
+        fail_after_partial_job,
+    )
+
+    with pytest.raises(AppError) as captured:
+        enqueue_agent_review(
+            db_session,
+            task=task,
+            project=project,
+            profile=profile,
+            request=request,
+            completion_context={"autoNotification": True},
+        )
+
+    assert captured.value.code == "AGENT_JOB_CREATE_FAILED"
+    assert db_session.get(ReviewTask, task.id).review_status == "REVIEWING"
+    assert db_session.scalar(
+        select(func.count())
+        .select_from(CodeQualitySchedulerJob)
+        .where(CodeQualitySchedulerJob.task_id == task.id)
+    ) == 0
+    events = list_progress(db_session, task.id)
+    assert events[-1]["phase"] == "AGENT_JOB_CREATE_FAILED"
+    assert "AGENT_JOB_CREATE_COMPLETED" not in [event["phase"] for event in events]
+    assert "AGENT_QUEUED" not in [event["phase"] for event in events]
+    failure = json.loads(events[-1]["detail"])
+    assert failure["failureCode"] == "AGENT_JOB_CREATE_FAILED"
+    assert "job-secret-error" not in events[-1]["detail"]
 
 
 def test_agent_preflight_fallback_persists_failure_detail(

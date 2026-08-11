@@ -2389,8 +2389,18 @@ function phaseLabel(phase) {
     PROVIDER_SELECTED: '已选择 Provider',
     REQUEST_VALIDATED: '请求校验',
     CONTEXT_PACK_BUILT: '上下文包已构建',
+    LOCAL_REPO_PREPARE_STARTED: '本地仓库准备中',
     LOCAL_REPO_PREPARED: '本地仓库已准备',
     LOCAL_REPO_PREPARE_FAILED: '本地仓库不可用',
+    PROJECT_POLICY_BUILD_STARTED: '项目审查策略构建中',
+    PROJECT_POLICY_BUILD_COMPLETED: '项目审查策略已构建',
+    PROJECT_POLICY_BUILD_FAILED: '项目审查策略构建失败',
+    AGENT_INPUT_BUILD_STARTED: 'Agent 安全输入组装中',
+    AGENT_INPUT_BUILD_COMPLETED: 'Agent 安全输入已组装',
+    AGENT_INPUT_BUILD_FAILED: 'Agent 安全输入组装失败',
+    AGENT_JOB_CREATE_STARTED: 'Agent 调度任务创建中',
+    AGENT_JOB_CREATE_COMPLETED: 'Agent 调度任务已持久化',
+    AGENT_JOB_CREATE_FAILED: 'Agent 调度任务创建失败',
     LOCAL_CONTEXT_RETRIEVED: '本地引用检索完成',
     LOCAL_CONTEXT_RETRIEVE_FAILED: '本地引用检索不可用',
     AGENT_SENSITIVE_PATHS_EXCLUDED: '已排除敏感路径',
@@ -2475,8 +2485,18 @@ const keyProgressPhases = new Set([
   'PROVIDER_SELECTED',
   'REQUEST_VALIDATED',
   'CONTEXT_PACK_BUILT',
+  'LOCAL_REPO_PREPARE_STARTED',
   'LOCAL_REPO_PREPARED',
   'LOCAL_REPO_PREPARE_FAILED',
+  'PROJECT_POLICY_BUILD_STARTED',
+  'PROJECT_POLICY_BUILD_COMPLETED',
+  'PROJECT_POLICY_BUILD_FAILED',
+  'AGENT_INPUT_BUILD_STARTED',
+  'AGENT_INPUT_BUILD_COMPLETED',
+  'AGENT_INPUT_BUILD_FAILED',
+  'AGENT_JOB_CREATE_STARTED',
+  'AGENT_JOB_CREATE_COMPLETED',
+  'AGENT_JOB_CREATE_FAILED',
   'LOCAL_CONTEXT_RETRIEVED',
   'LOCAL_CONTEXT_RETRIEVE_FAILED',
   'AGENT_RECLAIMED',
@@ -6144,14 +6164,16 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     const hasRunningReview = codeQualityResults.some(
       item => ['PENDING', 'QUEUED', 'RUNNING'].includes(item?.status)
     );
+    const hasDispatchingTask = detail?.reviewStatus === 'REVIEWING';
     if (
-      !hasRunningReview
+      !hasDispatchingTask
+      && !hasRunningReview
       && !['PENDING', 'QUEUED', 'RUNNING'].includes(codeQualityResult?.status)
       && !hasRunningFixPreview
     ) return undefined;
     const timer = window.setInterval(() => load({ silent: true }), 5000);
     return () => window.clearInterval(timer);
-  }, [taskId, codeQualityResult?.status, codeQualityResults, fixPreviews]);
+  }, [taskId, detail?.reviewStatus, codeQualityResult?.status, codeQualityResults, fixPreviews]);
 
   const retryCodeQualityReview = async (reviewKey, reviewEngine) => {
     setRetrying(true);

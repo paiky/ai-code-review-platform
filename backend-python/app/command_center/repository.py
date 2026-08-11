@@ -830,6 +830,7 @@ def _load_progress_events(
             CodeQualityReviewProgressEvent.review_key.label("review_key"),
             CodeQualityReviewProgressEvent.phase.label("phase"),
             CodeQualityReviewProgressEvent.level.label("level"),
+            CodeQualityReviewProgressEvent.detail.label("detail"),
             CodeQualityReviewProgressEvent.created_at.label("created_at"),
         )
         .where(CodeQualityReviewProgressEvent.task_id.in_(task_ids))

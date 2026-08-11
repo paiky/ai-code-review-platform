@@ -19,6 +19,7 @@ export default function CommandCenterCanvas({
   const [topology, setTopology] = useState(EMPTY_TOPOLOGY);
   const {
     taskQueue,
+    dispatchPreparation,
     engineSelection,
     agentLane,
     standardLane,
@@ -44,12 +45,22 @@ export default function CommandCenterCanvas({
       data-command-center-dom-fallback="always"
       data-command-center-animation-owner="CSS_STATE_M3"
       data-command-center-activity={motionScene.activity}
+      data-dispatch-preparation={dispatchPreparation.activity}
       data-command-center-topology-ready={topology.ready ? 'true' : 'false'}
     >
       <PreviewToolbar preview={preview} />
+      <DispatchPreparationStatus
+        preparation={dispatchPreparation}
+        motionActivity={motionScene.activity}
+      />
       <StaticConnections topology={topology} motionScene={motionScene} />
 
-      <MobileRouteSummary motionScene={motionScene} runtimeState={runtimeState} preview={preview} />
+      <MobileRouteSummary
+        motionScene={motionScene}
+        runtimeState={runtimeState}
+        preparation={dispatchPreparation}
+        preview={preview}
+      />
 
       <div className="command-center-map-grid">
         <ReviewTaskQueue taskQueue={taskQueue} onOpenReview={onOpenReview} />
@@ -77,6 +88,43 @@ export default function CommandCenterCanvas({
         <TodayReviewResults todayResults={todayResults} onOpen={onOpenResult} />
       </div>
     </section>
+  );
+}
+
+
+function DispatchPreparationStatus({ preparation, motionActivity }) {
+  if (!['preparing', 'delayed'].includes(preparation.activity)) return null;
+  const preparing = preparation.activity === 'preparing';
+  if (preparing && motionActivity !== 'preparing') return null;
+  if (!preparing && motionActivity !== 'idle') return null;
+  const targetCount = preparation.activeCount + preparation.delayedCount;
+  const stage = dispatchStageLabel(preparation.latestStage);
+  const updated = formatRelativeTime(preparation.latestUpdatedAt);
+  const detail = [
+    `${targetCount} 个 Agent 目标`,
+    stage ? `最后阶段：${stage}` : null,
+    updated,
+    preparing && preparation.delayedCount > 0
+      ? `另有 ${preparation.delayedCount} 个进度延迟`
+      : null
+  ].filter(Boolean).join(' · ');
+  return (
+    <div
+      className={`command-center-dispatch-status is-${preparation.activity}`}
+      role="status"
+      aria-live="polite"
+      data-dispatch-activity={preparation.activity}
+    >
+      <i aria-hidden="true" />
+      <span>
+        <strong>
+          {preparing
+            ? '准备派发 · 正在构建 Agent 上下文'
+            : '派发进度延迟 · 请查看任务详情最后阶段'}
+        </strong>
+        <small>{detail}</small>
+      </span>
+    </div>
   );
 }
 
@@ -117,8 +165,8 @@ function PreviewControl({ preview }) {
 }
 
 
-function MobileRouteSummary({ motionScene, runtimeState, preview }) {
-  const status = mobileRouteStatus(motionScene, runtimeState);
+function MobileRouteSummary({ motionScene, runtimeState, preparation, preview }) {
+  const status = mobileRouteStatus(motionScene, runtimeState, preparation);
   return (
     <div
       className="command-center-mobile-route-summary"
@@ -127,6 +175,7 @@ function MobileRouteSummary({ motionScene, runtimeState, preview }) {
       data-agent-activity={motionScene.lanes.agent.activity}
       data-standard-activity={motionScene.lanes.standard.activity}
       data-fallback-active={motionScene.fallbackActive ? 'true' : 'false'}
+      data-dispatch-activity={preparation.activity}
     >
       <strong>Agent 优先审查路由</strong>
       <span>任务队列 → Agent Review 主通道 → 审查结果；异常时由 Standard Review 接管</span>
@@ -139,7 +188,7 @@ function MobileRouteSummary({ motionScene, runtimeState, preview }) {
 }
 
 
-function mobileRouteStatus(motionScene, runtimeState) {
+function mobileRouteStatus(motionScene, runtimeState, preparation) {
   if (runtimeState === 'ERROR_RETAINED') return '刷新失败，保留旧快照 · 动效已暂停';
   if (runtimeState === 'STALE') return 'Runtime 快照已过期 · 动效已暂停';
   if (runtimeState === 'ERROR_EMPTY') return 'Runtime 暂不可用';
@@ -149,6 +198,8 @@ function mobileRouteStatus(motionScene, runtimeState) {
   if (motionScene.lanes.agent.queued) return 'Agent 主通道排队中';
   if (motionScene.lanes.standard.running) return 'Standard 备用通道运行中';
   if (motionScene.lanes.standard.queued) return 'Standard 备用通道排队中';
+  if (preparation.activity === 'preparing') return '准备派发 · 正在构建 Agent 上下文';
+  if (preparation.activity === 'delayed') return '派发进度延迟 · 请查看任务详情最后阶段';
   return motionScene.activity === 'paused' ? '线路动效已暂停' : '当前空闲';
 }
 
@@ -621,4 +672,12 @@ function formatRelativeTime(value) {
   if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
   return `${Math.floor(seconds / 86400)} 天前`;
+}
+
+
+function dispatchStageLabel(value) {
+  return {
+    PREFLIGHT: '确定性预检',
+    CONTEXT_BUILDING: '构建 Agent 上下文'
+  }[String(value || '').trim().toUpperCase()] || null;
 }

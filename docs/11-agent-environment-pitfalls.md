@@ -44,6 +44,8 @@ Get-Content -Raw -Encoding UTF8 <path>
 .\backend-python\.venv\Scripts\ruff.exe check --no-cache <本次文件或目录>
 ```
 
+- Windows 上执行 `python -m py_compile` 时，既有 `__pycache__` 也可能因临时 `.pyc.*` 文件权限报 `Permission denied`。不要删除整个缓存目录；若目标只是语法复核，可读取 UTF-8 源文件后使用内存 `compile(source, path, "exec")`，避免写入仓库缓存。相关模块已经被 pytest 正常导入执行时，也应明确区分“缓存写入失败”和“源码编译失败”。
+
 - 排查脚本行为或直连 Python 后端时，再使用：
 
 ```powershell
@@ -277,6 +279,13 @@ BACKEND_PORT = 容器内后端监听端口，只在 Docker 网络内使用
 ```
 
 - `PUBLIC_HTTP_PORT` 和 `PLATFORM_BASE_URL` 通常应指向同一个用户可访问地址；`BACKEND_PORT` 不应暴露给用户配置 webhook。
+
+## 浏览器控制台与扩展噪声
+
+- 控制台出现 `Immersive Translate ERROR: sync dynamic-i18n error Error: dynamic-i18n version mismatch: expected 6, got 5`，表示沉浸式翻译扩展自身运行代码与已缓存或同步的动态国际化数据版本不一致，不是平台 React、接口或运行总览异常。
+- 判断时先看错误来源：若 stack / source 为 `chrome-extension://`、`moz-extension://` 或明确包含 `Immersive Translate`，并且在禁用该站点的扩展或无扩展浏览器中不再出现，应作为浏览器环境噪声排除。不要通过修改 CSP、前端 bundle、i18n 资源或吞掉全局 console error 来掩盖扩展错误。
+- 处理顺序：先更新沉浸式翻译扩展并重新加载页面；仍存在时重载扩展或重启浏览器；只有扩展自身功能持续异常时，才按其官方反馈渠道处理。清除扩展数据或重装可能丢失个人配置，不作为默认动作。
+- 只有错误来源指向平台同源 `/assets/*.js`，或在无扩展浏览器中仍能复现页面白屏、接口失败、交互/动画异常时，才进入平台前端缺陷排查并登记对应专题。
 
 ## Agent Review 本地密钥
 
