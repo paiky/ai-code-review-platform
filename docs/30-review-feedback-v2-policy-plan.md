@@ -22,22 +22,7 @@
 
 ## 启动脚本说明
 
-`scripts/run-backend.cmd` 与 `scripts/run-backend-python.ps1` 最终走同一个 Python 后端入口。
-
-调用链：
-
-```text
-scripts/run-backend.cmd
-  -> scripts/run-backend.ps1
-  -> scripts/run-backend-python.ps1
-```
-
-区别：
-
-- `run-backend.cmd` 是 Windows cmd 包装，负责设置 PowerShell 执行参数、转发参数、失败时提示。
-- `run-backend-python.ps1` 是实际 Python 后端 runner，负责加载 `.local/gitlab.env`、设置 `PYTHONPATH`、选择 Python、执行 `dev/test/lint/migrate`。
-
-因此，直接启动 `run-backend-python.ps1 dev` 与通过 `run-backend.cmd dev` 在后端行为上等价。项目默认推荐 `run-backend.cmd` 是为了团队统一入口；排查或你当前这种直接跑 Python 后端 runner 的方式也可以继续使用。
+`scripts/run-backend.ps1` 是唯一 Python 后端 runner，负责加载 `.local/gitlab.env`、设置 `PYTHONPATH`、选择 Python 并执行 `dev/test/lint/migrate`。
 
 ## V2 产品边界
 
@@ -358,19 +343,19 @@ backend-python/tests/unit/test_project_review_policy_prompt.py
 ### 前端验证
 
 ```powershell
-.\scripts\run-frontend.cmd build
+.\scripts\run-frontend.ps1 build
 ```
 
 后端最小验证：
 
 ```powershell
-.\scripts\run-backend.cmd test tests\contract\test_project_review_policy_api_contract.py tests\unit\test_project_review_policy_prompt.py
+.\scripts\run-backend.ps1 test tests\contract\test_project_review_policy_api_contract.py tests\unit\test_project_review_policy_prompt.py
 ```
 
 直接用 Python runner 也等价：
 
 ```powershell
-.\scripts\run-backend-python.ps1 test tests\contract\test_project_review_policy_api_contract.py tests\unit\test_project_review_policy_prompt.py
+.\scripts\run-backend.ps1 test tests\contract\test_project_review_policy_api_contract.py tests\unit\test_project_review_policy_prompt.py
 ```
 
 ## 验收标准
@@ -547,13 +532,13 @@ Agent 不可自主推进：
 已验证：
 
 ```powershell
-$env:NO_PAUSE="1"; .\scripts\run-backend.cmd test tests\contract\test_review_feedback_api_contract.py tests\contract\test_project_review_policy_api_contract.py tests\unit\test_project_review_policy_prompt.py tests\contract\test_code_quality_api_contract.py::test_rendered_prompt_can_preview_project_review_policies tests\contract\test_code_quality_api_contract.py::test_manual_review_injects_project_review_policies_and_records_progress
+.\scripts\run-backend.ps1 test tests\contract\test_review_feedback_api_contract.py tests\contract\test_project_review_policy_api_contract.py tests\unit\test_project_review_policy_prompt.py tests\contract\test_code_quality_api_contract.py::test_rendered_prompt_can_preview_project_review_policies tests\contract\test_code_quality_api_contract.py::test_manual_review_injects_project_review_policies_and_records_progress
 ```
 
 结果：13 passed。
 
 ```powershell
-$env:NO_PAUSE="1"; .\scripts\run-frontend.cmd build
+.\scripts\run-frontend.ps1 build
 ```
 
 结果：build passed；仅保留既有 Vite chunk size warning。

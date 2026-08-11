@@ -169,23 +169,6 @@ Review 前配置
 - “提醒卡片 / 分析结果 / 原始事件摘要”不再作为任务详情可见 Tab；底层数据和 Backend 接口未删除。
 - 任务重新触发用于调试和对比，不代表 GitLab 上真实 MR 被重新提交。
 
-本地 docs/50 安全验收入口：
-
-```text
-scripts\run-docs50-acceptance.cmd
-```
-
-- 默认尝试 frontend `5173` 与安全 mock `8080`，也可显式指定独立 `FrontendPort / MockPort`，避免干扰
-  用户已运行的真实 Backend 或 Vite。
-- ready 必须同时满足端口 owner、frontend 根页面、mock 直连 `docs50-safe-mock` health 和 frontend
-  代理后的同一 health；只看到端口监听不算 ready。
-- 启动器只为安全合成响应服务，不连接真实 Review 数据，不触发 Review。Windows detached process 的
-  command-exit 复验当前仍暂停，不得把工具 Running 当成服务未 ready 而重复启动。
-- launcher 暂不可用时，可由用户或独立 service owner 人工启动 frontend 与 docs/50 mock；Agent 只复用
-  已有服务并检查 frontend 页面、API proxy 和安全合成任务标识，不接管或停止用户进程。2026-07-30 的
-  阶段二浏览器验收即使用人工准备的 `5173 -> 8080` 环境完成，service ready 与 command lifecycle
-  分别记录。
-
 ## 四、评估样本：把人工判断沉淀为质量样本
 
 `评估样本` 用于 Review 后的质量评估沉淀。

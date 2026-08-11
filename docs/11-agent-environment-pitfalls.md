@@ -11,6 +11,9 @@
 
 ## PowerShell 与编码
 
+- 仓库 Windows 自动化脚本统一使用 `.ps1`，不再维护 `.cmd` 转发层。执行策略禁止直接运行时，使用
+  `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <脚本路径> <参数>`，不要永久放宽系统级策略。
+
 - 阅读中文 Markdown 时使用：
 
 ```powershell
@@ -26,13 +29,13 @@ Get-Content -Raw -Encoding UTF8 <path>
 - 后端默认入口：
 
 ```powershell
-.\scripts\run-backend.cmd dev
-.\scripts\run-backend.cmd test
-.\scripts\run-backend.cmd lint
-.\scripts\run-backend.cmd migrate
+.\scripts\run-backend.ps1 dev
+.\scripts\run-backend.ps1 test
+.\scripts\run-backend.ps1 lint
+.\scripts\run-backend.ps1 migrate
 ```
 
-- `run-backend.cmd lint` 当前固定扫描整个 Python 后端，不会把后续路径参数透传给 Ruff。若本次只需检查新增文件，且全量 lint 被既有无关问题阻塞，可改用同一虚拟环境执行聚焦检查，并在结论中同时说明全量 lint 的阻塞项：
+- `run-backend.ps1 lint` 当前固定扫描整个 Python 后端，不会把后续路径参数透传给 Ruff。若本次只需检查新增文件，且全量 lint 被既有无关问题阻塞，可改用同一虚拟环境执行聚焦检查，并在结论中同时说明全量 lint 的阻塞项：
 
 ```powershell
 .\backend-python\.venv\Scripts\ruff.exe check <本次文件或目录>
@@ -46,26 +49,14 @@ Get-Content -Raw -Encoding UTF8 <path>
 
 - Windows 上执行 `python -m py_compile` 时，既有 `__pycache__` 也可能因临时 `.pyc.*` 文件权限报 `Permission denied`。不要删除整个缓存目录；若目标只是语法复核，可读取 UTF-8 源文件后使用内存 `compile(source, path, "exec")`，避免写入仓库缓存。相关模块已经被 pytest 正常导入执行时，也应明确区分“缓存写入失败”和“源码编译失败”。
 
-- 排查脚本行为或直连 Python 后端时，再使用：
-
-```powershell
-.\scripts\run-backend-python.cmd
-```
-
 - 前端入口：
 
 ```powershell
-.\scripts\run-frontend.cmd
-.\scripts\run-frontend.cmd build
+.\scripts\run-frontend.ps1
+.\scripts\run-frontend.ps1 build
 ```
 
-- Java 后端已经停止维护。只有明确需要对照历史行为时，才使用：
-
-```powershell
-.\scripts\run-backend-java.cmd
-```
-
-- Agent 执行 `.cmd` 验证脚本时，避免被失败后的 `pause` 阻塞；优先使用脚本已有的非交互参数或从 PowerShell 直接调用能返回退出码的入口。
+- 仓库 Windows 自动化入口统一使用 `.ps1`；Agent 直接从 PowerShell 调用并读取退出码，不再新增 `.cmd` 转发层。
 
 ## Python 环境
 
@@ -75,7 +66,7 @@ Get-Content -Raw -Encoding UTF8 <path>
 A specified logon session does not exist.
 ```
 
-- 日常启动和测试优先走 `.\scripts\run-backend.cmd`。
+- 日常启动和测试优先走 `.\scripts\run-backend.ps1`。
 - 一次性 Python 命令优先使用仓库虚拟环境：
 
 ```powershell
@@ -86,12 +77,12 @@ backend-python\.venv\Scripts\python.exe
 
 ## 验证范围
 
-- 前端样式或交互改动：优先跑 `.\scripts\run-frontend.cmd build`。
+- 前端样式或交互改动：优先跑 `.\scripts\run-frontend.ps1 build`。
 - Python 后端局部逻辑改动：优先跑相关 pytest 文件或测试类。
 - 改到 webhook -> 分析 -> 提醒卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容或跨模块边界时，再跑全量：
 
 ```powershell
-.\scripts\run-backend.cmd test
+.\scripts\run-backend.ps1 test
 ```
 
 - 不要为了“保险”默认全量验证。先按影响范围选择最小可复现验证，再在需要时扩大。
@@ -118,7 +109,7 @@ backend-python\.venv\Scripts\python.exe
 
 - 一次性命令以“进程退出并返回 exit code”为完成条件；dev server 和 mock server 依靠事件循环持续监听端口，
   正常运行时本来就不会退出。
-- 直接调用 `scripts/run-frontend.cmd` 的 dev 模式或 `node mock-server.mjs` 会把服务作为前台子进程附着在
+- 直接调用 `scripts/run-frontend.ps1` 的 dev 模式或 `node mock-server.mjs` 会把服务作为前台子进程附着在
   当前 shell。仅做日志重定向并不会自动分离进程，shell / Codex 工具仍会等待子进程退出。
 - 如果看到工具仍为 Running 就再次执行启动命令，可能产生端口冲突或多个服务实例；如果直接按进程名结束，
   又可能误伤用户原有服务。
@@ -142,13 +133,12 @@ backend-python\.venv\Scripts\python.exe
 
 长驻服务进入 `READY / SERVING` 就可以继续 Agent 流程；`STOPPED` 不是启动步骤需要等待的成功状态。
 
-### docs/50 acceptance launcher ready 后仍显示 Running
+### 长驻服务 detached 启动器 ready 后仍显示 Running
 
 问题记录：
 
-- docs/50 阶段二验收需要自动启动 Vite 和本地安全 mock。实际运行中，frontend 与 mock 已取得 PID，
-  目标端口已经监听，mock 直连 health 与 Vite 代理 health 均返回 `docs50-safe-mock`，但调用
-  `run-docs50-acceptance.cmd` 的 Codex tool 仍长时间显示 Running。
+- 页面验收需要自动启动 Vite 和本地安全 mock。实际运行中，frontend 与 mock 已取得 PID，
+  目标端口已经监听且 health 正常，但调用启动器的 Codex tool 仍长时间显示 Running。
 - 直接前台运行 Vite 或 mock 不退出属于长驻服务的正常行为。异常点不在服务没有 ready，而在启动器的
   command lifecycle 没有与 service lifecycle 可靠分离。
 - 本次先后尝试过 `Start-Process`、`.NET ProcessStartInfo`、隐藏窗口、stdout / stderr 文件重定向，
@@ -230,7 +220,7 @@ EPERM: operation not permitted, open 'C:\Users\<user>\AppData\Local\npm-cache\_c
   或配置语法错误。无需读取构建期 dev-server 代理时，可让受控构建脚本使用 `configFile: false` 并显式传入 React plugin，
   避免生成 `.vite-temp`；开发服务器仍继续使用原 `vite.config.js`。不要删除或重建整个 `node_modules` 来绕过。
 
-- `scripts/package-docker-deploy.cmd` 依赖 Docker CLI 和 Docker Engine。执行前先启动 Docker Desktop，并确认：
+- `scripts/package-docker-deploy.ps1` 依赖 Docker CLI 和 Docker Engine。执行前先启动 Docker Desktop，并确认：
 
 ```powershell
 docker version
@@ -239,7 +229,7 @@ docker version
 - 打包脚本会把完整输出保存到 `.local/docker-deploy/logs/`。Docker build 默认直接连接当前终端，
   以保留 BuildKit 的蓝色 TTY 动态进度；不要为了同时打印和收集输出而把 build 命令接入
   PowerShell 管道，否则 BuildKit 会退化成逐行 plain 输出。优先双击或执行
-  `scripts/package-docker-deploy.cmd`，失败时窗口会暂停；若直接运行 `.ps1`，从资源管理器启动时会
+  `scripts/package-docker-deploy.ps1`，失败时窗口会暂停；若直接运行 `.ps1`，从资源管理器启动时会
   自动暂停，也可显式传入 `-PauseOnError`。自动化调用可设置 `NO_PAUSE=1` 避免等待输入。
 - Docker Engine 未启动、CLI 不在 PATH 或 Windows 终端未刷新 PATH 时，先修本机 Docker 环境，不要改项目打包脚本。
 - Codex Windows 沙箱内执行 `docker build` 若出现 `open C:\Users\<user>\.docker\buildx\.lock: Access is denied`，说明 buildx 需要写用户目录；在任务确实要求构建镜像时按权限规则授权重跑，不要改 Dockerfile 绕过。
@@ -248,7 +238,7 @@ docker version
   打包脚本不捕获构建输出，也不自动重试；失败详情从完整日志确认后手动重跑。PowerShell 或
   `.local/gitlab.env` 中的 Agent/Provider 代理不能代理 BuildKit 拉取 `FROM`，应在 Docker Desktop 中配置代理。
 - 只修改 Agent Worker 时可使用
-  `scripts/package-docker-deploy.cmd -AgentWorkerOnly -ReuseVersion <上一个完整版本>`。增量模式仍输出四个
+  `scripts/package-docker-deploy.ps1 -AgentWorkerOnly -ReuseVersion <上一个完整版本>`。增量模式仍输出四个
   应用镜像的完整离线包，但 Backend、Frontend 和出站代理复用指定旧版本；不得用它掩盖这些组件本身的改动。
 - 非 root Squid 容器若启动后立即退出，先检查是否仍尝试写默认 PID 文件；只读代理镜像可配置 `pid_filename none`，并关闭 cache/access log，再用 `squid -k parse -f /etc/squid/squid.conf` 验证。仅设置 `read_only` 不能限制外网，必须结合 internal network 与域名白名单代理或等效防火墙。
 - Docker 前端镜像构建使用 `npm ci`，要求 `frontend/package.json` 和 `frontend/package-lock.json` 同步。不要使用 `latest` 或浮动顶层依赖；更新依赖后同步 lock。
@@ -290,19 +280,19 @@ BACKEND_PORT = 容器内后端监听端口，只在 Docker 网络内使用
 ## Agent Review 本地密钥
 
 - 设置页填写 DeepSeek Key 后“保存”仍为禁用，且页面显示 `未配置 AGENT_REVIEW_CONFIG_ENCRYPTION_KEY`，说明缺少的是后端加密主密钥，不是输入框或保存接口失效。不得删除该门禁或降级为明文落库。
-- 执行 `.\scripts\init-agent-review-secrets.cmd` 可安全补齐 `.local/gitlab.env` 中缺失或空白的加密主密钥与 Worker Token；脚本不覆盖非空值、不接触 DeepSeek Key，也不回显生成的秘密。
-- `.local/gitlab.env` 只在后端进程启动时加载。生成后必须重启 `scripts/run-backend.cmd dev`，浏览器刷新和 uvicorn 源码热重载都不能替代进程重启。
+- 执行 `.\scripts\init-agent-review-secrets.ps1` 可安全补齐 `.local/gitlab.env` 中缺失或空白的加密主密钥与 Worker Token；脚本不覆盖非空值、不接触 DeepSeek Key，也不回显生成的秘密。
+- `.local/gitlab.env` 只在后端进程启动时加载。生成后必须重启 `scripts/run-backend.ps1 dev`，浏览器刷新和 uvicorn 源码热重载都不能替代进程重启。
 - 如果数据库里已有加密的 Agent Key，不要随意轮换或丢失 `AGENT_REVIEW_CONFIG_ENCRYPTION_KEY`；旧密文无法用新主密钥解密。需要轮换时应先设计显式迁移流程。
-- Windows 本地后端不要直接执行生产完整 Compose 来“补一个 Worker”，否则可能额外启动连接同一数据库的 backend 并形成重复调度。使用 `.\scripts\run-agent-worker.cmd start`，它只启动 Windows 专用 Worker 和代理。
+- Windows 本地后端不要直接执行生产完整 Compose 来“补一个 Worker”，否则可能额外启动连接同一数据库的 backend 并形成重复调度。使用 `.\scripts\run-agent-worker.ps1 start`，它只启动 Windows 专用 Worker 和代理。
 - Docker internal 网络不能假设可直接解析或访问 `host.docker.internal`。Windows 专用方案通过双网卡代理严格放行 `host.docker.internal:8090`；不要把 Worker 直接加入普通网络来绕过连接问题。
 - Docker Desktop 可能同时返回 IPv6/IPv4，而 Squid 5 已移除 `dns_v4_first`。Windows 一键脚本会查询实际 IPv4 host-gateway，并生成 `.local/agent-review-squid-hosts` 只读挂载给代理；不要硬编码 Docker Desktop 网段。
 - Worker 容器有 `HTTP_PROXY/HTTPS_PROXY` 但配置测试恰好在 90 秒返回 `AGENT_TIMEOUT` 时，检查 Claude Code 子进程是否丢失了代理变量。子进程只能选择性继承代理变量，不能复制包含数据库、GitLab 等凭据的整个 Worker 环境。局域网上游代理应配置到白名单 Squid 的 `AGENT_REVIEW_UPSTREAM_PROXY`，不得让 Worker 绕过 Squid 直连。
 - `connect_error: [Errno -2] Name or service not known` 是发起请求一侧的 DNS / 出站链路错误，不是模型业务错误。Agent 可用但普通 DeepSeek 失败时，通常是只配置了 `AGENT_REVIEW_UPSTREAM_PROXY`；普通 Provider 应配置 `CODE_QUALITY_REVIEW_PROXY`，该变量只代理模型请求，不要用全局 `HTTP_PROXY` 误伤 GitLab、钉钉和内网请求。
 - Linux 生产不使用 Windows 专用 Compose。生产 Worker 通过 internal 网络访问 Compose backend，并与 backend 只读挂载同一个 `LOCAL_REPO_WORKSPACE_HOST_DIR`。
-- Windows 的 `run-backend.cmd dev` 会异步启动 Worker，不能在 uvicorn 启动前同步等待 Worker 心跳，否则会形成启动死锁。失败详情查看 `.local/agent-worker-startup.*.log`；设置 `AGENT_REVIEW_AUTO_START_WORKER=false` 可排除 Docker 启动因素。
-- Worker 镜像存在时，`run-agent-worker.cmd ensure` 会复用镜像；若宿主 Backend/Worker 心跳契约已更新，可能表现为容器
+- Windows 的 `run-backend.ps1 dev` 会异步启动 Worker，不能在 uvicorn 启动前同步等待 Worker 心跳，否则会形成启动死锁。失败详情查看 `.local/agent-worker-startup.*.log`；设置 `AGENT_REVIEW_AUTO_START_WORKER=false` 可排除 Docker 启动因素。
+- Worker 镜像存在时，`run-agent-worker.ps1 ensure` 会复用镜像；若宿主 Backend/Worker 心跳契约已更新，可能表现为容器
   长期 `health: starting` 且本地池无节点。先比较宿主与容器内 `worker.py` 摘要，确认过期后使用
-  `run-agent-worker.cmd start` 强制重建，不要把问题误判为远程 Worker 竞争。
+  `run-agent-worker.ps1 start` 强制重建，不要把问题误判为远程 Worker 竞争。
 - 只读 Squid 镜像的入口若要在 `/tmp` 生成运行期配置，Compose 必须提供受限 tmpfs；否则代理会因
   `cannot create /tmp/...: Read-only file system` 重启。Windows 专用代理还必须显式使用启动脚本生成并挂载的
   `/etc/squid/squid.conf`，否则通用代理配置不包含本地 Backend 的 HTTP 8090 例外，Worker 心跳表现为 Squid 403。

@@ -543,10 +543,10 @@ Agent 异步测试、Provider 同步测试、dirty 防丢失及三档响应式�
   服务端草稿，保存或清除成功后清理 dirty 状态；
 - 三档布局已经落地：桌面为双卡加目录/详情双栏，平板保留双卡并将目录/详情上下排列，移动端全部单列、精简目录列并
   保持 44px 操作命中区；页面本身无横向溢出，宽表仅在目录内部滚动；
-- 新增仅监听本机的安全 mock `scripts/docs54-settings-mock-server.mjs`，使用固定无效域名和内存数据完成浏览器验收，未
+- 新增仅监听本机的安全 mock `frontend/tests/fixtures/docs54-settings-mock-server.mjs`，使用固定无效域名和内存数据完成浏览器验收，未
   携带真实 Key、源码或发起外部模型请求；
 - 自动化验证通过：阶段二 A/B 及相关设置定向测试 `22/22`，全部前端测试 `183/183`，
-  `node --check scripts/docs54-settings-mock-server.mjs` 和 `scripts/run-frontend.cmd build` 均通过；构建仅有既有大
+  `node --check frontend/tests/fixtures/docs54-settings-mock-server.mjs` 和 `scripts/run-frontend.ps1 build` 均通过；构建仅有既有大
   chunk 提示；
 - 安全 mock 浏览器主路径在 `1440px`、`1024px`、`390px` 通过，覆盖初始默认选择、三类详情切换、Provider 保存与设
   默认解耦、dirty 取消/丢弃、Custom Runtime 保存与测试，以及三档响应式和横向溢出检查。
@@ -601,7 +601,7 @@ Agent 异步测试、Provider 同步测试、dirty 防丢失及三档响应式�
   失败、Settings / Agent Settings / Provider 三类读取失败和保存失败；场景切换只作用于内存数据，不访问外部网络；
 - 浏览器异常矩阵发现设置读取失败只有错误信息、缺少页面内恢复动作，已为设置页错误 Alert 增加复用现有 `load()` 的
   “重试”按钮；三类读取恢复均保持整页一致性，不在部分数据失败时开放混合版本编辑；
-- 自动化最终验证通过：`node --check scripts/docs54-settings-mock-server.mjs`、全部前端测试 `187/187` 和
+- 自动化最终验证通过：`node --check frontend/tests/fixtures/docs54-settings-mock-server.mjs`、全部前端测试 `187/187` 和
   `scripts/run-frontend.cmd build` 均通过；构建仅有既有大 chunk 提示；
 - `1440px` 浏览器验收覆盖双卡等宽、目录/详情双栏、Standard 默认初选、三类详情、dirty 取消/丢弃、Agent 与
   Standard Key 独立清除、Provider 保存与设默认解耦；页面无横向溢出；

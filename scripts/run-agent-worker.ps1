@@ -172,7 +172,7 @@ switch ($Action) {
                 if ([DateTime]::UtcNow -lt $deadline) { Start-Sleep -Seconds 2 }
             }
         } while (-not $backendReady -and [DateTime]::UtcNow -lt $deadline)
-        if (-not $backendReady) { throw "The local backend is not reachable at $backendBaseUrl. Start it with .\scripts\run-backend.cmd dev first." }
+        if (-not $backendReady) { throw "The local backend is not reachable at $backendBaseUrl. Start it with .\scripts\run-backend.ps1 dev first." }
 
         if ($Action -eq "ensure") {
             $existingSettings = Get-AgentSettings
@@ -220,7 +220,7 @@ switch ($Action) {
             Start-Sleep -Seconds 2
         }
         Invoke-DockerCompose @("ps")
-        throw "Agent Worker did not become ONLINE within 60 seconds. Run .\scripts\run-agent-worker.cmd logs and confirm the backend was restarted after the Worker token was initialized."
+        throw "Agent Worker did not become ONLINE within 60 seconds. Run .\scripts\run-agent-worker.ps1 logs and confirm the backend was restarted after the Worker token was initialized."
     }
     "status" {
         Invoke-DockerCompose @("ps")

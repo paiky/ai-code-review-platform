@@ -163,8 +163,8 @@ CREATE DATABASE ai_code_review
 ### 2. 初始化并启动后端
 
 ```powershell
-.\scripts\run-backend.cmd migrate
-.\scripts\run-backend.cmd dev
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-backend.ps1 migrate
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-backend.ps1 dev
 ```
 
 后端默认地址：`http://localhost:8090`。
@@ -177,7 +177,7 @@ curl http://localhost:8090/actuator/health
 ### 3. 启动前端
 
 ```powershell
-.\scripts\run-frontend.cmd
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-frontend.ps1
 ```
 
 前端默认地址：`http://localhost:5173`，`/api` 默认代理到本地 8090 后端。
@@ -278,13 +278,13 @@ curl http://localhost:8090/api/review-tasks
 
 ```powershell
 # Python 后端全量测试
-.\scripts\run-backend.cmd test
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-backend.ps1 test
 
 # Python lint
-.\scripts\run-backend.cmd lint
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-backend.ps1 lint
 
 # 前端生产构建
-.\scripts\run-frontend.cmd build
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-frontend.ps1 build
 ```
 
 - 前端样式或交互改动：优先只跑前端 build。

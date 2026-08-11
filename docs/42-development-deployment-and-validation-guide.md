@@ -12,6 +12,9 @@
 
 当前主后端是 `backend-python/`，前端是 `frontend/`。`backend/` Java 后端仅作历史参考，默认不启动、不测试。
 
+仓库 Windows 自动化脚本统一使用 `.ps1`，不再维护 `.cmd` 转发层。以下示例使用 PowerShell 直接调用语法；若本机执行策略禁止直接运行脚本，使用
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File <脚本路径> <参数>`，无需永久修改系统执行策略。
+
 ## 二、本地配置
 
 后端读取环境变量；仓库脚本还会自动加载 `.local/gitlab.env`。可从示例开始：
@@ -92,19 +95,19 @@ Pop-Location
 ### 3. 初始化数据库
 
 ```powershell
-.\scripts\run-backend.cmd migrate
+.\scripts\run-backend.ps1 migrate
 ```
 
 ### 4. 启动后端
 
 ```powershell
-.\scripts\run-backend.cmd dev
+.\scripts\run-backend.ps1 dev
 ```
 
 默认地址为 `http://localhost:8090`。临时修改端口：
 
 ```powershell
-.\scripts\run-backend.cmd dev --port 9090
+.\scripts\run-backend.ps1 dev --port 9090
 ```
 
 健康检查：
@@ -117,7 +120,7 @@ curl http://localhost:8090/actuator/health
 ### 5. 启动前端
 
 ```powershell
-.\scripts\run-frontend.cmd
+.\scripts\run-frontend.ps1
 ```
 
 前端默认访问 `http://localhost:5173`，Vite `/api` 默认代理到 `http://localhost:8090`。需要连接其他后端时设置 `VITE_API_PROXY_TARGET`。首次运行脚本会安装依赖。
@@ -127,7 +130,7 @@ curl http://localhost:8090/actuator/health
 应用当前运行环境的迁移入口：
 
 ```powershell
-.\scripts\run-backend.cmd migrate
+.\scripts\run-backend.ps1 migrate
 ```
 
 - Python 迁移实现位于 `backend-python/app/migrate.py`。
@@ -153,7 +156,7 @@ curl http://localhost:8090/actuator/health
 不得被本地 Backend 自动加载。可填写 `DATABASE_URL`，或填写 `MYSQL_URL + MYSQL_USERNAME + MYSQL_PASSWORD`；
 `DATABASE_URL` 非空时优先。真实连接串和密码不得出现在命令参数、Git、文档或终端输出中。
 
-执行 `run-backend.cmd dev`、`run-backend-python.cmd dev` 或其 `migrate` 动作时，启动脚本先读取通用的
+执行 `run-backend.ps1 dev` 或其 `migrate` 动作时，启动脚本先读取通用的
 `.local/gitlab.env`，再读取并校验 `database.local.env`，因此本地数据库变量固定覆盖通用文件或父进程中的同名变量。
 `database.local.env` 存在时必须声明 `DATABASE_TARGET=LOCAL` 并提供完整连接信息；启动脚本不会读取
 `database.test.env`。修改数据库目标后必须停止并重新启动 Backend，Uvicorn reload 不会重新执行 PowerShell 启动脚本。
@@ -162,25 +165,25 @@ curl http://localhost:8090/actuator/health
 
 ```powershell
 # 只解析目标、检查本地/测试线不是同一个 schema，并查看迁移状态
-.\scripts\run-database-migration.cmd status local
-.\scripts\run-database-migration.cmd status test
+.\scripts\run-database-migration.ps1 status local
+.\scripts\run-database-migration.ps1 status test
 
 # 只展示计划，不执行 DDL/DML
-.\scripts\run-database-migration.cmd dry-run local
+.\scripts\run-database-migration.ps1 dry-run local
 
 # 历史库首次接入账本；只有 schema 满足 V1～V47 基线才能登记
-.\scripts\run-database-migration.cmd baseline local
+.\scripts\run-database-migration.ps1 baseline local
 
 # 应用待执行版本并校验
-.\scripts\run-database-migration.cmd apply local
-.\scripts\run-database-migration.cmd verify local
+.\scripts\run-database-migration.ps1 apply local
+.\scripts\run-database-migration.ps1 verify local
 ```
 
 测试线的 `baseline` 和 `apply` 额外要求显式确认参数，并且仍需遵守变更前备份和用户授权：
 
 ```powershell
-.\scripts\run-database-migration.cmd baseline test -ConfirmTest
-.\scripts\run-database-migration.cmd apply test -ConfirmTest
+.\scripts\run-database-migration.ps1 baseline test -ConfirmTest
+.\scripts\run-database-migration.ps1 apply test -ConfirmTest
 ```
 
 每次 schema 或登记数据变更使用同一迁移文件，顺序固定为“本地 dry-run/apply/verify → 测试与备份 → 测试线
@@ -190,16 +193,16 @@ dry-run/apply/verify → 比对 version/checksum”。这不是业务数据双�
 历史库 baseline 前若缺少 V1～V47 的命名索引，使用 reconcile 工具先做只读计划：
 
 ```powershell
-.\scripts\run-database-baseline-reconcile.cmd plan local
-.\scripts\run-database-baseline-reconcile.cmd plan test
+.\scripts\run-database-baseline-reconcile.ps1 plan local
+.\scripts\run-database-baseline-reconcile.ps1 plan test
 ```
 
 计划会输出表/索引名、唯一性、估算行数、数据/索引字节和唯一索引重复状态，不读取或输出业务行值。实际增加索引是
 写操作，本地要求 `-ConfirmWrite`，测试线同时要求 `-ConfirmWrite -ConfirmTest`：
 
 ```powershell
-.\scripts\run-database-baseline-reconcile.cmd apply local -ConfirmWrite
-.\scripts\run-database-baseline-reconcile.cmd apply test -ConfirmWrite -ConfirmTest
+.\scripts\run-database-baseline-reconcile.ps1 apply local -ConfirmWrite
+.\scripts\run-database-baseline-reconcile.ps1 apply test -ConfirmWrite -ConfirmTest
 ```
 
 索引 DDL 固定使用 `ALGORITHM=INPLACE, LOCK=NONE`；任一缺失唯一索引存在重复数据时整次 apply 在首条 DDL 前拒绝。
@@ -209,10 +212,10 @@ dry-run/apply/verify → 比对 version/checksum”。这不是业务数据双�
 
 ```powershell
 # 只读检查客户端、源库容量和本地表数量
-.\scripts\run-database-data-copy.cmd plan
+.\scripts\run-database-data-copy.ps1 plan
 
 # 写入本地；读取测试线，不修改测试线
-.\scripts\run-database-data-copy.cmd apply -ConfirmCopy -ConfirmSourceData
+.\scripts\run-database-data-copy.ps1 apply -ConfirmCopy -ConfirmSourceData
 ```
 
 复制工具要求本地库表数量为 `0`，使用 `mysqldump --single-transaction` 流式传给本地 `mysql` 客户端，不生成持久化
@@ -335,13 +338,13 @@ docker compose up -d --build
 本机需要先启动 Docker Desktop，并确认 Linux Engine 可用：
 
 ```powershell
-.\scripts\package-docker-deploy.cmd
+.\scripts\package-docker-deploy.ps1
 ```
 
 如需同时打包内置 MySQL 镜像：
 
 ```powershell
-.\scripts\package-docker-deploy.cmd -IncludeMysqlImage
+.\scripts\package-docker-deploy.ps1 -IncludeMysqlImage
 ```
 
 镜像构建命令默认直接连接当前终端，保留 Docker BuildKit 的蓝色动态进度。脚本会把输出同步记录到
@@ -352,7 +355,7 @@ TLS 或连接重置失败不会自动重试，请根据日志确认是临时网�
 只重新构建 Worker：
 
 ```powershell
-.\scripts\package-docker-deploy.cmd `
+.\scripts\package-docker-deploy.ps1 `
   -AgentWorkerOnly `
   -ReuseVersion 20260728183000
 ```
@@ -444,26 +447,26 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 Windows 本地开发可直接初始化这两个基础密钥（不会生成或读取 DeepSeek API Key）：
 
 ```powershell
-.\scripts\init-agent-review-secrets.cmd
+.\scripts\init-agent-review-secrets.ps1
 ```
 
-命令将缺失或空白的 `AGENT_REVIEW_CONFIG_ENCRYPTION_KEY`、`AGENT_REVIEW_WORKER_TOKEN` 写入 `.local/gitlab.env`，已有非空值保持不变，且不会把生成值打印到终端。随后必须停止并重新执行 `.\scripts\run-backend.cmd dev`；仅刷新前端不会让已运行的后端进程重新加载环境变量。设置页不再显示“禁止保存 Agent Key”后，才可输入并保存独立 DeepSeek Key。
+命令将缺失或空白的 `AGENT_REVIEW_CONFIG_ENCRYPTION_KEY`、`AGENT_REVIEW_WORKER_TOKEN` 写入 `.local/gitlab.env`，已有非空值保持不变，且不会把生成值打印到终端。随后必须停止并重新执行 `.\scripts\run-backend.ps1 dev`；仅刷新前端不会让已运行的后端进程重新加载环境变量。设置页不再显示“禁止保存 Agent Key”后，才可输入并保存独立 DeepSeek Key。
 
 ### Windows + Docker Desktop 启动 Worker
 
-本地后端和前端仍使用仓库脚本启动。`run-backend.cmd dev` 会在后台等待后端健康并自动确保 Windows 专用 Agent Worker/代理运行，不启动容器 backend，也不要求手工维护 volume 路径。因此日常只需两个终端：
+本地后端和前端仍使用仓库脚本启动。`run-backend.ps1 dev` 会在后台等待后端健康并自动确保 Windows 专用 Agent Worker/代理运行，不启动容器 backend，也不要求手工维护 volume 路径。因此日常只需两个终端：
 
 ```powershell
-.\scripts\run-backend.cmd dev
-.\scripts\run-frontend.cmd dev
+.\scripts\run-backend.ps1 dev
+.\scripts\run-frontend.ps1 dev
 ```
 
 自动启动日志写入 `.local/agent-worker-startup-*.out.log` 和 `.local/agent-worker-startup-*.err.log`。如需关闭自动启动，在 `.local/gitlab.env` 设置 `AGENT_REVIEW_AUTO_START_WORKER=false`。手动管理命令仍保留：
 
 ```powershell
-.\scripts\run-agent-worker.cmd status
-.\scripts\run-agent-worker.cmd logs
-.\scripts\run-agent-worker.cmd stop
+.\scripts\run-agent-worker.ps1 status
+.\scripts\run-agent-worker.ps1 logs
+.\scripts\run-agent-worker.ps1 stop
 ```
 
 Windows 专用代理只允许 Worker 访问 `host.docker.internal:8090` 和 HTTPS `443`；实际模型目标由当前任务中固化的
@@ -477,7 +480,7 @@ AGENT_REVIEW_UPSTREAM_PROXY=http://192.168.100.133:7897
 CODE_QUALITY_REVIEW_PROXY=http://192.168.100.133:7897
 ```
 
-重新执行 `.\scripts\run-agent-worker.cmd start` 后，Windows 启动脚本会生成本机专用 Squid 配置。`AGENT_REVIEW_UPSTREAM_PROXY` 供 Agent Worker 使用，`CODE_QUALITY_REVIEW_PROXY` 供 Python backend 的普通 Provider 请求使用；本地未显式配置后者时会兼容复用前者。上游代理只承接模型请求，Linux 生产不会自动继承该本机设置。
+重新执行 `.\scripts\run-agent-worker.ps1 start` 后，Windows 启动脚本会生成本机专用 Squid 配置。`AGENT_REVIEW_UPSTREAM_PROXY` 供 Agent Worker 使用，`CODE_QUALITY_REVIEW_PROXY` 供 Python backend 的普通 Provider 请求使用；本地未显式配置后者时会兼容复用前者。上游代理只承接模型请求，Linux 生产不会自动继承该本机设置。
 
 自定义 Responses Agent 的安全启用顺序：
 
@@ -505,7 +508,7 @@ docker compose logs --tail=100 agent-worker
 
 默认目录映射：宿主机 `runtime/review-workspaces`，backend 容器 `/app/.local/review-workspaces`，Worker 容器 `/workspaces:ro`。`docker compose ps` 中 Worker 健康且设置页显示 `Worker ONLINE` 后，才执行真实配置测试。
 
-Windows 自动启动配置不会进入远程 runtime，也不会改变原离线部署步骤。`scripts/package-docker-deploy.cmd` 仍会打包 backend、frontend、Agent Worker、出站代理和 Linux `docker-compose.runtime.yml`；服务器仍按“加载镜像 -> 维护 runtime/.env -> docker compose up -d”部署。
+Windows 自动启动配置不会进入远程 runtime，也不会改变原离线部署步骤。`scripts/package-docker-deploy.ps1` 仍会打包 backend、frontend、Agent Worker、出站代理和 Linux `docker-compose.runtime.yml`；服务器仍按“加载镜像 -> 维护 runtime/.env -> docker compose up -d”部署。
 
 安全约束：
 
@@ -616,19 +619,19 @@ MR、Push、manual 和 retry 会在 Provider 调用前运行一次自动 Preflig
 Python 后端全量测试：
 
 ```powershell
-.\scripts\run-backend.cmd test
+.\scripts\run-backend.ps1 test
 ```
 
 Python lint：
 
 ```powershell
-.\scripts\run-backend.cmd lint
+.\scripts\run-backend.ps1 lint
 ```
 
 前端生产构建：
 
 ```powershell
-.\scripts\run-frontend.cmd build
+.\scripts\run-frontend.ps1 build
 ```
 
 局部后端改动优先运行相关 pytest 文件；只有修改 webhook 主链路、共享模型、通知、数据库兼容或跨模块契约时才跑全量。前端样式和交互改动优先只跑 production build。

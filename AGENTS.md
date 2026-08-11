@@ -39,6 +39,19 @@ AI代码质量审查平台
 - 已知接口路径、字段名、错误信息、日志内容或目标字符串时，优先直接搜索该字符串。从业务问题排查 Python
   后端时，先定位候选模块和错误文案，再局部阅读真实调用链；已知关键函数后反查其调用者和测试影响范围。
 
+### CodeGraph 使用边界
+
+- 默认使用 `rg` 定位文件、符号、接口路径、字段、配置、日志、错误文案和前端代码；CodeGraph 不是任务开始、
+  代码阅读或代码修改的固定前置步骤。
+- 仅在已知关键符号且需要分析 callers、callees 或影响范围，需要追踪 Python 后端跨模块调用链，或 `rg` 与
+  局部源码阅读不足以确定调用关系时使用 CodeGraph。
+- 文档、配置、脚本、日志、环境问题、React 前端定位、已知字符串或文件路径、简单局部修改、测试修复和样式
+  调整不调用 CodeGraph。
+- 单个任务默认最多调用两次 CodeGraph；获得候选链路后转为阅读局部源码，不重复执行同类查询。
+- CodeGraph 不可用、未配置、索引缺失或调用失败时，直接使用 `rg`；除非用户明确要求，不安装、初始化、同步、修复或重建
+  CodeGraph。
+- 除非当前任务就是 CodeGraph 维护或索引排障，不主动调用 `codegraph_status`、`init`、`sync` 或重建索引。
+
 ### 实现、文档与阶段边界
 
 - 以后端 Python 和 React 前端为默认维护范围；用户明确指定的任务范围优先。
@@ -66,12 +79,11 @@ AI代码质量审查平台
 
 ### 启动、测试与验收
 
-- 本地启动、测试和构建优先使用 `scripts/`：
-  - Python 后端默认使用 `scripts/run-backend.cmd`；排查脚本或直连 Python 后端时使用
-    `scripts/run-backend-python.cmd`。
-  - Python 测试优先使用 `scripts/run-backend.cmd test`，或按影响范围执行相关 pytest 文件。
-  - 前端使用 `scripts/run-frontend.cmd`；构建使用 `scripts/run-frontend.cmd build`。
-  - `scripts/run-backend-java.cmd` 仅供用户明确要求的历史 Java 验证。
+- 本地启动、测试和构建优先使用 `scripts/`；`scripts/` 只保留 PowerShell `.ps1`，后续不再新增 `.cmd`、`.mjs` 等其它脚本类型。
+  Agent 或受执行策略限制的终端使用 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <script.ps1> ...` 调用，不要求永久修改系统执行策略：
+  - Python 后端统一使用 `scripts/run-backend.ps1`。
+  - Python 测试优先使用 `scripts/run-backend.ps1 test`，或按影响范围执行相关 pytest 文件。
+  - 前端使用 `scripts/run-frontend.ps1`；构建使用 `scripts/run-frontend.ps1 build`。
 - 只有脚本缺少所需能力或脚本失败且需要定位根因时，才进入 `backend-python/` 或 `frontend/` 执行底层命令，
   并在结论中说明原因。
 - 按影响范围选择最小充分验证：前端样式或交互改动优先运行前端测试 / build；Python 局部改动优先运行相关

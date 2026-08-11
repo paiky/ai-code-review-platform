@@ -6,7 +6,7 @@ import {
   COMMAND_CENTER_M4_SCENARIOS,
   commandCenterGovernanceFixture,
   commandCenterRuntimeFixture
-} from '../../scripts/command-center-m4-fixtures.mjs';
+} from './fixtures/command-center-m4-fixtures.mjs';
 import { normalizeGovernanceSnapshot, normalizeRuntimeSnapshot } from '../src/command-center/commandCenterModel.js';
 import { buildCommandCenterPresentation } from '../src/command-center/commandCenterPresentation.js';
 import { commandCenterMotionScene } from '../src/command-center/commandCenterVisual.js';
@@ -86,7 +86,7 @@ test('M4 fixtures keep task bounds safe links and quality totals truthful', () =
 
 
 test('M4 mock server exposes only fixed scenario switching and read-only snapshot APIs', async () => {
-  const source = await readFile(new URL('../../scripts/command-center-m4-mock-server.mjs', import.meta.url), 'utf8');
+  const source = await readFile(new URL('./fixtures/command-center-m4-mock-server.mjs', import.meta.url), 'utf8');
   assert.deepEqual(COMMAND_CENTER_M4_SCENARIOS, [
     'idle', 'agent-queued', 'standard-queued', 'agent-running', 'standard-running', 'dual-running',
     'fallback-running', 'stale', 'runtime-error', 'governance-error'

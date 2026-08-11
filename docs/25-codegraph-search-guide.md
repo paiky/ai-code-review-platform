@@ -11,23 +11,30 @@
 - `rg` 适合快速定位代码中真实存在的字符串。
 - CodeGraph 适合从业务问题建立 Python 后端候选地图，并在拿到关键符号后展开调用关系。
 
-推荐工作流：
+默认工作流：
 
 ```text
-业务问题或异常现象
-  -> codegraph_context 获取候选模块和关键符号
-  -> rg 核对接口路径、字段名、错误文案和真实调用位置
+已知字符串、路径、日志或配置
+  -> rg 定位
   -> 阅读局部源码
-  -> 必要时使用 codegraph_callers / codegraph_callees / codegraph_trace 追链路
+
+已知关键符号，且需要跨模块调用链或影响分析
+  -> codegraph_callers / codegraph_callees / codegraph_trace / codegraph_impact
+  -> 阅读局部源码
+
+CodeGraph 不可用或查询失败
+  -> 直接使用 rg
+  -> 不做安装、配置或索引排障，除非当前任务明确要求
 ```
 
 ## 使用规则
 
 ### 优先使用 CodeGraph 的场景
 
-- 从业务逻辑、异常现象或架构问题开始排查 Python 后端。
 - 已知关键函数，需要确认调用者、被调用函数、影响范围或跨模块链路。
-- 需要快速了解陌生后端模块的入口和相关符号。
+- `rg` 与局部源码阅读不足以确定 Python 后端调用关系。
+
+单个任务默认最多调用两次 CodeGraph。获得候选链路后转为阅读局部源码，不重复执行同类查询。
 
 常用 MCP 工具：
 
@@ -44,6 +51,7 @@ codegraph_impact
 
 - 已知接口路径、字段名、数据库列、配置项、错误文案或日志内容。
 - 搜索 React 前端页面、组件、请求路径和展示文案。
+- 排查文档、脚本、环境或工具链问题，以及完成简单局部修改、测试修复或样式调整。
 - 核对 CodeGraph 返回的调用位置是否真实存在。
 - CodeGraph 未识别动态调用、异步调度或框架边界。
 
@@ -106,7 +114,7 @@ CodeGraph 是静态图，不是唯一事实来源。
 首次启用或索引不可用时：
 
 ```powershell
-.\scripts\setup-codegraph.cmd
+.\scripts\setup-codegraph.ps1
 ```
 
 修改忽略规则后需要强制重建索引：

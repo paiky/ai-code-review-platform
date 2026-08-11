@@ -110,22 +110,30 @@ def test_database_identity_rejects_option_like_schema_name() -> None:
         database_identity("mysql+pymysql://user:password@db/--defaults-file")
 
 
-def test_database_migration_wrapper_keeps_test_confirmation_gate() -> None:
+def test_database_migration_script_keeps_test_confirmation_gate() -> None:
     root = Path(__file__).resolve().parents[3]
     powershell = (root / "scripts/run-database-migration.ps1").read_text(encoding="utf-8")
-    command = (root / "scripts/run-database-migration.cmd").read_text(encoding="utf-8")
 
     assert 'ValidateSet("local", "test")' in powershell
     assert "$ConfirmTest" in powershell
     assert 'arguments.Add("--confirm-test")' in powershell
     assert "database.local.env" not in powershell
     assert "database.test.env" not in powershell
-    assert "run-database-migration.ps1" in command
+
+
+def test_repository_scripts_use_powershell_without_new_script_types() -> None:
+    root = Path(__file__).resolve().parents[3]
+    scripts = root / "scripts"
+
+    assert all(path.suffix.lower() == ".ps1" for path in scripts.iterdir())
+    assert (scripts / "run-backend.ps1").is_file()
+    assert (scripts / "run-frontend.ps1").is_file()
+    assert (scripts / "setup-codegraph.ps1").is_file()
 
 
 def test_backend_runner_loads_only_local_database_target_for_runtime() -> None:
     root = Path(__file__).resolve().parents[3]
-    powershell = (root / "scripts/run-backend-python.ps1").read_text(
+    powershell = (root / "scripts/run-backend.ps1").read_text(
         encoding="utf-8"
     )
 

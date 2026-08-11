@@ -729,7 +729,7 @@ M2-1 已为每条连接提供辉光、基轨和高亮内芯三层静态线缆。
 验收环境设计：
 
 - 真实环境继续复用当前 `5173 → 8090` 前后端，只读检查真实 Runtime / Governance、空闲态、数据口径和控制台；
-- 隔离环境使用 `scripts/command-center-m4-mock-server.mjs`，默认建议 `5184 → 8094`，所有数据仅存在于 mock 进程内存，不写数据库、不触发 Provider、GitLab 或通知；
+- 隔离环境使用 `frontend/tests/fixtures/command-center-m4-mock-server.mjs`，默认建议 `5184 → 8094`，所有数据仅存在于 mock 进程内存，不写数据库、不触发 Provider、GitLab 或通知；
 - mock 场景固定为 `idle / agent-queued / standard-queued / agent-running / standard-running / dual-running / fallback-running / stale / runtime-error / governance-error`，通过专用 `POST /__mock__/scenario/{name}` 切换；
 - retained 必须先成功载入活动快照，再切换到 `runtime-error` 并等待下一轮真实前端 polling；ERROR_EMPTY 必须在错误场景下重新加载隔离页面，两者不得用 DOM 属性伪造；
 - 每个活动场景返回相互一致的 scheduler、reviewLanes、runningItems / nextQueued 和 `fallback` 证据；fixture 直接进入前端 normalize、Presentation 和 M3 motion scene 测试；
@@ -741,7 +741,7 @@ M2-1 已为每条连接提供辉光、基轨和高亮内芯三层静态线缆。
 - 微调后在 `1600×900` 实际浏览器视口确认：引擎面板 / 结构关系说明底色 alpha 分别为 `0.30 / 0.34`，背景模糊分别为 `4px / 2px`；两张 Review 卡片 header 的重复 `small` 均为 0，页面无横向溢出，浏览器控制台无 warning / error；信息架构专项 `14 passed / 0 failed`，前端构建通过；
 - 桌面人工验收第二轮要求连接线优先：引擎面板与结构关系说明改为近透明底色并取消 `backdrop-filter`，不再使用磨砂玻璃模糊线路；仅保留低对比边框和必要文字承载，真实 fallback 活动态只允许增加轻量青色底色，不得恢复高遮挡玻璃层；
 - 近透明微调后在 `1600×900` 实际浏览器复验：引擎面板 / 结构关系说明底色 alpha 为 `0.08 / 0.06`，两者计算样式的 `backdrop-filter` 均为 `none`；页面无横向溢出，控制台无 warning / error，信息架构专项 `14 passed / 0 failed`，前端构建通过；
-- 新增 `scripts/command-center-m4-fixtures.mjs` 与 `scripts/command-center-m4-mock-server.mjs`，提供 10 个固定安全场景；fixture 仅包含合成项目、任务和统计，不连接数据库、Provider、GitLab 或通知；
+- 新增 `frontend/tests/fixtures/command-center-m4-fixtures.mjs` 与 `frontend/tests/fixtures/command-center-m4-mock-server.mjs`，提供 10 个固定安全场景；fixture 仅包含合成项目、任务和统计，不连接数据库、Provider、GitLab 或通知；
 - 新增 `frontend/tests/commandCenterM4Fixtures.test.mjs`，让全部活动 fixture 依次经过 Runtime normalize、Presentation 和 M3 motion scene，验证两条执行轨和 fallback 证据不会在层间漂移；
 - 真实 `5173 → 8090` 环境确认 Runtime v2、Governance v1、今日自然日结果和 coverage 字段可用；验收期间真实 Agent Review 从 running 转为 success，今日结果同步从 `1 success + 1 running` 更新为 `2 success`；
 - 隔离浏览器依次通过 idle、Agent queued、Standard queued、Agent running、Standard running、dual running、fallback running、stale、Runtime ERROR_EMPTY、Runtime ERROR_RETAINED 和 Governance ERROR_EMPTY；
@@ -762,7 +762,7 @@ M2-1 已为每条连接提供辉光、基轨和高亮内芯三层静态线缆。
 
 ```powershell
 # 终端 A：启动隔离 mock
-node scripts/command-center-m4-mock-server.mjs --port 8094 --scenario dual-running
+node frontend/tests/fixtures/command-center-m4-mock-server.mjs --port 8094 --scenario dual-running
 
 # 终端 B：启动隔离前端
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-frontend.ps1 `

@@ -255,5 +255,5 @@ DELETE /api/review-tasks/{taskId}/code-quality-findings/{fingerprint}/feedback
 - 后端测试通过：
 
 ```powershell
-.\scripts\run-backend.cmd -q test
+.\scripts\run-backend.ps1 -q test
 ```

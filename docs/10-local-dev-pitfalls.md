@@ -94,10 +94,9 @@ GitLab Push Hook 只有被推送的 `ref`，没有 MR 的 `source_branch` 和 `t
 
 项目脚本不仅是启动入口，也封装了本地开发约定：
 
-1. `scripts/run-backend.cmd` 默认转发到 Python 后端脚本，并加载 `.local/gitlab.env`。
-2. `scripts/run-backend-java.cmd` 保留 JDK 21 选择逻辑，供 legacy Java 行为对照使用。
-3. `scripts/run-frontend.cmd` 会检查 Node / npm，并在缺少 `node_modules` 时自动安装依赖。
-4. Windows 下优先使用 `.cmd` 入口可以减少 Shell、PATH、命令后缀差异。
+1. `scripts/run-backend.ps1` 默认转发到 Python 后端脚本，并加载 `.local/gitlab.env`。
+2. `scripts/run-frontend.ps1` 会检查 Node / npm，并在缺少 `node_modules` 时自动安装依赖。
+3. Windows 自动化入口统一使用 PowerShell `.ps1`，避免维护重复转发层。
 
 处理方式：
 
@@ -105,26 +104,20 @@ GitLab Push Hook 只有被推送的 `ref`，没有 MR 的 `source_branch` 和 `t
 2. 后端启动、测试、编译优先使用：
 
 ```powershell
-.\scripts\run-backend.cmd dev
-.\scripts\run-backend.cmd test
-.\scripts\run-backend.cmd lint
-.\scripts\run-backend.cmd migrate
+.\scripts\run-backend.ps1 dev
+.\scripts\run-backend.ps1 test
+.\scripts\run-backend.ps1 lint
+.\scripts\run-backend.ps1 migrate
 ```
 
 3. 前端启动、构建优先使用：
 
 ```powershell
-.\scripts\run-frontend.cmd
-.\scripts\run-frontend.cmd build
+.\scripts\run-frontend.ps1
+.\scripts\run-frontend.ps1 build
 ```
 
 4. 只有脚本缺少所需能力或脚本本身失败需要定位时，才直接执行底层 `mvn.cmd` / `npm.cmd` 命令，并记录原因。
-5. 如果确实需要对照历史 Java 后端，再显式使用：
-
-```powershell
-.\scripts\run-backend-java.cmd
-```
-
 ## 6. Docker 离线部署打包脚本找不到 docker 命令
 
 现象：
@@ -135,7 +128,7 @@ docker : 无法将“docker”项识别为 cmdlet、函数、脚本文件或可�
 
 原因：
 
-`scripts/package-docker-deploy.cmd` 会调用 Docker CLI 构建并导出镜像。本机如果没有安装 Docker Desktop、Docker Desktop 未启动，或安装后当前终端没有刷新 PATH，就会找不到 `docker` 命令。
+`scripts/package-docker-deploy.ps1` 会调用 Docker CLI 构建并导出镜像。本机如果没有安装 Docker Desktop、Docker Desktop 未启动，或安装后当前终端没有刷新 PATH，就会找不到 `docker` 命令。
 
 处理方式：
 
@@ -145,7 +138,7 @@ docker : 无法将“docker”项识别为 cmdlet、函数、脚本文件或可�
 
 ```powershell
 docker version
-.\scripts\package-docker-deploy.cmd
+.\scripts\package-docker-deploy.ps1
 ```
 
 4. 如果 `docker version` 仍提示找不到命令，检查 Docker Desktop 安装目录是否已加入 PATH，或重启 Windows 后再试。
@@ -262,7 +255,7 @@ WindowsApps 的 `python.exe` 是应用执行别名，不一定是真实 Python �
 
 处理方式：
 
-1. `scripts/run-backend-python.ps1` 优先使用 `backend-python/.venv/Scripts/python.exe`。
+1. `scripts/run-backend.ps1` 优先使用 `backend-python/.venv/Scripts/python.exe`。
 2. 如果没有 `.venv`，脚本会跳过 WindowsApps 占位别名，寻找真实 `python.exe`。
 3. 如果全局 pip 异常，不要直接修全局 Python；优先在仓库内创建隔离环境：
 
@@ -412,7 +405,7 @@ Python 后端本身不执行 Java Flyway migration。如果本地 MySQL 还停�
 
 1. Python 后端的 AI Review 配置初始化会在当前 Session connection 上补齐必要表和列，避免旧库直接 500。
 2. 本地真实 MySQL 如果仍异常，先重启 Python 后端，再确认数据库至少有 `code_quality_review_settings`、`code_quality_review_profiles`、`code_quality_model_providers`。
-3. 正式 schema 以 `backend-python/migrations/bootstrap_sql/` 为准；本地可执行 `scripts/run-backend.cmd` 触发的迁移/bootstrap，**不要**再依赖 Java Flyway 作为日常迁移入口。
+3. 正式 schema 以 `backend-python/migrations/bootstrap_sql/` 为准；本地可执行 `scripts/run-backend.ps1` 触发的迁移/bootstrap，**不要**再依赖 Java Flyway 作为日常迁移入口。
 
 ## 17. Python 后端写 MySQL 时不能依赖数据库默认时间戳
 
@@ -479,17 +472,17 @@ OpenAI Responses strict schema 会强约束 `filePath`、`startLine`、`category
 每轮开发都执行全量测试，例如：
 
 ```powershell
-.\scripts\run-backend.cmd test
+.\scripts\run-backend.ps1 test
 ```
 
 随着测试数量和输出增加，会让每轮对话耗时和额度消耗越来越高。对于只改前端交互、文档或单个后端模块的小目标，全量测试常常不是最高性价比的验证方式。
 
 处理方式：
 
-1. 前端样式、交互或展示逻辑改动：优先执行 `.\scripts\run-frontend.cmd build`。
+1. 前端样式、交互或展示逻辑改动：优先执行 `.\scripts\run-frontend.ps1 build`。
 2. Python 后端局部改动：优先执行相关 pytest 文件，例如 `.\backend-python\.venv\Scripts\python.exe -m pytest tests/contract/test_rule_templates_api_contract.py`，或通过脚本能力可达的最小测试集。
-3. 通过 `.\scripts\run-backend.cmd test <pytest-path>` 指定文件时，路径要按 `backend-python/` 作为当前目录书写，例如 `tests\contract\test_rule_templates_api_contract.py`；不要写成 `backend-python\tests\...`，否则脚本进入后端目录后 pytest 会找不到文件。
-4. 只有改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容、通知发送或跨模块边界时，才执行 `.\scripts\run-backend.cmd test` 全量 Python 测试。
+3. 通过 `.\scripts\run-backend.ps1 test <pytest-path>` 指定文件时，路径要按 `backend-python/` 作为当前目录书写，例如 `tests\contract\test_rule_templates_api_contract.py`；不要写成 `backend-python\tests\...`，否则脚本进入后端目录后 pytest 会找不到文件。
+4. 只有改到 webhook -> 分析 -> 风险卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容、通知发送或跨模块边界时，才执行 `.\scripts\run-backend.ps1 test` 全量 Python 测试。
 5. Java 后端 `backend/` 已停止维护，默认不再执行 Maven 编译或测试；只有用户明确要求对照历史 Java 行为时才读取或运行。
 6. 最终结论中说明“为什么选择这组验证”，避免把全量测试当作无脑默认动作。
 
@@ -722,7 +715,7 @@ Push 审核层原本只负责“是否自动进入 AI Review”，不负责“�
 
 现象：
 
-`scripts/run-backend-python.ps1` 改成本地默认 `8090` 后，后端能启动，但前端页面仍然请求旧端口，表现为接口 404 / 代理失败 / 页面数据不刷新。或者相反，前端已经代理到 `8090`，但后端仍跑在其它端口。
+`scripts/run-backend.ps1` 改成本地默认 `8090` 后，后端能启动，但前端页面仍然请求旧端口，表现为接口 404 / 代理失败 / 页面数据不刷新。或者相反，前端已经代理到 `8090`，但后端仍跑在其它端口。
 
 原因：
 
@@ -740,7 +733,7 @@ Python 后端本地脚本、`app.core.config` 默认端口、前端 `VITE_API_PR
 现象：
 
 ```text
-.\scripts\run-backend-python.ps1 dev
+.\scripts\run-backend.ps1 dev
 ```
 
 长时间没有继续启动。用 `faulthandler` 诊断时可能看到 Python 卡在：
@@ -759,7 +752,7 @@ Python 3.12 的 `platform` 模块在 Windows 上会优先调用 WMI 查询系统
 
 处理方式：
 
-1. `scripts/run-backend-python.ps1` 会为后端启动设置 `AI_REVIEW_SKIP_PYTHON_WMI=1`，并把 `backend-python/` 加入子进程 `PYTHONPATH`，确保 Python 启动阶段自动加载本项目的 `sitecustomize.py`。
+1. `scripts/run-backend.ps1` 会为后端启动设置 `AI_REVIEW_SKIP_PYTHON_WMI=1`，并把 `backend-python/` 加入子进程 `PYTHONPATH`，确保 Python 启动阶段自动加载本项目的 `sitecustomize.py`。
 2. `backend-python/sitecustomize.py` 在该变量开启且当前是 Windows 时，让 Python `platform` 模块跳过 WMI，并使用标准库已有的 registry / env fallback。
 3. 这只是本项目本地启动的兼容保护；如果 PowerShell 中 `Get-CimInstance Win32_OperatingSystem` 也会卡住，仍建议后续修复本机 WMI / CIM 服务状态。
 
@@ -835,7 +828,7 @@ GET /api/health
 执行前端构建时失败：
 
 ```powershell
-.\scripts\run-frontend.cmd build
+.\scripts\run-frontend.ps1 build
 ```
 
 错误类似：
@@ -855,7 +848,7 @@ The "fileName" or "name" properties of emitted chunks and assets must be strings
 2. 仍然通过仓库入口执行构建：
 
 ```powershell
-.\scripts\run-frontend.cmd build
+.\scripts\run-frontend.ps1 build
 ```
 
 3. 如果后续升级 Vite 后 CLI 行为恢复正常，可以再评估是否切回 `vite build`。
@@ -1465,7 +1458,7 @@ AI 修复 Patch 预览弹窗中，左右对照 diff 遇到较长的日志、方�
 3. 前端主按钮文案改为“重新执行审阅”，默认调用原地重跑接口。
 4. 保留“复制为新任务重跑”作为独立次要按钮，继续调用旧 `/rerun` 接口，满足需要保留历史审计或对比新旧结果的场景。
 
-## 65. Agent 执行 `.cmd` 验证脚本时要禁用失败后的 `pause`
+## 65. Agent 执行验证脚本时要区分一次性命令和长驻服务
 
 现象：
 
@@ -1477,44 +1470,38 @@ The shell command returned no exit status
 
 原因：
 
-仓库的 Windows `.cmd` 入口会在子脚本返回非 0 退出码时执行：
-
-```bat
-if not defined NO_PAUSE pause
-```
-
-这对人工双击脚本有帮助，但在 Agent / 非交互终端里会等待“按任意键继续”，看起来像测试脚本卡住。前端和后端的 `dev` 命令本身也是长驻服务，正常不会退出；验证构建 / 测试时不能误跑默认 `dev`。
+前端和后端的 `dev` 命令是长驻服务，正常不会退出；验证构建 / 测试时不能误跑默认 `dev`。仓库 Windows 自动化入口现已统一为 PowerShell `.ps1`，不再经过 `.cmd` 转发层。
 
 处理方式：
 
-1. Agent 执行一次性验证命令时，优先设置 `NO_PAUSE=1`，避免失败后等待输入：
+1. Agent 执行一次性验证命令时，直接调用统一的 PowerShell 入口：
 
 ```powershell
-$env:NO_PAUSE="1"; .\scripts\run-frontend.cmd build
-$env:NO_PAUSE="1"; .\scripts\run-backend.cmd test tests\contract\test_rule_templates_api_contract.py
+.\scripts\run-frontend.ps1 build
+.\scripts\run-backend.ps1 test tests\contract\test_rule_templates_api_contract.py
 ```
 
-2. 如果需要绕过 `.cmd` 的 pause 包装，可直接执行 `.ps1`：
+2. 若当前宿主没有直接执行 `.ps1`，可显式启动 PowerShell：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-frontend.ps1 build
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-backend.ps1 test tests\contract\test_rule_templates_api_contract.py
 ```
 
-3. 手动启动开发服务时仍可使用默认入口，例如 `.\scripts\run-frontend.cmd` 或 `.\scripts\run-backend.cmd dev`；这类命令正常会一直运行，不应作为“一次性验证是否通过”的命令。
+3. 手动启动开发服务时仍可使用默认入口，例如 `.\scripts\run-frontend.ps1` 或 `.\scripts\run-backend.ps1 dev`；这类命令正常会一直运行，不应作为“一次性验证是否通过”的命令。
 4. 如果连 `echo` 这类最小命令都拿不到退出状态，优先怀疑 Cursor / Agent 命令执行桥接异常，而不是项目构建失败。
 
 ## 66. CodeGraph MCP 配置后 Cursor 或 Codex App 仍看不到工具
 
 现象：
 
-- 已执行 `codegraph install` 或 `.\scripts\setup-codegraph.cmd`，但 Cursor Agent 或 Codex App 仍像没有 CodeGraph 工具一样全库 grep / Read。
+- 已执行 `codegraph install` 或 `.\scripts\setup-codegraph.ps1`，但 Cursor Agent 或 Codex App 仍像没有 CodeGraph 工具一样全库 grep / Read。
 
 常见原因：
 
 1. 修改 `.cursor/mcp.json` 后未重启 Cursor。
 2. 本机 PATH 中没有 `codegraph`；MCP 配置使用 `"command": "codegraph"`，需要全局安装 `@colbymchenry/codegraph` 或把 npm global bin 加入 PATH。
-3. 项目还没有 `.codegraph/codegraph.db` 索引；需要先 `codegraph init -i` 或 `.\scripts\setup-codegraph.cmd`。
+3. 项目还没有 `.codegraph/codegraph.db` 索引；需要先 `codegraph init -i` 或 `.\scripts\setup-codegraph.ps1`。
 4. Cursor 项目级 `.cursor/mcp.json` 写入了本机绝对 `--path`；可提交配置应使用 `"${workspaceFolder}"`，避免其他开发者克隆后仍指向原机器目录。
 5. Codex App 不读取 Cursor 的 `.cursor/mcp.json`；需要在用户级 `~/.codex/config.toml` 单独增加 CodeGraph MCP 配置并重启 Codex App。
 6. Windows PowerShell 直接运行 `codegraph` 时可能优先命中 `codegraph.ps1` 并被执行策略拦截；脚本和 Codex App 配置可显式使用 `codegraph.cmd`。
@@ -1523,7 +1510,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-backend.ps
 
 ```powershell
 npm install -g @colbymchenry/codegraph
-.\scripts\setup-codegraph.cmd
+.\scripts\setup-codegraph.ps1
 ```
 
 Cursor 使用仓库内 `.cursor/mcp.json`。Codex App 还需要在 `~/.codex/config.toml` 增加：
@@ -1559,7 +1546,7 @@ args = ["serve", "--mcp"]
 Docker Desktop 未启动或 Linux Engine 不可用时，执行：
 
 ```powershell
-.\scripts\package-docker-deploy.cmd
+.\scripts\package-docker-deploy.ps1
 ```
 
 直接看到 PowerShell `NativeCommandError`，没有进入脚本预期的 Docker Engine 诊断提示。
@@ -1631,7 +1618,7 @@ PATH 命中的系统 Python 启动器可能依赖当前沙箱不可用的登录�
 
 处理方式：
 
-1. 日常启动和测试优先使用 `.\scripts\run-backend.cmd`。
+1. 日常启动和测试优先使用 `.\scripts\run-backend.ps1`。
 2. 排查脚本行为或执行一次性 Python 命令时，优先使用
    `backend-python\.venv\Scripts\python.exe`。
 3. 不要因为 PATH Python 启动失败改动项目依赖或重建虚拟环境；先确认 `.venv` 解释器是否可用。
@@ -1697,7 +1684,7 @@ GitLab diff 和模型生成的 patch 都只包含局部上下文。真正展开�
 
 现象：
 
-在 Codex 沙箱中执行 `.\scripts\run-frontend.cmd build` 时，Vite 可能报错：
+在 Codex 沙箱中执行 `.\scripts\run-frontend.ps1 build` 时，Vite 可能报错：
 
 ```text
 The "fileName" or "name" properties of emitted chunks and assets must be strings that are neither absolute nor relative paths
@@ -1714,7 +1701,7 @@ The "fileName" or "name" properties of emitted chunks and assets must be strings
 处理方式：
 
 1. 先确认脚本日志中的工作区是否被映射到 `.codex/.sandbox/cwd/...`。
-2. 在用户批准后，于沙箱外使用真实工作区路径重跑同一条 `.\scripts\run-frontend.cmd build`。
+2. 在用户批准后，于沙箱外使用真实工作区路径重跑同一条 `.\scripts\run-frontend.ps1 build`。
 3. 只有沙箱外仍失败时，才继续排查前端源码或 Vite 配置。
 
 ## 76. Patch 预览展开上下文前必须校验当前源码基线
@@ -2016,5 +2003,5 @@ npm 默认 cache 位于用户目录，Codex 沙箱命令可能没有权限写入
 3. 安装后继续通过仓库脚本验证：
 
 ```powershell
-.\scripts\run-frontend.cmd build
+.\scripts\run-frontend.ps1 build
 ```

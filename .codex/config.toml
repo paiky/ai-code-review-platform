@@ -1,0 +1,4 @@
+[mcp_servers.codegraph]
+type = "stdio"
+command = "codegraph.cmd"
+args = ["serve", "--mcp"]

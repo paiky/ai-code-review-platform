@@ -15,7 +15,7 @@ Invoke-RestMethod `
   -Body $payload
 ```
 
-本目录用于存放本地验证和联调用的示例数据。默认 Python 后端端口为 `8090`（见 `scripts/run-backend.cmd`）；若你改了端口，请同步替换下面示例 URL。
+本目录用于存放本地验证和联调用的示例数据。默认 Python 后端端口为 `8090`（见 `scripts/run-backend.ps1`）；若你改了端口，请同步替换下面示例 URL。
 
 ## 文件说明
 

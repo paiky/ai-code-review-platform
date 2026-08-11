@@ -52,14 +52,14 @@ if (-not (Test-Path $packageJson)) {
 $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
 if ($null -eq $nodeCommand) {
     Write-Host "Node.js was not found in PATH." -ForegroundColor Red
-    Write-Host "Install Node.js, then run again: .\scripts\run-frontend.cmd"
+    Write-Host "Install Node.js, then run again: .\scripts\run-frontend.ps1"
     exit 1
 }
 
 $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if ($null -eq $npmCommand) {
     Write-Host "npm.cmd was not found in PATH." -ForegroundColor Red
-    Write-Host "Install Node.js with npm, then run again: .\scripts\run-frontend.cmd"
+    Write-Host "Install Node.js with npm, then run again: .\scripts\run-frontend.ps1"
     exit 1
 }
 

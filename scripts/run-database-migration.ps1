@@ -9,7 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$backendRunner = Join-Path $PSScriptRoot "run-backend-python.ps1"
+$backendRunner = Join-Path $PSScriptRoot "run-backend.ps1"
 if (-not (Test-Path -LiteralPath $backendRunner)) {
     throw "Python backend runner was not found: $backendRunner"
 }

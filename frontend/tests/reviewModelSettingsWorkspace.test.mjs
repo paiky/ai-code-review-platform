@@ -4,7 +4,7 @@ import test from 'node:test';
 
 const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
 const styleSource = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-const mockSource = await readFile(new URL('../../scripts/docs54-settings-mock-server.mjs', import.meta.url), 'utf8');
+const mockSource = await readFile(new URL('./fixtures/docs54-settings-mock-server.mjs', import.meta.url), 'utf8');
 
 test('renders one visible unified Review model settings workspace', () => {
   assert.match(appSource, /from ['"]\.\/reviewModelConnections\.js['"]/);
@@ -181,7 +181,7 @@ test('browser acceptance mock stays local and never calls a model Provider', () 
 
 test('keeps Agent polling terminal states and cleanup bounded', () => {
   const polling = appSource.slice(
-    appSource.indexOf('useEffect(() => {\n    const requestId = agentSettingsTestResult?.requestId'),
+    appSource.indexOf('const requestId = agentSettingsTestResult?.requestId'),
     appSource.indexOf('const loadProjectTargetConfigs = async')
   );
 
