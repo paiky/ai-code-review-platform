@@ -4,10 +4,10 @@
 
 - 文档日期：`2026-08-11`
 - 来源专项：`docs/56-agent-review-dispatch-observability-and-command-center-preparation-motion-plan.md`
-- 当前阶段：`D4E 已完成`
-- 当前状态：`D4E COMPLETED — WAITING FOR D4F AUTHORIZATION`
-- 当前授权：D4A、D4B、D4C、D4D、D4E 已完成；未经后续授权不修改测试环境数据。
-- 当前停止点：等待用户明确确认“继续 D4F”。
+- 当前阶段：`D4F 推进中`
+- 当前状态：`D4F WAITING FOR TEST ENVIRONMENT CHANGE AUTHORIZATION`
+- 当前授权：D4A、D4B、D4C、D4D、D4E 已完成；D4F 已获授权，仅执行只读测试环境核验与安全 synthetic/contract 验证；部署、迁移和业务状态清理仍需单独授权。
+- 当前停止点：等待用户授权测试库 V52 台账登记，并由用户部署 D4A～D4E 后提交新的受控大任务。
 
 ---
 
@@ -753,7 +753,7 @@ Task `1253/1256/1257/1263/1267` 不自动重跑。运维清理仅允许在用户
 
 ### D4F：测试环境迁移与真实任务验收
 
-- 阶段状态：`NOT STARTED`
+- 阶段状态：`IN PROGRESS — WAITING FOR TEST ENVIRONMENT CHANGE AUTHORIZATION`
 - 改动量等级：`小`。以用户执行部署迁移、Agent 只读核验、synthetic 验证和浏览器验收为主，不再扩展实现范围。
 - 目标：用真实大任务完成 preparing -> queued -> running -> submitted -> terminal 闭环，并核对输出失败能够快速准确 fallback。
 - 范围：迁移状态、列类型、Task/Progress/Job/Run/Result/Runtime/Lane、failureChain、schema 修正次数和浏览器检查；记录现有安全审计能够提供的证据调用、首次提交序号和 fallback 原因。
@@ -761,6 +761,16 @@ Task `1253/1256/1257/1263/1267` 不自动重跑。运维清理仅允许在用户
 - 验收：第 8.3 节证据齐全，正常 Agent 不降级，受控 synthetic schema 失败准确收敛，历史卡死任务清理结果可核对。
 - 授权边界：只读检查默认允许；部署、迁移、业务状态清理由用户明确执行或另行授权。
 - 停止点：回写 Task ID 和真实证据后结束 D4。
+
+#### D4F 只读预检与 synthetic 验证结果（2026-08-11）
+
+- 测试库迁移状态为 `current=V51, pending=V52`；`agent_review_runs.input_json` 与 `completion_context_json` 已由用户手工调整为可空 `LONGTEXT`，但 V52 尚未写入 `schema_migrations`。本轮只读核验未执行 `apply`。
+- 测试库最近 30 个 Agent Run 均为旧 completion context：`schemaVersion` 缺失且仍包含内嵌 `riskCard`；新的 `AGENT_SUBMIT_VALIDATION_FAILED`、`AGENT_REVIEW_SUBMITTED`、`AGENT_OUTPUT_CONVERGENCE_FAILED` 事件计数均为 0，证明 D4B～D4E 尚未在测试环境生效。
+- Task `1294` 可证明旧版本正常 Agent 主链闭环：Job `1498 SUCCESS`、Run `122 SUCCEEDED`、Result `1078 SUCCESS`、`effectiveEngine=AGENT`，但输入仅 1 个文件 / 1095-byte diff，且只有旧 `AGENT_SUBMITTING -> AGENT_FINISHED` 事件，不能作为 D4F 新版本大任务验收样本。
+- Task `1275` 是已有的 100 文件 / 226869-byte `TOOL_PAGED` 成功样本，Run `110` 为 `SUCCEEDED + AGENT`；其 completion context 仍为 92172-byte v1 且包含 `riskCard`，只能作为升级前基线，不能替代部署后的回归。
+- 历史 Task `1253/1256/1257/1263/1267` 已为 `reviewStatus=REVIEW_FAILED`；Task `1271` 保持 `SUCCESS + MAJOR`，未修改任何历史业务状态。
+- 本地安全 synthetic/contract 回归覆盖四类 Runner、三次 schema 失败熔断、failureChain、DataError 独立失败事务和 Agent API contract，共 `182 passed, 1 skipped`；D4E 前端提交诊断回归 `34 passed`。
+- D4F 剩余外部步骤：执行 `run-database-migration.ps1 apply test -ConfirmTest` 仅补记 V52 并随后 `verify`；部署 D4A～D4E；提交新的约 100 文件 / 200KB 以上受控任务；只读回查 v2 context、新提交 Progress、Job/Run/Result/Runtime 和浏览器任务详情。
 
 ---
 
