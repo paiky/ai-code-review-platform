@@ -101,7 +101,10 @@ test('M3 semantic DOM owns content while one measured SVG owns CSS-only route mo
   assert.equal(canvasSource.includes('data-command-center-canvas-mounted="false"'), true);
   assert.equal(canvasSource.includes('data-command-center-dom-fallback="always"'), true);
   assert.equal(canvasSource.includes('data-command-center-animation-owner="CSS_STATE_M3"'), true);
-  assert.equal((canvasSource.match(/<svg/g) || []).length, 1);
+  assert.equal((canvasSource.match(/<svg/g) || []).length, 3);
+  assert.equal((canvasSource.match(/className="command-center-static-connections"/g) || []).length, 1);
+  assert.equal((canvasSource.match(/className="command-center-engine-spectrum"/g) || []).length, 1);
+  assert.equal((canvasSource.match(/className="command-center-review-energy"/g) || []).length, 1);
   assert.equal(canvasSource.includes('aria-hidden="true"'), true);
   assert.equal(canvasSource.includes('focusable="false"'), true);
   assert.equal(canvasSource.includes('<canvas'), false);
@@ -275,16 +278,44 @@ test('M3 drives measured routes from truthful state and preserves reduced-motion
   assert.equal(styleSource.includes('[data-flow-state="running"]'), true);
   assert.equal(styleSource.includes('cc-engine-orbit-clockwise'), true);
   assert.equal(styleSource.includes('cc-engine-orbit-counterclockwise'), true);
-  assert.equal(canvasSource.includes('command-center-review-neon'), true);
-  assert.match(
-    styleSource,
-    /\.command-center-review-neon\s*\{[^}]*background:\s*currentColor;[^}]*transition:\s*opacity 220ms ease-out, filter 260ms ease-out;/s
-  );
-  assert.match(styleSource, /\[data-activity="queued"\] \.command-center-review-neon\s*\{[^}]*animation:\s*cc-review-beat 2\.4s ease-in-out infinite;/s);
-  assert.match(styleSource, /\[data-activity="running"\] \.command-center-review-neon\s*\{[^}]*animation:\s*cc-review-beat 1\.35s ease-in-out infinite;/s);
-  assert.match(styleSource, /@keyframes cc-review-beat\s*\{[\s\S]*8%[\s\S]*24%[\s\S]*var\(--cc-neon-peak-glow\)/s);
-  assert.equal(styleSource.includes('.command-center-review-neon::before'), false);
-  assert.equal(styleSource.includes('@keyframes cc-review-neon'), false);
+  assert.equal(canvasSource.includes('function EngineSpectrum()'), true);
+  assert.equal(canvasSource.includes('ENGINE_SPECTRUM_BAR_COUNT = 72'), true);
+  assert.equal(canvasSource.includes('command-center-engine-spectrum-bar'), true);
+  assert.equal(canvasSource.includes('<EngineSpectrum />'), true);
+  assert.equal(canvasSource.includes('pathLength="1"'), true);
+  assert.equal(canvasSource.includes('transform={`rotate(${bar.angle} 50 50)`}'), true);
+  assert.equal(canvasSource.includes("'--cc-spectrum-color': `hsl(${hue} 88% 58%)`"), true);
+  assert.equal(canvasSource.includes('Math.random'), false);
+  assert.match(styleSource, /\.command-center-engine-spectrum-bar\s*\{[^}]*stroke:\s*var\(--cc-spectrum-color\);[^}]*stroke-width:[^}]*stroke-dasharray:[^}]*vector-effect:\s*non-scaling-stroke;/s);
+  assert.match(styleSource, /\.command-center-engine\[data-activity="queued"\] \.command-center-engine-spectrum-bar,[\s\S]*animation:\s*cc-engine-spectrum-bar var\(--cc-spectrum-duration\) ease-in-out infinite;/s);
+  assert.match(styleSource, /@keyframes cc-engine-spectrum-bar\s*\{[\s\S]*stroke-dasharray:[^}]*var\(--cc-spectrum-active-peak\)[\s\S]*stroke-dasharray:[^}]*var\(--cc-spectrum-active-mid\)/s);
+  assert.doesNotMatch(styleSource, /@keyframes cc-engine-spectrum-bar\s*\{[\s\S]*stroke-width:/s);
+  assert.match(styleSource, /\[data-activity="running"\] \.command-center-engine-spectrum-bar\s*\{[^}]*--cc-spectrum-active-mid:\s*var\(--cc-spectrum-mid\);[^}]*--cc-spectrum-active-peak:\s*var\(--cc-spectrum-peak\);/s);
+  assert.equal(canvasSource.includes('function ReviewEnergyBorder({ token })'), true);
+  assert.equal(canvasSource.includes('<ReviewEnergyBorder token={lane.colorToken} />'), true);
+  assert.equal((canvasSource.match(/command-center-review-energy-segment is-/g) || []).length, 5);
+  assert.equal(canvasSource.includes('cc-review-energy-lightning-${token}'), true);
+  assert.equal(canvasSource.includes('cc-review-energy-spark-${token}'), true);
+  assert.equal((canvasSource.match(/<feTurbulence/g) || []).length, 2);
+  assert.equal((canvasSource.match(/<feDisplacementMap/g) || []).length, 2);
+  assert.equal(canvasSource.includes('scale="13.5"'), true);
+  assert.equal(canvasSource.includes('scale="18"'), true);
+  assert.equal(canvasSource.includes("token === 'agent' ? '#8b5cf6' : '#f97316'"), true);
+  assert.equal((canvasSource.match(/<feFlood/g) || []).length, 2);
+  assert.equal((canvasSource.match(/<feComposite/g) || []).length, 2);
+  assert.match(styleSource, /\.command-center-review-energy > rect\s*\{[^}]*rx:\s*calc\(var\(--cc-radius-card\) \+ 1px\);[^}]*vector-effect:\s*non-scaling-stroke;/s);
+  assert.match(styleSource, /\.command-center-review-energy-segment\.is-halo\s*\{[^}]*--cc-review-breathe-min:\s*0\.06;[^}]*filter:\s*blur\(4px\);[^}]*cc-review-energy-breathe/s);
+  assert.match(styleSource, /\.command-center-review-energy-segment\.is-body\s*\{[^}]*--cc-review-breathe-max:\s*0\.34;[^}]*cc-review-energy-breathe/s);
+  assert.match(styleSource, /\.command-center-review-energy-segment\.is-lightning\s*\{[^}]*stroke:\s*#ffffff;/s);
+  assert.match(styleSource, /\.command-center-review-energy-segment\.is-lightning\.is-primary\s*\{[^}]*stroke-dasharray:\s*8 2 6 2 10 3 7 2 9 2 6 2 8 3 7 2 8 3 8 2;[^}]*cc-review-energy-lightning 260ms steps\(2, end\) infinite;/s);
+  assert.match(styleSource, /\.command-center-review-energy-segment\.is-lightning\.is-spark\s*\{[^}]*stroke-dasharray:\s*3 3 5 4 2 3 4 5 3 4 5 5 2 4 4 6 3 5 4 6 3 5 3 9;[^}]*cc-review-energy-spark 170ms steps\(2, end\) infinite;/s);
+  assert.equal(styleSource.includes('@keyframes cc-review-energy-lightning'), true);
+  assert.equal(styleSource.includes('@keyframes cc-review-energy-spark'), true);
+  assert.equal(styleSource.includes('@keyframes cc-review-energy-breathe'), true);
+  assert.equal(styleSource.includes('@keyframes cc-review-energy-flow'), false);
+  assert.match(styleSource, /\[data-activity="running"\] \.command-center-review-energy\s*\{[^}]*--cc-review-breathe-duration:\s*2\.8s;[^}]*opacity:\s*1;/s);
+  assert.equal(styleSource.includes('@keyframes cc-review-beat'), false);
+  assert.equal(canvasSource.includes('command-center-review-neon'), false);
   assert.equal(styleSource.includes('@property --cc-neon-angle'), false);
   assert.equal(styleSource.includes('.command-center-static-connections,'), true);
   assert.equal(styleSource.includes('.command-center-port { display: none; }'), true);
@@ -394,8 +425,8 @@ test('A6 creates a measured desktop fallback corridor and compact responsive han
   assert.match(styleSource, /@keyframes cc-fallback-chevron-flow\s*\{[^}]*translateY\(-2px\)[\s\S]*translateY\(4px\);/s);
   assert.match(styleSource, /\.command-center-responsive-handoff\[data-active="true"\] > span > i\s*\{[^}]*animation:\s*cc-responsive-fallback-chevron-flow 1\.15s ease-in-out infinite;/s);
   assert.match(styleSource, /\.command-center-port\.is-fallback\s*\{\s*color:\s*var\(--cc-standard\);/s);
-  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-activity="running"\] \.command-center-review-neon\s*\{[^}]*--cc-neon-peak-glow:\s*4px;[^}]*color:\s*var\(--cc-standard\);/s);
-  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-fallback-active="true"\] \.command-center-review-neon\s*\{[^}]*--cc-neon-peak-glow:\s*5px;[^}]*animation:\s*cc-review-beat 1\.45s ease-in-out infinite;[^}]*color:\s*var\(--cc-standard\);/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-activity="running"\] \.command-center-review-energy\s*\{[^}]*--cc-review-breathe-duration:\s*3\.2s;[^}]*color:\s*var\(--cc-standard\);/s);
+  assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-fallback-active="true"\] \.command-center-review-energy\s*\{[^}]*--cc-review-breathe-duration:\s*2\.9s;[^}]*color:\s*var\(--cc-standard\);/s);
   assert.match(styleSource, /\.command-center-review-module\.is-standard\[data-fallback-active="true"\]\s*\{[^}]*border-color:\s*rgba\(240, 120, 24, 0\.58\);[^}]*rgba\(240, 120, 24, 0\.82\);/s);
   const standardActivityStyles = [...styleSource.matchAll(
     /\.command-center-review-module\.is-standard\[data-(?:activity="(?:queued|running)"|fallback-active="true")\][^{]*\{[^}]*\}/g

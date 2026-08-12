@@ -4,6 +4,34 @@ import { observeCommandCenterTopology } from './commandCenterTopology.js';
 
 
 const EMPTY_TOPOLOGY = Object.freeze({ ready: false, width: 0, height: 0, paths: [] });
+const ENGINE_SPECTRUM_BAR_COUNT = 72;
+const ENGINE_SPECTRUM_BARS = Object.freeze(Array.from(
+  { length: ENGINE_SPECTRUM_BAR_COUNT },
+  (_, index) => {
+    const angle = index / ENGINE_SPECTRUM_BAR_COUNT * 360;
+    const radians = angle * Math.PI / 180;
+    const broadWave = (Math.sin(radians * 2 - 0.7) + 1) / 2;
+    const detailWave = (Math.sin(radians * 5 + 0.35) + 1) / 2;
+    const energy = 0.32 + broadWave * 0.5 + detailWave * 0.18;
+    const phase = (Math.floor(index / 3) * 5 + Math.floor(index / 12) * 2) % 12;
+    const horizontalPosition = (Math.sin(radians) + 1) / 2;
+    const hue = Math.round(204 + horizontalPosition * 66);
+    return Object.freeze({
+      index,
+      angle,
+      style: Object.freeze({
+        '--cc-spectrum-delay': `${(-phase * 0.11).toFixed(2)}s`,
+        '--cc-spectrum-floor': (0.12 + energy * 0.13).toFixed(3),
+        '--cc-spectrum-mid-soft': (0.24 + energy * 0.22).toFixed(3),
+        '--cc-spectrum-peak-soft': (0.38 + energy * 0.32).toFixed(3),
+        '--cc-spectrum-mid': (0.34 + energy * 0.32).toFixed(3),
+        '--cc-spectrum-peak': (0.54 + energy * 0.46).toFixed(3),
+        '--cc-spectrum-opacity': (0.56 + energy * 0.38).toFixed(2),
+        '--cc-spectrum-color': `hsl(${hue} 88% 58%)`
+      })
+    });
+  }
+));
 
 
 export default function CommandCenterCanvas({
@@ -368,6 +396,7 @@ function EngineSelection({ engineSelection, activity }) {
       data-activity={activity}
     >
       <div className="command-center-engine-ring" aria-hidden="true">
+        <EngineSpectrum />
         <ConnectionPort id="engine-in" token="intake" position="orbit-left" />
         <ConnectionPort id="engine-agent-out" token="agent" position="orbit-right-upper" />
         <ConnectionPort id="engine-standard-out" token="standard" position="orbit-right-lower" />
@@ -383,6 +412,115 @@ function EngineSelection({ engineSelection, activity }) {
         <NodeHeading eyebrow="策略路由" title={engineSelection.title} subtitle={engineSelection.subtitle} />
       </div>
     </article>
+  );
+}
+
+
+function EngineSpectrum() {
+  return (
+    <svg
+      className="command-center-engine-spectrum"
+      viewBox="0 0 100 100"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {ENGINE_SPECTRUM_BARS.map(bar => (
+        <g key={bar.index} transform={`rotate(${bar.angle} 50 50)`}>
+          <line
+            className="command-center-engine-spectrum-bar"
+            x1="50"
+            y1="13"
+            x2="50"
+            y2="1"
+            pathLength="1"
+            style={bar.style}
+          />
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+
+function ReviewEnergyBorder({ token }) {
+  const lightningFilterId = `cc-review-energy-lightning-${token}`;
+  const sparkFilterId = `cc-review-energy-spark-${token}`;
+  const lightningSeed = token === 'agent' ? 7 : 13;
+  const sparkSeed = token === 'agent' ? 29 : 37;
+  const lightningGlow = token === 'agent' ? '#8b5cf6' : '#f97316';
+  return (
+    <svg
+      className="command-center-review-energy"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <defs>
+        <filter id={lightningFilterId} x="-36%" y="-54%" width="172%" height="208%">
+          <feTurbulence
+            type="fractalNoise"
+            baseFrequency="0.026 0.18"
+            numOctaves="2"
+            seed={lightningSeed}
+            result="energy-noise"
+          />
+          <feDisplacementMap
+            in="SourceGraphic"
+            in2="energy-noise"
+            scale="13.5"
+            xChannelSelector="R"
+            yChannelSelector="B"
+            result="energy-bolt"
+          />
+          <feFlood floodColor={lightningGlow} floodOpacity="0.92" result="energy-color" />
+          <feComposite in="energy-color" in2="energy-bolt" operator="in" result="energy-tint" />
+          <feGaussianBlur in="energy-tint" stdDeviation="2.8" result="energy-aura" />
+          <feGaussianBlur in="energy-tint" stdDeviation="0.9" result="energy-glow" />
+          <feMerge>
+            <feMergeNode in="energy-aura" />
+            <feMergeNode in="energy-glow" />
+            <feMergeNode in="energy-bolt" />
+          </feMerge>
+        </filter>
+        <filter id={sparkFilterId} x="-48%" y="-72%" width="196%" height="244%">
+          <feTurbulence
+            type="turbulence"
+            baseFrequency="0.055 0.28"
+            numOctaves="1"
+            seed={sparkSeed}
+            result="spark-noise"
+          />
+          <feDisplacementMap
+            in="SourceGraphic"
+            in2="spark-noise"
+            scale="18"
+            xChannelSelector="G"
+            yChannelSelector="B"
+            result="spark-bolt"
+          />
+          <feFlood floodColor={lightningGlow} floodOpacity="0.86" result="spark-color" />
+          <feComposite in="spark-color" in2="spark-bolt" operator="in" result="spark-tint" />
+          <feGaussianBlur in="spark-tint" stdDeviation="1.45" result="spark-glow" />
+          <feMerge>
+            <feMergeNode in="spark-glow" />
+            <feMergeNode in="spark-bolt" />
+          </feMerge>
+        </filter>
+      </defs>
+      <rect className="command-center-review-energy-rail" pathLength="100" />
+      <rect className="command-center-review-energy-segment is-halo" pathLength="100" />
+      <rect className="command-center-review-energy-segment is-tail" pathLength="100" />
+      <rect className="command-center-review-energy-segment is-body" pathLength="100" />
+      <rect
+        className="command-center-review-energy-segment is-lightning is-primary"
+        pathLength="100"
+        filter={`url(#${lightningFilterId})`}
+      />
+      <rect
+        className="command-center-review-energy-segment is-lightning is-spark"
+        pathLength="100"
+        filter={`url(#${sparkFilterId})`}
+      />
+    </svg>
   );
 }
 
@@ -426,7 +564,7 @@ function ReviewModule({
           <ConnectionPort id="standard-up" token="fallback" position="top" />
         </>
       )}
-      <span className="command-center-review-neon" aria-hidden="true" />
+      <ReviewEnergyBorder token={lane.colorToken} />
       <header>
         <span className="command-center-module-icon" aria-hidden="true">{isAgent ? '⌘' : '▤'}</span>
         <span className="command-center-module-copy">
