@@ -8,8 +8,10 @@ http_port 3128
 pid_filename none
 
 acl CONNECT method CONNECT
-acl SSL_ports port 443
+acl SSL_ports port 1-65535
+acl allowed_http_ports port 1-65535
 http_access allow CONNECT SSL_ports
+http_access allow !CONNECT allowed_http_ports
 http_access deny all
 
 access_log none

@@ -74,6 +74,8 @@ class AgentReviewRuntime(Base):
     test_duration_ms: Mapped[int | None] = mapped_column(BigInteger)
     test_started_at: Mapped[object | None] = mapped_column(DateTime)
     test_finished_at: Mapped[object | None] = mapped_column(DateTime)
+    test_runtime_snapshot_json: Mapped[str | None] = mapped_column(Text)
+    test_api_key_ciphertext: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[object | None] = mapped_column(DateTime)
     updated_at: Mapped[object | None] = mapped_column(DateTime)
 

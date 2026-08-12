@@ -250,17 +250,26 @@ def test_messages_http_transport_uses_anthropic_headers_without_leaks(
 @pytest.mark.parametrize(
     "endpoint",
     [
-        "http://relay.example/v1/messages",
+        "ftp://relay.example/v1/messages",
         "https://relay.example/v1/responses",
         "https://user:secret@relay.example/v1/messages",
         "https://relay.example/v1/messages?debug=true",
     ],
 )
-def test_messages_http_transport_requires_safe_https_endpoint(endpoint):
+def test_messages_http_transport_requires_safe_http_or_https_endpoint(endpoint):
     with pytest.raises(AnthropicMessagesAgentError) as captured:
         HttpxAnthropicMessagesTransport(endpoint, "synthetic-key")
 
     assert captured.value.code == "AGENT_CUSTOM_CONFIG_INCOMPLETE"
+
+
+def test_messages_http_transport_accepts_plain_http_endpoint():
+    transport = HttpxAnthropicMessagesTransport(
+        "http://127.0.0.1:8080/v1/messages",
+        "synthetic-key",
+    )
+
+    assert transport.endpoint_url == "http://127.0.0.1:8080/v1/messages"
 
 
 def test_anthropic_synthetic_validation_uses_no_network_and_submits_review():

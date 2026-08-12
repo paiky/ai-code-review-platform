@@ -97,6 +97,7 @@ services:
       AGENT_REVIEW_WORKER_TOKEN: ${AGENT_REVIEW_WORKER_TOKEN:-}
       AGENT_REVIEW_WORKER_ID_PREFIX: ${AGENT_REVIEW_WORKER_ID_PREFIX:-agent-worker}
       AGENT_REVIEW_WORKSPACE_ROOT: /workspaces
+      HTTP_PROXY: http://agent-egress-proxy:3128
       HTTPS_PROXY: http://agent-egress-proxy:3128
       NO_PROXY: backend,127.0.0.1,localhost
     volumes:

@@ -18,13 +18,15 @@ def test_custom_base_url_is_normalized_and_exposes_validated_host() -> None:
     assert base_url == "https://relay.example.com/v1"
     assert custom_base_url_host(base_url) == "relay.example.com"
 
+    http_base_url = normalize_custom_base_url("http://127.0.0.1:8080/v1/")
+    assert http_base_url == "http://127.0.0.1:8080/v1"
+    assert custom_base_url_host(http_base_url) == "127.0.0.1"
+
 
 @pytest.mark.parametrize(
     "value",
     [
-        "http://relay.example.com/v1",
-        "https://127.0.0.1/v1",
-        "https://relay.example.com:8443/v1",
+        "ftp://relay.example.com/v1",
         "https://relay.example.com/v1?token=secret",
         "https://*.example.com/v1",
     ],
@@ -41,7 +43,7 @@ def test_worker_capabilities_keep_legacy_default_and_drop_unknown_values() -> No
     ]
 
 
-def test_egress_proxy_allows_only_https_connect_without_environment_host_list() -> None:
+def test_egress_proxy_allows_custom_http_and_https_without_environment_host_list() -> None:
     repository_root = Path(__file__).resolve().parents[3]
     entrypoint = (repository_root / "deploy/agent-egress-proxy-entrypoint.sh").read_text(
         encoding="utf-8"
@@ -51,10 +53,14 @@ def test_egress_proxy_allows_only_https_connect_without_environment_host_list() 
     )
 
     assert "AGENT_REVIEW_CUSTOM_EGRESS_HOSTS" not in entrypoint
+    assert "acl SSL_ports port 1-65535" in entrypoint
     assert "http_access allow CONNECT SSL_ports" in entrypoint
+    assert "http_access allow !CONNECT allowed_http_ports" in entrypoint
     assert "http_access deny all" in entrypoint
     assert "Get-AgentCustomEgressHosts" not in windows_script
+    assert '"acl SSL_ports port 1-65535"' in windows_script
     assert '"http_access allow CONNECT SSL_ports"' in windows_script
+    assert '"http_access allow !CONNECT allowed_http_ports"' in windows_script
     assert '"http_access allow windows_backend windows_backend_port"' in windows_script
     for name in (
         "docker-compose.yml",
@@ -63,6 +69,11 @@ def test_egress_proxy_allows_only_https_connect_without_environment_host_list() 
     ):
         compose = (repository_root / "deploy" / name).read_text(encoding="utf-8")
         assert "AGENT_REVIEW_CUSTOM_EGRESS_HOSTS" not in compose
+        worker_section = compose.split("\n  agent-worker:", 1)[1].split(
+            "\n  agent-egress-proxy:", 1
+        )[0]
+        assert "HTTP_PROXY: http://agent-egress-proxy:3128" in worker_section
+        assert "HTTPS_PROXY: http://agent-egress-proxy:3128" in worker_section
         proxy_section = compose.split("\n  agent-egress-proxy:", 1)[1].split(
             "\n  frontend:", 1
         )[0]

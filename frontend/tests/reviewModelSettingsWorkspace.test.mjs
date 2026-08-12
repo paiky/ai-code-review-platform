@@ -159,6 +159,10 @@ test('supports native Runtime edit, test and protected delete without exposing k
   assert.match(appSource, /const saveDynamicAgentRuntimeDetail = async/);
   assert.match(appSource, /const testDynamicAgentRuntime = async/);
   assert.match(appSource, /code-quality-agent-runtimes\/\$\{runtime\.runtimeCode\}\/test/);
+  assert.match(appSource, /buildTestAgentRuntimeRequest\(agentRuntimeDraft\)/);
+  assert.match(appSource, /不会保存连接/);
+  assert.doesNotMatch(appSource, /updateDynamicAgentRuntimeDraft\('enabled'/);
+  assert.match(appSource, /dirtyReviewConnectionId === selectedReviewConnectionId/);
   assert.match(appSource, /title="永久删除自定义 Agent Runtime"/);
   assert.match(appSource, /matchesAgentRuntimeDeleteConfirmation/);
   assert.match(appSource, /className="review-provider-danger-zone"/);

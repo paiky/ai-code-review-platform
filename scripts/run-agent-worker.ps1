@@ -78,11 +78,13 @@ function Write-AgentEgressProxyConfig {
         "hosts_file /etc/squid/hosts.windows",
         "",
         "acl CONNECT method CONNECT",
-        "acl SSL_ports port 443",
+        "acl SSL_ports port 1-65535",
+        "acl allowed_http_ports port 1-65535",
         "acl windows_backend dstdomain host.docker.internal",
         "acl windows_backend_port port 8090",
         "",
         "http_access allow CONNECT SSL_ports",
+        "http_access allow !CONNECT allowed_http_ports",
         "http_access allow windows_backend windows_backend_port",
         "http_access deny all",
         "",
@@ -106,8 +108,10 @@ function Write-AgentEgressProxyConfig {
         }
         $lines.Add("cache_peer $($uri.Host) parent $($uri.Port) 0 no-query default name=lan_upstream")
         $lines.Add("cache_peer_access lan_upstream allow CONNECT SSL_ports")
+        $lines.Add("cache_peer_access lan_upstream allow !CONNECT allowed_http_ports")
         $lines.Add("cache_peer_access lan_upstream deny all")
         $lines.Add("never_direct allow CONNECT SSL_ports")
+        $lines.Add("never_direct allow !CONNECT allowed_http_ports")
     }
 
     @(

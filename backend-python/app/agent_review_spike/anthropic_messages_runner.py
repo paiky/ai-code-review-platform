@@ -60,7 +60,7 @@ class HttpxAnthropicMessagesTransport:
             raise AnthropicMessagesAgentError("AGENT_CUSTOM_CONFIG_INCOMPLETE")
         parsed = urlparse(endpoint_url.strip())
         if (
-            parsed.scheme != "https"
+            parsed.scheme not in {"http", "https"}
             or not parsed.hostname
             or not parsed.path.rstrip("/").endswith("/messages")
             or parsed.username

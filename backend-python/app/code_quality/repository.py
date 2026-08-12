@@ -1102,11 +1102,11 @@ def create_standard_model_connection(
             400,
         )
     try:
-        endpoint_url = normalize_custom_base_url(request.get("baseUrl"))
+        endpoint_url = normalize_custom_base_url(request.get("baseUrl"), require_https=True)
     except AppError as exception:
         raise AppError(
             "VALIDATION_ERROR",
-            "baseUrl must be a safe HTTPS URL without credentials, query, fragment, IP, or custom port",
+            "baseUrl must be an HTTPS URL without credentials, query, or fragment; IP and custom ports are supported",
             400,
         ) from exception
     model_name = str(request.get("model") or "").strip()

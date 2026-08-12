@@ -319,17 +319,26 @@ def test_http_transport_forwards_explicit_tls_verification_setting(monkeypatch):
 @pytest.mark.parametrize(
     "endpoint",
     [
-        "http://relay.example/v1/responses",
+        "ftp://relay.example/v1/responses",
         "https://relay.example/v1/chat/completions",
         "https://user:secret@relay.example/v1/responses",
         "https://relay.example/v1/responses?debug=true",
     ],
 )
-def test_http_transport_requires_safe_https_responses_endpoint(endpoint):
+def test_http_transport_requires_safe_http_or_https_responses_endpoint(endpoint):
     with pytest.raises(ResponsesAgentError) as captured:
         HttpxResponsesTransport(endpoint, "synthetic-key")
 
     assert captured.value.code == "AGENT_CUSTOM_CONFIG_INCOMPLETE"
+
+
+def test_http_transport_accepts_plain_http_responses_endpoint():
+    transport = HttpxResponsesTransport(
+        "http://127.0.0.1:8080/v1/responses",
+        "synthetic-key",
+    )
+
+    assert transport.endpoint_url == "http://127.0.0.1:8080/v1/responses"
 
 
 def test_responses_runner_tool_budget_and_review_schema_are_shared(worktree):

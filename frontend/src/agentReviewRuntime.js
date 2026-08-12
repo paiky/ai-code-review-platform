@@ -37,8 +37,8 @@ export function validateAgentRuntimeDraft(draft, settings) {
     if (!String(custom.baseUrl || '').trim()) return '请填写自定义中转站 Base URL';
     try {
       const url = new URL(String(custom.baseUrl).trim());
-      if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || (url.port && url.port !== '443')) {
-        return 'Base URL 必须是无凭据、查询参数和自定义端口的 HTTPS 地址';
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+        return 'Base URL 必须是无凭据、查询参数和片段的 HTTP 或 HTTPS 地址';
       }
     } catch {
       return 'Base URL 格式不正确';

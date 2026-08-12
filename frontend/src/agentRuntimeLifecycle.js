@@ -77,7 +77,7 @@ export function validateAgentRuntimeDraft(draft, { creating = false, apiKeyConfi
   if (!baseUrl || baseUrl.length > 1024) return 'Base URL 长度必须为 1～1024 个字符';
   if (!model || model.length > 128) return '模型名称长度必须为 1～128 个字符';
   if (apiKey.length > 1024) return 'API Key 最多 1024 个字符';
-  if (draft?.enabled && !apiKey && !apiKeyConfigured) return '启用 Runtime 时必须填写 API Key';
+  if (!apiKey && !apiKeyConfigured) return '请填写 Agent Runtime API Key';
   if (protocol === 'OPENAI_RESPONSES' && !['low', 'medium', 'high'].includes(draft?.reasoningEffort)) {
     return '请选择有效的推理强度';
   }
@@ -105,7 +105,19 @@ export function buildUpdateAgentRuntimeRequest(draft) {
     baseUrl: text(draft?.baseUrl),
     model: text(draft?.model),
     tlsVerify: draft?.tlsVerify !== false,
-    enabled: draft?.enabled === true
+    enabled: true
+  };
+  if (draft?.protocol === 'OPENAI_RESPONSES') request.reasoningEffort = draft?.reasoningEffort;
+  const apiKey = text(draft?.apiKey);
+  if (apiKey) request.apiKey = apiKey;
+  return request;
+}
+
+export function buildTestAgentRuntimeRequest(draft) {
+  const request = {
+    baseUrl: text(draft?.baseUrl),
+    model: text(draft?.model),
+    tlsVerify: draft?.tlsVerify !== false
   };
   if (draft?.protocol === 'OPENAI_RESPONSES') request.reasoningEffort = draft?.reasoningEffort;
   const apiKey = text(draft?.apiKey);

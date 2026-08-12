@@ -187,7 +187,7 @@ def test_unified_agent_connection_validates_key_preset_url_capability(
             protocol="ANTHROPIC_MESSAGES",
         ),
     )
-    unsafe_url = client.post(
+    http_url = client.post(
         "/api/review-model-connections",
         json=_connection_payload(
             preset_code="AGENT_OPENAI",
@@ -211,7 +211,8 @@ def test_unified_agent_connection_validates_key_preset_url_capability(
     assert empty_key.status_code == 400
     assert mismatch.status_code == 400
     assert mismatch.json()["code"] == "REVIEW_MODEL_PRESET_PROTOCOL_MISMATCH"
-    assert unsafe_url.status_code == 400
+    assert http_url.status_code == 200
+    assert http_url.json()["data"]["baseUrl"] == "http://127.0.0.1/v1"
     assert unavailable_runner.status_code == 409
     assert unavailable_runner.json()["code"] == "AGENT_RUNTIME_RUNNER_UNAVAILABLE"
     assert client_identity.status_code == 400

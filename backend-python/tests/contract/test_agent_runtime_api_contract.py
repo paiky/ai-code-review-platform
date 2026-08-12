@@ -285,10 +285,20 @@ def test_runtime_create_derives_runner_and_does_not_enable_select_or_test(
 
     unsafe_url = client.post(
         "/api/code-quality-agent-runtimes",
-        json={**_runtime_payload("UNSAFE_URL"), "baseUrl": "http://127.0.0.1/v1"},
+        json={**_runtime_payload("UNSAFE_URL"), "baseUrl": "ftp://127.0.0.1/v1"},
     )
     assert unsafe_url.status_code == 400
     assert unsafe_url.json()["code"] == "VALIDATION_ERROR"
+
+    ip_relay = client.post(
+        "/api/code-quality-agent-runtimes",
+        json={
+            **_runtime_payload("IP_RELAY"),
+            "baseUrl": "http://127.0.0.1:8080/v1/",
+        },
+    )
+    assert ip_relay.status_code == 200, ip_relay.text
+    assert ip_relay.json()["data"]["baseUrl"] == "http://127.0.0.1:8080/v1"
 
 
 def test_runtime_update_preserves_rotates_and_explicitly_clears_key(
@@ -804,6 +814,68 @@ def test_non_current_runtime_configuration_test_claim_and_callback_contract(
     assert "runtime-secret" not in str(runtime_item)
 
 
+def test_runtime_configuration_test_uses_unsaved_draft_without_mutating_connection(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    _configure_worker(client, monkeypatch)
+    runtime_code = "DRAFT_RELAY"
+    assert client.post(
+        "/api/code-quality-agent-runtimes",
+        json=_runtime_payload(runtime_code),
+    ).status_code == 200
+
+    requested = client.post(
+        f"/api/code-quality-agent-runtimes/{runtime_code}/test",
+        json={
+            "baseUrl": "http://127.0.0.1:18080/v2/",
+            "model": "draft-model",
+            "reasoningEffort": "medium",
+            "tlsVerify": False,
+            "apiKey": "draft-only-secret",
+        },
+    )
+
+    assert requested.status_code == 200, requested.text
+    runtime = db_session.get(AgentReviewRuntime, runtime_code)
+    assert runtime.enabled is False
+    assert runtime.base_url == "https://relay.example.com/v1"
+    assert runtime.model_name == "gpt-5.6-sol"
+    assert runtime.reasoning_effort == "high"
+    assert runtime.tls_verify is True
+    assert "draft-only-secret" not in str(runtime.test_api_key_ciphertext)
+
+    claimed = client.post(
+        "/internal/agent-review/jobs/claim",
+        headers={"X-Agent-Worker-Token": "runtime-worker-token"},
+        json={"workerId": "runtime-worker"},
+    ).json()["data"]
+    assert claimed["runtime"]["baseUrl"] == "http://127.0.0.1:18080/v2"
+    assert claimed["runtime"]["model"] == "draft-model"
+    assert claimed["runtime"]["reasoningEffort"] == "medium"
+    assert claimed["runtime"]["tlsVerify"] is False
+    assert claimed["runtime"]["apiKey"] == "draft-only-secret"
+
+    completed = client.post(
+        "/internal/agent-review/configuration-test/complete",
+        headers={"X-Agent-Worker-Token": "runtime-worker-token"},
+        json={
+            "workerId": "runtime-worker",
+            "requestId": claimed["requestId"],
+            "status": "SUCCESS",
+            "message": "draft synthetic review completed",
+            "durationMs": 12,
+        },
+    )
+    assert completed.status_code == 200
+    db_session.expire_all()
+    runtime = db_session.get(AgentReviewRuntime, runtime_code)
+    assert runtime.base_url == "https://relay.example.com/v1"
+    assert runtime.test_runtime_snapshot_json is None
+    assert runtime.test_api_key_ciphertext is None
+
+
 def test_runtime_configuration_test_timeout_stale_callback_and_worker_gate(
     client: TestClient,
     db_session: Session,
@@ -858,11 +930,16 @@ def test_runtime_configuration_test_timeout_stale_callback_and_worker_gate(
     runtime = db_session.get(AgentReviewRuntime, runtime_code)
     assert runtime.test_status == "FAILED"
     assert "disabled" in runtime.test_message
-    disabled = client.post(
+    disabled_draft_test = client.post(
         f"/api/code-quality-agent-runtimes/{runtime_code}/test"
     )
-    assert disabled.status_code == 409
-    assert disabled.json()["code"] == "AGENT_RUNTIME_DISABLED"
+    assert disabled_draft_test.status_code == 200
+    assert disabled_draft_test.json()["data"]["status"] == "QUEUED"
+    runtime = db_session.get(AgentReviewRuntime, runtime_code)
+    runtime.test_status = "FAILED"
+    runtime.test_message = "draft test cancelled for worker gate assertion"
+    runtime.test_runtime_snapshot_json = None
+    runtime.test_api_key_ciphertext = None
 
     runtime.enabled = True
     capable_worker = db_session.get(AgentReviewWorker, "runtime-worker")

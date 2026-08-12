@@ -14,6 +14,15 @@
 - 默认行为：数据库迁移、首次部署和未选择自定义配置时，仍使用 `Claude Code + DeepSeek`；不得自动切换现有环境。
 - 当前停止点：**53 计划已完成并关闭**。用户已确认远程部署和验证通过；不再继续扩大样本、调整默认运行时、提高预算
   或增加 Provider。后续新增需求应作为独立专项启动。
+- 2026-08-12 局部修复：自定义 Agent Base URL 支持 HTTP / HTTPS、IPv4、IPv6 和自定义端口，
+  便于连接本机或内网中转站；仍不接受 userinfo、query、fragment 和通配域名。普通 Standard Review
+  模型连接不在本次放宽范围内，仍要求 HTTPS。
+- 2026-08-12 连接编辑交互优化（改动量等级：中——涉及前端表单、配置测试 API、Worker Claim 快照与数据库
+  短期密文字段，但不改变 Review 主链路和对外结果 schema）：连接详情只保留“Agent Review”全局开关，
+  去掉单个 Runtime 的可见“启用”开关；保存有效连接时内部标记为可用。“测试配置”可直接使用当前
+  表单草稿中的 Base URL、模型、推理强度、TLS 选项和新 Key；测试草稿不覆盖已保存的连接、不切换当前
+  Runtime，临时 Key 仅以加密形式等待 Worker 领取，完成或超时后清理。验收为草稿测试 Claim 使用新值而
+  Runtime 持久化配置保持不变，且保存、清 Key、当前连接与全局开关回归通过。
 
 ## 2. 需求背景与现状
 
@@ -123,7 +132,7 @@ sequenceDiagram
 - 设置、配置测试、Worker 心跳/能力、Job Claim 和 Run 结果契约；
 - 受控 Responses 多轮 function tool 循环；
 - 复用现有五个只读工具、Review Card schema、运行预算、安全轨迹和 STANDARD fallback；
-- Windows 与 Linux Agent Worker 的 HTTPS 443 受限出站配置；
+- Windows 与 Linux Agent Worker 的自定义 HTTP / HTTPS 中转站出站配置；
 - React 设置页条件展示、保存、测试、清除和状态反馈；
 - 对应数据库迁移、运行时兼容补列、Backend/Worker/Frontend 测试和部署说明。
 
@@ -303,7 +312,8 @@ PUT /api/code-quality-reviews/agent-settings
 - 现有顶层 `apiKey/clearApiKey` 在兼容期仍只操作 DeepSeek Key；
 - `selectedRuntime` 切换不得修改两个 Key 槽位；
 - 允许在 `enabled=false` 时保存尚未完成的自定义草稿；启用或选择自定义运行时执行测试前必须配置完整；
-- Base URL 只接受 HTTPS，不接受 userinfo、query、fragment、IP literal 和通配域名；去除末尾 `/` 后保存；
+- Base URL 接受 HTTP 或 HTTPS，支持域名、IPv4 / IPv6 literal 和自定义端口，便于接入自建、本机或内网中转站；
+  仍不接受 userinfo、query、fragment 和通配域名，去除末尾 `/` 后保存；
 - 请求路径由 Runner 固定追加 `/responses`。如果用户填写 `.../v1`，实际调用为 `.../v1/responses`；
 - Base URL 通过上述安全 URL 校验后即作为页面管理的唯一模型目标，不再要求环境变量白名单；
 - 模型名长度不超过 128，不把前端候选列表当作中转站真实模型目录；
@@ -470,13 +480,13 @@ AGENT_CUSTOM_TOOL_CALL_INVALID
 
 阶段四按用户确认移除 `AGENT_REVIEW_CUSTOM_EGRESS_HOSTS` 环境白名单，以设置页保存的 Base URL 为唯一模型目标：
 
-- Backend 仅接受 HTTPS、默认 443、合法 DNS hostname，拒绝 IP literal、通配符、userinfo、query、fragment 和
-  自定义端口；
+- Backend 对自定义 Agent Base URL 接受 HTTP / HTTPS、DNS hostname、IPv4 / IPv6 和自定义端口，
+  拒绝通配符、userinfo、query 和 fragment；普通 Standard Review 模型连接仍仅接受 HTTPS；
 - Base URL、模型和运行时固化进 Job 快照，Worker 不接受任务外临时 URL，也不向模型开放网络工具；
-- Windows 与 Linux Squid 仅允许 CONNECT 443；Windows 另允许 `host.docker.internal:8090` 回连本地 Backend，
-  普通 HTTP 和其它端口仍被拒绝；
+- Windows 与 Linux Squid 允许 HTTPS CONNECT 443 及非 CONNECT 的 HTTP 1-65535 端口；Windows 另允许
+  `host.docker.internal:8090` 回连本地 Backend；
 - 设置页保存新 Base URL 后无需重建或重启 Backend、代理和 Worker；
-- 该选择扩大了代理可连接的 443 hostname 范围，安全边界从“运维域名白名单”调整为“页面权限 + Backend URL 校验
+- 该选择扩大了代理可连接的目标与端口范围，安全边界从“运维域名白名单”调整为“页面权限 + Backend URL 校验
   + 任务快照 + Worker 无网络工具”。
 
 ### 9.2 凭据与数据
@@ -485,6 +495,8 @@ AGENT_CUSTOM_TOOL_CALL_INVALID
 - Key 不进入环境文件、Compose、镜像层、命令参数、Prompt、日志、progress、Run 或前端状态；
 - Runner 只构造标准 `Authorization: Bearer`，首版不开放任意 Header，避免把设置页变成通用 SSRF/凭据转发器；
 - Base URL 不允许 query 和 userinfo，防止凭据或租户 token 被嵌入 URL 并写入快照；
+- 使用 HTTP 时 API Key、源码片段和 diff 不具备传输加密，只应配置在用户明确信任且网络边界受控的
+  本机或内网中转站；公网中转站仍应使用 HTTPS；
 - 继续沿用项目组源码外发授权。自定义中转站属于新的数据接收方，首次启用时页面必须明确提示源码片段和 diff
   会发送到该 Base URL；
 - 不保存模型 reasoning、原始 Responses payload 或中转站响应正文；
@@ -989,8 +1001,9 @@ Frontend：
 
 部署与安全：
 
-- Windows 与 Linux 代理仅允许 HTTPS CONNECT 443，实际目标来自任务固化的页面 Base URL；
-- Backend 拒绝 IP、通配符、userinfo、query、fragment、自定义端口和非 HTTPS URL，代理拒绝非 443 CONNECT；
+- Windows 与 Linux Worker 均通过受限 Squid 出站；代理允许 HTTP 转发和 HTTPS CONNECT 的有效端口，实际目标来自
+  任务固化的页面 Base URL；
+- Backend 接受 HTTP/HTTPS、IP 和自定义端口，仍拒绝通配符、userinfo、query 和 fragment；
 - 容器仍为 read-only、非 root、无 Docker socket、无数据库/GitLab/普通 Provider Key；
 - 打包产物和 `.env.example` 不包含真实 Base URL 或 Key。
 
@@ -1024,3 +1037,17 @@ Frontend：
 本需求可行，推荐实施，但应按“**默认 Claude + DeepSeek、单一自定义 OpenAI Responses Agent、先协议 Spike、
 再配置闭环、完成数据库隔离与版本迁移治理、最后小任务真实验证**”推进。不能把一次聊天接口连通当成 Agent 可用，
 也不能为了支持任意 Base URL 放宽现有五工具、双重预算、Key 加密、源码授权、受限出站和显式 fallback 边界。
+
+## 15. HTTP 中转站远程 Compose 修复（2026-08-12）
+
+- 改动量等级：小。依据是仅修复 Linux Compose 的 Worker 代理环境契约并同步部署说明，不改变 API、数据库或页面契约；
+- 问题：Windows Worker 已同时注入 `HTTP_PROXY` / `HTTPS_PROXY`，但 Linux `docker-compose.yml` 与离线
+  `docker-compose.runtime.yml` 仅注入 `HTTPS_PROXY`。HTTP Base URL 会绕过 Squid，而 Worker 只加入 internal 网络，
+  因此远程部署无法访问 HTTP 中转站；
+- 修复：Linux Worker 同时注入 `HTTP_PROXY` / `HTTPS_PROXY`，Squid 对普通 HTTP 和 HTTPS CONNECT 均按目标地址
+  直接出站。`AGENT_REVIEW_UPSTREAM_PROXY` 仍只属于 Windows 本地启动脚本，不进入 Linux runtime；
+- 部署：必须先加载包含新版 Worker/代理与 runtime Compose 的离线版本，再执行
+  `./deploy-stage3.sh upgrade --workers N`。仅修改远程 `.env` 或重启旧版 Worker 不能补齐旧 Compose 缺失的
+  `HTTP_PROXY`；
+- 验收：三套 Compose 的 Agent Worker 都必须同时包含两个代理变量，Squid 配置必须允许 HTTP 与 HTTPS 自定义端口，
+  然后执行 Compose/单元契约检查及远程 synthetic 配置测试。

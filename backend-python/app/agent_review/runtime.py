@@ -48,29 +48,46 @@ def normalize_runtime_type(value: Any, *, strict: bool = False) -> str:
     return DEFAULT_RUNTIME
 
 
-def normalize_custom_base_url(value: Any) -> str:
+def normalize_custom_base_url(value: Any, *, require_https: bool = False) -> str:
     text = str(value or "").strip().rstrip("/")
     if not text or len(text) > 1024:
         raise AppError("VALIDATION_ERROR", "customRuntime.baseUrl is required", 400)
-    parsed = urlparse(text)
-    hostname = str(parsed.hostname or "").casefold()
+    try:
+        parsed = urlparse(text)
+        hostname = str(parsed.hostname or "").casefold()
+        port = parsed.port
+    except ValueError:
+        raise AppError(
+            "VALIDATION_ERROR",
+            "customRuntime.baseUrl must be an HTTP or HTTPS URL without credentials, query, or fragment",
+            400,
+        ) from None
+    scheme = parsed.scheme.casefold()
+    allowed_schemes = {"https"} if require_https else {"http", "https"}
     if (
-        parsed.scheme != "https"
+        scheme not in allowed_schemes
         or not hostname
         or parsed.username
         or parsed.password
+        or parsed.params
         or parsed.query
         or parsed.fragment
-        or parsed.port not in {None, 443}
-        or not _valid_hostname(hostname)
+        or not _valid_endpoint_host(hostname)
     ):
         raise AppError(
             "VALIDATION_ERROR",
-            "customRuntime.baseUrl must be a safe HTTPS URL without credentials, query, fragment, IP, or custom port",
+            (
+                "baseUrl must be an HTTPS URL without credentials, query, or fragment"
+                if require_https
+                else "customRuntime.baseUrl must be an HTTP or HTTPS URL without credentials, query, or fragment"
+            ),
             400,
         )
     path = parsed.path.rstrip("/")
-    return f"https://{hostname}{path}"
+    host = f"[{hostname}]" if _is_ipv6_address(hostname) else hostname
+    default_port = 443 if scheme == "https" else 80
+    authority = f"{host}:{port}" if port not in {None, default_port} else host
+    return f"{scheme}://{authority}{path}"
 
 
 def custom_base_url_host(value: Any) -> str | None:
@@ -202,11 +219,18 @@ def runtime_snapshot(record: Any) -> dict[str, Any]:
     }
 
 
-def _valid_hostname(value: str) -> bool:
-    if not value or "*" in value or not _HOSTNAME.fullmatch(value):
+def _valid_endpoint_host(value: str) -> bool:
+    if not value or "*" in value or "%" in value:
         return False
     try:
         ipaddress.ip_address(value)
-        return False
+        return True
     except ValueError:
-        return "." in value
+        return bool(_HOSTNAME.fullmatch(value) and "." in value)
+
+
+def _is_ipv6_address(value: str) -> bool:
+    try:
+        return ipaddress.ip_address(value).version == 6
+    except ValueError:
+        return False

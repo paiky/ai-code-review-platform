@@ -433,9 +433,9 @@ AGENT_REVIEW_BACKEND_URL=http://backend:8090
 AGENT_REVIEW_WORKER_ID=agent-worker-1
 ```
 
-自定义 OpenAI Responses Agent 的目标地址以设置页保存的 Base URL 为准，不再需要额外环境白名单。Backend 仍只接受
-HTTPS 默认 443 的 DNS hostname，拒绝 IP、通配符、userinfo、query、fragment 和自定义端口；Worker 代理仅允许
-CONNECT 443 和本地 Backend 8090，不开放其它端口或普通 HTTP 外联。默认 `Claude Code + DeepSeek` 行为不变。
+自定义 OpenAI Responses Agent 的目标地址以设置页保存的 Base URL 为准，不再需要额外环境白名单。Backend 接受
+HTTP/HTTPS、IP 和自定义端口，拒绝通配符、userinfo、query 和 fragment；Worker 仍通过隔离的 Squid 出站，代理允许
+普通 HTTP 和 HTTPS CONNECT 的有效端口。默认 `Claude Code + DeepSeek` 行为不变。
 
 生成密钥：
 
@@ -469,9 +469,8 @@ Windows 本地开发可直接初始化这两个基础密钥（不会生成或读
 .\scripts\run-agent-worker.ps1 stop
 ```
 
-Windows 专用代理只允许 Worker 访问 `host.docker.internal:8090` 和 HTTPS `443`；实际模型目标由当前任务中固化的
-设置页 Base URL 决定，Worker 自身仍只加入 internal 网络。若后端使用非 `8090` 端口，当前代理不会放行，应先统一回
-默认端口，而不是扩大代理端口范围。
+Windows 专用代理只允许 Worker 访问 `host.docker.internal:8090`，以及设置页 Base URL 指向的 HTTP/HTTPS 目标；
+Worker 自身仍只加入 internal 网络。若后端使用非 `8090` 端口，当前代理不会放行，应先统一回默认端口。
 
 需要通过局域网 HTTP 代理访问 DeepSeek 时，在本机 `.local/gitlab.env` 设置：
 
@@ -507,6 +506,19 @@ docker compose logs --tail=100 agent-worker
 ```
 
 默认目录映射：宿主机 `runtime/review-workspaces`，backend 容器 `/app/.local/review-workspaces`，Worker 容器 `/workspaces:ro`。`docker compose ps` 中 Worker 健康且设置页显示 `Worker ONLINE` 后，才执行真实配置测试。
+
+Linux runtime 会同时向 Worker 注入 `HTTP_PROXY` 和 `HTTPS_PROXY`，两者都指向项目自带的 `agent-egress-proxy`。
+该代理在服务器上直接访问中转站，不读取 Windows 本地专用的 `AGENT_REVIEW_UPSTREAM_PROXY`。因此远程 Agent Runtime
+使用 HTTP 中转站时不需要删除 `.env` 中的 `CODE_QUALITY_REVIEW_PROXY`；该变量只控制 Backend 的普通 Provider 请求。
+
+升级 HTTP 中转站支持时，先通过离线包的 `load-images.sh` 加载新镜像并更新 runtime Compose/`APP_VERSION`，再执行：
+
+```bash
+./deploy-stage3.sh upgrade --workers 2
+```
+
+该命令会等待 Agent 队列清空、短暂暂停 Agent Review、更新 Backend 与代理、恢复两个 Worker、更新 Frontend，最后恢复
+原启用状态。只在旧 runtime 中删除代理变量或重启旧 Worker 不会补齐旧 Compose 缺失的 `HTTP_PROXY`。
 
 Windows 自动启动配置不会进入远程 runtime，也不会改变原离线部署步骤。`scripts/package-docker-deploy.ps1` 仍会打包 backend、frontend、Agent Worker、出站代理和 Linux `docker-compose.runtime.yml`；服务器仍按“加载镜像 -> 维护 runtime/.env -> docker compose up -d”部署。
 

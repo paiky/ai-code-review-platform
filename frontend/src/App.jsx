@@ -182,6 +182,7 @@ import {
 } from './reviewModelConnections.js';
 import {
   agentRuntimeDeleteAvailability,
+  buildTestAgentRuntimeRequest,
   buildUpdateAgentRuntimeRequest,
   createAgentRuntimeDraft,
   matchesAgentRuntimeDeleteConfirmation,
@@ -8188,11 +8189,12 @@ function TemplateConfig() {
 
   useEffect(() => {
     if (!selectedReviewConnectionId?.startsWith('AGENT:')) return;
+    if (dirtyReviewConnectionId === selectedReviewConnectionId) return;
     const runtimeCode = selectedReviewConnectionId.slice('AGENT:'.length);
     const runtime = agentRuntimes.find(item => item.runtimeCode === runtimeCode) || null;
     setAgentRuntimeDraft(createAgentRuntimeDraft(runtime));
     setAgentSettingsTestResult(runtime?.configurationTest || null);
-  }, [agentRuntimes, selectedReviewConnectionId]);
+  }, [agentRuntimes, dirtyReviewConnectionId, selectedReviewConnectionId]);
 
   useEffect(() => {
     if (!selectedReviewConnectionId?.startsWith('STANDARD:')) return;
@@ -8517,7 +8519,7 @@ function TemplateConfig() {
     try {
       const body = runtime.builtIn
         ? {
-          enabled: agentRuntimeDraft.enabled === true,
+          enabled: true,
           ...(String(agentRuntimeDraft.apiKey || '').trim()
             ? { apiKey: String(agentRuntimeDraft.apiKey).trim() }
             : {})
@@ -8553,7 +8555,7 @@ function TemplateConfig() {
         runtimeItems.find(item => item.runtimeCode === runtime.runtimeCode) || updated
       ));
       setDirtyReviewConnectionId(null);
-      messageApi.success('Agent Runtime Key 已清除，连接已停用');
+      messageApi.success('Agent Runtime Key 已清除');
     } catch (err) {
       messageApi.error(err.message);
     } finally {
@@ -8562,11 +8564,27 @@ function TemplateConfig() {
   };
 
   const testDynamicAgentRuntime = async runtime => {
-    if (!runtime || agentSettingsTesting || dirtyReviewConnectionId === runtime.id) return;
+    if (!runtime || agentSettingsTesting || agentSettingsSaving) return;
+    const validationError = runtime.builtIn
+      ? (!String(agentRuntimeDraft.apiKey || '').trim() && !runtime.apiKeyConfigured
+        ? '请填写 Agent Runtime API Key'
+        : null)
+      : validateDynamicAgentRuntimeDraft(agentRuntimeDraft, {
+        apiKeyConfigured: runtime.apiKeyConfigured
+      });
+    if (validationError) {
+      messageApi.error(validationError);
+      return;
+    }
     setAgentSettingsTesting(true);
     try {
       const result = await fetchApi(`/api/code-quality-agent-runtimes/${runtime.runtimeCode}/test`, {
-        method: 'POST'
+        method: 'POST',
+        body: JSON.stringify(runtime.builtIn
+          ? (String(agentRuntimeDraft.apiKey || '').trim()
+            ? { apiKey: String(agentRuntimeDraft.apiKey).trim() }
+            : {})
+          : buildTestAgentRuntimeRequest(agentRuntimeDraft))
       });
       setAgentSettingsTestResult(result);
       setAgentRuntimes(current => current.map(item => (
@@ -8574,7 +8592,7 @@ function TemplateConfig() {
           ? { ...item, configurationTest: result }
           : item
       )));
-      messageApi.info('Agent Runtime 配置测试已进入队列');
+      messageApi.info('当前表单配置已进入测试队列，不会保存连接');
     } catch (err) {
       setAgentSettingsTesting(false);
       setAgentSettingsTestResult({
@@ -8856,8 +8874,8 @@ function TemplateConfig() {
         icon={<KeyOutlined />}
         title={activeReviewConnection.name}
         description={activeRuntimeSettings?.builtIn
-          ? '内置 Runtime 的连接参数固定，只维护独立 Key 和启用状态。'
-          : '编辑动态 Agent Runtime；配置、Key、测试状态与其它连接独立保存。'}
+          ? '内置 Runtime 的连接参数固定，只维护独立 Key。'
+          : '编辑动态 Agent Runtime；可直接测试当前表单草稿，无需先保存连接。'}
         tags={(
           <Space wrap>
             <Tag color={activeReviewConnection.isCurrent ? 'purple' : 'default'}>
@@ -8917,7 +8935,7 @@ function TemplateConfig() {
           <Input
             value={agentRuntimeDraft.baseUrl}
             disabled={activeRuntimeSettings?.builtIn || agentSettingsSaving}
-            placeholder="https://relay.example.com/v1"
+            placeholder="http://192.168.1.10:8080/v1"
             onChange={event => updateDynamicAgentRuntimeDraft('baseUrl', event.target.value)}
           />
         </Col>
@@ -8954,13 +8972,6 @@ function TemplateConfig() {
         </Col>
         <Col xs={24}>
           <Space wrap>
-            <Switch
-              checked={agentRuntimeDraft.enabled}
-              disabled={agentSettingsSaving}
-              checkedChildren="启用"
-              unCheckedChildren="停用"
-              onChange={checked => updateDynamicAgentRuntimeDraft('enabled', checked)}
-            />
             {!activeRuntimeSettings?.builtIn && (
               <>
                 <Switch
@@ -8993,7 +9004,7 @@ function TemplateConfig() {
         <Space wrap>
           <Button
             loading={agentSettingsTesting}
-            disabled={Boolean(dirtyReviewConnectionId) || !activeRuntimeSettings?.enabled || agentSettingsSaving}
+            disabled={Boolean(activeRuntimeError) || !activeRuntimeSettings?.protocolAvailable || agentSettingsSaving}
             onClick={() => testDynamicAgentRuntime(activeRuntimeSettings)}
           >
             测试配置

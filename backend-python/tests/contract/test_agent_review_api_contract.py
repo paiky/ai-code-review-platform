@@ -257,10 +257,11 @@ def test_agent_settings_keep_default_and_custom_key_slots_independent(
 @pytest.mark.parametrize(
     "base_url",
     [
-        "http://relay.example.com/v1",
-        "https://127.0.0.1/v1",
+        "ftp://relay.example.com/v1",
         "https://user:secret@relay.example.com/v1",
         "https://relay.example.com/v1?tenant=secret",
+        "https://relay.example.com/v1#secret",
+        "https://relay.example.com:invalid/v1",
     ],
 )
 def test_custom_agent_settings_reject_unsafe_base_urls(
@@ -278,6 +279,31 @@ def test_custom_agent_settings_reject_unsafe_base_urls(
     assert response.status_code == 400
     assert response.json()["code"] == "VALIDATION_ERROR"
     assert "secret" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("base_url", "normalized"),
+    [
+        ("http://127.0.0.1:8080/v1/", "http://127.0.0.1:8080/v1"),
+        ("https://127.0.0.1:8443/v1/", "https://127.0.0.1:8443/v1"),
+        ("https://[2001:db8::1]:9443/v1/", "https://[2001:db8::1]:9443/v1"),
+    ],
+)
+def test_custom_agent_settings_accept_ip_and_custom_port_base_urls(
+    client: TestClient, monkeypatch, base_url: str, normalized: str
+) -> None:
+    _configure(monkeypatch)
+    response = client.put(
+        "/api/code-quality-reviews/agent-settings",
+        json={
+            "enabled": False,
+            "selectedRuntime": "OPENAI_RESPONSES_CUSTOM",
+            "customRuntime": {"baseUrl": base_url},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["customRuntime"]["baseUrl"] == normalized
 
 
 def test_custom_agent_settings_reject_non_boolean_tls_verify(

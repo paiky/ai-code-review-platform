@@ -126,9 +126,17 @@ def set_current_runtime(db: Session, runtime_code: str) -> dict[str, Any]:
         raise
 
 
-def test_runtime(db: Session, runtime_code: str) -> dict[str, Any]:
+def test_runtime(
+    db: Session,
+    runtime_code: str,
+    request: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     try:
-        response = repository.request_runtime_configuration_test(db, runtime_code)
+        response = repository.request_runtime_configuration_test(
+            db,
+            runtime_code,
+            request or {},
+        )
         db.commit()
         return response
     except Exception:

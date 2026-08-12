@@ -4,7 +4,11 @@ from fastapi import APIRouter, Depends, Header
 from sqlalchemy.orm import Session
 
 from app.agent_review import service
-from app.agent_review.schemas import CreateAgentRuntimeRequest, UpdateAgentRuntimeRequest
+from app.agent_review.schemas import (
+    CreateAgentRuntimeRequest,
+    TestAgentRuntimeRequest,
+    UpdateAgentRuntimeRequest,
+)
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import AppError
@@ -65,9 +69,16 @@ async def set_current_agent_runtime(
 @runtime_router.post("/{runtime_code}/test")
 async def test_agent_runtime(
     runtime_code: str,
+    request: TestAgentRuntimeRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict:
-    return ok(service.test_runtime(db, runtime_code))
+    return ok(
+        service.test_runtime(
+            db,
+            runtime_code,
+            request.model_dump(by_alias=True, exclude_unset=True) if request else {},
+        )
+    )
 
 
 def require_worker_token(

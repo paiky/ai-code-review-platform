@@ -1011,6 +1011,8 @@ def test_worker_compose_files_use_prefix_ids_and_registration_healthcheck() -> N
         )[0]
 
         assert "AGENT_REVIEW_WORKER_ID_PREFIX:" in worker_section
+        assert "HTTP_PROXY: http://agent-egress-proxy:3128" in worker_section
+        assert "HTTPS_PROXY: http://agent-egress-proxy:3128" in worker_section
         assert "app.agent_review.worker" in worker_section
         assert "--healthcheck" in worker_section
         assert "stop_grace_period: 930s" in worker_section

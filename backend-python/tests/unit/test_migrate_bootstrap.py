@@ -198,6 +198,20 @@ def test_agent_review_run_payload_capacity_migration_uses_longtext() -> None:
     assert "MODIFY COLUMN completion_context_json LONGTEXT NULL" in statements[0]
 
 
+def test_agent_runtime_draft_configuration_test_migration_adds_ephemeral_fields() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    sql = (
+        repository_root
+        / "backend-python/migrations/bootstrap_sql/V53__agent_runtime_draft_configuration_test.sql"
+    ).read_text(encoding="utf-8")
+
+    statements = split_sql_statements(sql)
+
+    assert len(statements) == 1
+    assert "ADD COLUMN test_runtime_snapshot_json TEXT NULL" in statements[0]
+    assert "ADD COLUMN test_api_key_ciphertext TEXT NULL" in statements[0]
+
+
 def test_agent_review_run_large_json_columns_use_mysql_longtext_variant() -> None:
     input_type = AgentReviewRun.__table__.c.input_json.type
     completion_context_type = AgentReviewRun.__table__.c.completion_context_json.type
@@ -416,8 +430,8 @@ def test_discover_migrations_is_contiguous_and_includes_checksums() -> None:
     migrations = discover_migrations()
 
     assert migrations[0].version == 1
-    assert migrations[-1].version == 52
-    assert [item.version for item in migrations] == list(range(1, 53))
+    assert migrations[-1].version == 53
+    assert [item.version for item in migrations] == list(range(1, 54))
     assert all(len(item.checksum) == 64 for item in migrations)
 
 

@@ -91,3 +91,21 @@ class UpdateAgentRuntimeRequest(BaseModel):
                 alias = type(self).model_fields[field_name].alias or field_name
                 raise ValueError(f"{alias} cannot be null")
         return self
+
+
+class TestAgentRuntimeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    base_url: str | None = Field(default=None, alias="baseUrl", min_length=1, max_length=1024)
+    model_name: str | None = Field(default=None, alias="model", min_length=1, max_length=128)
+    reasoning_effort: ReasoningEffort | None = Field(default=None, alias="reasoningEffort")
+    tls_verify: bool | None = Field(default=None, alias="tlsVerify")
+    api_key: str | None = Field(default=None, alias="apiKey", max_length=4096)
+
+    @field_validator("base_url", "model_name", "api_key", mode="before")
+    @classmethod
+    def normalize_text(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None

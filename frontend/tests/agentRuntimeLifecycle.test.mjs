@@ -6,6 +6,7 @@ import {
   agentProtocolOptionsForWorkerPool,
   agentRuntimeDeleteAvailability,
   buildCreateAgentRuntimeRequest,
+  buildTestAgentRuntimeRequest,
   buildUpdateAgentRuntimeRequest,
   createAgentRuntimeDraft,
   matchesAgentRuntimeDeleteConfirmation,
@@ -88,6 +89,14 @@ test('validates and builds create and update requests without inventing a runner
   const updated = buildUpdateAgentRuntimeRequest({ ...draft, apiKey: '' });
   assert.equal(Object.hasOwn(updated, 'apiKey'), false);
   assert.equal(Object.hasOwn(updated, 'runtimeCode'), false);
+  assert.equal(updated.enabled, true);
+  assert.deepEqual(buildTestAgentRuntimeRequest(draft), {
+    baseUrl: 'https://relay.example/v1',
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'high',
+    tlsVerify: true,
+    apiKey: 'secret'
+  });
 });
 
 test('rejects invalid, unavailable and incomplete Runtime drafts', () => {

@@ -37,13 +37,18 @@ test('normalizes and validates a custom Responses runtime draft', () => {
   const draft = normalizeAgentRuntimeDraft(settings);
   assert.equal(draft.customRuntime.tlsVerify, false);
   assert.equal(validateAgentRuntimeDraft({ ...draft, enabled: true }, settings), null);
+  assert.equal(validateAgentRuntimeDraft({
+    ...draft,
+    enabled: true,
+    customRuntime: { ...draft.customRuntime, baseUrl: 'http://127.0.0.1:8080/v1' }
+  }, settings), null);
   assert.match(
     validateAgentRuntimeDraft({
       ...draft,
       enabled: true,
-      customRuntime: { ...draft.customRuntime, baseUrl: 'http://127.0.0.1/v1' }
+      customRuntime: { ...draft.customRuntime, baseUrl: 'ftp://127.0.0.1/v1' }
     }, settings),
-    /HTTPS/
+    /HTTP 或 HTTPS/
   );
 });
 

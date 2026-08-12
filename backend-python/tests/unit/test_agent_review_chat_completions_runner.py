@@ -293,17 +293,26 @@ def test_chat_http_transport_does_not_leak_key_or_error_body(worktree, respx_moc
 @pytest.mark.parametrize(
     "endpoint",
     [
-        "http://relay.example/v1/chat/completions",
+        "ftp://relay.example/v1/chat/completions",
         "https://relay.example/v1/responses",
         "https://user:secret@relay.example/v1/chat/completions",
         "https://relay.example/v1/chat/completions?debug=true",
     ],
 )
-def test_chat_http_transport_requires_safe_https_endpoint(endpoint):
+def test_chat_http_transport_requires_safe_http_or_https_endpoint(endpoint):
     with pytest.raises(ChatCompletionsAgentError) as captured:
         HttpxChatCompletionsTransport(endpoint, "synthetic-key")
 
     assert captured.value.code == "AGENT_CUSTOM_CONFIG_INCOMPLETE"
+
+
+def test_chat_http_transport_accepts_plain_http_endpoint():
+    transport = HttpxChatCompletionsTransport(
+        "http://127.0.0.1:8080/v1/chat/completions",
+        "synthetic-key",
+    )
+
+    assert transport.endpoint_url == "http://127.0.0.1:8080/v1/chat/completions"
 
 
 def test_chat_synthetic_validation_uses_no_network_and_submits_review():

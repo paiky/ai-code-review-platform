@@ -151,6 +151,7 @@ def ensure_agent_review_schema(db: Session) -> None:
         AgentReviewWorker.__table__.create(connection, checkfirst=True)
         AgentReviewRun.__table__.create(connection, checkfirst=True)
         _ensure_settings_columns(db, inspector)
+        _ensure_runtime_columns(db, inspector)
         _ensure_worker_columns(db, inspector)
         _ensure_run_columns(db, inspector)
         _ensure_worker_indexes(db, inspector)
@@ -768,6 +769,8 @@ def _fail_active_runtime_configuration_test(
     runtime.test_message = _bounded(message, 512)
     runtime.test_duration_ms = None
     runtime.test_finished_at = now
+    runtime.test_runtime_snapshot_json = None
+    runtime.test_api_key_ciphertext = None
     runtime.updated_at = now
     return True
 
@@ -1435,6 +1438,7 @@ def request_configuration_test(db: Session) -> dict[str, Any]:
 def request_runtime_configuration_test(
     db: Session,
     runtime_code: str,
+    request: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _expire_runtime_configuration_tests(db)
     runtime = _get_agent_runtime(db, runtime_code, lock=True)
@@ -1444,7 +1448,50 @@ def request_runtime_configuration_test(
             f"Agent Runtime already has an active configuration test: {runtime.runtime_code}",
             409,
         )
-    _assert_selected_runtime_ready(db, runtime.runtime_code, require_worker=True)
+    request = request or {}
+    if runtime.built_in and any(
+        key in request for key in ("baseUrl", "model", "reasoningEffort", "tlsVerify")
+    ):
+        raise AppError(
+            "AGENT_RUNTIME_BUILT_IN_IMMUTABLE",
+            f"Built-in Agent Runtime test configuration is immutable: {runtime.runtime_code}",
+            409,
+        )
+    worker_pool = agent_worker_pool(db)
+    _assert_runtime_protocol_available(runtime.protocol, worker_pool, require_worker=True)
+    snapshot = runtime_record_snapshot(runtime)
+    if "baseUrl" in request:
+        snapshot["baseUrl"] = normalize_custom_base_url(request.get("baseUrl"))
+    if "model" in request:
+        snapshot["model"] = str(request.get("model") or "").strip()
+    if "reasoningEffort" in request:
+        if runtime.protocol != "OPENAI_RESPONSES":
+            raise AppError(
+                "VALIDATION_ERROR",
+                "reasoningEffort is only supported by OPENAI_RESPONSES",
+                400,
+            )
+        snapshot["reasoningEffort"] = str(request.get("reasoningEffort") or "").lower()
+    if "tlsVerify" in request:
+        snapshot["tlsVerify"] = request.get("tlsVerify") is not False
+    if not str(snapshot.get("baseUrl") or "").strip():
+        raise AppError("VALIDATION_ERROR", "baseUrl is required for configuration test", 400)
+    snapshot["baseUrl"] = normalize_custom_base_url(snapshot["baseUrl"])
+    if not str(snapshot.get("model") or "").strip():
+        raise AppError("VALIDATION_ERROR", "model is required for configuration test", 400)
+    if runtime.protocol == "OPENAI_RESPONSES" and snapshot.get("reasoningEffort") not in {
+        "low",
+        "medium",
+        "high",
+    }:
+        raise AppError("VALIDATION_ERROR", "reasoningEffort is invalid", 400)
+    test_api_key = str(request.get("apiKey") or "").strip()
+    if not test_api_key and not runtime.api_key_ciphertext:
+        raise AppError(
+            "AGENT_RUNTIME_CREDENTIAL_UNAVAILABLE",
+            f"Agent Runtime API Key is not configured: {runtime.runtime_code}",
+            409,
+        )
     now = utc_now()
     runtime.test_request_id = f"runtime-test:{runtime.runtime_code}:{uuid4().hex}"
     runtime.test_status = "QUEUED"
@@ -1452,6 +1499,10 @@ def request_runtime_configuration_test(
     runtime.test_duration_ms = None
     runtime.test_started_at = None
     runtime.test_finished_at = None
+    runtime.test_runtime_snapshot_json = json.dumps(snapshot, ensure_ascii=False)
+    runtime.test_api_key_ciphertext = (
+        encrypt_api_key(test_api_key)[0] if test_api_key else None
+    )
     runtime.updated_at = now
     settings = get_agent_settings_record(db)
     if settings.selected_runtime_code == runtime.runtime_code:
@@ -1480,7 +1531,6 @@ def claim_configuration_test(db: Session, *, worker_id: str) -> dict[str, Any] |
     statement = (
         select(AgentReviewRuntime)
         .where(AgentReviewRuntime.test_status == "QUEUED")
-        .where(AgentReviewRuntime.enabled.is_(True))
         .where(AgentReviewRuntime.runner_type.in_(supported_runners))
         .order_by(AgentReviewRuntime.updated_at.asc(), AgentReviewRuntime.runtime_code.asc())
         .limit(1)
@@ -1502,8 +1552,18 @@ def claim_configuration_test(db: Session, *, worker_id: str) -> dict[str, Any] |
     if settings.selected_runtime_code == runtime.runtime_code:
         _sync_runtime_test_to_legacy_settings(settings, runtime)
     db.commit()
-    snapshot = runtime_record_snapshot(runtime)
-    api_key = _decrypt_runtime_code_api_key(db, settings, runtime.runtime_code)
+    try:
+        draft_snapshot = json.loads(runtime.test_runtime_snapshot_json or "{}")
+    except json.JSONDecodeError:
+        draft_snapshot = {}
+    snapshot = (
+        draft_snapshot
+        if isinstance(draft_snapshot, dict) and draft_snapshot
+        else runtime_record_snapshot(runtime)
+    )
+    api_key = decrypt_api_key(
+        runtime.test_api_key_ciphertext or runtime.api_key_ciphertext
+    )
     return {
         "kind": "CONFIG_TEST",
         "requestId": runtime.test_request_id,
@@ -1548,8 +1608,11 @@ def complete_configuration_test(
     settings = get_agent_settings_record(db)
     if settings.selected_runtime_code == runtime.runtime_code:
         _sync_runtime_test_to_legacy_settings(settings, runtime)
+    response = _runtime_configuration_test_response(runtime)
+    runtime.test_runtime_snapshot_json = None
+    runtime.test_api_key_ciphertext = None
     db.commit()
-    return _runtime_configuration_test_response(runtime)
+    return response
 
 
 def create_agent_job(
@@ -2526,6 +2589,16 @@ def _ensure_settings_columns(db: Session, inspector) -> None:
             )
         )
         db.flush()
+
+
+def _ensure_runtime_columns(db: Session, inspector) -> None:
+    columns = {column["name"] for column in inspector.get_columns("code_quality_agent_runtimes")}
+    definitions = {
+        "test_runtime_snapshot_json": "TEXT NULL",
+        "test_api_key_ciphertext": "TEXT NULL",
+    }
+    for name, definition in definitions.items():
+        _add_column(db, columns, "code_quality_agent_runtimes", name, definition)
 
 
 def _ensure_worker_columns(db: Session, inspector) -> None:
