@@ -88,7 +88,8 @@ class CreateProviderRequest(BaseModel):
     reasoning_effort: ReasoningEffort | None = Field(default=None, alias="reasoningEffort")
     tls_verify: bool = Field(default=True, alias="tlsVerify")
     api_key: str | None = Field(default=None, alias="apiKey", max_length=1024)
-    enabled: bool = False
+    # Compatibility-only. Standard Providers are available by configuration completeness.
+    enabled: bool = True
 
     @field_validator("provider_code", mode="before")
     @classmethod
@@ -109,13 +110,7 @@ class CreateProviderRequest(BaseModel):
         return normalized or None
 
     @model_validator(mode="after")
-    def validate_enabled_configuration(self) -> "CreateProviderRequest":
+    def validate_protocol_configuration(self) -> "CreateProviderRequest":
         if self.reasoning_effort is not None and self.provider_type != "OPENAI_RESPONSES":
             raise ValueError("reasoningEffort is only supported by OPENAI_RESPONSES")
-        if self.enabled and not self.endpoint_url:
-            raise ValueError("endpointUrl is required when enabled is true")
-        if self.enabled and not self.model_name:
-            raise ValueError("modelName is required when enabled is true")
-        if self.enabled and not self.api_key:
-            raise ValueError("apiKey is required when enabled is true")
         return self

@@ -1,4 +1,28 @@
-export const DEFAULT_SETTINGS_ROUTE = '/settings/model-connections';
+export const AI_REVIEW_MODELS_ROUTE = '/settings/ai-review/models';
+export const AI_REVIEW_POLICIES_ROUTE = '/settings/ai-review/policies';
+export const DEFAULT_SETTINGS_ROUTE = AI_REVIEW_MODELS_ROUTE;
+
+export const AI_REVIEW_SETTINGS_TABS = Object.freeze([
+  {
+    key: 'models',
+    route: AI_REVIEW_MODELS_ROUTE,
+    label: '模型与运行',
+    contentKey: 'review-model-settings'
+  },
+  {
+    key: 'policies',
+    route: AI_REVIEW_POLICIES_ROUTE,
+    label: '策略与 Prompt',
+    contentKey: 'profile-settings'
+  }
+]);
+
+const SETTINGS_ROUTE_REDIRECTS = Object.freeze({
+  '/settings': DEFAULT_SETTINGS_ROUTE,
+  '/settings/ai-review': DEFAULT_SETTINGS_ROUTE,
+  '/settings/model-connections': AI_REVIEW_MODELS_ROUTE,
+  '/settings/review-profiles': AI_REVIEW_POLICIES_ROUTE
+});
 
 let activeSettingsNavigationGuard = null;
 let previousHistoryIndex = typeof window === 'undefined' ? null : window.history.state?.idx;
@@ -12,14 +36,9 @@ export const SETTINGS_SECTIONS = Object.freeze([
     label: '项目组 / 端类型配置'
   },
   {
-    key: 'profile-settings',
-    route: '/settings/review-profiles',
-    label: 'AI Review 配置'
-  },
-  {
-    key: 'review-model-settings',
+    key: 'ai-review-settings',
     route: DEFAULT_SETTINGS_ROUTE,
-    label: '模型连接与 Review 配置'
+    label: 'AI Review 配置'
   },
   {
     key: 'global-settings',
@@ -29,8 +48,21 @@ export const SETTINGS_SECTIONS = Object.freeze([
 ]);
 
 export function resolveSettingsSection(pathname) {
-  const normalizedPathname = pathname?.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
+  const normalizedPathname = normalizeSettingsPathname(pathname);
+  const aiReviewTab = AI_REVIEW_SETTINGS_TABS.find(tab => normalizedPathname === tab.route);
+  if (aiReviewTab) {
+    const section = SETTINGS_SECTIONS.find(item => item.key === 'ai-review-settings');
+    return { ...section, tabKey: aiReviewTab.key, contentKey: aiReviewTab.contentKey };
+  }
   return SETTINGS_SECTIONS.find(section => normalizedPathname === section.route) || null;
+}
+
+export function resolveSettingsRedirect(pathname) {
+  return SETTINGS_ROUTE_REDIRECTS[normalizeSettingsPathname(pathname)] || null;
+}
+
+function normalizeSettingsPathname(pathname) {
+  return pathname?.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
 }
 
 export function settingsSectionHasDirtyDraft(dirtyDraftTokens, sectionKey, dirtyConnectionId = null) {

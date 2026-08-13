@@ -177,7 +177,6 @@ function buildStandardRows(providers, defaultProviderCode) {
 
     const endpoint = text(provider?.endpointUrl);
     const model = text(provider?.modelName);
-    const enabled = provider?.enabled === true;
     const apiKeyConfigured = provider?.apiKeyConfigured === true;
     const configurationComplete = Boolean(endpoint && model && apiKeyConfigured);
     const isDefault = providerCode === defaultCode;
@@ -194,12 +193,12 @@ function buildStandardRows(providers, defaultProviderCode) {
       model: model || null,
       isDefault,
       isCurrent: isDefault,
-      enabled,
+      enabled: true,
       apiKeyConfigured,
       configurationComplete,
       workerSupported: null,
       configurationStatus: statusFor({
-        enabled,
+        enabled: true,
         apiKeyConfigured,
         configurationComplete,
         workerSupported: null

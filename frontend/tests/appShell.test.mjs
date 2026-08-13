@@ -19,10 +19,15 @@ test('navigation keeps the public routes and maps detail routes to their parent'
   assert.equal(resolveAppShellSelectedKey('/tasks/42', items), '/tasks');
   assert.equal(resolveAppShellSelectedKey('/settings', items), '');
   assert.equal(resolveAppShellSelectedKey('/settings/project-targets', items), '/settings/project-targets');
-  assert.equal(resolveAppShellSelectedKey('/settings/review-profiles', items), '/settings/review-profiles');
-  assert.equal(resolveAppShellSelectedKey('/settings/model-connections', items), '/settings/model-connections');
+  assert.equal(resolveAppShellSelectedKey('/settings/ai-review/models', items), '/settings/ai-review/models');
+  assert.equal(resolveAppShellSelectedKey('/settings/ai-review/policies', items), '/settings/ai-review/models');
   assert.equal(resolveAppShellSelectedKey('/settings/global', items), '/settings/global');
-  assert.deepEqual(resolveAppShellOpenKeys('/settings/model-connections', items), ['/settings']);
+  assert.deepEqual(resolveAppShellOpenKeys('/settings/ai-review/models', items), ['/settings']);
+  assert.deepEqual(items.find(item => item.key === '/settings').children.map(item => item.label), [
+    '项目组 / 端类型配置',
+    'AI Review 配置',
+    '全局设置'
+  ]);
   assert.equal(resolveAppShellSelectedKey('/releases', items), '');
   assert.equal(resolveAppShellSelectedKey('/unknown', items), '');
   assert.deepEqual(resolveAppShellOpenKeys('/tasks', items), []);

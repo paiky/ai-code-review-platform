@@ -962,7 +962,7 @@ def _load_provider_observations(
             CodeQualityModelProvider.provider_name.label("provider_name"),
             CodeQualityModelProvider.provider_type.label("provider_type"),
             CodeQualityModelProvider.model_name.label("model_name"),
-            CodeQualityModelProvider.enabled.label("enabled"),
+            literal(True).label("enabled"),
             case(
                 (
                     _case_insensitive_equal(

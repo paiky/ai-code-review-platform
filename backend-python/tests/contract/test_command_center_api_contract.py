@@ -164,7 +164,8 @@ def test_runtime_returns_real_task_flow_worker_provider_and_alert_data(
     }
     assert providers["DEEPSEEK"]["status"] == "ACTIVE"
     assert providers["DEEPSEEK"]["defaultProvider"] is True
-    assert providers["DISABLED"]["status"] == "DISABLED"
+    assert providers["DISABLED"]["enabled"] is True
+    assert providers["DISABLED"]["status"] == "NO_RECENT_DATA"
     assert all(
         provider["status"]
         not in {"HEALTHY", "UNHEALTHY", "UP", "DOWN"}

@@ -19,8 +19,7 @@ export function createProviderDraft() {
     endpointUrl: '',
     modelName: '',
     timeoutSeconds: null,
-    apiKey: '',
-    enabled: false
+    apiKey: ''
   };
 }
 
@@ -50,9 +49,6 @@ export function validateCreateProviderDraft(draft) {
       return 'Review 超时秒数必须为 1～3600 的整数';
     }
   }
-  if (draft?.enabled && !endpointUrl) return '启用 Provider 时必须填写 Endpoint URL';
-  if (draft?.enabled && !modelName) return '启用 Provider 时必须填写模型名称';
-  if (draft?.enabled && !apiKey) return '启用 Provider 时必须填写 API Key';
   return null;
 }
 
@@ -64,8 +60,7 @@ export function buildCreateProviderRequest(draft) {
     endpointUrl: text(draft?.endpointUrl) || null,
     modelName: text(draft?.modelName) || null,
     timeoutSeconds: draft?.timeoutSeconds || null,
-    apiKey: text(draft?.apiKey) || null,
-    enabled: draft?.enabled === true
+    apiKey: text(draft?.apiKey) || null
   };
 }
 

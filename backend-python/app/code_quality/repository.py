@@ -1020,7 +1020,7 @@ def create_provider(db: Session, request: dict[str, Any]) -> dict[str, Any]:
         ),
         tls_verify=request.get("tlsVerify") is not False,
         catalog_visible=True,
-        enabled=bool(request.get("enabled", False)),
+        enabled=True,
         built_in=False,
         sort_order=int(max_sort_order) + 10,
         created_at=now,
@@ -1264,7 +1264,9 @@ def provider_to_response(
         "catalogVisible": bool(
             provider.catalog_visible or provider.api_key or not provider.built_in
         ),
-        "enabled": provider.enabled,
+        # Kept for API compatibility. Provider availability is derived from its
+        # endpoint, model, and API key rather than a user-controlled switch.
+        "enabled": True,
         "builtIn": provider.built_in,
         "defaultProvider": provider.provider_code == default_provider_code,
         "apiKeyConfigured": bool(provider.api_key),
@@ -1294,13 +1296,13 @@ def update_provider(db: Session, provider_code: str, request: dict[str, Any]) ->
         values["tls_verify"] = request.get("tlsVerify") is not False
     if request.get("clearApiKey") is True:
         values["api_key"] = None
-        values["enabled"] = False
     elif "apiKey" in request:
         values["api_key"] = _blank_to_none(request["apiKey"])
         if values["api_key"]:
             values["catalog_visible"] = True
-    if "enabled" in request and request.get("clearApiKey") is not True:
-        values["enabled"] = bool(request["enabled"])
+    # Normalize historical disabled rows whenever they are edited. The request
+    # field remains accepted for backwards compatibility but no longer gates use.
+    values["enabled"] = True
     values["updated_at"] = datetime.now()
     db.execute(
         update(CodeQualityModelProvider)

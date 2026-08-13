@@ -27,16 +27,9 @@ def run_provider(
         "PROVIDER_SELECTED",
         "INFO",
         "已选择代码质量 Review Provider",
-        f"provider={provider.provider_code}, type={provider.provider_type}, enabled={provider.enabled}",
+        f"provider={provider.provider_code}, type={provider.provider_type}",
     )
     db.commit()
-    if not provider.enabled:
-        _validation_failed(
-            db,
-            task_id,
-            f"{provider.provider_code} model provider is disabled",
-        )
-        raise AppError("BAD_REQUEST", f"{provider.provider_code} model provider is disabled", 400)
     if provider.provider_type == "OPENAI_RESPONSES":
         return _run_openai_responses(db, task_id, provider, review_request)
     if provider.provider_type == "ANTHROPIC_MESSAGES":
@@ -59,12 +52,9 @@ def run_fix_provider(
         "FIX_PROVIDER_SELECTED",
         "INFO",
         "已选择修复预览 Provider",
-        f"provider={provider.provider_code}, type={provider.provider_type}, enabled={provider.enabled}",
+        f"provider={provider.provider_code}, type={provider.provider_type}",
     )
     db.commit()
-    if not provider.enabled:
-        _validation_failed(db, task_id, f"{provider.provider_code} model provider is disabled")
-        raise AppError("BAD_REQUEST", f"{provider.provider_code} model provider is disabled", 400)
     if provider.provider_type == "OPENAI_RESPONSES":
         return _run_openai_responses_fix(db, task_id, provider, fix_request)
     if provider.provider_type == "ANTHROPIC_MESSAGES":

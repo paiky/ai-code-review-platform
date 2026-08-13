@@ -15,8 +15,11 @@ const GOVERNANCE_ROUTES = Object.freeze([
 
 export const SETTINGS_NAVIGATION_ROUTES = Object.freeze([
   { key: '/settings/project-targets', label: '项目组 / 端类型配置' },
-  { key: '/settings/review-profiles', label: 'AI Review 配置' },
-  { key: '/settings/model-connections', label: '模型连接与 Review 配置' },
+  {
+    key: '/settings/ai-review/models',
+    label: 'AI Review 配置',
+    matchRoutes: ['/settings/ai-review/models', '/settings/ai-review/policies']
+  },
   { key: '/settings/global', label: '全局设置' }
 ]);
 
@@ -56,7 +59,7 @@ export function flattenAppShellNavigation(items) {
 
 export function resolveAppShellSelectedKey(pathname, items) {
   const matches = flattenAppShellNavigation(items)
-    .filter(item => routeMatches(pathname, item.key, item.exact))
+    .filter(item => (item.matchRoutes || [item.key]).some(route => routeMatches(pathname, route, item.exact)))
     .sort((left, right) => right.key.length - left.key.length);
   return matches[0]?.key || '';
 }

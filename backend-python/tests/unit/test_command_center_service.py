@@ -682,7 +682,8 @@ def test_worker_provider_and_alert_aggregation_are_observation_only() -> None:
     assert worker_pool["busyCount"] == 1
     assert worker_pool["drainingCount"] == 1
     assert providers["DEEPSEEK"]["status"] == "ACTIVE"
-    assert providers["DISABLED"]["status"] == "DISABLED"
+    assert providers["DISABLED"]["enabled"] is True
+    assert providers["DISABLED"]["status"] == "NO_RECENT_DATA"
     assert all(
         provider["status"]
         not in {"HEALTHY", "UNHEALTHY", "UP", "DOWN"}

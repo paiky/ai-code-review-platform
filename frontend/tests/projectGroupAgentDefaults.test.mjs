@@ -59,9 +59,10 @@ test('task navigation keeps an explicit icon in the shared sidebar model', () =>
   assert.match(appSource, /tasks: <FileSearchOutlined \/>/);
 });
 
-test('Agent settings keep spacious headers and compact budget controls without the raised-budget notice', () => {
+test('Agent settings keep spacious headers and responsive recommended budget selects', () => {
   assert.equal(styleSource.includes('.settings-subsection > .settings-card-header {\n  margin-bottom: 24px;'), true);
-  assert.equal(styleSource.includes('grid-template-columns: repeat(auto-fill, minmax(190px, 212px));'), true);
+  assert.equal(styleSource.includes('grid-template-columns: repeat(4, minmax(0, 1fr));'), true);
+  assert.equal(styleSource.includes('.agent-budget-field-select {'), true);
   assert.equal(appSource.includes('message="当前配置高于默认预算"'), false);
   assert.equal(appSource.includes('title="运行参数无效"'), true);
 });

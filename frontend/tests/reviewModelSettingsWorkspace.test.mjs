@@ -9,14 +9,16 @@ const mockSource = await readFile(new URL('./fixtures/docs54-settings-mock-serve
 test('renders one visible unified Review model settings workspace', () => {
   assert.match(appSource, /from ['"]\.\/reviewModelConnections\.js['"]/);
   assert.match(appSource, /key: 'review-model-settings'/);
-  assert.match(appSource, /title="Agent Review 运行配置"/);
-  assert.match(appSource, /title="Standard Review 运行配置"/);
+  assert.match(appSource, /<Text strong>Agent Review 运行配置<\/Text>/);
+  assert.match(appSource, /<Text strong>Standard Review 运行配置<\/Text>/);
   assert.match(appSource, /title="模型连接目录"/);
   assert.match(appSource, /aria-label="连接详情"/);
   assert.doesNotMatch(appSource, /key: 'provider-settings'/);
   assert.doesNotMatch(appSource, /key: 'agent-review-settings'/);
 
-  assert.match(appSource, /const activeSettingsItem = collapseItems\.find\(item => item\.key === activeSettingsSection\?\.key\)/);
+  assert.match(appSource, /item => item\.key === \(activeSettingsSection\?\.contentKey \|\| activeSettingsSection\?\.key\)/);
+  assert.match(appSource, /aria-label="AI Review 配置页签"/);
+  assert.match(appSource, /activeKey=\{activeSettingsSection\.tabKey\}/);
   assert.match(appSource, /data-settings-section=\{activeSettingsSection\?\.key \|\| ''\}/);
 });
 
@@ -74,6 +76,22 @@ test('keeps the upper runtime cards read-only and moves mutations into connectio
   assert.doesNotMatch(runtimeCards, /<Button/);
 });
 
+test('renders Agent Review as one page-level global switch instead of a connection field', () => {
+  const pageHeader = appSource.slice(
+    appSource.indexOf('title="模型连接与 Review 配置"'),
+    appSource.indexOf('<div className="review-runtime-card-grid">')
+  );
+  const connectionDetail = appSource.slice(
+    appSource.indexOf('const reviewConnectionDetail ='),
+    appSource.indexOf('const collapseItems =')
+  );
+
+  assert.match(pageHeader, /aria-label="全局启用 Agent Review"/);
+  assert.match(pageHeader, /onChange=\{updateAgentReviewEnabled\}/);
+  assert.doesNotMatch(connectionDetail, /aria-label="启用 Agent Review"/);
+  assert.doesNotMatch(connectionDetail, /onChange=\{updateAgentReviewEnabled\}/);
+});
+
 test('does not use removed Ant Design props that emit console deprecation warnings', () => {
   assert.doesNotMatch(appSource, /\baddonAfter=/);
   assert.doesNotMatch(appSource, /\baddonBefore=/);
@@ -106,12 +124,77 @@ test('keeps directory rows keyboard-selectable and the three planned layouts bou
   assert.match(directoryColumns, /icon=\{<DeleteOutlined \/>\}/);
   assert.doesNotMatch(directoryColumns, />\s*详情\s*<\/Button>/);
   assert.doesNotMatch(directoryColumns, /title: 'Endpoint'/);
-  assert.match(styleSource, /grid-template-columns: minmax\(0, 3fr\) minmax\(360px, 2fr\)/);
+  assert.match(styleSource, /grid-template-columns: minmax\(0, 2fr\) minmax\(360px, 1\.1fr\)/);
   assert.match(styleSource, /@media \(max-width: 1199px\)[\s\S]*\.review-connection-workbench[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(styleSource, /@media \(max-width: 760px\)[\s\S]*\.review-runtime-card-grid[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(styleSource, /\.review-connection-actions \.ant-btn \{\s*min-height: 44px;/);
   assert.match(styleSource, /@media \(max-width: 760px\)[\s\S]*\.review-provider-danger-zone[\s\S]*display: flex/);
   assert.match(styleSource, /@media \(max-width: 760px\)[\s\S]*\.review-connection-directory-actions[\s\S]*display: none/);
+});
+
+test('shows only availability and current state in the connection directory', () => {
+  const directoryColumnsStart = appSource.indexOf('const reviewConnectionColumns =');
+  const directoryStatus = appSource.slice(
+    appSource.indexOf("title: '状态'", directoryColumnsStart),
+    appSource.indexOf("title: '更新时间'", directoryColumnsStart)
+  );
+
+  assert.match(directoryStatus, />当前<\/Tag>/);
+  assert.doesNotMatch(directoryStatus, />默认<\/Tag>/);
+  assert.doesNotMatch(directoryStatus, /row\.isDefault/);
+});
+
+test('keeps existing connection operations, status semantics and Agent budgets', () => {
+  assert.doesNotMatch(appSource, /title="运行状态"/);
+  assert.doesNotMatch(appSource, />\s*运行状态\s*</);
+  assert.match(appSource, /title="Agent 执行预算"/);
+  assert.match(appSource, /title: '操作'/);
+  assert.match(appSource, /icon=\{<DeleteOutlined \/>\}/);
+  assert.doesNotMatch(appSource, /<MoreOutlined/);
+});
+
+test('renders all Agent budgets as recommended selects without free-form number inputs', () => {
+  const budgetField = appSource.slice(
+    appSource.indexOf('function AgentBudgetFieldCard'),
+    appSource.indexOf('function TemplateConfig')
+  );
+
+  assert.match(budgetField, /<Select/);
+  assert.match(budgetField, /默认\/推荐/);
+  assert.match(budgetField, /当前自定义/);
+  assert.doesNotMatch(budgetField, /<InputNumber/);
+  assert.match(appSource, /options=\{buildAgentBudgetOptions\(item\.key, agentSettingsDraft\.budgets, agentSettings\)\}/);
+  assert.match(appSource, /key: 'submitByTurn', label: '最迟提交回合', unit: '回合'/);
+});
+
+test('keeps connection detail headers compact and uses generic API Key labels', () => {
+  const connectionDetail = appSource.slice(
+    appSource.indexOf('const reviewConnectionDetail ='),
+    appSource.indexOf('const collapseItems =')
+  );
+
+  assert.doesNotMatch(connectionDetail, /编辑 Standard Provider 原生配置/);
+  assert.doesNotMatch(connectionDetail, /编辑动态 Agent Runtime/);
+  assert.doesNotMatch(styleSource, /\.review-connection-detail \.settings-card-heading::before/);
+  assert.doesNotMatch(connectionDetail, /<Text strong>Agent Runtime API Key<\/Text>/);
+  assert.doesNotMatch(connectionDetail, /sourceLabel\(providerDraft\.providerCode\)\} Key/);
+  assert.equal((connectionDetail.match(/<Text strong>API Key<\/Text>/g) || []).length, 2);
+  assert.equal((connectionDetail.match(/清除 API Key/g) || []).length, 2);
+});
+
+test('keeps Standard Providers default-available without a detail enable switch', () => {
+  const providerDetail = appSource.slice(
+    appSource.indexOf(') : providerDraft ? ('),
+    appSource.indexOf(') : (', appSource.indexOf(') : providerDraft ? ('))
+  );
+
+  assert.doesNotMatch(providerDetail, /启用此 Provider/);
+  assert.doesNotMatch(providerDetail, /providerDraft\.enabled/);
+  assert.doesNotMatch(appSource, /enabled: providerDraft\.enabled/);
+  assert.match(providerDetail, /!providerDraft\.endpointUrl\?\.trim\(\)/);
+  assert.match(providerDetail, /!providerDraft\.modelName\?\.trim\(\)/);
+  assert.doesNotMatch(providerDetail, /settingsDraft\?\.reviewEnabled/);
+  assert.match(appSource, /Provider \{currentStandardProviderAvailable \? '可用' : '配置不完整'\}/);
 });
 
 test('creates Agent or Standard connections from Backend presets without client identities', () => {
@@ -169,7 +252,7 @@ test('supports native Runtime edit, test and protected delete without exposing k
 });
 
 test('does not invent a Standard switch or a fixed Agent fallback selector', () => {
-  assert.match(appSource, /平台全局 \{\(settingsDraft\?\.reviewEnabled/);
+  assert.match(appSource, /平台 Review \{\(settingsDraft\?\.reviewEnabled/);
   assert.match(appSource, /失败后继承 Standard 动态解析链/);
   assert.doesNotMatch(appSource, /aria-label="启用 Standard Review"/);
   assert.doesNotMatch(appSource, /Agent fallback Provider/);

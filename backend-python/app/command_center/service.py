@@ -1262,10 +1262,8 @@ def _build_providers(
         active_count = active_counts[provider_code.upper()]
         success_count = int(row.get("recent_success_count") or 0)
         failure_count = int(row.get("recent_failure_count") or 0)
-        enabled = bool(row.get("enabled"))
-        if not enabled:
-            status = "DISABLED"
-        elif active_count:
+        enabled = True
+        if active_count:
             status = "ACTIVE"
         elif failure_count:
             status = "RECENT_FAILURE"

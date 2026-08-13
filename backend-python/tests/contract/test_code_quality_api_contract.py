@@ -242,7 +242,7 @@ def test_create_custom_provider_normalizes_fields_and_masks_key(
         "reasoningEffort": None,
         "tlsVerify": True,
         "catalogVisible": True,
-        "enabled": False,
+        "enabled": True,
         "builtIn": False,
         "defaultProvider": False,
         "apiKeyConfigured": True,
@@ -423,7 +423,7 @@ def test_provider_schema_upgrade_backfills_catalog_visibility_once(
     assert keyed.catalog_visible is True
 
 
-def test_create_enabled_custom_provider_requires_complete_configuration(
+def test_create_custom_provider_is_default_available_when_configured(
     client: TestClient,
 ) -> None:
     response = client.post(
@@ -443,7 +443,7 @@ def test_create_enabled_custom_provider_requires_complete_configuration(
     assert response.json()["data"]["enabled"] is True
 
 
-def test_create_enabled_custom_provider_rejects_incomplete_configuration(
+def test_legacy_enabled_flag_no_longer_gates_incomplete_provider_creation(
     client: TestClient,
 ) -> None:
     response = client.post(
@@ -456,9 +456,8 @@ def test_create_enabled_custom_provider_rejects_incomplete_configuration(
         },
     )
 
-    assert response.status_code == 400
-    assert response.json()["code"] == "VALIDATION_ERROR"
-    assert "endpointUrl is required" in response.json()["message"]
+    assert response.status_code == 200
+    assert response.json()["data"]["enabled"] is True
 
 
 def test_create_custom_provider_rejects_invalid_contract_fields(

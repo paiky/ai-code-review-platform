@@ -61,13 +61,13 @@ import {
   FileTextOutlined,
   FileSearchOutlined,
   GlobalOutlined,
-  KeyOutlined,
   LoadingOutlined,
   MenuFoldOutlined,
   MenuOutlined,
   MenuUnfoldOutlined,
   PlusOutlined,
   ReloadOutlined,
+  RobotOutlined,
   SafetyCertificateOutlined,
   SearchOutlined,
   SettingOutlined,
@@ -118,9 +118,11 @@ import {
   writeSidebarCollapsedPreference
 } from './appShell.js';
 import {
+  AI_REVIEW_SETTINGS_TABS,
   DEFAULT_SETTINGS_ROUTE,
   registerSettingsNavigationGuard,
   requestSettingsNavigation,
+  resolveSettingsRedirect,
   resolveSettingsSection,
   settingsSectionHasDirtyDraft
 } from './settingsNavigation.js';
@@ -158,9 +160,9 @@ import {
 import ReviewImmersiveCanvas from './ReviewImmersiveCanvas.jsx';
 import {
   agentBudgetLimits,
+  buildAgentBudgetOptions,
   bytesToKilobytes,
   formatAgentBudgetSummary,
-  kilobytesToBytes,
   normalizeAgentBudgets,
   validateAgentBudgets
 } from './agentReviewBudgets.js';
@@ -6527,13 +6529,13 @@ function SettingsCardHeader({ icon, title, description, tags, extra, compact = f
   return (
     <div className={`settings-card-header${compact ? ' settings-card-header-compact' : ''}`}>
       <div className="settings-card-heading">
-        <span className="settings-card-icon" aria-hidden="true">{icon}</span>
+        {icon && <span className="settings-card-icon" aria-hidden="true">{icon}</span>}
         <div className="settings-card-title-copy">
           <Space wrap size={[8, 6]} className="settings-card-title-row">
             <Title level={compact ? 5 : 4} className="settings-card-title">{title}</Title>
             {tags && <Space wrap size={[4, 4]}>{tags}</Space>}
           </Space>
-          <Text type="secondary" className="settings-card-description">{description}</Text>
+          {description && <Text type="secondary" className="settings-card-description">{description}</Text>}
         </div>
       </div>
       {extra && <div className="settings-card-extra">{extra}</div>}
@@ -6546,12 +6548,14 @@ function AgentBudgetFieldCard({
   value,
   defaultValue,
   limits,
+  options,
   onChange
 }) {
   const toDisplayValue = rawValue => (
     field.bytes ? bytesToKilobytes(rawValue) : rawValue
   );
-  const displayDefault = toDisplayValue(defaultValue) ?? '-';
+  const optionDefault = options.find(option => option.isDefault)?.value;
+  const displayDefault = toDisplayValue(optionDefault ?? defaultValue) ?? '-';
   const displayMinimum = toDisplayValue(limits.min);
   const displayMaximum = toDisplayValue(limits.max);
 
@@ -6560,46 +6564,37 @@ function AgentBudgetFieldCard({
       <div className="agent-budget-field-title">
         <Text strong>{field.label}</Text>
       </div>
-      <Space.Compact block className="agent-budget-field-input">
-        <InputNumber
-          aria-label={field.label}
-          className="agent-budget-field-number"
-          size="large"
-          min={displayMinimum}
-          max={displayMaximum}
-          step={1}
-          precision={0}
-          value={toDisplayValue(value)}
-          onChange={nextValue => onChange(
-            field.key,
-            field.bytes ? kilobytesToBytes(nextValue) : nextValue
-          )}
-        />
-        <Input
-          aria-hidden="true"
-          className="agent-budget-field-unit"
-          size="large"
-          tabIndex={-1}
-          value={field.unit}
-          readOnly
-        />
-      </Space.Compact>
-      <div className="agent-budget-field-meta">
-        <div>
-          <Text type="secondary">默认值</Text>
-          <Text strong>{displayDefault} {field.unit}</Text>
-        </div>
-        <div>
-          <Text type="secondary">允许范围</Text>
-          <Text strong>{displayMinimum}～{displayMaximum} {field.unit}</Text>
-        </div>
-      </div>
+      <Select
+        aria-label={field.label}
+        className="agent-budget-field-select"
+        size="large"
+        value={value}
+        onChange={nextValue => onChange(field.key, nextValue)}
+        options={options.map(option => ({
+          value: option.value,
+          disabled: option.disabled,
+          title: option.disabledReason || undefined,
+          label: `${toDisplayValue(option.value)} ${field.unit}${
+            option.isDefault
+              ? '（默认/推荐）'
+              : option.isCurrentCustom
+                ? '（当前自定义）'
+                : option.disabled
+                  ? '（不可用）'
+                  : ''
+          }`
+        }))}
+      />
+      <Text type="secondary" className="agent-budget-field-help">
+        默认/推荐 {displayDefault} {field.unit} · 范围 {displayMinimum}～{displayMaximum} {field.unit}
+      </Text>
     </div>
   );
 }
 
 function TemplateConfig() {
   const location = useLocation();
+  const navigate = useNavigate();
   const activeSettingsSection = resolveSettingsSection(location.pathname);
   const [groups, setGroups] = useState([]);
   const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, aiReviewModels: [], dingtalkWebhooks: [] });
@@ -6799,7 +6794,7 @@ function TemplateConfig() {
   currentSettingsUrlRef.current = `${location.pathname}${location.search}${location.hash}`;
   dirtySettingsRef.current = settingsSectionHasDirtyDraft(
     dirtySettingsDraftTokens,
-    activeSettingsSection?.key,
+    activeSettingsSection?.contentKey || activeSettingsSection?.key,
     dirtyReviewConnectionId
   );
 
@@ -7765,8 +7760,7 @@ function TemplateConfig() {
         providerName: providerDraft.providerName,
         endpointUrl: providerDraft.endpointUrl,
         modelName: providerDraft.modelName,
-        timeoutSeconds: providerDraft.timeoutSeconds || null,
-        enabled: providerDraft.enabled
+        timeoutSeconds: providerDraft.timeoutSeconds || null
       };
       if (providerApiKeyDraft.trim()) body.apiKey = providerApiKeyDraft.trim();
       const providerData = await fetchApi(`/api/code-quality-review-providers/${providerCode}`, {
@@ -8175,6 +8169,11 @@ function TemplateConfig() {
     provider => provider.providerCode === aiSettings?.defaultProviderCode
       || provider.defaultProvider === true
   ) || null;
+  const currentStandardProviderAvailable = Boolean(
+    currentStandardProvider?.endpointUrl?.trim()
+      && currentStandardProvider?.modelName?.trim()
+      && currentStandardProvider?.apiKeyConfigured
+  );
 
   useEffect(() => {
     if (!agentSettings || !aiSettings) return;
@@ -8728,21 +8727,22 @@ function TemplateConfig() {
     [agentSettings]
   );
   const agentBudgetFields = [
-    { key: 'maxTurns', label: '模型决策回合', unit: 'turns' },
+    { key: 'maxTurns', label: '模型决策回合', unit: '回合' },
     { key: 'maxToolCalls', label: 'MCP 工具调用', unit: '次' },
     { key: 'maxSourceBytes', label: '源码返回', unit: 'KB', bytes: true },
     { key: 'timeoutSeconds', label: '整体超时', unit: '秒' },
     { key: 'inlineDiffBytes', label: '内联 Diff', unit: 'KB', bytes: true },
     { key: 'maxEvidenceCalls', label: '证据调用', unit: '次', advanced: true },
     { key: 'convergeAtCalls', label: '收敛起点', unit: '次', advanced: true },
-    { key: 'submitByTurn', label: '最迟提交回合', unit: 'turn', advanced: true }
+    { key: 'submitByTurn', label: '最迟提交回合', unit: '回合', advanced: true }
   ];
 
   const reviewConnectionColumns = [
     {
-      title: '连接',
+      title: '连接名称',
       dataIndex: 'name',
       key: 'name',
+      width: 140,
       render: (_, row) => (
         <div className="review-connection-name-cell">
           <Text strong>{row.name}</Text>
@@ -8756,7 +8756,7 @@ function TemplateConfig() {
       title: '所属 Review',
       dataIndex: 'reviewType',
       key: 'reviewType',
-      width: 118,
+      width: 90,
       render: value => (
         <Tag color={value === agentReviewConnection ? 'purple' : 'blue'}>
           {value === agentReviewConnection ? 'Agent' : 'Standard'}
@@ -8767,7 +8767,7 @@ function TemplateConfig() {
       title: '协议',
       dataIndex: 'protocol',
       key: 'protocol',
-      width: 168,
+      width: 120,
       responsive: ['lg'],
       render: reviewConnectionProtocolLabel
     },
@@ -8775,7 +8775,7 @@ function TemplateConfig() {
       title: '模型',
       dataIndex: 'model',
       key: 'model',
-      width: 180,
+      width: 130,
       responsive: ['md'],
       ellipsis: true,
       render: value => value || '-'
@@ -8784,14 +8784,13 @@ function TemplateConfig() {
       title: '状态',
       dataIndex: 'configurationStatus',
       key: 'configurationStatus',
-      width: 126,
+      width: 90,
       render: (_, row) => (
         <Space size={4} wrap>
           <Tag color={reviewConnectionStatusColor(row.configurationStatus)}>
             {reviewConnectionStatusLabel(row.configurationStatus)}
           </Tag>
           {row.isCurrent && <Tag color="purple">当前</Tag>}
-          {row.isDefault && row.reviewType === standardReviewConnection && <Tag color="blue">默认</Tag>}
         </Space>
       )
     },
@@ -8799,14 +8798,14 @@ function TemplateConfig() {
       title: '更新时间',
       dataIndex: 'updatedAt',
       key: 'updatedAt',
-      width: 176,
+      width: 140,
       responsive: ['xl'],
       render: value => formatDateTime(value)
     },
     {
       title: '操作',
       key: 'actions',
-      width: 72,
+      width: 50,
       className: 'review-connection-directory-actions',
       render: (_, row) => {
         if (row.reviewType === agentReviewConnection) {
@@ -8868,21 +8867,17 @@ function TemplateConfig() {
   const reviewConnectionDetail = !activeReviewConnection ? (
     <Empty description="暂无模型连接" />
   ) : activeReviewConnection.reviewType === agentReviewConnection ? (
-    <Space orientation="vertical" size="middle" className="full-width">
+    <Space orientation="vertical" size="middle" className="full-width review-connection-detail-content review-connection-detail-agent">
       <SettingsCardHeader
         compact
-        icon={<KeyOutlined />}
         title={activeReviewConnection.name}
-        description={activeRuntimeSettings?.builtIn
-          ? '内置 Runtime 的连接参数固定，只维护独立 Key。'
-          : '编辑动态 Agent Runtime；可直接测试当前表单草稿，无需先保存连接。'}
         tags={(
           <Space wrap>
             <Tag color={activeReviewConnection.isCurrent ? 'purple' : 'default'}>
               {activeReviewConnection.isCurrent ? '当前 Runtime' : '可选 Runtime'}
             </Tag>
             <Tag color={activeRuntimeSettings?.apiKeyConfigured ? 'green' : 'gold'}>
-              Key {activeRuntimeSettings?.apiKeyConfigured ? '已配置' : '未配置'}
+              API Key {activeRuntimeSettings?.apiKeyConfigured ? '已配置' : '未配置'}
             </Tag>
             <Tag color={activeRuntimeSettings?.protocolAvailable ? 'green' : 'gold'}>
               Runner {activeRuntimeSettings?.protocolAvailable ? '可用' : '不可用'}
@@ -8890,33 +8885,6 @@ function TemplateConfig() {
           </Space>
         )}
       />
-      <div className="review-connection-runtime-controls">
-        <Space wrap>
-          <Text strong>Agent Review</Text>
-          <Switch
-            aria-label="启用 Agent Review"
-            checked={agentSettings?.enabled === true}
-            loading={agentSettingsSaving}
-            disabled={agentSettingsSaving || (!agentSettings?.encryptionAvailable && agentSettings?.enabled !== true)}
-            checkedChildren="启用"
-            unCheckedChildren="停用"
-            onChange={updateAgentReviewEnabled}
-          />
-          <Button
-            disabled={
-              activeReviewConnection.isCurrent
-              || Boolean(dirtyReviewConnectionId)
-              || !activeRuntimeSettings?.enabled
-              || !activeRuntimeSettings?.configurationComplete
-              || !activeRuntimeSettings?.protocolAvailable
-            }
-            loading={agentSettingsSaving}
-            onClick={() => setCurrentDynamicAgentRuntime(activeRuntimeSettings)}
-          >
-            {activeReviewConnection.isCurrent ? 'Agent 当前连接' : '设为 Agent 当前连接'}
-          </Button>
-        </Space>
-      </div>
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12}>
           <Text strong>配置名称</Text>
@@ -8960,13 +8928,13 @@ function TemplateConfig() {
           </Col>
         )}
         <Col xs={24} md={12}>
-          <Text strong>Agent Runtime API Key</Text>
+          <Text strong>API Key</Text>
           <Input.Password
             value={agentRuntimeDraft.apiKey}
             disabled={agentSettingsSaving}
             placeholder={activeRuntimeSettings?.apiKeyConfigured
               ? `${activeRuntimeSettings.apiKeyMasked || '已配置'}；留空保持原值`
-              : '请输入 Agent Runtime API Key'}
+              : '请输入 API Key'}
             onChange={event => updateDynamicAgentRuntimeDraft('apiKey', event.target.value)}
           />
         </Col>
@@ -9003,11 +8971,24 @@ function TemplateConfig() {
       <div className="settings-action-row review-connection-actions">
         <Space wrap>
           <Button
+            disabled={
+              activeReviewConnection.isCurrent
+              || Boolean(dirtyReviewConnectionId)
+              || !activeRuntimeSettings?.enabled
+              || !activeRuntimeSettings?.configurationComplete
+              || !activeRuntimeSettings?.protocolAvailable
+            }
+            loading={agentSettingsSaving}
+            onClick={() => setCurrentDynamicAgentRuntime(activeRuntimeSettings)}
+          >
+            {activeReviewConnection.isCurrent ? 'Agent 当前连接' : '设为 Agent 当前连接'}
+          </Button>
+          <Button
             loading={agentSettingsTesting}
             disabled={Boolean(activeRuntimeError) || !activeRuntimeSettings?.protocolAvailable || agentSettingsSaving}
             onClick={() => testDynamicAgentRuntime(activeRuntimeSettings)}
           >
-            测试配置
+            测试连接
           </Button>
           <Button
             danger
@@ -9015,7 +8996,7 @@ function TemplateConfig() {
             disabled={!activeRuntimeSettings?.apiKeyConfigured}
             onClick={() => clearDynamicAgentRuntimeKey(activeRuntimeSettings)}
           >
-            清除当前 Key
+            清除 API Key
           </Button>
           <Button
             type="primary"
@@ -9023,7 +9004,7 @@ function TemplateConfig() {
             disabled={Boolean(activeRuntimeError) || (!agentSettings?.encryptionAvailable && agentSaveRequiresEncryption)}
             onClick={() => saveDynamicAgentRuntimeDetail(activeRuntimeSettings)}
           >
-            保存连接
+            保存修改
           </Button>
         </Space>
       </div>
@@ -9040,19 +9021,17 @@ function TemplateConfig() {
       )}
     </Space>
   ) : providerDraft ? (
-    <Space orientation="vertical" size="middle" className="full-width">
+    <Space orientation="vertical" size="middle" className="full-width review-connection-detail-content review-connection-detail-standard">
       <SettingsCardHeader
         compact
-        icon={<ApiOutlined />}
         title={providerDraft.providerName || sourceLabel(providerDraft.providerCode)}
-        description="编辑 Standard Provider 原生配置；保存详情不会改变默认 Provider。"
         tags={(
           <Space wrap>
             <Tag color={providerDraft.defaultProvider ? 'blue' : 'default'}>
               {providerDraft.defaultProvider ? 'Standard 默认' : '可供 Standard 使用'}
             </Tag>
             <Tag color={providerDraft.apiKeyConfigured ? 'green' : 'gold'}>
-              Key {providerDraft.apiKeyConfigured ? '已配置' : '未配置'}
+              API Key {providerDraft.apiKeyConfigured ? '已配置' : '未配置'}
             </Tag>
           </Space>
         )}
@@ -9095,23 +9074,12 @@ function TemplateConfig() {
           />
         </Col>
         <Col xs={24} md={12}>
-          <Text strong>{sourceLabel(providerDraft.providerCode)} Key</Text>
+          <Text strong>API Key</Text>
           <Input.Password
             value={providerApiKeyDraft}
             placeholder={providerApiKeyPlaceholder}
             onChange={event => updateProviderKeyDraft(event.target.value)}
           />
-        </Col>
-        <Col xs={24}>
-          <Space wrap>
-            <Switch
-              checked={providerDraft.enabled ?? false}
-              checkedChildren="启用"
-              unCheckedChildren="停用"
-              onChange={checked => updateProviderDraft('enabled', checked)}
-            />
-            <Text type="secondary">Provider 启用状态仅影响 Standard Review 可用性。</Text>
-          </Space>
         </Col>
       </Row>
       {providerTestResult && (
@@ -9130,7 +9098,8 @@ function TemplateConfig() {
             disabled={
               providerDraft.defaultProvider === true
               || Boolean(dirtyReviewConnectionId)
-              || !providerDraft.enabled
+              || !providerDraft.endpointUrl?.trim()
+              || !providerDraft.modelName?.trim()
               || !providerDraft.apiKeyConfigured
             }
             loading={providerSaving}
@@ -9143,7 +9112,7 @@ function TemplateConfig() {
             disabled={providerSaving}
             onClick={testProviderConnection}
           >
-            测试联通性
+            测试连接
           </Button>
           <Button
             danger
@@ -9151,7 +9120,7 @@ function TemplateConfig() {
             disabled={!providerDraft.apiKeyConfigured}
             onClick={clearProviderApiKey}
           >
-            清除当前 Key
+            清除 API Key
           </Button>
           <Button
             type="primary"
@@ -9159,7 +9128,7 @@ function TemplateConfig() {
             disabled={providerTesting}
             onClick={saveProviderSettings}
           >
-            保存 Provider
+            保存修改
           </Button>
         </Space>
       </div>
@@ -9509,25 +9478,49 @@ function TemplateConfig() {
         <Card variant="borderless" className="settings-inner-card review-model-workspace-card">
           <Space orientation="vertical" size="middle" className="full-width">
             <SettingsCardHeader
-              icon={<ApiOutlined />}
               title="模型连接与 Review 配置"
               description="统一查看 Agent Runtime 与 Standard Provider；配置继续按 Review 域独立保存。"
-              tags={<Tag color="blue">统一视图 · 分域保存</Tag>}
+              extra={(
+                <Space wrap className="review-model-page-actions">
+                  <div className="review-agent-global-switch">
+                    <Text strong>Agent Review</Text>
+                    <Switch
+                      aria-label="全局启用 Agent Review"
+                      checked={agentSettings?.enabled === true}
+                      loading={agentSettingsSaving}
+                      disabled={
+                        agentSettingsSaving
+                        || Boolean(dirtyReviewConnectionId)
+                        || (!agentSettings?.encryptionAvailable && agentSettings?.enabled !== true)
+                      }
+                      checkedChildren="启用"
+                      unCheckedChildren="停用"
+                      onChange={updateAgentReviewEnabled}
+                    />
+                  </div>
+                  <Button type="primary" icon={<PlusOutlined />} onClick={openCreateProviderModal}>
+                    新增模型连接
+                  </Button>
+                </Space>
+              )}
             />
             <div className="review-runtime-card-grid">
-              <Card className="review-runtime-card" title="Agent Review 运行配置">
+              <Card className="review-runtime-card review-runtime-card-agent">
                 <Space orientation="vertical" size="small" className="full-width">
-                  <Space wrap>
-                    <Tag color={agentSettings?.enabled ? 'purple' : 'default'}>
-                      Agent {agentSettings?.enabled ? '已启用' : '未启用'}
-                    </Tag>
-                    <Tag color={agentWorkerPool.status === 'ONLINE' ? 'green' : 'red'}>
-                      Worker Pool {agentWorkerPool.status}
-                    </Tag>
-                    <Tag color={currentAgentRuntime?.apiKeyConfigured ? 'green' : 'gold'}>
-                      Key {currentAgentRuntime?.apiKeyConfigured ? '已配置' : '未配置'}
-                    </Tag>
-                  </Space>
+                  <div className="review-runtime-card-heading">
+                    <span className="review-runtime-card-icon" aria-hidden="true"><RobotOutlined /></span>
+                    <div className="review-runtime-card-heading-copy">
+                      <Text strong>Agent Review 运行配置</Text>
+                      <Space wrap size={[4, 4]}>
+                        <Tag color={agentSettings?.enabled ? 'green' : 'default'}>
+                          Agent Review {agentSettings?.enabled ? '已启用' : '已停用'}
+                        </Tag>
+                        <Tag color={agentWorkerPool.status === 'ONLINE' ? 'green' : 'red'}>
+                          Worker Pool {agentWorkerPool.status}
+                        </Tag>
+                      </Space>
+                    </div>
+                  </div>
                   <Descriptions size="small" column={1}>
                     <Descriptions.Item label="当前连接">
                       <Space size={6} wrap>
@@ -9545,19 +9538,22 @@ function TemplateConfig() {
                   )}
                 </Space>
               </Card>
-              <Card className="review-runtime-card" title="Standard Review 运行配置">
+              <Card className="review-runtime-card review-runtime-card-standard">
                 <Space orientation="vertical" size="small" className="full-width">
-                  <Space wrap>
-                    <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>
-                      平台全局 {(settingsDraft?.reviewEnabled ?? false) ? '已开启' : '已关闭'}
-                    </Tag>
-                    <Tag color={currentStandardProvider?.enabled ? 'green' : 'default'}>
-                      Provider {currentStandardProvider?.enabled ? '已启用' : '未启用'}
-                    </Tag>
-                    <Tag color={currentStandardProvider?.apiKeyConfigured ? 'green' : 'gold'}>
-                      Key {currentStandardProvider?.apiKeyConfigured ? '已配置' : '未配置'}
-                    </Tag>
-                  </Space>
+                  <div className="review-runtime-card-heading">
+                    <span className="review-runtime-card-icon" aria-hidden="true"><FileTextOutlined /></span>
+                    <div className="review-runtime-card-heading-copy">
+                      <Text strong>Standard Review 运行配置</Text>
+                      <Space wrap size={[4, 4]}>
+                        <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>
+                          平台 Review {(settingsDraft?.reviewEnabled ?? false) ? '已开启' : '已关闭'}
+                        </Tag>
+                        <Tag color={currentStandardProviderAvailable ? 'green' : 'gold'}>
+                          Provider {currentStandardProviderAvailable ? '可用' : '配置不完整'}
+                        </Tag>
+                      </Space>
+                    </div>
+                  </div>
                   <Descriptions size="small" column={1}>
                     <Descriptions.Item label="当前连接">
                       <Space size={6} wrap>
@@ -9576,7 +9572,7 @@ function TemplateConfig() {
                       {currentStandardProvider?.timeoutSeconds ? `${currentStandardProvider.timeoutSeconds} 秒` : '系统默认'}
                     </Descriptions.Item>
                   </Descriptions>
-                  {currentStandardProvider && (!currentStandardProvider.enabled || !currentStandardProvider.apiKeyConfigured) && (
+                  {currentStandardProvider && !currentStandardProviderAvailable && (
                     <Text type="warning">当前连接不可用，请在下方选择可用连接并设为当前。</Text>
                   )}
                 </Space>
@@ -9586,15 +9582,8 @@ function TemplateConfig() {
               <section className="settings-subsection review-connection-directory" aria-label="模型连接目录">
                 <SettingsCardHeader
                   compact
-                  icon={<ApiOutlined />}
                   title="模型连接目录"
-                  description="仅展示已配置或历史可见连接；清除 Key 后保留目录记录并标记为不可用。"
-                  tags={<Tag>{reviewConnectionRows.length} 条连接</Tag>}
-                  extra={(
-                    <Button type="primary" icon={<PlusOutlined />} onClick={openCreateProviderModal}>
-                      新增模型连接
-                    </Button>
-                  )}
+                  tags={<Text type="secondary">共 {reviewConnectionRows.length} 条连接</Text>}
                 />
                 <Table
                   className="review-connection-table"
@@ -9604,6 +9593,7 @@ function TemplateConfig() {
                   dataSource={reviewConnectionRows}
                   columns={reviewConnectionColumns}
                   scroll={{ x: 760 }}
+                  footer={() => <div className="review-connection-table-footer">已全部加载</div>}
                   rowClassName={row => row.id === selectedReviewConnectionId ? 'is-selected' : ''}
                   onRow={row => ({
                     tabIndex: 0,
@@ -9645,6 +9635,7 @@ function TemplateConfig() {
                     value={agentSettingsDraft.budgets?.[item.key]}
                     defaultValue={agentSettings?.budgetDefaults?.[item.key]}
                     limits={currentAgentBudgetLimits[item.key]}
+                    options={buildAgentBudgetOptions(item.key, agentSettingsDraft.budgets, agentSettings)}
                     onChange={updateAgentBudget}
                   />
                 ))}
@@ -9927,7 +9918,15 @@ function TemplateConfig() {
     }
   ];
 
-  const activeSettingsItem = collapseItems.find(item => item.key === activeSettingsSection?.key) || null;
+  const activeSettingsItem = collapseItems.find(
+    item => item.key === (activeSettingsSection?.contentKey || activeSettingsSection?.key)
+  ) || null;
+  const aiReviewTabItems = AI_REVIEW_SETTINGS_TABS.map(tab => ({ key: tab.key, label: tab.label }));
+  const changeAiReviewSettingsTab = tabKey => {
+    const nextTab = AI_REVIEW_SETTINGS_TABS.find(tab => tab.key === tabKey);
+    if (!nextTab || nextTab.route === location.pathname) return;
+    requestSettingsNavigation(() => navigate(nextTab.route));
+  };
   const connectionCreatePresets = reviewModelPresets[connectionCreateReviewType] || [];
   const connectionCreatePreset = presetForDraft(
     connectionCreatePresets,
@@ -9965,6 +9964,14 @@ function TemplateConfig() {
           aria-label={activeSettingsSection?.label || '设置'}
           data-settings-section={activeSettingsSection?.key || ''}
         >
+          {activeSettingsSection?.key === 'ai-review-settings' && (
+            <Tabs
+              aria-label="AI Review 配置页签"
+              activeKey={activeSettingsSection.tabKey}
+              items={aiReviewTabItems}
+              onChange={changeAiReviewSettingsTab}
+            />
+          )}
           {activeSettingsItem?.children || <Empty description="设置模块不存在" />}
         </section>
       </Spin>
@@ -11367,9 +11374,8 @@ function RiskFeedbackPage() {
 
 function SettingsPage() {
   const location = useLocation();
-  if (location.pathname === SETTINGS_ROUTE || location.pathname === `${SETTINGS_ROUTE}/`) {
-    return <Navigate to={DEFAULT_SETTINGS_ROUTE} replace />;
-  }
+  const redirectRoute = resolveSettingsRedirect(location.pathname);
+  if (redirectRoute) return <Navigate to={redirectRoute} replace />;
   if (!resolveSettingsSection(location.pathname)) {
     return <Navigate to={DEFAULT_SETTINGS_ROUTE} replace />;
   }

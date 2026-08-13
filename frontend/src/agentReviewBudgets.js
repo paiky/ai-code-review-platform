@@ -31,6 +31,17 @@ export const defaultAgentBudgetLimits = {
   submitByTurn: { min: 3, max: 15 }
 };
 
+export const recommendedAgentBudgetValues = Object.freeze({
+  maxTurns: [6, 9, 12, 14, 16, 18],
+  maxToolCalls: [10, 20, 30, 40, 50, 60],
+  maxSourceBytes: [10_000, 50_000, 100_000, 200_000, 300_000],
+  timeoutSeconds: [60, 180, 300, 600, 900],
+  inlineDiffBytes: [10_000, 50_000, 100_000, 200_000, 300_000],
+  maxEvidenceCalls: [4, 6, 8, 10, 12, 15],
+  convergeAtCalls: [2, 4, 6, 8, 10, 13],
+  submitByTurn: [3, 6, 9, 12, 15]
+});
+
 export function normalizeAgentBudgets(settings) {
   const source = settings?.budgets && typeof settings.budgets === 'object'
     ? settings.budgets
@@ -75,6 +86,39 @@ export function validateAgentBudgets(budgets, settings) {
     return '工具调用上限必须至少比证据调用上限多 1';
   }
   return null;
+}
+
+export function buildAgentBudgetOptions(fieldKey, budgets, settings) {
+  if (!agentBudgetKeys.includes(fieldKey)) return [];
+  const limits = agentBudgetLimits(settings)[fieldKey];
+  const serverDefault = Number(settings?.budgetDefaults?.[fieldKey]);
+  const defaultValue = Number.isInteger(serverDefault)
+    ? serverDefault
+    : defaultAgentBudgets[fieldKey];
+  const currentValue = Number(budgets?.[fieldKey]);
+  const recommendedValues = recommendedAgentBudgetValues[fieldKey] || [];
+  const recommendedSet = new Set(recommendedValues);
+  const values = new Set([...recommendedValues, defaultValue]);
+  if (Number.isInteger(currentValue)) values.add(currentValue);
+
+  return [...values]
+    .filter(value => Number.isInteger(value) && value >= limits.min && value <= limits.max)
+    .sort((left, right) => left - right)
+    .map(value => {
+      const nextBudgets = { ...budgets, [fieldKey]: value };
+      const disabledReason = value === currentValue
+        ? null
+        : validateAgentBudgets(nextBudgets, settings);
+      return {
+        value,
+        isDefault: value === defaultValue,
+        isCurrentCustom: value === currentValue
+          && value !== defaultValue
+          && !recommendedSet.has(value),
+        disabled: Boolean(disabledReason),
+        disabledReason
+      };
+    });
 }
 
 export function hasRaisedAgentBudget(budgets, settings) {

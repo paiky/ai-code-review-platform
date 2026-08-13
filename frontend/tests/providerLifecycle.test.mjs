@@ -18,8 +18,7 @@ test('normalizes and builds the explicit Provider create request', () => {
     endpointUrl: ' https://safe.invalid/v1 ',
     modelName: ' review-model ',
     timeoutSeconds: 120,
-    apiKey: ' local-secret ',
-    enabled: true
+    apiKey: ' local-secret '
   };
 
   assert.equal(validateCreateProviderDraft(draft), null);
@@ -30,17 +29,17 @@ test('normalizes and builds the explicit Provider create request', () => {
     endpointUrl: 'https://safe.invalid/v1',
     modelName: 'review-model',
     timeoutSeconds: 120,
-    apiKey: 'local-secret',
-    enabled: true
+    apiKey: 'local-secret'
   });
 });
 
-test('validates code, protocol, timeout and enabled completeness', () => {
+test('validates code, protocol and timeout without a Provider enable gate', () => {
   const base = { ...createProviderDraft(), providerCode: 'CUSTOM', providerName: 'Custom' };
   assert.match(validateCreateProviderDraft({ ...base, providerCode: '1bad' }), /Provider Code/);
   assert.match(validateCreateProviderDraft({ ...base, providerType: 'UNKNOWN' }), /协议/);
   assert.match(validateCreateProviderDraft({ ...base, timeoutSeconds: 3601 }), /超时/);
-  assert.match(validateCreateProviderDraft({ ...base, enabled: true }), /Endpoint/);
+  assert.equal(validateCreateProviderDraft({ ...base, enabled: false }), null);
+  assert.equal(Object.hasOwn(buildCreateProviderRequest(base), 'enabled'), false);
 });
 
 test('exposes delete only for custom non-default Providers', () => {

@@ -364,7 +364,7 @@ def test_unified_standard_connection_maps_presets_and_validates_contract(
     assert client_identity.status_code == 400
 
 
-def test_standard_clear_key_disables_connection_without_changing_default(
+def test_standard_clear_key_makes_connection_incomplete_without_changing_default(
     client: TestClient,
 ) -> None:
     created = client.post(
@@ -378,7 +378,7 @@ def test_standard_clear_key_disables_connection_without_changing_default(
 
     cleared = client.put(
         f"/api/code-quality-review-providers/{provider_code}",
-        json={"clearApiKey": True, "enabled": True},
+        json={"clearApiKey": True, "enabled": False},
     )
 
     assert cleared.status_code == 200
@@ -388,8 +388,38 @@ def test_standard_clear_key_disables_connection_without_changing_default(
     )
     assert selected["catalogVisible"] is True
     assert selected["apiKeyConfigured"] is False
-    assert selected["enabled"] is False
+    assert selected["enabled"] is True
     assert selected["defaultProvider"] is True
+
+
+def test_historical_disabled_standard_provider_remains_executable(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    provider = CodeQualityModelProvider(
+        provider_code="HISTORICAL_DISABLED",
+        provider_name="Historical disabled",
+        provider_type="OPENAI_CHAT_COMPATIBLE",
+        endpoint_url="https://provider.example.com/v1",
+        model_name="review-model",
+        api_key="historical-secret",
+        enabled=False,
+        built_in=False,
+    )
+    monkeypatch.setattr(providers, "append_progress", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        providers,
+        "_run_openai_compatible",
+        lambda *_args, **_kwargs: {"status": "SUCCESS"},
+    )
+    monkeypatch.setattr(
+        providers,
+        "_run_openai_compatible_fix",
+        lambda *_args, **_kwargs: {"status": "SUCCESS"},
+    )
+
+    assert providers.run_provider(db_session, 999, provider, {})["status"] == "SUCCESS"
+    assert providers.run_fix_provider(db_session, 1000, provider, {})["status"] == "SUCCESS"
 
 
 def test_standard_responses_execution_uses_saved_reasoning_and_tls(

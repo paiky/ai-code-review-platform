@@ -138,7 +138,7 @@ test('uses the explicit Settings default instead of a stale Provider flag', () =
   assert.equal(rows.find(item => item.id === 'STANDARD:ANTHROPIC').isDefault, true);
 });
 
-test('derives truthful incomplete disabled and worker-unsupported states', () => {
+test('derives truthful incomplete default-available and worker-unsupported states', () => {
   const input = fixtures();
   input.agentRuntimes[0].configurationComplete = false;
   input.agentRuntimes[1].protocolAvailable = false;
@@ -148,7 +148,8 @@ test('derives truthful incomplete disabled and worker-unsupported states', () =>
   assert.equal(rows[0].configurationStatus, connectionConfigurationStatus.INCOMPLETE);
   assert.equal(rows[1].configurationStatus, connectionConfigurationStatus.WORKER_UNSUPPORTED);
   assert.equal(rows[2].configurationStatus, connectionConfigurationStatus.INCOMPLETE);
-  assert.equal(rows[3].configurationStatus, connectionConfigurationStatus.DISABLED);
+  assert.equal(rows[3].configurationStatus, connectionConfigurationStatus.READY);
+  assert.equal(rows[3].enabled, true);
 });
 
 test('hides never-configured Standard placeholders and keeps cleared connections unavailable', () => {

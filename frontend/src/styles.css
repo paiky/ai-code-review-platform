@@ -1669,18 +1669,18 @@ body {
 }
 
 .agent-budget-grid-basic {
-  grid-template-columns: repeat(auto-fill, minmax(190px, 212px));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .agent-budget-field-card {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 164px;
+  min-height: 126px;
   padding: 14px;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  background: #fafafa;
+  background: #ffffff;
 }
 
 .agent-budget-field-title {
@@ -1689,60 +1689,29 @@ body {
   min-height: 22px;
 }
 
-.agent-budget-field-card .ant-space-compact {
+.agent-budget-field-select {
   width: 100%;
   margin-top: 12px;
 }
 
-.agent-budget-field-card .ant-input-number-addon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 58px;
-  min-width: 58px;
-  padding-inline: 8px;
-  text-align: center;
-}
-
-.agent-budget-field-input {
-  width: 100%;
-}
-
-.agent-budget-field-number {
-  width: calc(100% - 64px);
-}
-
-.agent-budget-field-unit {
-  width: 64px;
-  color: #64748b;
-  text-align: center;
-  pointer-events: none;
-}
-
-.agent-budget-field-meta {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 14px;
-}
-
-.agent-budget-field-meta > div {
-  display: flex;
-  flex-direction: column;
+.agent-budget-field-select .ant-select-selection-item {
   min-width: 0;
-  gap: 2px;
-  padding: 7px 8px;
-  border-radius: 6px;
-  background: #ffffff;
 }
 
-.agent-budget-field-meta .ant-typography {
+.agent-budget-field-help {
+  display: block;
+  margin-top: 8px;
   overflow: hidden;
   font-size: 12px;
   line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@media (max-width: 1199px) {
+  .agent-budget-grid-basic {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -1776,6 +1745,21 @@ body {
   min-width: 0;
 }
 
+.review-model-page-actions {
+  justify-content: flex-end;
+}
+
+.review-agent-global-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid #dce6f2;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
 .review-runtime-card-grid {
   display: grid;
   min-width: 0;
@@ -1787,14 +1771,57 @@ body {
   min-width: 0;
   height: 100%;
   border-color: #dce6f2;
-  box-shadow: 0 4px 14px rgba(15, 31, 61, 0.04);
+  border-radius: 10px;
+  box-shadow: 0 3px 12px rgba(15, 31, 61, 0.04);
 }
 
-.review-connection-runtime-controls {
-  padding: 10px 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #f8fafc;
+.review-runtime-card > .ant-card-body {
+  height: 100%;
+  padding: 16px 18px;
+}
+
+.review-runtime-card-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.review-runtime-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  font-size: 19px;
+}
+
+.review-runtime-card-agent .review-runtime-card-icon {
+  color: #6d5ce7;
+  background: #f2efff;
+}
+
+.review-runtime-card-standard .review-runtime-card-icon {
+  color: #1677ff;
+  background: #edf5ff;
+}
+
+.review-runtime-card-heading-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.review-runtime-card .ant-descriptions-item-label {
+  width: 90px;
+  color: #7a869a;
+}
+
+.review-runtime-card .ant-descriptions-row:last-child > td {
+  padding-bottom: 0;
 }
 
 .rule-gap-number-prefix {
@@ -1814,8 +1841,9 @@ body {
 .review-connection-workbench {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr);
+  grid-template-columns: minmax(0, 2fr) minmax(360px, 1.1fr);
   gap: 16px;
+  align-items: stretch;
 }
 
 .review-connection-directory,
@@ -1827,12 +1855,24 @@ body {
   overflow: hidden;
 }
 
+.review-connection-directory > .settings-card-header,
+.review-connection-detail > .settings-card-header {
+  margin-bottom: 14px;
+}
+
+.review-connection-directory .ant-table-thead > tr > th {
+  color: #536178;
+  background: #f8fafc;
+  font-size: 12px;
+}
+
 .review-connection-table .ant-table-row {
   cursor: pointer;
 }
 
 .review-connection-table .ant-table-row > .ant-table-cell {
   min-height: 44px;
+  font-size: 12px;
 }
 
 .review-connection-table .ant-table-row:focus-visible {
@@ -1841,7 +1881,13 @@ body {
 }
 
 .review-connection-table .ant-table-row.is-selected > .ant-table-cell {
-  background: #eaf3ff !important;
+  background: #f3f7ff !important;
+}
+
+.review-connection-table-footer {
+  color: #94a3b8;
+  font-size: 12px;
+  text-align: center;
 }
 
 .review-connection-name-cell {
@@ -1855,6 +1901,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
 }
 
 .review-connection-mobile-meta {
@@ -1864,6 +1911,83 @@ body {
 
 .review-connection-actions .ant-btn {
   min-height: 40px;
+}
+
+.review-connection-detail {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.review-connection-detail > .ant-space,
+.review-connection-detail-content {
+  height: 100%;
+}
+
+.review-connection-detail-content > .ant-space-item:first-child {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #edf0f5;
+}
+
+.review-connection-detail-content > .ant-space-item:not(:first-child) {
+  padding-inline: 16px;
+}
+
+.review-connection-detail-content > .ant-space-item:last-child {
+  padding-bottom: 14px;
+}
+
+.review-connection-detail .settings-card-heading {
+  gap: 8px;
+}
+
+.review-connection-detail .ant-input,
+.review-connection-detail .ant-input-affix-wrapper,
+.review-connection-detail .ant-input-number,
+.review-connection-detail .ant-select-selector {
+  border-color: transparent !important;
+  background: #f8fafc !important;
+  box-shadow: none !important;
+}
+
+.review-connection-detail .ant-row > .ant-col-md-12 {
+  display: grid;
+  align-items: center;
+  flex: 0 0 100%;
+  grid-template-columns: 122px minmax(0, 1fr);
+  gap: 10px;
+  max-width: 100%;
+  min-height: 44px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #edf0f5;
+}
+
+.review-connection-detail .ant-row > .ant-col-md-12 > .ant-typography {
+  color: #536178;
+  font-size: 12px;
+}
+
+.review-connection-detail .ant-input:hover,
+.review-connection-detail .ant-input:focus,
+.review-connection-detail .ant-input-affix-wrapper:hover,
+.review-connection-detail .ant-input-affix-wrapper-focused,
+.review-connection-detail .ant-input-number:hover,
+.review-connection-detail .ant-input-number-focused,
+.review-connection-detail .ant-select-focused .ant-select-selector {
+  border-color: #91caff !important;
+  background: #ffffff !important;
+}
+
+.review-connection-actions {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid #edf0f5;
+}
+
+.review-connection-actions .ant-space {
+  width: 100%;
+  justify-content: flex-end;
 }
 
 .review-provider-danger-zone {
@@ -1927,6 +2051,32 @@ body {
 
   .review-connection-actions .ant-btn {
     min-height: 44px;
+  }
+
+  .review-model-page-actions,
+  .review-agent-global-switch {
+    width: 100%;
+  }
+
+  .review-model-page-actions {
+    flex-direction: column;
+  }
+
+  .review-model-page-actions > .ant-space-item {
+    width: 100%;
+  }
+
+  .review-agent-global-switch {
+    justify-content: space-between;
+  }
+
+  .review-runtime-card > .ant-card-body {
+    padding: 14px;
+  }
+
+  .review-connection-detail .ant-row > .ant-col-md-12 {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
   }
 
   .review-provider-danger-zone {
