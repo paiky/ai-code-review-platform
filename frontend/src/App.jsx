@@ -48,6 +48,7 @@ import {
   ArrowLeftOutlined,
   BellOutlined,
   BranchesOutlined,
+  CheckCircleOutlined,
   ClockCircleOutlined,
   CloseOutlined,
   ClusterOutlined,
@@ -152,6 +153,15 @@ import {
   shouldAnimateReview,
   visibleReviewJourneyStages
 } from './reviewJourneyPresentation.js';
+import {
+  buildTerminalReviewResultPresentation,
+  isTerminalReviewStatus,
+  initializeFindingExpansionRegistry,
+  mergeDeepLinkedFinding,
+  resolveFindingDeepLink,
+  resolveReviewPresentationKey,
+  setReviewExpandedFindingIndexes
+} from './reviewResultPresentation.js';
 import {
   buildReviewImmersivePresentation,
   normalizeReviewWorkspaceMode,
@@ -801,6 +811,38 @@ function taskReviewStatusColor(value) {
     REVIEW_FAILED: 'red',
     TASK_FAILED: 'red'
   }[value] || 'default';
+}
+
+function terminalReviewStatusFromTask(value) {
+  const status = String(value || '').toUpperCase();
+  if (status === 'SKIPPED') return 'SKIPPED';
+  if (status === 'REVIEW_FAILED' || status === 'TASK_FAILED') return 'FAILED';
+  if (status === 'CANCELLED') return 'CANCELLED';
+  return null;
+}
+
+function taskExecutionStatusLabel(value) {
+  return {
+    PENDING: '待处理',
+    QUEUED: '排队中',
+    RUNNING: '执行中',
+    SUCCESS: '已完成',
+    FAILED: '失败',
+    CANCELLED: '已取消',
+    SKIPPED: '已跳过'
+  }[String(value || '').toUpperCase()] || value || '-';
+}
+
+function taskExecutionStatusColor(value) {
+  return {
+    PENDING: 'blue',
+    QUEUED: 'blue',
+    RUNNING: 'processing',
+    SUCCESS: 'green',
+    FAILED: 'red',
+    CANCELLED: 'default',
+    SKIPPED: 'gold'
+  }[String(value || '').toUpperCase()] || 'default';
 }
 
 function normalizeAutoFixPreviewSeverities(value) {
@@ -1767,7 +1809,7 @@ function MaintenanceArtifacts({ artifacts }) {
   );
 }
 
-function TaskWorkspaceShell({ title, description, actions, children, leading }) {
+function TaskWorkspaceShell({ title, description, actions, children, leading, meta }) {
   return (
     <Box
       sx={{
@@ -1797,6 +1839,11 @@ function TaskWorkspaceShell({ title, description, actions, children, leading }) 
                 <MuiTypography variant="body2" sx={{ color: '#5f6b76' }}>
                   {description}
                 </MuiTypography>
+              )}
+              {meta && (
+                <Box sx={{ mt: description ? 1.25 : 0 }}>
+                  {meta}
+                </Box>
               )}
             </Box>
             {actions && (
@@ -5046,7 +5093,8 @@ function ReviewJourneyTimeline({
   journey,
   taskCheckRunning,
   onRunTaskCheck,
-  variant = 'default'
+  variant = 'default',
+  anchorId = null
 }) {
   const mode = reviewTimelineMode(journey);
   const stages = visibleReviewJourneyStages(journey);
@@ -5122,10 +5170,14 @@ function ReviewJourneyTimeline({
   }, [openStageId, openAlertStageId]);
 
   return (
-    <section className={`review-journey-timeline review-journey-${mode.toLowerCase()} review-journey-${variant}`}>
+    <section
+      id={anchorId || undefined}
+      tabIndex={anchorId ? -1 : undefined}
+      className={`review-journey-timeline review-journey-${mode.toLowerCase()} review-journey-${variant}`}
+    >
       <div className="review-journey-heading">
         <div>
-          <Text strong>{mode === 'FULL' ? '统一 Review 进度' : 'Review 阶段回顾'}</Text>
+          <Text strong>{mode === 'FULL' ? '统一 Review 进度' : 'Review 流程'}</Text>
           <Text type="secondary">
             {stages.length === 0
               ? '历史任务未记录可可靠回看的阶段'
@@ -5174,7 +5226,9 @@ function ReviewJourneyTimeline({
                   <span className="review-journey-stage-index" aria-hidden="true">{index + 1}</span>
                   <span className="review-journey-stage-copy">
                     <strong>{stage.title}</strong>
-                    <small>{reviewJourneyStageStatusLabel(stage.status)}</small>
+                    <small>
+                      {reviewJourneyStageStatusLabel(stage.status)} · {formatJourneyDuration(stage.durationMs)}
+                    </small>
                   </span>
                 </button>
                 {alert && (
@@ -5496,6 +5550,143 @@ function ReviewImmersiveWorkspace({
   );
 }
 
+function ReviewSummaryText({ id, text, expanded, onToggle }) {
+  const contentRef = useRef(null);
+  const [overflowing, setOverflowing] = useState(false);
+
+  useEffect(() => {
+    if (expanded) return undefined;
+    const content = contentRef.current;
+    if (!content) return undefined;
+    const measure = () => setOverflowing(content.scrollHeight > content.clientHeight + 1);
+    const frame = window.requestAnimationFrame(measure);
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    observer?.observe(content);
+    window.addEventListener('resize', measure);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [expanded, text]);
+
+  return (
+    <div className="review-result-summary-copy">
+      <Paragraph
+        ref={contentRef}
+        id={id}
+        className={`review-result-summary-text${expanded ? ' is-expanded' : ''}`}
+      >
+        {text}
+      </Paragraph>
+      {(overflowing || expanded) && (
+        <Button
+          type="link"
+          size="small"
+          className="review-result-summary-toggle"
+          aria-expanded={expanded}
+          aria-controls={id}
+          onClick={onToggle}
+          onKeyDown={event => {
+            if (!isReviewStageActivationKey(event.key)) return;
+            event.preventDefault();
+            onToggle();
+          }}
+        >
+          {expanded ? '收起' : '展开全文'}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function ReviewResultSummary({
+  presentation,
+  summaryId,
+  summaryExpanded,
+  onToggleSummary,
+  onViewJourney,
+  actions,
+  children
+}) {
+  const riskItems = [
+    ['critical', '紧急', presentation.riskCounts.critical],
+    ['high', '高风险', presentation.riskCounts.high],
+    ['medium', '中风险', presentation.riskCounts.medium],
+    ['low', '低风险', presentation.riskCounts.low]
+  ];
+  const showRiskCounts = presentation.status === 'SUCCESS' || presentation.issueCount > 0;
+  const reasonType = presentation.status === 'FAILED'
+    ? 'error'
+    : presentation.fallback || presentation.status === 'SKIPPED'
+      ? 'warning'
+      : 'info';
+  return (
+    <section className={`review-result-summary review-result-summary-${presentation.status.toLowerCase()}`} aria-labelledby={`${summaryId}-title`}>
+      <div className="review-result-summary-grid">
+        <div className="review-result-overview">
+          <div className="review-result-title-row">
+            <span className="review-result-status-icon" aria-hidden="true">
+              {presentation.status === 'SUCCESS' ? <CheckCircleOutlined /> : '!'}
+            </span>
+            <Title level={3} id={`${summaryId}-title`}>{presentation.title}</Title>
+          </div>
+          {(presentation.status === 'SUCCESS' || presentation.issueCount > 0) && (
+            <Text strong className="review-result-count">
+              {presentation.status === 'SUCCESS'
+                ? `发现 ${presentation.issueCount} 个代码质量问题`
+                : `已有 ${presentation.issueCount} 个正式代码质量问题`}
+            </Text>
+          )}
+          {showRiskCounts && (
+            <div className="review-result-risk-counts" aria-label="风险分布">
+              {riskItems.map(([key, label, count]) => (
+                <Tag key={key} className={`review-risk-count review-risk-count-${key}`}>
+                  {label} {count}
+                </Tag>
+              ))}
+              {presentation.riskCounts.unknown > 0 && (
+                <Tag className="review-risk-count review-risk-count-unknown">未分类 {presentation.riskCounts.unknown}</Tag>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="review-result-narrative">
+          <ReviewSummaryText
+            id={summaryId}
+            text={presentation.summary}
+            expanded={summaryExpanded}
+            onToggle={onToggleSummary}
+          />
+          {presentation.reason && presentation.reason !== presentation.summary && (
+            <Alert type={reasonType} showIcon title={presentation.reason} />
+          )}
+        </div>
+
+        <div className="review-result-facts">
+          <dl>
+            <div><dt>引擎</dt><dd>{presentation.engineLabel}</dd></div>
+            <div><dt>模型</dt><dd><Tooltip title={presentation.providerModelLabel}><span>{presentation.providerModelLabel}</span></Tooltip></dd></div>
+            {presentation.durationMs !== null && <div><dt>总耗时</dt><dd>{formatJourneyDuration(presentation.durationMs)}</dd></div>}
+            {presentation.agentDurationMs !== null && <div><dt>Agent 耗时</dt><dd>{formatJourneyDuration(presentation.agentDurationMs)}</dd></div>}
+            {presentation.agentRunId !== null && <div><dt>Agent Run</dt><dd>#{presentation.agentRunId}</dd></div>}
+          </dl>
+          <Button className="review-result-journey-link" onClick={onViewJourney}>
+            查看 Review 流程
+          </Button>
+          {actions && <div className="review-result-fact-actions">{actions}</div>}
+        </div>
+      </div>
+      {children && (
+        <div className="review-result-supporting">
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function CodeQualityReviewView({
   taskId,
   review,
@@ -5519,21 +5710,75 @@ function CodeQualityReviewView({
   const [fixPreviewByIndex, setFixPreviewByIndex] = useState({});
   const [fixPreviewLoadingIndex, setFixPreviewLoadingIndex] = useState(null);
   const [cancelingAction, setCancelingAction] = useState(null);
-  const [activeFindingKeys, setActiveFindingKeys] = useState([]);
+  const [findingExpansionByReview, setFindingExpansionByReview] = useState({});
+  const [summaryExpansionByReview, setSummaryExpansionByReview] = useState({});
+  const initializedFindingReviewsRef = useRef(new Set());
+  const findings = Array.isArray(review?.findings) ? review.findings : [];
+  const reviewStateKey = resolveReviewPresentationKey(review, journey);
+  const journeyAnchorId = `review-journey-${reviewStateKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+  const summaryId = `review-summary-${reviewStateKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+  const activeFindingIndexes = findingExpansionByReview[reviewStateKey] || [];
+  const activeFindingKeys = activeFindingIndexes.map(index => `finding-${index}`);
+  const summaryExpanded = Boolean(summaryExpansionByReview[reviewStateKey]);
   useEffect(() => {
     const previews = Array.isArray(initialFixPreviews) ? initialFixPreviews : [];
     setFixPreviewByIndex(Object.fromEntries(previews.map(item => [item.findingIndex, item])));
   }, [initialFixPreviews]);
   useEffect(() => {
-    const match = /^#fix-preview-(\d+)$/.exec(location.hash || '');
-    if (!match) return;
-    const key = `finding-${match[1]}`;
-    setActiveFindingKeys(current => current.includes(key) ? current : [...current, key]);
+    if (!review || initializedFindingReviewsRef.current.has(reviewStateKey)) return;
+    initializedFindingReviewsRef.current.add(reviewStateKey);
+    setFindingExpansionByReview(current => initializeFindingExpansionRegistry(
+      current,
+      reviewStateKey,
+      findings,
+      location.hash
+    ));
+  }, [reviewStateKey]);
+  useEffect(() => {
+    if (!review) return;
+    const deepLink = resolveFindingDeepLink(location.hash, findings.length);
+    if (!deepLink) return;
+    setFindingExpansionByReview(current => ({
+      ...current,
+      [reviewStateKey]: mergeDeepLinkedFinding(current[reviewStateKey], location.hash, findings.length)
+    }));
     window.setTimeout(() => {
-      document.getElementById(`fix-preview-${match[1]}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      document.getElementById(deepLink.targetId)?.scrollIntoView({
+        behavior: reducedMotion ? 'auto' : 'smooth',
+        block: 'center'
+      });
     }, 180);
-  }, [location.hash, review?.id]);
+  }, [location.hash, reviewStateKey, findings.length]);
   if (!review) {
+    if (isTerminalReviewStatus(journey?.status)) {
+      const missingReviewPresentation = buildTerminalReviewResultPresentation({}, journey);
+      return (
+        <Space orientation="vertical" size="large" className="full-width review-result-first">
+          <ReviewResultSummary
+            presentation={missingReviewPresentation}
+            summaryId={summaryId}
+            summaryExpanded={summaryExpanded}
+            onToggleSummary={() => setSummaryExpansionByReview(current => ({
+              ...current,
+              [reviewStateKey]: !current[reviewStateKey]
+            }))}
+            onViewJourney={() => {
+              const target = document.getElementById(journeyAnchorId);
+              const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+              target?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
+              window.requestAnimationFrame(() => target?.focus({ preventScroll: true }));
+            }}
+          />
+          <ReviewJourneyTimeline
+            journey={journey}
+            anchorId={journeyAnchorId}
+            taskCheckRunning={taskCheckRunning}
+            onRunTaskCheck={onRunTaskCheck}
+          />
+        </Space>
+      );
+    }
     return (
       <Space orientation="vertical" size="large" className="full-width">
         <Card>
@@ -5553,7 +5798,6 @@ function CodeQualityReviewView({
     );
   }
 
-  const findings = Array.isArray(review.findings) ? review.findings : [];
   const requestedEngine = String(review.requestedEngine || 'STANDARD').toUpperCase();
   const effectiveEngine = String(review.effectiveEngine || requestedEngine).toUpperCase();
   const agentRunSummary = review.agentRunSummary || null;
@@ -5618,138 +5862,90 @@ function CodeQualityReviewView({
       setCancelingAction(null);
     }
   };
-  const resultContent = (
-    <Space direction="vertical" size="large" className="full-width">
-      {journey?.running && (
-        <ReviewJourneyExperience
-          journey={journey}
-          taskCheckRunning={taskCheckRunning}
-          onRunTaskCheck={onRunTaskCheck}
+  const terminalResult = isTerminalReviewStatus(journey?.status || review.status);
+  const resultPresentation = buildTerminalReviewResultPresentation(review, journey);
+  const fallbackDiagnosticText = effectiveEngine === 'STANDARD_FALLBACK'
+    ? agentFallbackDiagnostic(agentRunSummary, journey?.agentSummary)
+    : null;
+  const reviewActionButtons = (
+    <Space wrap>
+      {review.status === 'RUNNING' && (
+        <Button
+          danger
+          icon={<CloseOutlined />}
+          loading={cancelingAction === `review-${review?.reviewKey || 'default'}`}
+          onClick={cancelReview}
+        >
+          中断 AI Review
+        </Button>
+      )}
+      {isGitLabTask && (
+        alternateEngine === 'AGENT'
+        || STANDARD_REVIEW_COMPARISON_ACTION_VISIBLE
+      ) && (
+        <Button
+          loading={retrying}
+          disabled={review.status === 'RUNNING'}
+          onClick={() => onRetry?.(undefined, alternateEngine)}
+        >
+          {alternateEngine === 'AGENT' ? '追加 Agent 对照' : '追加普通 Review 对照'}
+        </Button>
+      )}
+      <Button
+        loading={retrying}
+        disabled={review.status === 'RUNNING'}
+        onClick={() => onRetry?.(requestedEngine === 'AGENT' ? undefined : review?.reviewKey, requestedEngine)}
+      >
+        重试 AI Review
+      </Button>
+    </Space>
+  );
+  const reviewSupportingAlerts = (
+    <Space orientation="vertical" size="small" className="full-width">
+      {reviewCoverage && (
+        <Alert
+          type="warning"
+          showIcon
+          message={reviewCoverage.includedFileCount > 0 ? '部分敏感文件已隔离，其余文件继续 Agent Review' : '全部变更文件已按敏感路径策略安全跳过'}
+          description={`总文件 ${reviewCoverage.totalChangedFileCount}，Agent 审查 ${reviewCoverage.includedFileCount}，排除 ${reviewCoverage.excludedFileCount}`}
         />
       )}
-      <Card>
-        <Space direction="vertical" size="small" className="full-width">
-          <div className="quality-result-head">
-            <Space wrap>
-              <Tag color={reviewJourneyStatusColor(journey?.status)}>{journey?.statusLabel || '历史任务未记录'}</Tag>
-              <Tag color="blue">{review.provider || '-'}</Tag>
-              {review.model && <Tag>{review.model}</Tag>}
-              <Tag color={reviewJourneyEngineColor(journey?.engineKind)}>
-                {journey?.engineLabel || '历史任务未记录'}
-              </Tag>
-              {review.overallLevel && <Tag color={riskColor(review.overallLevel)}>{severityLabel(review.overallLevel)}</Tag>}
-              <Tag>{review.findingCount ?? findings.length} 个问题</Tag>
-            </Space>
-            <Space>
-              {review.status === 'RUNNING' && (
-                <Button
-                  danger
-                  icon={<CloseOutlined />}
-                  loading={cancelingAction === `review-${review?.reviewKey || 'default'}`}
-                  onClick={cancelReview}
-                >
-                  中断 AI Review
-                </Button>
-              )}
-              {isGitLabTask && (
-                alternateEngine === 'AGENT'
-                || STANDARD_REVIEW_COMPARISON_ACTION_VISIBLE
-              ) && (
-                <Button
-                  loading={retrying}
-                  disabled={review.status === 'RUNNING'}
-                  onClick={() => onRetry?.(undefined, alternateEngine)}
-                >
-                  {alternateEngine === 'AGENT' ? '追加 Agent 对照' : '追加普通 Review 对照'}
-                </Button>
-              )}
-              <Button
-                loading={retrying}
-                disabled={review.status === 'RUNNING'}
-                onClick={() => onRetry?.(requestedEngine === 'AGENT' ? undefined : review?.reviewKey, requestedEngine)}
-              >
-                重试 AI Review
-              </Button>
-            </Space>
-          </div>
-          <Alert
-            type={findings.length > 0 && !journey?.running ? 'warning' : 'info'}
-            showIcon
-            message={journey?.running ? 'Review 正在执行，正式结果尚未生成' : summaryText}
-          />
-          {journey?.status === 'QUEUED' && <Alert type="info" showIcon message="AI Review 正在排队" description="任务已进入调度队列，执行状态会自动刷新。" />}
-          {journey?.status === 'RUNNING' && <Alert type="info" showIcon message="AI Review 正在执行" description="模型 Provider 正在分析代码变更，完成后结果会自动刷新。" />}
-          {journey?.status === 'SKIPPED' && (
-            <Alert
-              type="warning"
-              showIcon
-              message="AI Review 未执行"
-              description="本次 Review 已跳过；历史记录不足时不会补造具体原因。"
-            />
-          )}
-          {journey?.status === 'FAILED' && (
-            <Alert
-              type="error"
-              showIcon
-              message="AI Review 执行失败"
-              description="本次 Review 没有成功完成，可查看统一时间轴中的固定安全摘要。"
-            />
-          )}
-          {reviewCoverage && (
-            <Alert
-              type="warning"
-              showIcon
-              message={reviewCoverage.includedFileCount > 0 ? '部分敏感文件已隔离，其余文件继续 Agent Review' : '全部变更文件已按敏感路径策略安全跳过'}
-              description={`总文件 ${reviewCoverage.totalChangedFileCount}，Agent 审查 ${reviewCoverage.includedFileCount}，排除 ${reviewCoverage.excludedFileCount}`}
-            />
-          )}
-          {effectiveEngine === 'STANDARD_FALLBACK' && (
-            <Alert
-              type="warning"
-              showIcon
-              message="本次 Agent Review 已降级为普通 Review"
-              description={[
-                'Agent 未形成有效终态，任务已按既有策略由 Standard Review 接管。',
-                agentFallbackDiagnostic(agentRunSummary, journey?.agentSummary)
-              ].filter(Boolean).join(' ')}
-            />
-          )}
-          <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
-            <Descriptions.Item label="Profile">{review.profileCode || '-'}</Descriptions.Item>
-            <Descriptions.Item label="请求引擎">{journey?.requestedEngine || '历史任务未记录'}</Descriptions.Item>
-            <Descriptions.Item label="实际引擎">{journey?.effectiveEngine || '历史任务未记录'}</Descriptions.Item>
-            <Descriptions.Item label="开始时间">{formatDateTime(review.startedAt)}</Descriptions.Item>
-            <Descriptions.Item label="结束时间">{formatDateTime(review.finishedAt)}</Descriptions.Item>
-            <Descriptions.Item label="Exit Code">{review.exitCode ?? '-'}</Descriptions.Item>
-            {requestedEngine === 'AGENT' && <Descriptions.Item label="Agent Run">{agentRunSummary?.runId ?? review.agentRunId ?? '-'}</Descriptions.Item>}
-            {requestedEngine === 'AGENT' && <Descriptions.Item label="Agent turns / 工具">{agentRunSummary ? `${agentRunSummary.turnCount ?? 0} / ${agentRunSummary.toolCallCount ?? 0}` : '-'}</Descriptions.Item>}
-            {requestedEngine === 'AGENT' && <Descriptions.Item label="源码 / Diff 返回">{agentRunSummary ? `${agentRunSummary.sourceBytesReturned ?? 0} / ${agentRunSummary.diffBytesReturned ?? 0} bytes` : '-'}</Descriptions.Item>}
-            {requestedEngine === 'AGENT' && <Descriptions.Item label="Agent 耗时">{agentRunSummary?.durationMs == null ? '-' : formatDuration(agentRunSummary.durationMs / 1000)}</Descriptions.Item>}
-          </Descriptions>
-        </Space>
-      </Card>
-      {!journey?.running && (
-        <ReviewJourneyExperience
-          journey={journey}
-          taskCheckRunning={taskCheckRunning}
-          onRunTaskCheck={onRunTaskCheck}
-        />
+      {fallbackDiagnosticText && (
+        <Alert type="warning" showIcon title="Agent 安全执行摘要" description={fallbackDiagnosticText} />
       )}
-      {!journey?.running && <Card title="质量问题">
+    </Space>
+  );
+  const hasSupportingAlerts = Boolean(reviewCoverage || fallbackDiagnosticText);
+  const findingsSection = (terminalResult && (journey?.status === 'SUCCESS' || findings.length > 0)) ? (
+    <Card className="review-findings-card" title={`质量问题（${findings.length}）`}>
         {findings.length === 0 ? (
-          <Empty description="暂无结构化问题" />
+          <Empty description="本次 Review 未发现需要报告的代码质量问题" />
         ) : (
           <Collapse
             activeKey={activeFindingKeys}
-            onChange={keys => setActiveFindingKeys(Array.isArray(keys) ? keys : [keys])}
+            onChange={keys => {
+              const sourceKeys = Array.isArray(keys) ? keys : [keys];
+              const indexes = sourceKeys
+                .map(key => /^finding-(\d+)$/.exec(String(key))?.[1])
+                .filter(value => value !== undefined)
+                .map(Number)
+                .filter(index => Number.isSafeInteger(index) && index >= 0 && index < findings.length);
+              setFindingExpansionByReview(current => setReviewExpandedFindingIndexes(
+                current,
+                reviewStateKey,
+                indexes,
+                findings.length
+              ));
+            }}
             items={findings.map((finding, index) => {
               const fixPreviewStatus = fixPreviewByIndex[index]?.status;
               const fixPreviewBusy = fixPreviewStatus === 'RUNNING' || fixPreviewStatus === 'QUEUED';
               const fixPreviewLoading = fixPreviewLoadingIndex === index || fixPreviewStatus === 'RUNNING';
               return {
                 key: `finding-${index}`,
+                className: `review-finding-item review-finding-item-${String(finding.severity || 'unknown').toLowerCase()}`,
                 label: (
-                  <Space className="risk-item-heading" wrap>
+                  <Space className="risk-item-heading" id={`finding-${index}`} wrap>
                     <Tag color={severityColor(finding.severity)}>{severityLabel(finding.severity)}</Tag>
                     {finding.category && <Tag color="blue">{categoryLabel(finding.category)}</Tag>}
                     {finding.confidence && <Tag color={confidenceColor(finding.confidence)}>置信度 {confidenceLabel(finding.confidence)}</Tag>}
@@ -5843,7 +6039,60 @@ function CodeQualityReviewView({
             })}
           />
         )}
-      </Card>}
+      </Card>
+  ) : null;
+  const resultContent = terminalResult ? (
+    <Space orientation="vertical" size="large" className="full-width review-result-first">
+      <ReviewResultSummary
+        presentation={resultPresentation}
+        summaryId={summaryId}
+        summaryExpanded={summaryExpanded}
+        onToggleSummary={() => setSummaryExpansionByReview(current => ({
+          ...current,
+          [reviewStateKey]: !current[reviewStateKey]
+        }))}
+        onViewJourney={() => {
+          const target = document.getElementById(journeyAnchorId);
+          const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+          target?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
+          window.requestAnimationFrame(() => target?.focus({ preventScroll: true }));
+        }}
+        actions={reviewActionButtons}
+      >
+        {hasSupportingAlerts ? reviewSupportingAlerts : null}
+      </ReviewResultSummary>
+      {findingsSection}
+      <ReviewJourneyTimeline
+        journey={journey}
+        anchorId={journeyAnchorId}
+        taskCheckRunning={taskCheckRunning}
+        onRunTaskCheck={onRunTaskCheck}
+      />
+    </Space>
+  ) : (
+    <Space direction="vertical" size="large" className="full-width">
+      <ReviewJourneyExperience
+        journey={journey}
+        taskCheckRunning={taskCheckRunning}
+        onRunTaskCheck={onRunTaskCheck}
+      />
+      <Card>
+        <Space direction="vertical" size="small" className="full-width">
+          <div className="quality-result-head">
+            <Space wrap>
+              <Tag color={reviewJourneyStatusColor(journey?.status)}>{journey?.statusLabel || '历史任务未记录'}</Tag>
+              <Tag color="blue">{review.provider || '-'}</Tag>
+              {review.model && <Tag>{review.model}</Tag>}
+              <Tag color={reviewJourneyEngineColor(journey?.engineKind)}>{journey?.engineLabel || '历史任务未记录'}</Tag>
+            </Space>
+            {reviewActionButtons}
+          </div>
+          <Alert type="info" showIcon message={journey?.running ? 'Review 正在执行，正式结果尚未生成' : summaryText} />
+          {journey?.status === 'QUEUED' && <Alert type="info" showIcon message="AI Review 正在排队" description="任务已进入调度队列，执行状态会自动刷新。" />}
+          {journey?.status === 'RUNNING' && <Alert type="info" showIcon message="AI Review 正在执行" description="模型 Provider 正在分析代码变更，完成后结果会自动刷新。" />}
+          {reviewSupportingAlerts}
+        </Space>
+      </Card>
     </Space>
   );
 
@@ -5915,6 +6164,7 @@ function CodeQualityReviewsPanel({
   retrying,
   onCancelReview,
   onCancelFixPreview,
+  terminalFallbackStatus,
   deterministicChecks,
   runningDeterministicCheck,
   onRunDeterministicCheck
@@ -5928,10 +6178,14 @@ function CodeQualityReviewsPanel({
     : journeys[0]?.selectorKey;
   if (reviewItems.length <= 1) {
     const review = reviewItems[0] || null;
-    const journey = journeys[0] || buildReviewJourney({}, progress, {
+    const journey = journeys[0] || buildReviewJourney(
+      terminalFallbackStatus ? { status: terminalFallbackStatus } : {},
+      progress,
+      {
       deterministicChecks,
       allowUnscopedCompatibility: true
-    });
+      }
+    );
     const scopedProgress = review
       ? selectReviewJourneyEvents(review, progress)
       : progress;
@@ -6392,6 +6646,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       retrying={retrying}
       onCancelReview={cancelCodeQualityJob}
       onCancelFixPreview={cancelCodeQualityJob}
+      terminalFallbackStatus={terminalReviewStatusFromTask(detail?.reviewStatus)}
       deterministicChecks={deterministicChecks}
       runningDeterministicCheck={runningDeterministicCheck}
       onRunDeterministicCheck={runDeterministicCheck}
@@ -6425,15 +6680,30 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   const taskHeaderDescription = detail
     ? branchSummary(detail)
     : '查看统一 Review 进度、结果和阶段详情。';
+  const taskHeaderMeta = detail ? (
+    <Space wrap size={[8, 8]} className="task-detail-header-meta">
+      <Tag>#{detail.id}</Tag>
+      <Tag>{taskTypeLabel(detail.triggerType)}</Tag>
+      <Tag>{targetTypeLabel(detail.targetType)}</Tag>
+      <Text>{detail.authorName || detail.authorUsername || '-'}</Text>
+      <Text type="secondary"><ClockCircleOutlined /> {formatDateTime(detail.eventTime)}</Text>
+      {detail.externalUrl && (
+        <Button
+          type="link"
+          size="small"
+          icon={<ExportOutlined />}
+          href={detail.externalUrl}
+          target="_blank"
+          rel="noreferrer"
+        >
+          GitLab
+        </Button>
+      )}
+    </Space>
+  ) : null;
   const detailActions = (
     <>
-      <MuiButton
-        variant="outlined"
-        startIcon={<ArrowLeftOutlined />}
-        onClick={onBack}
-      >
-        返回上一层
-      </MuiButton>
+      {detail && <Tag color={taskExecutionStatusColor(detail.status)}>任务状态：{taskExecutionStatusLabel(detail.status)}</Tag>}
       <MuiButton
         variant="contained"
         startIcon={<ReloadOutlined />}
@@ -6456,55 +6726,44 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     <TaskWorkspaceShell
       title={taskHeaderTitle}
       description={taskHeaderDescription}
+      leading={(
+        <Button type="text" icon={<ArrowLeftOutlined />} onClick={onBack} className="task-detail-back-action">
+          返回上一层
+        </Button>
+      )}
+      meta={taskHeaderMeta}
       actions={detailActions}
     >
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
       <Spin spinning={loading}>
         {detail ? (
           <Space direction="vertical" size="large" className="full-width">
-            <Paper variant="outlined" sx={{ p: { xs: 1.75, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} sx={{ mb: 1.75, alignItems: { xs: 'stretch', md: 'center' }, justifyContent: 'space-between' }}>
-                <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                  <Chip size="small" label={`#${detail.id}`} sx={{ height: 24, borderColor: '#c9d5e2' }} variant="outlined" />
-                  <Chip size="small" label={taskTypeLabel(detail.triggerType)} sx={{ height: 24 }} variant="outlined" />
-                  <Chip size="small" label={targetTypeLabel(detail.targetType)} sx={{ height: 24 }} variant="outlined" />
-                </Stack>
-                <Tag color={taskReviewStatusColor(detail.reviewStatus)}>{taskReviewStatusLabel(detail.reviewStatus)}</Tag>
-              </Stack>
-              <Descriptions column={{ xs: 1, md: 2, xl: 3 }} size="small">
-                <Descriptions.Item label="任务 ID">{detail.id}</Descriptions.Item>
-                <Descriptions.Item label="GitLab 项目">
-                  <Space size={4}>
-                    <span>{detail.gitProjectId}</span>
-                    {detail.externalUrl && (
-                      <Button
-                        type="link"
-                        size="small"
-                        icon={<ExportOutlined />}
-                        href={detail.externalUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        跳转 GitLab
-                      </Button>
-                    )}
-                  </Space>
-                </Descriptions.Item>
-                <Descriptions.Item label="触发类型">{detail.triggerType}</Descriptions.Item>
-                <Descriptions.Item label="作者">{detail.authorName || detail.authorUsername || '-'}</Descriptions.Item>
-                <Descriptions.Item label="模板">{detail.templateCode}</Descriptions.Item>
-                <Descriptions.Item label="端类型">{targetTypeLabel(detail.targetType)}</Descriptions.Item>
-                <Descriptions.Item label="Profile">{detail.codeQualityProfileCode || '-'}</Descriptions.Item>
-                <Descriptions.Item label="底层任务状态">{detail.status || '-'}</Descriptions.Item>
-                <Descriptions.Item label="事件时间">{formatDateTime(detail.eventTime)}</Descriptions.Item>
-              </Descriptions>
-              {detail.errorMessage && (
-                <Alert className="section-gap" type="error" showIcon message="任务执行失败" description={detail.errorMessage} />
-              )}
-            </Paper>
+            {detail.errorMessage && (
+              <Alert type="error" showIcon message="任务执行失败" description={detail.errorMessage} />
+            )}
             <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 2 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
               <Space direction="vertical" size="large" className="full-width">
                 {qualityReviewContent}
+                <Collapse
+                  className="task-metadata-collapse"
+                  items={[{
+                    key: 'task-metadata',
+                    label: '任务信息',
+                    children: (
+                      <Descriptions column={{ xs: 1, md: 2, xl: 3 }} size="small">
+                        <Descriptions.Item label="任务 ID">{detail.id}</Descriptions.Item>
+                        <Descriptions.Item label="GitLab 项目">{detail.gitProjectId}</Descriptions.Item>
+                        <Descriptions.Item label="触发类型">{detail.triggerType}</Descriptions.Item>
+                        <Descriptions.Item label="作者">{detail.authorName || detail.authorUsername || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="模板">{detail.templateCode}</Descriptions.Item>
+                        <Descriptions.Item label="端类型">{targetTypeLabel(detail.targetType)}</Descriptions.Item>
+                        <Descriptions.Item label="Profile">{detail.codeQualityProfileCode || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="底层任务状态">{detail.status || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="事件时间">{formatDateTime(detail.eventTime)}</Descriptions.Item>
+                      </Descriptions>
+                    )
+                  }]}
+                />
                 {detail.triggerType === 'GITLAB_PUSH_WEBHOOK' && (
                   <Collapse
                     className="task-push-gate-collapse"

@@ -43,6 +43,39 @@ test('renders code quality directly without obsolete task tabs or a duplicate si
   assert.equal(singleReviewSource.includes('<ReviewSelectorIdentity'), false);
 });
 
+test('renders terminal reviews in result first order and keeps the running Hero path', () => {
+  const codeQualitySource = sourceBetween(
+    'function CodeQualityReviewView',
+    'function reviewJourneyStatusColor'
+  );
+  const terminalStart = codeQualitySource.indexOf('const resultContent = terminalResult ? (');
+  const runningStart = codeQualitySource.indexOf(') : (', terminalStart);
+  assert.notEqual(terminalStart, -1);
+  assert.notEqual(runningStart, -1);
+  const terminalSource = codeQualitySource.slice(terminalStart, runningStart);
+  const resultIndex = terminalSource.indexOf('<ReviewResultSummary');
+  const findingsIndex = terminalSource.indexOf('{findingsSection}');
+  const journeyIndex = terminalSource.indexOf('<ReviewJourneyTimeline');
+
+  assert.equal(resultIndex >= 0, true);
+  assert.equal(findingsIndex > resultIndex, true);
+  assert.equal(journeyIndex > findingsIndex, true);
+  assert.equal(terminalSource.includes('<ReviewStatusHero'), false);
+  assert.equal(codeQualitySource.slice(runningStart).includes('<ReviewJourneyExperience'), true);
+  assert.equal(codeQualitySource.includes('if (isTerminalReviewStatus(journey?.status))'), true);
+  assert.equal(codeQualitySource.includes('missingReviewPresentation'), true);
+});
+
+test('keeps task metadata after Review results and exposes one explicit back action', () => {
+  const taskDetailSource = sourceBetween(
+    'function TaskDetail',
+    'function AgentBudgetFieldCard'
+  );
+  assert.equal(taskDetailSource.indexOf('{qualityReviewContent}') < taskDetailSource.indexOf('className="task-metadata-collapse"'), true);
+  assert.equal((taskDetailSource.match(/onClick=\{onBack\}/g) || []).length, 1);
+  assert.equal(taskDetailSource.includes('className="task-detail-back-action"'), true);
+});
+
 test('keeps every migrated capability on an explicit Journey or finding entry', () => {
   for (const marker of [
     'ContextStageDrawerDetails',
