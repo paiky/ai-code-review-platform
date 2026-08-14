@@ -5,6 +5,7 @@ import {
   isEventInAgentTraceScope,
   summarizeAgentTrace
 } from './agentReviewTrace.js';
+import { buildSafeTraceViewModel } from './safeTracePresentation.js';
 
 export const REVIEW_JOURNEY_STAGE_STATUSES = Object.freeze([
   'WAITING',
@@ -757,6 +758,17 @@ function buildStageSafeMetrics(stageId, events, context = {}) {
 }
 
 function buildStageDetails(stageId, stageEvents, context = {}) {
+  if (stageId === 'model-review' && ['AGENT', 'FALLBACK'].includes(context.identity?.engineKind)) {
+    return {
+      safeTrace: buildSafeTraceViewModel({
+        reviewKey: context.review?.reviewKey,
+        engineKind: context.identity?.engineKind,
+        events: context.allEvents,
+        agentSummary: context.agentSummary,
+        agentDurationMs: context.review?.agentRunSummary?.durationMs
+      })
+    };
+  }
   if (stageId === 'context') {
     return {
       context: buildReviewJourneyContextDetails(

@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
+const stylesSource = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
 
 function sourceBetween(start, end) {
   const startIndex = appSource.indexOf(start);
@@ -17,6 +18,8 @@ test('removes the old Review segmented navigation and top-level deterministic ta
   assert.equal(appSource.includes('<CodeQualityViewSwitcher'), false);
   assert.equal(appSource.includes("<HighAccuracyFlowView"), false);
   assert.equal(appSource.includes("<CodeQualityProgressView"), false);
+  assert.equal(appSource.includes('function CodeQualityProgressView'), false);
+  assert.equal(appSource.includes('formatAgentTraceDetail'), false);
   assert.equal(appSource.includes("<DeterministicChecksPanel"), false);
   assert.equal(
     /\{\s*key:\s*['"]deterministic['"]\s*,\s*label:\s*['"]确定性检查['"]/.test(appSource),
@@ -74,6 +77,29 @@ test('keeps task metadata after Review results and exposes one explicit back act
   assert.equal(taskDetailSource.indexOf('{qualityReviewContent}') < taskDetailSource.indexOf('className="task-metadata-collapse"'), true);
   assert.equal((taskDetailSource.match(/onClick=\{onBack\}/g) || []).length, 1);
   assert.equal(taskDetailSource.includes('className="task-detail-back-action"'), true);
+});
+
+test('aligns task status with header metadata and keeps primary result actions on one desktop row', () => {
+  const taskDetailSource = sourceBetween(
+    'function TaskDetail',
+    'function AgentBudgetFieldCard'
+  );
+  const resultSummarySource = sourceBetween(
+    'function ReviewResultSummary',
+    'function CodeQualityReviewView'
+  );
+
+  assert.equal(taskDetailSource.includes('const taskHeaderStatus = detail ? ('), true);
+  assert.equal(taskDetailSource.includes('actionMeta={taskHeaderStatus}'), true);
+  assert.equal(appSource.includes("pt: { lg: leading ? 4 : 0 }"), true);
+  assert.equal(resultSummarySource.includes('className="review-result-fact-controls"'), true);
+  assert.equal(
+    resultSummarySource.indexOf('className="review-result-journey-link"')
+      < resultSummarySource.indexOf('className="review-result-fact-actions"'),
+    true
+  );
+  assert.match(stylesSource, /\.review-result-fact-controls\s*\{[\s\S]*?display:\s*flex;/);
+  assert.match(stylesSource, /@media \(max-width: 600px\)[\s\S]*?\.review-result-fact-controls\s*\{[\s\S]*?flex-direction:\s*column;/);
 });
 
 test('keeps every migrated capability on an explicit Journey or finding entry', () => {
@@ -148,7 +174,7 @@ test('removes the complete standalone page header from the primary utility pages
     'function TaskList'
   );
   assert.equal(
-    shellSource.includes('{(title || description || actions || leading) && <Paper'),
+    shellSource.includes('{(title || description || actions || actionMeta || leading) && <Paper'),
     true
   );
 });
@@ -192,4 +218,51 @@ test('renders only bounded Agent submission diagnostics in both fallback alerts'
   assert.equal(diagnosticSource.includes('rawCard'), false);
   assert.equal(diagnosticSource.includes('violations'), false);
   assert.equal((appSource.match(/agentFallbackDiagnostic\(/g) || []).length, 3);
+});
+
+test('renders the model Review Drawer from SafeTraceViewModel without parsing raw progress detail', () => {
+  const safeTraceSource = sourceBetween(
+    'const safeTraceJourneyPhases',
+    'function ReviewStageDrawerContent'
+  );
+  const drawerSource = sourceBetween(
+    'function ReviewStageDrawerContent',
+    'function OtherReviewJourneyEvents'
+  );
+
+  for (const prohibited of [
+    'formatAgentTraceDetail',
+    'parseProgressDetailJson',
+    'JSON.parse',
+    'displayLabel',
+    'queryHash',
+    'pathSummary',
+    'rawResponse',
+    'failureMessage',
+    'workerId'
+  ]) {
+    assert.equal(safeTraceSource.includes(prohibited), false, prohibited);
+    assert.equal(drawerSource.includes(prohibited), false, `drawer: ${prohibited}`);
+  }
+
+  assert.equal(safeTraceSource.includes('safeTraceActivityLabel(event.activityType)'), true);
+  assert.equal(safeTraceSource.includes('返回条目 {event.itemCount}'), true);
+  assert.equal(safeTraceSource.includes('证据调用累计'), true);
+  assert.equal(safeTraceSource.includes('最近心跳'), false);
+  assert.equal(safeTraceSource.includes('defaultActiveKey'), false);
+  assert.equal(drawerSource.includes('stage.details?.safeTrace'), true);
+});
+
+test('keeps Safe Trace single-column and full-width in the frozen mobile Drawer breakpoint', () => {
+  const mobileStart = stylesSource.indexOf('@media (max-width: 600px)');
+  const mobileEnd = stylesSource.indexOf('@media (prefers-reduced-motion: reduce)', mobileStart);
+  assert.notEqual(mobileStart, -1);
+  assert.notEqual(mobileEnd, -1);
+  const mobileSource = stylesSource.slice(mobileStart, mobileEnd);
+
+  assert.match(stylesSource, /\.safe-trace-event\s*\{[\s\S]*grid-template-columns:\s*18px minmax\(0, 1fr\)/);
+  assert.match(stylesSource, /\.safe-trace-event-body\s*\{[\s\S]*min-width:\s*0/);
+  assert.equal(mobileSource.includes('.safe-trace-quota-grid'), true);
+  assert.equal(mobileSource.includes('grid-template-columns: minmax(0, 1fr);'), true);
+  assert.equal(mobileSource.includes('width: 100vw !important;'), true);
 });

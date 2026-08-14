@@ -232,3 +232,52 @@ test('supports keyboard dismissal activation reduced motion and narrow-screen or
   assert.equal(reviewTimelineOrientation(1024), 'HORIZONTAL');
   assert.equal(reviewTimelineOrientation(390), 'VERTICAL');
 });
+
+test('derives Agent Safe Trace at the Journey boundary and keeps Standard Review trace-free', () => {
+  const reviewKey = 'safe-trace-review';
+  const agentJourney = buildReviewJourney({
+    ...review('AGENT', 'SUCCESS', reviewKey),
+    agentRunSummary: { durationMs: 181000 }
+  }, [
+    event(1, reviewKey, 'AGENT_ANALYZING', JSON.stringify({
+      runId: 129,
+      claimAttempt: 1,
+      sequence: 0,
+      prompt: 'SECRET_PROMPT'
+    })),
+    event(2, reviewKey, 'AGENT_TOOL_ACTIVITY', JSON.stringify({
+      runId: 129,
+      claimAttempt: 1,
+      sequence: 1,
+      activity: 'READ_DIFF_RANGE',
+      status: 'SUCCESS',
+      itemCount: 12,
+      query: 'SECRET_QUERY',
+      path: 'SECRET_PATH'
+    })),
+    event(3, reviewKey, 'AGENT_FINISHED', JSON.stringify({
+      runId: 129,
+      claimAttempt: 1,
+      sequence: 2,
+      turnCount: 8,
+      effectiveBudgets: { maxTurns: 18, maxToolCalls: 40 }
+    }))
+  ], { now: NOW });
+  const safeTrace = stage(agentJourney, 'model-review').details.safeTrace;
+
+  assert.equal(safeTrace.state, 'AVAILABLE');
+  assert.equal(safeTrace.summary.agentDurationMs, 181000);
+  assert.deepEqual(safeTrace.events.map(item => item.activityType), [
+    'ANALYZING',
+    'READ_DIFF_RANGE',
+    'FINISHED'
+  ]);
+  assert.doesNotMatch(JSON.stringify(safeTrace), /SECRET_PROMPT|SECRET_QUERY|SECRET_PATH/);
+
+  const standardJourney = buildReviewJourney(
+    review('STANDARD', 'SUCCESS', 'standard-trace-free'),
+    [event(4, 'standard-trace-free', 'OPENAI_REQUEST')],
+    { now: NOW }
+  );
+  assert.equal(stage(standardJourney, 'model-review').details, null);
+});

@@ -27,7 +27,6 @@ import {
   message,
   Modal,
   Popover,
-  Progress,
   Radio,
   Row,
   Select,
@@ -38,7 +37,6 @@ import {
   Table,
   Tabs,
   Tag,
-  Timeline,
   Tooltip,
   Typography
 } from 'antd';
@@ -62,7 +60,6 @@ import {
   FileTextOutlined,
   FileSearchOutlined,
   GlobalOutlined,
-  LoadingOutlined,
   MenuFoldOutlined,
   MenuOutlined,
   MenuUnfoldOutlined,
@@ -131,10 +128,6 @@ import CommandCenterPage from './command-center/CommandCenterPage.jsx';
 import { createVisibilityRefreshLifecycle } from './visibilityRefreshLifecycle.js';
 import {
   formatAgentFailureChain,
-  formatAgentTraceDetail,
-  groupAgentTraceEvents,
-  isAgentHeartbeatProgressEvent,
-  isAgentTraceProgressEvent,
   summarizeAgentTrace
 } from './agentReviewTrace.js';
 import {
@@ -1809,7 +1802,7 @@ function MaintenanceArtifacts({ artifacts }) {
   );
 }
 
-function TaskWorkspaceShell({ title, description, actions, children, leading, meta }) {
+function TaskWorkspaceShell({ title, description, actions, actionMeta, children, leading, meta }) {
   return (
     <Box
       sx={{
@@ -1820,7 +1813,7 @@ function TaskWorkspaceShell({ title, description, actions, children, leading, me
       }}
     >
       <Stack spacing={2.5}>
-        {(title || description || actions || leading) && <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
+        {(title || description || actions || actionMeta || leading) && <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
           <Stack
             direction={{ xs: 'column', lg: 'row' }}
             spacing={2}
@@ -1846,22 +1839,40 @@ function TaskWorkspaceShell({ title, description, actions, children, leading, me
                 </Box>
               )}
             </Box>
-            {actions && (
+            {(actions || actionMeta) && (
               <Stack
-                direction={{ xs: 'column', sm: 'row' }}
                 spacing={1}
                 useFlexGap
                 sx={{
                   flex: '0 0 auto',
                   width: { xs: '100%', lg: 'auto' },
                   ml: { lg: 'auto' },
-                  flexWrap: 'wrap',
-                  justifyContent: 'flex-end',
-                  alignItems: { xs: 'stretch', sm: 'center' },
-                  '& .MuiButton-root': { minHeight: 36, height: 36, px: 1.75, flex: '0 0 auto' }
+                  alignSelf: { lg: 'stretch' },
+                  pt: { lg: leading ? 4 : 0 },
+                  justifyContent: 'space-between',
+                  alignItems: { xs: 'stretch', lg: 'flex-end' }
                 }}
               >
-                {actions}
+                {actions && (
+                  <Stack
+                    direction={{ xs: 'column', sm: 'row' }}
+                    spacing={1}
+                    useFlexGap
+                    sx={{
+                      flexWrap: 'wrap',
+                      justifyContent: 'flex-end',
+                      alignItems: { xs: 'stretch', sm: 'center' },
+                      '& .MuiButton-root': { minHeight: 36, height: 36, px: 1.75, flex: '0 0 auto' }
+                    }}
+                  >
+                    {actions}
+                  </Stack>
+                )}
+                {actionMeta && (
+                  <Box sx={{ display: 'flex', minHeight: 24, alignItems: 'center', justifyContent: { xs: 'flex-start', sm: 'flex-end' } }}>
+                    {actionMeta}
+                  </Box>
+                )}
               </Stack>
             )}
           </Stack>
@@ -2758,38 +2769,6 @@ function progressStepDescription(event) {
   }
 }
 
-function formatCodexOutputDetail(detail) {
-  if (!detail) return '';
-  try {
-    const payload = JSON.parse(detail);
-    const item = payload.item || {};
-    const parts = [];
-    if (payload.type) parts.push(`type: ${payload.type}`);
-    if (item.type) parts.push(`item.type: ${item.type}`);
-    if (payload.text) parts.push(`text:\n${payload.text}`);
-    if (item.text) parts.push(`text:\n${item.text}`);
-    if (item.command) parts.push(`command:\n${item.command}`);
-    if (item.status) parts.push(`status: ${item.status}`);
-    if (item.exit_code !== undefined) parts.push(`exitCode: ${item.exit_code}`);
-    if (item.aggregated_output) parts.push(`output:\n${item.aggregated_output}`);
-    if (parts.length > 0) return parts.join('\n\n');
-  } catch {
-    return detail;
-  }
-  return detail;
-}
-
-function progressDetailText(event) {
-  if (!event?.detail) return '';
-  if (event.phase === 'CODEX_OUTPUT') {
-    return formatCodexOutputDetail(event.detail);
-  }
-  if (isAgentTraceProgressEvent(event)) {
-    return formatAgentTraceDetail(event.detail, event.phase);
-  }
-  return event.detail;
-}
-
 function parseEventTime(value) {
   if (!value) return null;
   const normalized = String(value).includes('T') ? value : String(value).replace(' ', 'T');
@@ -2825,15 +2804,6 @@ function formatDuration(seconds) {
   if (seconds < 1) return '<1 秒';
   if (seconds < 10) return `${seconds.toFixed(1)} 秒`;
   return `${Math.round(seconds)} 秒`;
-}
-
-function totalProgressDuration(events) {
-  const timestamps = events
-    .filter(event => !isFixPreviewProgressEvent(event))
-    .map(event => parseEventTime(event.createdAt))
-    .filter(timestamp => timestamp != null);
-  if (timestamps.length < 2) return null;
-  return Math.max(0, (timestamps[timestamps.length - 1] - timestamps[0]) / 1000);
 }
 
 function parseProgressDetailJson(detail) {
@@ -3583,25 +3553,6 @@ function HighAccuracyFlowView({ progress, review }) {
   );
 }
 
-function ProgressEventView({ event, showStepDescription = false }) {
-  const description = showStepDescription ? progressStepDescription(event) : event.message;
-  const detail = progressDetailText(event);
-  return (
-    <div className="progress-event">
-      <Space wrap size="small">
-        <Tag color={progressColor(event.level)}>{event.level || 'INFO'}</Tag>
-        <Tag>{phaseLabel(event.phase)}</Tag>
-        <Text type="secondary">{formatDateTime(event.createdAt)}</Text>
-      </Space>
-      <div className="progress-message">{description}</div>
-      {showStepDescription && event.message && event.message !== description && (
-        <Text type="secondary" className="progress-original-message">{event.message}</Text>
-      )}
-      {detail && <pre className="progress-detail">{detail}</pre>}
-    </div>
-  );
-}
-
 function FindingContext({ finding }) {
   const evidences = normalizeTextList(finding?.evidence);
   const missingContext = normalizeTextList(finding?.missingContext);
@@ -3804,245 +3755,6 @@ function FindingRefinementControl({ taskId, review, finding, findingIndex, onRef
       </span>
     </Tooltip>
   );
-}
-
-function AgentTraceOverview({ summary }) {
-  if (!summary) return null;
-  const budgets = summary.effectiveBudgets || {};
-  const budgetPhase = summary.reviewBudget?.phase || '';
-  const phaseReason = summary.submissionState === 'CONVERGENCE_FAILED'
-    ? 'Review Card 结构修正已达到安全上限，Agent 输出已停止。'
-    : summary.submissionState === 'SUBMITTED'
-      ? 'Review Card 已通过结构校验并被正式接受。'
-      : summary.submissionState === 'VALIDATION_FAILED'
-        ? 'Review Card 结构校验失败，等待下一次有界修正。'
-        : summary.submissionState === 'SUBMITTING'
-          ? 'Agent 正在提交结构化 Review Card。'
-          : summary.submissionState === 'WAITING'
-            ? '证据收集已经结束，正在等待提交 Review Card。'
-            : summary.phase === 'AGENT_FINISHED'
-              ? 'Review Card 已成功提交并保存。'
-              : summary.phase === 'AGENT_FALLBACK'
-                ? 'Agent 未能提交有效结果，已进入普通 Review 降级。'
-                : summary.phase === 'AGENT_CANCELLED'
-                  ? 'Agent Review 已取消。'
-                  : budgetPhase === 'CONVERGE' || summary.phase === 'AGENT_CONVERGING'
-                    ? '已达到收敛起点，不再扩大风险假设或检索范围。'
-                    : '仍处于有限取证阶段，只围绕既有风险假设补充证据。';
-  const metrics = [
-    {
-      key: 'turns',
-      label: '模型回合',
-      used: summary.turnCount,
-      limit: budgets.maxTurns,
-      unavailable: !summary.terminal
-    },
-    {
-      key: 'tools',
-      label: '工具调用',
-      used: summary.toolCallCount,
-      limit: budgets.maxToolCalls
-    },
-    {
-      key: 'evidence',
-      label: '证据调用',
-      used: summary.evidenceCallsUsed,
-      limit: budgets.maxEvidenceCalls
-    },
-    {
-      key: 'source',
-      label: '源码返回',
-      used: summary.sourceBytesReturned,
-      limit: budgets.maxSourceBytes,
-      bytes: true
-    }
-  ];
-
-  return (
-    <div className="agent-trace-overview">
-      <div className="agent-trace-overview-head">
-        <Space wrap>
-          <Text strong>Run #{summary.runId}</Text>
-          {summary.claimAttempt > 1 && (
-            <Tag color="orange">第 {summary.claimAttempt} 次领取</Tag>
-          )}
-          <Tag color={summary.terminal ? 'default' : 'processing'}>
-            {budgetPhase || phaseLabel(summary.phase)}
-          </Tag>
-        </Space>
-        <Text type="secondary">
-          最近心跳：{summary.lastHeartbeatAt ? formatDateTime(summary.lastHeartbeatAt) : '历史任务未记录'}
-        </Text>
-      </div>
-      <Text type="secondary">{phaseReason}</Text>
-      {summary.submitAttemptCount > 0 && (
-        <Space wrap>
-          <Tag>
-            提交 {summary.submitAttemptCount}
-            {summary.maxSubmitAttempts > 0 ? ` / ${summary.maxSubmitAttempts}` : ''}
-          </Tag>
-          {summary.schemaFailureCount > 0 && (
-            <Tag color="orange">Schema 失败 {summary.schemaFailureCount} 次</Tag>
-          )}
-          {formatAgentFailureChain(summary.failureChain) && (
-            <Text type="secondary">{formatAgentFailureChain(summary.failureChain)}</Text>
-          )}
-        </Space>
-      )}
-      <div className="agent-trace-budget-grid">
-        {metrics.map(metric => {
-          const used = Number(metric.used ?? 0);
-          const limit = Number(metric.limit ?? 0);
-          const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-          const valueText = metric.unavailable
-            ? `完成后可见 / ${limit || '-'}`
-            : metric.bytes
-              ? `${Math.round(used / 1000)} / ${limit ? Math.round(limit / 1000) : '-'} KB`
-              : `${used} / ${limit || '-'}`;
-          return (
-            <div className="agent-trace-budget-item" key={metric.key}>
-              <div>
-                <Text type="secondary">{metric.label}</Text>
-                <Text strong>{valueText}</Text>
-              </div>
-              {!metric.unavailable && limit > 0 && (
-                <Progress percent={percent} showInfo={false} size="small" />
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {summary.progressMayBeDelayed && (
-        <Alert
-          type="warning"
-          showIcon
-          message="Agent 进度数据可能延迟"
-          description="超过 45 秒未收到 Worker 心跳；这不等同于模型卡死，页面会继续等待后端终态。"
-        />
-      )}
-    </div>
-  );
-}
-
-function CodeQualityProgressView({ progress, running = false, reviewStartedAt, reviewFinishedAt }) {
-  const events = Array.isArray(progress) ? progress : [];
-  const reviewEvents = events.filter(event => !isFixPreviewProgressEvent(event));
-  const agentEvents = groupAgentTraceEvents(reviewEvents);
-  const regularEvents = reviewEvents.filter(
-    event => !isAgentTraceProgressEvent(event) && !isAgentHeartbeatProgressEvent(event)
-  );
-  const keyEvents = regularEvents.filter(isKeyProgressEvent);
-  const debugEvents = regularEvents.filter(isDebugProgressEvent);
-  const hiddenEvents = regularEvents.filter(event => !isKeyProgressEvent(event) && !isDebugProgressEvent(event));
-  const startedAt = parseEventTime(reviewStartedAt);
-  const finishedAt = parseEventTime(reviewFinishedAt);
-  const totalDurationText = startedAt && finishedAt
-    ? formatDuration(Math.max(0, (finishedAt - startedAt) / 1000))
-    : formatDuration(totalProgressDuration(reviewEvents));
-  const fallbackStartedAtRef = useRef(Date.now());
-  const [elapsedTick, setElapsedTick] = useState(Date.now());
-  const agentSummary = summarizeAgentTrace(reviewEvents, elapsedTick);
-  const latestEvent = reviewEvents.length > 0 ? reviewEvents[reviewEvents.length - 1] : null;
-  const latestRunStartAt = latestReviewRunStartAt(reviewEvents);
-  const runningStartedAt = (running ? latestRunStartAt : null) || startedAt || parseEventTime(reviewEvents[0]?.createdAt) || fallbackStartedAtRef.current;
-  const runningUntil = running ? elapsedTick : (finishedAt || elapsedTick);
-  const runningSeconds = Math.max(0, Math.floor((runningUntil - runningStartedAt) / 1000));
-
-  useEffect(() => {
-    if (!running) return undefined;
-    const timer = window.setInterval(() => setElapsedTick(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [running]);
-
-  return (
-    <Card title="执行过程">
-      {events.length === 0 ? (
-        <Empty description="暂无执行过程记录" />
-      ) : (
-        <Space direction="vertical" size="middle" className="full-width">
-          {running && (
-            <div className="quality-running-bar">
-              <Text strong>AI Review 正在执行</Text>
-              <Tag color="processing">{phaseLabel(agentSummary?.phase || latestEvent?.phase)}</Tag>
-              <Text type="secondary" className="quality-running-elapsed">
-                已执行 {runningSeconds} 秒 <LoadingOutlined />
-              </Text>
-            </div>
-          )}
-          <Alert
-            type="info"
-            showIcon
-            message={totalDurationText ? `总计耗时 ${totalDurationText}` : '默认只展示关键阶段'}
-            description={`已折叠 ${debugEvents.length} 条 stdout/stderr 调试输出${hiddenEvents.length > 0 ? `，以及 ${hiddenEvents.length} 条辅助事件` : ''}。`}
-          />
-          {agentEvents.length > 0 && (
-            <div>
-              <Title level={5}>Agent 执行轨迹</Title>
-              <AgentTraceOverview summary={agentSummary} />
-              <Timeline
-                items={agentEvents.map(event => ({
-                  key: event.id,
-                  color: progressColor(event.level),
-                  children: <ProgressEventView event={event} showStepDescription />
-                }))}
-              />
-            </div>
-          )}
-          <Timeline
-            items={keyEvents.map(event => ({
-              key: event.id,
-              color: progressColor(event.level),
-              children: <ProgressEventView event={event} showStepDescription />
-            }))}
-          />
-          {(debugEvents.length > 0 || hiddenEvents.length > 0) && (
-            <Collapse
-              items={[
-                debugEvents.length > 0 && {
-                  key: 'debug',
-                  label: `调试输出 (${debugEvents.length})`,
-                  children: (
-                    <Timeline
-                      items={debugEvents.map(event => ({
-                        key: event.id,
-                        color: progressColor(event.level),
-                        children: <ProgressEventView event={event} />
-                      }))}
-                    />
-                  )
-                },
-                hiddenEvents.length > 0 && {
-                  key: 'auxiliary',
-                  label: `辅助事件 (${hiddenEvents.length})`,
-                  children: (
-                    <Timeline
-                      items={hiddenEvents.map(event => ({
-                        key: event.id,
-                        color: progressColor(event.level),
-                        children: <ProgressEventView event={event} />
-                      }))}
-                    />
-                  )
-                }
-              ].filter(Boolean)}
-            />
-          )}
-        </Space>
-      )}
-    </Card>
-  );
-}
-
-function latestReviewRunStartAt(events) {
-  const runStartPhases = new Set(['QUEUED', 'STARTED', 'REQUEST_BUILT', 'HTTP_REQUEST_START']);
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (runStartPhases.has(event?.phase)) {
-      const parsed = parseEventTime(event?.createdAt);
-      if (parsed) return parsed;
-    }
-  }
-  return null;
 }
 
 function gateDecisionColor(value) {
@@ -4952,14 +4664,180 @@ function PreflightStageDrawerDetails({ details, running, onRun }) {
   );
 }
 
+const safeTraceJourneyPhases = new Set([
+  'AGENT_RECLAIMED',
+  'AGENT_ANALYZING',
+  'AGENT_TOOL_ACTIVITY',
+  'AGENT_CONVERGING',
+  'AGENT_SUBMITTING',
+  'AGENT_SUBMIT_VALIDATION_FAILED',
+  'AGENT_REVIEW_SUBMITTED',
+  'AGENT_OUTPUT_CONVERGENCE_FAILED',
+  'AGENT_FINISHED',
+  'AGENT_FALLBACK',
+  'AGENT_CANCELLED'
+]);
+
+function safeTraceActivityLabel(activityType) {
+  return {
+    ANALYZING: '开始分析变更',
+    LIST_FILES: '列出安全文件',
+    SEARCH_CODE: '搜索代码',
+    READ_FILE_RANGE: '读取源码片段',
+    READ_DIFF_RANGE: '读取 Diff 片段',
+    SUBMIT_REVIEW: '提交 Review Card',
+    RECLAIMED: '任务重新领取',
+    FINISHED: '正式结果已保存',
+    FALLBACK: '转交 Standard Review',
+    CANCELLED: 'Agent Review 已取消'
+  }[activityType] || '未识别的安全活动';
+}
+
+function safeTraceStatusLabel(status) {
+  return {
+    STARTED: '已开始',
+    RUNNING: '执行中',
+    SUCCESS: '成功',
+    FAILED: '失败',
+    WARNING: '有警告',
+    CANCELLED: '已取消',
+    UNKNOWN: '状态未记录'
+  }[status] || '状态未记录';
+}
+
+function safeTraceStatusColor(status) {
+  if (status === 'SUCCESS') return 'green';
+  if (status === 'FAILED') return 'red';
+  if (status === 'WARNING') return 'orange';
+  if (status === 'RUNNING' || status === 'STARTED') return 'processing';
+  return 'default';
+}
+
+function safeTraceSequenceLabel(event) {
+  return event.sequenceEnd === undefined
+    ? `#${event.sequence}`
+    : `#${event.sequence}–${event.sequenceEnd}`;
+}
+
+function SafeTraceEventList({ events }) {
+  const source = Array.isArray(events) ? events : [];
+  return (
+    <div className="safe-trace-event-list" aria-label="Agent 安全运行记录">
+      {source.map((event, index) => (
+        <article
+          className={`safe-trace-event is-${String(event.status || 'unknown').toLowerCase()}`}
+          key={`${event.sequence}-${event.sequenceEnd ?? event.sequence}-${event.activityType}-${index}`}
+        >
+          <span className="safe-trace-event-marker" aria-hidden="true" />
+          <div className="safe-trace-event-body">
+            <div className="safe-trace-event-heading">
+              <Space size={6} wrap>
+                <Text code>{safeTraceSequenceLabel(event)}</Text>
+                <Text strong>{safeTraceActivityLabel(event.activityType)}</Text>
+                <Tag color={safeTraceStatusColor(event.status)}>
+                  {safeTraceStatusLabel(event.status)}
+                </Tag>
+              </Space>
+            </div>
+            <Space size={[6, 6]} wrap className="safe-trace-event-metrics">
+              {event.groupCount > 1 && <Tag>合并活动 {event.groupCount} 次</Tag>}
+              {event.durationMs !== undefined && <Tag>耗时 {formatJourneyDuration(event.durationMs)}</Tag>}
+              {event.itemCount !== undefined && <Tag>返回条目 {event.itemCount}</Tag>}
+              {event.sourceBytes !== undefined && <Tag>返回 {event.sourceBytes} bytes</Tag>}
+              {event.errorCode && <Tag color="red">错误码：{event.errorCode}</Tag>}
+            </Space>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function SafeTraceQuota({ summary }) {
+  const source = summary || {};
+  const rows = [
+    ['工具调用', source.toolCallsUsed, source.toolCallsLimit],
+    ['证据调用累计', source.evidenceCallsUsed, source.evidenceCallsLimit],
+    ['源码返回', source.sourceBytesUsed, source.sourceBytesLimit, ' bytes'],
+    ['模型回合', source.modelTurnsUsed, source.modelTurnsLimit],
+    ['提交尝试', source.submitAttempts, source.submitAttemptLimit]
+  ].filter(([, used, limit]) => used !== undefined || limit !== undefined);
+  return rows.length === 0 ? (
+    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可可靠展示的运行配额" />
+  ) : (
+    <dl className="safe-trace-quota-grid">
+      {rows.map(([label, used, limit, suffix = '']) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>
+            {used === undefined ? '已用未记录' : `${used}${suffix}`}
+            {limit === undefined ? '' : ` / ${limit}${suffix}`}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function AgentSafeTraceDetails({ safeTrace }) {
+  if (!safeTrace) return null;
+  const summary = safeTrace.summary || {};
+  return (
+    <Space orientation="vertical" size="large" className="full-width safe-trace-details">
+      <section>
+        <Title level={5}>运行概览</Title>
+        <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+          {summary.runId !== undefined && (
+            <Descriptions.Item label="Agent Run">#{summary.runId}</Descriptions.Item>
+          )}
+          {summary.claimAttempt !== undefined && (
+            <Descriptions.Item label="领取尝试">第 {summary.claimAttempt} 次</Descriptions.Item>
+          )}
+        </Descriptions>
+      </section>
+      {safeTrace.state === 'PARTIAL' && (
+        <Alert
+          type="warning"
+          showIcon
+          title="仅展示现有可靠活动记录"
+          description="部分记录缺少可验证的序号或活动类型，未补造执行顺序。"
+        />
+      )}
+      <section>
+        <Title level={5}>运行记录</Title>
+        {safeTrace.state === 'UNAVAILABLE' ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="当前 Review 没有可安全展示的 Agent 活动记录"
+          />
+        ) : (
+          <SafeTraceEventList events={safeTrace.events} />
+        )}
+      </section>
+      <Collapse
+        className="safe-trace-quota-collapse"
+        items={[{
+          key: 'quota',
+          label: '运行配额',
+          children: <SafeTraceQuota summary={summary} />
+        }]}
+      />
+    </Space>
+  );
+}
+
 function ReviewStageDrawerContent({
   journey,
   stage,
   taskCheckRunning,
   onRunTaskCheck
 }) {
+  const safeTrace = stage?.id === 'model-review' ? stage.details?.safeTrace : null;
   const advancedEvents = (Array.isArray(stage?.events) ? stage.events : [])
-    .filter(event => !event.auxiliary);
+    .filter(event => (
+      !event.auxiliary
+      && !(safeTrace && safeTraceJourneyPhases.has(event.phase))
+    ));
   const hasReviewStageRecord = stage.visible !== false;
   return (
     <Space orientation="vertical" size="large" className="full-width review-stage-drawer-content">
@@ -4973,6 +4851,11 @@ function ReviewStageDrawerContent({
         <Descriptions.Item label="开始时间">{formatDateTime(stage.startedAt)}</Descriptions.Item>
         <Descriptions.Item label="结束时间">{formatDateTime(stage.finishedAt)}</Descriptions.Item>
         <Descriptions.Item label="真实耗时">{formatJourneyDuration(stage.durationMs)}</Descriptions.Item>
+        {safeTrace?.summary?.agentDurationMs !== undefined && (
+          <Descriptions.Item label="Agent 总耗时">
+            {formatJourneyDuration(safeTrace.summary.agentDurationMs)}
+          </Descriptions.Item>
+        )}
       </Descriptions>
       <Alert
         type={hasReviewStageRecord && stage.status === 'FAILED' ? 'error' : hasReviewStageRecord && stage.status === 'WARNING' ? 'warning' : 'info'}
@@ -5008,7 +4891,8 @@ function ReviewStageDrawerContent({
           </div>
         </section>
       )}
-      {stage.safeMetrics.length > 0 && (
+      {safeTrace && <AgentSafeTraceDetails safeTrace={safeTrace} />}
+      {!safeTrace && stage.safeMetrics.length > 0 && (
         <section>
           <Title level={5}>安全摘要</Title>
           <div className="review-stage-metrics">
@@ -5672,10 +5556,12 @@ function ReviewResultSummary({
             {presentation.agentDurationMs !== null && <div><dt>Agent 耗时</dt><dd>{formatJourneyDuration(presentation.agentDurationMs)}</dd></div>}
             {presentation.agentRunId !== null && <div><dt>Agent Run</dt><dd>#{presentation.agentRunId}</dd></div>}
           </dl>
-          <Button className="review-result-journey-link" onClick={onViewJourney}>
-            查看 Review 流程
-          </Button>
-          {actions && <div className="review-result-fact-actions">{actions}</div>}
+          <div className="review-result-fact-controls">
+            <Button className="review-result-journey-link" onClick={onViewJourney}>
+              查看 Review 流程
+            </Button>
+            {actions && <div className="review-result-fact-actions">{actions}</div>}
+          </div>
         </div>
       </div>
       {children && (
@@ -6703,7 +6589,6 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   ) : null;
   const detailActions = (
     <>
-      {detail && <Tag color={taskExecutionStatusColor(detail.status)}>任务状态：{taskExecutionStatusLabel(detail.status)}</Tag>}
       <MuiButton
         variant="contained"
         startIcon={<ReloadOutlined />}
@@ -6721,6 +6606,9 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       </MuiButton>
     </>
   );
+  const taskHeaderStatus = detail ? (
+    <Tag color={taskExecutionStatusColor(detail.status)}>任务状态：{taskExecutionStatusLabel(detail.status)}</Tag>
+  ) : null;
 
   return (
     <TaskWorkspaceShell
@@ -6733,6 +6621,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       )}
       meta={taskHeaderMeta}
       actions={detailActions}
+      actionMeta={taskHeaderStatus}
     >
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
       <Spin spinning={loading}>

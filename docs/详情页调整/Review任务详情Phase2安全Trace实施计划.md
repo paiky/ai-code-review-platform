@@ -2,8 +2,9 @@
 
 ## 1. 状态与前置条件
 
-- 文档状态：计划已创建，等待 Phase 1 实施并完成人工验收后再申请实施授权。
-- 当前授权：只允许创建和完善本计划；不授权修改前端代码、Backend、数据库、API 或部署环境。
+- 文档状态：Phase 2 已实施并完成自动化、构建、安全审计、本地真实数据和固定 viewport 浏览器验收；等待用户
+  人工确认。
+- 当前授权：Phase 2 已停止在验收检查点；不授权修改 Backend、数据库、API、部署环境或进入 Phase 3。
 - 实施前置条件：
   1. `Review任务详情Phase1实施计划.md` 已完成实现、自动化、构建、响应式、深链和轮询验收；
   2. Phase 1 文档已回填实际验证结果；
@@ -387,3 +388,58 @@ Phase 2 完成顺序固定为：
 ```
 
 未经用户人工确认，不进入 Phase 3，不新增 typed evidence，不修改 Review Card / API / 持久化契约。
+
+## 13. Phase 2 实施与验证结果（2026-08-14）
+
+### 13.1 已实施
+
+- 新增纯数据 `SafeTraceViewModel` 派生边界，只允许本计划定义的活动、状态、序号、单事件耗时、计数、错误码和
+  运行配额；输出对象不持有原始事件引用。
+- Trace 继续复用最新 `runId + claimAttempt` 作用域、去重和顺序规则；缺少 sequence 的事件不补造顺序，未知
+  activity 丢弃，未知 status 归一为 `UNKNOWN`，相邻相同 activity/status 才聚合。
+- 模型 Review Drawer 已增加固定枚举生成的纵向运行记录、`AVAILABLE / PARTIAL / UNAVAILABLE` 状态和默认折叠的
+  运行配额；事件节点不显示事件时钟。
+- Standard Review 不生成 Agent Safe Trace；Agent -> Standard fallback 继续保留显式身份和安全 Agent 活动，旧记录
+  缺少可靠 claimAttempt 时不显示“第 0 次”。
+- Drawer 关闭焦点、reviewKey 切换关闭、同 Review 轮询保持 Drawer 与折叠状态均继续沿用现有生命周期。
+- 已删除未挂载的旧“执行过程”原始 detail 展示组件和 `formatAgentTraceDetail` UI 入口，避免未来重新形成自由文本逃生口。
+- 未修改 Backend、API、schema、持久化、Finding、Review Card、Phase 1 信息架构或六阶段语义。
+
+### 13.2 自动化与构建
+
+- Phase 2 定向测试：`24 / 24` 通过，覆盖字段白名单、敏感值剔除、状态归一、边界数字、缺失 sequence、最新
+  claim attempt、相邻聚合、submit/finished 分离、Standard 隔离、Journey 派生、Drawer 安全入口和移动端 CSS 契约。
+- 全量前端测试：`248` 项中 `246` 项通过；剩余 2 项仍为
+  `frontend/tests/projectGroupAgentDefaults.test.mjs` 对既有 CRLF 样式源码的精确 LF 字符串断言，Phase 2 未修改对应
+  Settings 功能或断言，结果与 Phase 1 基线一致。
+- production build 通过：Vite 成功转换 `3554` 个模块；仅保留既有 chunk size warning。
+- `git diff --check` 通过。
+- 安全 fixture 包含 prompt、query、queryHash、path、pathSummary、arguments、input、output、reasoning、
+  rawResponse、failureMessage、workerId、message、displayLabel；测试确认其字段和值均未进入 ViewModel。
+
+### 13.3 本地浏览器验收
+
+- Agent success（任务 `1210`）：Drawer 展示 PARTIAL 安全记录，运行配额初始折叠；展开后等待轮询仍保持展开；
+  运行记录无 `HH:mm:ss` 事件时钟、query/path/worker 等原始字段，Drawer 无横向溢出。
+- Standard Review（任务 `1160`）：模型 Review Drawer 保留 Provider 安全阶段摘要，不出现 Agent 运行记录或运行配额。
+- Agent -> Standard fallback（任务 `1107`）：保留 fallback 身份并展示可证明的 Agent 安全活动；不展示异常原文；
+  历史兼容产生的 claimAttempt `0` 已隐藏。
+- 点击关闭后，焦点返回“模型 Review”六阶段按钮。
+- 本地验收只读取既有任务和安全 fixture，没有触发真实 Provider、重试或其它写操作。
+- Microsoft Edge 控制台未发现页面崩溃或 Phase 2 运行错误；仅观察到既有 Ant Design 弃用/布局警告和浏览器翻译
+  扩展自身的版本不匹配错误，不阻塞本阶段。
+
+### 13.4 固定 viewport 目视验收
+
+- Microsoft Edge `1440×1000`：Agent success 页面和 880px Drawer 均无文档级或 Drawer 横向溢出；Safe Trace
+  纵向顺序、状态、返回条目/字节可读，运行配额默认折叠，轮询后仍保持用户展开状态。
+- Microsoft Edge `1024×768`：Drawer、事件卡片和页面均无横向溢出，长活动、数字和状态保持可读。
+- Microsoft Edge `390×844`：Drawer 精确占满 `390×844` viewport，Trace 单列且事件卡片无横向溢出；运行配额
+  展开后为单列，关闭可用且焦点返回“模型 Review”阶段按钮。
+- 固定 viewport 下同时复验 Standard Review 和 Agent -> Standard fallback：Standard 不出现 Agent Safe Trace；
+  fallback 保留安全 Agent 活动和显式执行身份，不展示“第 0 次”、异常原文或禁止字段。
+
+### 13.5 STOP
+
+Phase 2 当前停止在“实施和计划内验证全部完成，等待用户人工确认”。人工确认前不提交 Phase 2、不进入 Phase 3、
+不新增 typed evidence 或 Evidence Chain。
