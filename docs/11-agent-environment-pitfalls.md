@@ -296,6 +296,11 @@ BACKEND_PORT = 容器内后端监听端口，只在 Docker 网络内使用
 - 只读 Squid 镜像的入口若要在 `/tmp` 生成运行期配置，Compose 必须提供受限 tmpfs；否则代理会因
   `cannot create /tmp/...: Read-only file system` 重启。Windows 专用代理还必须显式使用启动脚本生成并挂载的
   `/etc/squid/squid.conf`，否则通用代理配置不包含本地 Backend 的 HTTP 8090 例外，Worker 心跳表现为 Squid 403。
+- Windows 工作区打包 Linux 镜像时，所有 `.sh` 必须保持 LF。若代理日志反复出现
+  `exec /usr/local/bin/agent-egress-proxy-entrypoint: no such file or directory`，但镜像内文件实际存在且有执行权限，
+  用 `od -An -t x1 -N 12` 检查 shebang；`#!/bin/sh` 后出现 `0d 0a` 表示 CRLF 导致内核查找不存在的
+  `/bin/sh\r`。仓库通过 `.gitattributes` 强制 LF，代理 Dockerfile 构建时还会清理行尾作为二次保护；旧镜像必须
+  使用新版本号重新构建和加载，单纯重启或重建旧镜像容器不能修复。
 - 自动启动只作用于 Windows `dev`，不得影响 `test`、`lint`、`migrate` 或 Linux runtime。远程离线包继续使用 `docker-compose.runtime.yml`，不要把 `docker-compose.windows-agent.yml` 上传叠加到生产环境。
 - 不要让 Windows 本地 Backend 与 Linux 生产 Backend 同时连接同一生产数据库。旧版本使用无时区 `DATETIME` 和
   `datetime.now()` 判断 Worker 心跳、租约，UTC 与东八区进程并存会把刚领取的任务误判为超时 8 小时。修复后

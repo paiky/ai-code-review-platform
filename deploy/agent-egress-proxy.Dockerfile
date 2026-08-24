@@ -7,7 +7,9 @@ RUN apt-get update \
 
 COPY deploy/agent-egress-squid.conf /etc/squid/squid.conf
 COPY deploy/agent-egress-proxy-entrypoint.sh /usr/local/bin/agent-egress-proxy-entrypoint
-RUN chmod 0755 /usr/local/bin/agent-egress-proxy-entrypoint
+RUN sed -i 's/\r$//' /usr/local/bin/agent-egress-proxy-entrypoint \
+    && test "$(head -n 1 /usr/local/bin/agent-egress-proxy-entrypoint)" = '#!/bin/sh' \
+    && chmod 0755 /usr/local/bin/agent-egress-proxy-entrypoint
 
 USER proxy:proxy
 EXPOSE 3128

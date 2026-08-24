@@ -45,13 +45,21 @@ def test_worker_capabilities_keep_legacy_default_and_drop_unknown_values() -> No
 
 def test_egress_proxy_allows_custom_http_and_https_without_environment_host_list() -> None:
     repository_root = Path(__file__).resolve().parents[3]
-    entrypoint = (repository_root / "deploy/agent-egress-proxy-entrypoint.sh").read_text(
+    entrypoint_path = repository_root / "deploy/agent-egress-proxy-entrypoint.sh"
+    entrypoint_bytes = entrypoint_path.read_bytes()
+    entrypoint = entrypoint_bytes.decode("utf-8")
+    dockerfile = (repository_root / "deploy/agent-egress-proxy.Dockerfile").read_text(
         encoding="utf-8"
     )
+    git_attributes = (repository_root / ".gitattributes").read_text(encoding="utf-8")
     windows_script = (repository_root / "scripts/run-agent-worker.ps1").read_text(
         encoding="utf-8"
     )
 
+    assert entrypoint_bytes.startswith(b"#!/bin/sh\n")
+    assert b"\r\n" not in entrypoint_bytes
+    assert "*.sh text eol=lf" in git_attributes.splitlines()
+    assert "sed -i 's/\\r$//' /usr/local/bin/agent-egress-proxy-entrypoint" in dockerfile
     assert "AGENT_REVIEW_CUSTOM_EGRESS_HOSTS" not in entrypoint
     assert "acl SSL_ports port 1-65535" in entrypoint
     assert "http_access allow CONNECT SSL_ports" in entrypoint

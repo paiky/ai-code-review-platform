@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+# This file is executed directly in Linux images and must keep an LF shebang.
+
 config_path="/tmp/agent-egress-squid.conf"
 
 cat >"$config_path" <<'EOF'
