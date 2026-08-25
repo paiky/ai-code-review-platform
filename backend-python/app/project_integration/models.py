@@ -16,6 +16,7 @@ class Project(Base):
     git_provider: Mapped[str] = mapped_column(String(32), nullable=False)
     git_project_id: Mapped[str] = mapped_column(String(128), nullable=False)
     repository_url: Mapped[str | None] = mapped_column(String(512))
+    target_type: Mapped[str | None] = mapped_column(String(32))
     supported_target_types: Mapped[str | None] = mapped_column(Text)
     detected_target_types: Mapped[str | None] = mapped_column(Text)
     target_detection_json: Mapped[str | None] = mapped_column(Text)
@@ -152,5 +153,42 @@ class GitLabPushEvent(Base):
     author_username: Mapped[str | None] = mapped_column(String(128))
     changed_files_summary: Mapped[str] = mapped_column(Text, nullable=False)
     raw_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[object | None] = mapped_column(DateTime)
+    updated_at: Mapped[object | None] = mapped_column(DateTime)
+
+
+class ProjectReviewSettings(Base):
+    __tablename__ = "project_review_settings"
+
+    project_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    trigger_on_mr: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    trigger_on_push: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    trigger_only_when_risk_matched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    auto_fix_preview_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    auto_fix_preview_severities: Mapped[str | None] = mapped_column(Text)
+    push_branch_patterns: Mapped[str | None] = mapped_column(Text)
+    push_min_changed_files: Mapped[int | None] = mapped_column(Integer, default=10)
+    push_min_diff_bytes: Mapped[int | None] = mapped_column(Integer, default=30000)
+    push_min_commit_count: Mapped[int | None] = mapped_column(Integer, default=3)
+    push_max_changed_files: Mapped[int | None] = mapped_column(Integer, default=-1)
+    push_max_diff_bytes: Mapped[int | None] = mapped_column(Integer, default=-1)
+    push_debounce_seconds: Mapped[int | None] = mapped_column(Integer, default=300)
+    created_at: Mapped[object | None] = mapped_column(DateTime)
+    updated_at: Mapped[object | None] = mapped_column(DateTime)
+
+class ProjectAiReviewModel(Base):
+    __tablename__ = "project_ai_review_models"
+    __table_args__ = (
+        UniqueConstraint("project_id", "review_key", name="uk_project_ai_review_model_key"),
+    )
+
+    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    review_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str | None] = mapped_column(String(128))
+    display_name: Mapped[str | None] = mapped_column(String(128))
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[object | None] = mapped_column(DateTime)
     updated_at: Mapped[object | None] = mapped_column(DateTime)

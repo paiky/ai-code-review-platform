@@ -247,6 +247,58 @@ def _migration_statement_already_satisfied(
     connection, migration: MigrationFile, statement: str
 ) -> bool:
     """Reconcile migration effects that already exist outside the migration ledger."""
+    if migration.version == 54:
+        add_column = re.fullmatch(
+            r"\s*ALTER\s+TABLE\s+\x60?(\w+)\x60?\s+ADD\s+COLUMN\s+"
+            r"\x60?(\w+)\x60?\s+(.+?)\s*",
+            statement,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if add_column:
+            table_name, column_name, definition = add_column.groups()
+            inspector = inspect(connection)
+            if not inspector.has_table(table_name):
+                return False
+            columns = {
+                str(column.get("name") or ""): column
+                for column in inspector.get_columns(table_name)
+            }
+            existing = columns.get(column_name)
+            if existing is None:
+                return False
+            type_name = str(existing.get("type") or "").casefold().replace(" ", "")
+            definition_name = definition.casefold().replace(" ", "")
+            expected_nullable = "notnull" not in definition_name
+            compatible_type = (
+                ("varchar(" in definition_name and "varchar(" in type_name)
+                or ("bigint" in definition_name and "bigint" in type_name)
+                or ("boolean" in definition_name and any(
+                    marker in type_name for marker in ("bool", "tinyint")
+                ))
+                or ("datetime" in definition_name and "datetime" in type_name)
+            )
+            if existing.get("nullable", True) != expected_nullable or not compatible_type:
+                raise MigrationError(
+                    f"Existing {table_name}.{column_name} is incompatible with V54"
+                )
+            return True
+
+        add_index = re.fullmatch(
+            r"\s*ALTER\s+TABLE\s+\x60?(\w+)\x60?\s+ADD\s+INDEX\s+"
+            r"\x60?(\w+)\x60?\s*\(.+\)\s*",
+            statement,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if add_index:
+            table_name, index_name = add_index.groups()
+            inspector = inspect(connection)
+            if not inspector.has_table(table_name):
+                return False
+            return index_name in {
+                str(index.get("name") or "")
+                for index in inspector.get_indexes(table_name)
+            }
+        return False
     if migration.version == 52:
         match = re.fullmatch(
             r"\s*ALTER\s+TABLE\s+`?agent_review_runs`?\s+"

@@ -430,8 +430,8 @@ def test_discover_migrations_is_contiguous_and_includes_checksums() -> None:
     migrations = discover_migrations()
 
     assert migrations[0].version == 1
-    assert migrations[-1].version == 53
-    assert [item.version for item in migrations] == list(range(1, 54))
+    assert migrations[-1].version == 54
+    assert [item.version for item in migrations] == list(range(1, 55))
     assert all(len(item.checksum) == 64 for item in migrations)
 
 
