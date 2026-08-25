@@ -23,6 +23,8 @@ from app.core.response import ok
 from app.core.tracing import trace_id_middleware
 from app.evaluation.api import router as evaluation_router
 from app.evaluation.api import run_router as evaluation_run_router
+from app.notification.api import project_router as project_notification_router
+from app.notification.api import router as notification_router
 from app.project_integration.api import group_router
 from app.project_integration.api import router as project_router
 from app.project_integration.api import target_mapping_router
@@ -82,6 +84,8 @@ def create_app() -> FastAPI:
     )
     register_exception_handlers(app)
     app.include_router(project_router)
+    app.include_router(notification_router)
+    app.include_router(project_notification_router)
     app.include_router(group_router)
     app.include_router(target_mapping_router)
     app.include_router(webhook_router)

@@ -845,7 +845,7 @@ def test_dingtalk_delivery_skips_when_project_group_has_no_webhooks(
     notifications = client.get(f"/api/review-tasks/{response.json()['data']['taskId']}/notifications").json()["data"]
     assert notifications[0]["status"] == "SKIPPED"
     assert notifications[0]["target"] == "DINGTALK_WEBHOOKS_EMPTY"
-    assert notifications[0]["errorMessage"] == "DingTalk webhook is not configured for the project group"
+    assert notifications[0]["errorMessage"] == "DingTalk webhook is not configured for the project"
 
 
 def test_dingtalk_allows_same_enabled_url_in_different_groups(client: TestClient) -> None:

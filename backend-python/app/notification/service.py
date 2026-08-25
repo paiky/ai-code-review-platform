@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from urllib.parse import quote
+from datetime import datetime
 
 import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.notification.repository import enabled_webhooks_for_task, has_any_enabled_webhook_for_task
+from app.notification.repository import (
+    enabled_webhooks_for_task,
+    get_notification_webhook,
+    has_any_enabled_webhook_for_task,
+    notification_webhook_to_dict,
+)
 
 
 def dingtalk_skipped_result(
@@ -92,6 +98,19 @@ def send_test_notification(target_url: str, webhook_name: str | None = None) -> 
     return _send_to_url(target_url, f"大家好，我是{label}", markdown, markdown[:500])
 
 
+def test_saved_notification_webhook(db: Session, webhook_id: int) -> dict:
+    record = get_notification_webhook(db, webhook_id)
+    result = send_test_notification(record.webhook_url, record.name)
+    record.last_test_status = result["status"]
+    record.last_test_at = datetime.now()
+    record.last_test_message = result.get("errorMessage") or result.get("requestDigest")
+    record.updated_at = datetime.now()
+    db.flush()
+    return {
+        "webhook": notification_webhook_to_dict(record),
+        "test": result,
+    }
+
 def _send_markdown(
     db: Session,
     task_id: int,
@@ -100,17 +119,20 @@ def _send_markdown(
     digest: str,
     dingtalk_notification_enabled: bool | None,
 ) -> dict:
-    settings = get_settings()
     skipped = _resolve_skipped_result(db, digest, dingtalk_notification_enabled, task_id)
     if skipped is not None:
         return _aggregate_results([skipped], digest)
 
     webhooks = enabled_webhooks_for_task(db, task_id)
     if not webhooks:
-        return _aggregate_results(
-            [_send_to_url(settings.dingtalk_webhook_url, title, markdown, digest)],
-            digest,
-        )
+        skipped = {
+            "target": "DINGTALK_WEBHOOKS_EMPTY",
+            "status": "SKIPPED",
+            "requestDigest": digest,
+            "responseBody": None,
+            "errorMessage": "No enabled DingTalk webhook is configured for the project",
+        }
+        return _aggregate_results([skipped], digest)
     results = []
     for webhook in webhooks:
         results.append(_send_to_url(webhook.webhook_url, title, markdown, digest))
@@ -148,9 +170,9 @@ def _resolve_skipped_result(
         return {
             "target": "DINGTALK_WEBHOOKS_EMPTY",
             "status": "SKIPPED",
-            "requestDigest": digest or "No enabled DingTalk webhook is configured for the project group",
+            "requestDigest": digest or "No enabled DingTalk webhook is configured for the project",
             "responseBody": None,
-            "errorMessage": "DingTalk webhook is not configured for the project group",
+            "errorMessage": "DingTalk webhook is not configured for the project",
         }
 
     if settings.dingtalk_webhook_url.strip():

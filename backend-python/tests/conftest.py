@@ -35,6 +35,7 @@ def isolate_external_integrations(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOCAL_REPO_WORKTREE_RETENTION_HOURS", raising=False)
     monkeypatch.delenv("LOCAL_REPO_MIRROR_RETENTION_DAYS", raising=False)
     monkeypatch.delenv("DINGTALK_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("PROJECT_NOTIFICATION_GROUP_FALLBACK_ENABLED", "true")
     monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "false")
     monkeypatch.delenv("CODE_QUALITY_REVIEW_PROXY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
