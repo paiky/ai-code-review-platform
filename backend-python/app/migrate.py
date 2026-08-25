@@ -222,7 +222,7 @@ def apply_pending_migrations(
                 started = time.perf_counter()
                 try:
                     sql = migration.path.read_text(encoding="utf-8")
-                    for statement in split_sql_statements(sql):
+                    for statement in _migration_execution_statements(migration, sql):
                         if not _migration_statement_already_satisfied(
                             connection, migration, statement
                         ):
@@ -243,10 +243,66 @@ def apply_pending_migrations(
     return applied_versions
 
 
+def _migration_execution_statements(
+    migration: MigrationFile, sql: str
+) -> list[str]:
+    """Expand legacy multi-column ALTERs so partially applied schemas remain recoverable."""
+    statements = split_sql_statements(sql)
+    if migration.version != 53:
+        return statements
+
+    expanded: list[str] = []
+    for statement in statements:
+        match = re.fullmatch(
+            r"(\s*ALTER\s+TABLE\s+`?\w+`?\s+)"
+            r"(ADD\s+COLUMN\s+.+?)\s*,\s*(ADD\s+COLUMN\s+.+?)\s*",
+            statement,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            expanded.append(statement)
+            continue
+        prefix, first_clause, second_clause = match.groups()
+        expanded.extend(
+            [
+                f"{prefix}{first_clause.strip()}",
+                f"{prefix}{second_clause.strip()}",
+            ]
+        )
+    return expanded
+
+
 def _migration_statement_already_satisfied(
     connection, migration: MigrationFile, statement: str
 ) -> bool:
     """Reconcile migration effects that already exist outside the migration ledger."""
+    if migration.version == 53:
+        add_column = re.fullmatch(
+            r"\s*ALTER\s+TABLE\s+`?code_quality_agent_runtimes`?\s+"
+            r"ADD\s+COLUMN\s+`?(test_runtime_snapshot_json|test_api_key_ciphertext)`?\s+"
+            r"TEXT\s+NULL\s+AFTER\s+`?\w+`?\s*",
+            statement,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not add_column:
+            return False
+        inspector = inspect(connection)
+        columns = {
+            str(column.get("name") or ""): column
+            for column in inspector.get_columns("code_quality_agent_runtimes")
+        }
+        existing = columns.get(add_column.group(1))
+        if existing is None:
+            return False
+        compatible = (
+            existing.get("nullable", True)
+            and "text" in str(existing.get("type") or "").casefold().replace(" ", "")
+        )
+        if not compatible:
+            raise MigrationError(
+                f"Existing code_quality_agent_runtimes.{add_column.group(1)} is incompatible with V53"
+            )
+        return True
     if migration.version == 54:
         add_column = re.fullmatch(
             r"\s*ALTER\s+TABLE\s+\x60?(\w+)\x60?\s+ADD\s+COLUMN\s+"

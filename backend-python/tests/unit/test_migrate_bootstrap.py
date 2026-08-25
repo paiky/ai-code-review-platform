@@ -13,6 +13,7 @@ from app.migrate import (
     COMMAND_CENTER_INDEX_UPGRADES,
     MigrationError,
     MigrationFile,
+    _migration_execution_statements,
     _migration_statement_already_satisfied,
     apply_pending_migrations,
     baseline_existing_database,
@@ -212,6 +213,18 @@ def test_agent_runtime_draft_configuration_test_migration_adds_ephemeral_fields(
     assert "ADD COLUMN test_api_key_ciphertext TEXT NULL" in statements[0]
 
 
+def test_v53_expands_multi_column_alter_for_partial_reconciliation() -> None:
+    migration = next(item for item in discover_migrations() if item.version == 53)
+    sql = migration.path.read_text(encoding="utf-8")
+
+    statements = _migration_execution_statements(migration, sql)
+
+    assert len(statements) == 2
+    assert all("ALTER TABLE code_quality_agent_runtimes" in item for item in statements)
+    assert "test_runtime_snapshot_json" in statements[0]
+    assert "test_api_key_ciphertext" in statements[1]
+
+
 def test_agent_review_run_large_json_columns_use_mysql_longtext_variant() -> None:
     input_type = AgentReviewRun.__table__.c.input_json.type
     completion_context_type = AgentReviewRun.__table__.c.completion_context_json.type
@@ -392,6 +405,34 @@ def test_v52_executes_when_any_payload_column_still_needs_expansion(
     monkeypatch.setattr("app.migrate.inspect", lambda _connection: Inspector())
 
     assert _migration_statement_already_satisfied(object(), migration, statement) is False
+
+
+@pytest.mark.parametrize("column_name", ["test_runtime_snapshot_json", "test_api_key_ciphertext"])
+def test_v53_reconciles_compatible_runtime_column(
+    monkeypatch: pytest.MonkeyPatch,
+    column_name: str,
+) -> None:
+    migration = next(item for item in discover_migrations() if item.version == 53)
+    statements = _migration_execution_statements(
+        migration, migration.path.read_text(encoding="utf-8")
+    )
+    statement = next(item for item in statements if column_name in item)
+
+    class Inspector:
+        @staticmethod
+        def get_columns(_table_name):
+            return [
+                {
+                    "name": column_name,
+                    "type": mysql.TEXT(),
+                    "nullable": True,
+                    "default": None,
+                }
+            ]
+
+    monkeypatch.setattr("app.migrate.inspect", lambda _connection: Inspector())
+
+    assert _migration_statement_already_satisfied(object(), migration, statement) is True
 
 
 def test_existing_schema_upgrade_is_idempotent_and_groups_indexes_by_table() -> None:
