@@ -5,6 +5,7 @@ from datetime import datetime
 from fnmatch import fnmatchcase
 import hashlib
 import json
+import logging
 import os
 from itertools import count
 from queue import PriorityQueue
@@ -77,7 +78,7 @@ from app.code_quality.models import (
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.project_integration.repository import (
     find_project_by_id,
-    get_project_group_ai_review_policy,
+    get_project_review_policy,
     list_project_group_ai_review_models,
     make_ai_review_model_key,
     resolve_project_target_config,
@@ -96,6 +97,8 @@ from app.review_record.repository import (
     save_notification_records,
 )
 from app.review_feedback.service import ai_finding_fingerprint
+
+_LOGGER = logging.getLogger(__name__)
 
 
 REVIEW_JOB_PRIORITY = 10
@@ -344,11 +347,10 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
         request.get("targetTypes"),
     )
     profile = _resolve_profile(db, request.get("profileCode") or target_config["profileCode"], project)
-    ai_policy = get_project_group_ai_review_policy(db, project)
-    if not profile.enabled or not ai_policy.get("aiReviewEnabled") or not ai_policy.get("triggerOnManual"):
+    if not profile.enabled:
         raise AppError(
             "BAD_REQUEST",
-            f"Project group AI Review policy does not allow manual trigger: {profile.profile_code}",
+            f"Code quality review profile is disabled: {profile.profile_code}",
             400,
         )
     from app.agent_review.service import resolve_review_engine
@@ -975,7 +977,14 @@ def trigger_auto_review(
     profile = _resolve_auto_profile_or_save_failure(db, task, project)
     if profile is None:
         return False
-    ai_policy = get_project_group_ai_review_policy(db, project)
+    ai_policy = get_project_review_policy(db, project)
+    _LOGGER.info(
+        "Project review trigger decision projectId=%s targetType=%s trigger=MR enabled=%s source=%s",
+        project.id,
+        project.target_type or task.target_type,
+        bool(ai_policy.get("triggerOnMr")),
+        ai_policy.get("source"),
+    )
     if not profile.enabled or not ai_policy.get("aiReviewEnabled") or not ai_policy.get("triggerOnMr"):
         return False
     targets = _resolve_review_targets(db, project, profile, task.target_type)
@@ -1120,8 +1129,16 @@ def _trigger_push_auto_review(
     profile = _resolve_auto_profile_or_save_failure(db, task, project)
     if profile is None:
         return False
-    ai_policy = get_project_group_ai_review_policy(db, project)
-    if not profile.enabled or not ai_policy.get("aiReviewEnabled") or not ai_policy.get("triggerOnPush"):
+    ai_policy = get_project_review_policy(db, project)
+    trigger_enabled = bool(ai_policy.get("triggerOnPush"))
+    _LOGGER.info(
+        "Project review trigger decision projectId=%s targetType=%s trigger=PUSH enabled=%s source=%s",
+        project.id,
+        project.target_type or task.target_type,
+        trigger_enabled,
+        ai_policy.get("source"),
+    )
+    if not profile.enabled:
         _save_push_gate_rejection(
             db,
             task=task,
@@ -1131,7 +1148,20 @@ def _trigger_push_auto_review(
             focus_rule_codes=focus_rule_codes,
             profile_code=profile.profile_code,
             reason_code="PROFILE_DISABLED",
-            reason_summary="当前项目组 AI Review 策略未开启 Push 自动触发。",
+            reason_summary="当前项目 AI Review Profile 未启用。",
+        )
+        return False
+    if not trigger_enabled:
+        _save_push_gate_rejection(
+            db,
+            task=task,
+            changed_files=changed_files,
+            risk_card=risk_card,
+            focus_change_types=focus_change_types,
+            focus_rule_codes=focus_rule_codes,
+            profile_code=profile.profile_code,
+            reason_code="PROJECT_TRIGGER_DISABLED",
+            reason_summary="当前项目 Review 设置未开启 Push 自动触发。",
         )
         return False
     targets = _resolve_review_targets(db, project, profile, task.target_type)
@@ -1147,6 +1177,14 @@ def _trigger_push_auto_review(
         risk_card=risk_card,
         focus_change_types=focus_change_types,
         focus_rule_codes=focus_rule_codes,
+    )
+    _LOGGER.info(
+        "Project Push gate decision projectId=%s targetType=%s decision=%s reasonCode=%s source=%s",
+        project.id,
+        project.target_type or task.target_type,
+        gate.get("decision"),
+        gate.get("reason_code"),
+        ai_policy.get("source"),
     )
     if gate["decision"] != "ALLOWED":
         save_push_gate_decision(db, **gate)
@@ -2446,7 +2484,7 @@ def _enqueue_auto_fix_previews(
     result: dict[str, Any],
 ) -> None:
     review_key = result.get("reviewKey") or "default"
-    ai_policy = get_project_group_ai_review_policy(db, project)
+    ai_policy = get_project_review_policy(db, project)
     if not ai_policy.get("autoFixPreviewEnabled"):
         return
     enabled_severities = set(

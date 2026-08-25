@@ -3096,7 +3096,7 @@ def test_auto_trigger_agent_enqueue_failure_enters_standard_fallback(
         lambda *_args: profile,
     )
     monkeypatch.setattr(
-        "app.code_quality.service.get_project_group_ai_review_policy",
+        "app.code_quality.service.get_project_review_policy",
         lambda *_args: {"aiReviewEnabled": True, "triggerOnMr": True},
     )
     monkeypatch.setattr(

@@ -1961,7 +1961,11 @@ def test_ai_review_auto_generates_fix_previews_after_success(
     monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
     monkeypatch.setenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "true")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "auto-fix-secret")
-    enabled = update_default_push_policy(client, autoFixPreviewEnabled=True)
+    enabled = update_default_push_policy(
+        client,
+        autoFixPreviewEnabled=True,
+        autoFixPreviewSeverities=["CRITICAL"],
+    )
     assert enabled["autoFixPreviewEnabled"] is True
     calls = []
 
@@ -2159,7 +2163,11 @@ def test_ai_review_does_not_auto_generate_fix_previews_for_non_critical_findings
     monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
     monkeypatch.setenv("CODE_QUALITY_FIX_PREVIEW_INLINE", "true")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "auto-fix-non-critical-secret")
-    enabled = update_default_push_policy(client, autoFixPreviewEnabled=True)
+    enabled = update_default_push_policy(
+        client,
+        autoFixPreviewEnabled=True,
+        autoFixPreviewSeverities=["CRITICAL"],
+    )
     assert enabled["autoFixPreviewEnabled"] is True
     calls = []
 
@@ -3866,27 +3874,52 @@ def enable_push_profile(client: TestClient) -> None:
 
 
 def update_default_push_policy(client: TestClient, **overrides) -> dict:
-    groups_response = client.get("/api/project-groups")
-    assert groups_response.status_code == 200
-    default_group = next(item for item in groups_response.json()["data"]["items"] if item["groupCode"] == "default")
-    payload = {
-        "pushBranchPatterns": default_group["pushBranchPatterns"],
-        "pushMinChangedFiles": default_group["pushMinChangedFiles"],
-        "pushMinDiffBytes": default_group["pushMinDiffBytes"],
-        "pushMinCommitCount": default_group["pushMinCommitCount"],
-        "pushMaxChangedFiles": default_group["pushMaxChangedFiles"],
-        "pushMaxDiffBytes": default_group["pushMaxDiffBytes"],
-        "pushDebounceSeconds": default_group["pushDebounceSeconds"],
-        "aiReviewEnabled": default_group["aiReviewEnabled"],
-        "triggerOnManual": default_group["triggerOnManual"],
-        "triggerOnMr": default_group["triggerOnMr"],
-        "triggerOnPush": default_group["triggerOnPush"],
-        "triggerOnlyWhenRiskMatched": default_group["triggerOnlyWhenRiskMatched"],
-        "autoFixPreviewEnabled": default_group["autoFixPreviewEnabled"],
-        "autoFixPreviewSeverities": default_group["autoFixPreviewSeverities"],
-        **overrides,
+    projects_response = client.get("/api/projects")
+    assert projects_response.status_code == 200
+    project = next(
+        (
+            item
+            for item in projects_response.json()["data"]["items"]
+            if item["gitProjectId"] == "1001"
+        ),
+        None,
+    )
+    if project is None:
+        create_response = client.post(
+            "/api/projects",
+            json={
+                "name": "demo-service",
+                "gitProvider": "GITLAB",
+                "gitProjectId": "1001",
+                "repositoryUrl": "https://gitlab.example.com/demo/service",
+                "targetType": "BACKEND",
+            },
+        )
+        assert create_response.status_code == 200
+        project = create_response.json()["data"]
+    settings_response = client.get(f"/api/projects/{project['id']}/review-settings")
+    assert settings_response.status_code == 200
+    current = settings_response.json()["data"]
+    supported_fields = {
+        "triggerOnMr",
+        "triggerOnPush",
+        "triggerOnlyWhenRiskMatched",
+        "autoFixPreviewEnabled",
+        "autoFixPreviewSeverities",
+        "pushBranchPatterns",
+        "pushMinChangedFiles",
+        "pushMinDiffBytes",
+        "pushMinCommitCount",
+        "pushMaxChangedFiles",
+        "pushMaxDiffBytes",
+        "pushDebounceSeconds",
     }
-    response = client.put(f"/api/project-groups/{default_group['id']}", json=payload)
+    payload = {
+        key: value
+        for key, value in {**current, **overrides}.items()
+        if key in supported_fields
+    }
+    response = client.put(f"/api/projects/{project['id']}/review-settings", json=payload)
     assert response.status_code == 200
     return response.json()["data"]
 
@@ -3916,6 +3949,30 @@ def test_push_gate_returns_stable_empty_response_for_non_evaluated_task(
     assert data["decision"] == "NOT_EVALUATED"
     assert data["aiReviewScheduled"] is False
 
+
+def test_push_project_trigger_switch_records_project_rejection(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    seed_template(db_session)
+    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
+    update_default_push_policy(
+        client,
+        triggerOnPush=False,
+        pushBranchPatterns=["feature/*"],
+    )
+
+    created = client.post(
+        "/api/webhooks/gitlab/merge-request",
+        json=push_payload(branch="feature/project-disabled"),
+        headers={"X-Gitlab-Event": "Push Hook"},
+    ).json()["data"]
+    gate = client.get(f"/api/review-tasks/{created['taskId']}/code-quality-gate").json()["data"]
+
+    assert gate["decision"] == "REJECTED"
+    assert gate["reasonCode"] == "PROJECT_TRIGGER_DISABLED"
+    assert gate["aiReviewScheduled"] is False
 
 def test_push_gate_rejects_small_push_as_not_significant(
     client: TestClient,
@@ -4124,7 +4181,7 @@ def test_push_gate_rejects_branch_no_diff_and_too_large(
     assert client.get(f"/api/review-tasks/{too_large_task}/code-quality-gate").json()["data"]["reasonCode"] == "DIFF_TOO_LARGE"
 
 
-def test_push_branch_filter_uses_project_group_policy(
+def test_push_branch_filter_uses_project_review_settings(
     client: TestClient,
     db_session: Session,
     monkeypatch,
@@ -4163,16 +4220,21 @@ def test_push_gate_debounces_recent_allowed_push(
     monkeypatch.delenv("CODE_QUALITY_REVIEW_INLINE", raising=False)
     monkeypatch.setattr(service._executor, "submit", lambda *args: None)
     enable_push_profile(client)
-    files = [{"path": f"src/Change{index}.java", "diffText": "+ documentation update"} for index in range(10)]
+    files = [
+        {"path": f"src/Change{index}.java", "diffText": "+ " + ("documentation update " * 200)}
+        for index in range(10)
+    ]
+    payload = push_payload(branch="feature/debounce", changed_files=files)
+    payload["total_commits_count"] = 3
 
     first = client.post(
         "/api/webhooks/gitlab/merge-request",
-        json=push_payload(branch="feature/debounce", changed_files=files),
+        json=payload,
         headers={"X-Gitlab-Event": "Push Hook"},
     ).json()["data"]["taskId"]
     second = client.post(
         "/api/webhooks/gitlab/merge-request",
-        json=push_payload(branch="feature/debounce", changed_files=files),
+        json=payload,
         headers={"X-Gitlab-Event": "Push Hook"},
     ).json()["data"]["taskId"]
 

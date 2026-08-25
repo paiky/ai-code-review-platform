@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from fnmatch import fnmatchcase
 import json
+import logging
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -18,7 +19,7 @@ from app.project_integration import gitlab_client
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent
 from app.project_integration.repository import (
     ambiguous_auto_detected_target_types,
-    get_project_group_push_policy,
+    get_project_push_policy,
     resolve_project_review_profile_code,
     resolve_project_target_config,
     update_project_target_detection,
@@ -33,6 +34,8 @@ from app.review_record.repository import (
 )
 from app.risk_engine.service import generate_risk_card
 from app.rule_template.repository import get_enabled_template
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def handle_gitlab_webhook(db: Session, gitlab_event: str | None, payload: dict[str, Any]) -> dict:
@@ -194,7 +197,7 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
             "branchName": event["branchName"],
             "reasonCode": "PUSH_BRANCH_NOT_ALLOWED",
             "message": (
-                "GitLab Push branch is not configured in project group pushBranchPatterns; "
+                "GitLab Push branch is not configured in project pushBranchPatterns; "
                 "platform review flow was skipped."
             ),
             "profileCode": branch_gate["profileCode"],
@@ -680,10 +683,20 @@ def _parse_push_event(
 
 
 def _push_webhook_branch_gate(db: Session, project_record, branch_name: str | None) -> dict[str, Any]:
-    push_policy = get_project_group_push_policy(db, project_record)
+    push_policy = get_project_push_policy(db, project_record)
     patterns = push_policy["pushBranchPatterns"]
+    allowed = _branch_matches(branch_name, patterns)
+    _LOGGER.info(
+        "Project Push branch gate projectId=%s targetType=%s branch=%s allowed=%s source=%s patterns=%s",
+        project_record.id,
+        project_record.target_type,
+        branch_name,
+        allowed,
+        push_policy.get("source"),
+        patterns,
+    )
     return {
-        "allowed": _branch_matches(branch_name, patterns),
+        "allowed": allowed,
         "profileCode": resolve_project_review_profile_code(db, project_record, None),
         "patterns": patterns,
         "pushPolicy": push_policy,

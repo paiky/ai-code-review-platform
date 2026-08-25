@@ -668,5 +668,5 @@ def test_unmatched_new_project_uses_general_and_records_ai_review_profile_failur
     assert detail["targetType"] == "GENERAL"
     assert detail["codeQualityProfileCode"] is None
     result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
-    assert result["status"] == "FAILED"
+    assert result["status"] == "SKIPPED"
     assert "项目所属项目组未设置 AI Review 模板" in result["errorMessage"]

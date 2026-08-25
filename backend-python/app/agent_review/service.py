@@ -22,7 +22,7 @@ from app.core.database import SessionLocal
 from app.core.errors import AppError
 from app.core.json_utils import utc_now
 from app.project_integration.models import Project
-from app.project_integration.repository import get_project_group_ai_review_policy
+from app.project_integration.repository import get_project_review_policy
 from app.project_review_policy.service import build_project_review_policy_prompt_context
 from app.review_context.local_repo import prepare_local_repository_context, task_head_worktree_path
 from app.review_record.models import ReviewTask
@@ -151,7 +151,14 @@ def resolve_review_engine(
     *,
     explicit: bool = False,
 ) -> str:
-    policy = get_project_group_ai_review_policy(db, project)
+    policy = get_project_review_policy(db, project)
+    _LOGGER.info(
+        "Agent review engine policy projectId=%s targetType=%s source=%s",
+        project.id,
+        project.target_type,
+        policy.get("source"),
+    )
+
     value = override if override is not None else policy.get("reviewEngine")
     engine = str(value or "STANDARD").strip().upper()
     if engine not in {"STANDARD", "AGENT"}:
@@ -161,7 +168,7 @@ def resolve_review_engine(
             if explicit:
                 raise AppError(
                     "AGENT_REVIEW_UNAVAILABLE",
-                    "Project group has not authorized source export for Agent Review",
+                    "Project has not authorized source export for Agent Review",
                     409,
                 )
             return "AGENT_UNAVAILABLE"

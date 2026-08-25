@@ -17,6 +17,7 @@ from app.project_integration.models import (
     Project,
     ProjectGroup,
     ProjectGroupAiReviewModel,
+    ProjectReviewSettings,
     ProjectTargetConfig,
     TargetTypePathMapping,
 )
@@ -99,9 +100,12 @@ def ensure_project_config_schema(db: Session) -> None:
     engine_id = id(db.get_bind())
     if engine_id in _SCHEMA_ENSURED_ENGINE_IDS:
         _ensure_project_group_ai_review_model_schema(db)
+        _ensure_project_review_settings_schema(db)
         return
     with _SCHEMA_LOCK:
         if engine_id in _SCHEMA_ENSURED_ENGINE_IDS:
+            _ensure_project_group_ai_review_model_schema(db)
+            _ensure_project_review_settings_schema(db)
             return
         connection = db.connection()
         inspector = inspect(connection)
@@ -134,6 +138,7 @@ def ensure_project_config_schema(db: Session) -> None:
         _ensure_project_group_ai_review_model_schema(db, inspector)
         if not inspector.has_table("project_target_configs"):
             ProjectTargetConfig.__table__.create(connection, checkfirst=True)
+        _ensure_project_review_settings_schema(db, inspector)
         project_columns = {column["name"] for column in inspector.get_columns("projects")} if inspector.has_table("projects") else set()
         _add_column_if_missing(db, project_columns, "projects", "group_id", "BIGINT NULL")
         _add_column_if_missing(db, project_columns, "projects", "default_code_quality_profile_code", "VARCHAR(64) NULL")
@@ -159,6 +164,13 @@ def _ensure_project_group_ai_review_model_schema(db: Session, inspector=None) ->
         ProjectGroupAiReviewModel.__table__.create(db.connection(), checkfirst=True)
         db.flush()
 
+
+
+def _ensure_project_review_settings_schema(db: Session, inspector=None) -> None:
+    inspector = inspector or inspect(db.connection())
+    if not inspector.has_table("project_review_settings"):
+        ProjectReviewSettings.__table__.create(db.connection(), checkfirst=True)
+        db.flush()
 
 def _add_column_if_missing(db: Session, columns: set[str], table_name: str, column_name: str, definition: str) -> None:
     if column_name in columns:
@@ -351,6 +363,7 @@ def create_project(db: Session, request: dict) -> dict:
     )
     db.add(project)
     db.flush()
+    _create_default_project_review_settings(db, project)
     _create_manual_target_configs(db, project, target_types)
     db.commit()
     return project_to_dict(project)
@@ -384,6 +397,7 @@ def upsert_gitlab_project(
         project.repository_url = repository_url
         project.status = "ENABLED"
         _store_target_detection(project, detection)
+        _get_or_create_project_review_settings(db, project)
         project.updated_at = now
         db.flush()
         return project
@@ -411,6 +425,7 @@ def upsert_gitlab_project(
     )
     db.add(project)
     db.flush()
+    _create_default_project_review_settings(db, project)
     _create_detected_target_configs(db, project, detected_types)
     return project
 
@@ -679,20 +694,121 @@ def target_type_path_mapping_to_dict(mapping: TargetTypePathMapping) -> dict[str
     }
 
 
-def get_project_group_push_policy(db: Session, project: Project) -> dict[str, Any]:
-    ensure_project_config_schema(db)
-    group = db.get(ProjectGroup, project.group_id) if project.group_id else None
-    if group is None:
-        group = _ensure_default_project_group(db)
-    return push_policy_to_dict(group)
+def _create_default_project_review_settings(db: Session, project: Project) -> ProjectReviewSettings:
+    now = datetime.now()
+    settings = ProjectReviewSettings(
+        project_id=int(project.id),
+        trigger_on_mr=True,
+        trigger_on_push=False,
+        trigger_only_when_risk_matched=False,
+        auto_fix_preview_enabled=False,
+        auto_fix_preview_severities=json.dumps(["MAJOR"], ensure_ascii=False),
+        push_branch_patterns=json.dumps(DEFAULT_PUSH_REVIEW_POLICY["pushBranchPatterns"], ensure_ascii=False),
+        push_min_changed_files=int(DEFAULT_PUSH_REVIEW_POLICY["pushMinChangedFiles"]),
+        push_min_diff_bytes=int(DEFAULT_PUSH_REVIEW_POLICY["pushMinDiffBytes"]),
+        push_min_commit_count=int(DEFAULT_PUSH_REVIEW_POLICY["pushMinCommitCount"]),
+        push_max_changed_files=int(DEFAULT_PUSH_REVIEW_POLICY["pushMaxChangedFiles"]),
+        push_max_diff_bytes=int(DEFAULT_PUSH_REVIEW_POLICY["pushMaxDiffBytes"]),
+        push_debounce_seconds=int(DEFAULT_PUSH_REVIEW_POLICY["pushDebounceSeconds"]),
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(settings)
+    return settings
 
 
-def get_project_group_ai_review_policy(db: Session, project: Project) -> dict[str, Any]:
+def _get_or_create_project_review_settings(db: Session, project: Project) -> ProjectReviewSettings:
     ensure_project_config_schema(db)
-    group = db.get(ProjectGroup, project.group_id) if project.group_id else None
-    if group is None:
-        group = _ensure_default_project_group(db)
-    return {**ai_review_policy_to_dict(group), **push_policy_to_dict(group)}
+    settings = db.get(ProjectReviewSettings, int(project.id))
+    if settings is None:
+        settings = _create_default_project_review_settings(db, project)
+        db.flush()
+    return settings
+
+
+def project_review_settings_response(db: Session, project_id: int) -> dict[str, Any]:
+    project = find_project_by_id(db, project_id)
+    if project is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
+    settings = _get_or_create_project_review_settings(db, project)
+    db.commit()
+    return project_review_settings_to_dict(settings)
+
+
+def update_project_review_settings(db: Session, project_id: int, request: dict[str, Any]) -> dict[str, Any]:
+    project = find_project_by_id(db, project_id)
+    if project is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
+    settings = _get_or_create_project_review_settings(db, project)
+    bool_fields = {
+        "triggerOnMr": "trigger_on_mr",
+        "triggerOnPush": "trigger_on_push",
+        "triggerOnlyWhenRiskMatched": "trigger_only_when_risk_matched",
+        "autoFixPreviewEnabled": "auto_fix_preview_enabled",
+    }
+    for json_field, column_name in bool_fields.items():
+        if json_field in request and request[json_field] is not None:
+            setattr(settings, column_name, bool(request[json_field]))
+    if request.get("autoFixPreviewSeverities") is not None:
+        settings.auto_fix_preview_severities = json.dumps(
+            _normalize_auto_fix_preview_severities(request["autoFixPreviewSeverities"]),
+            ensure_ascii=False,
+        )
+    if request.get("pushBranchPatterns") is not None:
+        settings.push_branch_patterns = json.dumps(
+            _normalize_branch_patterns(request["pushBranchPatterns"]),
+            ensure_ascii=False,
+        )
+    int_fields = {
+        "pushMinChangedFiles": "push_min_changed_files",
+        "pushMinDiffBytes": "push_min_diff_bytes",
+        "pushMinCommitCount": "push_min_commit_count",
+        "pushMaxChangedFiles": "push_max_changed_files",
+        "pushMaxDiffBytes": "push_max_diff_bytes",
+        "pushDebounceSeconds": "push_debounce_seconds",
+    }
+    for json_field, column_name in int_fields.items():
+        if json_field in request and request[json_field] is not None:
+            setattr(settings, column_name, int(request[json_field]))
+    settings.updated_at = datetime.now()
+    db.commit()
+    return project_review_settings_to_dict(settings)
+
+
+def get_project_push_policy(db: Session, project: Project) -> dict[str, Any]:
+    return project_review_settings_to_dict(_get_or_create_project_review_settings(db, project))
+
+
+def get_project_review_policy(db: Session, project: Project) -> dict[str, Any]:
+    return {
+        "reviewEngine": "AGENT",
+        "agentSourceExportAllowed": True,
+        "aiReviewEnabled": True,
+        "triggerOnManual": True,
+        **project_review_settings_to_dict(_get_or_create_project_review_settings(db, project)),
+    }
+
+
+def project_review_settings_to_dict(settings: ProjectReviewSettings) -> dict[str, Any]:
+    return {
+        "projectId": int(settings.project_id),
+        "source": "PROJECT",
+        "triggerOnMr": bool(settings.trigger_on_mr),
+        "triggerOnPush": bool(settings.trigger_on_push),
+        "triggerOnlyWhenRiskMatched": bool(settings.trigger_only_when_risk_matched),
+        "autoFixPreviewEnabled": bool(settings.auto_fix_preview_enabled),
+        "autoFixPreviewSeverities": read_json_array(settings.auto_fix_preview_severities) or ["MAJOR"],
+        "pushBranchPatterns": (
+            read_json_array(settings.push_branch_patterns)
+            or list(DEFAULT_PUSH_REVIEW_POLICY["pushBranchPatterns"])
+        ),
+        "pushMinChangedFiles": _policy_int(settings.push_min_changed_files, "pushMinChangedFiles"),
+        "pushMinDiffBytes": _policy_int(settings.push_min_diff_bytes, "pushMinDiffBytes"),
+        "pushMinCommitCount": _policy_int(settings.push_min_commit_count, "pushMinCommitCount"),
+        "pushMaxChangedFiles": _policy_int(settings.push_max_changed_files, "pushMaxChangedFiles"),
+        "pushMaxDiffBytes": _policy_int(settings.push_max_diff_bytes, "pushMaxDiffBytes"),
+        "pushDebounceSeconds": _policy_int(settings.push_debounce_seconds, "pushDebounceSeconds"),
+    }
 
 
 def resolve_project_review_profile_code(db: Session, project: Project, target_type: str | None) -> str | None:
@@ -1217,6 +1333,18 @@ def _normalize_auto_fix_preview_severities(value: Any) -> list[str]:
         if normalized in allowed and normalized not in result:
             result.append(normalized)
     return result or list(DEFAULT_GROUP_AI_REVIEW_POLICY["autoFixPreviewSeverities"])
+
+
+def _normalize_branch_patterns(value: Any) -> list[str]:
+    raw_values = value if isinstance(value, list) else []
+    result: list[str] = []
+    for item in raw_values:
+        normalized = str(item or "").strip()
+        if normalized and normalized not in result:
+            result.append(normalized)
+    if not result:
+        raise AppError("VALIDATION_ERROR", "pushBranchPatterns must contain at least one pattern", 400)
+    return result
 
 
 def _int_or_default(value: Any, field: str) -> int:

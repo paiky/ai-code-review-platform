@@ -1047,6 +1047,8 @@ frontend/src/project-config/
   状态、Backend 状态口径、当前页选择、抽屉 dirty/响应式规则、Webhook 安全搜索和前端组件拆分边界；阶段状态不变。
 
 - 2026-08-25：完成阶段二项目级机器人 API、测试与通知切换：新增机器人资源 CRUD、脱敏列表、保存机器人测试与健康状态落库；新增项目机器人关联查询、批量预览/保存（REPLACE/ADD/REMOVE）及删除约束；任务通知改为项目关联机器人，多机器人全部发送，无机器人记录 `DINGTALK_WEBHOOKS_EMPTY/SKIPPED`，旧项目组回退仅由显式测试兼容开关启用；补充通知 API、项目关联和集成契约测试，相关验证 `35 passed`，Ruff 检查通过。阶段三待用户确认。
+- 2026-08-25：用户已确认推进阶段三；实施范围限定为项目 Review 设置 DTO、MR/PUSH/Agent Gate 运行时切换、项目设置默认创建、触发决策日志、相关测试和本文，不切换 Profile/模型，不修改前端。
+- 2026-08-25：完成阶段三项目级 MR/PUSH 与 Push Gate 切换：新增项目 Review 设置查询/更新 DTO 和默认创建；MR、Push、分支/大小/风险/防抖 Gate、Agent Gate 与自动修复预览改读 `project_review_settings`，Manual Review 保持不受项目触发开关限制；新增 `PROJECT_TRIGGER_DISABLED` 拒绝原因和 `PROJECT` 来源决策日志。阶段三相关契约测试 `53 passed`，变更文件 Ruff 检查通过；完整 code quality contract 额外审计 `94 passed, 2 failed`，失败为不在本阶段范围的既有 fix-preview 空任务与 Provider/端类型配置断言。阶段四待用户确认。
 - 2026-08-25：完成阶段一数据基础与迁移审计实现：新增项目端类型、Review 设置、项目模型、项目—机器人关联及机器人健康字段 ORM；新增 V54 bootstrap migration 与旧库字段/索引幂等 reconciliation；新增项目配置迁移预检、阻断异常报告、幂等回填、Webhook URL 去重关联和 Effective Config 对比 CLI；补充迁移与回填测试。阶段一相关测试 `31 passed`，变更文件 Ruff 检查通过；本地验收期间已执行并验证 V49～V54 迁移，未执行测试线迁移和部署。
 
 
