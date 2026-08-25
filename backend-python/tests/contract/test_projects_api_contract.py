@@ -106,25 +106,43 @@ def test_projects_api_returns_enabled_projects_page(client: TestClient, db_sessi
     assert body["data"]["total"] == 1
     assert body["data"]["pageNo"] == 1
     assert body["data"]["pageSize"] == 1
-    assert body["data"]["items"] == [
-        {
-            "id": 2,
-            "groupId": 1,
-            "groupName": "默认通用项目组",
-            "name": "demo-service",
-            "gitProvider": "GITLAB",
-            "gitProjectId": "1001",
-            "repositoryUrl": "https://gitlab.example.com/demo/service",
-            "targetType": "BACKEND",
-            "supportedTargetTypes": ["BACKEND"],
-            "detectedTargetTypes": [],
-            "targetDetection": None,
-            "defaultTemplateCode": "backend-default",
-            "defaultCodeQualityProfileCode": "backend-default-ai-review",
-            "defaultCodeQualityProviderCode": "DEEPSEEK",
-            "status": "ENABLED",
-        }
-    ]
+    item = body["data"]["items"][0]
+    assert {
+        key: item[key]
+        for key in (
+            "id",
+            "name",
+            "gitProvider",
+            "gitProjectId",
+            "repositoryUrl",
+            "targetType",
+            "supportedTargetTypes",
+            "detectedTargetTypes",
+            "targetDetection",
+            "status",
+        )
+    } == {
+        "id": 2,
+        "name": "demo-service",
+        "gitProvider": "GITLAB",
+        "gitProjectId": "1001",
+        "repositoryUrl": "https://gitlab.example.com/demo/service",
+        "targetType": "BACKEND",
+        "supportedTargetTypes": ["BACKEND"],
+        "detectedTargetTypes": [],
+        "targetDetection": None,
+        "status": "ENABLED",
+    }
+    assert item["groupId"] == 1
+    assert item["groupName"]
+    assert item["reviewProfileCode"] == "backend-default-ai-review"
+    assert item["reviewModelNames"]
+    assert item["triggerOnMr"] is True
+    assert item["triggerOnPush"] is False
+    assert item["reviewStatus"] == "CONFIGURED"
+    assert item["notificationStatus"] == "UNCONFIGURED"
+    assert item["healthWarning"] is False
+    assert item["webhooks"] == []
 
     include_disabled_response = client.get("/api/projects?includeDisabled=true")
     assert include_disabled_response.status_code == 200

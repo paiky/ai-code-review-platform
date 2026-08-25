@@ -6,7 +6,7 @@ import re
 from threading import Lock
 from typing import Any
 
-from sqlalchemy import Select, func, inspect, select, text
+from sqlalchemy import Select, func, inspect, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -91,7 +91,11 @@ PATH_DETECTION_RULES = [
     ("BACKEND", ["src/main/java/**", "src/main/resources/**", "src/*.java", "src/**/*.java", "pom.xml", "backend-python/**", "backend/**"]),
 ]
 PATH_MAPPING_TARGET_TYPES = {target_type for target_type, _patterns in PATH_DETECTION_RULES}
-SYSTEM_DETECTED_TARGET_CONFIG_DESCRIPTIONS = {"自动识别创建的端类型配置", "路径映射创建的端类型配置"}
+SYSTEM_DETECTED_TARGET_CONFIG_DESCRIPTIONS = {
+    "自动识别创建的端类型配置",
+    "路径映射创建的端类型配置",
+    "恢复自动识别的端类型配置",
+}
 
 _SCHEMA_LOCK = Lock()
 _SCHEMA_ENSURED_ENGINE_IDS: set[int] = set()
@@ -307,11 +311,22 @@ def list_enabled_projects(
     db: Session,
     group_id: int | None = None,
     target_type: str | None = None,
+    keyword: str | None = None,
+    notification_status: str | None = None,
+    review_status: str | None = None,
+    page_no: int | None = None,
+    page_size: int | None = None,
     include_disabled: bool = False,
 ) -> dict:
+    from app.code_quality.repository import ensure_defaults
+    from app.notification.repository import ensure_webhook_schema
+
     ensure_project_config_schema(db)
+    ensure_webhook_schema(db)
+    ensure_defaults(db)
     _ensure_default_project_group(db)
     db.commit()
+
     stmt: Select[tuple[Project]] = select(Project)
     if not include_disabled:
         stmt = stmt.where(Project.status == "ENABLED")
@@ -319,17 +334,340 @@ def list_enabled_projects(
         stmt = stmt.where(Project.group_id == group_id)
     if target_type:
         stmt = stmt.where(Project.target_type == normalize_target_type(target_type))
-    stmt = stmt.order_by(Project.id.desc())
-    items = [project_to_dict(project) for project in db.scalars(stmt).all()]
-    total_stmt = select(func.count()).select_from(Project)
-    if not include_disabled:
-        total_stmt = total_stmt.where(Project.status == "ENABLED")
-    if group_id is not None:
-        total_stmt = total_stmt.where(Project.group_id == group_id)
-    if target_type:
-        total_stmt = total_stmt.where(Project.target_type == normalize_target_type(target_type))
-    total = db.scalar(total_stmt) or 0
-    return page_response(items, 1, len(items), total)
+    normalized_keyword = str(keyword or "").strip().lower()
+    if normalized_keyword:
+        search_value = f"%{normalized_keyword}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(Project.name).like(search_value),
+                func.lower(Project.git_project_id).like(search_value),
+                func.lower(Project.repository_url).like(search_value),
+            )
+        )
+
+    projects = db.scalars(stmt.order_by(Project.id.desc())).all()
+    items = _project_list_items(db, projects)
+    normalized_notification_status = str(notification_status or "").strip().upper()
+    if normalized_notification_status:
+        if normalized_notification_status == "HEALTH_WARNING":
+            items = [item for item in items if item["healthWarning"]]
+        else:
+            items = [
+                item
+                for item in items
+                if item["notificationStatus"] == normalized_notification_status
+            ]
+    normalized_review_status = str(review_status or "").strip().upper()
+    if normalized_review_status:
+        items = [
+            item
+            for item in items
+            if item["reviewStatus"] == normalized_review_status
+        ]
+
+    total = len(items)
+    paging_requested = page_no is not None or page_size is not None
+    safe_page_no = max(int(page_no or 1), 1)
+    if not paging_requested:
+        return page_response(items, safe_page_no, len(items), total)
+    safe_page_size = min(max(int(page_size or 20), 1), 100)
+    start = (safe_page_no - 1) * safe_page_size
+    return page_response(
+        items[start : start + safe_page_size],
+        safe_page_no,
+        safe_page_size,
+        total,
+    )
+
+
+def _project_list_items(db: Session, projects: list[Project]) -> list[dict[str, Any]]:
+    if not projects:
+        return []
+
+    from app.code_quality.models import (
+        CodeQualityModelProvider,
+        CodeQualityReviewProfile,
+        CodeQualityReviewSettings,
+    )
+    from app.notification.models import (
+        NotificationWebhook,
+        ProjectNotificationWebhook,
+    )
+    from app.notification.repository import mask_webhook
+
+    project_ids = [int(project.id) for project in projects]
+    current_target_types = {
+        int(project.id): effective_project_target_type(project)
+        for project in projects
+    }
+    configs = db.scalars(
+        select(ProjectTargetConfig).where(
+            ProjectTargetConfig.project_id.in_(project_ids),
+            ProjectTargetConfig.enabled.is_(True),
+        )
+    ).all()
+    config_by_project: dict[int, ProjectTargetConfig] = {}
+    for config in configs:
+        project_id = int(config.project_id)
+        if config.target_type == current_target_types[project_id]:
+            config_by_project[project_id] = config
+
+    settings_by_project = {
+        int(settings.project_id): settings
+        for settings in db.scalars(
+            select(ProjectReviewSettings).where(
+                ProjectReviewSettings.project_id.in_(project_ids)
+            )
+        ).all()
+    }
+    models_by_project: dict[int, list[ProjectAiReviewModel]] = {}
+    project_models = db.scalars(
+        select(ProjectAiReviewModel)
+        .where(
+            ProjectAiReviewModel.project_id.in_(project_ids),
+            ProjectAiReviewModel.enabled.is_(True),
+        )
+        .order_by(
+            ProjectAiReviewModel.project_id.asc(),
+            ProjectAiReviewModel.sort_order.asc(),
+            ProjectAiReviewModel.id.asc(),
+        )
+    ).all()
+    for model in project_models:
+        models_by_project.setdefault(int(model.project_id), []).append(model)
+
+    webhook_rows = db.execute(
+        select(ProjectNotificationWebhook, NotificationWebhook)
+        .join(
+            NotificationWebhook,
+            NotificationWebhook.id == ProjectNotificationWebhook.webhook_id,
+        )
+        .where(
+            ProjectNotificationWebhook.project_id.in_(project_ids),
+            ProjectNotificationWebhook.enabled.is_(True),
+        )
+        .order_by(
+            ProjectNotificationWebhook.project_id.asc(),
+            NotificationWebhook.id.asc(),
+        )
+    ).all()
+    webhooks_by_project: dict[
+        int,
+        list[tuple[ProjectNotificationWebhook, NotificationWebhook]],
+    ] = {}
+    for relation, webhook in webhook_rows:
+        webhooks_by_project.setdefault(int(relation.project_id), []).append(
+            (relation, webhook)
+        )
+
+    profile_code_by_project = {
+        int(project.id): _project_list_profile_code(
+            project,
+            config_by_project.get(int(project.id)),
+        )
+        for project in projects
+    }
+    profile_codes = {
+        profile_code
+        for profile_code in profile_code_by_project.values()
+        if profile_code
+    }
+    profiles_by_code = (
+        {
+            profile.profile_code: profile
+            for profile in db.scalars(
+                select(CodeQualityReviewProfile).where(
+                    CodeQualityReviewProfile.profile_code.in_(profile_codes)
+                )
+            ).all()
+        }
+        if profile_codes
+        else {}
+    )
+
+    settings_record = db.get(CodeQualityReviewSettings, 1)
+    default_provider_code = (
+        _blank_to_none(settings_record.default_provider_code)
+        if settings_record is not None
+        else None
+    )
+    provider_codes = {
+        str(config.provider_code).upper()
+        for config in configs
+        if _blank_to_none(config.provider_code)
+    }
+    provider_codes.update(
+        str(model.provider_code).upper()
+        for model in project_models
+        if _blank_to_none(model.provider_code)
+    )
+    provider_codes.update(
+        str(profile.provider_code).upper()
+        for profile in profiles_by_code.values()
+        if _blank_to_none(profile.provider_code)
+    )
+    if default_provider_code:
+        provider_codes.add(default_provider_code.upper())
+    providers_by_code = (
+        {
+            provider.provider_code.upper(): provider
+            for provider in db.scalars(
+                select(CodeQualityModelProvider).where(
+                    CodeQualityModelProvider.provider_code.in_(provider_codes)
+                )
+            ).all()
+        }
+        if provider_codes
+        else {}
+    )
+
+    items = []
+    for project in projects:
+        project_id = int(project.id)
+        config = config_by_project.get(project_id)
+        profile_code = profile_code_by_project[project_id]
+        profile = profiles_by_code.get(profile_code)
+        profile_available = bool(
+            profile is not None
+            and profile.enabled
+            and profile.status == "ENABLED"
+        )
+        review_model_names = _project_review_model_names(
+            config,
+            models_by_project.get(project_id, []),
+            profile,
+            default_provider_code,
+            providers_by_code,
+        )
+        webhook_summary = _project_webhook_summary(
+            webhooks_by_project.get(project_id, []),
+            mask_webhook,
+        )
+        settings = settings_by_project.get(project_id)
+        item = project_to_dict(project)
+        item.update(
+            {
+                "reviewProfileCode": profile_code,
+                "reviewModelNames": review_model_names,
+                "triggerOnMr": (
+                    bool(settings.trigger_on_mr)
+                    if settings is not None
+                    else True
+                ),
+                "triggerOnPush": (
+                    bool(settings.trigger_on_push)
+                    if settings is not None
+                    else False
+                ),
+                "reviewStatus": (
+                    "CONFIGURED"
+                    if profile_available and review_model_names
+                    else "UNCONFIGURED"
+                ),
+                **webhook_summary,
+            }
+        )
+        items.append(item)
+    return items
+
+
+def _project_list_profile_code(
+    project: Project,
+    config: ProjectTargetConfig | None,
+) -> str | None:
+    if config is not None and _blank_to_none(config.code_quality_profile_code):
+        return _blank_to_none(config.code_quality_profile_code)
+    defaults = TARGET_TYPE_DEFAULTS.get(
+        effective_project_target_type(project),
+        TARGET_TYPE_DEFAULTS["GENERAL"],
+    )
+    return _blank_to_none(defaults.get("profileCode"))
+
+
+def _project_review_model_names(
+    config: ProjectTargetConfig | None,
+    project_models: list[ProjectAiReviewModel],
+    profile,
+    default_provider_code: str | None,
+    providers_by_code: dict[str, Any],
+) -> list[str]:
+    provider_codes: list[tuple[str, str | None, str | None]] = []
+    if config is not None and _blank_to_none(config.provider_code):
+        provider_codes.append((str(config.provider_code), None, None))
+    elif project_models:
+        provider_codes.extend(
+            (
+                str(model.provider_code),
+                _blank_to_none(model.model_name),
+                _blank_to_none(model.display_name),
+            )
+            for model in project_models
+        )
+    else:
+        profile_provider_code = (
+            _blank_to_none(profile.provider_code)
+            if profile is not None
+            else None
+        )
+        resolved_provider_code = profile_provider_code or default_provider_code
+        if resolved_provider_code:
+            provider_codes.append(
+                (
+                    resolved_provider_code,
+                    _blank_to_none(profile.model) if profile is not None else None,
+                    None,
+                )
+            )
+
+    names: list[str] = []
+    for provider_code, model_name, display_name in provider_codes:
+        provider = providers_by_code.get(provider_code.upper())
+        if provider is None or not provider.enabled:
+            continue
+        name = (
+            display_name
+            or model_name
+            or _blank_to_none(provider.model_name)
+            or provider.provider_name
+        )
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _project_webhook_summary(
+    rows: list[tuple[Any, Any]],
+    mask_webhook,
+) -> dict[str, Any]:
+    webhooks = []
+    enabled_webhooks = []
+    for _relation, webhook in rows:
+        enabled = bool(webhook.enabled) and webhook.status == "ENABLED"
+        item = {
+            "id": int(webhook.id),
+            "name": webhook.name,
+            "enabled": enabled,
+            "status": webhook.status,
+            "webhookMasked": mask_webhook(webhook.webhook_url),
+            "lastTestStatus": webhook.last_test_status,
+        }
+        webhooks.append(item)
+        if enabled:
+            enabled_webhooks.append(item)
+    if not webhooks:
+        notification_status = "UNCONFIGURED"
+    elif enabled_webhooks:
+        notification_status = "CONFIGURED"
+    else:
+        notification_status = "ABNORMAL"
+    return {
+        "notificationStatus": notification_status,
+        "healthWarning": any(
+            item["lastTestStatus"] == "FAILED"
+            for item in enabled_webhooks
+        ),
+        "webhooks": webhooks,
+    }
 
 
 def create_project(db: Session, request: dict) -> dict:
@@ -1226,6 +1564,247 @@ def _project_configuration_to_dict(
         "reviewSettings": project_review_settings_to_dict(settings),
         "webhookIds": webhook_ids,
     }
+
+
+def project_configuration_defaults_response(
+    target_type: str,
+) -> dict[str, Any]:
+    normalized_target_type = normalize_target_type(target_type)
+    return {
+        "targetType": normalized_target_type,
+        "targetConfig": _target_configuration_defaults(normalized_target_type),
+    }
+
+
+def project_target_type_auto_detection_preview(
+    db: Session,
+    project_id: int,
+) -> dict[str, Any]:
+    project = find_project_by_id(db, project_id)
+    if project is None:
+        raise AppError(
+            "RESOURCE_NOT_FOUND",
+            f"Project not found: {project_id}",
+            404,
+        )
+    detection, detected_target_types, evidence_version = (
+        _project_target_detection_state(project)
+    )
+    detected_target_type = detected_target_types[0]
+    current_target_type = effective_project_target_type(project)
+    current_config = db.scalars(
+        select(ProjectTargetConfig).where(
+            ProjectTargetConfig.project_id == project.id,
+            ProjectTargetConfig.target_type == current_target_type,
+            ProjectTargetConfig.enabled.is_(True),
+        )
+    ).first()
+    current_target_config = (
+        target_config_to_dict(current_config)
+        if current_config is not None
+        else _default_target_config_response(project)
+    )
+    target_config = _target_configuration_defaults(detected_target_type)
+    changes = []
+    for field in (
+        "targetType",
+        "templateCode",
+        "codeQualityProfileCode",
+        "providerCode",
+        "pathPatterns",
+        "reminderCardEnabled",
+    ):
+        before = (
+            current_target_type
+            if field == "targetType"
+            else current_target_config.get(field)
+        )
+        after = (
+            detected_target_type
+            if field == "targetType"
+            else target_config.get(field)
+        )
+        if before != after:
+            changes.append(
+                {
+                    "field": field,
+                    "before": before,
+                    "after": after,
+                }
+            )
+    return {
+        "projectId": int(project.id),
+        "currentTargetType": current_target_type,
+        "detectedTargetType": detected_target_type,
+        "detectedTargetTypes": detected_target_types,
+        "evidences": detection["evidences"],
+        "evidenceUpdatedAt": detection.get("updatedAt"),
+        "evidenceVersion": evidence_version,
+        "currentTargetConfig": current_target_config,
+        "targetConfig": target_config,
+        "changes": changes,
+    }
+
+
+def apply_project_target_type_auto_detection(
+    db: Session,
+    project_id: int,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        preview = project_target_type_auto_detection_preview(db, project_id)
+        if request.get("evidenceVersion") != preview["evidenceVersion"]:
+            raise AppError(
+                "PROJECT_TARGET_DETECTION_STALE",
+                "Project target detection evidence changed; refresh the preview",
+                409,
+            )
+        target_type = normalize_target_type(request.get("targetType"))
+        if target_type != preview["detectedTargetType"]:
+            raise AppError(
+                "PROJECT_TARGET_DETECTION_STALE",
+                "Selected target type no longer matches current detection evidence",
+                409,
+            )
+
+        project = find_project_by_id(db, project_id)
+        if project is None:
+            raise AppError(
+                "RESOURCE_NOT_FOUND",
+                f"Project not found: {project_id}",
+                404,
+            )
+        defaults = TARGET_TYPE_DEFAULTS[target_type]
+        configs = db.scalars(
+            select(ProjectTargetConfig).where(
+                ProjectTargetConfig.project_id == project.id
+            )
+        ).all()
+        selected = next(
+            (
+                config
+                for config in configs
+                if config.target_type == target_type
+            ),
+            None,
+        )
+        now = datetime.now()
+        if selected is None:
+            selected = ProjectTargetConfig(
+                project_id=project.id,
+                target_type=target_type,
+                template_code=defaults["templateCode"],
+                code_quality_profile_code=defaults["profileCode"],
+                provider_code=None,
+                path_patterns=json.dumps(
+                    defaults["pathPatterns"],
+                    ensure_ascii=False,
+                ),
+                reminder_card_enabled=bool(defaults["reminderCardEnabled"]),
+                enabled=True,
+                description="恢复自动识别的端类型配置",
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(selected)
+            configs.append(selected)
+        else:
+            selected.template_code = defaults["templateCode"]
+            selected.code_quality_profile_code = defaults["profileCode"]
+            selected.provider_code = None
+            selected.path_patterns = json.dumps(
+                defaults["pathPatterns"],
+                ensure_ascii=False,
+            )
+            selected.reminder_card_enabled = bool(
+                defaults["reminderCardEnabled"]
+            )
+            selected.description = "恢复自动识别的端类型配置"
+            selected.updated_at = now
+        for config in configs:
+            config.enabled = config is selected
+            config.updated_at = now
+
+        _set_project_supported_target_type(db, project, target_type)
+        project.default_template_code = defaults["templateCode"]
+        project.default_code_quality_profile_code = defaults["profileCode"]
+        project.default_code_quality_provider_code = None
+        project.updated_at = now
+        settings = _get_or_create_project_review_settings(db, project)
+        db.commit()
+        return {
+            "projectId": int(project.id),
+            "appliedTargetType": target_type,
+            "evidenceVersion": preview["evidenceVersion"],
+            "configuration": _project_configuration_to_dict(
+                db,
+                project,
+                settings,
+            ),
+        }
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _target_configuration_defaults(target_type: str) -> dict[str, Any]:
+    normalized_target_type = normalize_target_type(target_type)
+    defaults = TARGET_TYPE_DEFAULTS.get(
+        normalized_target_type,
+        TARGET_TYPE_DEFAULTS["GENERAL"],
+    )
+    return {
+        "targetType": normalized_target_type,
+        "templateCode": defaults["templateCode"],
+        "codeQualityProfileCode": defaults["profileCode"],
+        "providerCode": None,
+        "pathPatterns": list(defaults["pathPatterns"]),
+        "reminderCardEnabled": bool(defaults["reminderCardEnabled"]),
+    }
+
+
+def _project_target_detection_state(
+    project: Project,
+) -> tuple[dict[str, Any], list[str], str]:
+    detection = read_json(project.target_detection_json, None)
+    if not isinstance(detection, dict):
+        raise AppError(
+            "PROJECT_TARGET_DETECTION_UNAVAILABLE",
+            "Project target detection evidence is unavailable",
+            409,
+        )
+    evidences = [
+        item
+        for item in detection.get("evidences") or []
+        if isinstance(item, dict)
+    ]
+    detected_target_types = []
+    for value in detection.get("targetTypes") or []:
+        normalized = str(value or "").strip().upper().replace("-", "_")
+        if (
+            normalized in TARGET_TYPE_DEFAULTS
+            and normalized not in detected_target_types
+        ):
+            detected_target_types.append(normalized)
+    if not evidences or not detected_target_types:
+        raise AppError(
+            "PROJECT_TARGET_DETECTION_UNAVAILABLE",
+            "Project target detection evidence is incomplete",
+            409,
+        )
+    canonical = json.dumps(
+        detection,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    evidence_version = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    normalized_detection = {
+        **detection,
+        "evidences": evidences,
+        "targetTypes": detected_target_types,
+    }
+    return normalized_detection, detected_target_types, evidence_version
 
 
 def _validate_project_configuration(

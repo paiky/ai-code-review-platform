@@ -2,8 +2,8 @@
 
 ## 1. 状态与背景
 
-- 计划状态：**阶段四已完成，阶段五待确认（2026-08-25）**；
-- 当前停止点：单端类型、项目综合 Review 配置、Profile/Provider/项目多模型和任务快照运行时切换已完成；前端项目中心、遗留清理和部署尚未执行，等待阶段五确认；
+- 计划状态：**阶段五前置接口补充已完成，阶段五前端 UI 待确认（2026-08-25）**；
+- 当前停止点：项目列表、端类型默认配置和恢复自动识别 Backend 契约已补齐并完成验证；未修改前端、数据库或部署，等待用户确认恢复阶段五前端 UI；
 - 产品背景：组织架构已进入全栈协作模式，原“研发一部后端、研发二部后端、Web 端、iOS 端、Android 端”等项目组不再是
   稳定的业务归属，也不应继续决定 Review 模板、模型、触发策略或钉钉通知目标；
 - 当前问题：`projects.group_id -> project_groups -> notification_webhooks` 同时承担组织归类、Review 配置继承和通知路由，项目组停用、
@@ -361,6 +361,38 @@ Review 配置状态：
 - `CONFIGURED`：唯一端类型配置能解析出有效 Profile 和至少一个可用 Review 模型/Provider；
 - `UNCONFIGURED`：Profile 或 Provider/模型无法解析；
 - 单项目单端类型后不再需要“部分配置”。
+
+#### 7.1.1 端类型默认配置
+
+```http
+GET /api/projects/configuration-defaults?targetType=WEB_PC
+```
+
+`targetType` 只接受 `BACKEND/WEB_PC/APP_IOS/APP_ANDROID/APP_CROSS_PLATFORM/GENERAL`。响应直接复用运行时
+`TARGET_TYPE_DEFAULTS`，返回 `targetType` 和 `targetConfig`；`targetConfig` 包含 `templateCode`、
+`codeQualityProfileCode`、`providerCode`、`pathPatterns` 和 `reminderCardEnabled`，API 层不维护第二份默认映射。
+
+#### 7.1.2 恢复端类型自动识别
+
+```http
+GET /api/projects/{projectId}/target-type-auto-detection/preview
+PUT /api/projects/{projectId}/target-type-auto-detection
+```
+
+预览响应返回 `currentTargetType`、首个拟采用的 `detectedTargetType`、完整 `detectedTargetTypes`、识别证据、默认
+`targetConfig`、逐字段 `changes` 和当前证据的 SHA-256 `evidenceVersion`，且不写数据库。应用请求为：
+
+```json
+{
+  "targetType": "WEB_PC",
+  "evidenceVersion": "64 位 SHA-256 十六进制值"
+}
+```
+
+应用时服务端重新计算证据版本，并校验请求端类型等于当前首个候选；证据缺失返回
+`PROJECT_TARGET_DETECTION_UNAVAILABLE`（409），版本变化或端类型不匹配返回 `PROJECT_TARGET_DETECTION_STALE`（409）。
+校验通过后原子应用单一端类型及对应默认端配置，清除端配置 Provider 覆盖，同时保留项目模型、Review 设置和机器人关联；
+相同证据重复应用保持幂等。多个候选只作为完整识别证据返回，不改变既有固定单端类型运行语义。
 
 ### 7.2 单项目综合配置
 
@@ -918,7 +950,36 @@ frontend/src/project-config/
 
 授权边界与停止点：只允许修改端类型、Review 配置解析、综合接口、测试和本文；不得修改前端或删除旧表。完成后停止等待阶段五确认。
 
-### 11.5 阶段五：项目中心前端 UI
+### 11.5 阶段五前置：项目中心 Backend 接口补充
+
+改动量等级：**中**。扩展项目列表公开查询与状态 VO，新增端类型默认配置和恢复自动识别接口，涉及 API、Repository、DTO 与契约测试，但不修改数据库或 Review/通知运行主链路。
+
+目标：补齐项目中心 UI 必需的服务端分页、筛选、状态摘要和端类型操作契约，使阶段五前端能够只映射 Backend 状态，不执行 N+1 聚合或自行推导业务状态。
+
+范围：
+
+- 扩展 `GET /api/projects`，支持 `keyword`、`targetType`、`notificationStatus`、`reviewStatus`、`pageNo`、`pageSize`；
+- 项目列表 VO 返回 `reviewProfileCode`、`reviewModelNames`、`triggerOnMr`、`triggerOnPush`、`notificationStatus`、`healthWarning`、`reviewStatus` 和脱敏机器人摘要；
+- 新增 `GET /api/projects/configuration-defaults?targetType=...`，返回六种端类型的默认模板、Profile、Provider、路径规则和提醒卡片设置；
+- 新增 `GET /api/projects/{projectId}/target-type-auto-detection/preview`，基于已保存识别证据返回候选、拟采用端类型及端类型/模板/Profile 配置差异，接口只读；
+- 新增 `PUT /api/projects/{projectId}/target-type-auto-detection`，服务端重新校验当前识别证据后原子应用单一端类型和对应默认端配置，保留项目模型、Review 触发设置和机器人关联；
+- 补充查询参数、状态组合、分页边界、默认配置、预览无写入、应用幂等、证据变化/缺失和人工配置不被后台自动覆盖的契约测试；
+- 更新本文接口契约、验收矩阵和阶段实施记录。
+
+非目标：不修改前端；不新增数据库字段或 migration；不改变 MR、Push、manual、Agent/Standard、通知发送和 Provider 解析主链路；不在 webhook 或 diff 获取时自动覆盖人工端类型；不删除项目组兼容结构；不调用真实 GitLab、机器人或 Provider。
+
+验收方式：
+
+- 项目列表筛选与分页由服务端执行，`total/pageNo/pageSize/items` 与组合条件一致；
+- 已配置、未配置、配置异常和健康告警状态由 Backend 统一判定，前端不需要追加项目级查询；
+- 六种端类型默认配置与运行时 `TARGET_TYPE_DEFAULTS` 使用同一来源，不在 API 层维护第二份映射；
+- 自动识别预览不写数据库；应用只接受当前证据支持的单一端类型，证据缺失、变化或候选不合法时返回明确错误；
+- 自动识别应用重复执行保持幂等，且不修改项目模型、Review 设置和机器人关联；
+- 相关 project/notification contract 测试、受影响 Python 测试和变更文件 Ruff 检查通过。
+
+授权边界与停止点：本阶段已按授权完成，仅修改 Python 项目查询/端类型接口、必要 DTO/Repository、契约测试和本文；未修改前端、数据库、部署或运行主链路。当前停止并等待用户确认恢复阶段五前端 UI。
+
+### 11.6 阶段五：项目中心前端 UI
 
 改动量等级：**中**。重组设置页核心信息架构、项目表格、抽屉、批量操作和机器人库，但使用阶段二至四稳定 API。
 
@@ -949,7 +1010,7 @@ frontend/src/project-config/
 
 授权边界与停止点：只允许修改前端、前端测试、必要文案和本文；不得调整 Backend、数据库或部署。完成后停止等待阶段六确认。
 
-### 11.6 阶段六：项目组遗留清理
+### 11.7 阶段六：项目组遗留清理
 
 改动量等级：**中**。删除已停止使用的 API、字段、表、筛选和兼容分支，风险由前五阶段的双读验证和稳定期控制。
 
@@ -1051,6 +1112,11 @@ frontend/src/project-config/
 - 2026-08-25：完成阶段三项目级 MR/PUSH 与 Push Gate 切换：新增项目 Review 设置查询/更新 DTO 和默认创建；MR、Push、分支/大小/风险/防抖 Gate、Agent Gate 与自动修复预览改读 `project_review_settings`，Manual Review 保持不受项目触发开关限制；新增 `PROJECT_TRIGGER_DISABLED` 拒绝原因和 `PROJECT` 来源决策日志。阶段三相关契约测试 `53 passed`，变更文件 Ruff 检查通过；完整 code quality contract 额外审计 `94 passed, 2 failed`，失败为不在本阶段范围的既有 fix-preview 空任务与 Provider/端类型配置断言。阶段四待用户确认。
 - 2026-08-25：用户已确认推进阶段四；实施范围限定为单端类型校验、项目综合配置接口、Profile/Provider/项目多模型解析、任务创建快照、相关测试和本文，不修改前端，不删除旧表，不实现动态继承或多端拆分。
 - 2026-08-25：完成阶段四单端类型与项目 Review 配置切换：新增强类型项目综合配置 GET/PUT，在单事务内校验并保存唯一端类型配置、项目模型、Review 设置和机器人关联；项目创建、webhook、manual、MR、Push、重试与 Agent/Standard 运行时统一使用 `projects.target_type` 和单值 `targetTypes` 快照；Profile 改读项目端配置，Provider/模型按“端配置 Provider > 项目模型 > Profile Provider > 全局默认”解析，不再读取项目组 Profile/模型；自动识别仅维护候选证据，允许无 payload diff 的新项目在首次 GitLab diff 返回后完成系统占位端类型定型，不覆盖人工配置。阶段四相关项目/综合配置、迁移、Code Quality、manual/rule、Agent/Review Task、GitLab/diff context 验证合计 `287 passed, 1 failed`，变更文件 Ruff 检查通过；唯一失败为阶段三已记录的空任务 fix-preview 接口预期 200、实际 404 的既有断言。未修改前端、删除旧表、提交、推送或部署。阶段五待用户确认。
+- 2026-08-25：用户已确认推进阶段五；实施范围限定为项目中心前端 UI、前端测试、必要文案和本文，复用阶段二至四稳定 API，不修改 Backend、数据库或部署。阶段五按单个“中”等级阶段推进，内部依次完成页面骨架、核心配置交互和响应式验收，全部完成后停止等待阶段六确认。
+- 2026-08-25：阶段五实施前契约复核发现计划与代码存在前置缺口：项目列表尚不支持 keyword/通知状态/Review 状态/服务端分页，VO 未返回 Review 与机器人状态摘要；尚无恢复自动识别的预览/应用接口和端类型默认配置查询。因阶段五授权边界禁止 Backend 修改，前端实现暂停，等待最小 Backend 契约补充授权。
+- 2026-08-25：用户确认将“阶段五前置：项目中心 Backend 接口补充”新增到计划，但尚未授权代码推进；新增阶段覆盖项目列表服务端筛选/分页与状态摘要、端类型默认配置、恢复自动识别预览/应用和相关 Backend 契约测试，完成后必须停止验收，再恢复阶段五前端 UI。
+- 2026-08-25：用户已确认实施阶段五前置接口补充；实施范围限定为 Python 项目查询/端类型接口、必要 DTO/Repository、契约测试和本文，不修改前端、数据库、部署或 Review/通知运行主链路。
+- 2026-08-25：完成阶段五前置接口补充：项目列表新增 keyword/通知状态/Review 状态筛选和显式服务端分页，批量聚合 Review Profile、模型、MR/PUSH、通知状态、健康告警和脱敏机器人摘要；新增六种端类型默认配置查询，以及带 SHA-256 `evidenceVersion` 并发保护的恢复自动识别预览/应用接口，应用时保留项目模型、Review 设置和机器人关联。相关去重验证合计 `200 passed, 1 failed`，唯一失败为既有 `test_fix_preview_schema_removes_legacy_task_finding_unique_index` 对不存在任务预期 200、实际 404；变更文件 Ruff 与 `git diff --check` 通过。未修改前端、数据库、migration、部署或 Review/通知发送主链路，阶段五前端 UI 待用户确认。
 - 2026-08-25：完成阶段一数据基础与迁移审计实现：新增项目端类型、Review 设置、项目模型、项目—机器人关联及机器人健康字段 ORM；新增 V54 bootstrap migration 与旧库字段/索引幂等 reconciliation；新增项目配置迁移预检、阻断异常报告、幂等回填、Webhook URL 去重关联和 Effective Config 对比 CLI；补充迁移与回填测试。阶段一相关测试 `31 passed`，变更文件 Ruff 检查通过；本地验收期间已执行并验证 V49～V54 迁移，未执行测试线迁移和部署。
 
 

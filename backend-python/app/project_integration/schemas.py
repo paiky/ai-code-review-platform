@@ -68,3 +68,10 @@ class ProjectConfigurationUpdateRequest(BaseModel):
     ai_review_models: list[ProjectAiReviewModelUpdateRequest] = Field(alias="aiReviewModels")
     review_settings: ProjectReviewSettingsUpdateRequest = Field(alias="reviewSettings")
     webhook_ids: list[int] = Field(alias="webhookIds")
+
+
+class ProjectTargetTypeAutoDetectionApplyRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    target_type: TargetType = Field(alias="targetType")
+    evidence_version: str = Field(alias="evidenceVersion", min_length=64, max_length=64)
