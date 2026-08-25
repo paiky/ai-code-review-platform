@@ -79,7 +79,7 @@ from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEv
 from app.project_integration.repository import (
     find_project_by_id,
     get_project_review_policy,
-    list_project_group_ai_review_models,
+    list_project_ai_review_models,
     make_ai_review_model_key,
     resolve_project_target_config,
 )
@@ -2856,7 +2856,7 @@ def _send_auto_review_notification(
 def _resolve_profile(db: Session, profile_code: str | None, project: Project):
     selected = profile_code
     if not selected:
-        raise AppError("CODE_QUALITY_PROFILE_NOT_CONFIGURED", "项目所属项目组未设置 AI Review 模板", 400)
+        raise AppError("CODE_QUALITY_PROFILE_NOT_CONFIGURED", "项目未设置 AI Review 模板", 400)
     profile = get_profile(db, selected)
     return profile
 
@@ -2866,9 +2866,9 @@ def _resolve_auto_profile_or_save_failure(db: Session, task: ReviewTask, project
         return _resolve_profile(db, task.code_quality_profile_code, project)
     except AppError as exception:
         message = (
-            "项目所属项目组未设置 AI Review 模板"
+            "项目未设置 AI Review 模板"
             if not task.code_quality_profile_code
-            else f"项目所属项目组设置的 AI Review 模板不可用：{task.code_quality_profile_code}"
+            else f"项目设置的 AI Review 模板不可用：{task.code_quality_profile_code}"
         )
         _save_missing_profile_failure(db, task, project, message or exception.message)
         return None
@@ -2913,14 +2913,10 @@ def _resolve_provider(db: Session, project: Project, profile, target_type: str |
         from app.project_integration.repository import find_target_config
 
         target_config = find_target_config(db, project.id, target_type)
-        provider_code = target_config.provider_code if target_config else None
+        provider_code = target_config.provider_code if target_config and target_config.enabled else None
     if not provider_code:
-        provider_code = project.default_code_quality_provider_code
-    if not provider_code:
-        from app.project_integration.models import ProjectGroup
-
-        group = db.get(ProjectGroup, project.group_id) if project.group_id else None
-        provider_code = group.default_provider_code if group else None
+        project_models = list_project_ai_review_models(db, int(project.id), enabled_only=True)
+        provider_code = project_models[0]["providerCode"] if project_models else None
     if not provider_code:
         provider_code = profile.provider_code
     if not provider_code:
@@ -2934,30 +2930,35 @@ def _resolve_review_targets(db: Session, project: Project, profile, target_type:
         from app.project_integration.repository import find_target_config
 
         target_config = find_target_config(db, project.id, target_type)
-        provider_override = target_config.provider_code if target_config else None
-    if not provider_override:
-        provider_override = project.default_code_quality_provider_code
+        provider_override = (
+            target_config.provider_code
+            if target_config is not None and target_config.enabled
+            else None
+        )
     if provider_override:
         provider = get_provider(db, provider_override)
         model = profile.model or provider.model_name
-        return [_review_target(provider, make_ai_review_model_key(provider.provider_code, model), model, None, 10)]
+        return [
+            _review_target(
+                provider,
+                make_ai_review_model_key(provider.provider_code, model),
+                model,
+                None,
+                10,
+            )
+        ]
 
-    from app.project_integration.models import ProjectGroup
-
-    group = db.get(ProjectGroup, project.group_id) if project.group_id else None
-    group_models = [
-        item for item in list_project_group_ai_review_models(db, int(group.id), include_fallback=False)
-        if item.get("enabled") is not False
-    ] if group is not None else []
-    if group_models:
+    project_models = list_project_ai_review_models(db, int(project.id), enabled_only=True)
+    if project_models:
         targets: list[dict[str, Any]] = []
-        for index, item in enumerate(group_models):
+        for index, item in enumerate(project_models):
             provider = get_provider(db, item["providerCode"])
             model = item.get("modelName") or profile.model or provider.model_name
             targets.append(
                 _review_target(
                     provider,
-                    item.get("reviewKey") or make_ai_review_model_key(provider.provider_code, model, index),
+                    item.get("reviewKey")
+                    or make_ai_review_model_key(provider.provider_code, model, index),
                     model,
                     item.get("displayName"),
                     int(item.get("sortOrder") or (index + 1) * 10),
@@ -2967,7 +2968,15 @@ def _resolve_review_targets(db: Session, project: Project, profile, target_type:
 
     provider = _resolve_provider(db, project, profile, target_type)
     model = profile.model or provider.model_name
-    return [_review_target(provider, make_ai_review_model_key(provider.provider_code, model), model, None, 10)]
+    return [
+        _review_target(
+            provider,
+            make_ai_review_model_key(provider.provider_code, model),
+            model,
+            None,
+            10,
+        )
+    ]
 
 
 def _review_target(provider: CodeQualityModelProvider, review_key: str, model: str | None, display_name: str | None, sort_order: int) -> dict[str, Any]:

@@ -24,6 +24,7 @@ from app.project_integration.models import (
     Project,
     ProjectGroup,
     ProjectGroupAiReviewModel,
+    ProjectAiReviewModel,
     ProjectTargetConfig,
 )
 from app.project_review_policy.models import ProjectReviewPolicy
@@ -54,6 +55,36 @@ def seed_project(db_session: Session, provider_code: str | None = None) -> None:
     )
     db_session.commit()
 
+
+def seed_project_ai_review_models(db_session: Session) -> None:
+    now = datetime(2026, 8, 25, 10, 0, 0)
+    db_session.add_all(
+        [
+            ProjectAiReviewModel(
+                project_id=1,
+                review_key="deepseek-main",
+                provider_code="DEEPSEEK",
+                model_name="deepseek-v4-pro",
+                display_name="DeepSeek 主审",
+                enabled=True,
+                sort_order=10,
+                created_at=now,
+                updated_at=now,
+            ),
+            ProjectAiReviewModel(
+                project_id=1,
+                review_key="mimo-secondary",
+                provider_code="XIAOMIMO",
+                model_name="mimo-v2.5-pro",
+                display_name="MiMo 复审",
+                enabled=True,
+                sort_order=20,
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
+    )
+    db_session.commit()
 
 def seed_template(db_session: Session) -> None:
     now = datetime(2026, 5, 18, 10, 0, 0)
@@ -573,6 +604,7 @@ def test_delete_provider_reports_each_blocking_configuration_domain(
         "REF_PROJECT",
         "REF_GROUP",
         "REF_GROUP_MODEL",
+        "REF_PROJECT_MODEL",
         "REF_TARGET",
     )
     for provider_code in provider_codes:
@@ -609,6 +641,15 @@ def test_delete_provider_reports_each_blocking_configuration_domain(
         )
     )
     db_session.add(
+        ProjectAiReviewModel(
+            project_id=1,
+            review_key="project-secondary",
+            provider_code="REF_PROJECT_MODEL",
+            enabled=True,
+            sort_order=10,
+        )
+    )
+    db_session.add(
         ProjectTargetConfig(
             project_id=1,
             target_type="BACKEND",
@@ -626,6 +667,7 @@ def test_delete_provider_reports_each_blocking_configuration_domain(
         "REF_PROJECT": "projects=1",
         "REF_GROUP": "projectGroups=1",
         "REF_GROUP_MODEL": "projectGroupModels=1",
+        "REF_PROJECT_MODEL": "projectModels=1",
         "REF_TARGET": "projectTargets=1",
     }
     for provider_code, expected_domain in expected_domains.items():
@@ -1666,7 +1708,7 @@ def test_deepseek_manual_review_saves_result_and_progress(
 
 
 @respx.mock
-def test_project_group_multi_model_manual_review_saves_result_list(
+def test_project_multi_model_manual_review_saves_result_list(
     client: TestClient,
     db_session: Session,
     monkeypatch,
@@ -1677,25 +1719,8 @@ def test_project_group_multi_model_manual_review_saves_result_list(
     monkeypatch.setenv("XIAOMIMO_API_KEY", "mimo-secret")
     seed_project(db_session, None)
 
-    default_group = next(
-        item for item in client.get("/api/project-groups").json()["data"]["items"]
-        if item["groupCode"] == "default"
-    )
-    bind = client.put("/api/projects/1/group", json={"groupId": default_group["id"]})
-    assert bind.status_code == 200
-    update_group = client.put(
-        f"/api/project-groups/{default_group['id']}",
-        json={
-            "groupName": default_group["groupName"],
-            "groupCode": default_group["groupCode"],
-            "defaultCodeQualityProfileCode": "backend-default-ai-review",
-            "aiReviewModels": [
-                {"providerCode": "DEEPSEEK", "modelName": "deepseek-v4-pro", "displayName": "DeepSeek 主审", "sortOrder": 10},
-                {"providerCode": "XIAOMIMO", "modelName": "mimo-v2.5-pro", "displayName": "MiMo 复审", "sortOrder": 20},
-            ],
-        },
-    )
-    assert update_group.status_code == 200
+    seed_project_ai_review_models(db_session)
+
     deepseek_route = respx.post("https://api.deepseek.com/chat/completions").mock(
         return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("DeepSeek 完成")}}]})
     )
@@ -1783,7 +1808,7 @@ def test_manual_preflight_failure_is_redacted_and_fail_open(
     assert security["trigger"] == "AUTO_PREFLIGHT"
 
 
-def test_project_group_multi_model_manual_review_creates_model_level_queue_jobs(
+def test_project_multi_model_manual_review_creates_model_level_queue_jobs(
     client: TestClient,
     db_session: Session,
     monkeypatch,
@@ -1801,24 +1826,8 @@ def test_project_group_multi_model_manual_review_creates_model_level_queue_jobs(
         lambda fn, *args, **kwargs: submitted.append({"fn": fn.__name__, "args": args, "kwargs": kwargs}),
     )
 
-    default_group = next(
-        item for item in client.get("/api/project-groups").json()["data"]["items"]
-        if item["groupCode"] == "default"
-    )
-    assert client.put("/api/projects/1/group", json={"groupId": default_group["id"]}).status_code == 200
-    update_group = client.put(
-        f"/api/project-groups/{default_group['id']}",
-        json={
-            "groupName": default_group["groupName"],
-            "groupCode": default_group["groupCode"],
-            "defaultCodeQualityProfileCode": "backend-default-ai-review",
-            "aiReviewModels": [
-                {"providerCode": "DEEPSEEK", "modelName": "deepseek-v4-pro", "displayName": "DeepSeek 主审", "sortOrder": 10},
-                {"providerCode": "XIAOMIMO", "modelName": "mimo-v2.5-pro", "displayName": "MiMo 复审", "sortOrder": 20},
-            ],
-        },
-    )
-    assert update_group.status_code == 200
+    seed_project_ai_review_models(db_session)
+
 
     response = client.post("/api/code-quality-reviews/manual", json=manual_request())
 
@@ -2010,7 +2019,7 @@ def test_ai_review_auto_generates_fix_previews_after_success(
 
 
 @respx.mock
-def test_auto_review_uses_project_group_profile_before_target_type_profile(
+def test_auto_review_ignores_project_group_profile_and_uses_project_profile(
     client: TestClient,
     db_session: Session,
     monkeypatch,
@@ -2054,7 +2063,7 @@ def test_auto_review_uses_project_group_profile_before_target_type_profile(
 
     result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
     assert result["status"] == "SUCCESS"
-    assert result["profileCode"] == "web-pc-default-ai-review"
+    assert result["profileCode"] == "backend-default-ai-review"
     progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
     assert "group-profile-secret" not in json.dumps(progress, ensure_ascii=False)
 
@@ -2111,7 +2120,8 @@ def test_project_target_provider_override_wins_over_global_default_for_auto_mr_r
     assert "xiaomimo-secret" not in json.dumps(progress, ensure_ascii=False)
 
 
-def test_non_default_project_group_without_profile_records_ai_review_failure(
+@respx.mock
+def test_non_default_project_group_without_profile_does_not_change_project_profile(
     client: TestClient,
     db_session: Session,
     monkeypatch,
@@ -2120,6 +2130,13 @@ def test_non_default_project_group_without_profile_records_ai_review_failure(
     seed_project(db_session)
     monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
     monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "project-profile-secret")
+    provider_route = respx.post("https://api.deepseek.com/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={"choices": [{"message": {"content": review_card_json("项目配置生效")}}]},
+        )
+    )
     group = client.post(
         "/api/project-groups",
         json={"groupName": "未配置模板组", "groupCode": "without-profile"},
@@ -2146,10 +2163,11 @@ def test_non_default_project_group_without_profile_records_ai_review_failure(
 
     detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
     assert detail["status"] == "SUCCESS"
-    assert detail["codeQualityProfileCode"] is None
+    assert detail["codeQualityProfileCode"] == "backend-default-ai-review"
     result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
-    assert result["status"] == "SKIPPED"
-    assert "项目所属项目组未设置 AI Review 模板" in result["errorMessage"]
+    assert result["status"] == "SUCCESS"
+    assert result["profileCode"] == "backend-default-ai-review"
+    assert provider_route.called
 
 
 @respx.mock
@@ -3395,8 +3413,14 @@ def test_openai_and_anthropic_provider_mocks(
     assert openai.status_code == 200
     assert openai.json()["data"]["provider"] == "OPENAI"
 
-    project = db_session.get(Project, 1)
-    project.default_code_quality_provider_code = "ANTHROPIC"
+    target_config = db_session.scalar(
+        select(ProjectTargetConfig).where(
+            ProjectTargetConfig.project_id == 1,
+            ProjectTargetConfig.target_type == "BACKEND",
+        )
+    )
+    assert target_config is not None
+    target_config.provider_code = "ANTHROPIC"
     db_session.commit()
     respx.post("https://api.anthropic.com/v1/messages").mock(
         return_value=Response(
@@ -3741,34 +3765,8 @@ def test_retry_gitlab_ai_review_can_target_single_model(
         lambda fn, *args, **kwargs: submitted.append({"fn": fn.__name__, "args": args, "kwargs": kwargs}),
     )
     assert client.put("/api/code-quality-reviews/settings", json={"reviewEnabled": True}).status_code == 200
-    default_group = next(
-        item for item in client.get("/api/project-groups").json()["data"]["items"]
-        if item["groupCode"] == "default"
-    )
-    assert client.put(
-        f"/api/project-groups/{default_group['id']}",
-        json={
-            "groupName": default_group["groupName"],
-            "groupCode": default_group["groupCode"],
-            "defaultCodeQualityProfileCode": "backend-default-ai-review",
-            "aiReviewModels": [
-                {
-                    "reviewKey": "deepseek-main",
-                    "providerCode": "DEEPSEEK",
-                    "modelName": "deepseek-v4-pro",
-                    "displayName": "DeepSeek 主审",
-                    "sortOrder": 10,
-                },
-                {
-                    "reviewKey": "mimo-secondary",
-                    "providerCode": "XIAOMIMO",
-                    "modelName": "mimo-v2.5-pro",
-                    "displayName": "MiMo 复审",
-                    "sortOrder": 20,
-                },
-            ],
-        },
-    ).status_code == 200
+    seed_project_ai_review_models(db_session)
+
     now = datetime.now()
     db_session.add_all(
         [

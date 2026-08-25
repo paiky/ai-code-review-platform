@@ -115,6 +115,7 @@ def test_projects_api_returns_enabled_projects_page(client: TestClient, db_sessi
             "gitProvider": "GITLAB",
             "gitProjectId": "1001",
             "repositoryUrl": "https://gitlab.example.com/demo/service",
+            "targetType": "BACKEND",
             "supportedTargetTypes": ["BACKEND"],
             "detectedTargetTypes": [],
             "targetDetection": None,
@@ -185,8 +186,11 @@ def test_project_groups_and_target_configs_can_be_managed(client: TestClient, db
 
     configs_response = client.get("/api/projects/10/target-configs")
     assert configs_response.status_code == 200
-    target_types = {item["targetType"] for item in configs_response.json()["data"]}
+    configs = configs_response.json()["data"]
+    target_types = {item["targetType"] for item in configs}
     assert {"BACKEND", "WEB_PC"}.issubset(target_types)
+    assert sum(bool(item["enabled"]) for item in configs) == 1
+    assert next(item for item in configs if item["enabled"])["targetType"] == "WEB_PC"
 
 
 def test_get_project_target_configs_does_not_write_default_config(client: TestClient, db_session: Session) -> None:
@@ -476,7 +480,10 @@ def test_existing_project_detection_does_not_overwrite_target_configs(
     assert project["supportedTargetTypes"] == ["BACKEND"]
 
 
-def test_new_multi_target_project_creates_failed_task_when_multiple_types_match(client: TestClient, db_session: Session) -> None:
+def test_new_project_chooses_one_target_and_keeps_all_detection_candidates(
+    client: TestClient,
+    db_session: Session,
+) -> None:
     seed_template(db_session, "backend-default", "BACKEND")
     seed_template(db_session, "frontend-default", "FRONTEND")
 
@@ -495,18 +502,16 @@ def test_new_multi_target_project_creates_failed_task_when_multiple_types_match(
 
     assert response.status_code == 200
     payload = response.json()["data"]
-    assert payload["status"] == "FAILED"
-    assert payload["reasonCode"] == "TARGET_TYPE_AMBIGUOUS"
+    assert payload["status"] == "SUCCESS"
     task_id = payload["taskId"]
     detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
-    assert detail["status"] == "FAILED"
-    assert set(detail["targetTypes"]) == {"WEB_PC", "BACKEND"}
-    assert "端类型路径映射命中多个端类型" in detail["errorMessage"]
-    assert "BACKEND 命中 src/main/java/com/demo/OrderService.java" in detail["errorMessage"]
-    assert "WEB_PC 命中 web/src/App.jsx" in detail["errorMessage"]
+    assert detail["status"] == "SUCCESS"
+    assert detail["targetType"] == "WEB_PC"
+    assert detail["targetTypes"] == ["WEB_PC"]
     project = next(item for item in client.get("/api/projects").json()["data"]["items"] if item["gitProjectId"] == "4004")
     assert set(project["detectedTargetTypes"]) == {"WEB_PC", "BACKEND"}
-    assert set(project["supportedTargetTypes"]) == {"WEB_PC", "BACKEND"}
+    assert project["targetType"] == "WEB_PC"
+    assert project["supportedTargetTypes"] == ["WEB_PC"]
 
 
 def test_target_type_path_mapping_does_not_prefix_double_star_implicitly(
@@ -669,4 +674,4 @@ def test_unmatched_new_project_uses_general_and_records_ai_review_profile_failur
     assert detail["codeQualityProfileCode"] is None
     result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
     assert result["status"] == "SKIPPED"
-    assert "项目所属项目组未设置 AI Review 模板" in result["errorMessage"]
+    assert "项目未设置 AI Review 模板" in result["errorMessage"]

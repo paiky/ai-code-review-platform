@@ -17,6 +17,7 @@ from app.project_integration.models import (
     Project,
     ProjectGroup,
     ProjectGroupAiReviewModel,
+    ProjectAiReviewModel,
     ProjectReviewSettings,
     ProjectTargetConfig,
     TargetTypePathMapping,
@@ -100,11 +101,13 @@ def ensure_project_config_schema(db: Session) -> None:
     engine_id = id(db.get_bind())
     if engine_id in _SCHEMA_ENSURED_ENGINE_IDS:
         _ensure_project_group_ai_review_model_schema(db)
+        _ensure_project_ai_review_model_schema(db)
         _ensure_project_review_settings_schema(db)
         return
     with _SCHEMA_LOCK:
         if engine_id in _SCHEMA_ENSURED_ENGINE_IDS:
             _ensure_project_group_ai_review_model_schema(db)
+            _ensure_project_ai_review_model_schema(db)
             _ensure_project_review_settings_schema(db)
             return
         connection = db.connection()
@@ -136,11 +139,13 @@ def ensure_project_config_schema(db: Session) -> None:
         if not inspector.has_table("target_type_path_mappings"):
             TargetTypePathMapping.__table__.create(connection, checkfirst=True)
         _ensure_project_group_ai_review_model_schema(db, inspector)
+        _ensure_project_ai_review_model_schema(db, inspector)
         if not inspector.has_table("project_target_configs"):
             ProjectTargetConfig.__table__.create(connection, checkfirst=True)
         _ensure_project_review_settings_schema(db, inspector)
         project_columns = {column["name"] for column in inspector.get_columns("projects")} if inspector.has_table("projects") else set()
         _add_column_if_missing(db, project_columns, "projects", "group_id", "BIGINT NULL")
+        _add_column_if_missing(db, project_columns, "projects", "target_type", "VARCHAR(32) NULL")
         _add_column_if_missing(db, project_columns, "projects", "default_code_quality_profile_code", "VARCHAR(64) NULL")
         _ensure_nullable_column(db, inspector, "projects", "default_code_quality_profile_code", "VARCHAR(64)")
         _add_column_if_missing(db, project_columns, "projects", "supported_target_types", "TEXT NULL")
@@ -164,6 +169,13 @@ def _ensure_project_group_ai_review_model_schema(db: Session, inspector=None) ->
         ProjectGroupAiReviewModel.__table__.create(db.connection(), checkfirst=True)
         db.flush()
 
+
+
+def _ensure_project_ai_review_model_schema(db: Session, inspector=None) -> None:
+    inspector = inspector or inspect(db.connection())
+    if not inspector.has_table("project_ai_review_models"):
+        ProjectAiReviewModel.__table__.create(db.connection(), checkfirst=True)
+        db.flush()
 
 
 def _ensure_project_review_settings_schema(db: Session, inspector=None) -> None:
@@ -280,7 +292,8 @@ def project_to_dict(project: Project) -> dict:
         "gitProvider": project.git_provider,
         "gitProjectId": project.git_project_id,
         "repositoryUrl": project.repository_url,
-        "supportedTargetTypes": read_json_array(project.supported_target_types) or ["BACKEND"],
+        "targetType": effective_project_target_type(project),
+        "supportedTargetTypes": [effective_project_target_type(project)],
         "detectedTargetTypes": read_json_array(project.detected_target_types),
         "targetDetection": read_json(project.target_detection_json, None),
         "defaultTemplateCode": project.default_template_code,
@@ -305,7 +318,7 @@ def list_enabled_projects(
     if group_id is not None:
         stmt = stmt.where(Project.group_id == group_id)
     if target_type:
-        stmt = stmt.where(Project.supported_target_types.like(f"%{target_type}%"))
+        stmt = stmt.where(Project.target_type == normalize_target_type(target_type))
     stmt = stmt.order_by(Project.id.desc())
     items = [project_to_dict(project) for project in db.scalars(stmt).all()]
     total_stmt = select(func.count()).select_from(Project)
@@ -314,7 +327,7 @@ def list_enabled_projects(
     if group_id is not None:
         total_stmt = total_stmt.where(Project.group_id == group_id)
     if target_type:
-        total_stmt = total_stmt.where(Project.supported_target_types.like(f"%{target_type}%"))
+        total_stmt = total_stmt.where(Project.target_type == normalize_target_type(target_type))
     total = db.scalar(total_stmt) or 0
     return page_response(items, 1, len(items), total)
 
@@ -349,7 +362,8 @@ def create_project(db: Session, request: dict) -> dict:
         git_provider=git_provider,
         git_project_id=git_project_id,
         repository_url=_blank_to_none(request.get("repositoryUrl")),
-        supported_target_types=json.dumps(target_types, ensure_ascii=False),
+        target_type=primary,
+        supported_target_types=json.dumps([primary], ensure_ascii=False),
         detected_target_types=None,
         target_detection_json=None,
         default_template_code=request.get("defaultTemplateCode") or defaults["templateCode"],
@@ -411,7 +425,8 @@ def upsert_gitlab_project(
         git_provider="GITLAB",
         git_project_id=git_project_id,
         repository_url=repository_url,
-        supported_target_types=json.dumps(detected_types, ensure_ascii=False),
+        target_type=primary,
+        supported_target_types=json.dumps([primary], ensure_ascii=False),
         detected_target_types=json.dumps(detected_types, ensure_ascii=False),
         target_detection_json=json.dumps(detection, ensure_ascii=False),
         default_template_code=defaults["templateCode"],
@@ -426,7 +441,7 @@ def upsert_gitlab_project(
     db.add(project)
     db.flush()
     _create_default_project_review_settings(db, project)
-    _create_detected_target_configs(db, project, detected_types)
+    _create_detected_target_configs(db, project, [primary])
     return project
 
 
@@ -436,25 +451,36 @@ def update_project_target_detection(
     project_name: str | None,
     changed_files: list[dict[str, Any]] | None,
 ) -> Project:
-    detection = detect_project_target_types(db, changed_files or [])
-    _store_target_detection(project, detection)
+    previous_detection = read_json(project.target_detection_json, {}) or {}
     existing_configs = db.scalars(
         select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project.id)
     ).all()
-    auto_created = existing_configs and all(config.description in SYSTEM_DETECTED_TARGET_CONFIG_DESCRIPTIONS for config in existing_configs)
-    can_rebuild_auto_configs = not existing_configs or auto_created
-    if can_rebuild_auto_configs:
-        detected_types = detection.get("targetTypes") or ["BACKEND"]
-        primary = detected_types[0]
-        defaults = TARGET_TYPE_DEFAULTS.get(primary, TARGET_TYPE_DEFAULTS["BACKEND"])
+    can_complete_initial_detection = (
+        effective_project_target_type(project) == "GENERAL"
+        and not any(
+            evidence.get("source") != "FALLBACK"
+            for evidence in previous_detection.get("evidences") or []
+            if isinstance(evidence, dict)
+        )
+        and existing_configs
+        and all(
+            config.description in SYSTEM_DETECTED_TARGET_CONFIG_DESCRIPTIONS
+            for config in existing_configs
+        )
+    )
+    detection = detect_project_target_types(db, changed_files or [])
+    _store_target_detection(project, detection)
+    detected_types = detection.get("targetTypes") or ["GENERAL"]
+    primary = normalize_target_type(detected_types[0])
+    if can_complete_initial_detection and primary != "GENERAL":
+        defaults = TARGET_TYPE_DEFAULTS.get(primary, TARGET_TYPE_DEFAULTS["GENERAL"])
         for config in existing_configs:
             db.delete(config)
-        if existing_configs:
-            db.flush()
-        project.supported_target_types = json.dumps(detected_types, ensure_ascii=False)
+        db.flush()
+        _set_project_supported_target_type(db, project, primary)
         project.default_template_code = defaults["templateCode"]
         project.default_code_quality_profile_code = defaults["profileCode"]
-        _create_detected_target_configs(db, project, detected_types)
+        _create_detected_target_configs(db, project, [primary])
     project.updated_at = datetime.now()
     db.flush()
     return project
@@ -740,6 +766,15 @@ def update_project_review_settings(db: Session, project_id: int, request: dict[s
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
     settings = _get_or_create_project_review_settings(db, project)
+    _apply_project_review_settings(settings, request)
+    db.commit()
+    return project_review_settings_to_dict(settings)
+
+
+def _apply_project_review_settings(
+    settings: ProjectReviewSettings,
+    request: dict[str, Any],
+) -> None:
     bool_fields = {
         "triggerOnMr": "trigger_on_mr",
         "triggerOnPush": "trigger_on_push",
@@ -771,8 +806,6 @@ def update_project_review_settings(db: Session, project_id: int, request: dict[s
         if json_field in request and request[json_field] is not None:
             setattr(settings, column_name, int(request[json_field]))
     settings.updated_at = datetime.now()
-    db.commit()
-    return project_review_settings_to_dict(settings)
 
 
 def get_project_push_policy(db: Session, project: Project) -> dict[str, Any]:
@@ -813,17 +846,18 @@ def project_review_settings_to_dict(settings: ProjectReviewSettings) -> dict[str
 
 def resolve_project_review_profile_code(db: Session, project: Project, target_type: str | None) -> str | None:
     ensure_project_config_schema(db)
-    group = db.get(ProjectGroup, project.group_id) if project.group_id else None
-    if group is None:
-        group = _ensure_default_project_group(db)
-    group_profile = _blank_to_none(group.default_code_quality_profile_code)
-    if group_profile:
-        return group_profile
-    normalized_target_type = normalize_target_type(target_type)
-    if group.group_code == "default" and normalized_target_type != "GENERAL":
-        defaults = TARGET_TYPE_DEFAULTS.get(normalized_target_type, TARGET_TYPE_DEFAULTS["GENERAL"])
-        return defaults.get("profileCode")
-    return None
+    normalized_target_type = normalize_target_type(target_type or effective_project_target_type(project))
+    config = db.scalars(
+        select(ProjectTargetConfig).where(
+            ProjectTargetConfig.project_id == project.id,
+            ProjectTargetConfig.target_type == normalized_target_type,
+            ProjectTargetConfig.enabled.is_(True),
+        )
+    ).first()
+    if config is not None and _blank_to_none(config.code_quality_profile_code):
+        return _blank_to_none(config.code_quality_profile_code)
+    defaults = TARGET_TYPE_DEFAULTS.get(normalized_target_type, TARGET_TYPE_DEFAULTS["GENERAL"])
+    return defaults.get("profileCode")
 
 
 def push_policy_to_dict(group: ProjectGroup | None) -> dict[str, Any]:
@@ -887,6 +921,8 @@ def list_project_target_configs(db: Session, project_id: int) -> list[dict]:
 
 
 def ambiguous_auto_detected_target_types(db: Session, project: Project) -> list[str]:
+    if _blank_to_none(project.target_type):
+        return []
     target_types = read_json_array(project.detected_target_types)
     if len(target_types) <= 1:
         return []
@@ -940,35 +976,44 @@ def upsert_project_target_config(db: Session, project_id: int, target_type: str,
         elif config.description in SYSTEM_DETECTED_TARGET_CONFIG_DESCRIPTIONS:
             config.description = "手动维护的端类型配置"
         config.updated_at = now
+    for existing in db.scalars(
+        select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project_id)
+    ).all():
+        existing.enabled = existing is config
+        existing.updated_at = now
     _set_project_supported_target_type(db, project, normalized)
     db.commit()
     return target_config_to_dict(config)
 
 
 def ensure_default_target_configs(db: Session, project: Project) -> None:
+    target_type = effective_project_target_type(project)
     existing_configs = db.scalars(
         select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project.id)
     ).all()
-    if not existing_configs:
-        defaults = TARGET_TYPE_DEFAULTS["BACKEND"]
+    selected = next((config for config in existing_configs if config.target_type == target_type), None)
+    if selected is None:
+        defaults = TARGET_TYPE_DEFAULTS.get(target_type, TARGET_TYPE_DEFAULTS["GENERAL"])
         now = datetime.now()
-        db.add(
-            ProjectTargetConfig(
-                project_id=project.id,
-                target_type="BACKEND",
-                template_code=project.default_template_code or defaults["templateCode"],
-                code_quality_profile_code=project.default_code_quality_profile_code or defaults["profileCode"],
-                provider_code=project.default_code_quality_provider_code,
-                path_patterns=json.dumps(defaults["pathPatterns"], ensure_ascii=False),
-                reminder_card_enabled=True,
-                enabled=True,
-                description="默认后端端类型配置",
-                created_at=now,
-                updated_at=now,
-            )
+        selected = ProjectTargetConfig(
+            project_id=project.id,
+            target_type=target_type,
+            template_code=project.default_template_code or defaults["templateCode"],
+            code_quality_profile_code=project.default_code_quality_profile_code or defaults["profileCode"],
+            provider_code=project.default_code_quality_provider_code,
+            path_patterns=json.dumps(defaults["pathPatterns"], ensure_ascii=False),
+            reminder_card_enabled=bool(defaults["reminderCardEnabled"]),
+            enabled=True,
+            description="单端类型默认配置",
+            created_at=now,
+            updated_at=now,
         )
-        db.flush()
-    _sync_project_supported_target_types(db, project)
+        db.add(selected)
+        existing_configs.append(selected)
+    for config in existing_configs:
+        config.enabled = config is selected
+    _set_project_supported_target_type(db, project, target_type)
+    db.flush()
 
 
 def find_target_config(db: Session, project_id: int, target_type: str) -> ProjectTargetConfig | None:
@@ -986,30 +1031,23 @@ def resolve_project_target_config(
     requested_target_type: str | None = None,
     requested_target_types: list[str] | None = None,
 ) -> dict:
+    del changed_files, requested_target_type, requested_target_types
     ensure_default_target_configs(db, project)
-    configs = [
-        config for config in db.scalars(
-            select(ProjectTargetConfig)
-            .where(ProjectTargetConfig.project_id == project.id)
-            .order_by(ProjectTargetConfig.id.asc())
-        ).all()
-    ]
-    requested = [normalize_target_type(value) for value in (requested_target_types or []) if value]
-    if requested_target_type:
-        requested = [normalize_target_type(requested_target_type), *[value for value in requested if value != normalize_target_type(requested_target_type)]]
-    fixed_target_types = read_json_array(project.supported_target_types)
-    matched_types = requested or (fixed_target_types if len(fixed_target_types) == 1 else _match_target_types(configs, changed_files or []))
-    if not matched_types:
-        matched_types = ["BACKEND"]
-    primary = matched_types[0]
-    config = next((item for item in configs if item.target_type == primary), None)
+    primary = effective_project_target_type(project)
+    config = db.scalars(
+        select(ProjectTargetConfig).where(
+            ProjectTargetConfig.project_id == project.id,
+            ProjectTargetConfig.target_type == primary,
+            ProjectTargetConfig.enabled.is_(True),
+        )
+    ).first()
     defaults = TARGET_TYPE_DEFAULTS.get(primary, TARGET_TYPE_DEFAULTS["GENERAL"])
     return {
         "targetType": primary,
-        "targetTypes": matched_types,
-        "templateCode": (config.template_code if config else None) or defaults["templateCode"] or project.default_template_code,
+        "targetTypes": [primary],
+        "templateCode": (config.template_code if config else None) or defaults["templateCode"],
         "profileCode": resolve_project_review_profile_code(db, project, primary),
-        "providerCode": (config.provider_code if config else None) or project.default_code_quality_provider_code,
+        "providerCode": config.provider_code if config else None,
         "reminderCardEnabled": _reminder_card_enabled(primary, config, defaults),
     }
 
@@ -1033,19 +1071,350 @@ def target_config_to_dict(config: ProjectTargetConfig) -> dict:
     }
 
 
+def list_project_ai_review_models(
+    db: Session,
+    project_id: int,
+    *,
+    enabled_only: bool = False,
+) -> list[dict[str, Any]]:
+    ensure_project_config_schema(db)
+    stmt = select(ProjectAiReviewModel).where(ProjectAiReviewModel.project_id == project_id)
+    if enabled_only:
+        stmt = stmt.where(ProjectAiReviewModel.enabled.is_(True))
+    records = db.scalars(
+        stmt.order_by(ProjectAiReviewModel.sort_order.asc(), ProjectAiReviewModel.id.asc())
+    ).all()
+    return [project_ai_review_model_to_dict(record) for record in records]
+
+
+def project_ai_review_model_to_dict(record: ProjectAiReviewModel) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "projectId": record.project_id,
+        "reviewKey": record.review_key,
+        "providerCode": record.provider_code,
+        "modelName": record.model_name,
+        "displayName": record.display_name,
+        "enabled": bool(record.enabled),
+        "sortOrder": int(record.sort_order),
+    }
+
+
+def project_configuration_response(db: Session, project_id: int) -> dict[str, Any]:
+    project = find_project_by_id(db, project_id)
+    if project is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
+    settings = _get_or_create_project_review_settings(db, project)
+    db.commit()
+    return _project_configuration_to_dict(db, project, settings)
+
+
+def update_project_configuration(
+    db: Session,
+    project_id: int,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    project = find_project_by_id(db, project_id)
+    if project is None:
+        raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
+    try:
+        target_type = normalize_target_type(request["targetType"])
+        target_request = request["targetConfig"]
+        template_code = str(target_request["templateCode"]).strip()
+        profile_code = _blank_to_none(target_request.get("codeQualityProfileCode"))
+        provider_code = _blank_to_none(target_request.get("providerCode"))
+        provider_code = provider_code.upper() if provider_code else None
+        model_requests = request.get("aiReviewModels") or []
+        webhook_ids = list(dict.fromkeys(int(value) for value in request.get("webhookIds") or []))
+        _validate_project_configuration(
+            db,
+            target_type,
+            target_request,
+            model_requests,
+            webhook_ids,
+        )
+        now = datetime.now()
+        configs = db.scalars(
+            select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project_id)
+        ).all()
+        config = next((item for item in configs if item.target_type == target_type), None)
+        if config is None:
+            config = ProjectTargetConfig(
+                project_id=project_id,
+                target_type=target_type,
+                template_code=template_code,
+                code_quality_profile_code=profile_code,
+                provider_code=provider_code,
+                path_patterns=json.dumps(
+                    _normalize_path_patterns(target_request.get("pathPatterns")),
+                    ensure_ascii=False,
+                ),
+                reminder_card_enabled=bool(target_request["reminderCardEnabled"]),
+                enabled=True,
+                description="项目综合配置维护",
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(config)
+            configs.append(config)
+        else:
+            config.template_code = template_code
+            config.code_quality_profile_code = profile_code
+            config.provider_code = provider_code
+            config.path_patterns = json.dumps(
+                _normalize_path_patterns(target_request.get("pathPatterns")),
+                ensure_ascii=False,
+            )
+            config.reminder_card_enabled = bool(target_request["reminderCardEnabled"])
+            config.description = "项目综合配置维护"
+            config.updated_at = now
+        for item in configs:
+            item.enabled = item is config
+            item.updated_at = now
+        _set_project_supported_target_type(db, project, target_type)
+        project.default_template_code = config.template_code
+        project.default_code_quality_profile_code = config.code_quality_profile_code
+        project.default_code_quality_provider_code = config.provider_code
+        settings = _get_or_create_project_review_settings(db, project)
+        _apply_project_review_settings(settings, request["reviewSettings"])
+        _replace_project_ai_review_models(db, project, model_requests)
+        _replace_project_notification_webhooks(db, project, webhook_ids)
+        project.updated_at = now
+        db.commit()
+        return _project_configuration_to_dict(db, project, settings)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _project_configuration_to_dict(
+    db: Session,
+    project: Project,
+    settings: ProjectReviewSettings,
+) -> dict[str, Any]:
+    from app.notification.models import ProjectNotificationWebhook
+
+    target_type = effective_project_target_type(project)
+    config = db.scalars(
+        select(ProjectTargetConfig).where(
+            ProjectTargetConfig.project_id == project.id,
+            ProjectTargetConfig.target_type == target_type,
+            ProjectTargetConfig.enabled.is_(True),
+        )
+    ).first()
+    webhook_ids = [
+        int(value)
+        for value in db.scalars(
+            select(ProjectNotificationWebhook.webhook_id)
+            .where(
+                ProjectNotificationWebhook.project_id == project.id,
+                ProjectNotificationWebhook.enabled.is_(True),
+            )
+            .order_by(ProjectNotificationWebhook.webhook_id.asc())
+        ).all()
+    ]
+    return {
+        "projectId": int(project.id),
+        "targetType": target_type,
+        "targetTypes": [target_type],
+        "targetConfig": (
+            target_config_to_dict(config)
+            if config is not None
+            else _default_target_config_response(project)
+        ),
+        "aiReviewModels": list_project_ai_review_models(db, int(project.id)),
+        "reviewSettings": project_review_settings_to_dict(settings),
+        "webhookIds": webhook_ids,
+    }
+
+
+def _validate_project_configuration(
+    db: Session,
+    target_type: str,
+    target_request: dict[str, Any],
+    model_requests: list[dict[str, Any]],
+    webhook_ids: list[int],
+) -> None:
+    from app.code_quality.models import CodeQualityModelProvider, CodeQualityReviewProfile
+    from app.notification.models import NotificationWebhook
+    from app.rule_template.models import RuleTemplate
+
+    template_code = str(target_request.get("templateCode") or "").strip()
+    template = db.scalars(
+        select(RuleTemplate)
+        .where(
+            RuleTemplate.template_code == template_code,
+            RuleTemplate.status == "ENABLED",
+        )
+        .order_by(RuleTemplate.version.desc())
+    ).first()
+    if template is None:
+        raise AppError("VALIDATION_ERROR", f"Rule template is unavailable: {template_code}", 400)
+    profile_code = _blank_to_none(target_request.get("codeQualityProfileCode"))
+    if profile_code:
+        profile = db.scalars(
+            select(CodeQualityReviewProfile).where(
+                CodeQualityReviewProfile.profile_code == profile_code,
+                CodeQualityReviewProfile.enabled.is_(True),
+                CodeQualityReviewProfile.status == "ENABLED",
+            )
+        ).first()
+        if profile is None:
+            raise AppError(
+                "VALIDATION_ERROR",
+                f"Code quality review profile is unavailable: {profile_code}",
+                400,
+            )
+    _normalize_path_patterns(target_request.get("pathPatterns"))
+    provider_codes = {
+        value.upper()
+        for value in [_blank_to_none(target_request.get("providerCode"))]
+        if value
+    }
+    provider_codes.update(
+        str(item.get("providerCode") or "").strip().upper()
+        for item in model_requests
+        if item.get("providerCode")
+    )
+    if provider_codes:
+        providers = db.scalars(
+            select(CodeQualityModelProvider).where(
+                CodeQualityModelProvider.provider_code.in_(provider_codes),
+                CodeQualityModelProvider.enabled.is_(True),
+            )
+        ).all()
+        found_codes = {str(provider.provider_code).upper() for provider in providers}
+        missing = sorted(provider_codes - found_codes)
+        if missing:
+            raise AppError("VALIDATION_ERROR", f"Model provider is unavailable: {missing[0]}", 400)
+    if webhook_ids:
+        webhooks = db.scalars(
+            select(NotificationWebhook).where(
+                NotificationWebhook.id.in_(webhook_ids),
+                NotificationWebhook.channel == "DINGTALK",
+            )
+        ).all()
+        found_webhook_ids = {int(webhook.id) for webhook in webhooks}
+        missing_webhooks = sorted(set(webhook_ids) - found_webhook_ids)
+        if missing_webhooks:
+            raise AppError(
+                "RESOURCE_NOT_FOUND",
+                f"Notification webhook not found: {missing_webhooks[0]}",
+                404,
+            )
+    if target_type != "BACKEND" and target_request.get("reminderCardEnabled"):
+        raise AppError(
+            "VALIDATION_ERROR",
+            "reminderCardEnabled is only supported for BACKEND projects",
+            400,
+        )
+
+
+def _replace_project_ai_review_models(
+    db: Session,
+    project: Project,
+    raw_items: list[dict[str, Any]],
+) -> None:
+    for record in db.scalars(
+        select(ProjectAiReviewModel).where(ProjectAiReviewModel.project_id == project.id)
+    ).all():
+        db.delete(record)
+    db.flush()
+    now = datetime.now()
+    seen_keys: set[str] = set()
+    seen_provider_models: set[tuple[str, str | None]] = set()
+    for index, raw_item in enumerate(raw_items):
+        provider_code = str(raw_item.get("providerCode") or "").strip().upper()
+        model_name = _blank_to_none(raw_item.get("modelName"))
+        provider_model = (provider_code, model_name)
+        if provider_model in seen_provider_models:
+            raise AppError(
+                "VALIDATION_ERROR",
+                f"Duplicate project AI Review provider/model: {provider_code}/{model_name or 'default'}",
+                400,
+            )
+        seen_provider_models.add(provider_model)
+        review_key = _blank_to_none(raw_item.get("reviewKey")) or make_ai_review_model_key(
+            provider_code,
+            model_name,
+            index,
+        )
+        if review_key in seen_keys:
+            raise AppError(
+                "VALIDATION_ERROR",
+                f"Duplicate project AI Review reviewKey: {review_key}",
+                400,
+            )
+        seen_keys.add(review_key)
+        db.add(
+            ProjectAiReviewModel(
+                project_id=project.id,
+                review_key=review_key,
+                provider_code=provider_code,
+                model_name=model_name,
+                display_name=_blank_to_none(raw_item.get("displayName")),
+                enabled=bool(raw_item.get("enabled", True)),
+                sort_order=int(raw_item.get("sortOrder") or 0),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    db.flush()
+
+
+def _replace_project_notification_webhooks(
+    db: Session,
+    project: Project,
+    webhook_ids: list[int],
+) -> None:
+    from app.notification.models import ProjectNotificationWebhook
+
+    for record in db.scalars(
+        select(ProjectNotificationWebhook).where(
+            ProjectNotificationWebhook.project_id == project.id
+        )
+    ).all():
+        db.delete(record)
+    db.flush()
+    now = datetime.now()
+    for webhook_id in webhook_ids:
+        db.add(
+            ProjectNotificationWebhook(
+                project_id=project.id,
+                webhook_id=webhook_id,
+                enabled=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    db.flush()
+
+
+def _normalize_path_patterns(value: Any) -> list[str]:
+    patterns = []
+    for item in value if isinstance(value, list) else []:
+        pattern = str(item or "").strip()
+        if pattern and pattern not in patterns:
+            patterns.append(pattern)
+    if not patterns:
+        raise AppError("VALIDATION_ERROR", "pathPatterns must contain at least one pattern", 400)
+    return patterns
+
+
 def _default_target_config_response(project: Project) -> dict:
-    defaults = TARGET_TYPE_DEFAULTS["BACKEND"]
+    target_type = effective_project_target_type(project)
+    defaults = TARGET_TYPE_DEFAULTS.get(target_type, TARGET_TYPE_DEFAULTS["GENERAL"])
     return {
         "id": None,
         "projectId": project.id,
-        "targetType": "BACKEND",
+        "targetType": target_type,
         "templateCode": project.default_template_code or defaults["templateCode"],
         "codeQualityProfileCode": project.default_code_quality_profile_code or defaults["profileCode"],
         "providerCode": project.default_code_quality_provider_code,
         "pathPatterns": defaults["pathPatterns"],
-        "reminderCardEnabled": True,
+        "reminderCardEnabled": bool(defaults["reminderCardEnabled"]),
         "enabled": True,
-        "description": "默认后端端类型配置（未保存）",
+        "description": "单端类型默认配置（未保存）",
     }
 
 
@@ -1053,6 +1422,13 @@ def _reminder_card_enabled(target_type: str, config: ProjectTargetConfig | None,
     if normalize_target_type(target_type) != "BACKEND":
         return False
     return bool(config.reminder_card_enabled) if config else bool(defaults.get("reminderCardEnabled"))
+
+
+def effective_project_target_type(project: Project) -> str:
+    if _blank_to_none(project.target_type):
+        return normalize_target_type(project.target_type)
+    legacy_types = read_json_array(project.supported_target_types)
+    return normalize_target_type(legacy_types[0] if legacy_types else None)
 
 
 def normalize_target_type(value: str | None) -> str:
@@ -1220,21 +1596,13 @@ def _path_matches(path: str, pattern: str) -> bool:
 
 
 def _sync_project_supported_target_types(db: Session, project: Project) -> None:
-    types = [
-        config.target_type
-        for config in db.scalars(
-            select(ProjectTargetConfig)
-            .where(ProjectTargetConfig.project_id == project.id, ProjectTargetConfig.enabled.is_(True))
-            .order_by(ProjectTargetConfig.id.asc())
-        ).all()
-    ]
-    project.supported_target_types = json.dumps(types or ["BACKEND"], ensure_ascii=False)
-    project.updated_at = datetime.now()
-    db.flush()
+    _set_project_supported_target_type(db, project, effective_project_target_type(project))
 
 
 def _set_project_supported_target_type(db: Session, project: Project, target_type: str) -> None:
-    project.supported_target_types = json.dumps([normalize_target_type(target_type)], ensure_ascii=False)
+    normalized = normalize_target_type(target_type)
+    project.target_type = normalized
+    project.supported_target_types = json.dumps([normalized], ensure_ascii=False)
     project.updated_at = datetime.now()
     db.flush()
 
@@ -1418,6 +1786,8 @@ def _requested_target_types(request: dict) -> list[str]:
         target_type = normalize_target_type(value)
         if target_type not in normalized:
             normalized.append(target_type)
+    if len(normalized) > 1:
+        raise AppError("VALIDATION_ERROR", "A project must have exactly one targetType", 400)
     return normalized or ["BACKEND"]
 
 

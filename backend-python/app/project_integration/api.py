@@ -12,14 +12,19 @@ from app.project_integration.repository import (
     list_project_groups,
     list_project_target_configs,
     list_target_type_path_mappings,
+    project_configuration_response,
     project_review_settings_response,
+    update_project_configuration,
     update_project_group,
     update_project_group_binding,
     update_project_review_settings,
     update_target_type_path_mappings,
     upsert_project_target_config,
 )
-from app.project_integration.schemas import ProjectReviewSettingsUpdateRequest
+from app.project_integration.schemas import (
+    ProjectConfigurationUpdateRequest,
+    ProjectReviewSettingsUpdateRequest,
+)
 from app.project_integration.service import handle_gitlab_webhook
 
 
@@ -74,6 +79,21 @@ async def create_project_record(request: dict[str, Any], db: Session = Depends(g
 @router.put("/{project_id}/group")
 async def bind_project_group(project_id: int, request: dict[str, Any], db: Session = Depends(get_db)) -> dict:
     return ok(update_project_group_binding(db, project_id, request))
+
+
+@router.get("/{project_id}/configuration")
+async def get_project_configuration(project_id: int, db: Session = Depends(get_db)) -> dict:
+    return ok(project_configuration_response(db, project_id))
+
+
+@router.put("/{project_id}/configuration")
+async def save_project_configuration(
+    project_id: int,
+    request: ProjectConfigurationUpdateRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    payload = request.model_dump(by_alias=True)
+    return ok(update_project_configuration(db, project_id, payload))
 
 
 @router.get("/{project_id}/review-settings")

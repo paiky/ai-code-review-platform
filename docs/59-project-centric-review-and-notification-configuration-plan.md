@@ -2,8 +2,8 @@
 
 ## 1. 状态与背景
 
-- 计划状态：**阶段二已完成，阶段三待确认（2026-08-25）**；
-- 当前停止点：阶段二通知资源 API、项目机器人关联和通知路由切换已完成；前端改造、Review 触发切换和部署尚未执行，等待阶段三确认；
+- 计划状态：**阶段四已完成，阶段五待确认（2026-08-25）**；
+- 当前停止点：单端类型、项目综合 Review 配置、Profile/Provider/项目多模型和任务快照运行时切换已完成；前端项目中心、遗留清理和部署尚未执行，等待阶段五确认；
 - 产品背景：组织架构已进入全栈协作模式，原“研发一部后端、研发二部后端、Web 端、iOS 端、Android 端”等项目组不再是
   稳定的业务归属，也不应继续决定 Review 模板、模型、触发策略或钉钉通知目标；
 - 当前问题：`projects.group_id -> project_groups -> notification_webhooks` 同时承担组织归类、Review 配置继承和通知路由，项目组停用、
@@ -1049,6 +1049,8 @@ frontend/src/project-config/
 - 2026-08-25：完成阶段二项目级机器人 API、测试与通知切换：新增机器人资源 CRUD、脱敏列表、保存机器人测试与健康状态落库；新增项目机器人关联查询、批量预览/保存（REPLACE/ADD/REMOVE）及删除约束；任务通知改为项目关联机器人，多机器人全部发送，无机器人记录 `DINGTALK_WEBHOOKS_EMPTY/SKIPPED`，旧项目组回退仅由显式测试兼容开关启用；补充通知 API、项目关联和集成契约测试，相关验证 `35 passed`，Ruff 检查通过。阶段三待用户确认。
 - 2026-08-25：用户已确认推进阶段三；实施范围限定为项目 Review 设置 DTO、MR/PUSH/Agent Gate 运行时切换、项目设置默认创建、触发决策日志、相关测试和本文，不切换 Profile/模型，不修改前端。
 - 2026-08-25：完成阶段三项目级 MR/PUSH 与 Push Gate 切换：新增项目 Review 设置查询/更新 DTO 和默认创建；MR、Push、分支/大小/风险/防抖 Gate、Agent Gate 与自动修复预览改读 `project_review_settings`，Manual Review 保持不受项目触发开关限制；新增 `PROJECT_TRIGGER_DISABLED` 拒绝原因和 `PROJECT` 来源决策日志。阶段三相关契约测试 `53 passed`，变更文件 Ruff 检查通过；完整 code quality contract 额外审计 `94 passed, 2 failed`，失败为不在本阶段范围的既有 fix-preview 空任务与 Provider/端类型配置断言。阶段四待用户确认。
+- 2026-08-25：用户已确认推进阶段四；实施范围限定为单端类型校验、项目综合配置接口、Profile/Provider/项目多模型解析、任务创建快照、相关测试和本文，不修改前端，不删除旧表，不实现动态继承或多端拆分。
+- 2026-08-25：完成阶段四单端类型与项目 Review 配置切换：新增强类型项目综合配置 GET/PUT，在单事务内校验并保存唯一端类型配置、项目模型、Review 设置和机器人关联；项目创建、webhook、manual、MR、Push、重试与 Agent/Standard 运行时统一使用 `projects.target_type` 和单值 `targetTypes` 快照；Profile 改读项目端配置，Provider/模型按“端配置 Provider > 项目模型 > Profile Provider > 全局默认”解析，不再读取项目组 Profile/模型；自动识别仅维护候选证据，允许无 payload diff 的新项目在首次 GitLab diff 返回后完成系统占位端类型定型，不覆盖人工配置。阶段四相关项目/综合配置、迁移、Code Quality、manual/rule、Agent/Review Task、GitLab/diff context 验证合计 `287 passed, 1 failed`，变更文件 Ruff 检查通过；唯一失败为阶段三已记录的空任务 fix-preview 接口预期 200、实际 404 的既有断言。未修改前端、删除旧表、提交、推送或部署。阶段五待用户确认。
 - 2026-08-25：完成阶段一数据基础与迁移审计实现：新增项目端类型、Review 设置、项目模型、项目—机器人关联及机器人健康字段 ORM；新增 V54 bootstrap migration 与旧库字段/索引幂等 reconciliation；新增项目配置迁移预检、阻断异常报告、幂等回填、Webhook URL 去重关联和 Effective Config 对比 CLI；补充迁移与回填测试。阶段一相关测试 `31 passed`，变更文件 Ruff 检查通过；本地验收期间已执行并验证 V49～V54 迁移，未执行测试线迁移和部署。
 
 

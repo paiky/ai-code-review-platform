@@ -237,12 +237,22 @@ def test_manual_review_target_type_uses_frontend_profile_and_hides_card(
     seed_backend_template(db_session)
     seed_frontend_template(db_session)
     seed_project(db_session)
+    configured = client.put(
+        "/api/projects/1/target-configs/WEB_PC",
+        json={
+            "templateCode": "frontend-default",
+            "codeQualityProfileCode": "web-pc-default-ai-review",
+            "pathPatterns": ["**/*"],
+            "reminderCardEnabled": False,
+        },
+    )
+    assert configured.status_code == 200
 
     response = client.post(
         "/api/review-tasks/manual",
         json={
             "projectId": 1,
-            "targetType": "WEB_PC",
+            "targetType": "BACKEND",
             "sourceBranch": "feature/web",
             "targetBranch": "main",
             "changedFiles": [

@@ -34,6 +34,7 @@ from app.project_integration.models import (
     Project,
     ProjectGroup,
     ProjectGroupAiReviewModel,
+    ProjectAiReviewModel,
     ProjectTargetConfig,
 )
 from app.review_feedback.service import attach_ai_finding_feedbacks
@@ -1223,6 +1224,7 @@ def _locking_provider_reference_counts(db: Session, provider_code: str) -> dict[
         ("projects", Project, Project.default_code_quality_provider_code),
         ("projectGroups", ProjectGroup, ProjectGroup.default_provider_code),
         ("projectGroupModels", ProjectGroupAiReviewModel, ProjectGroupAiReviewModel.provider_code),
+        ("projectModels", ProjectAiReviewModel, ProjectAiReviewModel.provider_code),
         ("projectTargets", ProjectTargetConfig, ProjectTargetConfig.provider_code),
     )
     counts: dict[str, int] = {}
