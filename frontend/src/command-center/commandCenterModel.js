@@ -274,7 +274,6 @@ function normalizeTask(value) {
     taskId: safeCount(raw.taskId),
     projectId: safeCount(raw.projectId),
     projectName: safeText(raw.projectName, `Project ${safeCount(raw.projectId)}`),
-    groupId: safeNullableCount(raw.groupId),
     triggerType: safeEnum(raw.triggerType),
     authorName: safeNullableText(raw.authorName),
     authorUsername: safeNullableText(raw.authorUsername),

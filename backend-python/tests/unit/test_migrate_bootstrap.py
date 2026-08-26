@@ -11,8 +11,10 @@ from app.migrate import (
     AppliedMigration,
     BaselineRequirements,
     COMMAND_CENTER_INDEX_UPGRADES,
+    DESTRUCTIVE_MIGRATION_VERSIONS,
     MigrationError,
     MigrationFile,
+    _inspect_migration_precondition,
     _migration_execution_statements,
     _migration_statement_already_satisfied,
     apply_pending_migrations,
@@ -471,9 +473,137 @@ def test_discover_migrations_is_contiguous_and_includes_checksums() -> None:
     migrations = discover_migrations()
 
     assert migrations[0].version == 1
-    assert migrations[-1].version == 54
-    assert [item.version for item in migrations] == list(range(1, 55))
+    assert migrations[-1].version == 56
+    assert [item.version for item in migrations] == list(range(1, 57))
     assert all(len(item.checksum) == 64 for item in migrations)
+
+
+def test_v55_reconciles_project_target_type_from_enabled_configuration() -> None:
+    migration = next(item for item in discover_migrations() if item.version == 55)
+    sql = migration.path.read_text(encoding="utf-8")
+
+    assert "UPDATE project_target_configs AS config" in sql
+    assert "manual_config_count = 1" in sql
+    assert "project.target_type = config.target_type" in sql
+    assert "project.supported_target_types = JSON_ARRAY(config.target_type)" in sql
+    assert "project.default_code_quality_profile_code = config.code_quality_profile_code" in sql
+    assert "DROP TABLE" not in sql
+
+
+def test_v56_removes_legacy_project_group_schema() -> None:
+    migration = next(item for item in discover_migrations() if item.version == 56)
+    sql = migration.path.read_text(encoding="utf-8")
+
+    assert "DROP COLUMN group_id" in sql
+    assert "DROP COLUMN supported_target_types" in sql
+    assert "DROP COLUMN project_group_id" in sql
+    assert "DROP TABLE project_group_ai_review_models" in sql
+    assert "DROP TABLE project_groups" in sql
+    assert "MODIFY COLUMN target_type VARCHAR(32) NOT NULL" in sql
+    assert DESTRUCTIVE_MIGRATION_VERSIONS == frozenset({56})
+
+
+def test_v55_preflight_prefers_single_manual_config_and_reports_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        _project_target_row(
+            project_id=24,
+            project_target_type="BACKEND",
+            config_id=95,
+            config_target_type="WEB_PC",
+            config_description="路径映射创建的端类型配置",
+        ),
+        _project_target_row(
+            project_id=24,
+            project_target_type="BACKEND",
+            config_id=123,
+            config_target_type="GENERAL",
+            config_description="手动维护的端类型配置",
+            config_template_code="general-default",
+            config_profile_code=None,
+        ),
+    ]
+    connection = _ProjectTargetConnection(rows)
+    monkeypatch.setattr(
+        "app.migrate.inspect",
+        lambda _connection: _ProjectTargetInspector(),
+    )
+
+    preview = _inspect_migration_precondition(
+        connection,
+        MigrationFile(55, "reconcile", "V55.sql", "checksum", Path("V55.sql")),
+    )
+
+    assert preview is not None
+    assert preview.projects_scanned == 1
+    assert preview.projects_aligned == 0
+    assert preview.projects_reconciled == 1
+    assert preview.configs_disabled == 1
+    assert preview.changes[0].project_id == 24
+    assert preview.changes[0].current_target_type == "BACKEND"
+    assert preview.changes[0].selected_target_type == "GENERAL"
+    assert preview.changes[0].selected_config_id == 123
+    assert preview.changes[0].disabled_config_ids == (95,)
+
+
+def test_v55_preflight_blocks_multiple_manual_configs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        _project_target_row(
+            project_id=9,
+            config_id=1,
+            config_target_type="BACKEND",
+            config_description="手动维护的端类型配置",
+        ),
+        _project_target_row(
+            project_id=9,
+            config_id=2,
+            config_target_type="WEB_PC",
+            config_description="项目综合配置维护",
+        ),
+    ]
+    connection = _ProjectTargetConnection(rows)
+    monkeypatch.setattr(
+        "app.migrate.inspect",
+        lambda _connection: _ProjectTargetInspector(),
+    )
+
+    with pytest.raises(
+        MigrationError,
+        match=r"project 9 has multiple manual enabled target configs \[BACKEND,WEB_PC\]",
+    ):
+        _inspect_migration_precondition(
+            connection,
+            MigrationFile(55, "reconcile", "V55.sql", "checksum", Path("V55.sql")),
+        )
+
+
+def test_v56_preflight_requires_exact_project_target_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _ProjectTargetConnection(
+        [
+            _project_target_row(
+                project_id=6,
+                project_target_type="BACKEND",
+                config_id=59,
+                config_target_type="APP_ANDROID",
+                config_description="手动维护的端类型配置",
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        "app.migrate.inspect",
+        lambda _connection: _ProjectTargetInspector(),
+    )
+
+    with pytest.raises(MigrationError, match="does not match enabled config APP_ANDROID"):
+        _inspect_migration_precondition(
+            connection,
+            MigrationFile(56, "cleanup", "V56.sql", "checksum", Path("V56.sql")),
+        )
 
 
 def test_baseline_requirements_cover_latest_agent_runtime_schema() -> None:
@@ -504,6 +634,11 @@ def test_baseline_requirements_cover_latest_agent_runtime_schema() -> None:
         "uk_code_quality_fix_preview_task_finding"
         not in requirements.indexes["code_quality_fix_previews"]
     )
+    assert "project_groups" not in requirements.tables
+    assert "project_group_ai_review_models" not in requirements.tables
+    assert "group_id" not in requirements.columns["projects"]
+    assert "supported_target_types" not in requirements.columns["projects"]
+    assert "project_group_id" not in requirements.columns["notification_webhooks"]
 
     index_requirements = {
         (item.table_name, item.index_name): item
@@ -569,6 +704,37 @@ def test_empty_database_apply_is_recorded_and_idempotent(
     assert status.pending == ()
     assert [item.version for item in status.applied] == [1, 2]
     assert state.migration_statement_count == 2
+
+
+def test_destructive_migration_requires_explicit_authorization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = tmp_path / "V56__cleanup.sql"
+    script.write_text(
+        "CREATE TABLE review_tasks (id BIGINT PRIMARY KEY);",
+        encoding="utf-8",
+    )
+    migration = MigrationFile(56, "cleanup", script.name, "checksum", script)
+    state = _MigrationState(tables={"schema_migrations"})
+    engine = _MigrationEngine(state)
+    monkeypatch.setattr(
+        "app.migrate.inspect", lambda connection: _StateInspector(connection.state)
+    )
+    monkeypatch.setattr(
+        "app.migrate._inspect_migration_precondition",
+        lambda _connection, _migration: None,
+    )
+
+    assert apply_pending_migrations(engine, (migration,)) == []
+    assert state.migration_statement_count == 0
+
+    assert apply_pending_migrations(
+        engine,
+        (migration,),
+        allow_destructive=True,
+    ) == [56]
+    assert state.migration_statement_count == 1
 
 
 def test_existing_database_requires_valid_baseline(
@@ -669,6 +835,50 @@ class _Result:
 
     def mappings(self):
         return iter(self.rows)
+
+
+class _ProjectTargetInspector:
+    def has_table(self, table_name: str) -> bool:
+        return table_name in {"projects", "project_target_configs"}
+
+    def get_columns(self, table_name: str) -> list[dict]:
+        if table_name == "projects":
+            return [{"name": "target_type"}]
+        return []
+
+
+class _ProjectTargetConnection:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+
+    def execute(self, _statement):
+        return _Result(rows=self.rows)
+
+
+def _project_target_row(
+    *,
+    project_id: int,
+    project_target_type: str = "BACKEND",
+    config_id: int,
+    config_target_type: str,
+    config_description: str,
+    config_template_code: str = "backend-default",
+    config_profile_code: str | None = "backend-default-ai-review",
+    config_provider_code: str | None = None,
+) -> dict:
+    return {
+        "project_id": project_id,
+        "project_target_type": project_target_type,
+        "project_template_code": "backend-default",
+        "project_profile_code": "backend-default-ai-review",
+        "project_provider_code": None,
+        "config_id": config_id,
+        "config_target_type": config_target_type,
+        "config_template_code": config_template_code,
+        "config_profile_code": config_profile_code,
+        "config_provider_code": config_provider_code,
+        "config_description": config_description,
+    }
 
 
 class _MigrationConnection:

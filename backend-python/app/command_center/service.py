@@ -145,7 +145,6 @@ def get_runtime_snapshot(
     active_limit: int,
     alert_limit: int,
     project_id: int | None,
-    group_id: int | None,
     now: datetime | None = None,
 ) -> RuntimeSnapshot:
     generated_at = _normalize_utc(now)
@@ -160,7 +159,6 @@ def get_runtime_snapshot(
         active_limit=active_limit,
         alert_limit=alert_limit,
         project_id=project_id,
-        group_id=group_id,
     )
     return build_runtime_snapshot(
         data,
@@ -169,7 +167,6 @@ def get_runtime_snapshot(
         active_limit=active_limit,
         alert_limit=alert_limit,
         project_id=project_id,
-        group_id=group_id,
     )
 
 
@@ -178,7 +175,6 @@ def get_governance_snapshot(
     *,
     window_hours: int,
     project_id: int | None,
-    group_id: int | None,
     now: datetime | None = None,
 ) -> GovernanceSnapshot:
     generated_at = _normalize_utc(now)
@@ -188,14 +184,12 @@ def get_governance_snapshot(
             generated_at - timedelta(hours=window_hours)
         ),
         project_id=project_id,
-        group_id=group_id,
     )
     return build_governance_snapshot(
         data,
         now=generated_at,
         window_hours=window_hours,
         project_id=project_id,
-        group_id=group_id,
     )
 
 
@@ -207,7 +201,6 @@ def build_runtime_snapshot(
     active_limit: int,
     alert_limit: int,
     project_id: int | None,
-    group_id: int | None,
 ) -> RuntimeSnapshot:
     generated_at = _normalize_utc(now)
     database_now = _database_datetime(generated_at)
@@ -243,7 +236,6 @@ def build_runtime_snapshot(
                 taskId=task_id,
                 projectId=int(task["project_id"]),
                 projectName=str(task.get("project_name") or f"Project {task['project_id']}"),
-                groupId=_int_or_none(task.get("group_id")),
                 triggerType=str(task.get("trigger_type") or "UNKNOWN"),
                 authorName=task.get("author_name"),
                 authorUsername=task.get("author_username"),
@@ -436,7 +428,6 @@ def build_runtime_snapshot(
             },
             filters={
                 "projectId": project_id,
-                "groupId": group_id,
             },
             scanned={
                 "candidateTasks": data.candidate_task_count,
@@ -573,7 +564,6 @@ def build_governance_snapshot(
     now: datetime,
     window_hours: int,
     project_id: int | None,
-    group_id: int | None,
 ) -> GovernanceSnapshot:
     generated_at = _normalize_utc(now)
     rule_distribution: Counter[str] = Counter()
@@ -727,7 +717,6 @@ def build_governance_snapshot(
             limits={"findingResultScanLimit": FINDING_SCAN_LIMIT},
             filters={
                 "projectId": project_id,
-                "groupId": group_id,
             },
             scanned={
                 "preflightRuns": len(data.preflight_rows),

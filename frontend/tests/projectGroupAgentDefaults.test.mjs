@@ -10,28 +10,17 @@ const projectDrawerSource = await readFile(new URL('../src/project-config/Projec
 const projectStyleSource = await readFile(new URL('../src/project-config/projectConfiguration.css', import.meta.url), 'utf8');
 const settingsSource = [appSource, projectPageSource, projectDrawerSource].join('\n');
 
-test('project group Agent Review fixed defaults stay out of the settings controls', () => {
-  assert.equal(appSource.includes("reviewEngine: 'AGENT'"), true);
-  assert.equal(appSource.includes('agentSourceExportAllowed: true'), true);
-  assert.equal(appSource.includes('aiReviewEnabled: true'), true);
-  assert.equal(appSource.includes('triggerOnManual: true'), true);
-  assert.equal(appSource.includes('此处决定所选项目组后续 MR、Push 和默认 Manual Review 使用的主引擎'), false);
-  assert.equal(appSource.includes('<Text strong>Review 引擎</Text>'), false);
-  assert.equal(appSource.includes('<Text strong>手动触发</Text>'), false);
-  assert.equal(appSource.includes('<Text strong>允许 Agent 外发源码片段</Text>'), false);
-  assert.equal(appSource.includes('<Text strong>启用项目组 AI Review</Text>'), false);
-});
-
-test('project group policy cards follow their feature switches', () => {
-  assert.match(
-    appSource,
-    /\{pushPolicyDraft\?\.autoFixPreviewEnabled === true && \(\s*<Col xs=\{24\} lg=\{pushPolicyDraft\?\.triggerOnPush === true \? 8 : 24\}>/
-  );
-  assert.match(
-    appSource,
-    /\{pushPolicyDraft\?\.triggerOnPush === true && \(\s*<Col xs=\{24\} lg=\{pushPolicyDraft\?\.autoFixPreviewEnabled === true \? 16 : 24\}>/
-  );
-  assert.equal(appSource.includes('style={{ opacity: (pushPolicyDraft?.autoFixPreviewEnabled === true) ? 1 : 0.55 }}'), false);
+test('legacy project group controls and API dependencies stay removed', () => {
+  for (const marker of [
+    '/api/project-groups',
+    '项目组 AI Review 通用策略',
+    '保存项目组 AI Review 策略',
+    'Profile / 项目组策略',
+    'selectedPushPolicyGroupId',
+    'pushPolicyFromGroup'
+  ]) {
+    assert.equal(settingsSource.includes(marker), false, marker);
+  }
 });
 
 test('settings workspaces expose consistent titles, descriptions, and semantic icons', () => {
@@ -40,16 +29,13 @@ test('settings workspaces expose consistent titles, descriptions, and semantic i
     '项目通知与 Review 配置',
     '端类型自动识别规则',
     'Review 触发',
-    '项目组 AI Review 通用策略',
     '普通 Review 初始 Prompt',
     'Agent Review 运行配置',
     'Standard Review 运行配置',
     '模型连接目录',
     'Agent 执行预算',
     '平台全局能力',
-    '钉钉通知',
-    '修复预览策略',
-    'Push 审核策略'
+    '钉钉通知'
   ].forEach(title => assert.equal(settingsSource.includes(title), true, `missing settings title: ${title}`));
   assert.equal(appSource.includes('className="settings-card-description"'), true);
   assert.equal(projectDrawerSource.includes('基础与 Review 配置'), false);

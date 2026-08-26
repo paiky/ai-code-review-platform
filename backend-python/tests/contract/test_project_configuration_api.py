@@ -167,7 +167,6 @@ def test_project_configuration_put_saves_all_domains_in_one_transaction(
     stored_project = db_session.get(Project, project["id"])
     assert stored_project is not None
     assert stored_project.target_type == "WEB_PC"
-    assert stored_project.supported_target_types == '["WEB_PC"]'
     configs = db_session.scalars(
         select(ProjectTargetConfig).where(
             ProjectTargetConfig.project_id == project["id"]
@@ -267,7 +266,7 @@ def test_project_configuration_failure_rolls_back_and_fixed_target_drives_tasks(
     assert detail["targetTypes"] == ["WEB_PC"]
     assert detail["codeQualityProfileCode"] == "web-pc-default-ai-review"
 
-def test_project_creation_rejects_multiple_target_types(
+def test_project_creation_ignores_removed_legacy_target_types_field(
     client: TestClient,
 ) -> None:
     response = client.post(
@@ -280,5 +279,6 @@ def test_project_creation_rejects_multiple_target_types(
         },
     )
 
-    assert response.status_code == 400
-    assert response.json()["code"] == "VALIDATION_ERROR"
+    assert response.status_code == 200
+    assert response.json()["data"]["targetType"] == "BACKEND"
+    assert "supportedTargetTypes" not in response.json()["data"]

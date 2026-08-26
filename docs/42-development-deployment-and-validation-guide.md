@@ -138,7 +138,7 @@ curl http://localhost:8090/actuator/health
 - 空数据库会按版本顺序初始化历史表和内置数据，并在 `schema_migrations` 登记 version/checksum。
 - 已存在核心表但尚无迁移账本的数据库不会重放历史 SQL；必须先通过 schema baseline 校验并显式登记 V1～V47。
 - 已登记数据库只执行待应用版本；已执行文件的 checksum 变化、版本重复或历史 schema 不完整时拒绝继续。
-- Docker backend 启动时会先运行 `python -m app.migrate`。
+- Docker backend 启动时会先运行 `python -m app.migrate`；普通迁移自动执行，标记为破坏性的迁移默认延后并保持 pending。
 - 回滚应用镜像不会自动回滚 schema；迁移应优先新增表或列，避免在可回滚窗口删除、重命名旧字段。
 
 迁移后至少检查健康接口和任务列表接口；涉及共享模型或数据库兼容时运行全量 Python 测试。
@@ -189,6 +189,39 @@ curl http://localhost:8090/actuator/health
 每次 schema 或登记数据变更使用同一迁移文件，顺序固定为“本地 dry-run/apply/verify → 测试与备份 → 测试线
 dry-run/apply/verify → 比对 version/checksum”。这不是业务数据双向同步；任务、Worker、队列和运行状态不得自动在
 两套数据库间复制。测试线到本地的一次性脱敏数据迁移属于 `docs/53` 阶段三 B，必须在用户配置变量并再次确认后执行。
+
+### 项目组最终清理的两段式远程迁移
+
+阶段六将远程升级拆为两个数据库停止点：
+
+- V55 只收敛 `projects.target_type` 与唯一启用项目端配置。唯一人工配置优先；不可唯一判断时拒绝迁移并输出项目 ID；
+- V56 删除项目组表和兼容字段，属于不可由镜像回滚恢复的破坏性迁移，必须显式传入 `--allow-destructive`。
+
+加载新镜像但尚未启动新 Backend 时，先执行只读检查：
+
+```bash
+docker compose run --rm backend python -m app.migrate dry-run
+```
+
+确认输出没有项目端类型阻断项并完成数据库备份后，执行 V55；命令会自动延后 V56：
+
+```bash
+docker compose run --rm backend python -m app.migrate apply
+docker compose up -d backend frontend
+```
+
+此时先验收项目列表端类型、Profile 和路径配置。验收通过并进入最终维护窗口后，再停止业务容器并显式执行 V56：
+
+```bash
+docker compose stop frontend agent-worker backend
+docker compose run --rm backend python -m app.migrate apply --allow-destructive
+docker compose run --rm backend python -m app.migrate verify
+docker compose up -d
+docker compose ps
+docker compose logs --tail=100 backend
+```
+
+V56 执行前必须确认 `.env` 中的 `DATABASE_URL` 指向目标远程库，并保留可恢复的 MySQL 备份。命令输出和工单中不得粘贴数据库密码或完整连接串。
 
 历史库 baseline 前若缺少 V1～V47 的命名索引，使用 reconcile 工具先做只读计划：
 

@@ -2,8 +2,8 @@
 
 ## 1. 状态与背景
 
-- 计划状态：**阶段五实现已完成，最新 UI 反馈调整待用户浏览器验收（2026-08-26）**；
-- 当前停止点：项目中心页面、项目配置抽屉、批量机器人、机器人库、端类型规则和响应式布局已完成；此前 `1440px/1024px/390px` 浏览器验收已通过，七轮 UI 反馈调整已通过前端全量测试、build 与 `git diff --check`，等待用户浏览器验收，不推进阶段六；
+- 计划状态：**阶段六代码与两段式迁移已完成，本地 V55 已执行并待浏览器验收，V56 物理清理待备份与单独授权（2026-08-26）**；
+- 当前停止点：活动 Backend、Frontend、API 与测试中的项目组运行依赖已移除；本地 V55 已完成主端类型一致性收敛并通过 API/迁移前置校验，V56 保持 pending，尚未执行测试或生产数据库迁移，未部署、提交或推送；
 - 产品背景：组织架构已进入全栈协作模式，原“研发一部后端、研发二部后端、Web 端、iOS 端、Android 端”等项目组不再是
   稳定的业务归属，也不应继续决定 Review 模板、模型、触发策略或钉钉通知目标；
 - 当前问题：`projects.group_id -> project_groups -> notification_webhooks` 同时承担组织归类、Review 配置继承和通知路由，项目组停用、
@@ -1045,6 +1045,37 @@ frontend/src/project-config/
 授权边界与停止点：只在用户明确授权、备份确认和观察窗口满足后实施；不得自动删除测试环境或生产数据，不自动提交、推送或部署。
 完成后回填最终结果并停止。
 
+实施状态（2026-08-26）：阶段六活动代码清理已完成。移除项目组 ORM、Repository/Policy、API、筛选字段、通知回退、Review Task/Agent Observation/Command Center 输出及前端旧策略区；项目、任务和通知统一只读项目级配置，Code Quality 全局设置不再承载旧 `dingtalkWebhooks`。迁移基线解析器补充 `DROP TABLE/DROP COLUMN` 识别，旧一次性项目配置迁移工具及纯项目组测试已删除，主链路测试改为项目级契约。首轮验证结果：Backend 全量 `703 passed, 1 skipped`，Frontend 全量 `262 passed`，Frontend build、阶段六变更范围 Ruff 与 `git diff --check` 通过；全量 Ruff 仍报告 4 个本阶段外既有未使用导入/变量。未执行任何真实数据库迁移、真实 GitLab/钉钉/Provider 验收、部署、提交或推送。
+
+#### 11.7.1 阶段六补充：主端类型一致性收敛与物理清理闸门
+
+改动量等级：**中**。涉及历史项目数据判定、migration 执行控制、Docker 升级顺序和数据库兼容验证，但不新增公开接口或跨端数据结构。
+
+目标：修复浏览器验收发现的 `projects.target_type` 与已保存项目端配置不一致问题，并确保远程镜像启动不会在备份和人工验收前自动执行不可逆删表、删字段。
+
+范围：
+
+- 将原清理迁移拆为非破坏性的端类型一致性迁移和显式授权的最终 schema 清理迁移；
+- 每个项目只有一个人工维护的启用端配置时优先采用该配置，并停用同时遗留的自动配置；没有人工配置时要求恰好一个启用端配置；
+- 零个启用配置、多个启用人工配置或多个无法唯一判断的自动配置必须阻断迁移并输出项目 ID、当前类型和候选类型；
+- 数据迁移同步 `projects.target_type`、兼容期单值 `supported_target_types` 及默认模板/Profile/Provider，但不覆盖项目 Review 触发设置、模型和机器人关联；
+- Docker 默认只允许执行非破坏性迁移；最终删表、删字段必须通过独立参数显式授权；
+- 更新迁移测试和部署操作说明。
+
+非目标：不依据项目名称猜测端类型；不以自动识别证据覆盖唯一人工配置；不自动执行本地、测试或远程数据库写入；不提交、推送或部署；不发送真实钉钉消息。
+
+验收方式：
+
+- migration dry-run 输出待收敛项目数量，并对不可唯一判断的数据明确失败；
+- 数据迁移后每个项目恰好一个启用端配置，且 `projects.target_type` 与其一致；
+- 未显式授权时最终物理清理保持 pending，Backend 可在兼容 schema 上启动；
+- 显式授权后最终表/字段断言、Backend 全量测试、Frontend 全量测试与 build 通过；
+- 数据迁移后的项目列表端类型由用户浏览器验收，真实数据库物理清理仍需备份和用户单独确认。
+
+授权边界与停止点：本补充阶段只允许修改计划、迁移实现、迁移 SQL、部署说明和测试；不得执行任何数据库写入、部署、提交或推送。完成代码与自动化验证后停止，等待用户核对 dry-run 结果并授权实际环境迁移。
+
+实施状态（2026-08-26）：补充修正已完成。原单个清理迁移拆为 `V55__reconcile_project_target_types.sql` 和 `V56__remove_legacy_project_groups.sql`：V55 以唯一人工启用配置优先，否则要求恰好一个启用配置，同步项目主端类型、兼容单值端类型及默认模板/Profile/Provider；V56 在再次校验每个项目恰好一个启用配置且主类型一致后清理项目组表和字段。migration CLI 新增项目 ID 级阻断、dry-run 数量摘要和 `--allow-destructive` 闸门，Docker 默认启动只执行 V55 并延后 V56。本地只读 dry-run 扫描 24 个项目，1 个已一致、23 个待收敛、1 个冲突自动配置待停用，无不可判断项目；经用户确认后已执行本地 V55，迁移后 V56 前置校验为 24 个项目全部一致。项目列表 API 返回后端 11、PC Web 4、iOS 3、Android 3、通用 3，项目 24 的人工 `GENERAL` 配置启用且冲突自动 `WEB_PC` 配置已停用，健康接口正常。验证结果：Backend `708 passed, 1 skipped`，Frontend `262 passed`，Frontend build、全部阶段六 Python 变更 Ruff 与 `git diff --check` 通过。远程两段式操作已写入 `docs/42-development-deployment-and-validation-guide.md`；当前停止等待用户浏览器验收本地 V55 结果，V56 仍需在数据验收和备份后单独授权。
+
 ## 12. 测试与验收矩阵
 
 ### 12.1 Backend
@@ -1056,7 +1087,7 @@ frontend/src/project-config/
 - Notification：零/单/多机器人、共享机器人、停用、部分失败、测试健康、删除约束、无默认组兜底；
 - Batch Notification：预览不写数据、正式保存重校验、并发差异、REPLACE/ADD/REMOVE 幂等；
 - Query：项目/端类型/通知/Review 状态筛选与分页；
-- Legacy：兼容开关开启/关闭、新旧 Effective Config 对比。
+- Final schema：活动代码无项目组依赖，V55 最终表/字段断言与项目级 Effective Config 回归。
 
 ### 12.2 Frontend
 

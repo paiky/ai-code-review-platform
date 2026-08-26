@@ -55,7 +55,6 @@ class ActiveTaskSnapshot(CommandCenterSchema):
     task_id: int = Field(alias="taskId")
     project_id: int = Field(alias="projectId")
     project_name: str = Field(alias="projectName")
-    group_id: int | None = Field(default=None, alias="groupId")
     trigger_type: str = Field(alias="triggerType")
     author_name: str | None = Field(default=None, alias="authorName")
     author_username: str | None = Field(default=None, alias="authorUsername")

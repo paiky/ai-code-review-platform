@@ -13,13 +13,11 @@ from app.review_record.models import ReviewTask
 def _project(db_session: Session, project_id: int = 101) -> Project:
     project = Project(
         id=project_id,
-        group_id=None,
         name=f"project-{project_id}",
         git_provider="GITLAB",
         git_project_id=str(project_id),
         repository_url=None,
         target_type="BACKEND",
-        supported_target_types='["BACKEND"]',
         detected_target_types='["BACKEND"]',
         target_detection_json=None,
         default_template_code="backend-default",
@@ -105,8 +103,7 @@ def test_notification_webhook_test_persists_success_without_returning_url(client
     assert "webhookUrl" not in response.json()["data"]["webhook"]
 
 
-def test_task_notification_reads_project_associations_without_group_fallback(client, db_session, monkeypatch):
-    monkeypatch.setenv("PROJECT_NOTIFICATION_GROUP_FALLBACK_ENABLED", "false")
+def test_task_notification_reads_project_associations(client, db_session):
     project = _project(db_session, 102)
     task = ReviewTask(
         id=9001,

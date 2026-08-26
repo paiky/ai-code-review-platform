@@ -11,13 +11,11 @@ class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
-    group_id: Mapped[int | None] = mapped_column(BigInteger)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     git_provider: Mapped[str] = mapped_column(String(32), nullable=False)
     git_project_id: Mapped[str] = mapped_column(String(128), nullable=False)
     repository_url: Mapped[str | None] = mapped_column(String(512))
-    target_type: Mapped[str | None] = mapped_column(String(32))
-    supported_target_types: Mapped[str | None] = mapped_column(Text)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False, default="GENERAL")
     detected_target_types: Mapped[str | None] = mapped_column(Text)
     target_detection_json: Mapped[str | None] = mapped_column(Text)
     default_template_code: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -28,58 +26,6 @@ class Project(Base):
     description: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[object | None] = mapped_column(DateTime)
     updated_at: Mapped[object | None] = mapped_column(DateTime)
-
-
-class ProjectGroup(Base):
-    __tablename__ = "project_groups"
-    __table_args__ = (
-        UniqueConstraint("group_code", name="uk_project_group_code"),
-    )
-
-    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
-    group_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    group_code: Mapped[str | None] = mapped_column(String(64))
-    default_code_quality_profile_code: Mapped[str | None] = mapped_column(String(64))
-    default_provider_code: Mapped[str | None] = mapped_column(String(64))
-    review_engine: Mapped[str] = mapped_column(String(32), nullable=False, default="AGENT")
-    agent_source_export_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    ai_review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    trigger_on_manual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    trigger_on_mr: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    trigger_on_push: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    trigger_only_when_risk_matched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    auto_fix_preview_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    auto_fix_preview_severities: Mapped[str | None] = mapped_column(Text)
-    push_branch_patterns: Mapped[str | None] = mapped_column(Text)
-    push_min_changed_files: Mapped[int | None] = mapped_column(Integer)
-    push_min_diff_bytes: Mapped[int | None] = mapped_column(Integer)
-    push_min_commit_count: Mapped[int | None] = mapped_column(Integer)
-    push_max_changed_files: Mapped[int | None] = mapped_column(Integer)
-    push_max_diff_bytes: Mapped[int | None] = mapped_column(Integer)
-    push_debounce_seconds: Mapped[int | None] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ENABLED")
-    description: Mapped[str | None] = mapped_column(String(512))
-    created_at: Mapped[object | None] = mapped_column(DateTime)
-    updated_at: Mapped[object | None] = mapped_column(DateTime)
-
-
-class ProjectGroupAiReviewModel(Base):
-    __tablename__ = "project_group_ai_review_models"
-    __table_args__ = (
-        UniqueConstraint("group_id", "review_key", name="uk_project_group_ai_review_model_key"),
-    )
-
-    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
-    group_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    review_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    provider_code: Mapped[str] = mapped_column(String(64), nullable=False)
-    model_name: Mapped[str | None] = mapped_column(String(128))
-    display_name: Mapped[str | None] = mapped_column(String(128))
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_at: Mapped[object | None] = mapped_column(DateTime)
-    updated_at: Mapped[object | None] = mapped_column(DateTime)
-
 
 class TargetTypePathMapping(Base):
     __tablename__ = "target_type_path_mappings"

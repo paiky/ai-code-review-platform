@@ -754,7 +754,6 @@ def test_governance_snapshot_has_explicit_scopes_and_safe_json_aggregation() -> 
         now=NOW,
         window_hours=24,
         project_id=None,
-        group_id=7,
     ).model_dump(by_alias=True, mode="json")
 
     assert snapshot["ruleAnalysis"]["scope"] == "WINDOW"
@@ -803,7 +802,6 @@ def test_governance_coverage_reports_truncation() -> None:
         now=NOW,
         window_hours=24,
         project_id=None,
-        group_id=None,
     ).model_dump(by_alias=True, mode="json")
 
     assert snapshot["coverage"]["phase"] == "PHASE_1"
@@ -820,7 +818,6 @@ def _runtime_snapshot(data: RuntimeProjectionData) -> dict:
         active_limit=20,
         alert_limit=20,
         project_id=None,
-        group_id=None,
     ).model_dump(by_alias=True, mode="json")
 
 
@@ -859,7 +856,6 @@ def _task(task_id: int) -> dict:
         "task_id": task_id,
         "project_id": 9001,
         "project_name": "Command Center",
-        "group_id": 7001,
         "trigger_type": "MERGE_REQUEST",
         "author_name": "Mayn",
         "author_username": "mayn",

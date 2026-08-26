@@ -17,7 +17,7 @@ from app.core.errors import AppError
 from app.core.json_utils import format_datetime, read_json
 from app.evaluation.models import EvaluationCase
 from app.evaluation.repository import ensure_evaluation_case_schema
-from app.project_integration.models import Project, ProjectGroup
+from app.project_integration.models import Project
 from app.review_feedback.models import ReviewItemFeedback
 from app.review_feedback.repository import ensure_feedback_schema
 from app.review_record.models import ReviewTask
@@ -63,7 +63,6 @@ def get_agent_observation(
     db: Session,
     *,
     task_id: int | None,
-    group_id: int | None,
     project_id: int | None,
     profile: str | None,
     start_at: str | None,
@@ -72,7 +71,6 @@ def get_agent_observation(
 ) -> dict[str, Any]:
     filters = _normalize_filters(
         task_id=task_id,
-        group_id=group_id,
         project_id=project_id,
         profile=profile,
         start_at=start_at,
@@ -99,7 +97,6 @@ def export_agent_observation(db: Session, request: dict[str, Any]) -> dict[str, 
     observation = get_agent_observation(
         db,
         task_id=_optional_int(raw_filters.get("taskId"), "taskId"),
-        group_id=_optional_int(raw_filters.get("groupId"), "groupId"),
         project_id=_optional_int(raw_filters.get("projectId"), "projectId"),
         profile=_clean_text(raw_filters.get("profile")),
         start_at=_clean_text(raw_filters.get("startAt")),
@@ -228,15 +225,12 @@ def _load_snapshot(db: Session, filters: dict[str, Any]) -> dict[str, list[dict[
         ReviewTask.created_at,
     )
     stmt = (
-        select(CodeQualityReviewResult, ReviewTask, Project, ProjectGroup)
+        select(CodeQualityReviewResult, ReviewTask, Project)
         .join(ReviewTask, ReviewTask.id == CodeQualityReviewResult.task_id)
         .join(Project, Project.id == CodeQualityReviewResult.project_id)
-        .outerjoin(ProjectGroup, ProjectGroup.id == Project.group_id)
     )
     if filters["taskId"] is not None:
         stmt = stmt.where(CodeQualityReviewResult.task_id == filters["taskId"])
-    if filters["groupId"] is not None:
-        stmt = stmt.where(Project.group_id == filters["groupId"])
     if filters["projectId"] is not None:
         stmt = stmt.where(CodeQualityReviewResult.project_id == filters["projectId"])
     if filters["profile"]:
@@ -251,8 +245,6 @@ def _load_snapshot(db: Session, filters: dict[str, Any]) -> dict[str, list[dict[
             "taskId": int(result.task_id),
             "projectId": int(result.project_id),
             "projectName": project.name,
-            "groupId": int(project.group_id) if project.group_id is not None else None,
-            "groupName": group.group_name if group is not None else None,
             "profile": result.profile_code,
             "reviewKey": result.review_key,
             "requestedEngine": result.requested_engine or "STANDARD",
@@ -263,7 +255,7 @@ def _load_snapshot(db: Session, filters: dict[str, Any]) -> dict[str, list[dict[
             "observedAt": format_datetime(result.finished_at or result.created_at or task.created_at),
             "synthetic": False,
         }
-        for result, task, project, group in rows
+        for result, task, project in rows
     ]
     task_ids = {int(item["taskId"]) for item in results}
     if not task_ids:
@@ -432,8 +424,6 @@ def _comparison_rows(
                 "taskId": task_id,
                 "projectId": first.get("projectId"),
                 "projectName": first.get("projectName"),
-                "groupId": first.get("groupId"),
-                "groupName": first.get("groupName"),
                 "profile": first.get("profile"),
                 "standardResultCount": len(standard),
                 "agentResultCount": len(agent),
@@ -510,7 +500,6 @@ def _collect_usage_numbers(value: Any, totals: dict[str, int | float]) -> None:
 def _normalize_filters(
     *,
     task_id: int | None,
-    group_id: int | None,
     project_id: int | None,
     profile: str | None,
     start_at: str | None,
@@ -523,7 +512,6 @@ def _normalize_filters(
         raise AppError("VALIDATION_ERROR", "startAt must be earlier than or equal to endAt", 400)
     return {
         "taskId": task_id,
-        "groupId": group_id,
         "projectId": project_id,
         "profile": _clean_text(profile),
         "startAt": _clean_text(start_at),
@@ -551,7 +539,6 @@ def _sanitized_export(observation: dict[str, Any]) -> dict[str, Any]:
     filters = observation.get("filters") or {}
     safe_filters = {
         "taskRef": _opaque_ref("task", filters.get("taskId")),
-        "groupRef": _opaque_ref("group", filters.get("groupId")),
         "projectRef": _opaque_ref("project", filters.get("projectId")),
         "profileRef": _opaque_ref("profile", filters.get("profile")),
         "startAt": filters.get("startAt"),
@@ -563,7 +550,6 @@ def _sanitized_export(observation: dict[str, Any]) -> dict[str, Any]:
         comparisons.append(
             {
                 "taskRef": _opaque_ref("task", item.get("taskId")),
-                "groupRef": _opaque_ref("group", item.get("groupId")),
                 "projectRef": _opaque_ref("project", item.get("projectId")),
                 "profileRef": _opaque_ref("profile", item.get("profile")),
                 "standardResultCount": item.get("standardResultCount"),
@@ -644,8 +630,6 @@ def _synthetic_demo_snapshot() -> dict[str, list[dict[str, Any]]]:
             "taskId": task,
             "projectId": 99001,
             "projectName": "Stage 3A Synthetic Project",
-            "groupId": 9901,
-            "groupName": "Stage 3A Synthetic Group",
             "profile": "stage3a-synthetic-profile",
             "reviewKey": key,
             "requestedEngine": requested,
@@ -727,8 +711,6 @@ def _filter_synthetic_snapshot(
     for item in snapshot.get("results") or []:
         if filters["taskId"] is not None and int(item["taskId"]) != filters["taskId"]:
             continue
-        if filters["groupId"] is not None and int(item["groupId"]) != filters["groupId"]:
-            continue
         if filters["projectId"] is not None and int(item["projectId"]) != filters["projectId"]:
             continue
         if filters["profile"] and str(item.get("profile") or "") != filters["profile"]:
@@ -751,7 +733,6 @@ def _filter_synthetic_snapshot(
 def _public_filters(filters: dict[str, Any]) -> dict[str, Any]:
     return {
         "taskId": filters.get("taskId"),
-        "groupId": filters.get("groupId"),
         "projectId": filters.get("projectId"),
         "profile": filters.get("profile"),
         "startAt": filters.get("startAt"),

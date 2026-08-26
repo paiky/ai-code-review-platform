@@ -7,7 +7,6 @@ from threading import Lock
 from typing import Any
 
 from sqlalchemy import Select, func, inspect, or_, select, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.json_utils import page_response
@@ -15,8 +14,6 @@ from app.core.errors import AppError
 from app.core.json_utils import read_json, read_json_array
 from app.project_integration.models import (
     Project,
-    ProjectGroup,
-    ProjectGroupAiReviewModel,
     ProjectAiReviewModel,
     ProjectReviewSettings,
     ProjectTargetConfig,
@@ -72,18 +69,6 @@ DEFAULT_PUSH_REVIEW_POLICY = {
     "pushMaxDiffBytes": -1,
     "pushDebounceSeconds": 300,
 }
-DEFAULT_GROUP_AI_REVIEW_POLICY = {
-    "reviewEngine": "AGENT",
-    "agentSourceExportAllowed": True,
-    "aiReviewEnabled": True,
-    "triggerOnManual": True,
-    "triggerOnMr": True,
-    "triggerOnPush": True,
-    "triggerOnlyWhenRiskMatched": False,
-    "autoFixPreviewEnabled": True,
-    "autoFixPreviewSeverities": ["CRITICAL"],
-}
-
 PATH_DETECTION_RULES = [
     ("APP_IOS", ["ios/**", "**/*.swift", "**/*.m", "**/*.mm", "Podfile"]),
     ("APP_ANDROID", ["android/**", "**/*.kt", "**/*.kts", "build.gradle", "settings.gradle", "**/*.gradle"]),
@@ -104,55 +89,26 @@ _SCHEMA_ENSURED_ENGINE_IDS: set[int] = set()
 def ensure_project_config_schema(db: Session) -> None:
     engine_id = id(db.get_bind())
     if engine_id in _SCHEMA_ENSURED_ENGINE_IDS:
-        _ensure_project_group_ai_review_model_schema(db)
         _ensure_project_ai_review_model_schema(db)
         _ensure_project_review_settings_schema(db)
         return
     with _SCHEMA_LOCK:
         if engine_id in _SCHEMA_ENSURED_ENGINE_IDS:
-            _ensure_project_group_ai_review_model_schema(db)
             _ensure_project_ai_review_model_schema(db)
             _ensure_project_review_settings_schema(db)
             return
         connection = db.connection()
         inspector = inspect(connection)
-        project_groups_created = False
-        if not inspector.has_table("project_groups"):
-            ProjectGroup.__table__.create(connection, checkfirst=True)
-            project_groups_created = True
-        if not project_groups_created:
-            group_columns = {column["name"] for column in inspector.get_columns("project_groups")} if inspector.has_table("project_groups") else set()
-            _add_column_if_missing(db, group_columns, "project_groups", "default_code_quality_profile_code", "VARCHAR(64) NULL")
-            _add_column_if_missing(db, group_columns, "project_groups", "default_provider_code", "VARCHAR(64) NULL")
-            _add_column_if_missing(db, group_columns, "project_groups", "review_engine", "VARCHAR(32) NOT NULL DEFAULT 'AGENT'")
-            _add_column_if_missing(db, group_columns, "project_groups", "agent_source_export_allowed", "BOOLEAN NOT NULL DEFAULT TRUE")
-            _add_column_if_missing(db, group_columns, "project_groups", "ai_review_enabled", "BOOLEAN NOT NULL DEFAULT TRUE")
-            _add_column_if_missing(db, group_columns, "project_groups", "trigger_on_manual", "BOOLEAN NOT NULL DEFAULT TRUE")
-            _add_column_if_missing(db, group_columns, "project_groups", "trigger_on_mr", "BOOLEAN NOT NULL DEFAULT TRUE")
-            _add_column_if_missing(db, group_columns, "project_groups", "trigger_on_push", "BOOLEAN NOT NULL DEFAULT FALSE")
-            _add_column_if_missing(db, group_columns, "project_groups", "trigger_only_when_risk_matched", "BOOLEAN NOT NULL DEFAULT FALSE")
-            _add_column_if_missing(db, group_columns, "project_groups", "auto_fix_preview_enabled", "BOOLEAN NOT NULL DEFAULT FALSE")
-            _add_column_if_missing(db, group_columns, "project_groups", "auto_fix_preview_severities", "TEXT NULL")
-            _add_column_if_missing(db, group_columns, "project_groups", "push_branch_patterns", "TEXT NULL")
-            _add_column_if_missing(db, group_columns, "project_groups", "push_min_changed_files", "INT NULL DEFAULT 10")
-            _add_column_if_missing(db, group_columns, "project_groups", "push_min_diff_bytes", "INT NULL DEFAULT 30000")
-            _add_column_if_missing(db, group_columns, "project_groups", "push_min_commit_count", "INT NULL DEFAULT 3")
-            _add_column_if_missing(db, group_columns, "project_groups", "push_max_changed_files", "INT NULL DEFAULT -1")
-            _add_column_if_missing(db, group_columns, "project_groups", "push_max_diff_bytes", "INT NULL DEFAULT -1")
-            _add_column_if_missing(db, group_columns, "project_groups", "push_debounce_seconds", "INT NULL DEFAULT 300")
         if not inspector.has_table("target_type_path_mappings"):
             TargetTypePathMapping.__table__.create(connection, checkfirst=True)
-        _ensure_project_group_ai_review_model_schema(db, inspector)
         _ensure_project_ai_review_model_schema(db, inspector)
         if not inspector.has_table("project_target_configs"):
             ProjectTargetConfig.__table__.create(connection, checkfirst=True)
         _ensure_project_review_settings_schema(db, inspector)
         project_columns = {column["name"] for column in inspector.get_columns("projects")} if inspector.has_table("projects") else set()
-        _add_column_if_missing(db, project_columns, "projects", "group_id", "BIGINT NULL")
         _add_column_if_missing(db, project_columns, "projects", "target_type", "VARCHAR(32) NULL")
         _add_column_if_missing(db, project_columns, "projects", "default_code_quality_profile_code", "VARCHAR(64) NULL")
         _ensure_nullable_column(db, inspector, "projects", "default_code_quality_profile_code", "VARCHAR(64)")
-        _add_column_if_missing(db, project_columns, "projects", "supported_target_types", "TEXT NULL")
         _add_column_if_missing(db, project_columns, "projects", "detected_target_types", "TEXT NULL")
         _add_column_if_missing(db, project_columns, "projects", "target_detection_json", "TEXT NULL")
         task_columns = {column["name"] for column in inspector.get_columns("review_tasks")} if inspector.has_table("review_tasks") else set()
@@ -165,14 +121,6 @@ def ensure_project_config_schema(db: Session) -> None:
         db.flush()
         _ensure_default_target_type_path_mappings(db)
         _SCHEMA_ENSURED_ENGINE_IDS.add(engine_id)
-
-
-def _ensure_project_group_ai_review_model_schema(db: Session, inspector=None) -> None:
-    inspector = inspector or inspect(db.connection())
-    if not inspector.has_table("project_group_ai_review_models"):
-        ProjectGroupAiReviewModel.__table__.create(db.connection(), checkfirst=True)
-        db.flush()
-
 
 
 def _ensure_project_ai_review_model_schema(db: Session, inspector=None) -> None:
@@ -257,47 +205,14 @@ def _ensure_default_target_type_path_mappings(db: Session) -> None:
     db.flush()
 
 
-def _ensure_default_project_group(db: Session) -> ProjectGroup:
-    group = db.scalars(select(ProjectGroup).where(ProjectGroup.group_code == "default")).first()
-    if group is None:
-        now = datetime.now()
-        group = ProjectGroup(
-            group_name="默认通用项目组",
-            group_code="default",
-            default_code_quality_profile_code=None,
-            default_provider_code=None,
-            **_ai_review_policy_columns({}),
-            **_push_policy_columns({}),
-            status="ENABLED",
-            description="系统默认项目组",
-            created_at=now,
-            updated_at=now,
-        )
-        db.add(group)
-        db.flush()
-    elif group.group_name == "默认项目组":
-        group.group_name = "默认通用项目组"
-        group.updated_at = datetime.now()
-        db.flush()
-    db.execute(text("UPDATE projects SET group_id = :group_id WHERE group_id IS NULL"), {"group_id": group.id})
-    return group
-
-
 def project_to_dict(project: Project) -> dict:
-    group = None
-    session = Session.object_session(project)
-    if session and project.group_id:
-        group = session.get(ProjectGroup, project.group_id)
     return {
         "id": project.id,
-        "groupId": project.group_id,
-        "groupName": group.group_name if group else None,
         "name": project.name,
         "gitProvider": project.git_provider,
         "gitProjectId": project.git_project_id,
         "repositoryUrl": project.repository_url,
         "targetType": effective_project_target_type(project),
-        "supportedTargetTypes": [effective_project_target_type(project)],
         "detectedTargetTypes": read_json_array(project.detected_target_types),
         "targetDetection": read_json(project.target_detection_json, None),
         "defaultTemplateCode": project.default_template_code,
@@ -309,7 +224,6 @@ def project_to_dict(project: Project) -> dict:
 
 def list_enabled_projects(
     db: Session,
-    group_id: int | None = None,
     target_type: str | None = None,
     keyword: str | None = None,
     notification_status: str | None = None,
@@ -324,14 +238,11 @@ def list_enabled_projects(
     ensure_project_config_schema(db)
     ensure_webhook_schema(db)
     ensure_defaults(db)
-    _ensure_default_project_group(db)
     db.commit()
 
     stmt: Select[tuple[Project]] = select(Project)
     if not include_disabled:
         stmt = stmt.where(Project.status == "ENABLED")
-    if group_id is not None:
-        stmt = stmt.where(Project.group_id == group_id)
     if target_type:
         stmt = stmt.where(Project.target_type == normalize_target_type(target_type))
     normalized_keyword = str(keyword or "").strip().lower()
@@ -684,24 +595,15 @@ def create_project(db: Session, request: dict) -> dict:
     ).first()
     if existing is not None:
         raise AppError("VALIDATION_ERROR", f"Project already exists: {git_provider}/{git_project_id}", 400)
-    group_id = request.get("groupId")
-    group = db.get(ProjectGroup, int(group_id)) if group_id is not None else _ensure_default_project_group(db)
-    if group is None:
-        raise AppError("RESOURCE_NOT_FOUND", f"Project group not found: {group_id}", 404)
-    if group.status != "ENABLED":
-        raise AppError("VALIDATION_ERROR", f"Project group is disabled: {group_id}", 400)
-    target_types = _requested_target_types(request)
-    primary = target_types[0]
+    primary = normalize_target_type(request.get("targetType"))
     defaults = TARGET_TYPE_DEFAULTS.get(primary, TARGET_TYPE_DEFAULTS["BACKEND"])
     now = datetime.now()
     project = Project(
-        group_id=group.id,
         name=name,
         git_provider=git_provider,
         git_project_id=git_project_id,
         repository_url=_blank_to_none(request.get("repositoryUrl")),
         target_type=primary,
-        supported_target_types=json.dumps([primary], ensure_ascii=False),
         detected_target_types=None,
         target_detection_json=None,
         default_template_code=request.get("defaultTemplateCode") or defaults["templateCode"],
@@ -716,7 +618,7 @@ def create_project(db: Session, request: dict) -> dict:
     db.add(project)
     db.flush()
     _create_default_project_review_settings(db, project)
-    _create_manual_target_configs(db, project, target_types)
+    _create_manual_target_config(db, project, primary)
     db.commit()
     return project_to_dict(project)
 
@@ -758,13 +660,11 @@ def upsert_gitlab_project(
     primary = detected_types[0]
     defaults = TARGET_TYPE_DEFAULTS.get(primary, TARGET_TYPE_DEFAULTS["BACKEND"])
     project = Project(
-        group_id=_ensure_default_project_group(db).id,
         name=project_name,
         git_provider="GITLAB",
         git_project_id=git_project_id,
         repository_url=repository_url,
         target_type=primary,
-        supported_target_types=json.dumps([primary], ensure_ascii=False),
         detected_target_types=json.dumps(detected_types, ensure_ascii=False),
         target_detection_json=json.dumps(detection, ensure_ascii=False),
         default_template_code=defaults["templateCode"],
@@ -815,177 +715,13 @@ def update_project_target_detection(
         for config in existing_configs:
             db.delete(config)
         db.flush()
-        _set_project_supported_target_type(db, project, primary)
+        _set_project_target_type(db, project, primary)
         project.default_template_code = defaults["templateCode"]
         project.default_code_quality_profile_code = defaults["profileCode"]
         _create_detected_target_configs(db, project, [primary])
     project.updated_at = datetime.now()
     db.flush()
     return project
-
-
-def list_project_groups(db: Session) -> dict:
-    ensure_project_config_schema(db)
-    _ensure_default_project_group(db)
-    db.commit()
-    groups = db.scalars(select(ProjectGroup).where(ProjectGroup.status == "ENABLED").order_by(ProjectGroup.id.asc())).all()
-    return page_response([project_group_to_dict(group) for group in groups], 1, len(groups), len(groups))
-
-
-def project_group_to_dict(group: ProjectGroup) -> dict:
-    session = Session.object_session(group)
-    dingtalk_webhooks = []
-    if session is not None:
-        from app.notification.repository import project_group_webhooks_to_dict
-
-        dingtalk_webhooks = project_group_webhooks_to_dict(session, int(group.id))
-    return {
-        "id": group.id,
-        "groupCode": group.group_code,
-        "groupName": group.group_name,
-        "defaultCodeQualityProfileCode": group.default_code_quality_profile_code,
-        "defaultProviderCode": group.default_provider_code,
-        "reviewEngine": "AGENT",
-        "agentSourceExportAllowed": True,
-        "aiReviewModels": list_project_group_ai_review_models(session, int(group.id), include_fallback=True)
-        if session is not None
-        else [],
-        "dingtalkWebhooks": dingtalk_webhooks,
-        "enabledDingtalkWebhookCount": len([item for item in dingtalk_webhooks if item.get("enabled")]),
-        "status": group.status,
-        "description": group.description,
-        **ai_review_policy_to_dict(group),
-        **push_policy_to_dict(group),
-    }
-
-
-def list_project_group_ai_review_models(
-    db: Session | None,
-    group_id: int,
-    *,
-    include_fallback: bool = True,
-) -> list[dict[str, Any]]:
-    if db is None:
-        return []
-    _ensure_project_group_ai_review_model_schema(db)
-    group = db.get(ProjectGroup, group_id)
-    records = db.scalars(
-        select(ProjectGroupAiReviewModel)
-        .where(ProjectGroupAiReviewModel.group_id == group_id)
-        .order_by(ProjectGroupAiReviewModel.sort_order.asc(), ProjectGroupAiReviewModel.id.asc())
-    ).all()
-    items = [project_group_ai_review_model_to_dict(record) for record in records]
-    if items or not include_fallback or group is None or not _blank_to_none(group.default_provider_code):
-        return items
-    provider_code = _blank_to_none(group.default_provider_code)
-    review_key = make_ai_review_model_key(provider_code or "default", None, 0)
-    return [
-        {
-            "id": None,
-            "groupId": group_id,
-            "reviewKey": review_key,
-            "providerCode": provider_code,
-            "modelName": None,
-            "displayName": provider_code,
-            "enabled": True,
-            "sortOrder": 10,
-            "fallback": True,
-        }
-    ]
-
-
-def project_group_ai_review_model_to_dict(record: ProjectGroupAiReviewModel) -> dict[str, Any]:
-    return {
-        "id": record.id,
-        "groupId": record.group_id,
-        "reviewKey": record.review_key,
-        "providerCode": record.provider_code,
-        "modelName": record.model_name,
-        "displayName": record.display_name,
-        "enabled": bool(record.enabled),
-        "sortOrder": int(record.sort_order or 0),
-    }
-
-
-def create_project_group(db: Session, request: dict) -> dict:
-    ensure_project_config_schema(db)
-    now = datetime.now()
-    group_name = str(request.get("groupName") or request.get("name") or "").strip()
-    group_code = _blank_to_none(request.get("groupCode"))
-    if not group_name:
-        raise AppError("VALIDATION_ERROR", "groupName is required", 400)
-    if not group_code:
-        raise AppError("VALIDATION_ERROR", "groupCode is required", 400)
-    _assert_group_code_available(db, group_code)
-    group = ProjectGroup(
-        group_name=group_name,
-        group_code=group_code,
-        default_code_quality_profile_code=_blank_to_none(request.get("defaultCodeQualityProfileCode")),
-        default_provider_code=_blank_to_none(request.get("defaultProviderCode")),
-        **_ai_review_policy_columns(request),
-        **_push_policy_columns(request),
-        status=request.get("status") or "ENABLED",
-        description=_blank_to_none(request.get("description")),
-        created_at=now,
-        updated_at=now,
-    )
-    db.add(group)
-    try:
-        if "dingtalkWebhooks" in request:
-            from app.notification.repository import upsert_webhooks
-
-            db.flush()
-            upsert_webhooks(db, request.get("dingtalkWebhooks") or [], int(group.id))
-        if "aiReviewModels" in request:
-            db.flush()
-            _replace_project_group_ai_review_models(db, group, request.get("aiReviewModels") or [])
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise AppError("VALIDATION_ERROR", f"Project group code already exists: {group_code}", 400) from exc
-    return project_group_to_dict(group)
-
-
-def update_project_group(db: Session, group_id: int, request: dict) -> dict:
-    ensure_project_config_schema(db)
-    group = db.get(ProjectGroup, group_id)
-    if group is None:
-        raise AppError("RESOURCE_NOT_FOUND", f"Project group not found: {group_id}", 404)
-    if "groupName" in request or "name" in request:
-        group.group_name = str(request.get("groupName") or request.get("name") or "").strip()
-        if not group.group_name:
-            raise AppError("VALIDATION_ERROR", "groupName is required", 400)
-    if "groupCode" in request:
-        next_code = _blank_to_none(request.get("groupCode"))
-        if not next_code:
-            raise AppError("VALIDATION_ERROR", "groupCode is required", 400)
-        _assert_default_group_code_not_changed(group, next_code)
-        _assert_group_code_available(db, next_code, exclude_group_id=group.id)
-        group.group_code = next_code
-    if "defaultProviderCode" in request:
-        group.default_provider_code = _blank_to_none(request.get("defaultProviderCode"))
-    if "defaultCodeQualityProfileCode" in request:
-        group.default_code_quality_profile_code = _blank_to_none(request.get("defaultCodeQualityProfileCode"))
-    _update_group_ai_review_policy(group, request)
-    _update_group_push_policy(group, request)
-    if "status" in request:
-        _assert_default_group_can_keep_status(group, request["status"])
-        group.status = request["status"]
-    if "description" in request:
-        group.description = _blank_to_none(request.get("description"))
-    if "dingtalkWebhooks" in request:
-        from app.notification.repository import upsert_webhooks
-
-        upsert_webhooks(db, request.get("dingtalkWebhooks") or [], int(group.id))
-    if "aiReviewModels" in request:
-        _replace_project_group_ai_review_models(db, group, request.get("aiReviewModels") or [])
-    group.updated_at = datetime.now()
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise AppError("VALIDATION_ERROR", f"Project group code already exists: {group.group_code}", 400) from exc
-    return project_group_to_dict(group)
 
 
 def list_target_type_path_mappings(db: Session) -> list[dict[str, Any]]:
@@ -1198,52 +934,6 @@ def resolve_project_review_profile_code(db: Session, project: Project, target_ty
     return defaults.get("profileCode")
 
 
-def push_policy_to_dict(group: ProjectGroup | None) -> dict[str, Any]:
-    return {
-        "pushBranchPatterns": read_json_array(getattr(group, "push_branch_patterns", None)) or list(DEFAULT_PUSH_REVIEW_POLICY["pushBranchPatterns"]),
-        "pushMinChangedFiles": _policy_int(getattr(group, "push_min_changed_files", None), "pushMinChangedFiles"),
-        "pushMinDiffBytes": _policy_int(getattr(group, "push_min_diff_bytes", None), "pushMinDiffBytes"),
-        "pushMinCommitCount": _policy_int(getattr(group, "push_min_commit_count", None), "pushMinCommitCount"),
-        "pushMaxChangedFiles": _policy_int(getattr(group, "push_max_changed_files", None), "pushMaxChangedFiles"),
-        "pushMaxDiffBytes": _policy_int(getattr(group, "push_max_diff_bytes", None), "pushMaxDiffBytes"),
-        "pushDebounceSeconds": _policy_int(getattr(group, "push_debounce_seconds", None), "pushDebounceSeconds"),
-    }
-
-
-def ai_review_policy_to_dict(group: ProjectGroup | None) -> dict[str, Any]:
-    return {
-        "reviewEngine": "AGENT",
-        "agentSourceExportAllowed": True,
-        "aiReviewEnabled": True,
-        "triggerOnManual": True,
-        "triggerOnMr": _policy_bool(getattr(group, "trigger_on_mr", None), "triggerOnMr"),
-        "triggerOnPush": _policy_bool(getattr(group, "trigger_on_push", None), "triggerOnPush"),
-        "triggerOnlyWhenRiskMatched": _policy_bool(
-            getattr(group, "trigger_only_when_risk_matched", None),
-            "triggerOnlyWhenRiskMatched",
-        ),
-        "autoFixPreviewEnabled": _policy_bool(getattr(group, "auto_fix_preview_enabled", None), "autoFixPreviewEnabled"),
-        "autoFixPreviewSeverities": read_json_array(getattr(group, "auto_fix_preview_severities", None))
-        or list(DEFAULT_GROUP_AI_REVIEW_POLICY["autoFixPreviewSeverities"]),
-    }
-
-
-def update_project_group_binding(db: Session, project_id: int, request: dict) -> dict:
-    project = find_project_by_id(db, project_id)
-    if project is None:
-        raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
-    group_id = request.get("groupId")
-    group = db.get(ProjectGroup, int(group_id)) if group_id is not None else None
-    if group_id is not None and group is None:
-        raise AppError("RESOURCE_NOT_FOUND", f"Project group not found: {group_id}", 404)
-    if group is not None and group.status != "ENABLED":
-        raise AppError("VALIDATION_ERROR", f"Project group is disabled: {group_id}", 400)
-    project.group_id = group.id if group else None
-    project.updated_at = datetime.now()
-    db.commit()
-    return project_to_dict(project)
-
-
 def list_project_target_configs(db: Session, project_id: int) -> list[dict]:
     project = find_project_by_id(db, project_id)
     if project is None:
@@ -1319,7 +1009,7 @@ def upsert_project_target_config(db: Session, project_id: int, target_type: str,
     ).all():
         existing.enabled = existing is config
         existing.updated_at = now
-    _set_project_supported_target_type(db, project, normalized)
+    _set_project_target_type(db, project, normalized)
     db.commit()
     return target_config_to_dict(config)
 
@@ -1350,7 +1040,7 @@ def ensure_default_target_configs(db: Session, project: Project) -> None:
         existing_configs.append(selected)
     for config in existing_configs:
         config.enabled = config is selected
-    _set_project_supported_target_type(db, project, target_type)
+    _set_project_target_type(db, project, target_type)
     db.flush()
 
 
@@ -1509,7 +1199,7 @@ def update_project_configuration(
         for item in configs:
             item.enabled = item is config
             item.updated_at = now
-        _set_project_supported_target_type(db, project, target_type)
+        _set_project_target_type(db, project, target_type)
         project.default_template_code = config.template_code
         project.default_code_quality_profile_code = config.code_quality_profile_code
         project.default_code_quality_provider_code = config.provider_code
@@ -1725,7 +1415,7 @@ def apply_project_target_type_auto_detection(
             config.enabled = config is selected
             config.updated_at = now
 
-        _set_project_supported_target_type(db, project, target_type)
+        _set_project_target_type(db, project, target_type)
         project.default_template_code = defaults["templateCode"]
         project.default_code_quality_profile_code = defaults["profileCode"]
         project.default_code_quality_provider_code = None
@@ -2004,10 +1694,7 @@ def _reminder_card_enabled(target_type: str, config: ProjectTargetConfig | None,
 
 
 def effective_project_target_type(project: Project) -> str:
-    if _blank_to_none(project.target_type):
-        return normalize_target_type(project.target_type)
-    legacy_types = read_json_array(project.supported_target_types)
-    return normalize_target_type(legacy_types[0] if legacy_types else None)
+    return normalize_target_type(project.target_type)
 
 
 def normalize_target_type(value: str | None) -> str:
@@ -2117,71 +1804,15 @@ def _slug(value: str | None) -> str:
     return text_value or "default"
 
 
-def _replace_project_group_ai_review_models(
-    db: Session,
-    group: ProjectGroup,
-    raw_items: list[dict[str, Any]],
-) -> None:
-    _ensure_project_group_ai_review_model_schema(db)
-    for record in db.scalars(
-        select(ProjectGroupAiReviewModel).where(ProjectGroupAiReviewModel.group_id == group.id)
-    ).all():
-        db.delete(record)
-    # Flush deletes before inserting replacement rows, otherwise MySQL unique
-    # constraints can see the old and new review_key values at the same time.
-    db.flush()
-    now = datetime.now()
-    seen: set[str] = set()
-    seen_provider_models: set[tuple[str, str | None]] = set()
-    for index, raw_item in enumerate(raw_items or []):
-        if not isinstance(raw_item, dict):
-            raise AppError("VALIDATION_ERROR", "aiReviewModels must contain objects", 400)
-        provider_code = _blank_to_none(raw_item.get("providerCode"))
-        if not provider_code:
-            raise AppError("VALIDATION_ERROR", "aiReviewModels.providerCode is required", 400)
-        model_name = _blank_to_none(raw_item.get("modelName"))
-        provider_model_key = (provider_code, model_name)
-        if provider_model_key in seen_provider_models:
-            continue
-        seen_provider_models.add(provider_model_key)
-        review_key = _blank_to_none(raw_item.get("reviewKey")) or make_ai_review_model_key(
-            provider_code,
-            model_name,
-            index,
-        )
-        if review_key in seen:
-            review_key = make_ai_review_model_key(provider_code, f"{model_name or 'default'}-{index + 1}", index)
-        seen.add(review_key)
-        db.add(
-            ProjectGroupAiReviewModel(
-                group_id=group.id,
-                review_key=review_key,
-                provider_code=provider_code,
-                model_name=model_name,
-                display_name=_blank_to_none(raw_item.get("displayName")),
-                enabled=bool(raw_item.get("enabled", True)),
-                sort_order=int(raw_item.get("sortOrder") if raw_item.get("sortOrder") is not None else (index + 1) * 10),
-                created_at=now,
-                updated_at=now,
-            )
-        )
-    db.flush()
-
-
 def _path_matches(path: str, pattern: str) -> bool:
     normalized_path = path.replace("\\", "/")
     normalized_pattern = str(pattern or "").replace("\\", "/")
     return fnmatchcase(normalized_path, normalized_pattern)
 
 
-def _sync_project_supported_target_types(db: Session, project: Project) -> None:
-    _set_project_supported_target_type(db, project, effective_project_target_type(project))
-
-
-def _set_project_supported_target_type(db: Session, project: Project, target_type: str) -> None:
+def _set_project_target_type(db: Session, project: Project, target_type: str) -> None:
     normalized = normalize_target_type(target_type)
     project.target_type = normalized
-    project.supported_target_types = json.dumps([normalized], ensure_ascii=False)
     project.updated_at = datetime.now()
     db.flush()
 
@@ -2193,82 +1824,8 @@ def _blank_to_none(value) -> str | None:
     return text_value or None
 
 
-def _push_policy_columns(request: dict[str, Any]) -> dict[str, Any]:
-    policy = {**DEFAULT_PUSH_REVIEW_POLICY, **{key: request[key] for key in DEFAULT_PUSH_REVIEW_POLICY if key in request}}
-    return {
-        "push_branch_patterns": json.dumps(policy["pushBranchPatterns"] or [], ensure_ascii=False),
-        "push_min_changed_files": _int_or_default(policy.get("pushMinChangedFiles"), "pushMinChangedFiles"),
-        "push_min_diff_bytes": _int_or_default(policy.get("pushMinDiffBytes"), "pushMinDiffBytes"),
-        "push_min_commit_count": _int_or_default(policy.get("pushMinCommitCount"), "pushMinCommitCount"),
-        "push_max_changed_files": _int_or_default(policy.get("pushMaxChangedFiles"), "pushMaxChangedFiles"),
-        "push_max_diff_bytes": _int_or_default(policy.get("pushMaxDiffBytes"), "pushMaxDiffBytes"),
-        "push_debounce_seconds": _int_or_default(policy.get("pushDebounceSeconds"), "pushDebounceSeconds"),
-    }
-
-
-def _ai_review_policy_columns(request: dict[str, Any]) -> dict[str, Any]:
-    policy = {**DEFAULT_GROUP_AI_REVIEW_POLICY, **{key: request[key] for key in DEFAULT_GROUP_AI_REVIEW_POLICY if key in request}}
-    return {
-        "review_engine": "AGENT",
-        "agent_source_export_allowed": True,
-        "ai_review_enabled": True,
-        "trigger_on_manual": True,
-        "trigger_on_mr": bool(policy["triggerOnMr"]),
-        "trigger_on_push": bool(policy["triggerOnPush"]),
-        "trigger_only_when_risk_matched": bool(policy["triggerOnlyWhenRiskMatched"]),
-        "auto_fix_preview_enabled": bool(policy["autoFixPreviewEnabled"]),
-        "auto_fix_preview_severities": json.dumps(
-            _normalize_auto_fix_preview_severities(policy.get("autoFixPreviewSeverities")),
-            ensure_ascii=False,
-        ),
-    }
-
-
-def _update_group_ai_review_policy(group: ProjectGroup, request: dict[str, Any]) -> None:
-    fields = {
-        "triggerOnMr": "trigger_on_mr",
-        "triggerOnPush": "trigger_on_push",
-        "triggerOnlyWhenRiskMatched": "trigger_only_when_risk_matched",
-        "autoFixPreviewEnabled": "auto_fix_preview_enabled",
-    }
-    for json_field, column_name in fields.items():
-        if json_field in request:
-            setattr(group, column_name, bool(request[json_field]))
-    group.review_engine = "AGENT"
-    group.agent_source_export_allowed = True
-    group.ai_review_enabled = True
-    group.trigger_on_manual = True
-    if "autoFixPreviewSeverities" in request:
-        group.auto_fix_preview_severities = json.dumps(
-            _normalize_auto_fix_preview_severities(request.get("autoFixPreviewSeverities")),
-            ensure_ascii=False,
-        )
-
-
-def _update_group_push_policy(group: ProjectGroup, request: dict[str, Any]) -> None:
-    if "pushBranchPatterns" in request:
-        group.push_branch_patterns = json.dumps(request.get("pushBranchPatterns") or [], ensure_ascii=False)
-    fields = {
-        "pushMinChangedFiles": "push_min_changed_files",
-        "pushMinDiffBytes": "push_min_diff_bytes",
-        "pushMinCommitCount": "push_min_commit_count",
-        "pushMaxChangedFiles": "push_max_changed_files",
-        "pushMaxDiffBytes": "push_max_diff_bytes",
-        "pushDebounceSeconds": "push_debounce_seconds",
-    }
-    for json_field, column_name in fields.items():
-        if json_field in request:
-            setattr(group, column_name, _int_or_default(request.get(json_field), json_field))
-
-
 def _policy_int(value: Any, field: str) -> int:
     return _int_or_default(value, field)
-
-
-def _policy_bool(value: Any, field: str) -> bool:
-    if value is None:
-        return bool(DEFAULT_GROUP_AI_REVIEW_POLICY[field])
-    return bool(value)
 
 
 def _normalize_auto_fix_preview_severities(value: Any) -> list[str]:
@@ -2279,7 +1836,7 @@ def _normalize_auto_fix_preview_severities(value: Any) -> list[str]:
         normalized = str(item or "").strip().upper()
         if normalized in allowed and normalized not in result:
             result.append(normalized)
-    return result or list(DEFAULT_GROUP_AI_REVIEW_POLICY["autoFixPreviewSeverities"])
+    return result or ["MAJOR"]
 
 
 def _normalize_branch_patterns(value: Any) -> list[str]:
@@ -2332,63 +1889,28 @@ def _create_detected_target_configs(db: Session, project: Project, detected_type
     db.flush()
 
 
-def _create_manual_target_configs(db: Session, project: Project, target_types: list[str]) -> None:
-    single_target = len(target_types) == 1
+def _create_manual_target_config(db: Session, project: Project, target_type: str) -> None:
     now = datetime.now()
-    for target_type in target_types:
-        normalized = normalize_target_type(target_type)
-        defaults = TARGET_TYPE_DEFAULTS.get(normalized, TARGET_TYPE_DEFAULTS["GENERAL"])
-        db.add(
-            ProjectTargetConfig(
-                project_id=project.id,
-                target_type=normalized,
-                template_code=defaults["templateCode"],
-                code_quality_profile_code=defaults["profileCode"],
-                provider_code=project.default_code_quality_provider_code,
-                path_patterns=json.dumps(["**/*"] if single_target else defaults["pathPatterns"], ensure_ascii=False),
-                reminder_card_enabled=bool(defaults["reminderCardEnabled"]),
-                enabled=True,
-                description="手动预创建的端类型配置",
-                created_at=now,
-                updated_at=now,
-            )
+    normalized = normalize_target_type(target_type)
+    defaults = TARGET_TYPE_DEFAULTS.get(normalized, TARGET_TYPE_DEFAULTS["GENERAL"])
+    db.add(
+        ProjectTargetConfig(
+            project_id=project.id,
+            target_type=normalized,
+            template_code=defaults["templateCode"],
+            code_quality_profile_code=defaults["profileCode"],
+            provider_code=project.default_code_quality_provider_code,
+            path_patterns=json.dumps(defaults["pathPatterns"], ensure_ascii=False),
+            reminder_card_enabled=bool(defaults["reminderCardEnabled"]),
+            enabled=True,
+            description="手动预创建的端类型配置",
+            created_at=now,
+            updated_at=now,
         )
+    )
     db.flush()
-
-
-def _requested_target_types(request: dict) -> list[str]:
-    raw_values = request.get("targetTypes")
-    if not isinstance(raw_values, list):
-        raw_values = [request.get("targetType") or "BACKEND"]
-    normalized: list[str] = []
-    for value in raw_values:
-        target_type = normalize_target_type(value)
-        if target_type not in normalized:
-            normalized.append(target_type)
-    if len(normalized) > 1:
-        raise AppError("VALIDATION_ERROR", "A project must have exactly one targetType", 400)
-    return normalized or ["BACKEND"]
 
 
 def _append_unique_target(targets: list[str], target_type: str) -> None:
     if target_type not in targets:
         targets.append(target_type)
-
-
-def _assert_group_code_available(db: Session, group_code: str, exclude_group_id: int | None = None) -> None:
-    stmt = select(ProjectGroup).where(ProjectGroup.group_code == group_code)
-    if exclude_group_id is not None:
-        stmt = stmt.where(ProjectGroup.id != exclude_group_id)
-    existing = db.scalars(stmt).first()
-    if existing is not None:
-        raise AppError("VALIDATION_ERROR", f"Project group code already exists: {group_code}", 400)
-
-
-def _assert_default_group_code_not_changed(group: ProjectGroup, next_code: str) -> None:
-    if group.group_code == "default" and next_code != "default":
-        raise AppError("VALIDATION_ERROR", "Default project group code cannot be changed", 400)
-
-
-def _assert_default_group_can_keep_status(group: ProjectGroup, next_status: str) -> None:
-    if group.group_code == "default" and next_status != "ENABLED":
-        raise AppError("VALIDATION_ERROR", "Default project group cannot be disabled", 400)

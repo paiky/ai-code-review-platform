@@ -36,7 +36,7 @@ from app.code_quality.service import (
 )
 from app.core.errors import AppError
 from app.core.json_utils import utc_now
-from app.project_integration.models import Project, ProjectGroup
+from app.project_integration.models import Project
 from app.review_record.models import ReviewResult, ReviewTask
 
 
@@ -621,42 +621,6 @@ def test_agent_key_save_is_rejected_without_master_key(client: TestClient) -> No
     assert response.status_code == 409
     assert response.json()["code"] == "AGENT_ENCRYPTION_KEY_UNAVAILABLE"
     assert "sk-agent-secret" not in response.text
-
-
-def test_project_group_agent_review_policy_is_fixed_on(client: TestClient) -> None:
-    created = client.post(
-        "/api/project-groups",
-        json={
-            "groupName": "Agent 项目",
-            "groupCode": "agent",
-            "reviewEngine": "STANDARD",
-            "agentSourceExportAllowed": False,
-            "aiReviewEnabled": False,
-            "triggerOnManual": False,
-        },
-    )
-    assert created.status_code == 200
-    group = created.json()["data"]
-    assert group["reviewEngine"] == "AGENT"
-    assert group["agentSourceExportAllowed"] is True
-    assert group["aiReviewEnabled"] is True
-    assert group["triggerOnManual"] is True
-
-    updated = client.put(
-        f"/api/project-groups/{group['id']}",
-        json={
-            "reviewEngine": "STANDARD",
-            "agentSourceExportAllowed": False,
-            "aiReviewEnabled": False,
-            "triggerOnManual": False,
-        },
-    )
-    assert updated.status_code == 200
-    policy = updated.json()["data"]
-    assert policy["reviewEngine"] == "AGENT"
-    assert policy["agentSourceExportAllowed"] is True
-    assert policy["aiReviewEnabled"] is True
-    assert policy["triggerOnManual"] is True
 
 
 def test_agent_configuration_test_runs_through_worker_contract(
@@ -1264,19 +1228,6 @@ def test_worker_auth_claim_and_heartbeat(
     )
     assert heartbeat.status_code == 200
 
-    now = datetime.now()
-    group = ProjectGroup(
-        id=10,
-        group_name="Agent",
-        group_code="agent",
-        review_engine="AGENT",
-        agent_source_export_allowed=True,
-        status="ENABLED",
-        created_at=now,
-        updated_at=now,
-    )
-    db_session.add(group)
-    db_session.flush()
     run = create_agent_job(
         db_session,
         task_id=99,
@@ -3203,33 +3154,20 @@ def test_manual_agent_review_excludes_sensitive_file_and_reaches_worker_queue(
         json={"workerId": "worker-1"},
     )
     now = datetime.now()
-    group = ProjectGroup(
-        id=30,
-        group_name="Agent 项目组",
-        group_code="agent-manual",
-        default_code_quality_profile_code="backend-default-ai-review",
-        review_engine="AGENT",
-        agent_source_export_allowed=True,
-        ai_review_enabled=True,
-        trigger_on_manual=True,
-        status="ENABLED",
-        created_at=now,
-        updated_at=now,
-    )
     project = Project(
         id=301,
-        group_id=30,
         name="agent-demo",
         git_provider="GITLAB",
         git_project_id="301",
         repository_url="https://gitlab.example.com/demo/agent",
+        target_type="BACKEND",
         default_template_code="backend-default",
         default_code_quality_profile_code="backend-default-ai-review",
         status="ENABLED",
         created_at=now,
         updated_at=now,
     )
-    db_session.add_all([group, project])
+    db_session.add(project)
     db_session.commit()
 
     response = client.post(
@@ -3322,33 +3260,20 @@ def test_manual_agent_review_skips_when_all_files_are_sensitive(
         json={"workerId": "worker-sensitive"},
     )
     now = datetime.now()
-    group = ProjectGroup(
-        id=31,
-        group_name="Agent 敏感路径项目组",
-        group_code="agent-sensitive",
-        default_code_quality_profile_code="backend-default-ai-review",
-        review_engine="AGENT",
-        agent_source_export_allowed=True,
-        ai_review_enabled=True,
-        trigger_on_manual=True,
-        status="ENABLED",
-        created_at=now,
-        updated_at=now,
-    )
     project = Project(
         id=306,
-        group_id=31,
         name="agent-sensitive-demo",
         git_provider="GITLAB",
         git_project_id="306",
         repository_url="https://gitlab.example.com/demo/agent-sensitive",
+        target_type="BACKEND",
         default_template_code="backend-default",
         default_code_quality_profile_code="backend-default-ai-review",
         status="ENABLED",
         created_at=now,
         updated_at=now,
     )
-    db_session.add_all([group, project])
+    db_session.add(project)
     db_session.commit()
 
     response = client.post(
@@ -3421,25 +3346,13 @@ def test_webhook_task_can_append_agent_comparison_without_overwriting_standard(
         json={"workerId": "worker-comparison"},
     )
     now = datetime.now()
-    group = ProjectGroup(
-        id=40,
-        group_name="Agent 对照项目组",
-        group_code="agent-comparison",
-        default_code_quality_profile_code="backend-default-ai-review",
-        review_engine="STANDARD",
-        agent_source_export_allowed=True,
-        ai_review_enabled=True,
-        status="ENABLED",
-        created_at=now,
-        updated_at=now,
-    )
     project = Project(
         id=401,
-        group_id=40,
         name="agent-comparison-demo",
         git_provider="GITLAB",
         git_project_id="401",
         repository_url="https://gitlab.example.com/demo/agent-comparison",
+        target_type="BACKEND",
         default_template_code="backend-default",
         default_code_quality_profile_code="backend-default-ai-review",
         status="ENABLED",
@@ -3458,7 +3371,7 @@ def test_webhook_task_can_append_agent_comparison_without_overwriting_standard(
         created_at=now,
         updated_at=now,
     )
-    db_session.add_all([group, project, task])
+    db_session.add_all([project, task])
     db_session.flush()
     save_result(
         db_session,

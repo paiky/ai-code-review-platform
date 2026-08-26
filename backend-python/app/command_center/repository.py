@@ -103,21 +103,18 @@ def load_runtime_projection(
     active_limit: int,
     alert_limit: int,
     project_id: int | None,
-    group_id: int | None,
 ) -> RuntimeProjectionData:
     counts = load_runtime_base_counts(
         db,
         window_from=window_from,
         now=now,
         project_id=project_id,
-        group_id=group_id,
     )
     today_result_status_counts = _load_today_result_status_counts(
         db,
         today_from=today_from,
         now=now,
         project_id=project_id,
-        group_id=group_id,
     )
     candidate_limit = max(active_limit * 4, active_limit)
 
@@ -149,7 +146,6 @@ def load_runtime_projection(
         active_job_statement,
         CodeQualitySchedulerJob.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
     active_jobs = _rows(db, active_job_statement)
 
@@ -172,7 +168,6 @@ def load_runtime_projection(
         task_candidate_statement,
         ReviewTask.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
     task_candidates = _rows(db, task_candidate_statement)
 
@@ -190,7 +185,6 @@ def load_runtime_projection(
         result_candidate_statement,
         AiReviewResult.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
     result_candidates = _rows(db, result_candidate_statement)
 
@@ -239,24 +233,20 @@ def load_runtime_projection(
         window_from=window_from,
         alert_limit=alert_limit,
         project_id=project_id,
-        group_id=group_id,
     )
     lane_running_jobs = _load_lane_running_jobs(
         db,
         project_id=project_id,
-        group_id=group_id,
     )
     standard_next_queued_job = _load_next_lane_job(
         db,
         job_type="AI_REVIEW",
         project_id=project_id,
-        group_id=group_id,
     )
     agent_next_queued_job = _load_next_lane_job(
         db,
         job_type="AGENT_REVIEW",
         project_id=project_id,
-        group_id=group_id,
     )
 
     return RuntimeProjectionData(
@@ -288,7 +278,6 @@ def _load_today_result_status_counts(
     today_from: datetime,
     now: datetime,
     project_id: int | None,
-    group_id: int | None,
 ) -> dict[str, int]:
     statement = (
         select(
@@ -305,7 +294,6 @@ def _load_today_result_status_counts(
         statement,
         AiReviewResult.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
     return {
         str(row.get("status") or "UNKNOWN").strip().upper() or "UNKNOWN": int(
@@ -350,7 +338,6 @@ def _load_lane_running_jobs(
     db: Session,
     *,
     project_id: int | None,
-    group_id: int | None,
 ) -> list[dict[str, Any]]:
     statement = _lane_job_statement().where(
         CodeQualitySchedulerJob.job_type.in_(REVIEW_JOB_TYPES),
@@ -360,7 +347,6 @@ def _load_lane_running_jobs(
         statement,
         CodeQualitySchedulerJob.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
     return _rows(
         db,
@@ -376,7 +362,6 @@ def _load_next_lane_job(
     *,
     job_type: str,
     project_id: int | None,
-    group_id: int | None,
 ) -> dict[str, Any] | None:
     statement = _lane_job_statement().where(
         CodeQualitySchedulerJob.job_type == job_type,
@@ -386,7 +371,6 @@ def _load_next_lane_job(
         statement,
         CodeQualitySchedulerJob.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
     priority_order = (
         CodeQualitySchedulerJob.priority.desc()
@@ -409,7 +393,6 @@ def load_runtime_base_counts(
     window_from: datetime,
     now: datetime,
     project_id: int | None,
-    group_id: int | None,
 ) -> RuntimeBaseCounts:
     task_statement = (
         select(
@@ -439,7 +422,6 @@ def load_runtime_base_counts(
         task_statement,
         ReviewTask.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
     task_counts = _row(db, task_statement) or {}
 
@@ -527,7 +509,6 @@ def load_runtime_base_counts(
         job_statement,
         CodeQualitySchedulerJob.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
     job_counts = _row(db, job_statement) or {}
 
@@ -554,7 +535,6 @@ def load_governance_projection(
     *,
     window_from: datetime,
     project_id: int | None,
-    group_id: int | None,
 ) -> GovernanceProjectionData:
     rule_statement = (
         select(
@@ -571,7 +551,6 @@ def load_governance_projection(
         rule_statement,
         RuleReviewResult.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     preflight_statement = (
@@ -590,7 +569,6 @@ def load_governance_projection(
         preflight_statement,
         DeterministicCheckRun.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     finding_statement = (
@@ -606,7 +584,6 @@ def load_governance_projection(
         finding_statement,
         AiReviewResult.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     notification_statement = (
@@ -622,7 +599,6 @@ def load_governance_projection(
         notification_statement,
         ReviewTask.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     feedback_statement = select(
@@ -643,7 +619,6 @@ def load_governance_projection(
         feedback_statement,
         ReviewItemFeedback.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     evaluation_case_statement = select(
@@ -658,7 +633,6 @@ def load_governance_projection(
         evaluation_case_statement,
         EvaluationCase.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     evaluation_run_statement = select(
@@ -669,7 +643,6 @@ def load_governance_projection(
         evaluation_run_statement,
         EvaluationRun.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     policy_statement = select(
@@ -680,7 +653,6 @@ def load_governance_projection(
         policy_statement,
         ProjectReviewPolicy.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     acceptance_statement = select(
@@ -692,7 +664,6 @@ def load_governance_projection(
         acceptance_statement,
         ReviewQualityAcceptanceGate.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     preflight_rows = _rows(db, preflight_statement)
@@ -716,7 +687,6 @@ def load_governance_base_counts(
     db: Session,
     *,
     project_id: int | None,
-    group_id: int | None,
 ) -> GovernanceBaseCounts:
     pending_feedback_statement = (
         select(func.count())
@@ -727,14 +697,12 @@ def load_governance_base_counts(
         pending_feedback_statement,
         ReviewItemFeedback.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
     evaluation_case_statement = select(func.count()).select_from(EvaluationCase)
     evaluation_case_statement = _apply_project_filters(
         evaluation_case_statement,
         EvaluationCase.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
     return GovernanceBaseCounts(
         pending_feedback_count=_count(db, pending_feedback_statement),
@@ -751,7 +719,6 @@ def _load_tasks(db: Session, task_ids: list[int]) -> list[dict[str, Any]]:
             ReviewTask.id.label("task_id"),
             ReviewTask.project_id.label("project_id"),
             Project.name.label("project_name"),
-            Project.group_id.label("group_id"),
             Project.repository_url.label("repository_url"),
             ReviewTask.trigger_type.label("trigger_type"),
             ReviewTask.author_name.label("author_name"),
@@ -990,7 +957,6 @@ def _load_recent_alerts(
     window_from: datetime,
     alert_limit: int,
     project_id: int | None,
-    group_id: int | None,
 ) -> list[dict[str, Any]]:
     failed_jobs = (
         select(
@@ -1016,7 +982,6 @@ def _load_recent_alerts(
         failed_jobs,
         CodeQualitySchedulerJob.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     failed_runs = (
@@ -1041,7 +1006,6 @@ def _load_recent_alerts(
         failed_runs,
         ReviewTask.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     failed_notifications = (
@@ -1066,7 +1030,6 @@ def _load_recent_alerts(
         failed_notifications,
         ReviewTask.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     fallback_alerts = (
@@ -1091,7 +1054,6 @@ def _load_recent_alerts(
         fallback_alerts,
         AiReviewResult.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     critical_alerts = (
@@ -1115,7 +1077,6 @@ def _load_recent_alerts(
         critical_alerts,
         AiReviewResult.project_id,
         project_id=project_id,
-        group_id=group_id,
     )
 
     combined = union_all(
@@ -1183,13 +1144,9 @@ def _apply_project_filters(
     project_column: object,
     *,
     project_id: int | None,
-    group_id: int | None,
 ) -> Select:
     if project_id is not None:
         statement = statement.where(project_column == project_id)
-    if group_id is not None:
-        group_project_ids = select(Project.id).where(Project.group_id == group_id)
-        statement = statement.where(project_column.in_(group_project_ids))
     return statement
 
 

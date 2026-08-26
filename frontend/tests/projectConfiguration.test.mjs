@@ -85,7 +85,8 @@ test('replaces the visible project-group settings workspace with a modular proje
   assert.match(navigationSource, /label: '项目 \/ 端类型配置'/);
   assert.match(pageSource, /项目通知与 Review 配置/);
   assert.match(pageSource, /项目配置[\s\S]*钉钉机器人库/);
-  assert.match(pageSource, /MIGRATION_NOTICE_KEY/);
+  assert.doesNotMatch(pageSource, /MIGRATION_NOTICE_KEY/);
+  assert.doesNotMatch(pageSource, /项目组配置已升级/);
 });
 
 test('uses server filters and pagination and keeps selection scoped to the current result page', () => {

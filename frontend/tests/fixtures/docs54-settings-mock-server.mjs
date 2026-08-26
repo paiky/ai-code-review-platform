@@ -510,10 +510,6 @@ const server = http.createServer(async (request, reply) => {
     send(reply, 200, []);
     return;
   }
-  if (request.method === 'GET' && url.pathname === '/api/project-groups') {
-    send(reply, 200, { items: [] });
-    return;
-  }
   if (request.method === 'GET' && url.pathname === '/api/projects') {
     send(reply, 200, { items: [] });
     return;

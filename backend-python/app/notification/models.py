@@ -11,7 +11,6 @@ class NotificationWebhook(Base):
     __tablename__ = "notification_webhooks"
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
-    project_group_id: Mapped[int | None] = mapped_column(BigInteger)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     channel: Mapped[str] = mapped_column(String(32), nullable=False, default="DINGTALK")
     webhook_url: Mapped[str] = mapped_column(String(1024), nullable=False)

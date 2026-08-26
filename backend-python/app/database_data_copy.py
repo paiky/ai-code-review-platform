@@ -157,12 +157,6 @@ def sanitize_local_database(engine) -> dict[str, int]:
             "dingtalk_notification_enabled = FALSE, review_enabled = FALSE",
         )
         execute_if_table(
-            "project_groups",
-            "UPDATE project_groups SET ai_review_enabled = FALSE, "
-            "trigger_on_manual = FALSE, trigger_on_mr = FALSE, "
-            "trigger_on_push = FALSE, auto_fix_preview_enabled = FALSE",
-        )
-        execute_if_table(
             "code_quality_agent_settings",
             "UPDATE code_quality_agent_settings SET enabled = FALSE, "
             "runtime_type = 'CLAUDE_CODE_DEEPSEEK', "

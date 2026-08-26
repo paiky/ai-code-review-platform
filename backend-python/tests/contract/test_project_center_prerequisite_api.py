@@ -307,7 +307,6 @@ def test_restore_auto_detection_previews_and_applies_without_touching_relations(
     db_session.expire_all()
     restored_project = db_session.get(Project, project_id)
     assert restored_project.target_type == "WEB_PC"
-    assert restored_project.supported_target_types == '["WEB_PC"]'
     configs = db_session.scalars(
         select(ProjectTargetConfig).where(
             ProjectTargetConfig.project_id == project_id

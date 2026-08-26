@@ -18,6 +18,19 @@ BOOTSTRAP_DIR = Path(__file__).resolve().parents[1] / "migrations" / "bootstrap_
 MIGRATION_TABLE = "schema_migrations"
 MIGRATION_LOCK_PREFIX = "ai-code-review-schema-migrations"
 BASELINE_VERSION = 47
+DESTRUCTIVE_MIGRATION_VERSIONS = frozenset({56})
+PROJECT_TARGET_TYPES = frozenset(
+    {"BACKEND", "WEB_PC", "APP_IOS", "APP_ANDROID", "APP_CROSS_PLATFORM", "GENERAL"}
+)
+SYSTEM_TARGET_CONFIG_DESCRIPTIONS = frozenset(
+    {
+        "默认后端端类型配置",
+        "自动识别创建的端类型配置",
+        "路径映射创建的端类型配置",
+        "恢复自动识别的端类型配置",
+        "单端类型默认配置",
+    }
+)
 COMMAND_CENTER_INDEX_UPGRADES = (
     ("review_tasks", "idx_review_tasks_cc_created", ("created_at", "id")),
     ("code_quality_review_results", "idx_cq_results_cc_updated", ("updated_at", "id")),
@@ -84,6 +97,25 @@ class IndexRequirement:
 
 
 @dataclass(frozen=True)
+class ProjectTargetMigrationChange:
+    project_id: int
+    current_target_type: str | None
+    selected_target_type: str
+    selected_config_id: int
+    disabled_config_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class ProjectTargetMigrationPreflight:
+    migration_version: int
+    projects_scanned: int
+    projects_aligned: int
+    projects_reconciled: int
+    configs_disabled: int
+    changes: tuple[ProjectTargetMigrationChange, ...]
+
+
+@dataclass(frozen=True)
 class MigrationStatus:
     database_empty: bool
     ledger_exists: bool
@@ -91,6 +123,7 @@ class MigrationStatus:
     applied: tuple[AppliedMigration, ...]
     pending: tuple[MigrationFile, ...]
     baseline_missing: tuple[str, ...]
+    preflights: tuple[ProjectTargetMigrationPreflight, ...] = ()
 
 
 def main(argv: list[str] | None = None, *, database_url: str | None = None) -> None:
@@ -101,11 +134,20 @@ def main(argv: list[str] | None = None, *, database_url: str | None = None) -> N
         default="apply",
         choices=("status", "dry-run", "baseline", "apply", "verify"),
     )
+    parser.add_argument(
+        "--allow-destructive",
+        action="store_true",
+        help="Allow explicitly gated destructive schema migrations after backup and acceptance",
+    )
     arguments = parser.parse_args(argv)
     url = database_url or get_settings().database_url
     engine = create_migration_engine(url)
     try:
-        result = run_migration_action(engine, arguments.action)
+        result = run_migration_action(
+            engine,
+            arguments.action,
+            allow_destructive=arguments.allow_destructive,
+        )
         print_migration_result(arguments.action, result)
     except MigrationError as exception:
         raise SystemExit(f"Database migration refused: {exception}") from exception
@@ -117,11 +159,29 @@ def main(argv: list[str] | None = None, *, database_url: str | None = None) -> N
         engine.dispose()
 
 
-def run_migration_action(engine, action: str) -> MigrationStatus:
+def run_migration_action(
+    engine,
+    action: str,
+    *,
+    allow_destructive: bool = False,
+) -> MigrationStatus:
     _assert_mysql(engine)
     migrations = discover_migrations()
     if action in {"status", "dry-run", "verify"}:
         status = inspect_migration_status(engine, migrations)
+        if action == "dry-run":
+            status = MigrationStatus(
+                database_empty=status.database_empty,
+                ledger_exists=status.ledger_exists,
+                baseline_required=status.baseline_required,
+                applied=status.applied,
+                pending=status.pending,
+                baseline_missing=status.baseline_missing,
+                preflights=inspect_pending_migration_preconditions(
+                    engine,
+                    status.pending,
+                ),
+            )
         if action == "verify":
             _assert_verified(status)
         return status
@@ -129,7 +189,11 @@ def run_migration_action(engine, action: str) -> MigrationStatus:
         baseline_existing_database(engine, migrations)
         return inspect_migration_status(engine, migrations)
     if action == "apply":
-        apply_pending_migrations(engine, migrations)
+        apply_pending_migrations(
+            engine,
+            migrations,
+            allow_destructive=allow_destructive,
+        )
         return inspect_migration_status(engine, migrations)
     raise MigrationError(f"Unsupported migration action: {action}")
 
@@ -197,7 +261,10 @@ def inspect_migration_status(
 
 
 def apply_pending_migrations(
-    engine, migrations: tuple[MigrationFile, ...] | None = None
+    engine,
+    migrations: tuple[MigrationFile, ...] | None = None,
+    *,
+    allow_destructive: bool = False,
 ) -> list[int]:
     migration_files = migrations or discover_migrations()
     applied_versions: list[int] = []
@@ -219,6 +286,18 @@ def apply_pending_migrations(
             for migration in migration_files:
                 if migration.version in recorded:
                     continue
+                preflight = _inspect_migration_precondition(connection, migration)
+                if preflight is not None:
+                    _print_project_target_preflight(preflight)
+                if (
+                    migration.version in DESTRUCTIVE_MIGRATION_VERSIONS
+                    and not allow_destructive
+                ):
+                    print(
+                        f"Deferred destructive migration V{migration.version}; "
+                        "rerun with --allow-destructive after backup and acceptance"
+                    )
+                    break
                 started = time.perf_counter()
                 try:
                     sql = migration.path.read_text(encoding="utf-8")
@@ -241,6 +320,211 @@ def apply_pending_migrations(
         finally:
             _release_migration_lock(connection, lock_name)
     return applied_versions
+
+
+def inspect_pending_migration_preconditions(
+    engine,
+    migrations: tuple[MigrationFile, ...],
+) -> tuple[ProjectTargetMigrationPreflight, ...]:
+    previews: list[ProjectTargetMigrationPreflight] = []
+    with engine.connect() as connection:
+        for migration in migrations:
+            if migration.version not in {55, 56}:
+                continue
+            preview = _inspect_migration_precondition(connection, migration)
+            if preview is not None:
+                previews.append(preview)
+                # Later project-target checks depend on the preceding migration's writes.
+                break
+    return tuple(previews)
+
+
+def _inspect_migration_precondition(
+    connection,
+    migration: MigrationFile,
+) -> ProjectTargetMigrationPreflight | None:
+    if migration.version not in {55, 56}:
+        return None
+    inspector = inspect(connection)
+    if not (
+        inspector.has_table("projects")
+        and inspector.has_table("project_target_configs")
+    ):
+        return None
+    project_columns = {
+        str(column.get("name") or "")
+        for column in inspector.get_columns("projects")
+    }
+    if "target_type" not in project_columns:
+        return None
+    rows = list(
+        connection.execute(
+            text(
+                """
+                SELECT
+                  p.id AS project_id,
+                  p.target_type AS project_target_type,
+                  p.default_template_code AS project_template_code,
+                  p.default_code_quality_profile_code AS project_profile_code,
+                  p.default_code_quality_provider_code AS project_provider_code,
+                  c.id AS config_id,
+                  c.target_type AS config_target_type,
+                  c.template_code AS config_template_code,
+                  c.code_quality_profile_code AS config_profile_code,
+                  c.provider_code AS config_provider_code,
+                  c.description AS config_description
+                FROM projects p
+                LEFT JOIN project_target_configs c
+                  ON c.project_id = p.id
+                 AND c.enabled = TRUE
+                ORDER BY p.id ASC, c.id ASC
+                """
+            )
+        ).mappings()
+    )
+    grouped: dict[int, dict] = {}
+    for row in rows:
+        project_id = int(row["project_id"])
+        project = grouped.setdefault(
+            project_id,
+            {
+                "target_type": row["project_target_type"],
+                "template_code": row["project_template_code"],
+                "profile_code": row["project_profile_code"],
+                "provider_code": row["project_provider_code"],
+                "configs": [],
+            },
+        )
+        if row["config_id"] is not None:
+            project["configs"].append(
+                {
+                    "id": int(row["config_id"]),
+                    "target_type": row["config_target_type"],
+                    "template_code": row["config_template_code"],
+                    "profile_code": row["config_profile_code"],
+                    "provider_code": row["config_provider_code"],
+                    "description": row["config_description"],
+                }
+            )
+
+    issues: list[str] = []
+    aligned = 0
+    reconciled = 0
+    disabled = 0
+    changes: list[ProjectTargetMigrationChange] = []
+    for project_id, project in grouped.items():
+        configs = project["configs"]
+        if migration.version == 56:
+            if len(configs) != 1:
+                issues.append(
+                    f"project {project_id} has {len(configs)} enabled target configs"
+                )
+                continue
+            selected = configs[0]
+            if project["target_type"] != selected["target_type"]:
+                issues.append(
+                    f"project {project_id} targetType={project['target_type'] or 'NULL'} "
+                    f"does not match enabled config {selected['target_type'] or 'NULL'}"
+                )
+                continue
+        else:
+            manual_configs = [
+                config
+                for config in configs
+                if str(config["description"] or "")
+                not in SYSTEM_TARGET_CONFIG_DESCRIPTIONS
+            ]
+            if len(manual_configs) > 1:
+                candidates = ",".join(
+                    str(config["target_type"] or "NULL")
+                    for config in manual_configs
+                )
+                issues.append(
+                    f"project {project_id} has multiple manual enabled target configs [{candidates}]"
+                )
+                continue
+            if len(manual_configs) == 1:
+                selected = manual_configs[0]
+            elif len(configs) == 1:
+                selected = configs[0]
+            elif not configs:
+                issues.append(f"project {project_id} has no enabled target config")
+                continue
+            else:
+                candidates = ",".join(
+                    str(config["target_type"] or "NULL") for config in configs
+                )
+                issues.append(
+                    f"project {project_id} has multiple automatic enabled target configs [{candidates}]"
+                )
+                continue
+
+        selected_target = str(selected["target_type"] or "")
+        if selected_target not in PROJECT_TARGET_TYPES:
+            issues.append(
+                f"project {project_id} has invalid enabled target config {selected_target or 'NULL'}"
+            )
+            continue
+        needs_reconciliation = (
+            project["target_type"] != selected_target
+            or project["template_code"] != selected["template_code"]
+            or project["profile_code"] != selected["profile_code"]
+            or project["provider_code"] != selected["provider_code"]
+            or len(configs) != 1
+        )
+        if needs_reconciliation:
+            reconciled += 1
+            disabled_config_ids = tuple(
+                int(config["id"])
+                for config in configs
+                if config["id"] != selected["id"]
+            )
+            disabled += len(disabled_config_ids)
+            changes.append(
+                ProjectTargetMigrationChange(
+                    project_id=project_id,
+                    current_target_type=project["target_type"],
+                    selected_target_type=selected_target,
+                    selected_config_id=int(selected["id"]),
+                    disabled_config_ids=disabled_config_ids,
+                )
+            )
+        else:
+            aligned += 1
+
+    if issues:
+        details = "; ".join(issues[:20])
+        suffix = f"; and {len(issues) - 20} more" if len(issues) > 20 else ""
+        raise MigrationError(
+            f"V{migration.version} project target preflight failed: {details}{suffix}"
+        )
+    return ProjectTargetMigrationPreflight(
+        migration_version=migration.version,
+        projects_scanned=len(grouped),
+        projects_aligned=aligned,
+        projects_reconciled=reconciled,
+        configs_disabled=disabled,
+        changes=tuple(changes),
+    )
+
+
+def _print_project_target_preflight(
+    preflight: ProjectTargetMigrationPreflight,
+) -> None:
+    print(
+        f"V{preflight.migration_version} project target preflight: "
+        f"projects={preflight.projects_scanned} "
+        f"aligned={preflight.projects_aligned} "
+        f"reconcile={preflight.projects_reconciled} "
+        f"disableConfigs={preflight.configs_disabled}"
+    )
+    for change in preflight.changes:
+        disabled_ids = ",".join(str(item) for item in change.disabled_config_ids) or "none"
+        print(
+            f"V{preflight.migration_version} project={change.project_id} "
+            f"target={change.current_target_type or 'NULL'}->{change.selected_target_type} "
+            f"selectedConfig={change.selected_config_id} disableConfigs={disabled_ids}"
+        )
 
 
 def _migration_execution_statements(
@@ -577,6 +861,17 @@ def build_baseline_requirements(
     for migration in migrations:
         sql = migration.path.read_text(encoding="utf-8")
         for statement in split_sql_statements(sql):
+            drop_table_match = re.match(
+                r"\s*DROP\s+TABLE(?:\s+IF\s+EXISTS)?\s+`?([A-Za-z0-9_]+)`?\s*$",
+                statement,
+                flags=re.IGNORECASE,
+            )
+            if drop_table_match:
+                table_name = drop_table_match.group(1)
+                tables.discard(table_name)
+                columns.pop(table_name, None)
+                indexes.pop(table_name, None)
+                continue
             create_match = re.match(
                 r"\s*CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+`?([A-Za-z0-9_]+)`?\s*\((.*)\)",
                 statement,
@@ -606,6 +901,13 @@ def build_baseline_requirements(
                     flags=re.IGNORECASE,
                 )
             )
+            columns[table_name].difference_update(
+                re.findall(
+                    r"\bDROP\s+COLUMN\s+`?([A-Za-z0-9_]+)`?",
+                    body,
+                    flags=re.IGNORECASE,
+                )
+            )
             _apply_alter_index_requirements(
                 body, indexes.setdefault(table_name, set())
             )
@@ -623,6 +925,19 @@ def build_baseline_index_requirements(
     for migration in migrations:
         sql = migration.path.read_text(encoding="utf-8")
         for statement in split_sql_statements(sql):
+            drop_table_match = re.match(
+                r"\s*DROP\s+TABLE(?:\s+IF\s+EXISTS)?\s+`?([A-Za-z0-9_]+)`?\s*$",
+                statement,
+                flags=re.IGNORECASE,
+            )
+            if drop_table_match:
+                table_name = drop_table_match.group(1)
+                requirements = {
+                    key: value
+                    for key, value in requirements.items()
+                    if key[0] != table_name
+                }
+                continue
             create_match = re.match(
                 r"\s*CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+`?([A-Za-z0-9_]+)`?\s*\((.*)\)",
                 statement,
@@ -709,6 +1024,8 @@ def print_migration_result(action: str, status: MigrationStatus) -> None:
         f"Migration action={action} current=V{current} pending={pending} "
         f"ledger={'present' if status.ledger_exists else 'absent'}"
     )
+    for preflight in status.preflights:
+        _print_project_target_preflight(preflight)
     if status.baseline_required:
         if status.baseline_missing:
             print(

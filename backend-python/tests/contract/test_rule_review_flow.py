@@ -87,6 +87,7 @@ def seed_project(db_session: Session) -> None:
             git_provider="GITLAB",
             git_project_id="1001",
             repository_url="https://gitlab.example.com/demo/service",
+            target_type="BACKEND",
             default_template_code="backend-default",
             default_code_quality_profile_code="backend-default-ai-review",
             default_code_quality_provider_code=None,

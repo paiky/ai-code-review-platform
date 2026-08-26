@@ -7,8 +7,6 @@ import respx
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.notification.models import NotificationWebhook
-from app.notification.repository import default_project_group_id, list_enabled_webhooks, list_webhooks
 from app.project_integration.models import Project
 from app.project_integration.service import _build_gitlab_changed_files_summary, _parse_time
 from app.review_record.models import ReviewTask
@@ -153,59 +151,61 @@ def review_card_with_finding_json() -> str:
     )
 
 
-def save_dingtalk_webhooks(client: TestClient, items: list[dict]) -> None:
-    response = client.put("/api/code-quality-reviews/settings", json={"dingtalkWebhooks": items})
-    assert response.status_code == 200
-
-
-def default_group(client: TestClient) -> dict:
-    response = client.get("/api/project-groups")
-    assert response.status_code == 200
-    return next(item for item in response.json()["data"]["items"] if item["groupCode"] == "default")
-
-
-def update_group_webhooks(client: TestClient, group: dict, webhooks: list[dict]) -> dict:
-    response = client.put(
-        f"/api/project-groups/{group['id']}",
-        json={
-            "groupName": group["groupName"],
-            "groupCode": group["groupCode"],
-            "defaultProviderCode": group.get("defaultProviderCode"),
-            "description": group.get("description"),
-            "status": group.get("status") or "ENABLED",
-            "dingtalkWebhooks": webhooks,
-        },
-    )
-    assert response.status_code == 200
-    return response.json()["data"]
-
-
-def create_project_group(client: TestClient, group_name: str, group_code: str, webhooks: list[dict] | None = None) -> dict:
+def create_notification_webhook(client: TestClient, item: dict) -> dict:
     response = client.post(
-        "/api/project-groups",
+        "/api/notification-webhooks",
         json={
-            "groupName": group_name,
-            "groupCode": group_code,
-            "dingtalkWebhooks": webhooks or [],
+            "name": item["name"],
+            "webhookUrl": item["webhookUrl"],
+            "enabled": item.get("enabled", True),
         },
     )
     assert response.status_code == 200
     return response.json()["data"]
 
 
-def create_project(client: TestClient, git_project_id: int, name: str, group_id: int) -> dict:
+def create_project(
+    client: TestClient,
+    git_project_id: int,
+    name: str,
+    target_type: str = "BACKEND",
+) -> dict:
     response = client.post(
         "/api/projects",
         json={
             "name": name,
             "gitProjectId": str(git_project_id),
             "repositoryUrl": f"https://gitlab.example.com/{name}",
-            "groupId": group_id,
-            "targetType": "BACKEND",
+            "targetType": target_type,
         },
     )
     assert response.status_code == 200
     return response.json()["data"]
+
+
+def associate_project_webhooks(
+    client: TestClient,
+    project_id: int,
+    webhook_ids: list[int],
+) -> None:
+    response = client.put(
+        "/api/projects/notification-webhooks/batch",
+        json={"projectIds": [project_id], "webhookIds": webhook_ids, "mode": "REPLACE"},
+    )
+    assert response.status_code == 200
+
+
+def save_dingtalk_webhooks(
+    client: TestClient,
+    items: list[dict],
+    *,
+    target_type: str = "BACKEND",
+    git_project_id: int = 1001,
+    project_name: str = "demo-service",
+) -> None:
+    project = create_project(client, git_project_id, project_name, target_type)
+    webhooks = [create_notification_webhook(client, item) for item in items]
+    associate_project_webhooks(client, project["id"], [item["id"] for item in webhooks])
 
 
 def mr_payload_for_project(project_id: int, project_name: str, diff_text: str | None = None) -> dict:
@@ -747,55 +747,53 @@ def test_dingtalk_multiple_webhooks_record_partial_failure(
     assert {item["status"] for item in notifications} == {"SUCCESS", "FAILED"}
 
 
-def test_dingtalk_delivery_uses_project_group_webhooks(
+def test_dingtalk_delivery_uses_project_webhooks(
     client: TestClient,
     db_session: Session,
 ) -> None:
     seed_template(db_session)
-    mobile_group = create_project_group(
+    mobile_project = create_project(client, 1001, "mobile-service")
+    web_project = create_project(client, 1002, "web-service")
+    mobile_webhook = create_notification_webhook(
         client,
-        "移动业务组",
-        "mobile",
-        [
-            {
-                "name": "移动群",
-                "channel": "DINGTALK",
-                "webhookUrl": "https://dingtalk.example.test/robot/send?group=mobile",
-                "enabled": True,
-            }
-        ],
+        {
+            "name": "移动群",
+            "webhookUrl": "https://dingtalk.example.test/robot/send?project=mobile",
+        },
     )
-    web_group = create_project_group(
+    web_webhook = create_notification_webhook(
         client,
-        "前端业务组",
-        "web",
-        [
-            {
-                "name": "前端群",
-                "channel": "DINGTALK",
-                "webhookUrl": "https://dingtalk.example.test/robot/send?group=web",
-                "enabled": True,
-            }
-        ],
+        {
+            "name": "前端群",
+            "webhookUrl": "https://dingtalk.example.test/robot/send?project=web",
+        },
     )
-    create_project(client, 1001, "mobile-service", mobile_group["id"])
-    create_project(client, 1002, "web-service", web_group["id"])
+    associate_project_webhooks(client, mobile_project["id"], [mobile_webhook["id"]])
+    associate_project_webhooks(client, web_project["id"], [web_webhook["id"]])
 
     with respx.mock(assert_all_called=True) as router:
-        mobile_route = router.post("https://dingtalk.example.test/robot/send?group=mobile").mock(
-            return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
-        )
-        web_route = router.post("https://dingtalk.example.test/robot/send?group=web").mock(
-            return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
-        )
+        mobile_route = router.post(
+            "https://dingtalk.example.test/robot/send?project=mobile"
+        ).mock(return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"}))
+        web_route = router.post(
+            "https://dingtalk.example.test/robot/send?project=web"
+        ).mock(return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"}))
         mobile_response = client.post(
             "/api/webhooks/gitlab/merge-request",
-            json=mr_payload_for_project(1001, "mobile-service", "+ update orders set status = 'DONE' where id = #{id}"),
+            json=mr_payload_for_project(
+                1001,
+                "mobile-service",
+                "+ update orders set status = 'DONE' where id = #{id}",
+            ),
             headers={"X-Gitlab-Event": "Merge Request Hook"},
         )
         web_response = client.post(
             "/api/webhooks/gitlab/merge-request",
-            json=mr_payload_for_project(1002, "web-service", "+ update orders set status = 'DONE' where id = #{id}"),
+            json=mr_payload_for_project(
+                1002,
+                "web-service",
+                "+ update orders set status = 'DONE' where id = #{id}",
+            ),
             headers={"X-Gitlab-Event": "Merge Request Hook"},
         )
 
@@ -803,117 +801,55 @@ def test_dingtalk_delivery_uses_project_group_webhooks(
     assert web_response.status_code == 200
     assert mobile_route.call_count == 1
     assert web_route.call_count == 1
-    mobile_notifications = client.get(f"/api/review-tasks/{mobile_response.json()['data']['taskId']}/notifications").json()["data"]
-    web_notifications = client.get(f"/api/review-tasks/{web_response.json()['data']['taskId']}/notifications").json()["data"]
-    assert mobile_notifications[0]["target"].endswith("group=mobile")
-    assert web_notifications[0]["target"].endswith("group=web")
+    mobile_notifications = client.get(
+        f"/api/review-tasks/{mobile_response.json()['data']['taskId']}/notifications"
+    ).json()["data"]
+    web_notifications = client.get(
+        f"/api/review-tasks/{web_response.json()['data']['taskId']}/notifications"
+    ).json()["data"]
+    assert mobile_notifications[0]["target"].endswith("project=mobile")
+    assert web_notifications[0]["target"].endswith("project=web")
 
 
-def test_dingtalk_delivery_skips_when_project_group_has_no_webhooks(
+def test_dingtalk_delivery_skips_when_project_has_no_webhooks(
     client: TestClient,
     db_session: Session,
 ) -> None:
     seed_template(db_session)
-    default = update_group_webhooks(
+    create_project(client, 1001, "empty-service")
+    create_notification_webhook(
         client,
-        default_group(client),
-        [
-            {
-                "name": "默认群",
-                "channel": "DINGTALK",
-                "webhookUrl": "https://dingtalk.example.test/robot/send?group=default",
-                "enabled": True,
-            }
-        ],
+        {
+            "name": "未关联群",
+            "webhookUrl": "https://dingtalk.example.test/robot/send?project=unlinked",
+        },
     )
-    empty_group = create_project_group(client, "空机器人组", "empty")
-    create_project(client, 1001, "empty-service", empty_group["id"])
-    assert default["enabledDingtalkWebhookCount"] == 1
 
     with respx.mock(assert_all_called=False) as router:
-        route = router.post("https://dingtalk.example.test/robot/send?group=default").mock(
-            return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
-        )
+        route = router.post(
+            "https://dingtalk.example.test/robot/send?project=unlinked"
+        ).mock(return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"}))
         response = client.post(
             "/api/webhooks/gitlab/merge-request",
-            json=mr_payload_for_project(1001, "empty-service", "+ update orders set status = 'DONE' where id = #{id}"),
+            json=mr_payload_for_project(
+                1001,
+                "empty-service",
+                "+ update orders set status = 'DONE' where id = #{id}",
+            ),
             headers={"X-Gitlab-Event": "Merge Request Hook"},
         )
 
     assert response.status_code == 200
     assert route.called is False
-    notifications = client.get(f"/api/review-tasks/{response.json()['data']['taskId']}/notifications").json()["data"]
+    notifications = client.get(
+        f"/api/review-tasks/{response.json()['data']['taskId']}/notifications"
+    ).json()["data"]
     assert notifications[0]["status"] == "SKIPPED"
     assert notifications[0]["target"] == "DINGTALK_WEBHOOKS_EMPTY"
-    assert notifications[0]["errorMessage"] == "DingTalk webhook is not configured for the project"
-
-
-def test_dingtalk_allows_same_enabled_url_in_different_groups(client: TestClient) -> None:
-    webhook = {
-        "name": "公共群",
-        "channel": "DINGTALK",
-        "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=same",
-        "enabled": True,
-    }
-
-    first = create_project_group(client, "一组", "team-a", [webhook])
-    second = create_project_group(client, "二组", "team-b", [webhook])
-
-    assert first["enabledDingtalkWebhookCount"] == 1
-    assert second["enabledDingtalkWebhookCount"] == 1
-
-
-def test_dingtalk_rejects_duplicate_enabled_url_in_same_group(client: TestClient) -> None:
-    response = client.post(
-        "/api/project-groups",
-        json={
-            "groupName": "重复组",
-            "groupCode": "dup-group",
-            "dingtalkWebhooks": [
-                {
-                    "name": "A",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=same",
-                    "enabled": True,
-                },
-                {
-                    "name": "B",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=same",
-                    "enabled": True,
-                },
-            ],
-        },
+    assert (
+        notifications[0]["errorMessage"]
+        == "DingTalk webhook is not configured for the project"
     )
-
-    assert response.status_code == 400
-    assert response.json()["code"] == "VALIDATION_ERROR"
-
-
-def test_legacy_null_project_group_webhooks_are_read_as_default_group(db_session: Session) -> None:
-    group_id = default_project_group_id(db_session)
-    now = datetime(2026, 5, 18, 10, 0, 0)
-    webhook = NotificationWebhook(
-        project_group_id=None,
-        name="历史全局群",
-        channel="DINGTALK",
-        webhook_url="https://dingtalk.example.test/robot/send?access_token=legacy",
-        secret_ref=None,
-        status="ENABLED",
-        enabled=True,
-        created_at=now,
-        updated_at=now,
-    )
-    db_session.add(webhook)
-    db_session.commit()
-
-    default_webhooks = list_webhooks(db_session, group_id)
-    enabled_webhooks = list_enabled_webhooks(db_session, group_id)
-
-    assert [item.id for item in default_webhooks] == [webhook.id]
-    assert [item.id for item in enabled_webhooks] == [webhook.id]
-    db_session.refresh(webhook)
-    assert webhook.project_group_id is None
 
 
 def test_push_without_payload_diff_uses_compare_api(
@@ -1033,7 +969,7 @@ def test_new_branch_push_with_zero_before_sha_without_diff_skips_task_creation(
     assert data["reasonCode"] == "NEW_BRANCH_PUSH_DIFF_UNAVAILABLE"
     assert db_session.query(ReviewTask).count() == 0
     project = db_session.query(Project).filter(Project.git_project_id == "1001").one()
-    assert json.loads(project.supported_target_types) == ["GENERAL"]
+    assert project.target_type == "GENERAL"
 
 
 def test_push_without_reminders_skips_dingtalk_delivery(
@@ -1282,6 +1218,9 @@ def test_web_project_ai_summary_hides_rule_section_when_reminder_card_disabled(
                 "enabled": True,
             }
         ],
+        target_type="WEB_PC",
+        git_project_id=2002,
+        project_name="demo-web",
     )
 
     with respx.mock(assert_all_called=True) as router:

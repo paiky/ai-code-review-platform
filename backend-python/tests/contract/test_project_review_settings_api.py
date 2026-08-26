@@ -142,7 +142,7 @@ def test_project_review_settings_support_partial_updates_and_validation(client: 
 
     unknown = client.put(
         f"/api/projects/{project['id']}/review-settings",
-        json={"triggerOnMr": True, "groupId": 1},
+        json={"unsupportedField": True},
     )
     invalid_limit = client.put(
         f"/api/projects/{project['id']}/review-settings",

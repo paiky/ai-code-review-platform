@@ -81,8 +81,6 @@ def _result(task_id: int, review_key: str, requested: str, effective: str, findi
         "taskId": task_id,
         "projectId": 1,
         "projectName": "demo",
-        "groupId": 1,
-        "groupName": "demo",
         "profile": "profile",
         "reviewKey": review_key,
         "requestedEngine": requested,

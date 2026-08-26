@@ -22,8 +22,6 @@ from app.code_quality.repository import ensure_provider_schema
 from app.project_integration.models import (
     GitLabMergeRequestEvent,
     Project,
-    ProjectGroup,
-    ProjectGroupAiReviewModel,
     ProjectAiReviewModel,
     ProjectTargetConfig,
 )
@@ -43,6 +41,7 @@ def seed_project(db_session: Session, provider_code: str | None = None) -> None:
             git_provider="GITLAB",
             git_project_id="1001",
             repository_url="https://gitlab.example.com/demo/service",
+            target_type="BACKEND",
             default_template_code="backend-default",
             default_code_quality_profile_code="backend-default-ai-review",
             default_code_quality_provider_code=provider_code,
@@ -602,8 +601,6 @@ def test_delete_provider_reports_each_blocking_configuration_domain(
     provider_codes = (
         "REF_PROFILE",
         "REF_PROJECT",
-        "REF_GROUP",
-        "REF_GROUP_MODEL",
         "REF_PROJECT_MODEL",
         "REF_TARGET",
     )
@@ -622,24 +619,6 @@ def test_delete_provider_reports_each_blocking_configuration_domain(
     assert profile is not None
     profile.provider_code = "REF_PROFILE"
     seed_project(db_session, "REF_PROJECT")
-    group = ProjectGroup(
-        group_name="Reference group",
-        group_code="reference-group",
-        default_provider_code="REF_GROUP",
-        review_engine="STANDARD",
-        status="ENABLED",
-    )
-    db_session.add(group)
-    db_session.flush()
-    db_session.add(
-        ProjectGroupAiReviewModel(
-            group_id=group.id,
-            review_key="secondary",
-            provider_code="REF_GROUP_MODEL",
-            enabled=True,
-            sort_order=10,
-        )
-    )
     db_session.add(
         ProjectAiReviewModel(
             project_id=1,
@@ -665,8 +644,6 @@ def test_delete_provider_reports_each_blocking_configuration_domain(
     expected_domains = {
         "REF_PROFILE": "profiles=1",
         "REF_PROJECT": "projects=1",
-        "REF_GROUP": "projectGroups=1",
-        "REF_GROUP_MODEL": "projectGroupModels=1",
         "REF_PROJECT_MODEL": "projectModels=1",
         "REF_TARGET": "projectTargets=1",
     }
@@ -820,7 +797,7 @@ def test_provider_connectivity_uses_unsaved_xiaomimo_draft(
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["status"] == "SUCCESS"
+    assert data["status"] == "SUCCESS", data
     assert data["success"] is True
     assert data["endpointUrl"] == "https://draft-xiaomimo.example.com/v1/chat/completions"
     assert data["modelName"] == "draft-mimo-model"
@@ -1406,7 +1383,7 @@ def test_loading_profiles_repairs_pc_profile_overwritten_by_backend_default(
     assert "资深后端" not in pc_profile["reviewInstructions"]
 
 
-def test_settings_returns_empty_dingtalk_webhook_list(
+def test_settings_omits_legacy_global_dingtalk_webhooks(
     client: TestClient,
     monkeypatch,
 ) -> None:
@@ -1418,7 +1395,7 @@ def test_settings_returns_empty_dingtalk_webhook_list(
     assert response.json()["data"]["reviewEnabled"] is True
     assert response.json()["data"]["autoFixPreviewEnabled"] is False
     assert response.json()["data"]["autoFixPreviewSeverities"] == ["CRITICAL"]
-    assert response.json()["data"]["dingtalkWebhooks"] == []
+    assert "dingtalkWebhooks" not in response.json()["data"]
 
 
 def test_settings_filters_auto_fix_preview_severities(
@@ -1471,209 +1448,6 @@ def test_settings_review_enabled_can_turn_on_ai_review_without_env_flag(
     assert response.json()["data"]["status"] == "SUCCESS"
 
 
-def test_settings_can_save_multiple_dingtalk_webhooks(
-    client: TestClient,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
-
-    saved = client.put(
-        "/api/code-quality-reviews/settings",
-        json={
-            "dingtalkNotificationEnabled": True,
-            "dingtalkWebhooks": [
-                {
-                    "name": "研发群",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=one",
-                    "enabled": True,
-                },
-                {
-                    "name": "测试群",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=two",
-                    "enabled": False,
-                },
-            ],
-        },
-    )
-
-    assert saved.status_code == 200
-    items = saved.json()["data"]["dingtalkWebhooks"]
-    assert len(items) == 2
-    assert items[0]["name"] == "研发群"
-    assert items[0]["enabled"] is True
-    assert items[1]["enabled"] is False
-
-    fetched = client.get("/api/code-quality-reviews/settings")
-    assert fetched.status_code == 200
-    assert len(fetched.json()["data"]["dingtalkWebhooks"]) == 2
-
-
-@respx.mock
-def test_settings_does_not_send_test_notification_for_new_webhook(
-    client: TestClient,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
-    route = respx.post("https://dingtalk.example.test/robot/send?access_token=test-new").mock(
-        return_value=Response(200, json={"errcode": 0, "errmsg": "ok"})
-    )
-
-    saved = client.put(
-        "/api/code-quality-reviews/settings",
-        json={
-            "dingtalkWebhooks": [
-                {
-                    "name": "测试群",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=test-new",
-                    "enabled": True,
-                }
-            ],
-        },
-    )
-
-    assert saved.status_code == 200
-    assert not route.called
-    assert "webhookTestResults" not in saved.json()["data"]
-
-
-def test_settings_update_disables_omitted_webhook(
-    client: TestClient,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
-    created = client.put(
-        "/api/code-quality-reviews/settings",
-        json={
-            "dingtalkWebhooks": [
-                {
-                    "name": "研发群",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=one",
-                    "enabled": True,
-                },
-                {
-                    "name": "测试群",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=two",
-                    "enabled": True,
-                },
-            ]
-        },
-    ).json()["data"]["dingtalkWebhooks"]
-
-    updated = client.put(
-        "/api/code-quality-reviews/settings",
-        json={
-            "dingtalkWebhooks": [
-                {
-                    "id": created[0]["id"],
-                    "name": "研发群-新",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=one-new",
-                    "enabled": True,
-                }
-            ]
-        },
-    )
-
-    assert updated.status_code == 200
-    items = updated.json()["data"]["dingtalkWebhooks"]
-    assert len(items) == 1
-    assert items[0]["name"] == "研发群-新"
-    assert items[0]["enabled"] is True
-
-
-@respx.mock
-def test_settings_does_not_send_test_notification_when_reenabling_existing_webhook(
-    client: TestClient,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
-    created = client.put(
-        "/api/code-quality-reviews/settings",
-        json={
-            "dingtalkWebhooks": [
-                {
-                    "name": "测试群",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=reenable",
-                    "enabled": False,
-                }
-            ]
-        },
-    )
-    assert created.status_code == 200
-    webhook = created.json()["data"]["dingtalkWebhooks"][0]
-    route = respx.post("https://dingtalk.example.test/robot/send?access_token=reenable").mock(
-        return_value=Response(200, json={"errcode": 0, "errmsg": "ok"})
-    )
-
-    updated = client.put(
-        "/api/code-quality-reviews/settings",
-        json={
-            "dingtalkWebhooks": [
-                {
-                    "id": webhook["id"],
-                    "name": "测试群",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=reenable",
-                    "enabled": True,
-                }
-            ]
-        },
-    )
-
-    assert updated.status_code == 200
-    assert not route.called
-    assert "webhookTestResults" not in updated.json()["data"]
-
-
-def test_settings_rejects_invalid_or_duplicate_dingtalk_webhooks(
-    client: TestClient,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
-
-    invalid = client.put(
-        "/api/code-quality-reviews/settings",
-        json={
-            "dingtalkWebhooks": [
-                {
-                    "name": "",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "ftp://invalid.example.test",
-                    "enabled": True,
-                }
-            ]
-        },
-    )
-    assert invalid.status_code == 400
-
-    duplicate = client.put(
-        "/api/code-quality-reviews/settings",
-        json={
-            "dingtalkWebhooks": [
-                {
-                    "name": "A",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=same",
-                    "enabled": True,
-                },
-                {
-                    "name": "B",
-                    "channel": "DINGTALK",
-                    "webhookUrl": "https://dingtalk.example.test/robot/send?access_token=same",
-                    "enabled": True,
-                },
-            ]
-        },
-    )
-    assert duplicate.status_code == 400
-
-
 @respx.mock
 def test_deepseek_manual_review_saves_result_and_progress(
     client: TestClient,
@@ -1692,7 +1466,7 @@ def test_deepseek_manual_review_saves_result_and_progress(
 
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["status"] == "SUCCESS"
+    assert data["status"] == "SUCCESS", data.get("errorMessage")
     assert data["provider"] == "DEEPSEEK"
     result = client.get(f"/api/review-tasks/{data['taskId']}/code-quality-result").json()["data"]
     assert result["overallLevel"] == "HIGH"
@@ -2006,7 +1780,7 @@ def test_ai_review_auto_generates_fix_previews_after_success(
     result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
     previews = client.get(f"/api/review-tasks/{task_id}/code-quality-fix-previews").json()["data"]
 
-    assert result["status"] == "SUCCESS"
+    assert result["status"] == "SUCCESS", result
     assert len(previews) == 1
     assert previews[0]["status"] == "SUCCESS"
     assert "OrderStatus.CREATED" in previews[0]["patchText"]
@@ -2016,56 +1790,6 @@ def test_ai_review_auto_generates_fix_previews_after_success(
     assert "FIX_PREVIEW_AUTO_QUEUED" in phases
     assert "FIX_PREVIEW_SAVED" in phases
     assert "auto-fix-secret" not in json.dumps(progress, ensure_ascii=False)
-
-
-@respx.mock
-def test_auto_review_ignores_project_group_profile_and_uses_project_profile(
-    client: TestClient,
-    db_session: Session,
-    monkeypatch,
-) -> None:
-    seed_template(db_session)
-    seed_project(db_session)
-    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
-    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "group-profile-secret")
-    group = client.post(
-        "/api/project-groups",
-        json={
-            "groupName": "PC 业务组",
-            "groupCode": "pc",
-            "defaultCodeQualityProfileCode": "web-pc-default-ai-review",
-        },
-    ).json()["data"]
-    bind = client.put("/api/projects/1/group", json={"groupId": group["id"]})
-    assert bind.status_code == 200
-
-    respx.post("https://api.deepseek.com/chat/completions").mock(
-        return_value=Response(200, json={"choices": [{"message": {"content": review_card_json("组模板优先", "MAJOR")}}]})
-    )
-
-    created = client.post(
-        "/api/webhooks/gitlab/merge-request",
-        json={
-            "object_kind": "merge_request",
-            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
-            "object_attributes": {"iid": 34, "action": "open", "source_branch": "feature/group-profile", "target_branch": "main"},
-            "changedFiles": [
-                {
-                    "path": "src/main/java/com/demo/OrderService.java",
-                    "diffText": "@@ -9,4 +9,4 @@ public void create(Order order) {\n+        order.setStatus(null);",
-                }
-            ],
-        },
-        headers={"X-Gitlab-Event": "Merge Request Hook"},
-    )
-    task_id = created.json()["data"]["taskId"]
-
-    result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
-    assert result["status"] == "SUCCESS"
-    assert result["profileCode"] == "backend-default-ai-review"
-    progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
-    assert "group-profile-secret" not in json.dumps(progress, ensure_ascii=False)
 
 
 @respx.mock
@@ -2114,60 +1838,10 @@ def test_project_target_provider_override_wins_over_global_default_for_auto_mr_r
     task_id = created.json()["data"]["taskId"]
     result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
     progress = client.get(f"/api/review-tasks/{task_id}/code-quality-progress").json()["data"]
-    assert result["status"] == "SUCCESS"
+    assert result["status"] == "SUCCESS", result.get("errorMessage")
     assert result["provider"] == "XIAOMIMO"
     assert xiaomimo.called
     assert "xiaomimo-secret" not in json.dumps(progress, ensure_ascii=False)
-
-
-@respx.mock
-def test_non_default_project_group_without_profile_does_not_change_project_profile(
-    client: TestClient,
-    db_session: Session,
-    monkeypatch,
-) -> None:
-    seed_template(db_session)
-    seed_project(db_session)
-    monkeypatch.setenv("CODE_QUALITY_REVIEW_ENABLED", "true")
-    monkeypatch.setenv("CODE_QUALITY_REVIEW_INLINE", "true")
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "project-profile-secret")
-    provider_route = respx.post("https://api.deepseek.com/chat/completions").mock(
-        return_value=Response(
-            200,
-            json={"choices": [{"message": {"content": review_card_json("项目配置生效")}}]},
-        )
-    )
-    group = client.post(
-        "/api/project-groups",
-        json={"groupName": "未配置模板组", "groupCode": "without-profile"},
-    ).json()["data"]
-    bind = client.put("/api/projects/1/group", json={"groupId": group["id"]})
-    assert bind.status_code == 200
-
-    created = client.post(
-        "/api/webhooks/gitlab/merge-request",
-        json={
-            "object_kind": "merge_request",
-            "project": {"id": 1001, "name": "demo-service", "web_url": "https://gitlab.example.com/demo/service"},
-            "object_attributes": {"iid": 35, "action": "open", "source_branch": "feature/no-group-profile", "target_branch": "main"},
-            "changedFiles": [
-                {
-                    "path": "src/main/java/com/demo/OrderService.java",
-                    "diffText": "@@ -9,4 +9,4 @@ public void create(Order order) {\n+        order.setStatus(null);",
-                }
-            ],
-        },
-        headers={"X-Gitlab-Event": "Merge Request Hook"},
-    )
-    task_id = created.json()["data"]["taskId"]
-
-    detail = client.get(f"/api/review-tasks/{task_id}").json()["data"]
-    assert detail["status"] == "SUCCESS"
-    assert detail["codeQualityProfileCode"] == "backend-default-ai-review"
-    result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
-    assert result["status"] == "SUCCESS"
-    assert result["profileCode"] == "backend-default-ai-review"
-    assert provider_route.called
 
 
 @respx.mock
@@ -2215,7 +1889,7 @@ def test_ai_review_does_not_auto_generate_fix_previews_for_non_critical_findings
     result = client.get(f"/api/review-tasks/{task_id}/code-quality-result").json()["data"]
     previews = client.get(f"/api/review-tasks/{task_id}/code-quality-fix-previews").json()["data"]
 
-    assert result["status"] == "SUCCESS"
+    assert result["status"] == "SUCCESS", result.get("errorMessage")
     assert result["findings"][0]["severity"] == "MAJOR"
     assert previews == []
     assert len(calls) == 1
@@ -2586,6 +2260,18 @@ def test_fix_preview_schema_removes_legacy_task_finding_unique_index(
         text(
             "CREATE UNIQUE INDEX uk_code_quality_fix_preview_task_finding "
             "ON code_quality_fix_previews (task_id, finding_index)"
+        )
+    )
+    db_session.add(
+        ReviewTask(
+            id=463,
+            project_id=1,
+            trigger_type="MANUAL",
+            template_code="backend-default",
+            status="SUCCESS",
+            review_status="NOT_TRIGGERED",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
         )
     )
     db_session.commit()

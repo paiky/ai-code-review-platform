@@ -161,7 +161,6 @@ def _filters(
     review_statuses: list[str] | None,
     risk_level: str | None,
     keyword: str | None,
-    group_id: int | None,
     target_type: str | None,
     trigger_type: str | None,
 ):
@@ -174,21 +173,12 @@ def _filters(
         clauses.append(ReviewTask.review_status.in_(review_statuses))
     if risk_level:
         clauses.append(ReviewTask.risk_level == risk_level)
-    if group_id is not None:
-        clauses.append(Project.group_id == group_id)
     if target_type:
         clauses.append(
             or_(
                 ReviewTask.target_type == target_type,
                 ReviewTask.target_types_json.like(f"%{target_type}%"),
-                and_(
-                    or_(
-                        ReviewTask.target_types_json.is_(None),
-                        ReviewTask.target_types_json == "",
-                        ReviewTask.target_types_json == "[]",
-                    ),
-                    Project.supported_target_types.like(f"%{target_type}%"),
-                ),
+                Project.target_type == target_type,
             )
         )
     if trigger_type:
@@ -213,7 +203,6 @@ def list_review_tasks(
     review_statuses: list[str] | None,
     risk_level: str | None,
     keyword: str | None,
-    group_id: int | None,
     target_type: str | None,
     trigger_type: str | None,
     page_no: int,
@@ -224,7 +213,7 @@ def list_review_tasks(
     page_no = max(page_no, 1)
     page_size = max(page_size, 1)
     normalized_review_statuses = _normalize_review_statuses(review_statuses)
-    filters = _filters(project_id, status, normalized_review_statuses, risk_level, keyword, group_id, target_type, trigger_type)
+    filters = _filters(project_id, status, normalized_review_statuses, risk_level, keyword, target_type, trigger_type)
 
     total_stmt = select(func.count()).select_from(ReviewTask).join(Project, Project.id == ReviewTask.project_id)
     if filters:
@@ -276,7 +265,6 @@ def list_review_tasks(
                 "id": task.id,
                 "projectId": task.project_id,
                 "projectName": project.name,
-                "groupId": project.group_id,
                 "triggerType": task.trigger_type,
                 "externalSourceId": task.external_source_id,
                 "externalUrl": task.external_url,
@@ -331,7 +319,6 @@ def get_review_task_detail(db: Session, task_id: int) -> dict:
         "id": task.id,
         "projectId": task.project_id,
         "projectName": project.name,
-        "groupId": project.group_id,
         "gitProjectId": project.git_project_id,
         "triggerType": task.trigger_type,
         "mrId": mr_id,

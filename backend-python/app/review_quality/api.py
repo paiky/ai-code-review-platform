@@ -37,7 +37,6 @@ async def get_review_quality_dashboard(
 @router.get("/agent-observation")
 async def get_agent_review_observation(
     task_id: int | None = Query(default=None, alias="taskId"),
-    group_id: int | None = Query(default=None, alias="groupId"),
     project_id: int | None = Query(default=None, alias="projectId"),
     profile: str | None = None,
     start_at: str | None = Query(default=None, alias="startAt"),
@@ -49,7 +48,6 @@ async def get_agent_review_observation(
         get_agent_observation(
             db,
             task_id=task_id,
-            group_id=group_id,
             project_id=project_id,
             profile=profile,
             start_at=start_at,

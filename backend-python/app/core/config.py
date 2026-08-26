@@ -16,7 +16,6 @@ class Settings:
     database_url: str
     dingtalk_enabled: bool
     dingtalk_webhook_url: str
-    project_notification_group_fallback_enabled: bool
     platform_base_url: str
     gitlab_api_enabled: bool
     gitlab_base_url: str
@@ -69,9 +68,6 @@ class Settings:
             database_url=resolve_database_url(),
             dingtalk_enabled=os.getenv("DINGTALK_ENABLED", "true").lower() != "false",
             dingtalk_webhook_url=os.getenv("DINGTALK_WEBHOOK_URL", ""),
-            project_notification_group_fallback_enabled=os.getenv(
-                "PROJECT_NOTIFICATION_GROUP_FALLBACK_ENABLED", "false"
-            ).lower() == "true",
             platform_base_url=os.getenv("PLATFORM_BASE_URL", "http://localhost:5173"),
             gitlab_api_enabled=os.getenv("GITLAB_API_ENABLED", "false").lower() == "true",
             gitlab_base_url=os.getenv("GITLAB_BASE_URL", ""),

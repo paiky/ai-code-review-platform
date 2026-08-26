@@ -44,7 +44,6 @@ async def rerun_in_place(task_id: int, db: Session = Depends(get_db)) -> dict:
 @router.get("")
 async def find_review_tasks(
     project_id: int | None = Query(default=None, alias="projectId"),
-    group_id: int | None = Query(default=None, alias="groupId"),
     target_type: str | None = Query(default=None, alias="targetType"),
     trigger_type: str | None = Query(default=None, alias="triggerType"),
     status: str | None = None,
@@ -55,7 +54,7 @@ async def find_review_tasks(
     page_size: int = Query(default=20, alias="pageSize"),
     db: Session = Depends(get_db),
 ) -> dict:
-    return ok(list_review_tasks(db, project_id, status, review_status, risk_level, keyword, group_id, target_type, trigger_type, page_no, page_size))
+    return ok(list_review_tasks(db, project_id, status, review_status, risk_level, keyword, target_type, trigger_type, page_no, page_size))
 
 
 @router.get("/{task_id}/result")

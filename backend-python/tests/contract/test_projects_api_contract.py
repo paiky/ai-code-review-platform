@@ -7,17 +7,6 @@ from app.project_integration.models import Project, ProjectTargetConfig
 from app.rule_template.models import RuleTemplate
 
 
-DEFAULT_PUSH_POLICY = {
-    "pushBranchPatterns": ["master"],
-    "pushMinChangedFiles": 10,
-    "pushMinDiffBytes": 30000,
-    "pushMinCommitCount": 3,
-    "pushMaxChangedFiles": -1,
-    "pushMaxDiffBytes": -1,
-    "pushDebounceSeconds": 300,
-}
-
-
 def seed_template(db_session: Session, template_code: str, target_type: str) -> None:
     now = datetime(2026, 5, 18, 10, 0, 0)
     db_session.add(
@@ -70,6 +59,7 @@ def test_projects_api_returns_enabled_projects_page(client: TestClient, db_sessi
                 git_provider="GITLAB",
                 git_project_id="900",
                 repository_url="https://gitlab.example.com/demo/disabled",
+                target_type="BACKEND",
                 default_template_code="backend-default",
                 default_code_quality_profile_code="backend-default-ai-review",
                 default_code_quality_provider_code=None,
@@ -85,6 +75,7 @@ def test_projects_api_returns_enabled_projects_page(client: TestClient, db_sessi
                 git_provider="GITLAB",
                 git_project_id="1001",
                 repository_url="https://gitlab.example.com/demo/service",
+                target_type="BACKEND",
                 default_template_code="backend-default",
                 default_code_quality_profile_code="backend-default-ai-review",
                 default_code_quality_provider_code="DEEPSEEK",
@@ -116,7 +107,6 @@ def test_projects_api_returns_enabled_projects_page(client: TestClient, db_sessi
             "gitProjectId",
             "repositoryUrl",
             "targetType",
-            "supportedTargetTypes",
             "detectedTargetTypes",
             "targetDetection",
             "status",
@@ -128,13 +118,10 @@ def test_projects_api_returns_enabled_projects_page(client: TestClient, db_sessi
         "gitProjectId": "1001",
         "repositoryUrl": "https://gitlab.example.com/demo/service",
         "targetType": "BACKEND",
-        "supportedTargetTypes": ["BACKEND"],
         "detectedTargetTypes": [],
         "targetDetection": None,
         "status": "ENABLED",
     }
-    assert item["groupId"] == 1
-    assert item["groupName"]
     assert item["reviewProfileCode"] == "backend-default-ai-review"
     assert item["reviewModelNames"]
     assert item["triggerOnMr"] is True
@@ -151,66 +138,6 @@ def test_projects_api_returns_enabled_projects_page(client: TestClient, db_sessi
     assert {item["name"] for item in include_disabled_body["items"]} == {"disabled-service", "demo-service"}
 
 
-def test_project_groups_and_target_configs_can_be_managed(client: TestClient, db_session: Session) -> None:
-    now = datetime(2026, 5, 18, 10, 0, 0)
-    db_session.add(
-        Project(
-            id=10,
-            name="multi-client",
-            git_provider="GITLAB",
-            git_project_id="2001",
-            repository_url="https://gitlab.example.com/demo/multi-client",
-            default_template_code="backend-default",
-            default_code_quality_profile_code="backend-default-ai-review",
-            default_code_quality_provider_code=None,
-            dingtalk_webhook_id=None,
-            status="ENABLED",
-            description=None,
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    db_session.commit()
-
-    group_response = client.post(
-        "/api/project-groups",
-        json={"groupName": "移动业务组", "groupCode": "mobile"},
-    )
-    assert group_response.status_code == 200
-    group = group_response.json()["data"]
-    assert group["defaultCodeQualityProfileCode"] is None
-    assert {key: group[key] for key in DEFAULT_PUSH_POLICY} == DEFAULT_PUSH_POLICY
-
-    bind_response = client.put("/api/projects/10/group", json={"groupId": group["id"]})
-    assert bind_response.status_code == 200
-    assert bind_response.json()["data"]["groupName"] == "移动业务组"
-
-    update_response = client.put(
-        "/api/projects/10/target-configs/WEB_PC",
-        json={
-            "templateCode": "frontend-default",
-            "codeQualityProfileCode": "web-pc-default-ai-review",
-            "pathPatterns": ["frontend/**"],
-            "reminderCardEnabled": False,
-            "enabled": True,
-        },
-    )
-    assert update_response.status_code == 200
-    config = update_response.json()["data"]
-    assert config["targetType"] == "WEB_PC"
-    assert config["codeQualityProfileCode"] == "web-pc-default-ai-review"
-    assert config["pathPatterns"] == ["frontend/**"]
-    assert config["reminderCardEnabled"] is False
-
-    configs_response = client.get("/api/projects/10/target-configs")
-    assert configs_response.status_code == 200
-    configs = configs_response.json()["data"]
-    target_types = {item["targetType"] for item in configs}
-    assert {"BACKEND", "WEB_PC"}.issubset(target_types)
-    assert sum(bool(item["enabled"]) for item in configs) == 1
-    assert next(item for item in configs if item["enabled"])["targetType"] == "WEB_PC"
-
-
 def test_get_project_target_configs_does_not_write_default_config(client: TestClient, db_session: Session) -> None:
     now = datetime(2026, 5, 18, 10, 0, 0)
     db_session.add(
@@ -220,6 +147,7 @@ def test_get_project_target_configs_does_not_write_default_config(client: TestCl
             git_provider="GITLAB",
             git_project_id="2011",
             repository_url="https://gitlab.example.com/demo/legacy",
+            target_type="BACKEND",
             default_template_code="backend-default",
             default_code_quality_profile_code="backend-default-ai-review",
             default_code_quality_provider_code=None,
@@ -241,119 +169,6 @@ def test_get_project_target_configs_does_not_write_default_config(client: TestCl
     assert db_session.query(ProjectTargetConfig).filter_by(project_id=11).count() == 0
 
 
-def test_project_group_validation_rejects_duplicate_code_and_default_disable(client: TestClient) -> None:
-    first_response = client.post(
-        "/api/project-groups",
-        json={"groupName": "移动业务组", "groupCode": "mobile"},
-    )
-    assert first_response.status_code == 200
-
-    duplicate_response = client.post(
-        "/api/project-groups",
-        json={"groupName": "另一个移动组", "groupCode": "mobile"},
-    )
-    assert duplicate_response.status_code == 400
-    assert duplicate_response.json()["code"] == "VALIDATION_ERROR"
-
-    groups_response = client.get("/api/project-groups")
-    assert groups_response.status_code == 200
-    default_group = next(item for item in groups_response.json()["data"]["items"] if item["groupCode"] == "default")
-
-    disable_default_response = client.put(
-        f"/api/project-groups/{default_group['id']}",
-        json={"status": "DISABLED"},
-    )
-    assert disable_default_response.status_code == 400
-    assert disable_default_response.json()["code"] == "VALIDATION_ERROR"
-
-
-def test_project_group_update_and_binding_validation(client: TestClient, db_session: Session) -> None:
-    now = datetime(2026, 5, 18, 10, 0, 0)
-    db_session.add(
-        Project(
-            id=20,
-            name="pc-admin",
-            git_provider="GITLAB",
-            git_project_id="3001",
-            repository_url="https://gitlab.example.com/demo/pc-admin",
-            default_template_code="backend-default",
-            default_code_quality_profile_code="backend-default-ai-review",
-            default_code_quality_provider_code=None,
-            dingtalk_webhook_id=None,
-            status="ENABLED",
-            description=None,
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    db_session.commit()
-
-    group_response = client.post(
-        "/api/project-groups",
-        json={"groupName": "前端业务组", "groupCode": "frontend"},
-    )
-    assert group_response.status_code == 200
-    group = group_response.json()["data"]
-
-    update_response = client.put(
-        f"/api/project-groups/{group['id']}",
-        json={
-            "groupName": "PC 业务组",
-            "description": "管理端项目",
-            "defaultCodeQualityProfileCode": "web-pc-default-ai-review",
-            "defaultProviderCode": "DEEPSEEK",
-            "aiReviewModels": [
-                {
-                    "providerCode": "DEEPSEEK",
-                    "modelName": "deepseek-v4-pro",
-                    "displayName": "DeepSeek 主审",
-                    "enabled": True,
-                    "sortOrder": 10,
-                },
-                {
-                    "providerCode": "XIAOMIMO",
-                    "modelName": "mimo-v2.5-pro",
-                    "displayName": "MiMo 复审",
-                    "enabled": True,
-                    "sortOrder": 20,
-                },
-            ],
-            "pushBranchPatterns": ["release/*"],
-            "pushMinChangedFiles": 2,
-            "pushMinDiffBytes": 1024,
-            "pushMinCommitCount": 1,
-            "pushMaxChangedFiles": 20,
-            "pushMaxDiffBytes": 50000,
-            "pushDebounceSeconds": 60,
-        },
-    )
-    assert update_response.status_code == 200
-    updated = update_response.json()["data"]
-    assert updated["groupName"] == "PC 业务组"
-    assert updated["description"] == "管理端项目"
-    assert updated["defaultCodeQualityProfileCode"] == "web-pc-default-ai-review"
-    assert updated["defaultProviderCode"] == "DEEPSEEK"
-    assert [item["providerCode"] for item in updated["aiReviewModels"]] == ["DEEPSEEK", "XIAOMIMO"]
-    assert updated["aiReviewModels"][0]["displayName"] == "DeepSeek 主审"
-    assert {key: updated[key] for key in DEFAULT_PUSH_POLICY} == {
-        "pushBranchPatterns": ["release/*"],
-        "pushMinChangedFiles": 2,
-        "pushMinDiffBytes": 1024,
-        "pushMinCommitCount": 1,
-        "pushMaxChangedFiles": 20,
-        "pushMaxDiffBytes": 50000,
-        "pushDebounceSeconds": 60,
-    }
-
-    missing_group_response = client.put("/api/projects/20/group", json={"groupId": 9999})
-    assert missing_group_response.status_code == 404
-    assert missing_group_response.json()["code"] == "RESOURCE_NOT_FOUND"
-
-    bind_response = client.put("/api/projects/20/group", json={"groupId": group["id"]})
-    assert bind_response.status_code == 200
-    assert bind_response.json()["data"]["groupName"] == "PC 业务组"
-
-
 def test_project_can_be_created_before_webhook_and_reused_by_gitlab_project_id(
     client: TestClient, db_session: Session
 ) -> None:
@@ -372,11 +187,17 @@ def test_project_can_be_created_before_webhook_and_reused_by_gitlab_project_id(
     assert create_response.status_code == 200
     project = create_response.json()["data"]
     assert project["gitProjectId"] == "31001"
-    assert project["supportedTargetTypes"] == ["WEB_PC"]
+    assert project["targetType"] == "WEB_PC"
 
     configs = client.get(f"/api/projects/{project['id']}/target-configs").json()["data"]
     web_config = next(item for item in configs if item["targetType"] == "WEB_PC")
-    assert web_config["pathPatterns"] == ["**/*"]
+    assert web_config["pathPatterns"] == [
+        "frontend/**",
+        "web/**",
+        "src/**/*.tsx",
+        "src/**/*.jsx",
+        "src/**/*.vue",
+    ]
     assert web_config["codeQualityProfileCode"] == "web-pc-default-ai-review"
 
     webhook_response = client.post(
@@ -417,7 +238,7 @@ def test_new_ios_project_webhook_auto_creates_ios_target_config(client: TestClie
 
     projects = client.get("/api/projects").json()["data"]["items"]
     project = next(item for item in projects if item["gitProjectId"] == "4001")
-    assert project["supportedTargetTypes"] == ["APP_IOS"]
+    assert project["targetType"] == "APP_IOS"
     assert project["detectedTargetTypes"] == ["APP_IOS"]
     assert project["targetDetection"]["evidences"][0]["source"] == "PATH_MAPPING"
 
@@ -465,6 +286,7 @@ def test_existing_project_detection_does_not_overwrite_target_configs(
             git_provider="GITLAB",
             git_project_id="4003",
             repository_url="https://gitlab.example.com/demo/backend-service",
+            target_type="BACKEND",
             default_template_code="backend-default",
             default_code_quality_profile_code="backend-default-ai-review",
             default_code_quality_provider_code=None,
@@ -495,7 +317,7 @@ def test_existing_project_detection_does_not_overwrite_target_configs(
     assert {item["targetType"] for item in configs} == {"BACKEND"}
     project = next(item for item in client.get("/api/projects").json()["data"]["items"] if item["id"] == 30)
     assert "WEB_PC" in project["detectedTargetTypes"]
-    assert project["supportedTargetTypes"] == ["BACKEND"]
+    assert project["targetType"] == "BACKEND"
 
 
 def test_new_project_chooses_one_target_and_keeps_all_detection_candidates(
@@ -529,7 +351,7 @@ def test_new_project_chooses_one_target_and_keeps_all_detection_candidates(
     project = next(item for item in client.get("/api/projects").json()["data"]["items"] if item["gitProjectId"] == "4004")
     assert set(project["detectedTargetTypes"]) == {"WEB_PC", "BACKEND"}
     assert project["targetType"] == "WEB_PC"
-    assert project["supportedTargetTypes"] == ["WEB_PC"]
+    assert project["targetType"] == "WEB_PC"
 
 
 def test_target_type_path_mapping_does_not_prefix_double_star_implicitly(

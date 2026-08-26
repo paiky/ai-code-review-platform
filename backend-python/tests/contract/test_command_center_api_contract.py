@@ -120,7 +120,7 @@ def test_runtime_returns_real_task_flow_worker_provider_and_alert_data(
 
     response = client.get(
         "/api/command-center/runtime",
-        params={"windowHours": 24, "groupId": 7001},
+        params={"windowHours": 24},
     )
 
     assert response.status_code == 200
@@ -181,7 +181,7 @@ def test_runtime_projects_task_level_dispatch_progress_without_lane_counts(
     db_session: Session,
 ) -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    project = _project(7501, 7001, "dispatch-preparing")
+    project = _project(7501, "dispatch-preparing")
     task = _task(7502, project.id, now)
     review_key = "agent:claude-code:deepseek-v4-pro"
     dispatch_detail = json.dumps(
@@ -252,14 +252,14 @@ def test_runtime_projects_task_level_dispatch_progress_without_lane_counts(
     assert "dispatchAttemptId" not in json.dumps(runtime)
 
 
-def test_runtime_today_results_use_beijing_boundary_and_group_filter(
+def test_runtime_today_results_use_beijing_boundary_and_project_filter(
     db_session: Session,
 ) -> None:
     now = datetime(2026, 8, 4, 4, 0, tzinfo=timezone.utc)
     database_now = now.replace(tzinfo=None)
     today_from = datetime(2026, 8, 3, 16, 0)
-    project = _project(7601, 7001, "today-in-scope")
-    other_project = _project(7602, 7002, "today-out-of-scope")
+    project = _project(7601, "today-in-scope")
+    other_project = _project(7602, "today-out-of-scope")
     tasks = [
         _task(7610 + index, project.id, database_now)
         for index in range(1, 8)
@@ -307,7 +307,6 @@ def test_runtime_today_results_use_beijing_boundary_and_group_filter(
         active_limit=20,
         alert_limit=20,
         project_id=None,
-        group_id=7001,
         now=now,
     ).model_dump(by_alias=True, mode="json")
 
@@ -318,9 +317,9 @@ def test_runtime_today_results_use_beijing_boundary_and_group_filter(
         "timezone": "UTC+08:00",
         "from": "2026-08-03T16:00:00Z",
         "to": "2026-08-04T04:00:00Z",
-        "totalCount": 5,
-        "completedCount": 3,
-        "successCount": 1,
+        "totalCount": 6,
+        "completedCount": 4,
+        "successCount": 2,
         "failureCount": 1,
         "skippedCount": 1,
         "runningCount": 1,
@@ -329,11 +328,11 @@ def test_runtime_today_results_use_beijing_boundary_and_group_filter(
             "FAILED": 1,
             "FUTURE_STATUS": 1,
             "QUEUED": 1,
-            "SUCCESS": 1,
+            "SUCCESS": 2,
             "TIMED_OUT": 1,
         },
     }
-    assert snapshot["coverage"]["scanned"]["todayResults"] == 5
+    assert snapshot["coverage"]["scanned"]["todayResults"] == 6
 
     project_snapshot = get_runtime_snapshot(
         db_session,
@@ -341,7 +340,6 @@ def test_runtime_today_results_use_beijing_boundary_and_group_filter(
         active_limit=20,
         alert_limit=20,
         project_id=other_project.id,
-        group_id=None,
         now=now,
     ).model_dump(by_alias=True, mode="json")
     assert project_snapshot["todayResults"]["totalCount"] == 1
@@ -353,7 +351,7 @@ def test_runtime_review_lanes_use_engine_specific_queue_order_and_worker_binding
     db_session: Session,
 ) -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    project = _project(8101, 8001, "runtime-map")
+    project = _project(8101, "runtime-map")
     tasks = [_task(8200 + index, project.id, now) for index in range(1, 7)]
     jobs = [
         _scheduler_job(8301, 8201, project.id, "standard-later", "AI_REVIEW", "QUEUED", 50, now - timedelta(minutes=10), now),
@@ -414,7 +412,6 @@ def test_runtime_review_lanes_use_engine_specific_queue_order_and_worker_binding
 
     response = client.get(
         "/api/command-center/runtime",
-        params={"groupId": 8001},
     )
 
     assert response.status_code == 200
@@ -437,7 +434,7 @@ def test_governance_returns_window_and_all_time_metrics(
 
     response = client.get(
         "/api/command-center/governance",
-        params={"windowHours": 24, "groupId": 7001},
+        params={"windowHours": 24},
     )
 
     assert response.status_code == 200
@@ -475,7 +472,7 @@ def test_fallback_is_not_inferred_from_agent_failure_and_standard_result(
     db_session: Session,
 ) -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    project = _project(8101, 8001, "strict-fallback")
+    project = _project(8101, "strict-fallback")
     task = _task(8201, project.id, now)
     db_session.add_all(
         [
@@ -600,7 +597,7 @@ def test_runtime_query_count_does_not_grow_with_active_task_count(
 
     db_session.add_all(
         [
-            _project(9102, 7001, "command-center-second"),
+            _project(9102, "command-center-second"),
             _task(9202, 9102, now),
             CodeQualitySchedulerJob(
                 id=9302,
@@ -657,7 +654,7 @@ def _capture_statements(db_session: Session) -> Iterator[list[str]]:
 
 
 def _seed_phase_one_scenario(db_session: Session, now: datetime) -> None:
-    project = _project(7101, 7001, "command-center-one")
+    project = _project(7101, "command-center-one")
     task = _task(7201, project.id, now)
     finding = {
         "severity": "CRITICAL",
@@ -904,10 +901,10 @@ def _seed_phase_one_scenario(db_session: Session, now: datetime) -> None:
     db_session.commit()
 
 
-def _project(project_id: int, group_id: int, name: str) -> Project:
+def _project(project_id: int, name: str) -> Project:
     return Project(
         id=project_id,
-        group_id=group_id,
+        target_type="BACKEND",
         name=name,
         git_provider="GITLAB",
         git_project_id=f"cc-{project_id}",

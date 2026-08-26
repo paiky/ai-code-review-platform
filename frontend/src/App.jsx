@@ -12,7 +12,6 @@ import {
   Badge,
   Button,
   Card,
-  Cascader,
   Col,
   Collapse,
   Descriptions,
@@ -72,8 +71,7 @@ import {
   MoonOutlined,
   QuestionCircleOutlined,
   SunOutlined,
-  TeamOutlined,
-  ThunderboltOutlined
+  TeamOutlined
 } from '@ant-design/icons';
 import MuiAlert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -449,19 +447,6 @@ function defaultReminderCardEnabledForTargetType(targetType) {
 
 function defaultPathPatternsForTargetType(targetType) {
   return TARGET_TYPE_DEFAULT_PATH_PATTERNS[targetType] || TARGET_TYPE_DEFAULT_PATH_PATTERNS.GENERAL;
-}
-
-function pushPolicyFromGroup(group) {
-  return {
-    ...DEFAULT_PUSH_REVIEW_POLICY,
-    ...(group || {}),
-    reviewEngine: 'AGENT',
-    agentSourceExportAllowed: true,
-    aiReviewEnabled: true,
-    triggerOnManual: true,
-    pushBranchPatterns: Array.isArray(group?.pushBranchPatterns) ? group.pushBranchPatterns : [...DEFAULT_PUSH_REVIEW_POLICY.pushBranchPatterns],
-    autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(group?.autoFixPreviewSeverities)
-  };
 }
 
 function requestJobQueueRefresh() {
@@ -1887,9 +1872,7 @@ function TaskWorkspaceShell({ title, description, actions, actionMeta, children,
 function TaskList({ onOpen }) {
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState('');
-  const [groups, setGroups] = useState([]);
   const [projects, setProjects] = useState([]);
-  const [groupId, setGroupId] = useState(null);
   const [projectId, setProjectId] = useState(null);
   const [targetType, setTargetType] = useState(null);
   const [triggerType, setTriggerType] = useState(null);
@@ -1906,7 +1889,6 @@ function TaskList({ onOpen }) {
     try {
       const params = new URLSearchParams({ pageNo, pageSize });
       if (keyword.trim()) params.set('keyword', keyword.trim());
-      if (groupId) params.set('groupId', groupId);
       if (projectId) params.set('projectId', projectId);
       if (targetType) params.set('targetType', targetType);
       if (triggerType) params.set('triggerType', triggerType);
@@ -1922,31 +1904,19 @@ function TaskList({ onOpen }) {
   };
 
   useEffect(() => {
-    Promise.all([
-      fetchApi('/api/project-groups'),
-      fetchApi('/api/projects')
-    ]).then(([groupData, projectData]) => {
-      setGroups(groupData.items || []);
+    fetchApi('/api/projects').then(projectData => {
       setProjects(projectData.items || []);
     }).catch(err => setError(err.message));
     load({ pageNo: 1 });
   }, []);
 
-  const projectScopeValue = groupId ? (projectId ? [groupId, projectId] : [groupId]) : undefined;
-  const projectScopeOptions = useMemo(() => groups.map(group => {
-    const childProjects = projects
-      .filter(project => project.groupId === group.id)
-      .map(project => ({ label: project.name, value: project.id }));
-    return {
-      label: group.groupName,
-      value: group.id,
-      ...(childProjects.length ? { children: childProjects } : {})
-    };
-  }), [groups, projects]);
+  const projectOptions = useMemo(
+    () => projects.map(project => ({ label: project.name, value: project.id })),
+    [projects]
+  );
 
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 64 },
-    { title: '项目组', dataIndex: 'groupId', width: 120, ellipsis: true, render: value => groups.find(group => group.id === value)?.groupName || '-' },
     { title: '项目', dataIndex: 'projectName', width: 170, ellipsis: true },
     {
       title: '作者',
@@ -1967,18 +1937,15 @@ function TaskList({ onOpen }) {
     <TaskWorkspaceShell>
       <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
         <Space wrap className="task-filter-bar">
-          <Cascader
+          <Select
             allowClear
-            changeOnSelect
-            showSearch={{ filter: (inputValue, path) => path.some(option => String(option.label).toLowerCase().includes(inputValue.toLowerCase())) }}
-            className="task-project-scope-cascader"
-            placeholder="项目组 / 项目"
-            value={projectScopeValue}
-            options={projectScopeOptions}
-            onChange={value => {
-              setGroupId(value?.[0] || null);
-              setProjectId(value?.[1] || null);
-            }}
+            showSearch
+            optionFilterProp="label"
+            className="task-filter-select"
+            placeholder="项目"
+            value={projectId}
+            options={projectOptions}
+            onChange={value => setProjectId(value || null)}
           />
           <Select
             allowClear
@@ -6745,25 +6712,6 @@ function TemplateConfig() {
   const location = useLocation();
   const navigate = useNavigate();
   const activeSettingsSection = resolveSettingsSection(location.pathname);
-  const [groups, setGroups] = useState([]);
-  const [groupDraft, setGroupDraft] = useState({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, aiReviewModels: [], dingtalkWebhooks: [] });
-  const [editingGroupId, setEditingGroupId] = useState(null);
-  const [editingGroupDraft, setEditingGroupDraft] = useState(null);
-  const [projectGroupFilter, setProjectGroupFilter] = useState(null);
-  const [projectDraft, setProjectDraft] = useState({
-    name: '',
-    gitProjectId: '',
-    repositoryUrl: '',
-    groupId: null,
-    targetType: 'BACKEND'
-  });
-  const [projects, setProjects] = useState([]);
-  const [selectedProjectId, setSelectedProjectId] = useState(null);
-  const [projectConfigDraft, setProjectConfigDraft] = useState(null);
-  const [projectTargetConfigs, setProjectTargetConfigs] = useState([]);
-  const [targetPathMappings, setTargetPathMappings] = useState([]);
-  const [selectedTargetType, setSelectedTargetType] = useState(null);
-  const [targetConfigDraft, setTargetConfigDraft] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [providers, setProviders] = useState([]);
   const [selectedProviderCode, setSelectedProviderCode] = useState('DEEPSEEK');
@@ -6773,8 +6721,6 @@ function TemplateConfig() {
   const [dirtySettingsDraftTokens, setDirtySettingsDraftTokens] = useState(() => new Set());
   const [selectedProfileCode, setSelectedProfileCode] = useState(null);
   const [profileDraft, setProfileDraft] = useState(null);
-  const [selectedPushPolicyGroupId, setSelectedPushPolicyGroupId] = useState(null);
-  const [pushPolicyDraft, setPushPolicyDraft] = useState(null);
   const [promptPreview, setPromptPreview] = useState(null);
   const [aiSettings, setAiSettings] = useState(null);
   const [settingsDraft, setSettingsDraft] = useState(null);
@@ -6807,18 +6753,10 @@ function TemplateConfig() {
   const [agentRuntimeDeleting, setAgentRuntimeDeleting] = useState(false);
   const [loading, setLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
-  const [projectGroupCreating, setProjectGroupCreating] = useState(false);
-  const [projectGroupSavingId, setProjectGroupSavingId] = useState(null);
-  const [projectGroupDisablingId, setProjectGroupDisablingId] = useState(null);
-  const [projectCreating, setProjectCreating] = useState(false);
-  const [projectConfigSaving, setProjectConfigSaving] = useState(false);
-  const [targetPathMappingSaving, setTargetPathMappingSaving] = useState(false);
-  const [projectConfigReloading, setProjectConfigReloading] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
   const [providerTesting, setProviderTesting] = useState(false);
   const [providerTestResult, setProviderTestResult] = useState(null);
   const [profileSaving, setProfileSaving] = useState(false);
-  const [pushPolicySaving, setPushPolicySaving] = useState(false);
   const [promptPreviewLoading, setPromptPreviewLoading] = useState(false);
   const [error, setError] = useState(null);
   const [messageApi, contextHolder] = message.useMessage();
@@ -6852,15 +6790,12 @@ function TemplateConfig() {
     setLoading(true);
     setError(null);
     try {
-      const [settingsData, agentSettingsData, agentRuntimeData, profileData, providerData, groupData, projectData, pathMappingData, agentPresetData, standardPresetData] = await Promise.all([
+      const [settingsData, agentSettingsData, agentRuntimeData, profileData, providerData, agentPresetData, standardPresetData] = await Promise.all([
         fetchApi('/api/code-quality-reviews/settings'),
         fetchApi('/api/code-quality-reviews/agent-settings'),
         fetchApi('/api/code-quality-agent-runtimes'),
         fetchApi('/api/code-quality-review-profiles'),
         fetchApi('/api/code-quality-review-providers'),
-        fetchApi('/api/project-groups'),
-        Promise.resolve({ items: [] }),
-        Promise.resolve([]),
         fetchApi('/api/review-model-presets?reviewType=AGENT'),
         fetchApi('/api/review-model-presets?reviewType=STANDARD')
       ]);
@@ -6876,16 +6811,6 @@ function TemplateConfig() {
         ? selectedProfileCode
         : selectableProfileItems[0]?.profileCode || null;
       const nextSelectedProviderCode = settingsData?.defaultProviderCode || selectedProviderCode || providerItems[0]?.providerCode || 'DEEPSEEK';
-      const projectItems = projectData.items || [];
-      const groupItems = groupData.items || [];
-      const nextPushPolicyGroupId = selectedPushPolicyGroupId && groupItems.some(group => group.id === selectedPushPolicyGroupId)
-        ? selectedPushPolicyGroupId
-        : groupItems[0]?.id || null;
-      const nextSelectedProjectId = projectGroupFilter
-        ? (projectItems.some(project => project.id === selectedProjectId && project.groupId === projectGroupFilter)
-          ? selectedProjectId
-          : projectItems.find(project => project.groupId === projectGroupFilter)?.id || null)
-        : null;
       setAiSettings(settingsData);
       setAgentSettings(agentSettingsData);
       setAgentRuntimes(runtimeItems);
@@ -6901,27 +6826,6 @@ function TemplateConfig() {
         autoFixPreviewEnabled: settingsData?.autoFixPreviewEnabled ?? false,
         autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(settingsData?.autoFixPreviewSeverities)
       });
-      setGroups(groupItems);
-      setTargetPathMappings(Array.isArray(pathMappingData) ? pathMappingData : []);
-      setSelectedPushPolicyGroupId(nextPushPolicyGroupId);
-      setPushPolicyDraft(pushPolicyFromGroup(groupItems.find(group => group.id === nextPushPolicyGroupId)));
-      setProjects(projectItems);
-      setSelectedProjectId(nextSelectedProjectId);
-      if (nextSelectedProjectId) {
-        const nextProject = projectItems.find(project => project.id === nextSelectedProjectId);
-        const configs = await fetchApi(`/api/projects/${nextSelectedProjectId}/target-configs`);
-        setProjectTargetConfigs(configs || []);
-        const enabledTarget = (configs || []).find(item => item.enabled !== false)?.targetType;
-        const target = selectedTargetType || enabledTarget || configs?.[0]?.targetType || nextProject?.supportedTargetTypes?.[0] || 'BACKEND';
-        setProjectConfigDraft({ groupId: nextProject?.groupId || null, targetType: target });
-        setSelectedTargetType(target);
-        setTargetConfigDraft((configs || []).find(item => item.targetType === target) || null);
-      } else {
-        setProjectConfigDraft(null);
-        setProjectTargetConfigs([]);
-        setSelectedTargetType(null);
-        setTargetConfigDraft(null);
-      }
       setProviders(providerItems);
       setReviewModelPresets({ AGENT: agentPresetItems, STANDARD: standardPresetItems });
       setConnectionCreateDraft(createReviewModelConnectionDraft(
@@ -7073,526 +6977,6 @@ function TemplateConfig() {
       if (timer) window.clearTimeout(timer);
     };
   }, [agentSettingsTestResult?.requestId]);
-
-  const loadProjectTargetConfigs = async (projectId, targetType = selectedTargetType, projectList = projects) => {
-    if (!projectId) {
-      setSelectedProjectId(null);
-      setProjectConfigDraft(null);
-      setSelectedTargetType(null);
-      setProjectTargetConfigs([]);
-      setTargetConfigDraft(null);
-      return;
-    }
-    const configs = await fetchApi(`/api/projects/${projectId}/target-configs`);
-    setProjectTargetConfigs(configs || []);
-    const project = projectList.find(item => item.id === projectId);
-    const enabledTarget = (configs || []).find(item => item.enabled !== false)?.targetType;
-    const nextTargetType = targetType || enabledTarget || configs?.[0]?.targetType || project?.supportedTargetTypes?.[0] || 'BACKEND';
-    setProjectConfigDraft({ groupId: project?.groupId || null, targetType: nextTargetType });
-    setSelectedTargetType(nextTargetType);
-    setTargetConfigDraft((configs || []).find(item => item.targetType === nextTargetType) || null);
-  };
-
-  const reloadProjectGroupsAndProjects = async (
-    preferredProjectId = selectedProjectId,
-    preferredTargetType = selectedTargetType,
-    groupFilterOverride = projectGroupFilter
-  ) => {
-    const [groupData, projectData] = await Promise.all([
-      fetchApi('/api/project-groups'),
-      fetchApi('/api/projects?includeDisabled=true')
-    ]);
-    const groupItems = groupData.items || [];
-    const projectItems = projectData.items || [];
-    const activeGroupFilter = groupFilterOverride || null;
-    const nextSelectedProjectId = activeGroupFilter && projectItems.some(project => project.id === preferredProjectId && project.groupId === activeGroupFilter)
-      ? preferredProjectId
-      : (activeGroupFilter ? projectItems.find(project => project.groupId === activeGroupFilter)?.id || null : null);
-    setGroups(groupItems);
-    setProjects(projectItems);
-    setSelectedProjectId(nextSelectedProjectId);
-    if (nextSelectedProjectId) {
-      await loadProjectTargetConfigs(nextSelectedProjectId, preferredTargetType, projectItems);
-    } else {
-      setProjectConfigDraft(null);
-      setProjectTargetConfigs([]);
-      setSelectedTargetType(null);
-      setTargetConfigDraft(null);
-    }
-  };
-
-  const refreshProjectConfigData = async () => {
-    setProjectConfigReloading(true);
-    try {
-      const mappings = await fetchApi('/api/target-type-path-mappings');
-      setTargetPathMappings(Array.isArray(mappings) ? mappings : []);
-      await reloadProjectGroupsAndProjects();
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setProjectConfigReloading(false);
-    }
-  };
-
-  const selectProjectForTargetConfig = async (projectId) => {
-    setSelectedProjectId(projectId);
-    try {
-      await loadProjectTargetConfigs(projectId, null);
-    } catch (err) {
-      messageApi.error(err.message);
-    }
-  };
-
-  const clearSelectedProjectConfig = () => {
-    setSelectedProjectId(null);
-    setProjectConfigDraft(null);
-    setProjectTargetConfigs([]);
-    setSelectedTargetType(null);
-    setTargetConfigDraft(null);
-  };
-
-  const selectProjectGroupFilter = async (groupId) => {
-    const nextGroupId = groupId || null;
-    setProjectGroupFilter(nextGroupId);
-    if (!nextGroupId) {
-      clearSelectedProjectConfig();
-      return;
-    }
-    const nextProject = projects.find(project => project.groupId === nextGroupId);
-    if (nextProject) {
-      await selectProjectForTargetConfig(nextProject.id);
-    } else {
-      clearSelectedProjectConfig();
-    }
-  };
-
-  const updateProjectConfigDraft = (field, value) => {
-    setProjectConfigDraft(current => ({ ...(current || {}), [field]: value }));
-    markSettingsDraftDirty('project-target-configs:project-config');
-    if (field === 'targetType' && value) {
-      selectTargetTypeForConfig(value);
-    }
-  };
-
-  const selectTargetTypeForConfig = (targetType) => {
-    setSelectedTargetType(targetType);
-    setProjectConfigDraft(current => current ? { ...current, targetType } : current);
-    setTargetConfigDraft(projectTargetConfigs.find(item => item.targetType === targetType) || {
-      targetType,
-      templateCode: defaultTemplateCodeForTargetType(targetType),
-      providerCode: null,
-      pathPatterns: defaultPathPatternsForTargetType(targetType),
-      reminderCardEnabled: defaultReminderCardEnabledForTargetType(targetType),
-      enabled: true
-    });
-  };
-
-  const updateTargetConfigDraft = (field, value) => {
-    setTargetConfigDraft(current => current ? { ...current, [field]: value } : current);
-    markSettingsDraftDirty('project-target-configs:project-config');
-  };
-
-  const updateGroupDraft = (field, value) => {
-    setGroupDraft(current => ({ ...current, [field]: value }));
-    markSettingsDraftDirty('project-target-configs:group-create');
-  };
-
-  const startEditGroup = (group) => {
-    setEditingGroupId(group.id);
-    setEditingGroupDraft({ ...group, aiReviewModels: normalizeAiReviewModels(group) });
-  };
-
-  const updateEditingGroupDraft = (field, value) => {
-    setEditingGroupDraft(current => current ? { ...current, [field]: value } : current);
-    markSettingsDraftDirty('project-target-configs:group-edit');
-  };
-
-  const normalizeWebhookPayload = (webhooks = []) => webhooks.map(item => ({
-    id: item.id || undefined,
-    name: (item.name || '').trim(),
-    channel: 'DINGTALK',
-    webhookUrl: (item.webhookUrl || '').trim(),
-    enabled: item.enabled !== false
-  }));
-
-  const validateWebhookDrafts = (webhooks = []) => {
-    const enabledUrls = new Set();
-    for (const item of webhooks) {
-      const name = (item.name || '').trim();
-      const webhookUrl = (item.webhookUrl || '').trim();
-      if (!name) return 'Webhook 名称不能为空';
-      if (!webhookUrl) return 'Webhook 地址不能为空';
-      try {
-        const parsed = new URL(webhookUrl);
-        if (!['http:', 'https:'].includes(parsed.protocol)) return 'Webhook 地址必须以 http:// 或 https:// 开头';
-      } catch {
-        return 'Webhook 地址格式不正确';
-      }
-      if (item.enabled !== false) {
-        const normalized = webhookUrl.toLowerCase();
-        if (enabledUrls.has(normalized)) return '同一项目组内已启用的 webhook 地址不能重复';
-        enabledUrls.add(normalized);
-      }
-    }
-    return null;
-  };
-
-  const updateGroupWebhookDraft = (target, index, field, value) => {
-    const updater = current => {
-      if (!current) return current;
-      const dingtalkWebhooks = (current.dingtalkWebhooks || []).map((item, itemIndex) => (
-        itemIndex === index ? { ...item, [field]: value } : item
-      ));
-      return { ...current, dingtalkWebhooks };
-    };
-    if (target === 'editing') {
-      setEditingGroupDraft(updater);
-      markSettingsDraftDirty('project-target-configs:group-edit');
-    } else {
-      setGroupDraft(updater);
-      markSettingsDraftDirty('project-target-configs:group-create');
-    }
-  };
-
-  const addGroupWebhookDraft = (target) => {
-    const updater = current => ({
-      ...(current || {}),
-      dingtalkWebhooks: [
-        ...((current || {}).dingtalkWebhooks || []),
-        { id: null, name: '', channel: 'DINGTALK', webhookUrl: '', enabled: true, status: 'ENABLED' }
-      ]
-    });
-    if (target === 'editing') {
-      setEditingGroupDraft(updater);
-      markSettingsDraftDirty('project-target-configs:group-edit');
-    } else {
-      setGroupDraft(updater);
-      markSettingsDraftDirty('project-target-configs:group-create');
-    }
-  };
-
-  const normalizeAiReviewModels = (group) => {
-    const rawItems = Array.isArray(group?.aiReviewModels) ? group.aiReviewModels : [];
-    if (rawItems.length > 0) {
-      return rawItems.map((item, index) => ({
-        id: item.id || null,
-        reviewKey: item.reviewKey || null,
-        providerCode: item.providerCode || group?.defaultProviderCode || '',
-        modelName: item.modelName || '',
-        displayName: item.displayName || '',
-        enabled: item.enabled !== false,
-        sortOrder: item.sortOrder ?? (index + 1) * 10
-      }));
-    }
-    if (group?.defaultProviderCode) {
-      return [{
-        id: null,
-        reviewKey: null,
-        providerCode: group.defaultProviderCode,
-        modelName: '',
-        displayName: '',
-        enabled: true,
-        sortOrder: 10
-      }];
-    }
-    return [];
-  };
-
-  const normalizeAiReviewModelPayload = (items = []) => (items || [])
-    .filter(item => item?.providerCode && isProviderKeyConfigured(item.providerCode))
-    .map((item, index) => ({
-      id: item.id || undefined,
-      reviewKey: item.reviewKey || undefined,
-      providerCode: item.providerCode,
-      modelName: item.modelName?.trim() || null,
-      displayName: item.displayName?.trim() || null,
-      enabled: item.enabled !== false,
-      sortOrder: item.sortOrder ?? (index + 1) * 10
-    }));
-
-  const selectedAiReviewProviderCodes = (group) => normalizeAiReviewModels(group)
-    .filter(item => item.enabled !== false && item.providerCode)
-    .map(item => item.providerCode);
-
-  const isProviderKeyConfigured = (providerCode) => {
-    const provider = providers.find(item => item.providerCode === providerCode);
-    return Boolean(provider?.apiKeyConfigured);
-  };
-
-  const aiReviewProviderLabel = (providerCode) => {
-    return sourceLabel(providerCode);
-  };
-
-  const aiReviewProviderDisplay = (group) => {
-    const codes = selectedAiReviewProviderCodes(group);
-    if (codes.length === 0) return group?.defaultProviderCode || '-';
-    return codes.map(aiReviewProviderLabel).join(' / ');
-  };
-
-  const updateGroupAiReviewProviders = (target, providerCodes = []) => {
-    const selectableProviderCodes = providerCodes.filter(isProviderKeyConfigured);
-    const updater = current => current ? {
-      ...current,
-      defaultProviderCode: selectableProviderCodes[0] || null,
-      aiReviewModels: selectableProviderCodes.map((providerCode, index) => {
-        const existing = normalizeAiReviewModels(current).find(item => item.providerCode === providerCode);
-        return {
-          ...(existing || {}),
-          providerCode,
-          modelName: '',
-          displayName: '',
-          enabled: true,
-          sortOrder: (index + 1) * 10
-        };
-      })
-    } : current;
-    if (target === 'editing') {
-      setEditingGroupDraft(updater);
-      markSettingsDraftDirty('project-target-configs:group-edit');
-    } else {
-      setGroupDraft(updater);
-      markSettingsDraftDirty('project-target-configs:group-create');
-    }
-  };
-
-  const removeGroupWebhookDraft = (target, index) => {
-    const updater = current => current ? {
-      ...current,
-      dingtalkWebhooks: (current.dingtalkWebhooks || []).filter((_, itemIndex) => itemIndex !== index)
-    } : current;
-    if (target === 'editing') {
-      setEditingGroupDraft(updater);
-    } else {
-      setGroupDraft(updater);
-    }
-  };
-
-  const createProjectGroup = async () => {
-    const groupName = groupDraft.groupName.trim();
-    const groupCode = groupDraft.groupCode.trim();
-    if (!groupName || !groupCode) {
-      messageApi.error('项目组名称和编码不能为空');
-      return;
-    }
-    const validationError = validateWebhookDrafts(groupDraft.dingtalkWebhooks || []);
-    if (validationError) {
-      messageApi.error(validationError);
-      return;
-    }
-    setProjectGroupCreating(true);
-    try {
-      await fetchApi('/api/project-groups', {
-        method: 'POST',
-        body: JSON.stringify({
-          groupName,
-          groupCode,
-          description: groupDraft.description?.trim() || null,
-          defaultCodeQualityProfileCode: groupDraft.defaultCodeQualityProfileCode || null,
-          defaultProviderCode: groupDraft.defaultProviderCode || null,
-          aiReviewModels: normalizeAiReviewModelPayload(groupDraft.aiReviewModels || []),
-          dingtalkWebhooks: normalizeWebhookPayload(groupDraft.dingtalkWebhooks || [])
-        })
-      });
-      setGroupDraft({ groupName: '', groupCode: '', description: '', defaultCodeQualityProfileCode: null, defaultProviderCode: null, aiReviewModels: [], dingtalkWebhooks: [] });
-      clearSettingsDraftDirty('project-target-configs:group-create');
-      await reloadProjectGroupsAndProjects();
-      messageApi.success('项目组已创建');
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setProjectGroupCreating(false);
-    }
-  };
-
-  const saveEditingProjectGroup = async () => {
-    if (!editingGroupDraft) return;
-    const groupName = editingGroupDraft.groupName.trim();
-    const groupCode = editingGroupDraft.groupCode.trim();
-    if (!groupName || !groupCode) {
-      messageApi.error('项目组名称和编码不能为空');
-      return;
-    }
-    const validationError = validateWebhookDrafts(editingGroupDraft.dingtalkWebhooks || []);
-    if (validationError) {
-      messageApi.error(validationError);
-      return;
-    }
-    setProjectGroupSavingId(editingGroupDraft.id);
-    try {
-      await fetchApi(`/api/project-groups/${editingGroupDraft.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          groupName,
-          groupCode,
-          description: editingGroupDraft.description?.trim() || null,
-          defaultCodeQualityProfileCode: editingGroupDraft.defaultCodeQualityProfileCode || null,
-          defaultProviderCode: editingGroupDraft.defaultProviderCode || null,
-          aiReviewModels: normalizeAiReviewModelPayload(editingGroupDraft.aiReviewModels || []),
-          status: editingGroupDraft.status || 'ENABLED',
-          dingtalkWebhooks: normalizeWebhookPayload(editingGroupDraft.dingtalkWebhooks || [])
-        })
-      });
-      setEditingGroupId(null);
-      setEditingGroupDraft(null);
-      clearSettingsDraftDirty('project-target-configs:group-edit');
-      await reloadProjectGroupsAndProjects();
-      messageApi.success('项目组已保存');
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setProjectGroupSavingId(null);
-    }
-  };
-
-  const disableProjectGroup = async (group) => {
-    setProjectGroupDisablingId(group.id);
-    try {
-      await fetchApi(`/api/project-groups/${group.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ status: 'DISABLED' })
-      });
-      if (projectGroupFilter === group.id) setProjectGroupFilter(null);
-      await reloadProjectGroupsAndProjects();
-      messageApi.success('项目组已停用');
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setProjectGroupDisablingId(null);
-    }
-  };
-
-  const saveSelectedProjectConfig = async () => {
-    if (!selectedProjectId || !projectConfigDraft?.groupId || !projectConfigDraft?.targetType) {
-      messageApi.error('请选择项目组、项目和所属端类型');
-      return;
-    }
-    setProjectConfigSaving(true);
-    try {
-      const updatedProject = await fetchApi(`/api/projects/${selectedProjectId}/group`, {
-        method: 'PUT',
-        body: JSON.stringify({ groupId: projectConfigDraft.groupId })
-      });
-      const normalizedTargetType = projectConfigDraft.targetType;
-      const existing = projectTargetConfigs.find(item => item.targetType === normalizedTargetType);
-      const updated = await fetchApi(`/api/projects/${selectedProjectId}/target-configs/${normalizedTargetType}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          templateCode: defaultTemplateCodeForTargetType(normalizedTargetType),
-          providerCode: targetConfigDraft?.providerCode || existing?.providerCode || null,
-          pathPatterns: existing?.pathPatterns?.length ? existing.pathPatterns : ['**/*'],
-          reminderCardEnabled: existing?.reminderCardEnabled ?? defaultReminderCardEnabledForTargetType(normalizedTargetType),
-          enabled: true
-        })
-      });
-      setProjects(current => current.map(project => project.id === updatedProject.id ? updatedProject : project));
-      setSelectedTargetType(normalizedTargetType);
-      setTargetConfigDraft(updated);
-      setProjectConfigDraft({ groupId: updatedProject.groupId || null, targetType: normalizedTargetType });
-      setProjectGroupFilter(updatedProject.groupId || null);
-      await reloadProjectGroupsAndProjects(selectedProjectId, normalizedTargetType, updatedProject.groupId || null);
-      clearSettingsDraftDirty('project-target-configs:project-config');
-      messageApi.success('项目配置已保存');
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setProjectConfigSaving(false);
-    }
-  };
-
-  const updateProjectDraft = (field, value) => {
-    setProjectDraft(current => ({ ...current, [field]: value }));
-    markSettingsDraftDirty('project-target-configs:project-create');
-  };
-
-  const createProjectRecord = async () => {
-    const name = projectDraft.name.trim();
-    const gitProjectId = projectDraft.gitProjectId.trim();
-    if (!name || !gitProjectId) {
-      messageApi.error('项目名称和 GitLab 项目 ID 不能为空');
-      return;
-    }
-    setProjectCreating(true);
-    try {
-      const created = await fetchApi('/api/projects', {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          gitProvider: 'GITLAB',
-          gitProjectId,
-          repositoryUrl: projectDraft.repositoryUrl.trim() || null,
-          groupId: projectDraft.groupId || groups[0]?.id || null,
-          targetType: projectDraft.targetType || 'BACKEND'
-        })
-      });
-      setProjectDraft({ name: '', gitProjectId: '', repositoryUrl: '', groupId: created.groupId || null, targetType: 'BACKEND' });
-      clearSettingsDraftDirty('project-target-configs:project-create');
-      await reloadProjectGroupsAndProjects(created.id);
-      messageApi.success('项目已预创建，后续 webhook 会复用该 GitLab 项目 ID');
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setProjectCreating(false);
-    }
-  };
-
-  const buildTargetPathMappingDrafts = (source = targetPathMappings) => TARGET_TYPE_PATH_MAPPING_OPTIONS
-    .map((option, index) => {
-      const existing = source.find(item => item.targetType === option.value);
-      return existing || {
-        targetType: option.value,
-        pathPatterns: defaultPathPatternsForTargetType(option.value),
-        enabled: true,
-        sortOrder: (index + 1) * 10,
-        description: '系统默认端类型路径映射'
-      };
-    });
-  const targetPathMappingDrafts = buildTargetPathMappingDrafts();
-
-  const updateTargetPathMappingDraft = (targetType, field, value) => {
-    setTargetPathMappings(current => {
-      const drafts = buildTargetPathMappingDrafts(current);
-      return drafts.map(item => item.targetType === targetType ? { ...item, [field]: value } : item);
-    });
-    markSettingsDraftDirty('project-target-configs:path-mappings');
-  };
-
-  const resetTargetPathMappingDraft = (targetType) => {
-    setTargetPathMappings(current => {
-      const drafts = buildTargetPathMappingDrafts(current);
-      return drafts.map(item => item.targetType === targetType ? {
-        ...item,
-        pathPatterns: defaultPathPatternsForTargetType(targetType),
-        enabled: true
-      } : item);
-    });
-    markSettingsDraftDirty('project-target-configs:path-mappings');
-    messageApi.info(`已恢复 ${targetTypeLabel(targetType)} 的默认匹配路径，请点击“保存路径映射”生效`);
-  };
-
-  const saveTargetPathMappings = async () => {
-    setTargetPathMappingSaving(true);
-    try {
-      const updated = await fetchApi('/api/target-type-path-mappings', {
-        method: 'PUT',
-        body: JSON.stringify({
-          items: targetPathMappingDrafts.map((item, index) => ({
-            targetType: item.targetType,
-            pathPatterns: item.pathPatterns || [],
-            enabled: item.enabled !== false,
-            sortOrder: item.sortOrder ?? (index + 1) * 10,
-            description: item.description || null
-          }))
-        })
-      });
-      setTargetPathMappings(Array.isArray(updated) ? updated : []);
-      clearSettingsDraftDirty('project-target-configs:path-mappings');
-      messageApi.success('端类型路径映射已保存');
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setTargetPathMappingSaving(false);
-    }
-  };
 
   const saveAiSettings = async (nextSettings = settingsDraft, successText = '设置已保存') => {
     if (!nextSettings) return;
@@ -8029,16 +7413,6 @@ function TemplateConfig() {
     markSettingsDraftDirty('profile-settings:profile');
   };
 
-  const selectPushPolicyGroup = (groupId) => {
-    setSelectedPushPolicyGroupId(groupId);
-    setPushPolicyDraft(pushPolicyFromGroup(groups.find(group => group.id === groupId)));
-  };
-
-  const updatePushPolicyDraft = (field, value) => {
-    setPushPolicyDraft(current => current ? { ...current, [field]: value } : current);
-    markSettingsDraftDirty('profile-settings:push-policy');
-  };
-
   const saveProfilePrompt = async () => {
     if (!profileDraft) return;
     setProfileSaving(true);
@@ -8060,42 +7434,6 @@ function TemplateConfig() {
       messageApi.error(err.message);
     } finally {
       setProfileSaving(false);
-    }
-  };
-
-  const savePushReviewPolicy = async () => {
-    if (!selectedPushPolicyGroupId || !pushPolicyDraft) return;
-    setPushPolicySaving(true);
-    try {
-      const updated = await fetchApi(`/api/project-groups/${selectedPushPolicyGroupId}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          reviewEngine: 'AGENT',
-          agentSourceExportAllowed: true,
-          aiReviewEnabled: true,
-          triggerOnManual: true,
-          triggerOnMr: pushPolicyDraft.triggerOnMr !== false,
-          triggerOnPush: pushPolicyDraft.triggerOnPush === true,
-          triggerOnlyWhenRiskMatched: false,
-          autoFixPreviewEnabled: pushPolicyDraft.autoFixPreviewEnabled === true,
-          autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(pushPolicyDraft.autoFixPreviewSeverities),
-          pushBranchPatterns: pushPolicyDraft.pushBranchPatterns || [],
-          pushMinChangedFiles: pushPolicyDraft.pushMinChangedFiles ?? null,
-          pushMinDiffBytes: pushPolicyDraft.pushMinDiffBytes ?? null,
-          pushMinCommitCount: pushPolicyDraft.pushMinCommitCount ?? null,
-          pushMaxChangedFiles: pushPolicyDraft.pushMaxChangedFiles ?? null,
-          pushMaxDiffBytes: pushPolicyDraft.pushMaxDiffBytes ?? null,
-          pushDebounceSeconds: pushPolicyDraft.pushDebounceSeconds ?? null
-        })
-      });
-      setGroups(current => current.map(item => item.id === updated.id ? updated : item));
-      setPushPolicyDraft(pushPolicyFromGroup(updated));
-      clearSettingsDraftDirty('profile-settings:push-policy');
-      messageApi.success('项目组 AI Review 策略已保存');
-    } catch (err) {
-      messageApi.error(err.message);
-    } finally {
-      setPushPolicySaving(false);
     }
   };
 
@@ -8141,172 +7479,8 @@ function TemplateConfig() {
     label: provider.providerName || sourceLabel(provider.providerCode),
     value: provider.providerCode
   }));
-  const groupModelOptions = providers.map(provider => ({
-    label: provider.apiKeyConfigured
-      ? sourceLabel(provider.providerCode)
-      : `${sourceLabel(provider.providerCode)}（未配置 Key）`,
-    value: provider.providerCode,
-    disabled: !provider.apiKeyConfigured
-  }));
-  const groupProfileOptions = [{ label: '不指定', value: '' }, ...profileOptions];
-  const profileProviderOptions = [{ label: '使用项目组模型配置', value: '' }, ...providerOptions];
+  const profileProviderOptions = [{ label: '使用全局 Provider', value: '' }, ...providerOptions];
   const providerApiKeyPlaceholder = '留空表示不更新当前 API Key';
-  const filteredProjects = projectGroupFilter
-    ? projects.filter(project => project.groupId === projectGroupFilter)
-    : [];
-  const renderWebhookDraftList = (webhooks, target) => (
-    <Space direction="vertical" size="middle" className="full-width webhook-list">
-      {(webhooks || []).length > 0 ? (
-        (webhooks || []).map((item, index) => (
-          <div key={item.id || `${target}-draft-${index}`} className="webhook-item">
-            <Row gutter={[12, 12]} align="middle">
-              <Col xs={24} lg={6}>
-                <Text strong>名称</Text>
-                <Input
-                  className="prompt-field"
-                  value={item.name || ''}
-                  placeholder="例如 移动业务群"
-                  onChange={event => updateGroupWebhookDraft(target, index, 'name', event.target.value)}
-                />
-              </Col>
-              <Col xs={24} lg={13}>
-                <Text strong>Webhook URL</Text>
-                <Input
-                  className="prompt-field"
-                  value={item.webhookUrl || ''}
-                  placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."
-                  onChange={event => updateGroupWebhookDraft(target, index, 'webhookUrl', event.target.value)}
-                />
-              </Col>
-              <Col xs={12} lg={3}>
-                <Text strong>启用</Text>
-                <div className="prompt-field">
-                  <Switch
-                    checked={item.enabled !== false}
-                    checkedChildren="开启"
-                    unCheckedChildren="关闭"
-                    onChange={checked => updateGroupWebhookDraft(target, index, 'enabled', checked)}
-                  />
-                </div>
-              </Col>
-              <Col xs={12} lg={2}>
-                <Text strong>操作</Text>
-                <div className="prompt-field webhook-remove-cell">
-                  <Button
-                    danger
-                    type="text"
-                    size="small"
-                    className="webhook-remove-button"
-                    icon={<CloseOutlined />}
-                    onClick={() => removeGroupWebhookDraft(target, index)}
-                  />
-                </div>
-              </Col>
-            </Row>
-          </div>
-        ))
-      ) : (
-        <Empty description="暂未配置钉钉机器人" />
-      )}
-    </Space>
-  );
-  const groupColumns = [
-    {
-      title: '项目组',
-      dataIndex: 'groupName',
-      width: 190,
-      render: (_, group) => editingGroupId === group.id ? (
-        <Input value={editingGroupDraft?.groupName || ''} onChange={event => updateEditingGroupDraft('groupName', event.target.value)} />
-      ) : (
-        <Space wrap>
-          <Text strong>{group.groupName}</Text>
-          {group.groupCode === 'default' && <Tag>默认</Tag>}
-        </Space>
-      )
-    },
-    {
-      title: '编码',
-      dataIndex: 'groupCode',
-      width: 160,
-      render: (_, group) => editingGroupId === group.id ? (
-        <Input disabled={group.groupCode === 'default'} value={editingGroupDraft?.groupCode || ''} onChange={event => updateEditingGroupDraft('groupCode', event.target.value)} />
-      ) : group.groupCode
-    },
-    {
-      title: 'AI Review 模板',
-      dataIndex: 'defaultCodeQualityProfileCode',
-      width: 220,
-      render: (_, group) => editingGroupId === group.id ? (
-        <Select className="full-width" value={editingGroupDraft?.defaultCodeQualityProfileCode || ''} options={groupProfileOptions} onChange={value => updateEditingGroupDraft('defaultCodeQualityProfileCode', value || null)} />
-      ) : (() => {
-        const profile = profiles.find(item => item.profileCode === group.defaultCodeQualityProfileCode);
-        return profile ? profileLabel(profile) : (group.defaultCodeQualityProfileCode || '-');
-      })()
-    },
-    {
-      title: 'Review 模型',
-      dataIndex: 'defaultProviderCode',
-      width: 260,
-      render: (_, group) => editingGroupId === group.id ? (
-        <Select
-          mode="multiple"
-          allowClear
-          className="full-width"
-          placeholder="选择一个或多个模型"
-          value={selectedAiReviewProviderCodes(editingGroupDraft)}
-          options={groupModelOptions}
-          onChange={value => updateGroupAiReviewProviders('editing', value)}
-        />
-      ) : aiReviewProviderDisplay(group)
-    },
-    {
-      title: '钉钉机器人',
-      dataIndex: 'enabledDingtalkWebhookCount',
-      width: 140,
-      render: value => <Tag color={value > 0 ? 'blue' : 'default'}>{value || 0} 个启用</Tag>
-    },
-    {
-      title: '描述',
-      dataIndex: 'description',
-      render: (_, group) => editingGroupId === group.id ? (
-        <Input value={editingGroupDraft?.description || ''} onChange={event => updateEditingGroupDraft('description', event.target.value)} />
-      ) : (group.description || '-')
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      width: 100,
-      render: value => <Tag color={value === 'ENABLED' ? 'green' : 'default'}>{value === 'ENABLED' ? '启用' : '停用'}</Tag>
-    },
-    {
-      title: '操作',
-      width: 190,
-      render: (_, group) => editingGroupId === group.id ? (
-        <Space wrap>
-          <Button type="primary" size="small" loading={projectGroupSavingId === group.id} onClick={saveEditingProjectGroup}>保存</Button>
-          <Button size="small" onClick={() => {
-            setEditingGroupId(null);
-            setEditingGroupDraft(null);
-            clearSettingsDraftDirty('project-target-configs:group-edit');
-          }}>取消</Button>
-        </Space>
-      ) : (
-        <Space wrap>
-          <Button size="small" onClick={() => startEditGroup(group)}>编辑</Button>
-          <Button
-            danger
-            size="small"
-            disabled={group.groupCode === 'default'}
-            loading={projectGroupDisablingId === group.id}
-            onClick={() => disableProjectGroup(group)}
-          >
-            停用
-          </Button>
-        </Space>
-      )
-    }
-  ];
-
   const reviewConnectionRows = useMemo(
     () => buildReviewModelConnectionCatalog({
       agentSettings,
@@ -9571,7 +8745,7 @@ function TemplateConfig() {
       label: (
         <Space wrap>
           <Text strong>AI Review 配置</Text>
-          <Tag>Profile / 项目组策略</Tag>
+          <Tag>Profile</Tag>
         </Space>
       ),
       children: (
@@ -9581,7 +8755,7 @@ function TemplateConfig() {
         >
           {profileDraft ? (
             <div className="full-width" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div className="settings-subsection" style={{ order: 2 }}>
+              <div className="settings-subsection">
                 <Space direction="vertical" size="middle" className="full-width">
                   <SettingsCardHeader
                     icon={<FileTextOutlined />}
@@ -9653,179 +8827,6 @@ function TemplateConfig() {
                       <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={!profileDraft}>恢复当前 Profile 默认 Prompt</Button>
                       <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={!profileDraft}>保存 Profile</Button>
                     </Space>
-                  </div>
-                </Space>
-              </div>
-              <div className="settings-subsection" style={{ order: 1 }}>
-                <Space direction="vertical" size="middle" className="full-width">
-                  <SettingsCardHeader
-                    icon={<SettingOutlined />}
-                    title="项目组 AI Review 通用策略"
-                    description="配置项目组默认 Review 引擎、自动触发方式与 Push 审核门槛。"
-                    tags={(
-                      <>
-                        <Tag color="blue">项目组级</Tag>
-                        {selectedPushPolicyGroupId && <Tag color="purple">AGENT</Tag>}
-                      </>
-                    )}
-                  />
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} md={10}>
-                      <Text strong>项目组</Text>
-                      <Select
-                        className="full-width prompt-field"
-                        value={selectedPushPolicyGroupId || undefined}
-                        options={groups.map(group => ({ label: group.groupName, value: group.id }))}
-                        onChange={selectPushPolicyGroup}
-                        placeholder="请选择项目组"
-                      />
-                    </Col>
-                  </Row>
-                  <Row gutter={[16, 16]} align="middle" className="project-review-switch-row">
-                    <Col xs={12} sm={8} lg={4}>
-                      <Space direction="vertical">
-                        <Text strong>MR 自动触发</Text>
-                        <Switch
-                          checked={pushPolicyDraft?.triggerOnMr !== false}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => updatePushPolicyDraft('triggerOnMr', checked)}
-                        />
-                      </Space>
-                    </Col>
-                    <Col xs={12} sm={8} lg={4}>
-                      <Space direction="vertical">
-                        <Text strong>Push 自动触发</Text>
-                        <Switch
-                          checked={pushPolicyDraft?.triggerOnPush === true}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => updatePushPolicyDraft('triggerOnPush', checked)}
-                        />
-                      </Space>
-                    </Col>
-                    <Col xs={12} sm={8} lg={4}>
-                      <Space direction="vertical">
-                        <Text strong>自动生成修复预览</Text>
-                        <Switch
-                          checked={pushPolicyDraft?.autoFixPreviewEnabled === true}
-                          checkedChildren="开启"
-                          unCheckedChildren="关闭"
-                          onChange={checked => updatePushPolicyDraft('autoFixPreviewEnabled', checked)}
-                        />
-                      </Space>
-                    </Col>
-                  </Row>
-                  {(pushPolicyDraft?.autoFixPreviewEnabled === true || pushPolicyDraft?.triggerOnPush === true) && (
-                    <Row gutter={[16, 16]} align="stretch" className="project-review-policy-panels">
-                    {pushPolicyDraft?.autoFixPreviewEnabled === true && (
-                      <Col xs={24} lg={pushPolicyDraft?.triggerOnPush === true ? 8 : 24}>
-                        <div className="project-review-policy-panel">
-                          <SettingsCardHeader
-                            compact
-                            icon={<ThunderboltOutlined />}
-                            title="修复预览策略"
-                            description="配置自动生成修复预览的风险等级和生成范围，避免不必要的 token 消耗。"
-                          />
-                          <Select
-                            mode="multiple"
-                            className="full-width prompt-field"
-                            value={normalizeAutoFixPreviewSeverities(pushPolicyDraft?.autoFixPreviewSeverities)}
-                            options={AUTO_FIX_PREVIEW_SEVERITY_OPTIONS}
-                            onChange={value => updatePushPolicyDraft('autoFixPreviewSeverities', normalizeAutoFixPreviewSeverities(value))}
-                          />
-                        </div>
-                      </Col>
-                    )}
-                    {pushPolicyDraft?.triggerOnPush === true && (
-                      <Col xs={24} lg={pushPolicyDraft?.autoFixPreviewEnabled === true ? 16 : 24}>
-                        <div className="project-review-policy-panel">
-                          <SettingsCardHeader
-                            compact
-                            icon={<SafetyCertificateOutlined />}
-                            title="Push 审核策略"
-                            description="配置 Push 事件进入 AI Review 前必须满足的分支和变更门槛；-1 表示不限制。"
-                          />
-                          <Row gutter={[16, 16]}>
-                          <Col xs={24}>
-                            <Text strong>允许分支</Text>
-                            <Select
-                              mode="tags"
-                              className="full-width prompt-field"
-                              value={pushPolicyDraft?.pushBranchPatterns || []}
-                              onChange={value => updatePushPolicyDraft('pushBranchPatterns', value)}
-                              placeholder="例如 master、release/*"
-                            />
-                          </Col>
-                          <Col xs={24} md={8}>
-                            <Text strong>最小文件数</Text>
-                            <InputNumber
-                              className="full-width prompt-field"
-                              min={-1}
-                              value={pushPolicyDraft?.pushMinChangedFiles}
-                              onChange={value => updatePushPolicyDraft('pushMinChangedFiles', value)}
-                            />
-                          </Col>
-                          <Col xs={24} md={8}>
-                            <Text strong>最小 Diff 字节</Text>
-                            <InputNumber
-                              className="full-width prompt-field"
-                              min={-1}
-                              value={pushPolicyDraft?.pushMinDiffBytes}
-                              onChange={value => updatePushPolicyDraft('pushMinDiffBytes', value)}
-                            />
-                          </Col>
-                          <Col xs={24} md={8}>
-                            <Text strong>最小 Commit 数</Text>
-                            <InputNumber
-                              className="full-width prompt-field"
-                              min={-1}
-                              value={pushPolicyDraft?.pushMinCommitCount}
-                              onChange={value => updatePushPolicyDraft('pushMinCommitCount', value)}
-                            />
-                          </Col>
-                          <Col xs={24} md={8}>
-                            <Text strong>最大文件数</Text>
-                            <InputNumber
-                              className="full-width prompt-field"
-                              min={-1}
-                              value={pushPolicyDraft?.pushMaxChangedFiles}
-                              onChange={value => updatePushPolicyDraft('pushMaxChangedFiles', value)}
-                            />
-                          </Col>
-                          <Col xs={24} md={8}>
-                            <Text strong>最大 Diff 字节</Text>
-                            <InputNumber
-                              className="full-width prompt-field"
-                              min={-1}
-                              value={pushPolicyDraft?.pushMaxDiffBytes}
-                              onChange={value => updatePushPolicyDraft('pushMaxDiffBytes', value)}
-                            />
-                          </Col>
-                          <Col xs={24} md={8}>
-                            <Text strong>Debounce 秒数</Text>
-                            <InputNumber
-                              className="full-width prompt-field"
-                              min={-1}
-                              value={pushPolicyDraft?.pushDebounceSeconds}
-                              onChange={value => updatePushPolicyDraft('pushDebounceSeconds', value)}
-                            />
-                          </Col>
-                          </Row>
-                        </div>
-                      </Col>
-                    )}
-                    </Row>
-                  )}
-                  <div className="settings-action-row">
-                    <Button
-                      type="primary"
-                      loading={pushPolicySaving}
-                      onClick={savePushReviewPolicy}
-                      disabled={!pushPolicyDraft || !selectedPushPolicyGroupId}
-                    >
-                      保存项目组 AI Review 策略
-                    </Button>
                   </div>
                 </Space>
               </div>
@@ -11433,28 +10434,28 @@ function HelpPage() {
         <section className="help-section">
           <div className="help-section-number">三</div>
           <div className="help-section-content">
-            <Title level={3}>配置平台项目组</Title>
+            <Title level={3}>配置平台项目</Title>
             <Paragraph>进入平台：</Paragraph>
             <HelpCodeBlock>设置 -&gt; 项目 / 端类型配置</HelpCodeBlock>
             <Paragraph>
-              给项目组配置钉钉机器人时，把上一步从钉钉复制的 Webhook URL 填入该项目组的机器人配置，并启用它。
-              平台只会按项目所属项目组发送通知；该项目组未配置机器人时，本次通知会记录为跳过。
+              在机器人库中保存上一步复制的 Webhook URL 并启用机器人，再为需要接收通知的项目选择对应机器人。
+              平台只按项目配置发送通知；项目未关联可用机器人时，本次通知会记录为跳过。
             </Paragraph>
             <HelpImage
               src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-27_11-10-57.png"
-              alt="平台项目组与钉钉机器人配置示例"
+              alt="平台项目与钉钉机器人配置示例"
             />
             <Paragraph>
-              首次收到某个 GitLab 项目的 Webhook 后，平台可以自动创建项目记录。自动创建的项目会进入默认项目组，后续可以再人工调整。
+              首次收到某个 GitLab 项目的 Webhook 后，平台可以自动创建项目记录，并根据路径规则识别端类型。
             </Paragraph>
             <HelpImage
               src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/cd00250a14cb455e95f79c07f7cd6a03.png"
-              alt="平台项目组配置示例"
+              alt="平台项目配置示例"
             />
             <Paragraph>
-              首次收到某个 GitLab 项目的 Webhook 后，项目打入通用组，同时自动匹配路径到具体端类型，走端类型对应的 AI Review 模板。
+              项目会自动匹配变更路径到具体端类型，并使用端类型对应的 AI Review Profile 与默认路径规则。
               注意，结合各端项目实际目录判断，确认映射规则能覆盖项目日常提交的主要代码路径，避免多端路径存在冲突，否则平台可能无法准确识别端类型和 AI Review 审查模板。
-              当然，可以通过手动指定项目组，后续优先以项目组的策略为准。
+              识别后仍可在项目配置中手动调整端类型、Profile、路径规则、触发策略和通知机器人。
             </Paragraph>
             <HelpImage
               src="https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-28_19-50-37.png"
@@ -11482,7 +10483,6 @@ function ReviewQualityDashboardPage() {
     riskType: '',
     verdict: null,
     taskId: '',
-    groupId: '',
     startAt: '',
     endAt: '',
     syntheticDemo: false
@@ -11517,7 +10517,6 @@ function ReviewQualityDashboardPage() {
       const query = params.toString();
       const observationParams = new URLSearchParams();
       if (nextFilters.taskId?.trim()) observationParams.set('taskId', nextFilters.taskId.trim());
-      if (nextFilters.groupId?.trim()) observationParams.set('groupId', nextFilters.groupId.trim());
       if (nextFilters.projectId) observationParams.set('projectId', String(nextFilters.projectId));
       if (nextFilters.profile?.trim()) observationParams.set('profile', nextFilters.profile.trim());
       if (nextFilters.startAt) observationParams.set('startAt', nextFilters.startAt);
@@ -11556,7 +10555,6 @@ function ReviewQualityDashboardPage() {
       riskType: '',
       verdict: null,
       taskId: '',
-      groupId: '',
       startAt: '',
       endAt: '',
       syntheticDemo: false
@@ -11623,7 +10621,7 @@ function ReviewQualityDashboardPage() {
   ];
   const agentComparisonColumns = [
     { title: '任务', dataIndex: 'taskId', width: 90, render: value => <Button type="link" onClick={() => navigate(`${TASK_LIST_ROUTE}/${value}`)}>#{value}</Button> },
-    { title: '项目组 / 项目', key: 'scope', ellipsis: true, render: (_, row) => `${row.groupName || row.groupId || '-'} / ${row.projectName || row.projectId || '-'}` },
+    { title: '项目', key: 'scope', ellipsis: true, render: (_, row) => row.projectName || row.projectId || '-' },
     { title: 'Profile', dataIndex: 'profile', width: 180, ellipsis: true },
     { title: '普通 / Agent 结果', key: 'results', width: 130, render: (_, row) => `${row.standardResultCount ?? 0} / ${row.agentResultCount ?? 0}` },
     { title: 'finding（普通 / Agent）', key: 'findings', width: 155, render: (_, row) => `${row.standardFindingCount ?? 0} / ${row.agentFindingCount ?? 0}` },
@@ -11644,7 +10642,6 @@ function ReviewQualityDashboardPage() {
           confirmation: 'SANITIZED_SUMMARY_ONLY',
           filters: {
             taskId: filters.taskId || null,
-            groupId: filters.groupId || null,
             projectId: filters.projectId || null,
             profile: filters.profile || null,
             startAt: filters.startAt || null,
@@ -11810,13 +10807,12 @@ function ReviewQualityDashboardPage() {
             <Box
               sx={{
                 display: 'grid',
-                gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(150px, 1fr)) auto' },
+                gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(3, minmax(150px, 1fr)) auto' },
                 gap: 1.25,
                 alignItems: 'center'
               }}
             >
               <TextField size="small" label="任务 ID（Agent 观察）" value={filters.taskId} onChange={event => updateFilter('taskId', event.target.value)} />
-              <TextField size="small" label="项目组 ID（Agent 观察）" value={filters.groupId} onChange={event => updateFilter('groupId', event.target.value)} />
               <TextField size="small" label="开始时间" type="datetime-local" value={filters.startAt} onChange={event => updateFilter('startAt', event.target.value)} InputLabelProps={{ shrink: true }} />
               <TextField size="small" label="结束时间" type="datetime-local" value={filters.endAt} onChange={event => updateFilter('endAt', event.target.value)} InputLabelProps={{ shrink: true }} />
               <Stack direction="row" spacing={1} sx={{ minHeight: 40, alignItems: 'center' }}>
@@ -11829,7 +10825,6 @@ function ReviewQualityDashboardPage() {
                       projectId: checked ? null : current.projectId,
                       profile: checked ? '' : current.profile,
                       taskId: checked ? '' : current.taskId,
-                      groupId: checked ? '' : current.groupId
                     }));
                   }}
                 />

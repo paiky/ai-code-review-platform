@@ -139,7 +139,6 @@ class _SanitizeInspector:
             "notification_records",
             "code_quality_model_providers",
             "code_quality_review_settings",
-            "project_groups",
             "code_quality_agent_settings",
             "code_quality_agent_runtimes",
             "code_quality_agent_workers",

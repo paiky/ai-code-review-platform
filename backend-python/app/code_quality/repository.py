@@ -24,16 +24,9 @@ from app.code_quality.models import (
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.json_utils import format_datetime, page_response, read_json, read_json_array
-from app.notification.repository import (
-    ensure_webhook_schema,
-    list_webhooks,
-    upsert_webhooks,
-    webhook_to_dict,
-)
+from app.notification.repository import ensure_webhook_schema
 from app.project_integration.models import (
     Project,
-    ProjectGroup,
-    ProjectGroupAiReviewModel,
     ProjectAiReviewModel,
     ProjectTargetConfig,
 )
@@ -808,7 +801,6 @@ def get_settings_record(db: Session) -> CodeQualityReviewSettings:
 
 
 def settings_to_dict(record: CodeQualityReviewSettings) -> dict[str, Any]:
-    session = Session.object_session(record)
     return {
         "reviewEnabled": record.review_enabled,
         "mrAutoReviewEnabled": record.mr_auto_review_enabled,
@@ -817,7 +809,6 @@ def settings_to_dict(record: CodeQualityReviewSettings) -> dict[str, Any]:
         "autoFixPreviewSeverities": normalize_auto_fix_preview_severities(
             record.auto_fix_preview_severities
         ),
-        "dingtalkWebhooks": [webhook_to_dict(item) for item in list_webhooks(session)] if session else [],
         "reviewProvider": record.default_provider_code or _provider_code(record.review_provider),
         "defaultProviderCode": record.default_provider_code or _provider_code(record.review_provider),
         "updatedAt": format_datetime(record.updated_at),
@@ -839,11 +830,6 @@ def update_settings_record(db: Session, request: dict[str, Any]) -> dict[str, An
             normalize_auto_fix_preview_severities(request["autoFixPreviewSeverities"]),
             ensure_ascii=False,
         )
-    if "dingtalkWebhooks" in request:
-        payload = request["dingtalkWebhooks"] or []
-        if not isinstance(payload, list):
-            raise AppError("VALIDATION_ERROR", "dingtalkWebhooks must be a list", 400)
-        upsert_webhooks(db, payload)
     default_provider = request.get("defaultProviderCode") or request.get("reviewProvider")
     if default_provider is not None:
         provider = get_provider(db, str(default_provider).upper())
@@ -1222,8 +1208,6 @@ def _locking_provider_reference_counts(db: Session, provider_code: str) -> dict[
     references = (
         ("profiles", CodeQualityReviewProfile, CodeQualityReviewProfile.provider_code),
         ("projects", Project, Project.default_code_quality_provider_code),
-        ("projectGroups", ProjectGroup, ProjectGroup.default_provider_code),
-        ("projectGroupModels", ProjectGroupAiReviewModel, ProjectGroupAiReviewModel.provider_code),
         ("projectModels", ProjectAiReviewModel, ProjectAiReviewModel.provider_code),
         ("projectTargets", ProjectTargetConfig, ProjectTargetConfig.provider_code),
     )

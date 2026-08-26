@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.agent_review.models import AgentReviewRun
 from app.code_quality.models import CodeQualityReviewResult
 from app.evaluation.models import EvaluationCase
-from app.project_integration.models import Project, ProjectGroup
+from app.project_integration.models import Project
 from app.review_feedback.models import ReviewItemFeedback
 from app.review_record.models import ReviewTask
 
@@ -22,7 +22,6 @@ def test_agent_observation_supports_scope_filters_and_insufficient_sample_gate(
         "/api/review-quality/agent-observation",
         params={
             "taskId": 97001,
-            "groupId": 9701,
             "projectId": 97001,
             "profile": "backend-observation",
             "startAt": "2026-07-18T08:00:00",
@@ -55,7 +54,7 @@ def test_agent_observation_supports_scope_filters_and_insufficient_sample_gate(
 
     no_match = client.get(
         "/api/review-quality/agent-observation",
-        params={"groupId": 999999},
+        params={"projectId": 999999},
     ).json()["data"]
     assert no_match["sampleSummary"]["taskCount"] == 0
 
@@ -137,29 +136,13 @@ def test_agent_observation_rejects_invalid_time_range(client: TestClient) -> Non
 def _seed_observation(db: Session) -> None:
     now = datetime(2026, 7, 18, 10, 0, 0)
     db.add(
-        ProjectGroup(
-            id=9701,
-            group_name="Sensitive Observation Group",
-            group_code="observation-sensitive",
-            review_engine="STANDARD",
-            agent_source_export_allowed=False,
-            ai_review_enabled=True,
-            trigger_on_manual=True,
-            trigger_on_mr=True,
-            trigger_on_push=False,
-            status="ENABLED",
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    db.add(
         Project(
             id=97001,
-            group_id=9701,
             name="Sensitive Production Project",
             git_provider="GITLAB",
             git_project_id="97001",
             repository_url="https://gitlab.example.test/sensitive/project.git",
+            target_type="BACKEND",
             default_template_code="backend-default",
             default_code_quality_profile_code="backend-observation",
             status="ENABLED",

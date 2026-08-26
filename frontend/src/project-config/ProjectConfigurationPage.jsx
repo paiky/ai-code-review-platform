@@ -42,15 +42,9 @@ import WebhookLibrary from './WebhookLibrary.jsx';
 import './projectConfiguration.css';
 
 const { Text, Title } = Typography;
-const MIGRATION_NOTICE_KEY = 'project-center-migration-notice-dismissed-v1';
 const PATH_MAPPING_TARGET_TYPES = TARGET_TYPE_OPTIONS.filter(
   item => !['APP_CROSS_PLATFORM', 'GENERAL'].includes(item.value)
 );
-
-function initialNoticeVisible() {
-  if (typeof window === 'undefined') return true;
-  return window.localStorage.getItem(MIGRATION_NOTICE_KEY) !== '1';
-}
 
 function normalizeMappings(items) {
   const source = Array.isArray(items) ? items : [];
@@ -69,7 +63,6 @@ function normalizeMappings(items) {
 export default function ProjectConfigurationPage({ onDirtyChange }) {
   const [messageApi, contextHolder] = message.useMessage();
   const [activeTab, setActiveTab] = useState('projects');
-  const [noticeVisible, setNoticeVisible] = useState(initialNoticeVisible);
   const [filters, setFilters] = useState({ ...EMPTY_PROJECT_FILTERS });
   const [appliedFilters, setAppliedFilters] = useState({ ...EMPTY_PROJECT_FILTERS });
   const [page, setPage] = useState(() => normalizePage(null));
@@ -342,20 +335,6 @@ export default function ProjectConfigurationPage({ onDirtyChange }) {
           </div>
         </div>
       </header>
-
-      {noticeVisible && (
-        <Alert
-          banner
-          closable
-          showIcon
-          type="info"
-          title="项目组配置已升级为项目级 Review 与通知配置，原有端类型、触发策略、模型和机器人关系已自动迁移。"
-          onClose={() => {
-            window.localStorage.setItem(MIGRATION_NOTICE_KEY, '1');
-            setNoticeVisible(false);
-          }}
-        />
-      )}
 
       <Tabs
         activeKey={activeTab}

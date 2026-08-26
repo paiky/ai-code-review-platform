@@ -8,9 +8,7 @@ from app.core.response import ok
 from app.project_integration.repository import (
     apply_project_target_type_auto_detection,
     create_project,
-    create_project_group,
     list_enabled_projects,
-    list_project_groups,
     list_project_target_configs,
     list_target_type_path_mappings,
     project_configuration_defaults_response,
@@ -18,8 +16,6 @@ from app.project_integration.repository import (
     project_target_type_auto_detection_preview,
     project_review_settings_response,
     update_project_configuration,
-    update_project_group,
-    update_project_group_binding,
     update_project_review_settings,
     update_target_type_path_mappings,
     upsert_project_target_config,
@@ -37,23 +33,7 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 webhook_router = APIRouter(prefix="/api/webhooks/gitlab", tags=["gitlab-webhooks"])
 
 
-group_router = APIRouter(prefix="/api/project-groups", tags=["project-groups"])
 target_mapping_router = APIRouter(prefix="/api/target-type-path-mappings", tags=["target-type-path-mappings"])
-
-
-@group_router.get("")
-async def find_project_groups(db: Session = Depends(get_db)) -> dict:
-    return ok(list_project_groups(db))
-
-
-@group_router.post("")
-async def create_group(request: dict[str, Any], db: Session = Depends(get_db)) -> dict:
-    return ok(create_project_group(db, request))
-
-
-@group_router.put("/{group_id}")
-async def update_group(group_id: int, request: dict[str, Any], db: Session = Depends(get_db)) -> dict:
-    return ok(update_project_group(db, group_id, request))
 
 
 @target_mapping_router.get("")
@@ -68,7 +48,6 @@ async def save_target_type_path_mappings(request: dict[str, Any], db: Session = 
 
 @router.get("")
 async def list_projects(
-    group_id: int | None = Query(default=None, alias="groupId"),
     target_type: str | None = Query(default=None, alias="targetType"),
     keyword: str | None = Query(default=None),
     notification_status: Literal[
@@ -90,7 +69,6 @@ async def list_projects(
     return ok(
         list_enabled_projects(
             db,
-            group_id=group_id,
             target_type=target_type,
             keyword=keyword,
             notification_status=notification_status,
@@ -112,11 +90,6 @@ async def get_project_configuration_defaults(
     target_type: TargetType = Query(alias="targetType"),
 ) -> dict:
     return ok(project_configuration_defaults_response(target_type))
-
-
-@router.put("/{project_id}/group")
-async def bind_project_group(project_id: int, request: dict[str, Any], db: Session = Depends(get_db)) -> dict:
-    return ok(update_project_group_binding(db, project_id, request))
 
 
 @router.get("/{project_id}/configuration")
