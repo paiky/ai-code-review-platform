@@ -14,7 +14,7 @@ const GOVERNANCE_ROUTES = Object.freeze([
 ]);
 
 export const SETTINGS_NAVIGATION_ROUTES = Object.freeze([
-  { key: '/settings/project-targets', label: '项目组 / 端类型配置' },
+  { key: '/settings/project-targets', label: '项目 / 端类型配置' },
   {
     key: '/settings/ai-review/models',
     label: 'AI Review 配置',

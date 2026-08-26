@@ -33,7 +33,7 @@ export const SETTINGS_SECTIONS = Object.freeze([
   {
     key: 'project-target-configs',
     route: '/settings/project-targets',
-    label: '项目组 / 端类型配置'
+    label: '项目 / 端类型配置'
   },
   {
     key: 'ai-review-settings',

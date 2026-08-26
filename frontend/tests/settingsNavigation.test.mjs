@@ -24,6 +24,7 @@ test('maps the three settings menu entries and both AI Review tabs to stable chi
     'ai-review-settings',
     'global-settings'
   ]);
+  assert.equal(SETTINGS_SECTIONS[0].label, '项目 / 端类型配置');
   assert.deepEqual(AI_REVIEW_SETTINGS_TABS.map(item => item.key), ['models', 'policies']);
   assert.equal(resolveSettingsSection('/settings/project-targets')?.key, 'project-target-configs');
   assert.deepEqual(

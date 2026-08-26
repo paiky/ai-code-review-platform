@@ -2,8 +2,8 @@
 
 ## 1. 状态与背景
 
-- 计划状态：**阶段五前置接口补充已完成，阶段五前端 UI 待确认（2026-08-25）**；
-- 当前停止点：项目列表、端类型默认配置和恢复自动识别 Backend 契约已补齐并完成验证；未修改前端、数据库或部署，等待用户确认恢复阶段五前端 UI；
+- 计划状态：**阶段五实现已完成，最新 UI 反馈调整待用户浏览器验收（2026-08-26）**；
+- 当前停止点：项目中心页面、项目配置抽屉、批量机器人、机器人库、端类型规则和响应式布局已完成；此前 `1440px/1024px/390px` 浏览器验收已通过，七轮 UI 反馈调整已通过前端全量测试、build 与 `git diff --check`，等待用户浏览器验收，不推进阶段六；
 - 产品背景：组织架构已进入全栈协作模式，原“研发一部后端、研发二部后端、Web 端、iOS 端、Android 端”等项目组不再是
   稳定的业务归属，也不应继续决定 Review 模板、模型、触发策略或钉钉通知目标；
 - 当前问题：`projects.group_id -> project_groups -> notification_webhooks` 同时承担组织归类、Review 配置继承和通知路由，项目组停用、
@@ -21,8 +21,10 @@
 2. 项目暂定只属于一个端类型，端类型取值继续使用 `BACKEND`、`WEB_PC`、`APP_IOS`、`APP_ANDROID`、
    `APP_CROSS_PLATFORM`、`GENERAL`。
 3. 一个项目只走一个端类型对应的规则模板和 AI Review Profile；不在本专项实现多端 diff 分桶或一个任务多端 Review。
-4. 保留现有端类型配置行为：继续保存实际的 `templateCode`、`codeQualityProfileCode`、`providerCode`、路径规则和提醒卡片开关；
-   不新增“动态继承端类型默认配置”开关。
+4. 项目配置页的 Profile 以当前端类型配置为默认值；项目路径编辑器每次打开均以服务端当前端类型默认路径初始化，二者均允许
+   项目级调整；不展示 Review 模型区块，Review 引擎跟随
+   全局 AI Review 配置（Agent Review 优先，不可用时由 Standard Review 承接），保存时清除 `providerCode` 与 `aiReviewModels`
+   项目覆盖。规则模板和提醒卡片继续按现有综合配置契约保存。
 5. 项目独立配置自动 Review 触发：`triggerOnMr` 默认 `true`，`triggerOnPush` 默认 `false`；迁移时优先复制原项目组实际值，
    保留既有“只 PUSH”“只 MR”等使用习惯。
 6. 项目与钉钉机器人为多对多关系；一个项目可以通知多个机器人，一个机器人可以被多个项目复用。
@@ -413,16 +415,7 @@ PUT /api/projects/{projectId}/configuration
     "pathPatterns": ["**/*"],
     "reminderCardEnabled": false
   },
-  "aiReviewModels": [
-    {
-      "reviewKey": "deepseek-default",
-      "providerCode": "DEEPSEEK",
-      "modelName": null,
-      "displayName": "DeepSeek",
-      "enabled": true,
-      "sortOrder": 10
-    }
-  ],
+  "aiReviewModels": [],
   "reviewSettings": {
     "triggerOnMr": true,
     "triggerOnPush": false,
@@ -442,7 +435,8 @@ PUT /api/projects/{projectId}/configuration
 ```
 
 Service 在单个数据库事务中验证并保存：项目端类型、唯一端类型配置、项目模型、Review 设置和机器人关联。端类型改变导致模板/Profile
-变化时，前端必须先展示差异；Backend 仍以请求内完整配置为准，禁止根据旧项目组隐式覆盖。
+变化时，前端必须先展示差异；Backend 仍以请求内完整配置为准，禁止根据旧项目组隐式覆盖。项目中心前端保存用户确认的 Profile
+与路径规则，同时提交 `providerCode: null` 和空 `aiReviewModels`；Backend 暂时保留原 DTO 兼容其它调用方，不在本阶段删除字段。
 
 ### 7.3 机器人库
 
@@ -659,15 +653,18 @@ ljdw2-saas-front-web · GitLab ID 148
 
 区块一“基础与 Review 配置”：
 
+- 不显示独立区块标题和说明，抽屉标题后直接进入端类型与规则模板表单；
 - 端类型：单选；
 - 规则模板；
-- AI Review Profile；
-- Review 模型：支持当前项目一个或多个模型；
+- AI Review Profile：默认展示当前端类型配置，并允许项目级选择；
+- 不展示 Review 模型区块，不提供项目级模型选择；
+- 项目路径规则：每次打开抽屉均使用服务端当前端类型默认路径作为初始值，并允许项目级编辑；
 - 提醒卡片开关；
-- 不展示“使用端类型默认配置”开关，保持保存实际配置的现有行为；
+- 不展示“使用端类型默认配置”开关，端类型变化时直接加载服务端默认 Profile 与路径，用户仍可在保存前调整；
 - 修改端类型时加载新端类型默认模板/Profile，并在抽屉内显示“端类型变化将同时调整以下 Review 配置”的差异提醒；
 - 差异提醒至少展示旧/新端类型、规则模板和 Profile；未确认最终值前不得静默提交；
-- 保存前由用户确认完整最终值，不做运行时隐式继承。
+- 保存时保留用户确认的 Profile 与路径规则，清除旧 `providerCode` 和项目模型覆盖；旧项目在首次保存前继续保持已有模型运行行为，
+  避免仅打开抽屉就静默改写配置。
 
 区块二“Review 触发”：
 
@@ -694,8 +691,8 @@ ljdw2-saas-front-web · GitLab ID 148
 
 端类型、Review、触发和机器人配置由一次保存提交，失败时保持草稿并展示具体字段错误。
 
-抽屉关闭、切换项目、切换页签或离开设置页时接入既有 dirty guard：无修改直接离开；有修改时提供“继续编辑 / 放弃修改”。保存失败
-不得清空草稿；保存成功后刷新列表中的 Review、触发和通知状态。
+项目配置抽屉点击遮罩、关闭按钮或取消时直接关闭并丢弃草稿，不显示二次确认；切换页签或离开设置页时继续接入既有 dirty guard。
+保存失败不得清空草稿；保存成功后刷新列表中的 Review、触发和通知状态。
 
 ### 9.5 批量配置机器人
 
@@ -1010,6 +1007,8 @@ frontend/src/project-config/
 
 授权边界与停止点：只允许修改前端、前端测试、必要文案和本文；不得调整 Backend、数据库或部署。完成后停止等待阶段六确认。
 
+实施状态（2026-08-26）：阶段五主体实现已完成并通过首轮验收。浏览器在 `1440px/1024px/390px` 下验证无页面级横向溢出，筛选换行、表格内部滚动、项目/操作固定列、项目与批量抽屉、服务端批量预览、自动识别预览、分页/筛选选择清理、机器人库入口和 dirty guard 可用；验收中修复移动端固定列重叠、旧侧栏文案及 Ant Design 弃用属性告警。机器人库当前无已保存机器人，未调用真实钉钉测试或执行持久化保存/删除。首轮全部前端测试 `257 passed`，`scripts/run-frontend.ps1 build` 与 `git diff --check` 通过。后续按用户反馈优化端类型规则折叠区外观，移除项目表格独立 GitLab ID 列，并将项目名改为直达 GitLab 的安全链接且不再重复展示 URL；第二轮补充项目和批量抽屉遮罩关闭并保留草稿保护，修正机器人启用状态横向布局，移除页头重复的刷新与机器人入口；第三轮尝试将基础 Review 默认值改为只读摘要，第四轮按最新反馈恢复 Profile 与路径项目级编辑并完全移除 Review 模型区块，保存时仅清理项目 Provider/模型覆盖；第五轮将路径编辑器初始值统一改为服务端当前端类型默认路径，同时继续允许保存前调整；第六轮将项目配置抽屉改为直接关闭并删除默认路径和空通知信息提示；第七轮移除首段“基础与 Review 配置”标题说明，让表单直接从端类型开始。最新全部前端测试 `263 passed`、build 与 `git diff --check` 通过，浏览器复验由用户执行。阶段五继续停止，不推进阶段六。
+
 ### 11.7 阶段六：项目组遗留清理
 
 改动量等级：**中**。删除已停止使用的 API、字段、表、筛选和兼容分支，风险由前五阶段的双读验证和稳定期控制。
@@ -1117,6 +1116,12 @@ frontend/src/project-config/
 - 2026-08-25：用户确认将“阶段五前置：项目中心 Backend 接口补充”新增到计划，但尚未授权代码推进；新增阶段覆盖项目列表服务端筛选/分页与状态摘要、端类型默认配置、恢复自动识别预览/应用和相关 Backend 契约测试，完成后必须停止验收，再恢复阶段五前端 UI。
 - 2026-08-25：用户已确认实施阶段五前置接口补充；实施范围限定为 Python 项目查询/端类型接口、必要 DTO/Repository、契约测试和本文，不修改前端、数据库、部署或 Review/通知运行主链路。
 - 2026-08-25：完成阶段五前置接口补充：项目列表新增 keyword/通知状态/Review 状态筛选和显式服务端分页，批量聚合 Review Profile、模型、MR/PUSH、通知状态、健康告警和脱敏机器人摘要；新增六种端类型默认配置查询，以及带 SHA-256 `evidenceVersion` 并发保护的恢复自动识别预览/应用接口，应用时保留项目模型、Review 设置和机器人关联。相关去重验证合计 `200 passed, 1 failed`，唯一失败为既有 `test_fix_preview_schema_removes_legacy_task_finding_unique_index` 对不存在任务预期 200、实际 404；变更文件 Ruff 与 `git diff --check` 通过。未修改前端、数据库、migration、部署或 Review/通知发送主链路，阶段五前端 UI 待用户确认。
+- 2026-08-25：完成阶段五项目中心前端实现与浏览器验收：设置入口改为“项目 / 端类型配置”，新增服务端筛选分页项目表格、Backend 状态摘要、当前页批量选择、单项目综合配置抽屉、端类型变化提示、带 `evidenceVersion` 的恢复自动识别、批量机器人服务端预览/保存、机器人库 CRUD/测试/关联项目查看、一次性迁移提示、dirty guard 和独立响应式样式；移除旧项目组管理与项目归属可见区，停止设置页全量项目预加载。`1440px/1024px/390px` 验收无页面级横向溢出，表格内部滚动、固定列、抽屉和关键只读交互通过；补验修复移动端固定列重叠、旧侧栏文案和 Ant Design 弃用属性告警。全部前端测试 `257 passed`，`scripts/run-frontend.ps1 build`、`git diff --check` 与本地只读 API smoke 通过；机器人库无已保存数据，未发送真实钉钉消息或执行持久化保存/删除。未修改 Backend、数据库或部署，阶段五完成后停止等待阶段六确认。
+- 2026-08-25：根据用户浏览器反馈完成阶段五 UI 跟进调整：重做端类型自动识别规则折叠摘要的紧凑布局，移除项目表格 GitLab ID 列，将项目名改为仅允许 HTTP(S) 的 GitLab 新窗口链接并移除下方重复 URL。全部前端测试 `259 passed`，`scripts/run-frontend.ps1 build` 与 `git diff --check` 通过；按用户要求未执行浏览器复验，等待用户验收，阶段六未授权。
+- 2026-08-25：根据第二轮用户浏览器反馈继续调整阶段五 UI：项目与批量配置抽屉允许在非保存状态点击遮罩关闭，有未保存草稿时继续执行放弃确认；修正机器人启用状态被通用字段样式覆盖导致的纵向布局；移除项目中心页头重复的“刷新项目”和“管理机器人”按钮。全部前端测试 `261 passed`，`scripts/run-frontend.ps1 build` 与 `git diff --check` 通过；按用户要求未执行浏览器复验，继续等待用户验收。
+- 2026-08-26：根据第三轮用户浏览器反馈调整项目基础 Review 配置：Profile 与项目路径改为只读展示服务端端类型默认值，Review 模型改为只读展示全局 Agent Review 优先、Standard Review 兜底策略，不再请求 Profile/Provider 选择列表；项目加载和端类型切换统一清除草稿中的 `providerCode` 与 `aiReviewModels` 覆盖，检测到历史覆盖时标记为待保存，仅在用户保存后落库，避免打开抽屉即产生写操作。全部前端测试 `262 passed`，`scripts/run-frontend.ps1 build` 与 `git diff --check` 通过；未修改 Backend、数据库或公开 DTO，按用户要求未执行浏览器复验。
+- 2026-08-26：根据第四轮用户浏览器反馈修正基础 Review 配置交互：Profile 默认展示端类型当前值并恢复列表选择，项目路径默认展示端类型路径并恢复标签编辑，Review 模型区块完整移除；配置加载不再覆盖已有 Profile/路径，仅清理草稿中的项目 Provider/模型覆盖，仍需用户保存后落库。全部前端测试 `262 passed`，`scripts/run-frontend.ps1 build` 与 `git diff --check` 通过；未修改 Backend、数据库或公开 DTO，未执行浏览器复验。
+- 2026-08-26：根据第五轮用户浏览器反馈统一项目路径初始值：历史项目保存过不同 `pathPatterns`，导致同端类型抽屉展示不一致；抽屉现同时读取项目配置与服务端端类型默认配置，以默认 `pathPatterns` 初始化草稿，仍保留标签编辑能力，历史差异仅在用户保存后落库。全部前端测试 `262 passed`，`scripts/run-frontend.ps1 build` 与 `git diff --check` 通过；未修改 Backend、数据库或公开 DTO，未执行浏览器复验。
+- 2026-08-26：根据第六轮用户浏览器反馈精简项目配置抽屉：点击遮罩、关闭按钮或取消时直接丢弃草稿并关闭，不再显示二次确认；移除“已应用当前端类型默认路径”和无机器人时“通知记录为跳过”两条信息提示。批量配置抽屉与新增机器人弹窗的独立草稿保护保持不变。全部前端测试 `263 passed`，`scripts/run-frontend.ps1 build` 与 `git diff --check` 通过；未修改 Backend、数据库或公开 DTO，未执行浏览器复验。
+- 2026-08-26：根据第七轮用户浏览器反馈移除项目配置抽屉首段“基础与 Review 配置”标题、说明及对应图标，抽屉标题后直接展示端类型与规则模板；Review 触发和钉钉通知分区标题保留。同步更新共享设置标题测试基线，全部前端测试 `263 passed`，`scripts/run-frontend.ps1 build` 与 `git diff --check` 通过；未修改 Backend、数据库或公开 DTO，未执行浏览器复验。
 - 2026-08-25：完成阶段一数据基础与迁移审计实现：新增项目端类型、Review 设置、项目模型、项目—机器人关联及机器人健康字段 ORM；新增 V54 bootstrap migration 与旧库字段/索引幂等 reconciliation；新增项目配置迁移预检、阻断异常报告、幂等回填、Webhook URL 去重关联和 Effective Config 对比 CLI；补充迁移与回填测试。阶段一相关测试 `31 passed`，变更文件 Ruff 检查通过；本地验收期间已执行并验证 V49～V54 迁移，未执行测试线迁移和部署。
-
-

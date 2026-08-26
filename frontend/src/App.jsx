@@ -125,6 +125,7 @@ import {
   settingsSectionHasDirtyDraft
 } from './settingsNavigation.js';
 import CommandCenterPage from './command-center/CommandCenterPage.jsx';
+import ProjectConfigurationPage from './project-config/ProjectConfigurationPage.jsx';
 import { createVisibilityRefreshLifecycle } from './visibilityRefreshLifecycle.js';
 import {
   formatAgentFailureChain,
@@ -6842,6 +6843,11 @@ function TemplateConfig() {
     });
   }, []);
 
+  const handleProjectCenterDirtyChange = useCallback(dirty => {
+    if (dirty) markSettingsDraftDirty('project-target-configs:project-center');
+    else clearSettingsDraftDirty('project-target-configs:project-center');
+  }, [clearSettingsDraftDirty, markSettingsDraftDirty]);
+
   const load = async () => {
     setLoading(true);
     setError(null);
@@ -6853,8 +6859,8 @@ function TemplateConfig() {
         fetchApi('/api/code-quality-review-profiles'),
         fetchApi('/api/code-quality-review-providers'),
         fetchApi('/api/project-groups'),
-        fetchApi('/api/projects?includeDisabled=true'),
-        fetchApi('/api/target-type-path-mappings'),
+        Promise.resolve({ items: [] }),
+        Promise.resolve([]),
         fetchApi('/api/review-model-presets?reviewType=AGENT'),
         fetchApi('/api/review-model-presets?reviewType=STANDARD')
       ]);
@@ -9374,244 +9380,10 @@ function TemplateConfig() {
       key: 'project-target-configs',
       label: (
         <Space wrap>
-          <Text strong>项目组 / 端类型配置</Text>
-          {targetConfigDraft?.targetType && <Tag>{targetTypeLabel(targetConfigDraft.targetType)}</Tag>}
+          <Text strong>项目 / 端类型配置</Text>
         </Space>
       ),
-      children: (
-        <Card variant="borderless" className="settings-inner-card">
-          <Space direction="vertical" size="middle" className="full-width">
-            <div className="settings-subsection">
-              <Space direction="vertical" size="middle" className="full-width">
-                <SettingsCardHeader
-                  icon={<TeamOutlined />}
-                  title="项目组管理"
-                  description="维护项目组、默认 Review 模板、可用模型及基础信息。"
-                  tags={<Tag>{groups.length} 个项目组</Tag>}
-                  extra={<Button icon={<ReloadOutlined />} onClick={refreshProjectConfigData} loading={projectConfigReloading}>刷新</Button>}
-                />
-                <Row gutter={[12, 12]} align="bottom">
-                  <Col xs={24} md={4}>
-                    <Text strong>名称</Text>
-                    <Input
-                      className="prompt-field"
-                      value={groupDraft.groupName}
-                      placeholder="例如 移动业务组"
-                      onChange={event => updateGroupDraft('groupName', event.target.value)}
-                    />
-                  </Col>
-                  <Col xs={24} md={4}>
-                    <Text strong>编码</Text>
-                    <Input
-                      className="prompt-field"
-                      value={groupDraft.groupCode}
-                      placeholder="例如 mobile"
-                      onChange={event => updateGroupDraft('groupCode', event.target.value)}
-                    />
-                  </Col>
-                  <Col xs={24} md={5}>
-                    <Text strong>AI Review 模板</Text>
-                    <Select
-                      className="full-width prompt-field"
-                      value={groupDraft.defaultCodeQualityProfileCode || ''}
-                      options={groupProfileOptions}
-                      onChange={value => updateGroupDraft('defaultCodeQualityProfileCode', value || null)}
-                    />
-                  </Col>
-                  <Col xs={24} md={5}>
-                    <Text strong>Review 模型</Text>
-                    <Select
-                      mode="multiple"
-                      allowClear
-                      className="full-width prompt-field"
-                      placeholder="选择一个或多个模型"
-                      value={selectedAiReviewProviderCodes(groupDraft)}
-                      options={groupModelOptions}
-                      onChange={value => updateGroupAiReviewProviders('create', value)}
-                    />
-                  </Col>
-                  <Col xs={24} md={4}>
-                    <Text strong>描述</Text>
-                    <Input
-                      className="prompt-field"
-                      value={groupDraft.description}
-                      placeholder="可选"
-                      onChange={event => updateGroupDraft('description', event.target.value)}
-                    />
-                  </Col>
-                  <Col xs={24} md={2}>
-                    <Button block type="primary" icon={<PlusOutlined />} loading={projectGroupCreating} onClick={createProjectGroup}>
-                      新增
-                    </Button>
-                  </Col>
-                </Row>
-                <Table
-                  size="small"
-                  rowKey="id"
-                  pagination={false}
-                  columns={groupColumns}
-                  dataSource={groups}
-                  scroll={{ x: 1180 }}
-                />
-                {editingGroupDraft && (
-                  <div className="settings-subsection settings-subcard">
-                    <SettingsCardHeader
-                      compact
-                      icon={<BellOutlined />}
-                      title={`${editingGroupDraft.groupName || '项目组'}钉钉通知`}
-                      description="配置该项目组接收规则提醒和 AI Review 结果的钉钉机器人；未配置时通知会记录为跳过。"
-                      tags={<Tag>{(editingGroupDraft.dingtalkWebhooks || []).filter(item => item.enabled !== false).length} 个启用</Tag>}
-                      extra={<Button icon={<PlusOutlined />} onClick={() => addGroupWebhookDraft('editing')}>新增机器人</Button>}
-                    />
-                    {renderWebhookDraftList(editingGroupDraft.dingtalkWebhooks || [], 'editing')}
-                  </div>
-                )}
-              </Space>
-            </div>
-            <div className="settings-subsection">
-              <Space direction="vertical" size="middle" className="full-width">
-                <SettingsCardHeader
-                  icon={<ApartmentOutlined />}
-                  title="项目归属与 Review 配置"
-                  description="为具体 GitLab 项目绑定项目组、端类型和默认 Review 模型。"
-                  tags={targetConfigDraft?.targetType ? <Tag>{targetTypeLabel(targetConfigDraft.targetType)}</Tag> : null}
-                />
-                <Row gutter={[16, 16]}>
-                  <Col xs={24} md={7}>
-                    <Text strong>项目组筛选</Text>
-                    <Select
-                      className="full-width prompt-field"
-                      allowClear
-                      value={projectGroupFilter}
-                      options={groups.map(group => ({ label: group.groupName, value: group.id }))}
-                      placeholder="全部项目组"
-                      onChange={selectProjectGroupFilter}
-                    />
-                  </Col>
-                  <Col xs={24} md={10}>
-                    <Text strong>项目</Text>
-                    <Select
-                      showSearch
-                      className="full-width prompt-field"
-                      value={selectedProjectId || undefined}
-                      options={filteredProjects.map(project => ({
-                        label: `${project.name}${project.status !== 'ENABLED' ? ` (${project.status})` : ''}`,
-                        value: project.id
-                      }))}
-                      placeholder={projectGroupFilter ? '请选择项目' : '请先选择项目组'}
-                      disabled={!projectGroupFilter}
-                      onChange={selectProjectForTargetConfig}
-                    />
-                  </Col>
-                </Row>
-                {selectedProjectId && (
-                  <Row gutter={[16, 16]} align="bottom">
-                  <Col xs={24} md={7}>
-                      <Text strong>当前项目所属项目组</Text>
-                      <Select
-                        className="full-width prompt-field"
-                        value={projectConfigDraft?.groupId || undefined}
-                        options={groups.map(group => ({ label: group.groupName, value: group.id }))}
-                        onChange={value => updateProjectConfigDraft('groupId', value)}
-                      />
-                    </Col>
-                  <Col xs={24} md={6}>
-                      <Text strong>当前项目所属端类型</Text>
-                      <Select
-                        className="full-width prompt-field"
-                        value={projectConfigDraft?.targetType || undefined}
-                        options={PROJECT_TARGET_TYPE_OPTIONS}
-                        loading={projectConfigSaving}
-                        onChange={value => updateProjectConfigDraft('targetType', value)}
-                      />
-                    </Col>
-                  <Col xs={24} md={7}>
-                    <Text strong>当前项目所用模型</Text>
-                    <Select
-                      className="full-width prompt-field"
-                      value={targetConfigDraft?.providerCode || ''}
-                      options={profileProviderOptions}
-                      onChange={value => updateTargetConfigDraft('providerCode', value || null)}
-                    />
-                  </Col>
-                  <Col xs={24} md={4}>
-                      <div className="settings-action-row project-config-save-row">
-                        <Button type="primary" loading={projectConfigSaving} onClick={saveSelectedProjectConfig}>
-                          保存项目配置
-                        </Button>
-                      </div>
-                    </Col>
-                  </Row>
-                )}
-              </Space>
-            </div>
-            <div className="settings-subsection">
-              <Space direction="vertical" size="middle" className="full-width">
-                <SettingsCardHeader
-                  icon={<BranchesOutlined />}
-                  title="端类型自动识别规则"
-                  description="根据仓库目录结构识别后端、PC、App 等端类型。"
-                  tags={<Tag>{targetPathMappingDrafts.filter(item => item.enabled !== false).length} 个启用</Tag>}
-                  extra={(
-                    <Button type="primary" loading={targetPathMappingSaving} onClick={saveTargetPathMappings}>
-                      保存路径映射
-                    </Button>
-                  )}
-                />
-                <Alert
-                  type="info"
-                  showIcon
-                  message="Webhook 新项目只按这里的全局路径映射识别端类型。路径规则从仓库根目录匹配；如需任意层级匹配，请显式配置 **/ 前缀。"
-                />
-                <Table
-                  size="small"
-                  rowKey="targetType"
-                  pagination={false}
-                  dataSource={targetPathMappingDrafts}
-                  columns={[
-                    { title: '端类型', dataIndex: 'targetType', width: 160, render: value => <Tag>{targetTypeLabel(value)}</Tag> },
-                    {
-                      title: '路径匹配',
-                      dataIndex: 'pathPatterns',
-                      render: (_, row) => (
-                        <Select
-                          mode="tags"
-                          className="full-width"
-                          value={row.pathPatterns || []}
-                          onChange={value => updateTargetPathMappingDraft(row.targetType, 'pathPatterns', value)}
-                        />
-                      )
-                    },
-                    {
-                      title: '启用',
-                      dataIndex: 'enabled',
-                      width: 180,
-                      render: (_, row) => (
-                        <Space wrap>
-                          <Switch
-                            checked={row.enabled !== false}
-                            checkedChildren="启用"
-                            unCheckedChildren="停用"
-                            onChange={checked => updateTargetPathMappingDraft(row.targetType, 'enabled', checked)}
-                          />
-                          <Button
-                            size="small"
-                            icon={<ReloadOutlined />}
-                            onClick={() => resetTargetPathMappingDraft(row.targetType)}
-                          >
-                            重置
-                          </Button>
-                        </Space>
-                      )
-                    }
-                  ]}
-                  scroll={{ x: 836 }}
-                />
-              </Space>
-            </div>
-          </Space>
-        </Card>
-      )
+      children: <ProjectConfigurationPage onDirtyChange={handleProjectCenterDirtyChange} />,
     },
     {
       key: 'review-model-settings',
@@ -11663,7 +11435,7 @@ function HelpPage() {
           <div className="help-section-content">
             <Title level={3}>配置平台项目组</Title>
             <Paragraph>进入平台：</Paragraph>
-            <HelpCodeBlock>设置 -&gt; 项目组 / 端类型配置</HelpCodeBlock>
+            <HelpCodeBlock>设置 -&gt; 项目 / 端类型配置</HelpCodeBlock>
             <Paragraph>
               给项目组配置钉钉机器人时，把上一步从钉钉复制的 Webhook URL 填入该项目组的机器人配置，并启用它。
               平台只会按项目所属项目组发送通知；该项目组未配置机器人时，本次通知会记录为跳过。

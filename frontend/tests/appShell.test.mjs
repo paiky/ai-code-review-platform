@@ -24,7 +24,7 @@ test('navigation keeps the public routes and maps detail routes to their parent'
   assert.equal(resolveAppShellSelectedKey('/settings/global', items), '/settings/global');
   assert.deepEqual(resolveAppShellOpenKeys('/settings/ai-review/models', items), ['/settings']);
   assert.deepEqual(items.find(item => item.key === '/settings').children.map(item => item.label), [
-    '项目组 / 端类型配置',
+    '项目 / 端类型配置',
     'AI Review 配置',
     '全局设置'
   ]);
