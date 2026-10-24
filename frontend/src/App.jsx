@@ -459,14 +459,7 @@ function profileLabel(profile) {
     ...REVIEW_PROFILE_DROPDOWN_LABELS,
     'app-cross-platform-default-ai-review': '跨端应用默认 AI Review'
   };
-  return labels[profile?.profileCode] || profile?.profileName || profile?.profileCode || '-';
-}
-
-function selectableReviewProfiles(profiles = []) {
-  const byCode = new Map(profiles.map(profile => [profile.profileCode, profile]));
-  return REVIEW_PROFILE_DROPDOWN_ITEMS
-    .map(item => byCode.get(item.profileCode))
-    .filter(Boolean);
+  return profile?.profileName || labels[profile?.profileCode] || profile?.profileCode || '-';
 }
 
 function currentRoute(location) {
@@ -6721,6 +6714,10 @@ function TemplateConfig() {
   const [dirtySettingsDraftTokens, setDirtySettingsDraftTokens] = useState(() => new Set());
   const [selectedProfileCode, setSelectedProfileCode] = useState(null);
   const [profileDraft, setProfileDraft] = useState(null);
+  const [profileCreateOpen, setProfileCreateOpen] = useState(false);
+  const [profileCreateDraft, setProfileCreateDraft] = useState({ profileCode: '', profileName: '' });
+  const [profileCreateError, setProfileCreateError] = useState(null);
+  const [profileCreating, setProfileCreating] = useState(false);
   const [promptPreview, setPromptPreview] = useState(null);
   const [aiSettings, setAiSettings] = useState(null);
   const [settingsDraft, setSettingsDraft] = useState(null);
@@ -6800,16 +6797,15 @@ function TemplateConfig() {
         fetchApi('/api/review-model-presets?reviewType=STANDARD')
       ]);
       const profileItems = Array.isArray(profileData) ? profileData : (profileData.items || []);
-      const selectableProfileItems = selectableReviewProfiles(profileItems);
       const providerItems = Array.isArray(providerData) ? providerData : (providerData.items || []);
       const runtimeItems = Array.isArray(agentRuntimeData) ? agentRuntimeData : (agentRuntimeData.items || []);
       const agentPresetItems = normalizeReviewModelPresets(agentPresetData, agentReviewConnection);
       const standardPresetItems = normalizeReviewModelPresets(standardPresetData, standardReviewConnection);
       const nextSelectedProfileCode = (
-        selectedProfileCode && selectableProfileItems.some(profile => profile.profileCode === selectedProfileCode)
+        selectedProfileCode && profileItems.some(profile => profile.profileCode === selectedProfileCode)
       )
         ? selectedProfileCode
-        : selectableProfileItems[0]?.profileCode || null;
+        : profileItems[0]?.profileCode || null;
       const nextSelectedProviderCode = settingsData?.defaultProviderCode || selectedProviderCode || providerItems[0]?.providerCode || 'DEEPSEEK';
       setAiSettings(settingsData);
       setAgentSettings(agentSettingsData);
@@ -6839,7 +6835,7 @@ function TemplateConfig() {
       setDirtySettingsDraftTokens(new Set());
       setProfiles(profileItems);
       setSelectedProfileCode(nextSelectedProfileCode);
-      setProfileDraft(profileItems.find(item => item.profileCode === nextSelectedProfileCode) || selectableProfileItems[0] || null);
+      setProfileDraft(profileItems.find(item => item.profileCode === nextSelectedProfileCode) || profileItems[0] || null);
       setPromptPreview(null);
     } catch (err) {
       setError(err.message);
@@ -6860,6 +6856,7 @@ function TemplateConfig() {
     dirtySettingsRef.current = false;
     setDirtyReviewConnectionId(null);
     setDirtySettingsDraftTokens(new Set());
+    setProfileCreateOpen(false);
     setProviderCreateModalOpen(false);
     setConnectionCreateReviewType(agentReviewConnection);
     setConnectionCreateDraft(createReviewModelConnectionDraft(
@@ -7403,6 +7400,10 @@ function TemplateConfig() {
   };
 
   const selectProfile = (profileCode) => {
+    if (dirtySettingsDraftTokens.has('profile-settings:profile')) {
+      messageApi.warning('请先保存当前 Profile 的修改，再切换 Profile');
+      return;
+    }
     setSelectedProfileCode(profileCode);
     setProfileDraft(profiles.find(profile => profile.profileCode === profileCode) || null);
     setPromptPreview(null);
@@ -7420,6 +7421,7 @@ function TemplateConfig() {
       const updated = await fetchApi(`/api/code-quality-review-profiles/${profileDraft.profileCode}`, {
         method: 'PUT',
         body: JSON.stringify({
+          profileName: profileDraft.profileName,
           providerCode: profileDraft.providerCode || null,
           reviewInstructions: profileDraft.reviewInstructions,
           model: profileDraft.model
@@ -7434,6 +7436,43 @@ function TemplateConfig() {
       messageApi.error(err.message);
     } finally {
       setProfileSaving(false);
+    }
+  };
+
+  const openCreateProfile = () => {
+    if (dirtySettingsDraftTokens.has('profile-settings:profile')) {
+      messageApi.warning('请先保存当前 Profile 的修改，再复制');
+      return;
+    }
+    setProfileCreateDraft({ profileCode: '', profileName: '' });
+    setProfileCreateError(null);
+    setProfileCreateOpen(true);
+  };
+
+  const createProfile = async () => {
+    const profileCode = profileCreateDraft.profileCode.trim();
+    const profileName = profileCreateDraft.profileName.trim();
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(profileCode) || !profileName) {
+      setProfileCreateError('请填写名称；编码须以字母开头，仅含字母、数字、短横线或下划线，最多 64 字符');
+      return;
+    }
+    setProfileCreating(true);
+    setProfileCreateError(null);
+    try {
+      const created = await fetchApi('/api/code-quality-review-profiles', {
+        method: 'POST',
+        body: JSON.stringify({ sourceProfileCode: profileDraft.profileCode, profileCode, profileName })
+      });
+      setProfiles(current => [...current, created]);
+      setSelectedProfileCode(created.profileCode);
+      setProfileDraft(created);
+      setPromptPreview(null);
+      setProfileCreateOpen(false);
+      messageApi.success('Profile 已创建，可编辑指令并在项目配置中选择');
+    } catch (err) {
+      setProfileCreateError(err.message);
+    } finally {
+      setProfileCreating(false);
     }
   };
 
@@ -7471,8 +7510,8 @@ function TemplateConfig() {
     }
   };
 
-  const profileOptions = selectableReviewProfiles(profiles).map(profile => ({
-    label: profileLabel(profile),
+  const profileOptions = profiles.map(profile => ({
+    label: `${profileLabel(profile)} (${profile.profileCode})`,
     value: profile.profileCode
   }));
   const providerOptions = providers.map(provider => ({
@@ -8759,10 +8798,11 @@ function TemplateConfig() {
                 <Space direction="vertical" size="middle" className="full-width">
                   <SettingsCardHeader
                     icon={<FileTextOutlined />}
-                    title="普通 Review 初始 Prompt"
-                    description="配置普通 Review 的审查场景、模型覆盖与初始审查指令；该配置不影响 Agent Review。"
-                    tags={<Tag color="blue">STANDARD REVIEW</Tag>}
+                    title="Review Prompt Profile"
+                    description="审查指令持续作用于普通和 Agent Review；Provider 与模型覆盖仅沿用普通 Review 配置。项目可独立选择 Profile。"
+                    tags={<Tag color="blue">{profileDraft.builtIn ? '内置 Profile' : '自定义 Profile'}</Tag>}
                   />
+                  <Alert type="info" showIcon title="保存会影响所有引用该 Profile 的项目的新 Review；需要项目专用指令时，请先复制为新 Profile。" />
                   <Row gutter={[16, 16]}>
                     <Col xs={24} lg={8}>
                       <Text strong>Profile</Text>
@@ -8771,6 +8811,9 @@ function TemplateConfig() {
                         value={selectedProfileCode}
                         options={profileOptions}
                         onChange={selectProfile}
+                        showSearch
+                        optionFilterProp="label"
+                        disabled={profileSaving || profileCreating || profileCreateOpen}
                       />
                     </Col>
                     <Col xs={24} lg={7}>
@@ -8780,6 +8823,7 @@ function TemplateConfig() {
                         value={profileDraft.providerCode || ''}
                         options={profileProviderOptions}
                         onChange={value => updateProfileDraft('providerCode', value || null)}
+                        disabled={profileSaving || profileCreating}
                       />
                     </Col>
                     <Col xs={24} lg={7}>
@@ -8789,7 +8833,25 @@ function TemplateConfig() {
                         placeholder="留空使用后端默认模型"
                         value={profileDraft.model || ''}
                         onChange={event => updateProfileDraft('model', event.target.value)}
+                        maxLength={128}
+                        disabled={profileSaving || profileCreating}
                       />
+                    </Col>
+                  </Row>
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24} lg={12}>
+                      <Text strong>Profile 名称</Text>
+                      <Input
+                        className="prompt-field"
+                        value={profileDraft.profileName || ''}
+                        maxLength={128}
+                        onChange={event => updateProfileDraft('profileName', event.target.value)}
+                        disabled={profileSaving || profileCreating}
+                      />
+                    </Col>
+                    <Col xs={24} lg={12}>
+                      <Text strong>Profile 编码（创建后不可修改）</Text>
+                      <Input className="prompt-field" value={profileDraft.profileCode} readOnly />
                     </Col>
                   </Row>
                   <Row gutter={[16, 16]}>
@@ -8800,6 +8862,7 @@ function TemplateConfig() {
                         value={profileDraft.reviewInstructions || ''}
                         onChange={event => updateProfileDraft('reviewInstructions', event.target.value)}
                         autoSize={{ minRows: 8, maxRows: 16 }}
+                        disabled={profileSaving || profileCreating}
                       />
                     </Col>
                   </Row>
@@ -8823,9 +8886,12 @@ function TemplateConfig() {
                   )}
                   <div className="settings-action-row">
                     <Space wrap>
-                      <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={!profileDraft}>预览 Prompt</Button>
-                      <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={!profileDraft}>恢复当前 Profile 默认 Prompt</Button>
-                      <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={!profileDraft}>保存 Profile</Button>
+                      <Button icon={<CopyOutlined />} onClick={openCreateProfile} disabled={profileSaving || profileCreating}>复制为新 Profile</Button>
+                      <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={profileSaving || profileCreating || dirtySettingsDraftTokens.has('profile-settings:profile')}>预览已保存的普通 Review Prompt</Button>
+                      {profileDraft.builtIn && (
+                        <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={profileCreating}>恢复当前 Profile 默认 Prompt</Button>
+                      )}
+                      <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={profileCreating}>保存 Profile</Button>
                     </Space>
                   </div>
                 </Space>
@@ -8896,6 +8962,45 @@ function TemplateConfig() {
           {activeSettingsItem?.children || <Empty description="设置模块不存在" />}
         </section>
       </Spin>
+      <Modal
+        title="复制为新 Profile"
+        open={profileCreateOpen}
+        okText="创建 Profile"
+        cancelText="取消"
+        confirmLoading={profileCreating}
+        mask={{ closable: !profileCreating }}
+        keyboard={!profileCreating}
+        closable={!profileCreating}
+        onOk={createProfile}
+        onCancel={() => !profileCreating && setProfileCreateOpen(false)}
+      >
+        <Space orientation="vertical" size="middle" className="full-width">
+          <Text>复制来源：{profileLabel(profileDraft)}（已保存配置）。创建后编辑新 Profile，再到项目配置中选择。</Text>
+          <label className="full-width">
+            <Text strong>新 Profile 编码</Text>
+            <Input
+              className="prompt-field"
+              value={profileCreateDraft.profileCode}
+              maxLength={64}
+              placeholder="例如 project-a-review"
+              disabled={profileCreating}
+              onChange={event => setProfileCreateDraft(current => ({ ...current, profileCode: event.target.value }))}
+            />
+          </label>
+          <label className="full-width">
+            <Text strong>新 Profile 名称</Text>
+            <Input
+              className="prompt-field"
+              value={profileCreateDraft.profileName}
+              maxLength={128}
+              placeholder="例如 项目 A 审查"
+              disabled={profileCreating}
+              onChange={event => setProfileCreateDraft(current => ({ ...current, profileName: event.target.value }))}
+            />
+          </label>
+          {profileCreateError && <Alert type="error" showIcon title={profileCreateError} />}
+        </Space>
+      </Modal>
       <Modal
         title="新增模型连接"
         open={providerCreateModalOpen}

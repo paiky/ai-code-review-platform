@@ -19,6 +19,49 @@ ReviewModelConnectionProtocol = Literal[
 ]
 
 
+class CreateReviewProfileRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    source_profile_code: str = Field(alias="sourceProfileCode", min_length=1, max_length=64)
+    profile_code: str = Field(alias="profileCode", pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+    profile_name: str = Field(alias="profileName", min_length=1, max_length=128)
+
+    @field_validator("source_profile_code", "profile_code", "profile_name", mode="before")
+    @classmethod
+    def normalize_required_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class UpdateReviewProfileRequest(BaseModel):
+    # Preserve the existing update endpoint's other configuration fields.
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    profile_name: str | None = Field(default=None, alias="profileName", min_length=1, max_length=128)
+    review_instructions: str | None = Field(default=None, alias="reviewInstructions")
+    provider_code: str | None = Field(default=None, alias="providerCode", max_length=64)
+    model: str | None = Field(default=None, max_length=128)
+
+    @field_validator("profile_name", mode="before")
+    @classmethod
+    def normalize_profile_name(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("provider_code", "model", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: object) -> object:
+        return (value.strip() or None) if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_prompt_fields(self) -> "UpdateReviewProfileRequest":
+        for name in ("profile_name", "review_instructions"):
+            if name in self.model_fields_set and not str(getattr(self, name) or "").strip():
+                raise ValueError(f"{name} must not be blank")
+        if self.review_instructions is not None:
+            if len(self.review_instructions.encode("utf-8")) > 65535:
+                raise ValueError("reviewInstructions must not exceed 65535 UTF-8 bytes")
+        return self
+
+
 class ReviewModelPresetVariant(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

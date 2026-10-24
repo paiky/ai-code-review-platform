@@ -199,7 +199,29 @@ Content-Type: application/json
 }
 ```
 
-## 6. 后续方向（历史记录）
+## 6. 项目专用 Profile 管理（2026-10-24）
+
+全局配置动态列出全部启用 Profile（含跨端、API 创建及 SQL 导入记录），提供“复制为新 Profile”，项目配置继续通过同一列表按 `profileCode` 绑定。项目端类型保持真实类型；Profile 与端类型不新增匹配字段，也不改现有“项目绑定优先、端类型默认兜底”的解析逻辑。
+
+### 接口与兼容
+
+- 新增 `POST /api/code-quality-review-profiles`，请求 `{ "sourceProfileCode": "backend-default-ai-review", "profileCode": "project-a-review", "profileName": "项目 A 审查" }`。来源必须存在且启用；编码为字母开头的字母、数字、短横线或下划线，最多 64 字符，名称去首尾空白后为 1–128 字符。复制来源已保存的完整配置，不修改来源，不自动绑定项目；重复编码返回 409 `CONFLICT`，来源不可用返回 400。并发重复由数据库唯一索引保护。
+- 继续使用 `PUT /api/code-quality-review-profiles/{profileCode}` 编辑，支持页面更新名称、指令、Provider/模型覆盖。名称和指令不能为空，模型最多 128 字符，Provider 编码最多 64 字符，指令按 UTF-8 编码不得超过 TEXT 的 65535 字节；保留原接口的其它配置字段语义。更新指令同步三个历史指令列。
+- 列表、详情、创建、更新响应在现有 Profile VO 上增加 `builtIn: boolean`，由服务端内置定义判断，不增加数据库字段。编码创建后不可编辑；SQL 导入的自定义项同样可编辑。
+- 自定义项不展示“恢复默认”，后端维持只有内置定义可恢复的约束。Profile 指令作用于普通和 Agent Review；Provider/模型覆盖沿用普通 Review 原有逻辑，Agent 使用其独立运行配置。
+- 不新增数据库迁移、端类型、删除/禁用入口、Prompt 版本管理或分阶段 Prompt；不改通知、触发、队列和执行机制。
+
+### 页面交互与验收
+
+选择 Profile 后可复制，弹窗填写唯一编码和名称，成功后自动选择新项，再编辑并保存 Prompt。复制基于已保存值，存在未保存修改时先提示保存；保存或复制中不允许切换 Profile。复制不影响任何项目，修改共享 Profile 时页面明确提示会影响引用项目的新 Review。普通 Review 的 Prompt 预览仍只预览已保存配置，不表示 Agent 的最终工具指令。
+
+操作入口：设置 → AI Review 配置 → 策略与 Prompt（`/settings/ai-review/policies`）。复制、编辑保存后，前往“项目 / 端类型配置”，重新打开目标项目抽屉并选择新 Profile。原内置 Profile 和既有项目绑定不变；已经通过临时 SQL 创建的 Profile 自动出现在列表中。部署需要同时更新 Backend 和 Frontend，无需执行数据库迁移。
+
+验收按本次约定不新增或运行单元测试，采用 Python 局部 Ruff/语法检查、前端 build、隔离环境接口与页面手动验收。检查动态列表、复制及重名拒绝、编辑名称和 Prompt、内置恢复与自定义隐藏、项目重新打开后可选择新项，以及请求组装保留所选指令。使用已有数据/隔离数据，不在生产库创建验收 Profile，不触发付费 Provider 或真实通知。
+
+实施与验收记录（2026-10-24）：上述接口和 UI 已实现；改动四个 Python 模块的 Ruff/AST 检查、`scripts/run-frontend.ps1 build`、`git diff --check` 通过。手动使用 ASGITransport 与内存 SQLite 验收真实接口：全部配置复制、重名 409、非法编码/空名称/空指令/超长 UTF-8 指令拒绝、三个指令字段同步、原 Profile 不变、自定义/跨端列表可见、内置恢复、自定义恢复拒绝、项目 A 保存并重读新绑定而项目 B 保持原值、普通/Agent Prompt 组装及已保存预览均通过。应用 lifespan、Worker、真实 Provider 和通知未启动，未连接生产库，未新增或运行单元测试。页面已构建，未执行真实浏览器交互复验或付费模型执行。现有 lint 脚本固定附带全目录 `.` 扫描，另报告四处无关历史 unused import/variable，故使用同一 Python 环境对改动文件单独运行 Ruff 并通过，未修改无关文件。
+
+## 7. 后续方向（历史记录）
 
 以下条目在编写本文时为待办；**当前大多已完成**，仅作演进参考：
 

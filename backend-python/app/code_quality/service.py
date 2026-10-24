@@ -28,6 +28,7 @@ from app.code_quality.repository import (
     append_progress,
     cancel_active_scheduler_jobs_for_task,
     cancel_scheduler_job,
+    create_profile,
     create_provider,
     create_standard_model_connection,
     create_scheduler_job,
@@ -1940,6 +1941,12 @@ def get_profile_response(db: Session, profile_code: str) -> dict[str, Any]:
     from app.code_quality.repository import profile_to_dict
 
     return profile_to_dict(get_profile(db, profile_code))
+
+
+def create_profile_response(db: Session, request: dict[str, Any]) -> dict[str, Any]:
+    response = create_profile(db, request)
+    db.commit()
+    return response
 
 
 def update_profile_response(db: Session, profile_code: str, request: dict[str, Any]) -> dict[str, Any]:

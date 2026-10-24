@@ -5,8 +5,10 @@ from app.code_quality import service
 from app.code_quality.model_presets import list_review_model_presets
 from app.code_quality.schemas import (
     CreateProviderRequest,
+    CreateReviewProfileRequest,
     CreateReviewModelConnectionRequest,
     ReviewType,
+    UpdateReviewProfileRequest,
 )
 from app.core.database import get_db
 from app.core.response import ok
@@ -136,14 +138,25 @@ async def list_profiles(db: Session = Depends(get_db)) -> dict:
     return ok(list_enabled_profiles(db))
 
 
+@profile_router.post("")
+async def create_profile(request: CreateReviewProfileRequest, db: Session = Depends(get_db)) -> dict:
+    return ok(service.create_profile_response(db, request.model_dump(by_alias=True)))
+
+
 @profile_router.get("/{profile_code}")
 async def get_profile(profile_code: str, db: Session = Depends(get_db)) -> dict:
     return ok(service.get_profile_response(db, profile_code))
 
 
 @profile_router.put("/{profile_code}")
-async def update_profile(profile_code: str, request: dict, db: Session = Depends(get_db)) -> dict:
-    return ok(service.update_profile_response(db, profile_code, request))
+async def update_profile(
+    profile_code: str, request: UpdateReviewProfileRequest, db: Session = Depends(get_db)
+) -> dict:
+    return ok(
+        service.update_profile_response(
+            db, profile_code, request.model_dump(by_alias=True, exclude_unset=True)
+        )
+    )
 
 
 @profile_router.get("/{profile_code}/rendered-prompt")

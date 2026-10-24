@@ -874,6 +874,7 @@ def profile_to_dict(profile: CodeQualityReviewProfile) -> dict[str, Any]:
         "id": profile.id,
         "profileCode": profile.profile_code,
         "profileName": profile.profile_name,
+        "builtIn": profile.profile_code in DEFAULT_PROFILE_DEFINITIONS,
         "enabled": profile.enabled,
         "provider": provider_code,
         "providerCode": profile.provider_code,
@@ -901,6 +902,35 @@ def profile_to_dict(profile: CodeQualityReviewProfile) -> dict[str, Any]:
         "createdAt": format_datetime(profile.created_at),
         "updatedAt": format_datetime(profile.updated_at),
     }
+
+
+def create_profile(db: Session, request: dict[str, Any]) -> dict[str, Any]:
+    source = get_profile(db, request["sourceProfileCode"])
+    if not source.enabled or source.status != "ENABLED":
+        raise AppError("VALIDATION_ERROR", "Source review profile is unavailable", 400)
+    profile_code = request["profileCode"]
+    if find_profile_by_code(db, profile_code, ensure=False) is not None:
+        raise AppError("CONFLICT", f"Review profile already exists: {profile_code}", 409)
+    copied_fields = {
+        column.key: getattr(source, column.key)
+        for column in CodeQualityReviewProfile.__table__.columns
+        if column.key not in {"id", "profile_code", "profile_name", "created_at", "updated_at"}
+    }
+    now = datetime.now()
+    profile = CodeQualityReviewProfile(
+        **copied_fields,
+        profile_code=profile_code,
+        profile_name=request["profileName"],
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(profile)
+    try:
+        db.flush()
+    except IntegrityError as exception:
+        db.rollback()
+        raise AppError("CONFLICT", f"Review profile already exists: {profile_code}", 409) from exception
+    return profile_to_dict(profile)
 
 
 def update_profile(db: Session, profile_code: str, request: dict[str, Any]) -> dict[str, Any]:
@@ -947,6 +977,7 @@ def update_profile(db: Session, profile_code: str, request: dict[str, Any]) -> d
     if "reviewInstructions" in request:
         profile.review_instructions = request["reviewInstructions"]
         profile.openai_instructions = request["reviewInstructions"]
+        profile.codex_prompt = request["reviewInstructions"]
     profile.updated_at = datetime.now()
     db.flush()
     return profile_to_dict(profile)
