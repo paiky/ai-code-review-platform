@@ -43,6 +43,7 @@ README 只提供项目入口和最短运行方式。详细配置、部署、验�
 - `docs/47-agent-review-multi-worker-pool-and-queue-governance-plan.md`：Agent Worker 池化、并发领取、扩缩容和队列治理。
 - `docs/48-review-task-detail-unified-progress-ui-plan.md`：任务详情统一 Review 进度 UI 专项。
 - `docs/49-review-progress-animation-style-extension-plan.md`：Review 进度动画风格扩展专项；在 `docs/48` 完成后实施。
+- `docs/62-agent-review-memory-library-plan.md`：项目记忆库、资料管理和后续 Review 接入；默认显示 `/settings/ai-review/memory`，可通过 `VITE_REVIEW_MEMORY_UI_ENABLED=false` 隐藏。
 
 ### 排障与历史
 

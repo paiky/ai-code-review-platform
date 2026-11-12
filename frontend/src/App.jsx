@@ -104,6 +104,7 @@ import 'prismjs/components/prism-tsx';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-yaml';
 import { fetchApi, riskColor, statusColor } from './api.js';
+import ReviewMemoryPage from './reviewMemory/ReviewMemoryPage.jsx';
 import { AppFrameOperationsContext } from './appFrameOperations.js';
 import {
   buildAppShellNavigation,
@@ -10423,6 +10424,9 @@ function SettingsPage() {
   if (redirectRoute) return <Navigate to={redirectRoute} replace />;
   if (!resolveSettingsSection(location.pathname)) {
     return <Navigate to={DEFAULT_SETTINGS_ROUTE} replace />;
+  }
+  if (resolveSettingsSection(location.pathname)?.tabKey === 'memory') {
+    return <TaskWorkspaceShell><ReviewMemoryPage /></TaskWorkspaceShell>;
   }
   return <TemplateConfig />;
 }

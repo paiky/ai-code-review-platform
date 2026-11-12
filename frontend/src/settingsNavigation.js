@@ -1,5 +1,7 @@
 export const AI_REVIEW_MODELS_ROUTE = '/settings/ai-review/models';
 export const AI_REVIEW_POLICIES_ROUTE = '/settings/ai-review/policies';
+export const AI_REVIEW_MEMORY_ROUTE = '/settings/ai-review/memory';
+export const REVIEW_MEMORY_UI_ENABLED = String(import.meta.env?.VITE_REVIEW_MEMORY_UI_ENABLED || 'true').toLowerCase() !== 'false';
 export const DEFAULT_SETTINGS_ROUTE = AI_REVIEW_MODELS_ROUTE;
 
 export const AI_REVIEW_SETTINGS_TABS = Object.freeze([
@@ -14,7 +16,13 @@ export const AI_REVIEW_SETTINGS_TABS = Object.freeze([
     route: AI_REVIEW_POLICIES_ROUTE,
     label: '策略与 Prompt',
     contentKey: 'profile-settings'
-  }
+  },
+  ...(REVIEW_MEMORY_UI_ENABLED ? [{
+    key: 'memory',
+    route: AI_REVIEW_MEMORY_ROUTE,
+    label: '项目记忆库',
+    contentKey: 'review-memory'
+  }] : [])
 ]);
 
 const SETTINGS_ROUTE_REDIRECTS = Object.freeze({
@@ -100,8 +108,9 @@ function handleSettingsHistoryNavigation(event) {
     previousHistoryIndex = nextHistoryIndex;
     return;
   }
-  if (activeSettingsNavigationGuard.shouldConfirmNavigation?.() === false
-    || window.confirm('当前设置模块有未保存修改，确定放弃并离开吗？')) {
+  if (activeSettingsNavigationGuard.canNavigate?.() !== false && (
+    activeSettingsNavigationGuard.shouldConfirmNavigation?.() === false
+    || window.confirm('当前设置模块有未保存修改，确定放弃并离开吗？'))) {
     previousHistoryIndex = nextHistoryIndex;
     Promise.resolve(activeSettingsNavigationGuard.discard?.()).catch(() => {});
     return;

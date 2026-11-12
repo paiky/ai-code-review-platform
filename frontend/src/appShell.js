@@ -18,7 +18,7 @@ export const SETTINGS_NAVIGATION_ROUTES = Object.freeze([
   {
     key: '/settings/ai-review/models',
     label: 'AI Review 配置',
-    matchRoutes: ['/settings/ai-review/models', '/settings/ai-review/policies']
+    matchRoutes: ['/settings/ai-review/models', '/settings/ai-review/policies', '/settings/ai-review/memory']
   },
   { key: '/settings/global', label: '全局设置' }
 ]);

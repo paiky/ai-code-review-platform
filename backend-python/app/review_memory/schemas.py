@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Generic, Literal, TypeVar
+from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -38,6 +38,16 @@ class SourceState(StrEnum):
 
 class EntryState(StrEnum):
     DRAFT = "DRAFT"
+    ACTIVE = "ACTIVE"
+    DISABLED = "DISABLED"
+
+
+class SourceVisibility(StrEnum):
+    PROJECT = "PROJECT"
+    SHARED = "SHARED"
+
+
+class BindingState(StrEnum):
     ACTIVE = "ACTIVE"
     DISABLED = "DISABLED"
 
@@ -158,6 +168,7 @@ class MemorySourceDraft(MemorySchema):
 
 
 class MemorySourceQuery(MemorySchema):
+    view: Literal["OWNED", "USED"] = "OWNED"
     kind: MemoryKind | None = None
     state: SourceState | None = None
     target_type: TargetType | None = Field(default=None, alias="targetType")
@@ -183,6 +194,48 @@ class MemoryEntryResponse(MemoryEntryDraft):
     validation_errors: list[str] = Field(default_factory=list, alias="validationErrors")
 
 
+class MemoryBindingSummary(MemorySchema):
+    id: int
+    project_id: int = Field(alias="projectId")
+    state: BindingState
+    version: int
+    target_type: TargetType | None = Field(alias="targetType")
+    path_globs: list[str] = Field(default_factory=list, alias="pathGlobs")
+
+
+class MemoryBindingUpdate(MemorySchema):
+    expected_source_version: int = Field(alias="expectedSourceVersion", gt=0, strict=True)
+    expected_binding_version: int | None = Field(
+        default=None, alias="expectedBindingVersion", gt=0, strict=True
+    )
+    state: BindingState
+    target_type: TargetType | None = Field(default=None, alias="targetType")
+    path_globs: list[str] = Field(default_factory=list, alias="pathGlobs", max_length=8)
+
+    _paths = field_validator("path_globs")(MemoryEntryDraft.validate_path_globs.__func__)
+
+
+class MemoryBindingResult(MemorySchema):
+    source_version: int = Field(alias="sourceVersion")
+    binding: MemoryBindingSummary
+
+
+class MemorySourceImpact(MemorySchema):
+    source_id: int = Field(alias="sourceId")
+    source_version: int = Field(alias="sourceVersion")
+    project_ids: list[int] = Field(alias="projectIds")
+    bindings: list[MemoryBindingSummary]
+
+
+class MemorySharedQuery(MemorySchema):
+    kind: Literal["STANDARD", "ARCHITECTURE", "SKILL"] | None = None
+    keyword: str | None = Field(default=None, max_length=128)
+    page_no: int = Field(default=1, alias="pageNo", ge=1)
+    page_size: int = Field(default=20, alias="pageSize", ge=1, le=100)
+
+    _keyword = field_validator("keyword")(MemorySourceQuery.normalize_keyword.__func__)
+
+
 class MemorySourceSummary(MemorySchema):
     id: int
     project_id: int = Field(alias="projectId")
@@ -196,6 +249,9 @@ class MemorySourceSummary(MemorySchema):
     replacement_of_id: int | None = Field(alias="replacementOfId")
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
+    visibility: SourceVisibility = SourceVisibility.PROJECT
+    binding: MemoryBindingSummary | None = None
+    can_manage: bool = Field(default=False, alias="canManage")
 
 
 class MemorySourceDetail(MemorySourceSummary):
@@ -205,6 +261,7 @@ class MemorySourceDetail(MemorySourceSummary):
     parser_version: str | None = Field(default=None, alias="parserVersion")
     parse_warnings: list[str] = Field(default_factory=list, alias="parseWarnings")
     has_original: bool = Field(default=False, alias="hasOriginal")
+    can_download_original: bool = Field(default=False, alias="canDownloadOriginal")
     confirmed_by: str | None = Field(default=None, alias="confirmedBy")
     confirmed_at: datetime | None = Field(default=None, alias="confirmedAt")
     identity_verified: bool = Field(default=False, alias="identityVerified")
@@ -237,20 +294,34 @@ class CoreBudgetItem(MemoryEntryDraft):
     load_mode: LoadMode = Field(default=LoadMode.CORE, alias="loadMode")
 
 
-class MemorySourceUpdate(MemorySchema):
+class MemoryImpactConfirmation(MemorySchema):
+    acknowledged_project_ids: list[Annotated[int, Field(gt=0, strict=True)]] | None = Field(
+        default=None, alias="acknowledgedProjectIds", max_length=1000
+    )
+
+    @field_validator("acknowledged_project_ids")
+    @classmethod
+    def validate_project_ids(cls, values: list[int] | None) -> list[int] | None:
+        if values is not None and len(values) != len(set(values)):
+            raise ValueError("acknowledgedProjectIds must be unique")
+        return sorted(values) if values is not None else None
+
+
+class MemorySourceUpdate(MemoryImpactConfirmation):
     title: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=4000)
     expected_version: int = Field(alias="expectedVersion", gt=0, strict=True)
+    visibility: SourceVisibility | None = None
 
     _title = field_validator("title")(MemorySourceDraft.validate_title.__func__)
 
 
-class MemoryEntryCreate(MemorySchema):
+class MemoryEntryCreate(MemoryImpactConfirmation):
     expected_source_version: int = Field(alias="expectedSourceVersion", gt=0, strict=True)
     entry: MemoryEntryDraft
 
 
-class MemoryEntryUpdate(MemorySchema):
+class MemoryEntryUpdate(MemoryImpactConfirmation):
     expected_source_version: int = Field(alias="expectedSourceVersion", gt=0, strict=True)
     expected_version: int = Field(alias="expectedVersion", gt=0, strict=True)
     entry: MemoryEntryDraft | None = None
@@ -268,7 +339,7 @@ class MemorySelectedEntry(MemorySchema):
     expected_version: int = Field(alias="expectedVersion", gt=0, strict=True)
 
 
-class MemoryPublish(MemorySchema):
+class MemoryPublish(MemoryImpactConfirmation):
     expected_version: int = Field(alias="expectedVersion", gt=0, strict=True)
     selected_entries: list[MemorySelectedEntry] = Field(
         alias="selectedEntries", min_length=1, max_length=MAX_SOURCE_ENTRIES
@@ -288,7 +359,7 @@ class MemoryPublish(MemorySchema):
         return values
 
 
-class MemorySourceDisable(MemorySchema):
+class MemorySourceDisable(MemoryImpactConfirmation):
     expected_version: int = Field(alias="expectedVersion", gt=0, strict=True)
     state: Literal["DISABLED"]
 

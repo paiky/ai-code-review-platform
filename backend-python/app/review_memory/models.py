@@ -35,11 +35,17 @@ class ReviewMemorySource(Base):
         UniqueConstraint("source_feedback_id", name="uk_review_memory_sources_feedback"),
         Index("idx_review_memory_sources_project_state_kind", "project_id", "state", "kind", "id"),
         Index("idx_review_memory_sources_project_sha", "project_id", "original_sha256"),
+        Index(
+            "idx_review_memory_sources_visibility_state_kind", "visibility", "state", "kind", "id"
+        ),
         TABLE_OPTIONS,
     )
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
     project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    visibility: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="PROJECT", server_default="PROJECT"
+    )
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     origin: Mapped[str] = mapped_column(String(16), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -63,6 +69,30 @@ class ReviewMemorySource(Base):
     created_at: Mapped[datetime] = mapped_column(MEMORY_DATETIME, nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(MEMORY_DATETIME, nullable=False, default=utc_now)
     deleted_at: Mapped[datetime | None] = mapped_column(MEMORY_DATETIME)
+
+
+class ReviewMemoryProjectSource(Base):
+    __tablename__ = "review_memory_project_sources"
+    __table_args__ = (
+        UniqueConstraint("project_id", "source_id", name="uk_review_memory_project_sources"),
+        Index(
+            "idx_review_memory_project_sources_project_state", "project_id", "state", "source_id"
+        ),
+        Index("idx_review_memory_project_sources_source_state", "source_id", "state", "project_id"),
+        TABLE_OPTIONS,
+    )
+
+    id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
+    project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="ACTIVE", server_default="ACTIVE"
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    target_type: Mapped[str | None] = mapped_column(String(32))
+    path_globs_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(MEMORY_DATETIME, nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(MEMORY_DATETIME, nullable=False, default=utc_now)
 
 
 class ReviewMemoryEntry(Base):

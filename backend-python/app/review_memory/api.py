@@ -4,7 +4,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 from python_multipart.exceptions import MultipartParseError
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
@@ -23,21 +23,26 @@ from app.review_memory.parsing import (
 )
 from app.review_memory.schemas import (
     MemoryApiResponse,
+    MemoryBindingResult,
+    MemoryBindingUpdate,
     MemoryEntryCreate,
     MemoryEntryUpdate,
     MemoryPublish,
     MemorySourceDetail,
+    MemorySourceImpact,
     MemorySourceDisable,
     MemorySourceDraft,
     MemorySourcePage,
     MemorySourceQuery,
     MemorySourceUpdate,
+    MemorySharedQuery,
     MemoryUploadMetadata,
     SourceState,
 )
 
 
 router = APIRouter(prefix="/api/projects/{project_id}/review-memory", tags=["review-memory"])
+shared_router = APIRouter(prefix="/api/review-memory/shared-sources", tags=["review-memory"])
 DetailResponse = MemoryApiResponse[MemorySourceDetail]
 
 
@@ -49,7 +54,7 @@ def memory_db(db: Session = Depends(get_db)) -> Generator[Session, None, None]:
         raise
 
 
-def _commit(db: Session, detail: MemorySourceDetail) -> dict:
+def _commit(db: Session, detail: MemorySourceDetail | MemoryBindingResult) -> dict:
     db.commit()
     return ok(detail)
 
@@ -74,6 +79,44 @@ def list_sources(
     db: Session = Depends(memory_db),
 ) -> dict:
     return ok(service.list_project_sources(db, project_id, query))
+
+
+@shared_router.get("", response_model=MemoryApiResponse[MemorySourcePage])
+def list_shared_sources(
+    query: Annotated[MemorySharedQuery, Query()],
+    db: Session = Depends(memory_db),
+) -> dict:
+    return ok(service.list_shared_sources(db, query))
+
+
+@shared_router.get("/{source_id}", response_model=DetailResponse)
+def get_shared_source(source_id: int, db: Session = Depends(memory_db)) -> dict:
+    return ok(service.get_shared_source(db, source_id))
+
+
+@shared_router.get("/{source_id}/original", response_class=Response)
+def download_shared_original(source_id: int, db: Session = Depends(memory_db)) -> Response:
+    return _original_response(*service.get_original(db, None, source_id))
+
+
+@router.get("/sources/{source_id}/impact", response_model=MemoryApiResponse[MemorySourceImpact])
+def get_source_impact(project_id: int, source_id: int, db: Session = Depends(memory_db)) -> dict:
+    return ok(service.get_source_impact(db, project_id, source_id))
+
+
+@router.get("/sources/{source_id}/binding", response_model=MemoryApiResponse[MemoryBindingResult])
+def get_source_binding(project_id: int, source_id: int, db: Session = Depends(memory_db)) -> dict:
+    return ok(service.get_source_binding(db, project_id, source_id))
+
+
+@router.put("/sources/{source_id}/binding", response_model=MemoryApiResponse[MemoryBindingResult])
+def update_source_binding(
+    project_id: int,
+    source_id: int,
+    request: MemoryBindingUpdate,
+    db: Session = Depends(memory_db),
+) -> dict:
+    return _commit(db, service.update_source_binding(db, project_id, source_id, request))
 
 
 @router.post("/sources", response_model=DetailResponse)
@@ -201,7 +244,10 @@ def get_source(project_id: int, source_id: int, db: Session = Depends(memory_db)
 def download_original(
     project_id: int, source_id: int, db: Session = Depends(memory_db)
 ) -> Response:
-    filename, content = service.get_original(db, project_id, source_id)
+    return _original_response(*service.get_original(db, project_id, source_id))
+
+
+def _original_response(filename: str, content: bytes) -> Response:
     return Response(
         content,
         media_type="application/octet-stream",
@@ -252,7 +298,12 @@ def disable_source(
     return _commit(
         db,
         service.change_source_state(
-            db, project_id, source_id, request.expected_version, SourceState.DISABLED
+            db,
+            project_id,
+            source_id,
+            request.expected_version,
+            SourceState.DISABLED,
+            request.acknowledged_project_ids,
         ),
     )
 
@@ -262,11 +313,21 @@ def delete_source(
     project_id: int,
     source_id: int,
     expected_version: int = Query(alias="expectedVersion", gt=0),
+    acknowledged_project_ids: list[Annotated[int, Field(gt=0)]] | None = Query(
+        default=None,
+        alias="acknowledgedProjectIds",
+        max_length=1000,
+    ),
     db: Session = Depends(memory_db),
 ) -> dict:
     return _commit(
         db,
         service.change_source_state(
-            db, project_id, source_id, expected_version, SourceState.DELETED
+            db,
+            project_id,
+            source_id,
+            expected_version,
+            SourceState.DELETED,
+            acknowledged_project_ids,
         ),
     )

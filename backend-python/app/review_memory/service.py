@@ -11,15 +11,23 @@ from app.core.errors import AppError
 from app.core.json_utils import utc_now
 from app.project_integration.schemas import TargetType
 from app.review_memory import repository
-from app.review_memory.models import ReviewMemoryEntry, ReviewMemorySource
+from app.review_memory.models import (
+    ReviewMemoryEntry,
+    ReviewMemoryProjectSource,
+    ReviewMemorySource,
+)
 from app.review_memory.parsing import PARSER_VERSION, ParsedMemory
 from app.review_memory.schemas import (
     MAX_CORE_BYTES,
     MAX_CORE_ENTRIES,
     MAX_ENTRY_CONTENT_BYTES,
+    BindingState,
     CoreBudgetItem,
     EntryState,
     LoadMode,
+    MemoryBindingResult,
+    MemoryBindingSummary,
+    MemoryBindingUpdate,
     MemoryEntryDraft,
     MemoryEntryResponse,
     MemoryEntryCreate,
@@ -27,15 +35,18 @@ from app.review_memory.schemas import (
     MemoryKind,
     MemoryOrigin,
     MemorySourceDetail,
+    MemorySourceImpact,
     MemorySourceDraft,
     MemorySourcePage,
     MemorySourceQuery,
     MemorySourceSummary,
     MemorySourceUpdate,
+    MemorySharedQuery,
     MemoryPublish,
     MemoryUploadMetadata,
     MemoryWritebackSummary,
     SourceState,
+    SourceVisibility,
 )
 
 
@@ -129,6 +140,7 @@ def create_manual_draft(
     draft = MemorySourceDraft.model_validate(draft.model_dump())
     source = ReviewMemorySource(
         project_id=project_id,
+        visibility=SourceVisibility.PROJECT,
         kind=draft.kind,
         origin=MemoryOrigin.MANUAL,
         title=draft.title,
@@ -138,6 +150,14 @@ def create_manual_draft(
     )
     db.add(source)
     db.flush()
+    db.add(
+        ReviewMemoryProjectSource(
+            project_id=project_id,
+            source_id=source.id,
+            state=BindingState.ACTIVE,
+            version=1,
+        )
+    )
     for ordinal, entry in enumerate(draft.entries):
         record = ReviewMemoryEntry(
             source_id=source.id,
@@ -168,8 +188,12 @@ def list_project_sources(
     require_project(db, project_id)
     query = MemorySourceQuery.model_validate(query.model_dump())
     records, total = repository.list_sources(db, project_id, query)
+    bindings = repository.project_bindings_by_source(db, project_id, [row.id for row in records])
     return MemorySourcePage(
-        items=[_source_summary(record) for record in records],
+        items=[
+            _source_summary(record, bindings.get(record.id), record.project_id == project_id)
+            for record in records
+        ],
         total=total,
         page_no=query.page_no,
         page_size=query.page_size,
@@ -177,20 +201,169 @@ def list_project_sources(
 
 
 def get_project_source(db: Session, project_id: int, source_id: int) -> MemorySourceDetail:
-    source = require_source(db, project_id, source_id)
-    entries = repository.list_entries(db, project_id, source_id)
+    source = _readable_source(db, project_id, source_id)
+    return _source_detail(db, source, project_id)
+
+
+def _is_shared(source: ReviewMemorySource) -> bool:
+    return (
+        source.visibility == SourceVisibility.SHARED
+        and source.state == SourceState.PUBLISHED
+        and source.deleted_at is None
+        and source.kind in {MemoryKind.STANDARD, MemoryKind.ARCHITECTURE, MemoryKind.SKILL}
+        and source.origin != MemoryOrigin.FEEDBACK
+        and (source.replacement_of_id is None or source.confirmed_at is not None)
+    )
+
+
+def _readable_source(db: Session, project_id: int | None, source_id: int) -> ReviewMemorySource:
+    source = repository.get_source(db, None, source_id)
+    if source is not None:
+        if project_id == source.project_id:
+            return source
+        binding = (
+            repository.get_project_source_binding(db, project_id, source_id)
+            if project_id is not None
+            else None
+        )
+        if _is_shared(source) and (
+            project_id is None or binding is not None and binding.state == BindingState.ACTIVE
+        ):
+            return source
+    raise AppError("RESOURCE_NOT_FOUND", "Memory source not found", 404)
+
+
+def _source_detail(
+    db: Session, source: ReviewMemorySource, project_id: int | None
+) -> MemorySourceDetail:
+    owner = project_id == source.project_id
+    binding = (
+        repository.get_project_source_binding(db, project_id, source.id)
+        if project_id is not None
+        else None
+    )
+    entries = repository.list_entries(db, source.project_id, source.id)
     return MemorySourceDetail(
-        **_source_summary(source).model_dump(),
-        entries=[_entry_response(entry) for entry in entries],
+        **_source_summary(source, binding, owner).model_dump(),
+        entries=[
+            _entry_response(entry) for entry in entries if owner or entry.state == EntryState.ACTIVE
+        ],
         original_filename=source.original_filename,
         media_type=source.media_type,
         parser_version=source.parser_version,
         parse_warnings=_string_list(source.parse_warnings_json),
         has_original=source.original_sha256 is not None,
+        can_download_original=source.original_sha256 is not None
+        and (owner or all(entry.state == EntryState.ACTIVE for entry in entries)),
         confirmed_by=source.confirmed_by,
         confirmed_at=source.confirmed_at,
-        legacy_policy_ids=repository.legacy_policy_ids(db, project_id, source.source_feedback_id),
+        legacy_policy_ids=repository.legacy_policy_ids(
+            db, source.project_id, source.source_feedback_id
+        )
+        if owner
+        else [],
     )
+
+
+def list_shared_sources(db: Session, query: MemorySharedQuery) -> MemorySourcePage:
+    query = MemorySharedQuery.model_validate(query.model_dump())
+    records, total = repository.list_sources(db, None, MemorySourceQuery(**query.model_dump()))
+    return MemorySourcePage(
+        items=[_source_summary(row) for row in records],
+        total=total,
+        page_no=query.page_no,
+        page_size=query.page_size,
+    )
+
+
+def get_shared_source(db: Session, source_id: int) -> MemorySourceDetail:
+    return _source_detail(db, _readable_source(db, None, source_id), None)
+
+
+def get_source_impact(db: Session, project_id: int, source_id: int) -> MemorySourceImpact:
+    source = require_source(db, project_id, source_id)
+    bindings = repository.list_source_bindings(db, source_id)
+    return MemorySourceImpact(
+        source_id=source.id,
+        source_version=source.version,
+        project_ids=_active_project_ids(bindings),
+        bindings=[_binding_summary(row) for row in bindings],
+    )
+
+
+def get_source_binding(db: Session, project_id: int, source_id: int) -> MemoryBindingResult:
+    require_project(db, project_id)
+    binding = repository.get_project_source_binding(db, project_id, source_id)
+    source = repository.get_source(db, None, source_id)
+    if binding is None or source is None:
+        raise AppError("RESOURCE_NOT_FOUND", "Memory project binding not found", 404)
+    return MemoryBindingResult(source_version=source.version, binding=_binding_summary(binding))
+
+
+def update_source_binding(
+    db: Session,
+    project_id: int,
+    source_id: int,
+    request: MemoryBindingUpdate,
+) -> MemoryBindingResult:
+    request = MemoryBindingUpdate.model_validate(request.model_dump())
+    source, bindings = _lock_source_group(db, project_id, source_id, reference=True)[source_id]
+    binding = next((row for row in bindings if row.project_id == project_id), None)
+    owner = source.project_id == project_id
+    # Existing references may always be detached, even after the source was disabled.
+    if (
+        not owner
+        and not _is_shared(source)
+        and not (binding is not None and request.state == BindingState.DISABLED)
+    ):
+        raise AppError("RESOURCE_NOT_FOUND", "Shared memory source not found", 404)
+    assert_version(source.version, request.expected_source_version)
+    if binding is None:
+        if request.expected_binding_version is not None or request.state != BindingState.ACTIVE:
+            raise AppError("MEMORY_VERSION_CONFLICT", "Memory project binding does not exist", 409)
+    elif request.expected_binding_version is None:
+        raise AppError("MEMORY_VERSION_CONFLICT", "expectedBindingVersion is required", 409)
+    else:
+        assert_version(binding.version, request.expected_binding_version)
+    if request.state == BindingState.ACTIVE:
+        if source.state != SourceState.PUBLISHED or source.deleted_at is not None:
+            raise AppError("MEMORY_STATE_CONFLICT", "Only published sources can be used", 409)
+    if source.replacement_of_id is not None and source.confirmed_at is None:
+        raise AppError(
+            "MEMORY_REPLACEMENT_INVALID",
+            "Replacement bindings are inherited at first publication",
+            409,
+        )
+    old_paths = _string_list(binding.path_globs_json) if binding is not None else []
+    reducing = request.state == BindingState.DISABLED or (
+        binding is not None
+        and binding.state == BindingState.ACTIVE
+        and (binding.target_type is None or binding.target_type == request.target_type)
+        and (
+            not old_paths
+            or bool(request.path_globs)
+            and set(request.path_globs).issubset(old_paths)
+        )
+        and (
+            binding.target_type != request.target_type or set(old_paths) != set(request.path_globs)
+        )
+    )
+    if binding is None:
+        binding = ReviewMemoryProjectSource(project_id=project_id, source_id=source_id, version=1)
+        db.add(binding)
+    else:
+        binding.version += 1
+    binding.state = request.state
+    binding.target_type = request.target_type
+    binding.path_globs_json = json.dumps(request.path_globs, ensure_ascii=False)
+    binding.updated_at = utc_now()
+    _touch(source)
+    db.flush()
+    if not reducing:
+        _validate_project_budgets(
+            db, _active_project_ids(repository.list_source_bindings(db, source.id, lock=True))
+        )
+    return MemoryBindingResult(source_version=source.version, binding=_binding_summary(binding))
 
 
 def get_project_entry(
@@ -227,7 +400,10 @@ def get_project_core_items(
     require_project(db, project_id)
     return [
         CoreBudgetItem(
-            **_entry_draft(entry).model_dump(),
+            **{
+                **_entry_draft(entry).model_dump(),
+                "target_type": binding.target_type or entry.target_type,
+            },
             source_id=source.id,
             entry_id=entry.id,
             source_version=source.version,
@@ -235,17 +411,98 @@ def get_project_core_items(
             source_kind=source.kind,
             source_title=source.title,
         )
-        for source, entry in repository.list_project_core_entries(db, project_id, lock=lock)
+        for source, entry, binding in repository.list_project_core_entries(
+            db, project_id, lock=lock
+        )
     ]
 
 
+def _active_project_ids(bindings: list[ReviewMemoryProjectSource]) -> list[int]:
+    return sorted(row.project_id for row in bindings if row.state == BindingState.ACTIVE)
+
+
+def _lock_source_group(
+    db: Session,
+    project_id: int,
+    source_id: int,
+    *,
+    reference: bool = False,
+    replacement: bool = False,
+) -> dict[int, tuple[ReviewMemorySource, list[ReviewMemoryProjectSource]]]:
+    # Use a separate read transaction; the writer only uses current reads after project locks.
+    with Session(bind=db.get_bind(), autoflush=False) as lookup:
+        primary = repository.get_source(lookup, None, source_id)
+        if primary is None or not reference and primary.project_id != project_id:
+            raise AppError("RESOURCE_NOT_FOUND", "Memory source not found in project", 404)
+        source_ids = {source_id}
+        if replacement and primary.replacement_of_id is not None and primary.confirmed_at is None:
+            source_ids.add(primary.replacement_of_id)
+        versions = {}
+        project_ids = {project_id}
+        for item_id in sorted(source_ids):
+            item = repository.get_source(lookup, None, item_id)
+            if item is None or item.project_id != primary.project_id:
+                raise AppError("RESOURCE_NOT_FOUND", "Replacement source not found in project", 404)
+            versions[item_id] = item.version
+            project_ids.add(item.project_id)
+            project_ids.update(
+                row.project_id for row in repository.list_source_bindings(lookup, item_id)
+            )
+    for item_id in sorted(project_ids):
+        if repository.get_project(db, item_id, lock=True) is None:
+            raise AppError("RESOURCE_NOT_FOUND", "Project not found", 404)
+    sources = {}
+    for item_id in sorted(source_ids):
+        item = repository.get_source(db, None, item_id, lock=True)
+        if item is None or item.version != versions[item_id]:
+            raise AppError("MEMORY_VERSION_CONFLICT", "Memory changed during lock acquisition", 409)
+        sources[item_id] = item
+    result = {}
+    current_projects = {project_id}
+    for item_id, item in sources.items():
+        bindings = repository.list_source_bindings(db, item_id, lock=True)
+        current_projects.add(item.project_id)
+        current_projects.update(row.project_id for row in bindings)
+        result[item_id] = (item, bindings)
+    if current_projects != project_ids:
+        raise AppError("MEMORY_VERSION_CONFLICT", "Memory project bindings changed", 409)
+    return result
+
+
+def _confirm_impact(
+    source: ReviewMemorySource,
+    bindings: list[ReviewMemoryProjectSource],
+    acknowledged: list[int] | None,
+) -> None:
+    projects = _active_project_ids(bindings)
+    if acknowledged is None:
+        if any(item != source.project_id for item in projects):
+            raise AppError(
+                "MEMORY_SHARED_CONFIRMATION_REQUIRED",
+                "Confirm all affected projects before changing shared memory",
+                409,
+            )
+    elif sorted(acknowledged) != projects or len(acknowledged) != len(set(acknowledged)):
+        raise AppError(
+            "MEMORY_VERSION_CONFLICT", "Affected projects changed; reload impact preview", 409
+        )
+
+
 def _locked_source(
-    db: Session, project_id: int, source_id: int, version: int
+    db: Session,
+    project_id: int,
+    source_id: int,
+    version: int,
+    acknowledged: list[int] | None = None,
 ) -> ReviewMemorySource:
-    if repository.get_project(db, project_id, lock=True) is None:
-        raise AppError("RESOURCE_NOT_FOUND", "Project not found", 404)
-    source = require_source(db, project_id, source_id, expected_version=version, lock=True)
+    source, bindings = _lock_source_group(db, project_id, source_id)[source_id]
+    assert_version(source.version, version)
     _require_manageable(source)
+    if not any(row.project_id == project_id for row in bindings):
+        raise AppError(
+            "MEMORY_BINDING_MISSING", "Memory project binding is missing; check migration", 409
+        )
+    _confirm_impact(source, bindings, acknowledged)
     return source
 
 
@@ -265,9 +522,24 @@ def _touch(source: ReviewMemorySource) -> None:
     source.updated_at = utc_now()
 
 
-def _finish_mutation(db: Session, source: ReviewMemorySource) -> MemorySourceDetail:
+def _validate_project_budgets(db: Session, project_ids: list[int]) -> None:
+    for project_id in sorted(set(project_ids)):
+        try:
+            validate_core_budget(get_project_core_items(db, project_id, lock=True))
+        except AppError as exception:
+            raise AppError(
+                exception.code, f"Project {project_id}: {exception.message}", exception.status_code
+            ) from exception
+
+
+def _finish_mutation(
+    db: Session, source: ReviewMemorySource, *, budget: bool = True
+) -> MemorySourceDetail:
     db.flush()
-    validate_core_budget(get_project_core_items(db, source.project_id, lock=True))
+    if budget:
+        _validate_project_budgets(
+            db, _active_project_ids(repository.list_source_bindings(db, source.id, lock=True))
+        )
     return get_project_source(db, source.project_id, source.id)
 
 
@@ -298,16 +570,11 @@ def create_upload_draft(
     original: bytes,
     metadata: MemoryUploadMetadata,
 ) -> MemorySourceDetail:
-    if repository.get_project(db, project_id, lock=True) is None:
-        raise AppError("RESOURCE_NOT_FOUND", "Project not found", 404)
     if metadata.replacement_of_id is not None:
-        old = require_source(
-            db,
-            project_id,
-            metadata.replacement_of_id,
-            expected_version=metadata.expected_replaced_version,
-            lock=True,
-        )
+        old, _ = _lock_source_group(db, project_id, metadata.replacement_of_id)[
+            metadata.replacement_of_id
+        ]
+        assert_version(old.version, metadata.expected_replaced_version)
         _require_manageable(old)
         if old.kind != metadata.kind:
             raise AppError("MEMORY_REPLACEMENT_INVALID", "Replacement requires the same kind", 409)
@@ -333,7 +600,27 @@ def create_upload_draft(
 def update_source(
     db: Session, project_id: int, source_id: int, request: MemorySourceUpdate
 ) -> MemorySourceDetail:
-    source = _locked_source(db, project_id, source_id, request.expected_version)
+    source = _locked_source(
+        db, project_id, source_id, request.expected_version, request.acknowledged_project_ids
+    )
+    if request.visibility is not None:
+        if request.visibility == SourceVisibility.SHARED and (
+            source.kind not in {MemoryKind.STANDARD, MemoryKind.ARCHITECTURE, MemoryKind.SKILL}
+            or source.origin == MemoryOrigin.FEEDBACK
+        ):
+            raise AppError(
+                "MEMORY_SHARING_INVALID", "Cases and feedback memories cannot be shared", 409
+            )
+        if request.visibility == SourceVisibility.PROJECT and any(
+            row.project_id != project_id and row.state == BindingState.ACTIVE
+            for row in repository.list_source_bindings(db, source_id, lock=True)
+        ):
+            raise AppError(
+                "MEMORY_SHARING_IN_USE",
+                "Detach other projects before making this source private",
+                409,
+            )
+        source.visibility = request.visibility
     source.title, source.description = request.title, request.description
     _touch(source)
     return _finish_mutation(db, source)
@@ -342,7 +629,9 @@ def update_source(
 def add_entry(
     db: Session, project_id: int, source_id: int, request: MemoryEntryCreate
 ) -> MemorySourceDetail:
-    source = _locked_source(db, project_id, source_id, request.expected_source_version)
+    source = _locked_source(
+        db, project_id, source_id, request.expected_source_version, request.acknowledged_project_ids
+    )
     records = repository.list_entries(db, project_id, source_id, lock=True)
     _validate_source_entries(source, [*map(_entry_draft, records), request.entry])
     record = ReviewMemoryEntry(
@@ -361,7 +650,9 @@ def add_entry(
 def update_entry(
     db: Session, project_id: int, source_id: int, entry_id: int, request: MemoryEntryUpdate
 ) -> MemorySourceDetail:
-    source = _locked_source(db, project_id, source_id, request.expected_source_version)
+    source = _locked_source(
+        db, project_id, source_id, request.expected_source_version, request.acknowledged_project_ids
+    )
     records = repository.list_entries(db, project_id, source_id, lock=True)
     record = next((row for row in records if row.id == entry_id), None)
     if record is None:
@@ -384,7 +675,17 @@ def update_entry(
 def publish_source(
     db: Session, project_id: int, source_id: int, request: MemoryPublish
 ) -> MemorySourceDetail:
-    source = _locked_source(db, project_id, source_id, request.expected_version)
+    group = _lock_source_group(db, project_id, source_id, replacement=True)
+    source, bindings = group[source_id]
+    assert_version(source.version, request.expected_version)
+    _require_manageable(source)
+    if not any(row.project_id == project_id for row in bindings):
+        raise AppError(
+            "MEMORY_BINDING_MISSING", "Memory project binding is missing; check migration", 409
+        )
+    pending_replacement = source.replacement_of_id is not None and source.confirmed_at is None
+    if not pending_replacement:
+        _confirm_impact(source, bindings, request.acknowledged_project_ids)
     records = repository.list_entries(db, project_id, source_id, lock=True)
     by_id = {row.id: row for row in records}
     selected = {item.id for item in request.selected_entries}
@@ -400,21 +701,40 @@ def publish_source(
                 exception.code, f"Entry {record.id}: {exception.message}", exception.status_code
             ) from exception
     _validate_source_entries(source, [_entry_draft(row) for row in records])
-    if source.replacement_of_id is not None and source.confirmed_at is None:
+    if pending_replacement:
         if request.expected_replaced_version is None:
             raise AppError(
                 "MEMORY_REPLACEMENT_VERSION_REQUIRED", "expectedReplacedVersion is required", 409
             )
-        old = require_source(
-            db,
-            project_id,
-            source.replacement_of_id,
-            expected_version=request.expected_replaced_version,
-            lock=True,
-        )
+        old, old_bindings = group[source.replacement_of_id]
+        assert_version(old.version, request.expected_replaced_version)
         _require_manageable(old)
+        _confirm_impact(old, old_bindings, request.acknowledged_project_ids)
         if old.kind != source.kind or old.id == source.id:
             raise AppError("MEMORY_REPLACEMENT_INVALID", "Invalid replacement source", 409)
+        if not any(row.project_id == project_id for row in old_bindings) or any(
+            row.project_id != project_id for row in bindings
+        ):
+            raise AppError(
+                "MEMORY_REPLACEMENT_INVALID", "Replacement project bindings are invalid", 409
+            )
+        by_project = {row.project_id: row for row in bindings}
+        for old_binding in old_bindings:
+            new_binding = by_project.get(old_binding.project_id)
+            if new_binding is None:
+                new_binding = ReviewMemoryProjectSource(
+                    project_id=old_binding.project_id,
+                    source_id=source.id,
+                    version=1,
+                )
+                db.add(new_binding)
+            else:
+                new_binding.version += 1
+            new_binding.state = old_binding.state
+            new_binding.target_type = old_binding.target_type
+            new_binding.path_globs_json = old_binding.path_globs_json
+            new_binding.updated_at = utc_now()
+        source.visibility = old.visibility
         old.state = SourceState.DISABLED
         _touch(old)
     elif request.expected_replaced_version is not None:
@@ -442,9 +762,14 @@ def publish_source(
 
 
 def change_source_state(
-    db: Session, project_id: int, source_id: int, expected_version: int, state: SourceState
+    db: Session,
+    project_id: int,
+    source_id: int,
+    expected_version: int,
+    state: SourceState,
+    acknowledged_project_ids: list[int] | None = None,
 ) -> MemorySourceDetail:
-    source = _locked_source(db, project_id, source_id, expected_version)
+    source = _locked_source(db, project_id, source_id, expected_version, acknowledged_project_ids)
     validate_source_transition(SourceState(source.state), state)
     if state not in {SourceState.DISABLED, SourceState.DELETED}:
         raise AppError("MEMORY_STATE_CONFLICT", "Use publish to activate memory", 409)
@@ -452,13 +777,22 @@ def change_source_state(
     if state == SourceState.DELETED:
         source.deleted_at = utc_now()
     _touch(source)
-    return _finish_mutation(db, source)
+    return _finish_mutation(db, source, budget=False)
 
 
-def get_original(db: Session, project_id: int, source_id: int) -> tuple[str, bytes]:
-    source = require_source(db, project_id, source_id)
+def get_original(db: Session, project_id: int | None, source_id: int) -> tuple[str, bytes]:
+    source = _readable_source(db, project_id, source_id)
     if source.original_filename is None or source.original_bytes is None:
         raise AppError("RESOURCE_NOT_FOUND", "Memory source has no original file", 404)
+    if project_id != source.project_id and any(
+        entry.state != EntryState.ACTIVE
+        for entry in repository.list_entries(db, source.project_id, source_id)
+    ):
+        raise AppError(
+            "MEMORY_ORIGINAL_NOT_PUBLISHED",
+            "Original contains unpublished or disabled sections; use the published preview",
+            409,
+        )
     return source.original_filename, source.original_bytes
 
 
@@ -488,7 +822,13 @@ def validate_core_budget(items: list[CoreBudgetItem]) -> dict[str, int]:
     sizes = {}
     for target in get_args(TargetType):
         applicable = [item for item in validated if item.target_type in (None, target)]
-        size = len(render_core_context(applicable).encode("utf-8"))
+        # Stored versions are signed MySQL INTs. Reserve their full width so a binding
+        # update (for example 9 -> 10) cannot make another project's CORE overflow.
+        budget_items = [
+            item.model_copy(update={"source_version": 2147483647, "entry_version": 2147483647})
+            for item in applicable
+        ]
+        size = len(render_core_context(budget_items).encode("utf-8"))
         if len(applicable) > MAX_CORE_ENTRIES or size > MAX_CORE_BYTES:
             raise AppError(
                 "MEMORY_CORE_BUDGET_EXCEEDED",
@@ -499,7 +839,22 @@ def validate_core_budget(items: list[CoreBudgetItem]) -> dict[str, int]:
     return sizes
 
 
-def _source_summary(record: ReviewMemorySource) -> MemorySourceSummary:
+def _binding_summary(record: ReviewMemoryProjectSource) -> MemoryBindingSummary:
+    return MemoryBindingSummary(
+        id=record.id,
+        project_id=record.project_id,
+        state=record.state,
+        version=record.version,
+        target_type=record.target_type,
+        path_globs=_string_list(record.path_globs_json),
+    )
+
+
+def _source_summary(
+    record: ReviewMemorySource,
+    binding: ReviewMemoryProjectSource | None = None,
+    can_manage: bool = False,
+) -> MemorySourceSummary:
     return MemorySourceSummary(
         id=record.id,
         project_id=record.project_id,
@@ -513,6 +868,11 @@ def _source_summary(record: ReviewMemorySource) -> MemorySourceSummary:
         replacement_of_id=record.replacement_of_id,
         created_at=record.created_at,
         updated_at=record.updated_at,
+        visibility=record.visibility,
+        binding=_binding_summary(binding) if binding is not None else None,
+        can_manage=can_manage
+        and record.state != SourceState.DELETED
+        and record.origin != MemoryOrigin.FEEDBACK,
     )
 
 

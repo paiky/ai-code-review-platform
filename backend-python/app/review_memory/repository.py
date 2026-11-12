@@ -1,11 +1,37 @@
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, undefer
 
 from app.project_integration.models import Project
 from app.project_review_policy.models import ProjectReviewPolicy
 from app.review_feedback.models import ReviewItemFeedback
-from app.review_memory.models import ReviewMemoryEntry, ReviewMemorySource, ReviewMemoryWriteback
-from app.review_memory.schemas import LoadMode, MemorySourceQuery, SourceState
+from app.review_memory.models import (
+    ReviewMemoryEntry,
+    ReviewMemoryProjectSource,
+    ReviewMemorySource,
+    ReviewMemoryWriteback,
+)
+from app.review_memory.schemas import (
+    BindingState,
+    EntryState,
+    LoadMode,
+    MemorySourceQuery,
+    SourceState,
+    SourceVisibility,
+)
+
+
+def shared_source_conditions() -> list:
+    return [
+        ReviewMemorySource.visibility == SourceVisibility.SHARED,
+        ReviewMemorySource.state == SourceState.PUBLISHED,
+        ReviewMemorySource.deleted_at.is_(None),
+        ReviewMemorySource.kind.in_(("STANDARD", "ARCHITECTURE", "SKILL")),
+        ReviewMemorySource.origin != "FEEDBACK",
+        or_(
+            ReviewMemorySource.replacement_of_id.is_(None),
+            ReviewMemorySource.confirmed_at.is_not(None),
+        ),
+    ]
 
 
 def get_project(db: Session, project_id: int, *, lock: bool = False) -> Project | None:
@@ -17,15 +43,14 @@ def get_project(db: Session, project_id: int, *, lock: bool = False) -> Project 
 
 def get_source(
     db: Session,
-    project_id: int,
+    project_id: int | None,
     source_id: int,
     *,
     lock: bool = False,
 ) -> ReviewMemorySource | None:
-    query = select(ReviewMemorySource).where(
-        ReviewMemorySource.id == source_id,
-        ReviewMemorySource.project_id == project_id,
-    )
+    query = select(ReviewMemorySource).where(ReviewMemorySource.id == source_id)
+    if project_id is not None:
+        query = query.where(ReviewMemorySource.project_id == project_id)
     if lock:
         query = query.with_for_update().execution_options(populate_existing=True)
     return db.scalar(query)
@@ -66,10 +91,32 @@ def list_entries(
 
 def list_sources(
     db: Session,
-    project_id: int,
+    project_id: int | None,
     filters: MemorySourceQuery,
 ) -> tuple[list[ReviewMemorySource], int]:
-    conditions = [ReviewMemorySource.project_id == project_id]
+    if project_id is None:
+        conditions = shared_source_conditions()
+    elif filters.view == "USED":
+        binding_conditions = [
+            ReviewMemoryProjectSource.source_id == ReviewMemorySource.id,
+            ReviewMemoryProjectSource.project_id == project_id,
+            ReviewMemoryProjectSource.state == BindingState.ACTIVE,
+        ]
+        if filters.target_type is not None:
+            binding_conditions.append(
+                or_(
+                    ReviewMemoryProjectSource.target_type.is_(None),
+                    ReviewMemoryProjectSource.target_type == filters.target_type,
+                )
+            )
+        conditions = [
+            exists(select(ReviewMemoryProjectSource.id).where(*binding_conditions)),
+            ReviewMemorySource.state == SourceState.PUBLISHED,
+            ReviewMemorySource.deleted_at.is_(None),
+            or_(ReviewMemorySource.project_id == project_id, and_(*shared_source_conditions())),
+        ]
+    else:
+        conditions = [ReviewMemorySource.project_id == project_id]
     if filters.state is not None:
         conditions.append(ReviewMemorySource.state == filters.state)
     else:
@@ -78,10 +125,19 @@ def list_sources(
         conditions.append(ReviewMemorySource.kind == filters.kind)
     entry_conditions = [ReviewMemoryEntry.source_id == ReviewMemorySource.id]
     if filters.target_type is not None:
-        entry_conditions.append(ReviewMemoryEntry.target_type == filters.target_type)
+        entry_conditions.append(
+            or_(
+                ReviewMemoryEntry.target_type.is_(None),
+                ReviewMemoryEntry.target_type == filters.target_type,
+            )
+            if filters.view == "USED"
+            else ReviewMemoryEntry.target_type == filters.target_type
+        )
     if filters.issue_type is not None:
         entry_conditions.append(ReviewMemoryEntry.issue_type == filters.issue_type)
     if filters.target_type is not None or filters.issue_type is not None:
+        if project_id is None or filters.view == "USED":
+            entry_conditions.append(ReviewMemoryEntry.state == EntryState.ACTIVE)
         conditions.append(exists(select(ReviewMemoryEntry.id).where(*entry_conditions)))
     if filters.keyword:
         conditions.append(
@@ -90,6 +146,10 @@ def list_sources(
                 exists(
                     select(ReviewMemoryEntry.id).where(
                         ReviewMemoryEntry.source_id == ReviewMemorySource.id,
+                        or_(
+                            ReviewMemoryEntry.state == EntryState.ACTIVE,
+                            and_(project_id is not None, filters.view == "OWNED"),
+                        ),
                         or_(
                             ReviewMemoryEntry.heading.contains(filters.keyword, autoescape=True),
                             ReviewMemoryEntry.content.contains(filters.keyword, autoescape=True),
@@ -109,22 +169,72 @@ def list_sources(
     return list(rows), total
 
 
+def get_project_source_binding(
+    db: Session, project_id: int, source_id: int, *, lock: bool = False
+) -> ReviewMemoryProjectSource | None:
+    query = select(ReviewMemoryProjectSource).where(
+        ReviewMemoryProjectSource.project_id == project_id,
+        ReviewMemoryProjectSource.source_id == source_id,
+    )
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    return db.scalar(query)
+
+
+def list_source_bindings(
+    db: Session, source_id: int, *, lock: bool = False
+) -> list[ReviewMemoryProjectSource]:
+    query = (
+        select(ReviewMemoryProjectSource)
+        .where(ReviewMemoryProjectSource.source_id == source_id)
+        .order_by(ReviewMemoryProjectSource.project_id, ReviewMemoryProjectSource.id)
+    )
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    return list(db.scalars(query))
+
+
+def project_bindings_by_source(
+    db: Session, project_id: int, source_ids: list[int]
+) -> dict[int, ReviewMemoryProjectSource]:
+    return {
+        row.source_id: row
+        for row in db.scalars(
+            select(ReviewMemoryProjectSource).where(
+                ReviewMemoryProjectSource.project_id == project_id,
+                ReviewMemoryProjectSource.source_id.in_(source_ids),
+            )
+        )
+    }
+
+
 def list_project_core_entries(
     db: Session,
     project_id: int,
     *,
     lock: bool = False,
-) -> list[tuple[ReviewMemorySource, ReviewMemoryEntry]]:
+) -> list[tuple[ReviewMemorySource, ReviewMemoryEntry, ReviewMemoryProjectSource]]:
     # Keep all targets and path scopes: publication validates their conservative upper bound.
     query = (
-        select(ReviewMemorySource, ReviewMemoryEntry)
+        select(ReviewMemorySource, ReviewMemoryEntry, ReviewMemoryProjectSource)
         .join(ReviewMemoryEntry, ReviewMemoryEntry.source_id == ReviewMemorySource.id)
+        .join(
+            ReviewMemoryProjectSource,
+            ReviewMemoryProjectSource.source_id == ReviewMemorySource.id,
+        )
         .where(
-            ReviewMemorySource.project_id == project_id,
+            ReviewMemoryProjectSource.project_id == project_id,
+            ReviewMemoryProjectSource.state == BindingState.ACTIVE,
+            or_(ReviewMemorySource.project_id == project_id, and_(*shared_source_conditions())),
             ReviewMemorySource.state == SourceState.PUBLISHED,
             ReviewMemorySource.deleted_at.is_(None),
             ReviewMemoryEntry.state == "ACTIVE",
             ReviewMemoryEntry.load_mode == LoadMode.CORE,
+            or_(
+                ReviewMemoryProjectSource.target_type.is_(None),
+                ReviewMemoryEntry.target_type.is_(None),
+                ReviewMemoryProjectSource.target_type == ReviewMemoryEntry.target_type,
+            ),
         )
         .options(undefer(ReviewMemoryEntry.content))
         .order_by(ReviewMemorySource.id, ReviewMemoryEntry.ordinal, ReviewMemoryEntry.id)

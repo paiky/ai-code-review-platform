@@ -560,6 +560,38 @@ def _migration_statement_already_satisfied(
     connection, migration: MigrationFile, statement: str
 ) -> bool:
     """Reconcile migration effects that already exist outside the migration ledger."""
+    if migration.version == 58:
+        inspector = inspect(connection)
+        if statement.strip().upper().startswith("ALTER TABLE REVIEW_MEMORY_SOURCES"):
+            if "ADD COLUMN visibility" in statement:
+                columns = {
+                    column["name"]: column
+                    for column in inspector.get_columns("review_memory_sources")
+                }
+                existing = columns.get("visibility")
+                if existing is None:
+                    return False
+                default = str(existing.get("default") or "").strip("()'\"")
+                if (
+                    existing.get("nullable") is not False
+                    or str(existing.get("type") or "").lower() != "varchar(16)"
+                    or default != "PROJECT"
+                ):
+                    raise MigrationError(
+                        "Existing review_memory_sources.visibility is incompatible with V58"
+                    )
+                return True
+            if "ADD INDEX idx_review_memory_sources_visibility_state_kind" in statement:
+                for index in inspector.get_indexes("review_memory_sources"):
+                    if index["name"] == "idx_review_memory_sources_visibility_state_kind":
+                        if index["column_names"] != ["visibility", "state", "kind", "id"] or index.get(
+                            "unique"
+                        ):
+                            raise MigrationError(
+                                "Existing shared source index is incompatible with V58"
+                            )
+                        return True
+        return False
     if migration.version == 53:
         add_column = re.fullmatch(
             r"\s*ALTER\s+TABLE\s+`?code_quality_agent_runtimes`?\s+"
