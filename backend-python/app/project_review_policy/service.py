@@ -25,7 +25,7 @@ PROMPT_POLICY_MAX_TOTAL_CHARS = 8000
 
 
 def convert_feedback_to_policy_response(db: Session, feedback_id: int, request: dict[str, Any]) -> dict[str, Any]:
-    feedback = get_feedback(db, feedback_id)
+    feedback = get_feedback(db, feedback_id, lock=True)
     if feedback is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Feedback not found: {feedback_id}", 404)
     _validate_convertible_feedback(feedback)

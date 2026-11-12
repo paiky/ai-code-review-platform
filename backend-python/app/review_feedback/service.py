@@ -179,7 +179,7 @@ def list_feedback_pool_response(
 
 
 def update_feedback_status_response(db: Session, feedback_id: int, request: dict[str, Any]) -> dict[str, Any]:
-    record = get_feedback(db, feedback_id)
+    record = get_feedback(db, feedback_id, lock=True)
     if record is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Feedback not found: {feedback_id}", 404)
     status = _normalize_enum(request.get("status"), STATUSES, "status")

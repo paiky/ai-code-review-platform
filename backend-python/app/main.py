@@ -50,12 +50,29 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exception:
         log.warning("Code quality startup recovery skipped: %s", exception)
     recovery_task = asyncio.create_task(_agent_recovery_loop())
+    memory_task = asyncio.create_task(_memory_writeback_loop())
     try:
         yield
     finally:
         recovery_task.cancel()
+        memory_task.cancel()
         with suppress(asyncio.CancelledError):
             await recovery_task
+        with suppress(asyncio.CancelledError):
+            await memory_task
+
+
+async def _memory_writeback_loop() -> None:
+    from app.review_memory.writeback import sweep_writebacks
+
+    while True:
+        try:
+            await asyncio.to_thread(sweep_writebacks)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            log.warning("Memory writeback sweep unavailable")
+        await asyncio.sleep(10)
 
 
 async def _agent_recovery_loop() -> None:

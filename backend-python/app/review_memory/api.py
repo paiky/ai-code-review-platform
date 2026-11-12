@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.core.errors import AppError
 from app.core.response import ok
 from app.review_memory import service
+from app.review_memory import feedback as memory_feedback
 from app.review_memory.parsing import (
     MAX_METADATA_BYTES,
     MAX_REQUEST_BYTES,
@@ -36,6 +37,11 @@ from app.review_memory.schemas import (
     MemorySourceQuery,
     MemorySourceUpdate,
     MemorySharedQuery,
+    MemoryCaseConfirmation,
+    MemoryFeedbackDetail,
+    MemoryFeedbackPage,
+    MemoryFeedbackQuery,
+    MemoryWritebackSummary,
     MemoryUploadMetadata,
     SourceState,
 )
@@ -44,6 +50,45 @@ from app.review_memory.schemas import (
 router = APIRouter(prefix="/api/projects/{project_id}/review-memory", tags=["review-memory"])
 shared_router = APIRouter(prefix="/api/review-memory/shared-sources", tags=["review-memory"])
 DetailResponse = MemoryApiResponse[MemorySourceDetail]
+
+
+@router.get("/feedbacks", response_model=MemoryApiResponse[MemoryFeedbackPage])
+def list_memory_feedbacks(
+    project_id: int,
+    query: Annotated[MemoryFeedbackQuery, Query()],
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(memory_feedback.list_feedbacks(db, project_id, query))
+
+
+@router.get("/feedbacks/{feedback_id}", response_model=MemoryApiResponse[MemoryFeedbackDetail])
+def get_memory_feedback(project_id: int, feedback_id: int, db: Session = Depends(get_db)) -> dict:
+    return ok(memory_feedback.get_feedback_detail(db, project_id, feedback_id))
+
+
+@router.post(
+    "/feedbacks/{feedback_id}/confirm",
+    status_code=202,
+    response_model=MemoryApiResponse[MemoryWritebackSummary],
+)
+def confirm_memory_feedback(
+    project_id: int,
+    feedback_id: int,
+    request: MemoryCaseConfirmation,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        result = memory_feedback.confirm_feedback(db, project_id, feedback_id, request)
+        db.commit()
+        return ok(result)
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.get("/writebacks/{writeback_id}", response_model=MemoryApiResponse[MemoryWritebackSummary])
+def get_memory_writeback(project_id: int, writeback_id: int, db: Session = Depends(get_db)) -> dict:
+    return ok(service.get_project_writeback(db, project_id, writeback_id))
 
 
 def memory_db(db: Session = Depends(get_db)) -> Generator[Session, None, None]:

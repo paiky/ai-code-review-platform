@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Annotated, Generic, Literal, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -282,6 +282,82 @@ class MemoryWritebackSummary(MemorySchema):
     state: WritebackState
     attempts: int
     last_error_code: str | None = Field(alias="lastErrorCode")
+
+
+class MemoryFeedbackQuery(MemorySchema):
+    feedback_type: Literal["FALSE_POSITIVE"] | None = Field(default=None, alias="feedbackType")
+    status: Literal["PENDING", "VALID", "INSUFFICIENT", "IGNORED", "CONVERTED"] | None = None
+    page_no: int = Field(default=1, alias="pageNo", ge=1)
+    page_size: int = Field(default=20, alias="pageSize", ge=1, le=100)
+
+
+class MemoryFeedbackSummary(MemorySchema):
+    id: int
+    project_id: int = Field(alias="projectId")
+    task_id: int = Field(alias="taskId")
+    review_key: str | None = Field(alias="reviewKey")
+    item_fingerprint: str = Field(alias="itemFingerprint")
+    risk_title: str | None = Field(alias="riskTitle")
+    risk_type: str | None = Field(alias="riskType")
+    feedback_type: str = Field(alias="feedbackType")
+    reason_type: str | None = Field(alias="reasonType")
+    reason_text: str | None = Field(alias="reasonText")
+    status: str
+    feedback_digest: str = Field(alias="feedbackDigest")
+    memory_source_id: int | None = Field(alias="memorySourceId")
+    source_version: int | None = Field(alias="sourceVersion")
+    source_state: SourceState | None = Field(alias="sourceState")
+    writeback_id: int | None = Field(alias="writebackId")
+    writeback_state: WritebackState | None = Field(alias="writebackState")
+
+
+class MemoryFeedbackDetail(MemoryFeedbackSummary):
+    item_snapshot: dict[str, Any] = Field(alias="itemSnapshot")
+    missing_context_types: list[str] = Field(alias="missingContextTypes")
+    task_url: str = Field(alias="taskUrl")
+    finding_available: bool = Field(alias="findingAvailable")
+
+
+class MemoryFeedbackPage(MemorySchema):
+    items: list[MemoryFeedbackSummary]
+    total: int
+    page_no: int = Field(alias="pageNo")
+    page_size: int = Field(alias="pageSize")
+
+
+class MemoryCaseConfirmation(MemorySchema):
+    expected_feedback_digest: str = Field(alias="expectedFeedbackDigest", pattern=r"^[a-f0-9]{64}$")
+    expected_source_version: int | None = Field(
+        default=None, alias="expectedSourceVersion", gt=0, strict=True
+    )
+    title: str = Field(min_length=1, max_length=255)
+    target_type: TargetType | None = Field(default=None, alias="targetType")
+    issue_type: IssueType | None = Field(default=None, alias="issueType")
+    path_globs: list[str] = Field(default_factory=list, alias="pathGlobs", max_length=8)
+    keywords: list[str] = Field(default_factory=list, max_length=12)
+    applicability: str = Field(min_length=1, max_length=4000)
+    misjudgment_cause: str = Field(alias="misjudgmentCause", min_length=1, max_length=4000)
+    correct_approach: str = Field(alias="correctApproach", min_length=1, max_length=4000)
+    required_evidence: str = Field(alias="requiredEvidence", min_length=1, max_length=4000)
+    exceptions: str = Field(min_length=1, max_length=4000)
+    operator_name: str | None = Field(default=None, alias="operatorName", max_length=96)
+
+    _paths = field_validator("path_globs")(MemoryEntryDraft.validate_path_globs.__func__)
+    _keywords = field_validator("keywords")(MemoryEntryDraft.validate_keywords.__func__)
+
+    @field_validator(
+        "title",
+        "applicability",
+        "misjudgment_cause",
+        "correct_approach",
+        "required_evidence",
+        "exceptions",
+    )
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip() or "\x00" in value:
+            raise ValueError("case fields must not be blank or contain NUL")
+        return value.strip()
 
 
 class CoreBudgetItem(MemoryEntryDraft):

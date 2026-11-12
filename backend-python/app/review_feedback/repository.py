@@ -113,6 +113,8 @@ def upsert_feedback(
         .where(ReviewItemFeedback.task_id == task.id)
         .where(ReviewItemFeedback.source_type == source_type)
         .where(ReviewItemFeedback.item_fingerprint == item_fingerprint)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     ).first()
     if record is None:
         record = ReviewItemFeedback(
@@ -144,6 +146,9 @@ def upsert_feedback(
     record.operator_username = operator_username
     record.updated_at = now
     db.flush()
+    from app.review_memory.feedback import invalidate_feedback_memory
+
+    invalidate_feedback_memory(db, record.id)
     return record
 
 
@@ -159,12 +164,18 @@ def update_feedback_status(
     record.admin_comment = admin_comment
     record.updated_at = now
     db.flush()
+    from app.review_memory.feedback import invalidate_feedback_memory
+
+    invalidate_feedback_memory(db, record.id)
     return record
 
 
-def get_feedback(db: Session, feedback_id: int) -> ReviewItemFeedback | None:
+def get_feedback(db: Session, feedback_id: int, *, lock: bool = False) -> ReviewItemFeedback | None:
     ensure_feedback_schema(db)
-    return db.get(ReviewItemFeedback, feedback_id)
+    query = select(ReviewItemFeedback).where(ReviewItemFeedback.id == feedback_id)
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    return db.scalar(query)
 
 
 def list_feedback_pool(

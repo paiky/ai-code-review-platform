@@ -2,7 +2,7 @@
 
 ## 0. 状态与使用范围
 
-- 设计日期：2026-11-11。M1/M2/M3 实施日期：2026-11-12。状态：M1 数据基础、M2 资料管理后端和 M3 管理 UI 已落地，完成离线/临时库与隔离浏览器验证；未执行运行库迁移或部署，M4 及后续阶段尚未开始。
+- 设计日期：2026-11-11。实施日期：2026-11-12。状态：M1～M3、S1～S3 及 M4 后端已落地，本地运行库已迁移 V58；M4 完成隔离 MySQL/API 验证，M5 及后续阶段尚未开始，未部署远程环境。
 - 2026-11-12 用户确认调整为“共享资料 + 项目多对多关联”，第 13 节是调整后的设计基线；先按 S1～S3 完成调整，再进入 M4。第 3～5 节中的单项目归属、查询、修改和 UI 约定以第 13 节修订为准，第 10～12 节保留实际已交付记录，不表示当前代码已支持共享。
 - 用户随后授权调整代码及继续推进，S1 关联数据及兼容层、S2 共享与关联后端、S3 共享 UI 已完成，分别见第 14～16 节；S2 通过独立临时 MySQL/API 验证，S3 通过构建与隔离浏览器交互验收。2026-11-12 经用户另行授权，本地运行库已备份并迁移至 V58，真实页面只读验收通过，见第 17 节；未部署远程环境。
 - 本文是后续**记忆库专项**的独立开发依据，完整定义功能、数据、接口、UI、接入和阶段停止点，不需要查阅 60 号文档才能开发。60 号文档的记忆方案、61 号文档的估时不作为本专项实施基线；未来阶段以本文与当阶段用户授权为准。
@@ -1112,3 +1112,41 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-backend.ps1 
 - 真实 API 验证：项目 24 的 OWNED 列表直连 8090 及经 5173 代理均 200；USED 列表及共享目录均 200，返回正常空分页。未新增、修改或运行单元测试。
 - 真实浏览器只读验收：无 API 拦截的独立 Chrome 打开项目 24 页面，切换“本项目使用”并打开共享目录；三个真实接口均 200、共享空态正常，无页面 JavaScript 异常。未创建演示资料或触发真实审查；已有服务直接复用、未重启。
 - 停止点：仅修复本地运行前置条件；不自动进入 M4/M6，不将空库只读验收宣称为真实资料写入/共享闭环验收。备份是回退依据；V56 涉及已删除结构，需要恢复时先停止写入并另行确认恢复范围，不直接自动覆盖当前数据库。
+
+## 18. M4 踩坑确认后端（已完成）
+
+- 用户授权先本地提交再实施 M4；前序 M3/S1～S3 已提交 `efaec7e`。改动量等级：**中**，复用 V57/V58 数据结构，在既有反馈模块及记忆模块内补可靠确认闭环，不改前端、Review 或 Worker 协议，不新增迁移。
+- 接口沿用 4.6：项目内反馈分页/详情、POST confirm 返回 HTTP 202、GET writeback 状态；明确 Pydantic 请求/响应契约。确认字段沿用示例的五段正文和端/问题/路径/关键词；正文经服务端渲染后完整限制 4000 UTF-8 字节，不截断。
+- 只接受可关联已保存 AI finding 的 FALSE_POSITIVE、PENDING/VALID 反馈；核对任务/项目、reviewKey、fingerprint 及快照。PENDING 转 VALID 后重新生成持久化摘要。CONTEXT_MISSING 必须包含原反馈缺失证据和非空查证步骤，只产生 PITFALL/ON_DEMAND。
+- 以反馈行锁串行确认和旧反馈写入口；确认、失效、消费遵循反馈→来源→回写任务锁序。旧 upsert/status/convert-to-policy 写入均在提交前使关联记忆和在途任务失效；旧库缺记忆表时不让原反馈功能因新钩子报错。
+- 幂等键使用请求摘要及规范化业务 payload；已受理请求先返回原状态，刷新为当前反馈摘要后同内容也复用在途/成功记录。失效或失败请求不会因重复点击重启；修改已有关联案例必须传当前 sourceVersion，重新启用必须人工重新确认。新确认取消同反馈的过期在途确认，迟到任务不能覆盖更新。
+- 消费扫描每 10 秒、每批最多 20 条，独立 Session、60 秒租约、最多 3 次领取；暂时数据库错误按 30/120 秒退避，第三次失租终结 FAILED。MySQL 8 使用 SKIP LOCKED，5.7 有界串行行锁降级；无新增队列基础设施。新案例同事务创建私有来源、ACTIVE ON_DEMAND 条目和 owner 自关联；更新不恢复被显式解除的关联。
+- 验收采用静态/OpenAPI 与隔离 MySQL 手动 API/synthetic，覆盖双确认、取消及重启/失租、digest/版本、旧入口失效、跨项目、失败回滚与并发；不新增、修改或运行单元测试，不写真实业务反馈或触发真实 Review。完成后停止，M5 另行授权；M4 不自动提交或推送。
+
+### 18.1 接口及实际实现
+
+| 方法与路径（均在 `/api/projects/{projectId}/review-memory` 下） | 输入与输出 |
+| --- | --- |
+| GET `/feedbacks` | 仅本项目 AI_FINDING；支持 feedbackType=FALSE_POSITIVE、status、pageNo/pageSize（最多 100）。返回 items/total/pageNo/pageSize；条目含反馈原因/状态、feedbackDigest、memorySourceId/sourceVersion/sourceState、writebackId/writebackState，不返回完整 finding 正文 |
+| GET `/feedbacks/{feedbackId}` | 返回上述摘要及 itemSnapshot、missingContextTypes、taskUrl、findingAvailable；任务/指纹/reviewKey/位置及保存快照须与真实 finding 一致才允许确认 |
+| POST `/feedbacks/{feedbackId}/confirm` | 请求沿用 4.6 示例，可选 operatorName（未经验证）；expectedSourceVersion 在新来源时为 null、修改/重新确认现有来源时必须正确。HTTP 202 的 data 复用 MemoryWritebackSummary：id、feedbackId、sourceId、state、attempts、lastErrorCode；**字段实际是 id/state，不是 writebackId/status**，202 也可能返回同请求已有的成功/失败/失效终态，不能只凭状态码显示“已沉淀” |
+| GET `/writebacks/{id}` | 返回上述 MemoryWritebackSummary，按关联反馈校验项目；跨项目 404，供 M5 有界轮询使用 |
+
+- 新增 `review_memory/feedback.py`：结构化案例渲染、摘要、真实 finding 复核、反馈分页详情、确认事务和失效钩子。五段完整正文发布上限 4000 UTF-8 字节；全部非空、路径和枚举有界，不执行模型总结。
+- 新增 `review_memory/writeback.py`：持久化领取/租约、再次复核、原子写入、自关联、重试及终态。已有案例维持同一 source/entry ID 并递增版本；不复制新来源，不复活已删除来源，不恢复被解除的项目关系。原确认任务丢失租约或被新确认替代后无法写入。
+- `main.py` 生命周期注册独立扫描协程，每次经 to_thread 调用独立 Session 的短批次，退出取消协程；已有 Review 恢复逻辑不变。MySQL 8 使用 SKIP LOCKED，MySQL 5.7/MariaDB 保留普通行锁降级；本轮实际验证 MySQL 8.0.45，未宣称验证 5.7/MariaDB。
+- 原反馈 upsert、状态更新、旧策略转换均先锁反馈，再在同一事务使来源 DISABLED/版本递增及在途任务 CANCELLED_STALE_SOURCE。原反馈每次保存会更新其时间版本，因此包括重复保存也会使旧确认失效；重新生效需基于当前摘要人工确认。旧库不存在记忆表时钩子跳过，不在请求中创建记忆表。
+- 反馈原表时间是普通 DATETIME，PENDING→VALID 后必须 refresh 读取数据库实际精度再算 digest，避免当前确认被自身状态变更误判过期。重放原请求以及刷新为当前 digest 的同内容请求均去重；失败相同内容不自动重新开启重试。
+- 无新增依赖、迁移、Worker 协议或前端按钮。M5 仍需实现独立人工打标与案例确认 UI；M6 才让已发布案例参与审查。
+
+### 18.2 验证结果与复验
+
+- 聚焦 Ruff、格式、内存语法/OpenAPI 与 `git diff --check` 通过。`review_feedback/service.py` 原有 unused ReviewItemFeedback 导入在 HEAD 即存在，本轮只改锁参数，不顺带清理；该文件的静态检查仅对原有 F401 作命令级豁免，未添加持久 lint 配置。未新增、修改或运行单元测试。
+- 使用本地 MySQL 8.0.45 的随机独立 `memory_m4_acceptance_*` 数据库、真实 FastAPI router 和合成已保存 finding，验证结束逐次删除精确随机库；不写运行库反馈，不启动新长驻服务。
+- 已通过：项目隔离及四接口契约、HTTP 202/空白/超限拒绝、PENDING 转 VALID 前后幂等、成功及失败重复确认、同反馈并发双确认只建一个任务、双扫描器只领取一次、连接重建后恢复任务、私有来源/一个完整条目/自关联原子落库、CONTEXT_MISSING 的证据约束及查证型 PITFALL、伪造 finding 拒绝。
+- 已通过：反馈 upsert/status/旧策略转换失效；反馈写入与确认竞争不发布陈旧记忆；已领取旧任务在反馈改变后不复活；新人工确认替代旧 payload；解除关系后重新确认不恢复关联；错误来源版本及已删除来源拒绝；第三次失租终止、第一次失租可重领、旧 owner/attempt 无权提交。
+- 数据库暂时错误通过 SQLAlchemy 执行事件在真实 INSERT 后注入 1213，验证 source/entry/binding 整笔回滚、30 秒退避及其他记录继续成功；下一次 1205 错误验证 120 秒退避，第三次进入 FAILED。未实际断开 MySQL 服务，不宣称执行过真实网络中断；恢复验证使用连接重建和显式失租，不需要杀生产进程。
+- 兼容验证：隔离库移除四张记忆表后，原反馈创建/修改/状态更新仍成功。完整 app 导入/OpenAPI 包含四接口及 202；已有本地后端自动重载后注册 M4，项目 24 的新反馈列表经 5173 代理返回 200。本轮无前端改动，不要求浏览器验收。
+- 最小复验：在隔离库保存真实 AI finding 的 FALSE_POSITIVE 反馈；GET 详情获得 digest/version，填写五段模板后 POST confirm，确认返回 202/id/state；GET writebacks 等待 SUCCEEDED，再核对私有 PITFALL 与 owner 关联。重复同请求不新增任务；修改原反馈后来源应 DISABLED、旧待执行任务应失效；并发及失租用独立 Session/受控故障验证。真实反馈写入须独立选择验收对象，不自动创建示例污染业务库。
+
+**停止点：M4 已完成。** 前序提交 `efaec7e` 已保留；用户随后另行授权本地提交 M4，提交号以 Git 记录为准。无新数据库迁移、远程部署或推送，不进入 M5/M6。
