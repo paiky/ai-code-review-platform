@@ -2,7 +2,7 @@
 
 ## 0. 状态与使用范围
 
-- 日期：2026-11-11。状态：待实施设计；本次仅新增本文，未改业务代码、执行迁移或部署。
+- 设计日期：2026-11-11。M1/M2 实施日期：2026-11-12。状态：M1 数据基础和 M2 资料管理后端已落地并完成离线/临时库验证；未执行运行库迁移或部署，M3 及后续阶段尚未开始。
 - 本文是后续**记忆库专项**的独立开发依据，完整定义功能、数据、接口、UI、接入和阶段停止点，不需要查阅 60 号文档才能开发。60 号文档的记忆方案、61 号文档的估时不作为本专项实施基线；未来阶段以本文与当阶段用户授权为准。
 - 本专项面向所有现有端类型，不受 Java/MyBatis 限制。Java/MyBatis 是源码关系分析的范围，与文字规范、Skill 和案例记忆的接入无关。
 - 不在本文实施 AST/调用图、源码范围裁剪、两轮早停、向量库、跨项目共享、脚本执行或模型训练。不填写工时估算。
@@ -483,3 +483,235 @@ AI Review 配置  /  项目记忆库
 - 向量命中必须返回 entryId/version，Backend 再核验当前项目、端、状态及正文版本，不能直接把索引中的过期原文注入。停用/删除在 SQL 最终核验时立即生效，索引同步可异步补齐。
 - 更换 Embedding 模型通常要重建向量；存储、模型费用、延迟和语义召回效果必须用实际样本评估。本期不预建向量字段、接口、容器或“通用检索平台”。
 - Agent 执行中按需查记忆是另一个可选扩展，需要新增受控工具和协议验收；首期只有 Backend 入队前检索，不能在 UI 或交付中宣称 Agent 已会自主查询记忆库。
+
+## 10. M1 实施边界与记录
+
+### 10.1 本阶段契约
+
+- 改动量等级：**中**。仅新增后端加法数据层与内部校验，不开放公开接口或改变审查主链路。
+- 新增 V57 三张表迁移和 `app/review_memory` 模块；迁移按既有工具自动发现，不在应用导入、查询或请求时建表。
+- 内部能力限于创建 MANUAL 草稿、按项目读取/分页查询来源、读取章节和回写记录、核验版本/来源状态、验证条目与 CORE 发布预算。不在 M1 实现上传、发布事务、反馈确认、异步消费、排名召回或 Prompt 注入。
+- 所有来源/章节查询显式传入 projectId；回写记录通过原反馈关联项目。来源列表不读取原文件二进制和整份抽取文本；详情按需读取正文，原件读取仍留给 M2。
+- 新草稿内容允许单段超过 4000 字节以便后续人工拆分，但同来源最多 200 条、总正文 256 KiB；发布校验必须拒绝超限条目。CORE 仅允许 STANDARD/ARCHITECTURE，针对六种端分别验证通配与专属内容合计最多 20 条/8000 字节，包含稳定渲染包装。
+- 状态/版本与预算校验作为内部函数交付，实际发布和并发写保护在 M2 完成；M1 不提供绕过确认的发布入口。
+- 验证使用聚焦静态检查和 SQLite 内存临时库 synthetic 调用，迁移做离线发现/语句及 MySQL DDL 编译对照；不连接运行数据库，不新增或运行单元测试，不需要浏览器验收。
+
+### 10.2 验证与停止点
+
+交付文件：
+
+- `backend-python/migrations/bootstrap_sql/V57__review_memory_foundation.sql`：三张加法表，InnoDB/utf8mb4，来源反馈、章节标识和回写幂等唯一约束，以及筛选/回写索引。
+- `backend-python/app/review_memory/models.py`：对应 ORM，SQLite ID/文本兼容、MySQL MEDIUMTEXT/MEDIUMBLOB/DATETIME(3)；原件、抽取原文和章节正文延迟加载。
+- `schemas.py`：种类、来源、状态、issue 和加载方式枚举；复用现有 TargetType；草稿、分页、详情、CORE 预算输入和回写摘要契约。未知字段拒绝，路径越界与条目/来源大小有界。
+- `repository.py`：项目范围内的来源、章节、回写读取及来源分页，章节筛选用 EXISTS 避免重复来源；管理筛选中的 targetType/issueType 为精确标签筛选，通配匹配在未来 M6 生效检索中处理。
+- `service.py`：创建手工草稿只 flush、不 commit；项目关联读取和安全摘要；版本/来源状态校验、条目发布前校验，以及六端 CORE 总预算校验。发布预算函数只做校验，不实际发布。
+
+已完成验证：
+
+| 验证 | 结果与证据边界 |
+| --- | --- |
+| 聚焦 Ruff | `check app/review_memory`、`format --check app/review_memory` 均通过 |
+| 迁移静态一致性 | 现有 discover_migrations 自动发现 V1～V57；V57 拆出且仅拆出 3 条 CREATE TABLE；逐表对照字段、MySQL 类型（INT/INTEGER 同义）、可空性、server default、索引与唯一约束通过 |
+| MySQL 方言编译 | 三张 ORM 表 DDL 编译通过，确认 MEDIUMTEXT/MEDIUMBLOB、CHAR(64)、DATETIME(3)、InnoDB/utf8mb4；这不等于已在 MySQL 执行迁移 |
+| 隔离临时库 synthetic | SQLite 内存库建表/删表成功；草稿回滚、来源/章节/回写跨项目 404、EXISTS 分页不重复、LIKE 特殊字符转义、原件/整份原文未加载、活动 CORE 可见及停用/删除排除通过 |
+| 契约与边界 synthetic | 非法端/未知字段/越界路径拒绝；超限正文可存草稿但禁止发布；来源总字节限制、CORE 类型限制、旧版本冲突、删除状态不能重新发布、CORE 20 条/8000 字节和 UTF-8 多字节预算通过；GENERAL 与 NULL 通配保持区别 |
+| 实际运行库/前端 | 未连接运行数据库，未执行迁移、启动服务、浏览器验收或真实 Review；未改主链路、UI、现有表、项目设置或 Worker |
+
+没有新增、修改或运行单元测试。现有后端脚本提供模块执行，但没有 stdin 临时 synthetic 入口，因此临时库校验直接调用项目虚拟环境 Python，仅连接 `sqlite:///:memory:`。
+
+最小复现（仓库根目录 PowerShell）：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-backend.ps1 ruff check app/review_memory
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-backend.ps1 ruff format --check app/review_memory
+@'
+import os, sys
+from pathlib import Path
+os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+sys.path.insert(0, str(Path('backend-python').resolve()))
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from app.core.database import Base
+from app.core.errors import AppError
+from app.project_integration.models import Project
+from app.review_memory.models import ReviewMemorySource, ReviewMemoryEntry, ReviewMemoryWriteback
+from app.review_memory.schemas import MemorySourceDraft, MemorySourceQuery
+from app.review_memory.service import create_manual_draft, get_project_source, list_project_sources
+engine = create_engine('sqlite:///:memory:')
+tables = [Project.__table__, ReviewMemorySource.__table__,
+          ReviewMemoryEntry.__table__, ReviewMemoryWriteback.__table__]
+Base.metadata.create_all(engine, tables=tables)
+with Session(engine) as db:
+    db.add(Project(id=1, name='demo', git_provider='GITLAB', git_project_id='1',
+                   default_template_code='backend', target_type='BACKEND', status='ACTIVE'))
+    db.flush()
+    draft = create_manual_draft(db, 1, MemorySourceDraft(kind='STANDARD', title='demo',
+        entries=[{'heading': 'rule', 'content': 'Check the actual evidence.'}]))
+    assert draft.state == 'DRAFT' and draft.entries[0].state == 'DRAFT'
+    assert list_project_sources(db, 1, MemorySourceQuery()).total == 1
+    try:
+        get_project_source(db, 2, draft.id)
+    except AppError as error:
+        assert error.status_code == 404
+    else:
+        raise AssertionError('cross-project source was returned')
+    db.rollback()
+Base.metadata.drop_all(engine, tables=tables)
+engine.dispose()
+print('M1 isolated draft/query smoke passed')
+'@ | & backend-python/.venv/Scripts/python.exe -
+```
+
+运行库迁移仍需独立授权。尤其本地既有 V56 可能尚未执行，未来不能把 `migrate apply` 当成“仅执行 V57”；应先使用隔离目标的 status/dry-run 检查所有 pending，并按 V56 破坏性迁移的既有前置条件处理。首期不提供自动删除新表的回滚脚本；应用回退保留新表，避免丢失以后录入的资料。
+
+**M1 历史停止记录：** M1 完成时未本地提交、运行库迁移或部署；之后用户已授权 M2，当前实施结果见第 11 节。
+
+## 11. M2 实施契约与记录
+
+### 11.1 本阶段实施边界
+
+- 改动量等级：**中**。复用 M1 三张表，新增一个后端资料管理子域及有界文本解析，不新增迁移、前端或 Review 消费能力。
+- 用户已授权实施 M2；只实现 4.6 的 sources、uploads、entries、publish、state 和 original 接口。反馈确认/回写、项目开关及 Review 注入不在本阶段。
+- 新接口统一返回现有 success/code/message/data/traceId 信封，data 使用明确的 Pydantic schema；下载例外，返回 attachment。所有服务写操作只 flush，由 API 在成功时提交、异常时回滚。
+
+### 11.2 【PC端】资料管理接口新增
+
+以下路径均以 `/api/projects/{projectId}/review-memory` 为前缀；projectId 来自当前选中项目，source/entry ID 和版本来自本接口列表/详情，不能由请求更改项目归属。
+
+| 接口 | 新增请求字段、来源与前端用途 | 返回数据与需求使用位置 |
+| --- | --- | --- |
+| GET /sources | 4.6 的筛选字段、pageNo/pageSize，来自筛选表单 | MemorySourcePage；供 5.1 列表使用，不带正文/原件 |
+| POST /sources | kind/title/description/entries，来自手工表单，结构沿用 M1 MemorySourceDraft | MemorySourceDetail；4.1 草稿预览，默认不发布 |
+| POST /uploads | multipart 单文件 file 和 JSON 文本 metadata；metadata 为 kind、可选 title/description、默认 targetType/issueType/pathGlobs/keywords/loadMode、可选 replacementOfId/expectedReplacedVersion，来自上传表单及旧来源详情 | MemorySourceDetail；4.1 返回章节、诊断、原件信息，供 5.2 预览 |
+| GET /sources/{id} | 路径 id 来自列表 | MemorySourceDetail；含 entries、originalFilename/mediaType/parserVersion/parseWarnings、hasOriginal、confirmedBy/confirmedAt、identityVerified=false、legacyPolicyIds，仅按同源反馈关联旧策略，不返回旧策略正文 |
+| GET /sources/{id}/original | 路径 id 来自详情 | 原始字节 attachment；4.1 原件追溯，不接受本地路径 |
+| PUT /sources/{id} | title/description/expectedVersion；完整元信息表单及详情版本 | MemorySourceDetail；3.5 编辑、递增来源版本、重验 CORE 包装预算 |
+| POST /sources/{id}/entries | expectedSourceVersion + entry（M1 MemoryEntryDraft）；来自拆分/新增表单 | MemorySourceDetail；4.6 新增草稿，sectionKey 服务端生成 |
+| PUT /sources/{id}/entries/{entryId} | expectedVersion/expectedSourceVersion + entry（完整 MemoryEntryDraft）或 state=DISABLED，两种操作互斥 | MemorySourceDetail；3.5 编辑转 DRAFT，或停用，不允许客户端直接 ACTIVE |
+| POST /sources/{id}/publish | expectedVersion、selectedEntries[{id,expectedVersion}]、可选 expectedReplacedVersion/operatorName；来自详情勾选、版本和操作人填报 | MemorySourceDetail；4.1 人工确认，operatorName 仅记录为未经身份验证的填报 |
+| PUT /sources/{id}/state | state=DISABLED、expectedVersion，来自停用动作和详情 | MemorySourceDetail；3.5 重新启用必须走 publish |
+| DELETE /sources/{id} | query expectedVersion，来自详情 | MemorySourceDetail；逻辑删除，已删除来源禁止继续修改或发布 |
+
+完整条目字段为 heading/content/targetType/issueType/pathGlobs/keywords/loadMode；可空标签和空列表的意义沿用 M1，不使用任意 dict 绕过 schema。新增章节/编辑后返回完整详情，前端用新版本覆盖已保存状态；409 保留本地输入并刷新对比。列表标签采用精确筛选，NULL 通配匹配属于 M6 检索。
+
+### 11.3 后端处理与必要兼容保护
+
+- 所有管理写入先锁项目行，再锁来源，再读取章节当前版本；统一串行化同项目发布/编辑预算核验，来源和条目均复核客户端版本。MySQL 的版本/活动集合查询使用锁定当前读，避免等待项目锁前的普通读快照影响预算；现有 Review/策略接口不改动。
+- 发布只激活选中章节；PUBLISHED 来源未选择的 ACTIVE 章节继续有效，DRAFT/DISABLED 章节仍不生效。恢复 DISABLED 来源时，只恢复本次明确选中的章节，其余原 ACTIVE 章节转 DISABLED，避免暗中恢复。每次操作来源版本只递增一次，受影响章节版本分别递增一次。
+- 替换上传时核验旧来源同项目、同 kind 且非 DELETED/FEEDBACK；不改变旧来源。发布替换草稿必须再次提供 expectedReplacedVersion，核验旧来源仍为该版本且非删除，然后同事务停用旧来源和发布新来源；新来源只在首次发布执行替换。旧来源中途修改返回 409，不覆盖。旧版本号不另加持久化字段。
+- FEEDBACK 来源仅可读取；通用管理写入一律拒绝，防止在 M4 的反馈锁、digest 和撤回保护实现前提前开放绕过确认的入口。手工 PITFALL/INCIDENT 发布要求正文保留“适用条件、原误判及原因、正确判断方法、下次应查证据、例外/失效条件”五个非空模板段落。
+- 标题、条目或状态变更后按当前完整活动集合校验六端 CORE 预算；替换时先排除同事务停用的旧来源。source/entry 当前版本及渲染元信息一起计入，失败整体回滚。
+- Markdown 使用固定版本轻量解析库识别标题/段落/代码围栏；以完整顶层章节保留嵌套适用条件，公共前言复制至每章。TXT 保留完整正文；PITFALL/INCIDENT 保留整份模板，避免把五个案例段落拆散。保守保留大段为不可发布草稿，避免依赖自然语言猜测拆条件。不渲染 HTML、不请求外链、不调用模型。
+- Skill YAML front matter 最多 8 KiB，使用 safe loader，拒绝 alias/anchor、重复键和过深结构；仅 name/description 生效，其余字段诊断为未启用。MD/TXT 单文件最多 1 MiB；整个 multipart 请求最多 1 MiB + 64 KiB，metadata 最多 16 KiB、只允许一文件一字段，流式累计限制，不信任 Content-Length。
+- UTF-8（可带 BOM）解码并拒绝二进制控制符；文件名只保留安全 basename，扩展名与 MIME 校验，纯文本无需执行式内容探测。正文/条目数遵循 M1 上限，解析失败事务不留半成品。重复文件只提示，不拦截。
+
+### 11.4 【公共】异常与验收
+
+- 400：参数/UTF-8/YAML/结构无效；404：项目、来源、章节或原件不在当前项目；409：版本、状态、发布条件或 CORE 预算冲突；413：请求/文件/抽取总量超限；415：格式不支持。错误只含字段/ID/错误码，不回显完整文档。
+- 使用聚焦 Ruff、OpenAPI 静态核对、隔离 SQLite 的 API/synthetic 验证上传→草稿→编辑→发布→停用/替换→下载/删除，以及跨项目、超限、版本冲突和失败回滚。脚本入口不支持内嵌 synthetic 时使用本地 venv Python；不新增、修改或运行单元测试。
+- 不启动运行服务、不执行运行库迁移、不部署、不提交；M2 完成后停，M3 需要用户另行授权。
+
+### 11.5 实施结果与最小复现
+
+已交付 `review_memory/api.py`、`parsing.py`，扩展既有 schemas/service/repository；`main.py` 只注册新路由。共 11 个资料管理 HTTP 操作，已有三张表直接复用，无 M2 迁移。`MemoryUploadMetadata` 是 multipart 的 metadata 字段契约；其内容示例：
+
+```json
+{
+  "kind": "SKILL",
+  "title": "缓存审查步骤",
+  "targetType": "BACKEND",
+  "issueType": "CACHE",
+  "pathGlobs": ["**/order/**"],
+  "keywords": ["缓存失效"],
+  "loadMode": "ON_DEMAND"
+}
+```
+
+上传不填 title/description 时可采用 Skill name/description；其它 YAML 字段只产生未启用诊断。替换上传在上述 JSON 中增加同项目同 kind 的 replacementOfId/expectedReplacedVersion，首次发布时再次提供最新 expectedReplacedVersion。发布请求示例（ID/版本必须使用详情实际值）：
+
+```json
+{
+  "expectedVersion": 1,
+  "selectedEntries": [{"id": 101, "expectedVersion": 1}],
+  "operatorName": "维护者填报名称"
+}
+```
+
+本地 Backend 新依赖已安装并验证，固定版本为 `python-multipart==0.0.22`、`PyYAML==6.0.3`、`markdown-it-py==4.0.0`。在其它 Backend 环境按 pyproject 安装；仅更新本地依赖可从仓库根目录执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-backend.ps1 pip install python-multipart==0.0.22 PyYAML==6.0.3 markdown-it-py==4.0.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-backend.ps1 ruff check app/review_memory app/main.py
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-backend.ps1 ruff format --check app/review_memory
+```
+
+隔离 API 最小复现（仓库根目录运行；本地脚本没有 stdin synthetic 入口，因此直接使用 venv Python；不启动 lifespan，不接运行库，不触发 Review）：
+
+```powershell
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+@'
+import os, sys, json
+os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+sys.path.insert(0, 'backend-python')
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
+from app.core.database import Base, get_db
+from app.core.errors import register_exception_handlers
+from app.project_integration.models import Project
+from app.review_memory.api import router
+from app.review_memory.models import ReviewMemorySource, ReviewMemoryEntry
+engine = create_engine('sqlite://', poolclass=StaticPool,
+                       connect_args={'check_same_thread': False})
+tables = [Project.__table__, ReviewMemorySource.__table__, ReviewMemoryEntry.__table__]
+Base.metadata.create_all(engine, tables=tables)
+with Session(engine) as db:
+    db.add(Project(id=1, name='memory-smoke', git_provider='GITLAB',
+                   git_project_id='1', default_template_code='DEFAULT', status='ACTIVE'))
+    db.commit()
+def isolated_db():
+    with Session(engine, autoflush=False) as db:
+        yield db
+app = FastAPI()
+register_exception_handlers(app)
+app.include_router(router)
+app.dependency_overrides[get_db] = isolated_db
+root = '/api/projects/1/review-memory'
+with TestClient(app) as client:
+    original = b'# Rules\nCheck transaction events before reporting cache issues.\n'
+    response = client.post(root + '/uploads',
+        files={'file': ('rules.md', original, 'text/markdown')},
+        data={'metadata': json.dumps({'kind': 'STANDARD', 'targetType': 'BACKEND'})})
+    assert response.status_code == 200, response.text
+    source = response.json()['data']
+    assert source['state'] == 'DRAFT' and source['hasOriginal']
+    path = root + '/sources/' + str(source['id'])
+    payload = {'expectedVersion': source['version'], 'selectedEntries': [
+        {'id': source['entries'][0]['id'], 'expectedVersion': source['entries'][0]['version']}]}
+    published = client.post(path + '/publish', json=payload)
+    assert published.status_code == 200, published.text
+    assert published.json()['data']['entries'][0]['state'] == 'ACTIVE'
+    assert client.post(path + '/publish', json=payload).status_code == 409
+    assert client.get(path.replace('/1/', '/2/', 1)).status_code == 404
+    download = client.get(path + '/original')
+    assert download.content == original
+    assert download.headers['content-disposition'].startswith('attachment;')
+Base.metadata.drop_all(engine, tables=tables)
+engine.dispose()
+print('M2 isolated upload/publish/version/download smoke passed')
+'@ | backend-python/.venv/Scripts/python.exe -
+```
+
+本阶段验收结果：
+
+- 聚焦 Ruff check/format、模块导入和完整应用 OpenAPI 生成通过；仅新增资料管理路由，不启动应用恢复循环。
+- SQLite 临时库的 API/synthetic 调用通过：手工/上传草稿、UTF-8 BOM、Skill 元信息、分章与代码围栏、公共适用前言、完整案例模板、预览/编辑/部分发布/章节停用/来源停用后选择恢复/下载/逻辑删除。
+- 跨项目来源/章节/下载/替换、来源及章节旧版本、重复文件提示、无原件、格式/MIME/UTF-8/二进制控制字符、损坏/多文件/额外字段 multipart、请求/文件/元信息/正文/章节数超限均检查；拒绝不留可发布半成品。
+- YAML alias/anchor、重复键、不安全 tag 和未闭合 front matter 均拒绝；Skill 不能使用 CORE。手工和上传案例的五段模板保持完整且发布校验非空。
+- CORE 六端字节预算、NULL 通配、20 条数量上限、标题增长、旧版本写入、替换后预算失败均检查；失败回滚来源/章节版本及旧资料状态。FEEDBACK 来源通用写入口拒绝，同源旧策略只读关联可用。
+- MySQL 方言下项目/来源/章节/活动 CORE 查询均生成 `FOR UPDATE`，并使用 populate_existing 刷新。**未连接 MySQL，真实多连接竞争和运行库迁移尚未验证**；SQLite 不模拟 InnoDB 锁行为，不将旧版本冲突检查宣称为真实并发验收。
+- 未新增、修改或运行单元测试；本阶段无前端变化，不需要浏览器验收。未执行运行库迁移、服务启动、部署或本地提交。运行前仍需先独立核验 V56/V57 pending 风险，不能直接把 migrate apply 当作只建记忆表。
+
+**停止点：M2 已完成；未进入 M3。** 下一阶段是资料管理 UI，需用户另行授权；Review 当前尚不消费新记忆库。
