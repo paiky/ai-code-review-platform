@@ -6846,9 +6846,11 @@ function TemplateConfig() {
 
   loadSettingsRef.current = load;
   currentSettingsUrlRef.current = `${location.pathname}${location.search}${location.hash}`;
+  const currentSettingsSectionKey = activeSettingsSection?.contentKey || activeSettingsSection?.key;
+  const isAiReviewSettingsSection = activeSettingsSection?.key === 'ai-review-settings';
   dirtySettingsRef.current = settingsSectionHasDirtyDraft(
     dirtySettingsDraftTokens,
-    activeSettingsSection?.contentKey || activeSettingsSection?.key,
+    currentSettingsSectionKey,
     dirtyReviewConnectionId
   );
 
@@ -6875,9 +6877,18 @@ function TemplateConfig() {
 
   useEffect(() => registerSettingsNavigationGuard({
     isDirty: () => dirtySettingsRef.current,
+    shouldConfirmNavigation: () => !isAiReviewSettingsSection,
     currentUrl: () => currentSettingsUrlRef.current,
     discard: discardCurrentSettingsDrafts,
     requestNavigation: next => {
+      if (isAiReviewSettingsSection) {
+        if (!dirtySettingsRef.current) {
+          next();
+          return;
+        }
+        void discardCurrentSettingsDrafts().then(next);
+        return;
+      }
       if (!dirtySettingsRef.current) {
         next();
         return;
@@ -6896,17 +6907,17 @@ function TemplateConfig() {
         onCancel: () => window.setTimeout(() => focusTarget?.focus?.(), 0)
       });
     }
-  }), [discardCurrentSettingsDrafts]);
+  }), [discardCurrentSettingsDrafts, isAiReviewSettingsSection]);
 
   useEffect(() => {
     const onBeforeUnload = event => {
-      if (!dirtySettingsRef.current) return;
+      if (isAiReviewSettingsSection || !dirtySettingsRef.current) return;
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, []);
+  }, [isAiReviewSettingsSection]);
 
   useEffect(() => {
     load();
@@ -8793,30 +8804,53 @@ function TemplateConfig() {
           className="settings-inner-card"
         >
           {profileDraft ? (
-            <div className="full-width" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div className="settings-subsection">
-                <Space direction="vertical" size="middle" className="full-width">
+            <div className="review-profile-layout">
+              <div className="review-profile-toolbar settings-subsection">
+                <div className="review-profile-selector">
+                  <Text strong>当前 Profile 模板</Text>
+                  <Select
+                    className="full-width"
+                    value={selectedProfileCode}
+                    options={profileOptions}
+                    onChange={selectProfile}
+                    showSearch
+                    optionFilterProp="label"
+                    disabled={profileSaving || profileCreating || profileCreateOpen}
+                  />
+                </div>
+                <Button
+                  icon={<CopyOutlined />}
+                  onClick={openCreateProfile}
+                  disabled={profileSaving || profileCreating}
+                >
+                  复制为新 Profile
+                </Button>
+              </div>
+              <div className="review-profile-workspace">
+                <section className="settings-subsection review-profile-config-card">
                   <SettingsCardHeader
                     icon={<FileTextOutlined />}
-                    title="Review Prompt Profile"
-                    description="审查指令持续作用于普通和 Agent Review；Provider 与模型覆盖仅沿用普通 Review 配置。项目可独立选择 Profile。"
+                    title="基本信息与配置"
+                    description="审查指令持续作用于普通和 Agent Review；Provider 与模型覆盖仅沿用普通 Review 配置。"
                     tags={<Tag color="blue">{profileDraft.builtIn ? '内置 Profile' : '自定义 Profile'}</Tag>}
                   />
                   <Alert type="info" showIcon title="保存会影响所有引用该 Profile 的项目的新 Review；需要项目专用指令时，请先复制为新 Profile。" />
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} lg={8}>
-                      <Text strong>Profile</Text>
-                      <Select
-                        className="full-width prompt-field"
-                        value={selectedProfileCode}
-                        options={profileOptions}
-                        onChange={selectProfile}
-                        showSearch
-                        optionFilterProp="label"
-                        disabled={profileSaving || profileCreating || profileCreateOpen}
+                  <div className="review-profile-config-fields">
+                    <label>
+                      <Text strong>Profile 名称</Text>
+                      <Input
+                        className="prompt-field"
+                        value={profileDraft.profileName || ''}
+                        maxLength={128}
+                        onChange={event => updateProfileDraft('profileName', event.target.value)}
+                        disabled={profileSaving || profileCreating}
                       />
-                    </Col>
-                    <Col xs={24} lg={7}>
+                    </label>
+                    <label>
+                      <Text strong>Profile 编码（创建后不可修改）</Text>
+                      <Input className="prompt-field" value={profileDraft.profileCode} readOnly />
+                    </label>
+                    <label>
                       <Text strong>Provider 覆盖</Text>
                       <Select
                         className="full-width prompt-field"
@@ -8825,8 +8859,8 @@ function TemplateConfig() {
                         onChange={value => updateProfileDraft('providerCode', value || null)}
                         disabled={profileSaving || profileCreating}
                       />
-                    </Col>
-                    <Col xs={24} lg={7}>
+                    </label>
+                    <label>
                       <Text strong>模型覆盖</Text>
                       <Input
                         className="prompt-field"
@@ -8836,44 +8870,30 @@ function TemplateConfig() {
                         maxLength={128}
                         disabled={profileSaving || profileCreating}
                       />
-                    </Col>
-                  </Row>
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} lg={12}>
-                      <Text strong>Profile 名称</Text>
-                      <Input
-                        className="prompt-field"
-                        value={profileDraft.profileName || ''}
-                        maxLength={128}
-                        onChange={event => updateProfileDraft('profileName', event.target.value)}
-                        disabled={profileSaving || profileCreating}
-                      />
-                    </Col>
-                    <Col xs={24} lg={12}>
-                      <Text strong>Profile 编码（创建后不可修改）</Text>
-                      <Input className="prompt-field" value={profileDraft.profileCode} readOnly />
-                    </Col>
-                  </Row>
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24}>
-                      <Text strong>Review Instructions</Text>
-                      <Input.TextArea
-                        className="prompt-textarea"
-                        value={profileDraft.reviewInstructions || ''}
-                        onChange={event => updateProfileDraft('reviewInstructions', event.target.value)}
-                        autoSize={{ minRows: 8, maxRows: 16 }}
-                        disabled={profileSaving || profileCreating}
-                      />
-                    </Col>
-                  </Row>
+                    </label>
+                  </div>
+                </section>
+                <section className="settings-subsection review-profile-prompt-card">
+                  <SettingsCardHeader
+                    title="Review Instructions（核心 Prompt）"
+                    description="提示词会同时用于普通 Review 和 Agent Review。"
+                  />
+                  <Input.TextArea
+                    className="prompt-textarea review-profile-prompt-input"
+                    value={profileDraft.reviewInstructions || ''}
+                    onChange={event => updateProfileDraft('reviewInstructions', event.target.value)}
+                    rows={20}
+                    disabled={profileSaving || profileCreating}
+                  />
                   {promptPreview && (
                     <Collapse
+                      className="review-profile-saved-preview"
                       defaultActiveKey={['preview']}
                       items={[{
                         key: 'preview',
                         label: (
                           <Space wrap>
-                            <Text strong>Prompt 预览</Text>
+                            <Text strong>已保存 Prompt 预览</Text>
                             <Tag>{promptPreview.provider}</Tag>
                             {promptPreview.model && <Tag>{promptPreview.model}</Tag>}
                             <Tag>{promptPreview.promptLength} 字符</Tag>
@@ -8884,9 +8904,8 @@ function TemplateConfig() {
                       }]}
                     />
                   )}
-                  <div className="settings-action-row">
+                  <div className="settings-action-row review-profile-action-row">
                     <Space wrap>
-                      <Button icon={<CopyOutlined />} onClick={openCreateProfile} disabled={profileSaving || profileCreating}>复制为新 Profile</Button>
                       <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={profileSaving || profileCreating || dirtySettingsDraftTokens.has('profile-settings:profile')}>预览已保存的普通 Review Prompt</Button>
                       {profileDraft.builtIn && (
                         <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={profileCreating}>恢复当前 Profile 默认 Prompt</Button>
@@ -8894,7 +8913,7 @@ function TemplateConfig() {
                       <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={profileCreating}>保存 Profile</Button>
                     </Space>
                   </div>
-                </Space>
+                </section>
               </div>
             </div>
           ) : (

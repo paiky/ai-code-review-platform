@@ -100,7 +100,8 @@ function handleSettingsHistoryNavigation(event) {
     previousHistoryIndex = nextHistoryIndex;
     return;
   }
-  if (window.confirm('当前设置模块有未保存修改，确定放弃并离开吗？')) {
+  if (activeSettingsNavigationGuard.shouldConfirmNavigation?.() === false
+    || window.confirm('当前设置模块有未保存修改，确定放弃并离开吗？')) {
     previousHistoryIndex = nextHistoryIndex;
     Promise.resolve(activeSettingsNavigationGuard.discard?.()).catch(() => {});
     return;
