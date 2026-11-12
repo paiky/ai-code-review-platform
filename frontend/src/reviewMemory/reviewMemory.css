@@ -56,6 +56,20 @@
   grid-template-columns: 1fr 1fr;
   gap: 16px;
 }
+.memory-feedback-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+}
+.memory-feedback-original {
+  min-width: 0;
+}
+.memory-feedback-summary {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 100px;
+  overflow: auto;
+}
 .memory-chapter-layout {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -130,6 +144,7 @@
     padding: 16px;
   }
   .memory-chapter-layout,
+  .memory-feedback-layout,
   .memory-field-grid {
     grid-template-columns: minmax(0, 1fr);
   }

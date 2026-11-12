@@ -35,6 +35,8 @@ import {
 } from './model.js';
 import MemorySourceDrawer from './MemorySourceDrawer.jsx';
 import MemoryAssociationDrawer from './MemoryAssociationDrawer.jsx';
+import MemoryFeedbackDrawer from './MemoryFeedbackDrawer.jsx';
+import MemoryFeedbackList from './MemoryFeedbackList.jsx';
 import './reviewMemory.css';
 
 const { Title, Paragraph, Text } = Typography;
@@ -61,6 +63,8 @@ export default function ReviewMemoryPage() {
   const [projectError, setProjectError] = useState(null);
   const [projectRetry, setProjectRetry] = useState(0);
   const [category, setCategory] = useState('rules');
+  const [caseTab, setCaseTab] = useState('saved');
+  const feedbackView = category === 'cases' && caseTab === 'feedbacks';
   const [view, setView] = useState('OWNED');
   const [filters, setFilters] = useState({
     kind: 'STANDARD',
@@ -184,7 +188,7 @@ export default function ReviewMemoryPage() {
   useEffect(() => {
     setPage({ items: [], total: 0 });
     setError(null);
-    if (!projectId) {
+    if (!projectId || feedbackView) {
       setLoading(false);
       return undefined;
     }
@@ -201,7 +205,7 @@ export default function ReviewMemoryPage() {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [projectId, filters, view, refresh]);
+  }, [projectId, filters, view, refresh, feedbackView]);
 
   useEffect(() => {
     setLegacy(null);
@@ -388,6 +392,7 @@ export default function ReviewMemoryPage() {
         <>
           <Tabs
             aria-label="资料视图"
+            style={feedbackView ? { display: 'none' } : undefined}
             activeKey={view}
             items={[
               { key: 'OWNED', label: '维护资料' },
@@ -406,11 +411,17 @@ export default function ReviewMemoryPage() {
             onChange={(next) =>
               requestLeave(() => {
                 setCategory(next);
+                setCaseTab('saved');
                 changeFilter({ kind: CATEGORY_KINDS[next][0], keyword: '' });
                 setSearch('');
               })
             }
           />
+          {category === 'cases' && <Tabs aria-label="踩坑案例视图" activeKey={caseTab}
+            items={[{ key: 'saved', label: '已沉淀' }, { key: 'feedbacks', label: '待确认反馈' }]}
+            onChange={(next) => requestLeave(() => setCaseTab(next))} />}
+          {feedbackView ? <MemoryFeedbackList key={projectId} projectId={projectId} refresh={refresh}
+            onOpen={(feedbackId) => openDrawer({ mode: 'feedback', feedbackId })} /> : <>
           <div className="memory-toolbar">
             <Select
               aria-label="资料子类型"
@@ -526,6 +537,7 @@ export default function ReviewMemoryPage() {
                 setFilters((current) => ({ ...current, pageNo, pageSize }))
             }}
           />
+          </>}
           <Collapse
             className="memory-top-space"
             activeKey={legacyOpen ? ['legacy'] : []}
@@ -567,7 +579,11 @@ export default function ReviewMemoryPage() {
           />
         </>
       )}
-      {drawer && ['shared', 'binding'].includes(drawer.mode) ? (
+      {drawer?.mode === 'feedback' ? (
+        <MemoryFeedbackDrawer key={`${projectId}-${drawer.key}`} projectId={projectId}
+          feedbackId={drawer.feedbackId} onClose={() => requestLeave(() => {})}
+          onDirtyChange={handleDirty} onBusyChange={handleBusy} onSaved={handleSaved} />
+      ) : drawer && ['shared', 'binding'].includes(drawer.mode) ? (
         <MemoryAssociationDrawer
           key={`${projectId}-${drawer.key}`}
           projectId={projectId}
@@ -591,6 +607,7 @@ export default function ReviewMemoryPage() {
             onBusyChange={handleBusy}
             onSaved={handleSaved}
             projectLabel={projectLabel}
+            onViewFeedback={(feedbackId) => requestLeave(() => openDrawer({ mode: 'feedback', feedbackId }))}
             onManageBinding={(source) =>
               requestLeave(() => openDrawer({ mode: 'binding', source }))
             }

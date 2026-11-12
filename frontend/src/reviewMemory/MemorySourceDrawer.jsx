@@ -47,7 +47,8 @@ export default function MemorySourceDrawer({
   onBusyChange,
   onSaved,
   projectLabel,
-  onManageBinding
+  onManageBinding,
+  onViewFeedback
 }) {
   const [source, setSource] = useState(null);
   const [creation, setCreation] = useState(initial.mode === 'view' ? null : initial.mode);
@@ -771,7 +772,7 @@ export default function MemorySourceDrawer({
                 type="info"
                 title={
                   source.origin === 'FEEDBACK'
-                    ? '反馈来源只读，后续通过专用确认流程维护。'
+                    ? '反馈来源只读，通过来源反馈的专用确认流程维护。'
                     : source.state === 'DELETED'
                       ? '资料已删除，只保留追溯信息。'
                       : '引用资料只读，正文由维护项目统一管理。'
@@ -806,7 +807,9 @@ export default function MemorySourceDrawer({
                       {
                         key: 'feedback',
                         label: '来源反馈',
-                        children: `反馈 #${source.sourceFeedbackId}`
+                        children: <Button type="link" onClick={() => onViewFeedback?.(source.sourceFeedbackId)}>
+                          查看来源反馈 #{source.sourceFeedbackId}
+                        </Button>
                       }
                     ]
                   : []),

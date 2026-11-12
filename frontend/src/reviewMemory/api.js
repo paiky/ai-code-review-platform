@@ -26,6 +26,38 @@ export function getSource(projectId, sourceId, signal) {
   return request(`${root(projectId)}/sources/${sourceId}`, { signal });
 }
 
+export function listMemoryFeedbacks(projectId, filters, signal) {
+  const query = new URLSearchParams({ feedbackType: 'FALSE_POSITIVE' });
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== '' && value != null) query.set(key, String(value));
+  });
+  return request(`${root(projectId)}/feedbacks?${query}`, { signal });
+}
+
+export function getMemoryFeedback(projectId, feedbackId, signal) {
+  return request(`${root(projectId)}/feedbacks/${feedbackId}`, { signal });
+}
+
+export function getWriteback(projectId, id, signal) {
+  return request(`${root(projectId)}/writebacks/${id}`, { signal });
+}
+
+export function saveFindingFeedback(taskId, payload) {
+  return request(`/api/review-tasks/${taskId}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+
+export function withdrawFeedback(feedbackId) {
+  return request(`/api/risk-feedback/${feedbackId}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'IGNORED', adminComment: '人工撤回误报标记' })
+  });
+}
+
 export function getSourceImpact(projectId, sourceId) {
   return request(`${root(projectId)}/sources/${sourceId}/impact`);
 }

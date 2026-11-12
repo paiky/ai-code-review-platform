@@ -2,7 +2,7 @@
 
 ## 0. 状态与使用范围
 
-- 设计日期：2026-11-11。实施日期：2026-11-12。状态：M1～M3、S1～S3 及 M4 后端已落地，本地运行库已迁移 V58；M4 完成隔离 MySQL/API 验证，M5 及后续阶段尚未开始，未部署远程环境。
+- 设计日期：2026-11-11。实施日期：2026-11-12。状态：M1～M5、S1～S3 已落地，本地运行库已迁移 V58；M4 完成隔离 MySQL/API 验证，M5 完成 build、受控 Chrome 及本地服务只读验收；M6 及后续阶段尚未开始，未部署远程环境。
 - 2026-11-12 用户确认调整为“共享资料 + 项目多对多关联”，第 13 节是调整后的设计基线；先按 S1～S3 完成调整，再进入 M4。第 3～5 节中的单项目归属、查询、修改和 UI 约定以第 13 节修订为准，第 10～12 节保留实际已交付记录，不表示当前代码已支持共享。
 - 用户随后授权调整代码及继续推进，S1 关联数据及兼容层、S2 共享与关联后端、S3 共享 UI 已完成，分别见第 14～16 节；S2 通过独立临时 MySQL/API 验证，S3 通过构建与隔离浏览器交互验收。2026-11-12 经用户另行授权，本地运行库已备份并迁移至 V58，真实页面只读验收通过，见第 17 节；未部署远程环境。
 - 本文是后续**记忆库专项**的独立开发依据，完整定义功能、数据、接口、UI、接入和阶段停止点，不需要查阅 60 号文档才能开发。60 号文档的记忆方案、61 号文档的估时不作为本专项实施基线；未来阶段以本文与当阶段用户授权为准。
@@ -307,7 +307,7 @@ CORE 发布/编辑时锁项目行，按每个已支持端核验“NULL 通配 + 
 | `DELETE /api/projects/{projectId}/review-memory/sources/{id}?expectedVersion=...` | 逻辑删除、取消关联待回写；新建恢复流程不在首期 |
 | `GET /api/projects/{projectId}/review-memory/feedbacks` | 仅本项目 AI_FINDING，复用原反馈池查询，补 memorySourceId/writebackState/feedbackDigest；支持 FALSE_POSITIVE 和状态筛选 |
 | `GET /api/projects/{projectId}/review-memory/feedbacks/{feedbackId}` | 反馈、原 finding 和任务链接、digest、现有来源版本；不支持不存在于本项目的任意 finding |
-| `POST /api/projects/{projectId}/review-memory/feedbacks/{feedbackId}/confirm` | 结构化踩坑模板 + 标签 + expectedFeedbackDigest + 可选 expectedSourceVersion；返回 HTTP 202/writebackId/status |
+| `POST /api/projects/{projectId}/review-memory/feedbacks/{feedbackId}/confirm` | 结构化踩坑模板 + 标签 + expectedFeedbackDigest + 可选 expectedSourceVersion；返回 HTTP 202/id/state（MemoryWritebackSummary，见 18 节） |
 | `GET /api/projects/{projectId}/review-memory/writebacks/{id}` | status/attempts/sourceId/lastErrorCode，可供前端有界轮询 |
 | `GET /api/projects/{projectId}/review-memory/settings`、`PUT` 同路径 | 新增 enabled，默认 false，PUT 带 expectedVersion；配置存储见下文 |
 | `GET /api/agent-review/runs/{runId}/memory-summary` | 从任务冻结输入读摘要，校验关联项目访问边界；不返回 baselineContext/原始 query/diff |
@@ -404,7 +404,7 @@ AI Review 配置  /  项目记忆库
 - 不勾选：只保存打标，提示“反馈已保存，尚未进入审查记忆”。
 - 勾选：打开案例 Drawer，左右对照原 finding 和固定案例模板；从服务端回填 project、target、问题线索及反馈 digest，允许人工修正标签和证据描述。
 - 按钮文案 **“确认并加入记忆”**；提交成功先显示“已受理”，有界轮询回写状态（2 秒一次，最多 30 秒，离开页面停止）。未完成时可关闭，列表保留处理中，重新打开再查询，不持续后台轮询。
-- 成功显示“已沉淀，将按适用条件参与后续 Agent Review”；失败显示可操作原因，不把 202 误写成成功。
+- 成功显示“已沉淀；自动审查读取尚未接入”（M6/M7 后再按实际状态提示参与后续审查）；失败显示可操作原因，不把 202 误写成成功。
 - 已有同源案例显示“查看案例”；修改/撤回原反馈会使该案例停止用于新任务，UI 明确提醒。已有旧策略显示其来源，不重复生成同样内容。
 
 “踩坑案例”页再分 **已沉淀 / 待确认反馈**：前者展示生效案例及关联任务，后者查询本项目 FALSE_POSITIVE 反馈并提供整理入口；不复制旧反馈表、不恢复无关学习运营功能。缺少说明和证据的反馈仍可保存，但不允许直接发布案例。
@@ -1150,3 +1150,27 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-backend.ps1 
 - 最小复验：在隔离库保存真实 AI finding 的 FALSE_POSITIVE 反馈；GET 详情获得 digest/version，填写五段模板后 POST confirm，确认返回 202/id/state；GET writebacks 等待 SUCCEEDED，再核对私有 PITFALL 与 owner 关联。重复同请求不新增任务；修改原反馈后来源应 DISABLED、旧待执行任务应失效；并发及失租用独立 Session/受控故障验证。真实反馈写入须独立选择验收对象，不自动创建示例污染业务库。
 
 **停止点：M4 已完成。** 前序提交 `efaec7e` 已保留；用户随后另行授权本地提交 M4，提交号以 Git 记录为准。无新数据库迁移、远程部署或推送，不进入 M5/M6。
+
+## 19. M5 实施边界（2026-11-12）
+
+- 用户已授权推进 M5。改动量等级：**中**，复用 M4 完整接口，联动任务 finding 和记忆页表单，不新增后端契约、迁移或依赖。
+- 任务详情已保存的终态 AI finding 默认提供“标记误报”，不依赖旧学习 UI 开关。复用原反馈保存及状态接口，原因/说明/缺失背景先保存，取消案例整理不撤销反馈；撤回明确使用 IGNORED，使已有案例失效，不删除历史记录。
+- 案例 Drawer 对照服务端 finding 快照和反馈，编辑五段模板及端/问题/路径/关键词。现有案例回填当前正文与版本；反馈、来源版本冲突保留输入，显式刷新对照后再确认。CONVERTED 只展示已有旧策略来源，不重复确认；已删除来源不能恢复。
+- 记忆页“踩坑案例”增加“已沉淀 / 待确认反馈”子页签。已沉淀沿用来源列表，待确认列表固定 FALSE_POSITIVE，可按反馈状态筛选，展示未确认、处理中、失败、已失效、已沉淀和来源链接。入口不开放整个旧治理页面。
+- 严格按 M4 `id/state` 展示异步受理/终态，每 2 秒查询，单次最多 30 秒，关闭/切项目/离开即取消；超时保留处理中并可重新查询。网络失败不解释为回写失败，不自动重发确认；相同失败请求不承诺重试成功。
+- 本阶段提示“已沉淀；自动审查读取尚未接入”，不提前声称实际参与 Review。M6 才接入检索，M7 才开放注入控制。
+- 验收：前端 build；无扩展真实 Chrome 配合受控 API 响应验证保存/失败/取消/重新打开/撤回、202 终态、409 保留输入、导航保护、轮询停止和窄屏；现有业务服务仅只读核验。使用合成 finding，不写真实业务反馈，不触发真实 Review。不新增、修改或运行单元测试。
+- 授权边界与停止点：完成 M5 后停止，不进入 M6，不自动提交、推送、部署或迁移。
+
+### 19.1 M5 实施与验收结果
+
+- `FalsePositiveControl.jsx` 在已保存的终态 finding 处提供默认入口，复用原 feedback/fingerprint/reviewKey/index。支持原反馈读取、原因/证据保存、独立保存后整理，以及通过原状态接口撤回；不依赖旧学习 UI 开关。Standard 与 Agent 共用入口，进行中的结果不显示。
+- `MemoryFeedbackDrawer.jsx` 复用 M4 详情/确认/回写接口和原任务详情/旧项目策略查询：左右对照服务端 finding、人工说明及当前案例；五段必填、4000 UTF-8 字节校验，来源版本/digest 冲突保留输入并显式刷新对照，原任务端类型作为新案例默认值。已删除来源、无匹配 finding、无证据的 CONTEXT_MISSING、非 PENDING/VALID 状态均阻止确认。
+- `MemoryFeedbackList.jsx` 接入项目记忆库“踩坑案例 → 待确认反馈”，固定 FALSE_POSITIVE，支持状态筛选/分页/空态/失败重试及任务追溯；现有来源详情可进入专用反馈确认。页面保留“尚未接入自动审查”提示，不把来源已发布等同当前已被 Review 使用。
+- 严格处理 202 的 PENDING/RUNNING/RETRY_WAIT/SUCCEEDED/FAILED/CANCELLED_STALE_SOURCE。每次查询最多 30 秒，关闭/离开取消，查询失败显示结果未知；重新打开或手动重新查询不重发确认。失败后当前输入继续保留并有离开保护；M4 详情不返回失败回写的 confirmation_json，关闭后尚未形成来源的失败正文需人工重新整理，不新增敏感正文的浏览器持久化。
+- 复用既有导航保护及 beforeunload，保存时阻止离开，未保存内容离开前确认。新案例抽屉限制在视口内，桌面双栏、390px 窄屏单栏，页脚按钮可换行；没有修改共享 Drawer 的其它历史行为。
+- `scripts/run-frontend.ps1 build` 与 `git diff --check` 通过。构建保留既有大 bundle 提示，本阶段不顺带拆包；未新增、修改或运行单元测试。
+- 无扩展真实 Chrome + 全量拦截的合成 API 场景通过：独立入口、先保存再确认、保存/确认失败、取消/保留输入、五段空白/UTF-8 超限、409 后刷新对照、202 成功/失败/失效、原文回填、撤回停用、列表/详情重试、不可确认状态、状态查询失败、30 秒停止/手动恢复、关闭停止轮询、Standard/Agent 终态及运行中入口边界、390px 截图与元素视口边界、切项目后的浏览器后退取消/放弃保护。临时复验脚本和截图仅保存在 ignored `.local/memory-m5-*`，不作为单元测试纳入仓库。
+- 复用现有 5173/8090 做真实业务只读核验：已完成任务可见“标记误报”；项目 24 的反馈列表返回 200，浏览器无 pageerror。浏览器拦截所有非 GET 请求，未写真实业务反馈、未触发真实 Review，未新增或停止常驻服务。后端、接口、schema、依赖及数据库迁移均无变更。
+
+**停止点：M5 已完成。** 本次改动保留在工作区，未自动提交、推送或部署；M6 检索与 prompt 注入等待单独授权。

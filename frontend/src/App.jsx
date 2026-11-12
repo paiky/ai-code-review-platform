@@ -105,6 +105,8 @@ import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-yaml';
 import { fetchApi, riskColor, statusColor } from './api.js';
 import ReviewMemoryPage from './reviewMemory/ReviewMemoryPage.jsx';
+import FalsePositiveControl from './reviewMemory/FalsePositiveControl.jsx';
+import { MISSING_CONTEXT_TYPE_OPTIONS, REVIEW_FEEDBACK_REASON_OPTIONS } from './reviewMemory/feedbackModel.js';
 import { AppFrameOperationsContext } from './appFrameOperations.js';
 import {
   buildAppShellNavigation,
@@ -378,16 +380,6 @@ const REVIEW_FEEDBACK_TYPE_OPTIONS = [
   { label: '重复提醒', value: 'DUPLICATE' },
   { label: '已修复', value: 'FIXED' }
 ];
-const REVIEW_FEEDBACK_REASON_OPTIONS = [
-  { label: '项目允许', value: 'PROJECT_ALLOWED' },
-  { label: '已有兜底', value: 'HAS_EXTERNAL_GUARD' },
-  { label: '上下文不足', value: 'CONTEXT_MISSING' },
-  { label: '规则不适用', value: 'RULE_NOT_APPLICABLE' },
-  { label: '等级过高', value: 'LEVEL_TOO_HIGH' },
-  { label: '描述不准', value: 'DESCRIPTION_INACCURATE' },
-  { label: '重复提醒', value: 'DUPLICATE' },
-  { label: '其他', value: 'OTHER' }
-];
 const REVIEW_FEEDBACK_STATUS_OPTIONS = [
   { label: '待分析', value: 'PENDING' },
   { label: '有效反馈', value: 'VALID' },
@@ -417,19 +409,6 @@ const RULE_GAP_ATTRIBUTION_OPTIONS = [
 const PROJECT_REVIEW_POLICY_TYPE_OPTIONS = [
   { label: '项目规则', value: 'PROJECT_RULE' },
   { label: '项目事实', value: 'CONTEXT_FACT' }
-];
-const MISSING_CONTEXT_TYPE_OPTIONS = [
-  { label: '同文件上下文', value: 'SAME_FILE_CONTEXT' },
-  { label: '同类方法', value: 'SAME_CLASS_METHODS' },
-  { label: '引用搜索', value: 'REFERENCE_SEARCH' },
-  { label: '调用方', value: 'CALLER_CONTEXT' },
-  { label: '被调用方', value: 'CALLEE_CONTEXT' },
-  { label: '相关文件', value: 'RELATED_FILE' },
-  { label: '表结构', value: 'DB_SCHEMA_CONTEXT' },
-  { label: '配置', value: 'CONFIG_CONTEXT' },
-  { label: '项目规则', value: 'PROJECT_POLICY_CONTEXT' },
-  { label: '测试结果', value: 'TEST_RESULT_CONTEXT' },
-  { label: '其他', value: 'OTHER' }
 ];
 
 function targetTypeLabel(value) {
@@ -5537,6 +5516,8 @@ function ReviewResultSummary({
 
 function CodeQualityReviewView({
   taskId,
+  projectId,
+  targetType,
   review,
   journey,
   progress,
@@ -5859,6 +5840,15 @@ function CodeQualityReviewView({
                     {finding.suggestion && <Alert type="info" showIcon message="建议" description={finding.suggestion} />}
                     <FindingContext finding={finding} />
                     <FindingRefinementPanel overlay={finding.refinementOverlay} />
+                    <FalsePositiveControl
+                      key={finding.fingerprint || `${review.reviewKey}-${index}`}
+                      projectId={projectId}
+                      taskId={taskId}
+                      review={{ ...review, targetType }}
+                      finding={finding}
+                      findingIndex={index}
+                      onRefresh={onRefresh}
+                    />
                     <ReviewFeedbackControl
                       taskId={taskId}
                       sourceType="AI_FINDING"
@@ -5998,6 +5988,8 @@ function ReviewSelectorIdentity({ journey, compact = false }) {
 
 function CodeQualityReviewsPanel({
   taskId,
+  projectId,
+  targetType,
   reviews,
   journeys: providedJourneys,
   progress,
@@ -6040,6 +6032,8 @@ function CodeQualityReviewsPanel({
     return (
       <CodeQualityReviewView
         taskId={taskId}
+        projectId={projectId}
+        targetType={targetType}
         review={review}
         journey={journey}
         progress={scopedProgress}
@@ -6075,6 +6069,8 @@ function CodeQualityReviewsPanel({
             children: (
               <CodeQualityReviewView
                 taskId={taskId}
+                projectId={projectId}
+                targetType={targetType}
                 review={review}
                 journey={journey}
                 progress={selectReviewJourneyEvents(review, progress, {
@@ -6480,6 +6476,8 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   const qualityReviewContent = (
     <CodeQualityReviewsPanel
       taskId={taskId}
+      projectId={detail?.projectId}
+      targetType={detail?.targetType}
       reviews={codeQualityResults}
       journeys={journeys}
       progress={codeQualityProgress}
