@@ -16,6 +16,17 @@
 .memory-top-space {
   margin-top: 16px;
 }
+.memory-injection-settings {
+  margin-bottom: 16px;
+}
+.memory-snapshot-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.memory-run-summary {
+  min-width: 0;
+  width: 100%;
+}
 .memory-toolbar {
   display: flex;
   flex-wrap: wrap;

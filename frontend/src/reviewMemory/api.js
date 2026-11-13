@@ -26,6 +26,23 @@ export function getSource(projectId, sourceId, signal) {
   return request(`${root(projectId)}/sources/${sourceId}`, { signal });
 }
 
+export function getMemorySettings(projectId, signal) {
+  return request(`${root(projectId)}/settings`, { signal });
+}
+
+export function saveMemorySettings(projectId, enabled, expectedVersion, signal) {
+  return request(`${root(projectId)}/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled, expectedVersion }),
+    signal
+  });
+}
+
+export function getRunMemorySummary(projectId, runId, signal) {
+  return request(`/api/agent-review/runs/${encodeURIComponent(runId)}/memory-summary?projectId=${encodeURIComponent(projectId)}`, { signal });
+}
+
 export function listMemoryFeedbacks(projectId, filters, signal) {
   const query = new URLSearchParams({ feedbackType: 'FALSE_POSITIVE' });
   Object.entries(filters).forEach(([key, value]) => {

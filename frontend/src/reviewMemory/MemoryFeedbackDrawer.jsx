@@ -192,7 +192,7 @@ export default function MemoryFeedbackDrawer({
       {job && (
         <Alert showIcon type={job.state === 'SUCCEEDED' ? 'success' : ['FAILED', 'CANCELLED_STALE_SOURCE'].includes(job.state) ? 'warning' : 'info'}
           title={job.state === 'SUCCEEDED' ? '回写已成功；当前案例状态见下方来源信息' : WRITEBACK_LABELS[job.state] || job.state}
-          description={job.lastErrorCode ? feedbackError(job.lastErrorCode) : pending ? '已受理不等于已入库。关闭后停止查询，可重新打开查看结果。' : source?.state === 'PUBLISHED' ? '已沉淀；自动审查读取尚未接入。' : '历史回写结果不能代表案例当前仍然生效，请核对来源状态。'} />
+          description={job.lastErrorCode ? feedbackError(job.lastErrorCode) : pending ? '已受理不等于已入库。关闭后停止查询，可重新打开查看结果。' : source?.state === 'PUBLISHED' ? '已沉淀；仅在项目开启记忆且匹配适用范围和预算时，用于后续 Agent Review。' : '历史回写结果不能代表案例当前仍然生效，请核对来源状态。'} />
       )}
       {pollError && <Alert type="warning" title={pollError} />}
       {submittedHere.current && ['FAILED', 'CANCELLED_STALE_SOURCE'].includes(job?.state) && <Alert type="warning"

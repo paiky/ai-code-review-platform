@@ -105,6 +105,7 @@ import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-yaml';
 import { fetchApi, riskColor, statusColor } from './api.js';
 import ReviewMemoryPage from './reviewMemory/ReviewMemoryPage.jsx';
+import ReviewMemorySummary from './reviewMemory/ReviewMemorySummary.jsx';
 import FalsePositiveControl from './reviewMemory/FalsePositiveControl.jsx';
 import { MISSING_CONTEXT_TYPE_OPTIONS, REVIEW_FEEDBACK_REASON_OPTIONS } from './reviewMemory/feedbackModel.js';
 import { AppFrameOperationsContext } from './appFrameOperations.js';
@@ -5879,6 +5880,12 @@ function CodeQualityReviewView({
         )}
       </Card>
   ) : null;
+  const memoryRunId = agentRunSummary?.runId ?? review.agentRunId;
+  const memorySummary = requestedEngine === 'AGENT' || memoryRunId ? (
+    <ReviewMemorySummary key={`${projectId}-${memoryRunId || reviewStateKey}`}
+      projectId={projectId} runId={memoryRunId}
+      reviewStatus={agentRunSummary?.status || review.status} effectiveEngine={effectiveEngine} />
+  ) : null;
   const resultContent = terminalResult ? (
     <Space orientation="vertical" size="large" className="full-width review-result-first">
       <ReviewResultSummary
@@ -5899,6 +5906,7 @@ function CodeQualityReviewView({
       >
         {hasSupportingAlerts ? reviewSupportingAlerts : null}
       </ReviewResultSummary>
+      {memorySummary}
       {findingsSection}
       <ReviewJourneyTimeline
         journey={journey}
@@ -5931,6 +5939,7 @@ function CodeQualityReviewView({
           {reviewSupportingAlerts}
         </Space>
       </Card>
+      {memorySummary}
     </Space>
   );
 

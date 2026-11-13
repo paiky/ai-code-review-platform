@@ -37,6 +37,7 @@ import MemorySourceDrawer from './MemorySourceDrawer.jsx';
 import MemoryAssociationDrawer from './MemoryAssociationDrawer.jsx';
 import MemoryFeedbackDrawer from './MemoryFeedbackDrawer.jsx';
 import MemoryFeedbackList from './MemoryFeedbackList.jsx';
+import MemoryInjectionSettings from './MemoryInjectionSettings.jsx';
 import './reviewMemory.css';
 
 const { Title, Paragraph, Text } = Typography;
@@ -80,7 +81,15 @@ export default function ReviewMemoryPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [refresh, setRefresh] = useState(0);
-  const [drawer, setDrawer] = useState(null);
+  const [drawer, setDrawer] = useState(() => {
+    const sourceId = new URLSearchParams(location.search).get('sourceId');
+    return projectId && /^[1-9]\d*$/.test(sourceId || '') ? { mode: 'view', sourceId, key: 0 } : null;
+  });
+  const [settingsReset, setSettingsReset] = useState(0);
+  const settingsDirtyRef = useRef(false);
+  const settingsBusyRef = useRef(false);
+  const handleSettingsDirty = useCallback((dirty) => { settingsDirtyRef.current = dirty; }, []);
+  const handleSettingsBusy = useCallback((busy) => { settingsBusyRef.current = busy; }, []);
   const [legacyOpen, setLegacyOpen] = useState(false);
   const [legacy, setLegacy] = useState(null);
   const [legacyError, setLegacyError] = useState(null);
@@ -101,14 +110,18 @@ export default function ReviewMemoryPage() {
   const discard = useCallback(() => {
     dirtyRef.current = false;
     setDrawer(null);
+    if (settingsDirtyRef.current) {
+      settingsDirtyRef.current = false;
+      setSettingsReset((value) => value + 1);
+    }
   }, []);
   const requestLeave = useCallback(
     (next) => {
-      if (busyRef.current === 'save') {
+      if (busyRef.current === 'save' || settingsBusyRef.current) {
         messageApi.info('正在保存或发布，请等待完成后再离开。');
         return;
       }
-      if (!dirtyRef.current && !busyRef.current) {
+      if (!dirtyRef.current && !busyRef.current && !settingsDirtyRef.current) {
         discard();
         next();
         return;
@@ -118,7 +131,7 @@ export default function ReviewMemoryPage() {
         content:
           busyRef.current === 'upload'
             ? '取消客户端等待不代表撤销服务端保存；请刷新列表检查是否已有草稿。'
-            : '已保存的草稿继续保留，未保存的输入将丢弃。',
+            : '已保存内容继续保留，未保存的资料输入及记忆开关选择将丢弃。',
         okText: '放弃并离开',
         cancelText: '继续编辑',
         okButtonProps: { danger: true },
@@ -134,8 +147,8 @@ export default function ReviewMemoryPage() {
   useEffect(
     () =>
       registerSettingsNavigationGuard({
-        isDirty: () => dirtyRef.current || Boolean(busyRef.current),
-        canNavigate: () => busyRef.current !== 'save',
+        isDirty: () => dirtyRef.current || Boolean(busyRef.current) || settingsDirtyRef.current || settingsBusyRef.current,
+        canNavigate: () => busyRef.current !== 'save' && !settingsBusyRef.current,
         shouldConfirmNavigation: () => true,
         currentUrl: () => currentUrl.current,
         discard,
@@ -146,7 +159,7 @@ export default function ReviewMemoryPage() {
 
   useEffect(() => {
     const onBeforeUnload = (event) => {
-      if (!dirtyRef.current && !busyRef.current) return;
+      if (!dirtyRef.current && !busyRef.current && !settingsDirtyRef.current && !settingsBusyRef.current) return;
       event.preventDefault();
       event.returnValue = '';
     };
@@ -345,8 +358,8 @@ export default function ReviewMemoryPage() {
       <Alert
         type="info"
         showIcon
-        title="资料可管理，尚未接入自动审查"
-        description="“已发布”表示资料已确认；Agent Review 读取记忆和注入开关将在后续阶段接入。"
+        title="资料发布后，按项目设置参与后续 Agent Review"
+        description="需开启并保存下方开关；系统按适用端、路径和问题线索选择背景。Standard Review 沿用原有策略。"
       />
       <div className="memory-toolbar memory-top-space">
         <label className="memory-project-select">
@@ -390,6 +403,8 @@ export default function ReviewMemoryPage() {
         <Empty className="memory-empty" description="先选择项目，再查看或维护资料" />
       ) : (
         <>
+          <MemoryInjectionSettings key={`${projectId}-${settingsReset}`} projectId={projectId}
+            onDirtyChange={handleSettingsDirty} onBusyChange={handleSettingsBusy} />
           <Tabs
             aria-label="资料视图"
             style={feedbackView ? { display: 'none' } : undefined}
