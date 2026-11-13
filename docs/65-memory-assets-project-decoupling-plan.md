@@ -1,7 +1,7 @@
 # 记忆资料与项目解耦及项目关联简化计划
 
 - 日期：2026-11-13。
-- 状态：A1～A5 已依序完成并逐阶段本地提交；真实数据库 V60 迁移仍待明确目标授权，不自动进入其它专项。
+- 状态：A1～A5 已依序完成并逐阶段本地提交；用户授权的当前本地库 V60 迁移已完成且验收通过，不涉及 test 或部署库。
 - 基线：U1～U5 已完成，最新代码提交 `bffbed7`。本文接续 [64 号专项](64-memory-library-simple-ui-plan.md)，不修改其已完成记录；资料解析、人工确认和冻结背景继续沿用 [62 号专项](62-agent-review-memory-library-plan.md)，关系并发保护沿用 [63 号专项](63-memory-library-central-management-plan.md)。
 - 用户确认的目标：上传不再选择项目，关联单独处理；“项目关联”成为同级 Tab，简化现有项目使用配置。
 - 每阶段完成实现、对应验收和记录后先本地提交，再停止；用户后续明确授权连续阶段时按授权顺序逐阶段提交，不重复请求确认。不推送、部署、调用真实模型或默认开启真实项目记忆。
@@ -141,7 +141,7 @@
 ## 7. 当前交付与后续操作
 
 - A1～A5 已完成：公共资料独立上传/手工录入及维护、四同级 Tab、显式项目关联、迁移就绪保护；存量项目资料及误报案例保留原链路。
-- 真实本地 capabilities 当前返回 schemaReady=false，未执行 V60；页面禁用公共创建并提示迁移，既有资料及案例继续可达。迁移步骤见本文 A3 记录；真实迁移仍须单独明确目标授权。
+- 真实本地库已在用户明确授权后迁移到 V60，capabilities 返回 schemaReady=true，无项目上传已启用。test / 部署库未操作，迁移步骤见本文 A3 记录，执行其它目标仍须明确授权。
 - 验收脚本优先现有 `scripts/run-backend.ps1` / `scripts/run-frontend.ps1 build`，手动隔离资产按已有 ignored `.local` 方式保留；不用单元测试替代用户未授权的真实写入。
 - 不改冻结的 docs/36、不默认更新 README；实际新入口 / 操作要求在实施阶段有变化时再补对应导航及使用说明。
 
@@ -213,3 +213,13 @@
 - 混合公共与旧项目资料的真实隔离 MySQL/API→Agent 冻结入队→Worker 输入→人工确认→异步案例回写→下次采用→撤回闭环通过；历史快照不变。脚本 .local/memory-a5-flow-acceptance.ps1，未调用真实模型；随机验收库已清理。
 - 浏览器脚本 .local/memory-a5-{upload,association,cases,manual}-acceptance.ps1；真实页面仅 GET 验收通过：当前 schemaReady=false，V60 提示可见且公共创建禁用，无项目选择字段，零业务写入。未新增/修改/运行单元测试；未执行真实库迁移、推送或部署。
 - A1～A4 提交依次 cd9be16、2918088、bb2d4df、10c0239；本阶段提交后按约定停止。
+
+### 本地 V60 迁移（已完成，2026-11-13）
+
+- 改动量等级：中。仅现有本地库单列 DDL 与迁移台账更新，不改业务数据或应用代码。
+- 用户已明确确认迁移。status / dry-run 已核对 LOCAL 目标 `127.0.0.1:3306/ai_code_review_local`，当前 V59，唯一待执行项 V60；本次授权不包含 test / 部署库或其它迁移。
+- 执行顺序：本地完整 SQL 备份与关键表指纹→原迁移脚本 apply local→verify local→列定义 / 关键业务表指纹对照→capabilities 和浏览器只读验收。备份保存在 ignored `.local/backups/`，不提交数据或凭据；无真实模型调用、资料写入、自动关联或记忆开关修改。
+- 完整备份为 `.local/backups/memory-v60-local-20261113-181459/ai_code_review_local-before-v60.sql`（195,121,931 字节）；使用 mysqldump 的一致性快照、原件二进制导出及存储程序/事件/触发器导出，确认完成标记并记录 SHA-256。项目脚本没有备份能力，因此备份由本地一次性 PowerShell / Python 调用现有 mysqldump；密码只经子进程环境传递，不写命令行或记录。
+- `scripts/run-database-migration.ps1 apply local` 和 `verify local` 均成功，当前 V60、无待执行项；实际列 project_id 已可空。迁移前后 sources、entries、project_sources、writebacks、project_review_settings、projects、review_item_feedbacks 共 7 张关键业务表的完整行数与内容 SHA-256 完全一致。
+- 运行中后端无需重启，GET capabilities 已返回 schemaReady=true；真实页面只读浏览器验收通过：无项目选择字段、未就绪提示消失、开始上传按钮启用，零业务写请求。没有为验收创建真实资料、修改关联或开启记忆；未运行单元测试。
+- 本次仅提交专题文档，备份和一次性校验脚本保存在 ignored `.local/`；后续进入“上传资料”即可按使用说明操作。
