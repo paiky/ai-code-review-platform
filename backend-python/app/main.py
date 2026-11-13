@@ -35,6 +35,7 @@ from app.review_feedback.api import feedback_pool_router
 from app.review_feedback.api import task_feedback_router
 from app.review_memory.api import router as review_memory_router
 from app.review_memory.api import shared_router as shared_memory_router
+from app.review_memory.api import management_router as memory_management_router
 from app.review_quality.api import router as review_quality_router
 from app.review_quality_acceptance.api import router as review_quality_acceptance_router
 from app.review_record.api import router as review_task_router
@@ -114,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(feedback_pool_router)
     app.include_router(review_memory_router)
     app.include_router(shared_memory_router)
+    app.include_router(memory_management_router)
     app.include_router(rule_template_router)
     app.include_router(code_quality_review_router)
     app.include_router(code_quality_profile_router)

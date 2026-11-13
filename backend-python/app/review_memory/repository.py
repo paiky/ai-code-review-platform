@@ -14,6 +14,8 @@ from app.review_memory.schemas import (
     BindingState,
     EntryState,
     LoadMode,
+    MemoryBindingQuery,
+    MemoryLibraryQuery,
     MemorySourceQuery,
     SourceState,
     SourceVisibility,
@@ -163,6 +165,144 @@ def list_sources(
         select(ReviewMemorySource)
         .where(*conditions)
         .order_by(ReviewMemorySource.updated_at.desc(), ReviewMemorySource.id.desc())
+        .offset((filters.page_no - 1) * filters.page_size)
+        .limit(filters.page_size)
+    )
+    return list(rows), total
+
+
+def list_library_sources(
+    db: Session, filters: MemoryLibraryQuery
+) -> tuple[list[ReviewMemorySource], int]:
+    conditions = [
+        ReviewMemorySource.state == filters.state
+        if filters.state is not None
+        else ReviewMemorySource.state != SourceState.DELETED
+    ]
+    if filters.owner_project_id is not None:
+        conditions.append(ReviewMemorySource.project_id == filters.owner_project_id)
+    if filters.using_project_id is not None:
+        conditions.append(
+            exists(
+                select(ReviewMemoryProjectSource.id).where(
+                    ReviewMemoryProjectSource.source_id == ReviewMemorySource.id,
+                    ReviewMemoryProjectSource.project_id == filters.using_project_id,
+                    ReviewMemoryProjectSource.state == BindingState.ACTIVE,
+                )
+            )
+        )
+    if filters.kind is not None:
+        conditions.append(ReviewMemorySource.kind == filters.kind)
+    entry_conditions = [ReviewMemoryEntry.source_id == ReviewMemorySource.id]
+    if filters.target_type is not None:
+        entry_conditions.append(ReviewMemoryEntry.target_type == filters.target_type)
+    if filters.issue_type is not None:
+        entry_conditions.append(ReviewMemoryEntry.issue_type == filters.issue_type)
+    if filters.target_type is not None or filters.issue_type is not None:
+        conditions.append(exists(select(ReviewMemoryEntry.id).where(*entry_conditions)))
+    if filters.keyword:
+        conditions.append(
+            or_(
+                ReviewMemorySource.title.contains(filters.keyword, autoescape=True),
+                exists(
+                    select(ReviewMemoryEntry.id).where(
+                        ReviewMemoryEntry.source_id == ReviewMemorySource.id,
+                        or_(
+                            ReviewMemoryEntry.heading.contains(filters.keyword, autoescape=True),
+                            ReviewMemoryEntry.content.contains(filters.keyword, autoescape=True),
+                        ),
+                    )
+                ),
+            )
+        )
+    total = db.scalar(select(func.count()).select_from(ReviewMemorySource).where(*conditions)) or 0
+    rows = db.scalars(
+        select(ReviewMemorySource)
+        .where(*conditions)
+        .order_by(ReviewMemorySource.updated_at.desc(), ReviewMemorySource.id.desc())
+        .offset((filters.page_no - 1) * filters.page_size)
+        .limit(filters.page_size)
+    )
+    return list(rows), total
+
+
+def library_binding_summaries(
+    db: Session, source_ids: list[int]
+) -> dict[int, tuple[int, list[int]]]:
+    if not source_ids:
+        return {}
+    ranked = (
+        select(
+            ReviewMemoryProjectSource.source_id,
+            ReviewMemoryProjectSource.project_id,
+            func.count().over(partition_by=ReviewMemoryProjectSource.source_id).label("total"),
+            func.row_number()
+            .over(
+                partition_by=ReviewMemoryProjectSource.source_id,
+                order_by=ReviewMemoryProjectSource.project_id,
+            )
+            .label("ordinal"),
+        )
+        .where(
+            ReviewMemoryProjectSource.source_id.in_(source_ids),
+            ReviewMemoryProjectSource.state == BindingState.ACTIVE,
+        )
+        .subquery()
+    )
+    rows = db.execute(
+        select(ranked.c.source_id, ranked.c.project_id, ranked.c.total)
+        .where(ranked.c.ordinal <= 3)
+        .order_by(ranked.c.source_id, ranked.c.project_id)
+    )
+    result = {}
+    for source_id, project_id, total in rows:
+        result.setdefault(source_id, (total, []))[1].append(project_id)
+    return result
+
+
+def list_source_projects(
+    db: Session, source_id: int, filters: MemoryBindingQuery
+) -> tuple[list[ReviewMemoryProjectSource], int]:
+    conditions = [
+        ReviewMemoryProjectSource.source_id == source_id,
+        ReviewMemoryProjectSource.state == filters.state,
+    ]
+    total = (
+        db.scalar(select(func.count()).select_from(ReviewMemoryProjectSource).where(*conditions))
+        or 0
+    )
+    rows = db.scalars(
+        select(ReviewMemoryProjectSource)
+        .where(*conditions)
+        .order_by(ReviewMemoryProjectSource.project_id, ReviewMemoryProjectSource.id)
+        .offset((filters.page_no - 1) * filters.page_size)
+        .limit(filters.page_size)
+    )
+    return list(rows), total
+
+
+def list_project_bindings(
+    db: Session, project_id: int, filters: MemoryBindingQuery
+) -> tuple[list, int]:
+    conditions = [
+        ReviewMemoryProjectSource.project_id == project_id,
+        ReviewMemoryProjectSource.state == filters.state,
+    ]
+    total = (
+        db.scalar(select(func.count()).select_from(ReviewMemoryProjectSource).where(*conditions))
+        or 0
+    )
+    active_entries = exists(
+        select(ReviewMemoryEntry.id).where(
+            ReviewMemoryEntry.source_id == ReviewMemoryProjectSource.source_id,
+            ReviewMemoryEntry.state == EntryState.ACTIVE,
+        )
+    )
+    rows = db.execute(
+        select(ReviewMemoryProjectSource, ReviewMemorySource, active_entries)
+        .outerjoin(ReviewMemorySource, ReviewMemorySource.id == ReviewMemoryProjectSource.source_id)
+        .where(*conditions)
+        .order_by(ReviewMemoryProjectSource.updated_at.desc(), ReviewMemoryProjectSource.id.desc())
         .offset((filters.page_no - 1) * filters.page_size)
         .limit(filters.page_size)
     )

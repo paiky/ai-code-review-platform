@@ -256,6 +256,26 @@ class MemoryEntryResponse(MemoryEntryDraft):
     validation_errors: list[str] = Field(default_factory=list, alias="validationErrors")
 
 
+class MemoryLibraryQuery(MemorySchema):
+    owner_project_id: int | None = Field(default=None, alias="ownerProjectId", gt=0)
+    using_project_id: int | None = Field(default=None, alias="usingProjectId", gt=0)
+    kind: MemoryKind | None = None
+    state: SourceState | None = None
+    target_type: TargetType | None = Field(default=None, alias="targetType")
+    issue_type: IssueType | None = Field(default=None, alias="issueType")
+    keyword: str | None = Field(default=None, max_length=128)
+    page_no: int = Field(default=1, alias="pageNo", ge=1)
+    page_size: int = Field(default=20, alias="pageSize", ge=1, le=100)
+
+    _keyword = field_validator("keyword")(MemorySourceQuery.normalize_keyword.__func__)
+
+
+class MemoryBindingQuery(MemorySchema):
+    state: BindingState = BindingState.ACTIVE
+    page_no: int = Field(default=1, alias="pageNo", ge=1)
+    page_size: int = Field(default=20, alias="pageSize", ge=1, le=100)
+
+
 class MemoryBindingSummary(MemorySchema):
     id: int
     project_id: int = Field(alias="projectId")
@@ -332,6 +352,45 @@ class MemorySourceDetail(MemorySourceSummary):
 
 class MemorySourcePage(MemorySchema):
     items: list[MemorySourceSummary]
+    total: int
+    page_no: int = Field(alias="pageNo")
+    page_size: int = Field(alias="pageSize")
+
+
+class MemoryLibrarySource(MemorySourceSummary):
+    active_binding_count: int = Field(alias="activeBindingCount", ge=0)
+    using_project_ids: list[int] = Field(alias="usingProjectIds", max_length=3)
+    using_projects_truncated: bool = Field(alias="usingProjectsTruncated")
+
+
+class MemoryLibraryPage(MemorySchema):
+    items: list[MemoryLibrarySource]
+    total: int
+    page_no: int = Field(alias="pageNo")
+    page_size: int = Field(alias="pageSize")
+
+
+class MemorySourceProjectsPage(MemorySchema):
+    source_id: int = Field(alias="sourceId")
+    source_version: int = Field(alias="sourceVersion")
+    items: list[MemoryBindingSummary]
+    total: int
+    page_no: int = Field(alias="pageNo")
+    page_size: int = Field(alias="pageSize")
+
+
+class MemoryProjectBinding(MemorySchema):
+    source_id: int = Field(alias="sourceId")
+    binding: MemoryBindingSummary
+    source: MemorySourceSummary | None
+    source_missing: bool = Field(alias="sourceMissing")
+    has_active_entries: bool = Field(alias="hasActiveEntries")
+    can_read_source: bool = Field(alias="canReadSource")
+
+
+class MemoryProjectBindingsPage(MemorySchema):
+    project_id: int = Field(alias="projectId")
+    items: list[MemoryProjectBinding]
     total: int
     page_no: int = Field(alias="pageNo")
     page_size: int = Field(alias="pageSize")

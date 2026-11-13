@@ -2,7 +2,7 @@ from collections.abc import Generator
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import Response
 from pydantic import Field, ValidationError
 from python_multipart.exceptions import MultipartParseError
@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.core.errors import AppError
 from app.core.response import ok
 from app.review_memory import service
+from app.review_memory import management
 from app.review_memory import feedback as memory_feedback
 from app.review_memory import settings as memory_settings
 from app.review_memory.summary import get_run_memory_summary
@@ -27,6 +28,7 @@ from app.review_memory.parsing import (
 from app.review_memory.schemas import (
     MemoryApiResponse,
     MemoryBindingResult,
+    MemoryBindingQuery,
     MemoryBindingUpdate,
     MemoryEntryCreate,
     MemoryEntryUpdate,
@@ -37,6 +39,10 @@ from app.review_memory.schemas import (
     MemorySourceDraft,
     MemorySourcePage,
     MemorySourceQuery,
+    MemoryLibraryQuery,
+    MemoryLibraryPage,
+    MemorySourceProjectsPage,
+    MemoryProjectBindingsPage,
     MemorySourceUpdate,
     MemorySharedQuery,
     MemoryCaseConfirmation,
@@ -54,6 +60,7 @@ from app.review_memory.schemas import (
 
 router = APIRouter(prefix="/api/projects/{project_id}/review-memory", tags=["review-memory"])
 shared_router = APIRouter(prefix="/api/review-memory/shared-sources", tags=["review-memory"])
+management_router = APIRouter(prefix="/api/review-memory/sources", tags=["review-memory"])
 run_router = APIRouter(prefix="/api/agent-review/runs", tags=["review-memory"])
 DetailResponse = MemoryApiResponse[MemorySourceDetail]
 
@@ -157,6 +164,33 @@ def list_sources(
     db: Session = Depends(memory_db),
 ) -> dict:
     return ok(service.list_project_sources(db, project_id, query))
+
+
+@management_router.get("", response_model=MemoryApiResponse[MemoryLibraryPage])
+def list_library_sources(
+    query: Annotated[MemoryLibraryQuery, Query()], db: Session = Depends(memory_db)
+) -> dict:
+    return ok(management.list_library(db, query))
+
+
+@management_router.get(
+    "/{source_id}/projects", response_model=MemoryApiResponse[MemorySourceProjectsPage]
+)
+def list_source_projects(
+    source_id: Annotated[int, Path(gt=0)],
+    query: Annotated[MemoryBindingQuery, Query()],
+    db: Session = Depends(memory_db),
+) -> dict:
+    return ok(management.list_source_projects(db, source_id, query))
+
+
+@router.get("/bindings", response_model=MemoryApiResponse[MemoryProjectBindingsPage])
+def list_project_bindings(
+    project_id: Annotated[int, Path(gt=0)],
+    query: Annotated[MemoryBindingQuery, Query()],
+    db: Session = Depends(memory_db),
+) -> dict:
+    return ok(management.list_project_bindings(db, project_id, query))
 
 
 @shared_router.get("", response_model=MemoryApiResponse[MemorySourcePage])
