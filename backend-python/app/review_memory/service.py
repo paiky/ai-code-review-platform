@@ -16,7 +16,7 @@ from app.review_memory.models import (
     ReviewMemoryProjectSource,
     ReviewMemorySource,
 )
-from app.review_memory.parsing import PARSER_VERSION, ParsedMemory
+from app.review_memory.parsing import ParsedMemory
 from app.review_memory.schemas import (
     MAX_CORE_BYTES,
     MAX_CORE_ENTRIES,
@@ -597,7 +597,7 @@ def create_upload_draft(
     source.original_bytes = original
     source.original_sha256 = digest
     source.extracted_text = parsed.text
-    source.parser_version = PARSER_VERSION
+    source.parser_version = parsed.parser_version
     source.parse_warnings_json = json.dumps(warnings, ensure_ascii=False)
     source.replacement_of_id = metadata.replacement_of_id
     db.flush()

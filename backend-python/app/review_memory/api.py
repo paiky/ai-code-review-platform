@@ -21,8 +21,8 @@ from app.review_memory.summary import get_run_memory_summary
 from app.review_memory.parsing import (
     MAX_METADATA_BYTES,
     MAX_REQUEST_BYTES,
-    MAX_UPLOAD_BYTES,
     parse_upload,
+    upload_byte_limit,
 )
 from app.review_memory.schemas import (
     MemoryApiResponse,
@@ -239,7 +239,11 @@ UPLOAD_BODY = {
                     "type": "object",
                     "required": ["file", "metadata"],
                     "properties": {
-                        "file": {"type": "string", "format": "binary"},
+                        "file": {
+                            "type": "string",
+                            "format": "binary",
+                            "description": "MD/TXT/SKILL.md <= 1 MiB; DOCX/text PDF <= 5 MiB",
+                        },
                         "metadata": {
                             "type": "string",
                             "description": "MemoryUploadMetadata JSON; up to 16 KiB",
@@ -279,7 +283,7 @@ async def upload_source(
         ).parse()
     except _RequestTooLarge as exception:
         raise AppError(
-            "MEMORY_UPLOAD_TOO_LARGE", "Request exceeds 1 MiB + 64 KiB", 413
+            "MEMORY_UPLOAD_TOO_LARGE", "Request exceeds 5 MiB + 64 KiB", 413
         ) from exception
     except MultiPartException as exception:
         status = 413 if "maximum size" in exception.message else 400
@@ -305,7 +309,7 @@ async def upload_source(
             raise AppError(
                 "VALIDATION_ERROR", "metadata does not match MemoryUploadMetadata", 400
             ) from exception
-        original = await file.read(MAX_UPLOAD_BYTES + 1)
+        original = await file.read(upload_byte_limit(file.filename) + 1)
         return await run_in_threadpool(
             _import_upload, db, project_id, file.filename, file.content_type, original, metadata
         )

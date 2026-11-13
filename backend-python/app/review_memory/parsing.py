@@ -8,6 +8,11 @@ import yaml
 from yaml.tokens import AliasToken, AnchorToken
 
 from app.core.errors import AppError
+from app.review_memory.document_parser import (
+    DOCUMENT_PARSER_VERSION,
+    MAX_DOCUMENT_BYTES,
+    extract_document,
+)
 from app.review_memory.schemas import (
     MAX_SOURCE_CONTENT_BYTES,
     MAX_SOURCE_ENTRIES,
@@ -20,7 +25,7 @@ from app.review_memory.schemas import (
 
 MAX_UPLOAD_BYTES = 1024 * 1024
 MAX_METADATA_BYTES = 16 * 1024
-MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 64 * 1024
+MAX_REQUEST_BYTES = MAX_DOCUMENT_BYTES + 64 * 1024
 PARSER_VERSION = "text-markdown-v1"
 
 
@@ -31,6 +36,12 @@ class ParsedMemory:
     media_type: str
     text: str
     warnings: list[str]
+    parser_version: str = PARSER_VERSION
+
+
+def upload_byte_limit(filename: str | None) -> int:
+    extension = (filename or "").rsplit(".", 1)[-1].lower()
+    return MAX_DOCUMENT_BYTES if extension in {"docx", "pdf"} else MAX_UPLOAD_BYTES
 
 
 class _SkillLoader(yaml.SafeLoader):
@@ -127,8 +138,9 @@ def parse_upload(
     content: bytes,
     metadata: MemoryUploadMetadata,
 ) -> ParsedMemory:
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise AppError("MEMORY_UPLOAD_TOO_LARGE", "File exceeds 1 MiB", 413)
+    limit = upload_byte_limit(filename)
+    if len(content) > limit:
+        raise AppError("MEMORY_UPLOAD_TOO_LARGE", f"File exceeds {limit // (1024 * 1024)} MiB", 413)
     filename = (filename or "").replace("\\", "/").split("/")[-1]
     if not filename or len(filename) > 255 or any(ord(char) < 32 for char in filename):
         raise AppError("MEMORY_FILENAME_INVALID", "Invalid original filename", 400)
@@ -136,17 +148,36 @@ def parse_upload(
     allowed = {"text/plain", "application/octet-stream"}
     if extension == "md":
         allowed |= {"text/markdown", "text/x-markdown"}
-    if extension not in {"md", "txt"} or (media_type or "").split(";", 1)[0].lower() not in allowed:
-        raise AppError("MEMORY_FORMAT_UNSUPPORTED", "Only UTF-8 MD/TXT/SKILL.md are supported", 415)
+    elif extension == "docx":
+        allowed = {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/octet-stream",
+        }
+    elif extension == "pdf":
+        allowed = {"application/pdf", "application/octet-stream"}
+    if (
+        extension not in {"md", "txt", "docx", "pdf"}
+        or (media_type or "").split(";", 1)[0].lower() not in allowed
+    ):
+        raise AppError(
+            "MEMORY_FORMAT_UNSUPPORTED",
+            "Supported formats: UTF-8 MD/TXT, DOCX, text PDF; Skill requires MD",
+            415,
+        )
     if metadata.kind == MemoryKind.SKILL and extension != "md":
         raise AppError("MEMORY_FORMAT_UNSUPPORTED", "Skill must be a Markdown document", 415)
-    try:
-        text = content.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
-    except UnicodeError as exception:
-        raise AppError("MEMORY_TEXT_INVALID", "File must use UTF-8 encoding", 400) from exception
+    document = None
+    if extension in {"docx", "pdf"}:
+        document = extract_document(content, extension)
+        text = document["text"]
+    else:
+        try:
+            text = content.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
+        except UnicodeError as exception:
+            raise AppError("MEMORY_TEXT_INVALID", "File must use UTF-8 encoding", 400) from exception
     if any(ord(char) < 32 and char not in "\n\t" for char in text):
         raise AppError("MEMORY_TEXT_INVALID", "File contains binary control characters", 400)
-    warnings = []
+    warnings = list(document["warnings"]) if document else []
     info = {}
     if metadata.kind == MemoryKind.SKILL:
         text, info, warnings = _front_matter(text)
@@ -157,11 +188,14 @@ def parse_upload(
     if not text.strip():
         raise AppError("MEMORY_TEXT_INVALID", "Document has no review text", 400)
     title = metadata.title or info.get("name") or filename
-    sections = (
-        _markdown_sections(text, title)
-        if extension == "md" and metadata.kind not in {MemoryKind.PITFALL, MemoryKind.INCIDENT}
-        else [(title, text)]
-    )
+    if metadata.kind in {MemoryKind.PITFALL, MemoryKind.INCIDENT}:
+        sections = [(title, text)]
+    elif document:
+        sections = [(heading or title, body) for heading, body in document["sections"]]
+    elif extension == "md":
+        sections = _markdown_sections(text, title)
+    else:
+        sections = [(title, text)]
     if len(sections) > MAX_SOURCE_ENTRIES:
         raise AppError("MEMORY_TOO_MANY_ENTRIES", "Document exceeds 200 sections", 413)
     if sum(len(body.encode("utf-8")) for _, body in sections) > MAX_SOURCE_CONTENT_BYTES:
@@ -195,6 +229,17 @@ def parse_upload(
         raise AppError(
             "MEMORY_PARSE_INVALID", "Parsed headings or metadata are invalid", 400
         ) from exception
+    canonical_media_type = {
+        "md": "text/markdown",
+        "txt": "text/plain",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "pdf": "application/pdf",
+    }[extension]
     return ParsedMemory(
-        draft, filename, "text/markdown" if extension == "md" else "text/plain", text, warnings
+        draft,
+        filename,
+        canonical_media_type,
+        text,
+        warnings,
+        DOCUMENT_PARSER_VERSION if document else PARSER_VERSION,
     )
