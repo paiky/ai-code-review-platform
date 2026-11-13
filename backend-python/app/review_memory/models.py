@@ -42,7 +42,7 @@ class ReviewMemorySource(Base):
     )
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
-    project_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     visibility: Mapped[str] = mapped_column(
         String(16), nullable=False, default="PROJECT", server_default="PROJECT"
     )

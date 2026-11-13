@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.core.errors import AppError
 from app.core.response import ok
 from app.review_memory import service
+from app.review_memory.capabilities import read_capabilities
 from app.review_memory import management
 from app.review_memory import feedback_management
 from app.review_memory import feedback as memory_feedback
@@ -28,6 +29,7 @@ from app.review_memory.parsing import (
 )
 from app.review_memory.schemas import (
     MemoryApiResponse,
+    MemoryCapabilities,
     MemoryBindingResult,
     MemoryBindingQuery,
     MemoryBindingUpdate,
@@ -62,11 +64,17 @@ from app.review_memory.schemas import (
 
 
 router = APIRouter(prefix="/api/projects/{project_id}/review-memory", tags=["review-memory"])
+library_router = APIRouter(prefix="/api/review-memory", tags=["review-memory"])
 shared_router = APIRouter(prefix="/api/review-memory/shared-sources", tags=["review-memory"])
 management_router = APIRouter(prefix="/api/review-memory/sources", tags=["review-memory"])
 feedback_management_router = APIRouter(prefix="/api/review-memory/feedbacks", tags=["review-memory"])
 run_router = APIRouter(prefix="/api/agent-review/runs", tags=["review-memory"])
 DetailResponse = MemoryApiResponse[MemorySourceDetail]
+
+
+@library_router.get("/capabilities", response_model=MemoryApiResponse[MemoryCapabilities])
+def get_memory_capabilities(db: Session = Depends(get_db)) -> dict:
+    return ok(read_capabilities(db))
 
 
 @feedback_management_router.get("", response_model=MemoryApiResponse[MemoryFeedbackManagementPage])

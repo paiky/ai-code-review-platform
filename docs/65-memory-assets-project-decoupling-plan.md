@@ -1,7 +1,7 @@
 # 记忆资料与项目解耦及项目关联简化计划
 
 - 日期：2026-11-13。
-- 状态：用户已授权依序推进 A1～A5；A1～A2 已完成，A3 待推进；每阶段验收并提交后继续下一已授权阶段，A5 完成后停止。
+- 状态：用户已授权依序推进 A1～A5；A1～A3 已完成，A4 待推进；每阶段验收并提交后继续下一已授权阶段，A5 完成后停止。
 - 基线：U1～U5 已完成，最新代码提交 `bffbed7`。本文接续 [64 号专项](64-memory-library-simple-ui-plan.md)，不修改其已完成记录；资料解析、人工确认和冻结背景继续沿用 [62 号专项](62-agent-review-memory-library-plan.md)，关系并发保护沿用 [63 号专项](63-memory-library-central-management-plan.md)。
 - 用户确认的目标：上传不再选择项目，关联单独处理；“项目关联”成为同级 Tab，简化现有项目使用配置。
 - 每阶段完成实现、对应验收和记录后先本地提交，再停止；用户后续明确授权连续阶段时按授权顺序逐阶段提交，不重复请求确认。不推送、部署、调用真实模型或默认开启真实项目记忆。
@@ -162,8 +162,20 @@
 - 四 Tab 中保留 projects 参数，名称改“项目关联”；无项目的 sourceId 链接走显式管理详情，带项目旧链接仍按原项目读取。
 - 无归属资料的详情及使用项目先只读，不提前调用未完成的公共写接口；原项目资料的所有写操作仍可用。原件下载区分管理与共享预览，冻结摘要将空 owner 显示为公共资料。
 
+### A3 实施契约与迁移操作
+
+- V60 仅放宽 review_memory_sources.project_id 为空；ORM 同步，不改任何存量行或自关联。GET `/api/review-memory/capabilities` 返回 `{schemaReady: boolean}`，每次检查实际列定义，不缓存进程级结果。公共创建在 A4 使用同一检查，未就绪返回 503 MEMORY_SCHEMA_PENDING。
+- 真实目标迁移须另行授权：先备份目标库并核对目标身份，再用 `scripts/run-database-migration.ps1 status local`、`dry-run local` 检查待执行集合；明确批准后才执行 `apply local`，最后 `verify local` 并检查列 nullable 及存量资料/关系数量。test 目标另需 ConfirmTest。不得把授权 V60 当作执行其它待迁移的授权。
+- MySQL DDL 不保证事务回滚；执行失败后先检查列定义及迁移台账，再按实际状态修复重试。只有确认不存在 project_id IS NULL 行才允许恢复 NOT NULL；已有公共资料时保留兼容版本，不能随意回填项目或删除资料回退。
+
 ### A2 实施记录（已完成）
 
 - 改动量等级：中。四个同级 Tab 已落地；公共资料和原件走管理读取，空归属显示公共资料，公共写入口暂只读。旧项目编辑及带项目链接保持原 API。
 - 前端 build、隔离浏览器验收通过：四 Tab、公共详情/原件、无 null 项目请求、旧链接 query/hash、旧项目编辑可达、390px；未运行单元测试，无真实业务写入。
 - 验收脚本 .local/memory-a2-browser-acceptance.ps1；提交后按授权进入 A3。
+
+### A3 实施记录（已完成）
+
+- 改动量等级：中。新增 V60 与 nullable ORM，独立 capabilities 读取及公共创建前置 guard，不缓存就绪结果。
+- ruff / compileall、随机 MySQL 隔离库全链迁移与旧结构升级验收通过：未就绪明确识别、旧项目读取可用、升级后实时就绪、存量资料/关系/版本不变、NULL 写入可行；隔离库已清理。未运行单元测试。
+- 未执行真实数据库迁移，未启停真实服务。验收脚本 .local/memory-a3-acceptance.ps1；提交后进入 A4。

@@ -83,6 +83,10 @@ class MemorySchema(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid", str_strip_whitespace=False)
 
 
+class MemoryCapabilities(MemorySchema):
+    schema_ready: bool = Field(alias="schemaReady")
+
+
 class MemorySettings(MemorySchema):
     enabled: bool
     version: int = Field(ge=1)
