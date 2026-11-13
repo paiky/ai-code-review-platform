@@ -57,7 +57,7 @@ export default function MemorySourceDrawer({
   onLoaded
 }) {
   const [selectedOwner, setSelectedOwner] = useState(initialProjectId || '');
-  const projectId = selectedOwner;
+  const projectId = initial.library ? null : selectedOwner;
   const [source, setSource] = useState(null);
   const [creation, setCreation] = useState(initial.mode === 'view' ? null : initial.mode);
   const [metadata, setMetadata] = useState({
@@ -86,7 +86,7 @@ export default function MemorySourceDrawer({
   const dirty = creation
     ? touched
     : Boolean(editor && JSON.stringify(editor.value) !== editor.baseline);
-  const readOnly = !source?.canManage;
+  const readOnly = !source?.canManage || source?.projectId === null;
 
   useEffect(() => {
     if (source) onLoaded?.(source);
@@ -470,7 +470,7 @@ export default function MemorySourceDrawer({
         items={[{ title: '选择资料 / 录入' }, { title: '预览并确认发布' }]}
       />
       <Paragraph type="secondary" className="memory-top-space">
-        {ownerOptions ? `归属项目：${projectId ? projectLabel(projectId) : '待选择'}` : `查看项目：${projectName}`} · 保存草稿或发布资料均不会立即触发审查。
+        {initial.library ? '公共资料，无归属项目' : ownerOptions ? `归属项目：${projectId ? projectLabel(projectId) : '待选择'}` : `查看项目：${projectName}`} · 保存草稿或发布资料均不会立即触发审查。
       </Paragraph>
       {error && (
         <Alert
@@ -706,7 +706,7 @@ export default function MemorySourceDrawer({
                     icon={<DownloadOutlined />}
                     disabled={Boolean(busy)}
                     onClick={() =>
-                      perform(() => downloadOriginal(projectId, source), {
+                      perform(() => downloadOriginal(projectId, source, initial.library), {
                         adoptResult: false
                       })
                     }
@@ -780,7 +780,7 @@ export default function MemorySourceDrawer({
             </div>
             <Paragraph>{source.description || '未填写简介'}</Paragraph>
             <Paragraph type="secondary">
-              归属项目：{projectLabel(source.projectId)} · {ownerOptions ? '归属项目关联' : '本项目关联'}：
+              {source.projectId == null ? '公共资料，无默认项目关联' : `归属项目：${projectLabel(source.projectId)}`} · {ownerOptions ? '归属项目关联' : '本项目关联'}：
               {source.binding?.state === 'ACTIVE' ? '已关联' : '已解除 / 未关联'} · 范围：
               {source.binding?.targetType
                 ? labelFor(TARGET_TYPE_OPTIONS, source.binding.targetType)
@@ -824,7 +824,9 @@ export default function MemorySourceDrawer({
                     ? '反馈来源只读，通过来源反馈的专用确认流程维护。'
                     : source.state === 'DELETED'
                       ? '资料已删除，只保留追溯信息。'
-                      : '引用资料只读，正文由维护项目统一管理。'
+                      : source.projectId == null && initial.library
+                        ? '公共资料暂为只读，独立维护入口将在后续阶段开放。'
+                        : '引用资料只读，正文由维护项目统一管理。'
                 }
               />
             )}

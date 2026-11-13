@@ -15,7 +15,7 @@ import {
   Tag,
   Typography
 } from 'antd';
-import { PlusOutlined, ReloadOutlined, SettingOutlined, UploadOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { fetchApi } from '../api.js';
 import { registerSettingsNavigationGuard } from '../settingsNavigation.js';
 import { listLibrarySources } from './api.js';
@@ -88,8 +88,8 @@ export default function ReviewMemoryPage() {
   const [error, setError] = useState(null);
   const [refresh, setRefresh] = useState(0);
   const [drawer, setDrawer] = useState(() => {
-    return projectId && /^[1-9]\d*$/.test(linkedSourceId)
-      ? { mode: 'view', sourceId: linkedSourceId, projectId, key: 0 } : null;
+    return /^[1-9]\d*$/.test(linkedSourceId)
+      ? { mode: 'view', sourceId: linkedSourceId, projectId, library: !projectId, key: 0 } : null;
   });
   const [settingsReset, setSettingsReset] = useState(0);
   const settingsDirtyRef = useRef(false);
@@ -171,8 +171,8 @@ export default function ReviewMemoryPage() {
     if (previousSourceLink.current === link) return;
     previousSourceLink.current = link;
     drawerSequence.current += 1;
-    setDrawer(projectId && /^[1-9]\d*$/.test(linkedSourceId)
-      ? { mode: 'view', sourceId: linkedSourceId, projectId, key: drawerSequence.current } : null);
+    setDrawer(/^[1-9]\d*$/.test(linkedSourceId)
+      ? { mode: 'view', sourceId: linkedSourceId, projectId, library: !projectId, key: drawerSequence.current } : null);
   }, [projectId, linkedSourceId]);
 
   useEffect(
@@ -303,11 +303,11 @@ export default function ReviewMemoryPage() {
         <div><Button
           type="link"
           className="memory-title-link"
-          onClick={() => openDrawer({ mode: 'view', sourceId: record.id, projectId: isLibrary ? String(record.projectId) : projectId })}
+          onClick={() => openDrawer({ mode: 'view', sourceId: record.id, library: record.projectId == null, projectId: isLibrary ? record.projectId == null ? null : String(record.projectId) : projectId })}
         >
           {value}
         </Button>
-          <div><Text type="secondary">归属：{projectLabel(record.projectId)}</Text></div>
+          <div><Text type="secondary">{record.projectId == null ? '公共资料' : `归属：${projectLabel(record.projectId)}`}</Text></div>
           <div><Text type="secondary">{record.visibility === 'SHARED' ? '共享' : '项目私有'} · {ORIGIN_LABELS[record.origin] || record.origin}</Text></div>
         </div>
       )
@@ -356,7 +356,7 @@ export default function ReviewMemoryPage() {
       width: 220,
       render: (_, record) => (
         <Space wrap>
-          <Button onClick={() => openDrawer({ mode: 'view', sourceId: record.id, projectId: isLibrary ? String(record.projectId) : projectId })}>查看</Button>
+          <Button onClick={() => openDrawer({ mode: 'view', sourceId: record.id, library: record.projectId == null, projectId: isLibrary ? record.projectId == null ? null : String(record.projectId) : projectId })}>查看</Button>
           <Button onClick={() => openDrawer({ mode: 'projects', source: record })}>管理使用项目</Button>
           {record.origin === 'FEEDBACK' && record.sourceFeedbackId && <Button onClick={() => openDrawer({ mode: 'feedback', projectId: String(record.projectId), feedbackId: record.sourceFeedbackId })}>查看来源反馈</Button>}
         </Space>
@@ -439,14 +439,11 @@ export default function ReviewMemoryPage() {
     <section className="settings-route-panel memory-page" aria-label="项目记忆库" data-settings-section="review-memory">
       {contextHolder}
       <div className="memory-page-heading">
-        <div><Title level={3}>{isProjects ? '项目使用配置' : '项目记忆库'}</Title>
+        <div><Title level={3}>项目记忆库</Title>
           <Paragraph type="secondary">上传资料、维护规范与 Skill，将人工误报整理为可追溯的案例。</Paragraph></div>
-        <Button aria-label={isProjects ? '返回记忆资料' : '项目使用配置'} icon={<SettingOutlined />} onClick={() => updateQuery({ tab: isProjects ? 'library' : 'projects' })}>
-          {isProjects ? '返回记忆资料' : '项目使用配置'}
-        </Button>
       </div>
       <Tabs aria-label="项目记忆库页签" activeKey={activeTab}
-        items={[{ key: 'upload', label: '上传资料' }, { key: 'library', label: '记忆资料' }, { key: 'cases', label: '案例与打标' }]}
+        items={[{ key: 'upload', label: '上传资料' }, { key: 'library', label: '记忆资料' }, { key: 'cases', label: '案例与打标' }, { key: 'projects', label: '项目关联' }]}
         onChange={(tab) => updateQuery({ tab })} />
       {projectError && <Alert type="error" title={`项目加载失败：${projectError}`}
         action={<Button onClick={() => setProjectRetry((value) => value + 1)}>重试</Button>} />}
@@ -554,7 +551,7 @@ export default function ReviewMemoryPage() {
             projectLabel={projectLabel}
             onViewFeedback={(feedbackId) => requestLeave(() => openDrawer({ mode: 'feedback', feedbackId, projectId: drawer.projectId || projectId }))}
             onManageBinding={(source) =>
-              requestLeave(() => openDrawer({ mode: isProjects ? 'binding' : 'projects', source, projectId: isProjects ? projectId : String(source.projectId) }))
+              requestLeave(() => openDrawer({ mode: isProjects ? 'binding' : 'projects', source, projectId: isProjects ? projectId : source.projectId == null ? null : String(source.projectId) }))
             }
           />
         )

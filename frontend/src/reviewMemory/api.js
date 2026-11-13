@@ -39,7 +39,7 @@ export function listProjectBindings(projectId, filters, signal) {
 }
 
 export function getSource(projectId, sourceId, signal) {
-  return request(`${root(projectId)}/sources/${sourceId}`, { signal });
+  return request(projectId ? `${root(projectId)}/sources/${sourceId}` : `/api/review-memory/sources/${sourceId}`, { signal });
 }
 
 export function getMemorySettings(projectId, signal) {
@@ -138,9 +138,11 @@ export function uploadSource(projectId, file, metadata, signal) {
   });
 }
 
-export async function downloadOriginal(projectId, source) {
+export async function downloadOriginal(projectId, source, management = false) {
   const path =
-    projectId == null
+    management
+      ? `/api/review-memory/sources/${source.id}/original`
+      : projectId == null
       ? `/api/review-memory/shared-sources/${source.id}/original`
       : `${root(projectId)}/sources/${source.id}/original`;
   const response = await fetch(path);

@@ -59,7 +59,7 @@ export default function ReviewMemorySummary({ projectId, runId, reviewStatus, ef
     </> },
     { title: '冻结版本', width: 185, render: (_, item) => <>
       <div>资料 v{item.sourceVersion} · 章节 v{item.entryVersion}</div>
-      <div>关联 v{item.bindingVersion} · 维护项目 #{item.ownerProjectId}</div>
+      <div>关联 v{item.bindingVersion} · {item.ownerProjectId == null ? '公共资料' : `维护项目 #${item.ownerProjectId}`}</div>
       <Typography.Text type="secondary">章节 #{item.entryId} · 关联 #{item.bindingId}</Typography.Text>
     </> },
     { title: '适用范围（摘要）', width: 280, render: (_, item) => <div className="memory-snapshot-text">

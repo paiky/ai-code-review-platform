@@ -42,7 +42,7 @@ export default function MemoryProjectBindings({ projectId, memoryEnabled, refres
       columns={[
         { title: '资料 / 归属项目', width: 250, render: (_, row) => <>
           <Text strong>{row.source?.title || `缺失资料 #${row.sourceId}`}</Text>
-          {row.source && <div>{projectLabel(row.source.projectId)} · {labelFor(KIND_OPTIONS, row.source.kind)}</div>}
+          {row.source && <div>{row.source.projectId == null ? '公共资料' : projectLabel(row.source.projectId)} · {labelFor(KIND_OPTIONS, row.source.kind)}</div>}
         </> },
         { title: '资料状态 / 关系', width: 170, render: (_, row) => <>
           <Tag>{row.source ? STATE_LABELS[row.source.state] : '资料缺失'}</Tag>
