@@ -38,6 +38,30 @@ import {
 
 const { Text, Title, Paragraph } = Typography;
 
+function uploadProblem(file, kind) {
+  const extension = file.name.split('.').at(-1).toLowerCase();
+  if (kind === 'SKILL' && extension !== 'md') return 'Skill 仅支持 Markdown（.md）文件。';
+  if (!['md', 'txt', 'docx', 'pdf'].includes(extension)) {
+    return '请选择 .md / .txt / .docx / .pdf 文件；不支持旧 .doc、图片或压缩包。';
+  }
+  const limit = ['docx', 'pdf'].includes(extension) ? 5 : 1;
+  return file.size > limit * 1024 * 1024 ? `该格式文件不能超过 ${limit} MiB。` : null;
+}
+
+const DOCUMENT_ERRORS = {
+  MEMORY_DOCUMENT_INVALID:
+    '文档损坏、格式不符或含不支持的结构，请转换为普通 DOCX／文本 PDF 后重试。',
+  MEMORY_DOCUMENT_ENCRYPTED: '不支持加密文档，请先解除加密后重新上传。',
+  MEMORY_PDF_NO_TEXT: 'PDF 没有可提取文字，可能是扫描件；当前不支持 OCR。',
+  MEMORY_DOCUMENT_LIMIT:
+    '文档超出解析限制：PDF 最多 100 页，DOCX 最多 1000 个内部文件、总解压量 20 MiB。',
+  MEMORY_SOURCE_TOO_LARGE: '抽取正文或包含上级条件的章节总量超过 256 KiB，请拆分原文件后重试。',
+  MEMORY_TOO_MANY_ENTRIES: '章节超过 200 条，请拆分原文件后重试。',
+  MEMORY_PARSE_TIMEOUT: '文档解析超过 10 秒，请简化或拆分文件后重试；旧发布资料仍有效。',
+  MEMORY_PARSE_FAILED: '文档解析未能完成，请重试或转换为文本格式；旧发布资料仍有效。',
+  MEMORY_PARSER_UNAVAILABLE: '服务端文档解析依赖尚未就绪，请联系维护人员；仍可导入 MD／TXT。'
+};
+
 export default function MemorySourceDrawer({
   projectId,
   projectName,
@@ -246,12 +270,13 @@ export default function MemorySourceDrawer({
         return;
       }
     } else if (!file) {
-      setError(new Error('请选择一个 MD/TXT 文件，Skill 请选择 Markdown。'));
+      setError(new Error('请选择一个 MD／TXT／DOCX／PDF 文件，Skill 仅支持 Markdown。'));
       return;
     }
     if (creation === 'upload') {
-      if (file.size > 1024 * 1024) {
-        setError(new Error('文件不能超过 1 MiB。'));
+      const problem = uploadProblem(file, metadata.kind);
+      if (problem) {
+        setError(new Error(problem));
         return;
       }
       const { heading: _heading, content: _content, ...labels } = creationEntry;
@@ -460,7 +485,7 @@ export default function MemorySourceDrawer({
           type="error"
           showIcon
           title={error.status === 409 ? '版本或发布条件冲突，本地输入已保留' : '操作未完成'}
-          description={error.message}
+          description={DOCUMENT_ERRORS[error.code] || error.message}
           action={
             source && error.status === 409 ? (
               <Button onClick={compareLatest} disabled={Boolean(busy)}>
@@ -539,6 +564,8 @@ export default function MemorySourceDrawer({
                   value={metadata.kind}
                   onChange={(kind) => {
                     setMetadata((current) => ({ ...current, kind }));
+                    const problem = file && uploadProblem(file, kind);
+                    setError(problem ? new Error(problem) : null);
                     setCreationEntry((current) => ({
                       ...current,
                       content: current.content || blankEntry(kind).content,
@@ -583,10 +610,14 @@ export default function MemorySourceDrawer({
                 <Form.Item
                   label="原文件"
                   required
-                  extra="支持 UTF-8 .md / .txt，单文件不超过 1 MiB；Skill 请选择 Markdown。"
+                  extra={
+                    metadata.kind === 'SKILL'
+                      ? '仅支持 UTF-8 Markdown（.md），单文件不超过 1 MiB。'
+                      : '每次选择一个文件：UTF-8 .md / .txt 不超过 1 MiB；.docx / 文本 .pdf 不超过 5 MiB。PDF 最多 100 页，不支持扫描件 OCR、旧 .doc、图片或压缩包。'
+                  }
                 >
                   <Upload
-                    accept={metadata.kind === 'SKILL' ? '.md' : '.md,.txt'}
+                    accept={metadata.kind === 'SKILL' ? '.md' : '.md,.txt,.docx,.pdf'}
                     maxCount={1}
                     fileList={
                       file
@@ -601,12 +632,19 @@ export default function MemorySourceDrawer({
                         : []
                     }
                     beforeUpload={(next) => {
+                      const problem = uploadProblem(next, metadata.kind);
+                      if (problem) {
+                        setError(new Error(problem));
+                        return Upload.LIST_IGNORE;
+                      }
                       setFile(next);
+                      setError(null);
                       setTouched(true);
                       return false;
                     }}
                     onRemove={() => {
                       setFile(null);
+                      setError(null);
                       setTouched(true);
                     }}
                     disabled={Boolean(busy)}
@@ -615,6 +653,9 @@ export default function MemorySourceDrawer({
                       选择文件
                     </Button>
                   </Upload>
+                  <Paragraph type="secondary" className="memory-top-space">
+                    上传后请对照原件核对章节、适用条件和解析诊断，再选择章节发布；超长章节需人工拆分。多份规范、Skill 和案例可分别添加，按项目范围共同使用。
+                  </Paragraph>
                 </Form.Item>
               )}
             </Form>
@@ -782,9 +823,20 @@ export default function MemorySourceDrawer({
             {source.state === 'DISABLED' && (
               <Alert type="warning" title="当前资料已停用。重新发布只恢复本次明确勾选的章节。" />
             )}
-            {(source.parseWarnings || []).map((warning, index) => (
-              <Alert key={index} type="warning" className="memory-top-space" title={warning} />
-            ))}
+            {Boolean(source.parseWarnings?.length) && (
+              <details
+                className="memory-parse-diagnostics memory-top-space"
+                open={source.parserVersion === 'docx-pdf-v1'}
+              >
+                <summary>查看解析诊断（{source.parseWarnings.length} 条）</summary>
+                <Paragraph type="secondary">请对照原件确认提取完整性，诊断不代表内容已经发布。</Paragraph>
+                <div className="memory-parse-diagnostics-list">
+                  {source.parseWarnings.map((warning, index) => (
+                    <Alert key={index} type="warning" title={warning} />
+                  ))}
+                </div>
+              </details>
+            )}
             <Descriptions
               size="small"
               column={1}
@@ -1062,7 +1114,7 @@ export default function MemorySourceDrawer({
             </Paragraph>
             <Alert
               type="info"
-              title="正文大小不等于项目 CORE 总占用，最终预算由服务端校验。当前尚未接入自动审查。"
+              title="正文大小不等于项目 CORE 总占用，最终预算由服务端校验。仅项目开启记忆且范围、预算匹配时，才会用于后续 Agent Review。"
             />
             {impactContent(publishPreview.impact)}
             {publishPreview.entries.map((item) => (
