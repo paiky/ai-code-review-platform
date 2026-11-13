@@ -1,7 +1,7 @@
 # 项目记忆库简化布局与批量上传推进计划
 
 - 日期：2026-11-13。
-- 状态：规划完成，U1～U5 均未实施；本轮仅新增文档，不修改代码或运行数据。
+- 状态：U1 已完成并通过验收；U2～U5 未实施。当前仅交付资料管理只读查询，不修改页面或真实业务数据。
 - 基线：M1～M9、S1～S3、C1～C3 已完成；C3 提交 `b4ce346`。
 - 依据：用户提供的三张页面参考图及本轮讨论，仅参考信息布局，不一比一复刻。文档树留待后续优化。
 - 本文是本次布局专项的推进依据；资料解析、发布、反馈确认、检索和冻结背景继续遵循 [62 号专项](62-agent-review-memory-library-plan.md)，项目关联继续沿用 [63 号专项](63-memory-library-central-management-plan.md)。本文调整其页面组织，不改写历史阶段记录，不推进 M10，不登记到已冻结的 docs/36。
@@ -69,7 +69,7 @@
 - **摘要约定：** 仅管理列表条目增加有界 `targetTypes`、`hasUnrestrictedTarget`、`hasEntries`；类型去重，NULL 用独立标识表示“不限”，无章节明确展示“未设置”，不能误称全端。摘要按管理可见章节（包括草稿/停用）汇总，明确不代表已发布适用范围；既有端筛选仍按章节明确标签精确匹配。全局分页总数与分类过滤一致，旧项目摘要/引用详情不扩展。
 - **非目标：** 端标签迁移、来源级新字段、文档树、写逻辑或检索规则变化；不借此清理旧查询。
 - **验收方式：** 聚焦静态检查，随机隔离 MySQL/API 验证混合类型、类别与 kind 联合过滤、总数/分页、无章节/多端/NULL/GENERAL、管理摘要无正文、查询次数不随当前页行数增长；省略新参数保持旧查询结果。无需浏览器。
-- **授权边界：** 当前仅规划；用户授权 U1 后只实施上述只读能力，不改真实资料或开启记忆，不调用模型。
+- **授权边界：** 用户已授权 U1，只实施上述只读能力，不改真实资料或开启记忆，不调用模型。
 - **停止点：** 原页面不变且查询可独立使用；记录验收、本地提交，停止并等待 U2 授权。
 
 ## 5. U2：三 Tab 布局与简化上传
@@ -122,9 +122,42 @@
 
 ## 9. 执行与交付约定
 
-- 当前授权仅写本计划；用户可用“推进 U1”等指令逐阶段授权，不能将本计划视为全部代码实施授权。
+- 用户已授权 U1；其余阶段仍需用“推进 U2”等指令分别授权，不能将本计划视为全部代码实施授权。
 - 新增只读管理字段先定 DTO/查询语义再实现；复用已有发布、CAS、关联和反馈失效规则，不为页面简单而绕过后端校验。
 - 按项目明确规则不默认新增、修改或运行单元测试；执行聚焦静态检查、隔离手动 API 和对应浏览器验收，并如实记录验证范围。前端构建使用 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-frontend.ps1 build`，后端执行优先使用现有统一脚本。
 - 浏览器写操作仅使用隔离响应/样本，真实服务默认只读；复用已有可用服务，新增服务须按 AGENTS.md 检查端口及有界 ready。不得为验收写入真实项目资料、开启记忆或调用真实模型。
 - 各阶段记录“改了什么、为什么、如何验证、保留限制”和提交号。仅在实际入口或文档路由变化时最小更新 README；本规划轮不改 README、docs/36 或既有已完成阶段。
 - 文档树、无归属独立资产、向量检索、批量发布与完整打标治理均是后续候选，不计入本计划完成条件。
+
+## 10. U1 实施记录（2026-11-13，已完成）
+
+- 改动量等级仍为**中**，只修改 Python 的资料管理 DTO、过滤和有界摘要读取，不变更表结构、旧项目/共享详情、关联写入或审查检索。
+- `GET /api/review-memory/sources` 新增可选枚举 `category=DOCUMENT/CASE`，不提供时保留原分类范围；DOCUMENT 为 STANDARD/SKILL/ARCHITECTURE，CASE 为 PITFALL/INCIDENT。与 `kind`、端、问题、项目、状态及关键词按 AND 组合，类型冲突返回空列表且 total=0；非法枚举按现有参数错误契约返回 400。
+- 仅 `MemoryLibrarySource` 增加三个必返字段：`targetTypes` 为当前六种 TargetType 的去重数组，按枚举值字典序稳定排序、最多 6 项；`hasUnrestrictedTarget` 表示存在 NULL 端章节；`hasEntries` 表示存在任何章节。无章节时返回 `[]/false/false`；仅 NULL 章节返回 `[]/true/true`；GENERAL 是独立数组值，不能当作 NULL。
+- 摘要汇总当前页每份来源全部管理可见章节（DRAFT/ACTIVE/DISABLED），不随端/问题/关键词筛选裁掉其它章节标签，不包含章节正文或原件，也不代表已发布可用于检索的范围。原 `targetType` 筛选保持明确标签精确匹配，NULL 不作为管理筛选通配。
+- 复用原独立 REPEATABLE READ 会话；分页来源读取后，按来源 ID 和 target_type 分组批量查标签，最多返回每来源 7 组（六端加 NULL）。非空页为 count/page/关系摘要/章节端摘要四次 SELECT，空页只读 count/page；不逐行读详情或全量正文，不结束/flush 调用方事务。
+- 最小请求示例：`GET /api/review-memory/sources?category=DOCUMENT&targetType=BACKEND&pageNo=1&pageSize=20`；`category=CASE&kind=STANDARD` 为空。包含 BACKEND、GENERAL 和 NULL 章节的来源摘要为 `targetTypes=["BACKEND","GENERAL"], hasUnrestrictedTarget=true, hasEntries=true`。
+- 验收采用聚焦静态检查和随机隔离 MySQL/API；不新增、修改或运行单元测试，不调用浏览器或模型。完成验收后补结果、本地提交并停在 U1。
+
+### 10.1 实现与验证结果
+
+- `schemas.py` 仅扩展 `MemoryLibraryQuery/MemoryLibrarySource`；原 `MemorySourceSummary`、项目列表、共享目录、详情和关联 DTO 不增加字段。FastAPI 原路由直接登记新枚举与三个必返字段，不增加新路径或改动写接口。
+- `repository.list_library_sources` 在 SQL count/page 前应用分类，与既有条件求交；`library_entry_targets` 仅按当前页 sourceId/target_type 分组读两列。`management.list_library` 在原一致性读取内组合去重端摘要，不读取章节实体或正文，不修改现有关联、项目设置和入队检索逻辑。
+- 通过统一脚本执行聚焦 Ruff 和 `compileall`，以及 `git diff --check`，均通过；未新增、修改或运行单元测试。此阶段无前端变更，不运行前端 build 或浏览器验收。
+- 本机 `.local/memory-u1-api-acceptance.ps1` 通过。该 ignored PowerShell 脚本使用统一脚本未提供的 stdin 入口调用本地 venv Python，在随机隔离 MySQL 库经真实 FastAPI 路由/DTO/SQL 验证；共 39 份默认可见资料（普通资料 37、案例 2）及额外删除历史，包含全部五种资料类型、200 章节、多端/NULL/GENERAL 和各种章节状态。
+- 通过：分类互斥且不漏资料；分类与类型冲突为 total=0；归属/使用项目、端、问题、关键词、状态组合正确；不传 category 保留旧查询结果；分页排序稳定、无重复，空页保留总数；非法分类和旧参数上限被拒绝。摘要覆盖全部章节标签而不只过滤命中章节，NULL 不变成端筛选通配，GENERAL 与“不限”分开，无章节不冒充全端。
+- 通过：旧 OWNED/USED、共享目录、项目关系内的来源摘要未新增字段；已发布但无章节的原 USED 行为保留；跨项目私有正文/原件仍 404。所有 GET 前后逐表比较 projects/settings/sources/entries/bindings 完全一致，管理响应不包含正文、原件、提取文本或诊断内容。
+- SQL 计数验证：每页 1 条和 100 条均为 4 次 SELECT，空页为 2 次，200 章节在数据库只返回 7 组标签；未按行读取详情。并发事务在 count 后改变来源版本、关联状态和章节端，本响应保留原快照，下一响应看到新状态。独立读取不会 flush 或结束调用方事务；关闭记忆的项目仍不选择资料。
+- 生产 app OpenAPI 含可选分类枚举、三个必返管理字段及端数组上限 6，原摘要 schema 不变。复用现有 8090 服务只读检查：`category=DOCUMENT&pageSize=1` 返回 200/success（当前 total=0），新参数已注册；项目 24 前后仍 `enabled=false/version=1/schemaReady=true`。无新启停服务、真实业务写入、迁移、部署或模型调用，随机验收数据库已在 finally 精确删除。
+
+### 10.2 本地验收与停止点
+
+```text
+GET http://localhost:8090/api/review-memory/sources?category=DOCUMENT&pageNo=1&pageSize=20
+GET http://localhost:8090/api/review-memory/sources?category=CASE&pageNo=1&pageSize=20
+GET http://localhost:8090/api/review-memory/sources?category=CASE&kind=STANDARD
+```
+
+第三个请求应成功返回空列表和 total=0；空库可检查契约和参数，章节摘要需准备隔离资料后验证。原页面尚未展示新摘要属于 U1 预期，三 Tab 与筛选消费由 U2 实现。管理端摘要包含草稿/停用章节，不能据此认定资料已发布或本次一定采用；本阶段未做大数据量性能评估、索引调整或真实审查效果验证。
+
+**停止点：U1 已完成，按用户约定本地提交，提交号以 Git 记录为准。停止在 U1，不自动推进 U2，不推送或部署。**

@@ -179,6 +179,14 @@ def list_library_sources(
         if filters.state is not None
         else ReviewMemorySource.state != SourceState.DELETED
     ]
+    if filters.category is not None:
+        conditions.append(
+            ReviewMemorySource.kind.in_(
+                ("STANDARD", "SKILL", "ARCHITECTURE")
+                if filters.category == "DOCUMENT"
+                else ("PITFALL", "INCIDENT")
+            )
+        )
     if filters.owner_project_id is not None:
         conditions.append(ReviewMemorySource.project_id == filters.owner_project_id)
     if filters.using_project_id is not None:
@@ -224,6 +232,20 @@ def list_library_sources(
         .limit(filters.page_size)
     )
     return list(rows), total
+
+
+def library_entry_targets(db: Session, source_ids: list[int]) -> dict[int, list[str | None]]:
+    if not source_ids:
+        return {}
+    rows = db.execute(
+        select(ReviewMemoryEntry.source_id, ReviewMemoryEntry.target_type)
+        .where(ReviewMemoryEntry.source_id.in_(source_ids))
+        .group_by(ReviewMemoryEntry.source_id, ReviewMemoryEntry.target_type)
+    )
+    result = {}
+    for source_id, target_type in rows:
+        result.setdefault(source_id, []).append(target_type)
+    return result
 
 
 def library_binding_summaries(

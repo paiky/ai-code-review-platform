@@ -33,15 +33,20 @@ def list_library(db: Session, query: MemoryLibraryQuery) -> MemoryLibraryPage:
     with _reader(db) as reader:
         sources, total = repository.list_library_sources(reader, query)
         summaries = repository.library_binding_summaries(reader, [source.id for source in sources])
+        targets = repository.library_entry_targets(reader, [source.id for source in sources])
         items = []
         for source in sources:
             count, project_ids = summaries.get(source.id, (0, []))
+            source_targets = targets.get(source.id, [])
             items.append(
                 MemoryLibrarySource(
                     **_source_summary(source, can_manage=True).model_dump(),
                     active_binding_count=count,
                     using_project_ids=project_ids,
                     using_projects_truncated=count > len(project_ids),
+                    target_types=sorted(target for target in source_targets if target is not None),
+                    has_unrestricted_target=None in source_targets,
+                    has_entries=bool(source_targets),
                 )
             )
         return MemoryLibraryPage(

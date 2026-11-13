@@ -259,6 +259,7 @@ class MemoryEntryResponse(MemoryEntryDraft):
 class MemoryLibraryQuery(MemorySchema):
     owner_project_id: int | None = Field(default=None, alias="ownerProjectId", gt=0)
     using_project_id: int | None = Field(default=None, alias="usingProjectId", gt=0)
+    category: Literal["DOCUMENT", "CASE"] | None = None
     kind: MemoryKind | None = None
     state: SourceState | None = None
     target_type: TargetType | None = Field(default=None, alias="targetType")
@@ -361,6 +362,9 @@ class MemoryLibrarySource(MemorySourceSummary):
     active_binding_count: int = Field(alias="activeBindingCount", ge=0)
     using_project_ids: list[int] = Field(alias="usingProjectIds", max_length=3)
     using_projects_truncated: bool = Field(alias="usingProjectsTruncated")
+    target_types: list[TargetType] = Field(alias="targetTypes", max_length=6)
+    has_unrestricted_target: bool = Field(alias="hasUnrestrictedTarget")
+    has_entries: bool = Field(alias="hasEntries")
 
 
 class MemoryLibraryPage(MemorySchema):
