@@ -450,6 +450,42 @@ class MemoryFeedbackPage(MemorySchema):
     page_size: int = Field(alias="pageSize")
 
 
+class MemoryFeedbackManagementQuery(MemorySchema):
+    project_id: int | None = Field(default=None, alias="projectId", gt=0)
+    target_type: TargetType | None = Field(default=None, alias="targetType")
+    status: Literal["PENDING", "VALID", "INSUFFICIENT", "IGNORED", "CONVERTED"] | None = None
+    keyword: str | None = Field(default=None, max_length=128)
+    page_no: int = Field(default=1, alias="pageNo", ge=1)
+    page_size: int = Field(default=20, alias="pageSize", ge=1, le=100)
+
+    _keyword = field_validator("keyword")(MemorySourceQuery.normalize_keyword.__func__)
+
+
+class MemoryFeedbackManagementItem(MemorySchema):
+    id: int
+    project_id: int = Field(alias="projectId")
+    task_id: int = Field(alias="taskId")
+    risk_title: str | None = Field(alias="riskTitle")
+    risk_type: str | None = Field(alias="riskType")
+    reason_type: str | None = Field(alias="reasonType")
+    reason_text: str | None = Field(alias="reasonText", max_length=1000)
+    status: str
+    target_type: TargetType | None = Field(alias="targetType")
+    created_at: datetime | None = Field(alias="createdAt")
+    memory_source_id: int | None = Field(alias="memorySourceId")
+    source_version: int | None = Field(alias="sourceVersion")
+    source_state: SourceState | None = Field(alias="sourceState")
+    writeback_id: int | None = Field(alias="writebackId")
+    writeback_state: WritebackState | None = Field(alias="writebackState")
+
+
+class MemoryFeedbackManagementPage(MemorySchema):
+    items: list[MemoryFeedbackManagementItem]
+    total: int
+    page_no: int = Field(alias="pageNo")
+    page_size: int = Field(alias="pageSize")
+
+
 class MemoryCaseConfirmation(MemorySchema):
     expected_feedback_digest: str = Field(alias="expectedFeedbackDigest", pattern=r"^[a-f0-9]{64}$")
     expected_source_version: int | None = Field(

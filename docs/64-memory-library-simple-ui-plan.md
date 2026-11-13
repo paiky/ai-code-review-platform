@@ -1,7 +1,7 @@
 # 项目记忆库简化布局与批量上传推进计划
 
 - 日期：2026-11-13。
-- 状态：U1 已完成（`e8f9f3a`）；U2 已完成（`95ea766`）；U3 已完成；U4/U5 待依序推进。
+- 状态：U1 已完成（`e8f9f3a`）；U2 已完成（`95ea766`）；U3 已完成（`74e8abb`）；U4 已完成；U5 待推进。
 - 基线：M1～M9、S1～S3、C1～C3 已完成；C3 提交 `b4ce346`。
 - 依据：用户提供的三张页面参考图及本轮讨论，仅参考信息布局，不一比一复刻。文档树留待后续优化。
 - 本文是本次布局专项的推进依据；资料解析、发布、反馈确认、检索和冻结背景继续遵循 [62 号专项](62-agent-review-memory-library-plan.md)，项目关联继续沿用 [63 号专项](63-memory-library-central-management-plan.md)。本文调整其页面组织，不改写历史阶段记录，不推进 M10，不登记到已冻结的 docs/36。
@@ -136,6 +136,14 @@
 - 明确 4xx 失败可人工重试；断连、5xx 或响应无法确认成功时标记结果待确认，只提供查资料/移除，不直接重试。停止仅阻止后续文件，当前请求继续等待结果。
 - 通过原抽屉逐份发布，成功队列不自动弹详情；离开保护和刷新丢失本地文件提示继续有效。
 
+### 本轮 U4 接口约定（实施前确认）
+
+- 改动量等级：中。新增独立 `GET /api/review-memory/feedbacks`，固定 AI_FINDING / FALSE_POSITIVE；支持 projectId（正整数）、targetType（现有枚举）、status（既有五态）、keyword（去空白，最多 128 字符）、pageNo ≥ 1 / pageSize 1～100。
+- 独立管理条目包含 id、projectId、taskId、riskTitle、riskType、reasonType、reasonText（摘要最多 1000 字符，完整说明见详情）、status、targetType、createdAt、memorySourceId/sourceState/sourceVersion、writebackId/writebackState；分页 items/total/pageNo/pageSize。正文快照、原件、确认摘要和回写 payload 不返回，详情再沿旧接口获取权威摘要。
+- targetType 只取 `ReviewTask.target_type` 已保存的任务主端（同时校验 task.project_id），缺失/未知为 null，UI 标注“未记录”；不回退项目当前端。多端任务此列仅代表任务主端，不声称为 finding 精确归属，不扫描 target_types_json 或运行 JSON 补全历史。筛选同样只按任务主端。
+- createdAt 是反馈原始创建时间，更新误报说明不改变打标时间。关键词按字面搜索原问题标题和人工原因（`%`/`_` 转义），按反馈 id 倒序稳定分页。总数/分页/来源/最新回写使用独立 REPEATABLE READ 会话，固定最多四次 SELECT；只投影摘要列，不加载完整 finding。
+- 无 schema 迁移，无前端改动，不改变旧项目查询和所有写接口；可信管理部署边界保持不变。
+
 ## 10. U1 实施记录（2026-11-13，已完成）
 
 - 改动量等级仍为**中**，只修改 Python 的资料管理 DTO、过滤和有界摘要读取，不变更表结构、旧项目/共享详情、关联写入或审查检索。
@@ -213,3 +221,10 @@ GET http://localhost:8090/api/review-memory/sources?category=CASE&kind=STANDARD
 - 验证：统一前端 build 通过（仅既有 bundle 大小提示）；隔离浏览器覆盖混合规范/Skill、逐行端、串行锁定、停止/续传待项、失败独立重试、未知结果禁重试、成功禁重传、逐份显式发布、空队列、格式/单文件大小、20 个文件及 50 MiB 上下界、离开保护和 390px。截图 `.local/memory-u3-mobile.png`。
 - 随机隔离 MySQL/API 复用 M9 样本，真实 DOCX、文本 PDF、MD 各建独立草稿并发布，关联、后续选择、人工确认回写和撤回闭环通过；数据库已删除，无真实模型/真实项目写入。未新增、修改或运行单元测试。
 - 保留限制：本地文件不持久化、不做自动幂等或批量发布；未知结果需人工到资料页核对。验收脚本与截图位于 ignored `.local`。按本轮授权提交后继续 U4。
+
+## 13. U4 实施记录（2026-11-13，已完成）
+
+- 改动量等级：中。新增独立全局只读 GET、管理 DTO 与聚合读取模块并注册生产路由；旧项目接口、正文/确认权限和写入链路不变，无迁移。
+- 固定读取 AI_FINDING / FALSE_POSITIVE，按项目、任务主端、真实反馈状态、字面关键词组合分页。四次 SELECT 批量返回来源及最新回写，原因只投影前 1000 字符，不加载 finding 快照或回写正文。
+- 验证：ruff、compileall、diff check 通过；随机隔离 MySQL + FastAPI 验证 31 条多项目混合反馈、稳定排序与分页、筛选/非法参数、NULL/未知/任务项目不匹配/任务缺失的端、已忽略/CONVERTED、最新失败/成功回写、无敏感字段、旧项目响应及跨项目确认 404。页长 1/20/100 均四次 SELECT；并发在 count 后提交更新，当前页/来源/回写仍读取同一旧快照，下次请求看到新值。全部 GET 前后相关表无写入，OpenAPI 已注册。
+- 验收资产 `.local/memory-u4-api-acceptance.ps1`，随机隔离数据库已删除。未新增、修改或运行单元测试；本阶段无需浏览器。限制：端仅历史任务主端，不能代表多端 finding 精确归属，不补全历史 JSON。本地提交后按授权继续 U5。

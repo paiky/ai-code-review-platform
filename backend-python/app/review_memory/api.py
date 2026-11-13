@@ -16,6 +16,7 @@ from app.core.errors import AppError
 from app.core.response import ok
 from app.review_memory import service
 from app.review_memory import management
+from app.review_memory import feedback_management
 from app.review_memory import feedback as memory_feedback
 from app.review_memory import settings as memory_settings
 from app.review_memory.summary import get_run_memory_summary
@@ -49,6 +50,8 @@ from app.review_memory.schemas import (
     MemoryFeedbackDetail,
     MemoryFeedbackPage,
     MemoryFeedbackQuery,
+    MemoryFeedbackManagementQuery,
+    MemoryFeedbackManagementPage,
     MemoryWritebackSummary,
     MemoryUploadMetadata,
     SourceState,
@@ -61,8 +64,17 @@ from app.review_memory.schemas import (
 router = APIRouter(prefix="/api/projects/{project_id}/review-memory", tags=["review-memory"])
 shared_router = APIRouter(prefix="/api/review-memory/shared-sources", tags=["review-memory"])
 management_router = APIRouter(prefix="/api/review-memory/sources", tags=["review-memory"])
+feedback_management_router = APIRouter(prefix="/api/review-memory/feedbacks", tags=["review-memory"])
 run_router = APIRouter(prefix="/api/agent-review/runs", tags=["review-memory"])
 DetailResponse = MemoryApiResponse[MemorySourceDetail]
+
+
+@feedback_management_router.get("", response_model=MemoryApiResponse[MemoryFeedbackManagementPage])
+def list_global_memory_feedbacks(
+    query: Annotated[MemoryFeedbackManagementQuery, Query()],
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(feedback_management.list_feedbacks(db, query))
 
 
 @router.get("/settings", response_model=MemoryApiResponse[MemorySettings])
