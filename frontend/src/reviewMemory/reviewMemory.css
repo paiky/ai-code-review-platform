@@ -190,3 +190,78 @@
 .memory-toolbar > .memory-owner-picker {
   width: min(100%, 300px);
 }
+
+.memory-simple-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+  padding: 20px;
+  background: #fff;
+  border: 1px solid #e5e9f0;
+  border-radius: 8px;
+}
+.memory-simple-filters > label {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.memory-simple-filters .ant-select {
+  width: 100%;
+}
+.memory-more-filters {
+  margin-top: 12px;
+}
+.memory-list-actions h4 {
+  margin: 0;
+}
+.memory-upload-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 310px;
+  gap: 20px;
+}
+.memory-upload-layout > *,
+.memory-upload-panel {
+  min-width: 0;
+}
+.memory-upload-drop-card .ant-upload-drag {
+  min-height: 330px;
+}
+.memory-upload-icon {
+  font-size: 84px;
+  color: #1677ff;
+  margin-bottom: 20px;
+}
+.memory-upload-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 20px;
+}
+.memory-upload-settings .memory-field-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.memory-upload-panel .ant-alert {
+  margin-bottom: 16px;
+}
+@media (max-width: 1000px) {
+  .memory-upload-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .memory-simple-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 540px) {
+  .memory-simple-filters {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 16px;
+  }
+  .memory-upload-layout .ant-card-body {
+    padding: 16px;
+  }
+  .memory-upload-drop-card .ant-upload-drag {
+    min-height: 270px;
+  }
+}

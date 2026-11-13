@@ -6,6 +6,7 @@ export default function MemoryEntryFields({
   onChange,
   kind,
   content = true,
+  showTargetType = true,
   disabled = false
 }) {
   const change = (key, next) => onChange({ ...value, [key]: next });
@@ -41,7 +42,7 @@ export default function MemoryEntryFields({
         </>
       )}
       <div className="memory-field-grid">
-        <Form.Item label="适用端" extra="留空表示本项目所有端；“通用”是独立端。">
+        {showTargetType && <Form.Item label="适用端" extra="留空表示本项目所有端；“通用”是独立端。">
           <Select
             aria-label="适用端"
             allowClear
@@ -50,7 +51,7 @@ export default function MemoryEntryFields({
             placeholder="本项目所有端"
             onChange={(next) => change('targetType', next || null)}
           />
-        </Form.Item>
+        </Form.Item>}
         <Form.Item label="问题类型">
           <Select
             aria-label="问题类型"

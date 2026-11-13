@@ -33,34 +33,12 @@ import {
   STATE_LABELS,
   stateColor,
   TARGET_TYPE_OPTIONS,
-  validateEntry
+  validateEntry,
+  uploadProblem,
+  DOCUMENT_ERRORS
 } from './model.js';
 
 const { Text, Title, Paragraph } = Typography;
-
-function uploadProblem(file, kind) {
-  const extension = file.name.split('.').at(-1).toLowerCase();
-  if (kind === 'SKILL' && extension !== 'md') return 'Skill 仅支持 Markdown（.md）文件。';
-  if (!['md', 'txt', 'docx', 'pdf'].includes(extension)) {
-    return '请选择 .md / .txt / .docx / .pdf 文件；不支持旧 .doc、图片或压缩包。';
-  }
-  const limit = ['docx', 'pdf'].includes(extension) ? 5 : 1;
-  return file.size > limit * 1024 * 1024 ? `该格式文件不能超过 ${limit} MiB。` : null;
-}
-
-const DOCUMENT_ERRORS = {
-  MEMORY_DOCUMENT_INVALID:
-    '文档损坏、格式不符或含不支持的结构，请转换为普通 DOCX／文本 PDF 后重试。',
-  MEMORY_DOCUMENT_ENCRYPTED: '不支持加密文档，请先解除加密后重新上传。',
-  MEMORY_PDF_NO_TEXT: 'PDF 没有可提取文字，可能是扫描件；当前不支持 OCR。',
-  MEMORY_DOCUMENT_LIMIT:
-    '文档超出解析限制：PDF 最多 100 页，DOCX 最多 1000 个内部文件、总解压量 20 MiB。',
-  MEMORY_SOURCE_TOO_LARGE: '抽取正文或包含上级条件的章节总量超过 256 KiB，请拆分原文件后重试。',
-  MEMORY_TOO_MANY_ENTRIES: '章节超过 200 条，请拆分原文件后重试。',
-  MEMORY_PARSE_TIMEOUT: '文档解析超过 10 秒，请简化或拆分文件后重试；旧发布资料仍有效。',
-  MEMORY_PARSE_FAILED: '文档解析未能完成，请重试或转换为文本格式；旧发布资料仍有效。',
-  MEMORY_PARSER_UNAVAILABLE: '服务端文档解析依赖尚未就绪，请联系维护人员；仍可导入 MD／TXT。'
-};
 
 export default function MemorySourceDrawer({
   projectId: initialProjectId,
@@ -75,7 +53,8 @@ export default function MemorySourceDrawer({
   onSaved,
   projectLabel,
   onManageBinding,
-  onViewFeedback
+  onViewFeedback,
+  onLoaded
 }) {
   const [selectedOwner, setSelectedOwner] = useState(initialProjectId || '');
   const projectId = selectedOwner;
@@ -108,6 +87,10 @@ export default function MemorySourceDrawer({
     ? touched
     : Boolean(editor && JSON.stringify(editor.value) !== editor.baseline);
   const readOnly = !source?.canManage;
+
+  useEffect(() => {
+    if (source) onLoaded?.(source);
+  }, [source, onLoaded]);
 
   useEffect(() => {
     onDirtyChange(dirty);
