@@ -424,7 +424,7 @@ def legacy_policy_ids(db: Session, project_id: int, feedback_id: int | None) -> 
     )
 
 
-def has_duplicate_upload(db: Session, project_id: int, digest: str) -> bool:
+def has_duplicate_upload(db: Session, project_id: int | None, digest: str) -> bool:
     return (
         db.scalar(
             select(ReviewMemorySource.id)

@@ -1,7 +1,7 @@
 # 记忆资料与项目解耦及项目关联简化计划
 
 - 日期：2026-11-13。
-- 状态：用户已授权依序推进 A1～A5；A1～A3 已完成，A4 待推进；每阶段验收并提交后继续下一已授权阶段，A5 完成后停止。
+- 状态：用户已授权依序推进 A1～A5；A1～A4 已完成，A5 待推进；每阶段验收并提交后继续下一已授权阶段，A5 完成后停止。
 - 基线：U1～U5 已完成，最新代码提交 `bffbed7`。本文接续 [64 号专项](64-memory-library-simple-ui-plan.md)，不修改其已完成记录；资料解析、人工确认和冻结背景继续沿用 [62 号专项](62-agent-review-memory-library-plan.md)，关系并发保护沿用 [63 号专项](63-memory-library-central-management-plan.md)。
 - 用户确认的目标：上传不再选择项目，关联单独处理；“项目关联”成为同级 Tab，简化现有项目使用配置。
 - 每阶段完成实现、对应验收和记录后先本地提交，再停止；用户后续明确授权连续阶段时按授权顺序逐阶段提交，不重复请求确认。不推送、部署、调用真实模型或默认开启真实项目记忆。
@@ -168,6 +168,12 @@
 - 真实目标迁移须另行授权：先备份目标库并核对目标身份，再用 `scripts/run-database-migration.ps1 status local`、`dry-run local` 检查待执行集合；明确批准后才执行 `apply local`，最后 `verify local` 并检查列 nullable 及存量资料/关系数量。test 目标另需 ConfirmTest。不得把授权 V60 当作执行其它待迁移的授权。
 - MySQL DDL 不保证事务回滚；执行失败后先检查列定义及迁移台账，再按实际状态修复重试。只有确认不存在 project_id IS NULL 行才允许恢复 NOT NULL；已有公共资料时保留兼容版本，不能随意回填项目或删除资料回退。
 
+### A4 实施契约
+
+- 公共管理写路径为 POST sources、POST uploads、GET sources/{id}/impact、PUT sources/{id}、POST sources/{id}/entries、PUT sources/{id}/entries/{entryId}、POST sources/{id}/publish、PUT sources/{id}/state、DELETE sources/{id}，均位于 `/api/review-memory` 下；复用原请求 DTO、上传解析、版本 CAS、影响确认和事务回滚。
+- 无归属只接受 STANDARD/SKILL/ARCHITECTURE，固定 SHARED，不允许改为 PROJECT。管理写严格检查真实 NULL owner；旧项目来源只能走原项目写 API。公共创建必须检查 V60，无默认绑定；公共替换草稿也无默认绑定，首次发布继承旧资料实际关系并确认全部影响项目。
+- 锁顺序仍为实际项目 ID 升序→来源 ID 升序→关系；NULL 不参与项目锁。无项目资料不要求自关联，预算仅约束实际关联项目；其它预算、引用、案例私有及历史冻结语义保持不变。
+
 ### A2 实施记录（已完成）
 
 - 改动量等级：中。四个同级 Tab 已落地；公共资料和原件走管理读取，空归属显示公共资料，公共写入口暂只读。旧项目编辑及带项目链接保持原 API。
@@ -179,3 +185,9 @@
 - 改动量等级：中。新增 V60 与 nullable ORM，独立 capabilities 读取及公共创建前置 guard，不缓存就绪结果。
 - ruff / compileall、随机 MySQL 隔离库全链迁移与旧结构升级验收通过：未就绪明确识别、旧项目读取可用、升级后实时就绪、存量资料/关系/版本不变、NULL 写入可行；隔离库已清理。未运行单元测试。
 - 未执行真实数据库迁移，未启停真实服务。验收脚本 .local/memory-a3-acceptance.ps1；提交后进入 A4。
+
+### A4 实施记录（已完成）
+
+- 改动量等级：中。公共资料创建/章节/发布/替换/停用/删除完整管理链路已落地，复用旧解析、CAS、事务、锁序和项目预算。公共来源不建默认关系，固定 SHARED，仅显式关联后可成为审查候选。
+- ruff / compileall、隔离 MySQL/API 通过：MD/Skill/DOCX/PDF、未迁移 503、非法案例/旧归属写入拒绝、无关联不选取、双项目范围/端过滤、影响确认/CAS、章节草稿化、替换关系继承、预算失败回滚、移除/恢复/停用/删除、历史冻结不变。
+- M9 synthetic 闭环回归通过：旧项目上传→Agent 冻结入队→Worker 输入→人工误报确认→异步回写→下次召回→撤回；未调用真实模型。隔离库均清理，未运行单元测试，真实库和配置无写入。验收脚本 .local/memory-a4-acceptance.ps1；提交后进入 A5。

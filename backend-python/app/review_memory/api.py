@@ -15,7 +15,7 @@ from app.core.database import get_db
 from app.core.errors import AppError
 from app.core.response import ok
 from app.review_memory import service
-from app.review_memory.capabilities import read_capabilities
+from app.review_memory.capabilities import read_capabilities, require_library_schema
 from app.review_memory import management
 from app.review_memory import feedback_management
 from app.review_memory import feedback as memory_feedback
@@ -166,13 +166,16 @@ def _commit(db: Session, detail: MemorySourceDetail | MemoryBindingResult) -> di
 
 def _import_upload(
     db: Session,
-    project_id: int,
+    project_id: int | None,
     filename: str | None,
     content_type: str | None,
     original: bytes,
     metadata: MemoryUploadMetadata,
 ) -> dict:
-    service.require_project(db, project_id)
+    if project_id is None:
+        require_library_schema(db)
+    else:
+        service.require_project(db, project_id)
     parsed = parse_upload(filename, content_type, original, metadata)
     return _commit(db, service.create_upload_draft(db, project_id, parsed, original, metadata))
 
@@ -325,6 +328,15 @@ UPLOAD_BODY = {
 async def upload_source(
     project_id: int, request: Request, db: Session = Depends(memory_db)
 ) -> dict:
+    return await _upload_source(project_id, request, db)
+
+
+@library_router.post("/uploads", response_model=DetailResponse, openapi_extra=UPLOAD_BODY)
+async def upload_library_source(request: Request, db: Session = Depends(memory_db)) -> dict:
+    return await _upload_source(None, request, db)
+
+
+async def _upload_source(project_id: int | None, request: Request, db: Session) -> dict:
     if request.headers.get("content-type", "").split(";", 1)[0].lower() != "multipart/form-data":
         raise AppError("MEMORY_FORMAT_UNSUPPORTED", "Upload requires multipart/form-data", 415)
 
@@ -477,3 +489,65 @@ def delete_source(
             acknowledged_project_ids,
         ),
     )
+
+
+@management_router.post("", response_model=DetailResponse)
+def create_library_source(request: MemorySourceDraft, db: Session = Depends(memory_db)) -> dict:
+    return _commit(db, service.create_manual_draft(db, None, request))
+
+
+@management_router.get("/{source_id}/impact", response_model=MemoryApiResponse[MemorySourceImpact])
+def get_library_impact(source_id: int, db: Session = Depends(memory_db)) -> dict:
+    return ok(service.get_source_impact(db, None, source_id))
+
+
+@management_router.put("/{source_id}", response_model=DetailResponse)
+def update_library_source(
+    source_id: int, request: MemorySourceUpdate, db: Session = Depends(memory_db)
+) -> dict:
+    return _commit(db, service.update_source(db, None, source_id, request))
+
+
+@management_router.post("/{source_id}/entries", response_model=DetailResponse)
+def create_library_entry(
+    source_id: int, request: MemoryEntryCreate, db: Session = Depends(memory_db)
+) -> dict:
+    return _commit(db, service.add_entry(db, None, source_id, request))
+
+
+@management_router.put("/{source_id}/entries/{entry_id}", response_model=DetailResponse)
+def update_library_entry(
+    source_id: int, entry_id: int, request: MemoryEntryUpdate, db: Session = Depends(memory_db)
+) -> dict:
+    return _commit(db, service.update_entry(db, None, source_id, entry_id, request))
+
+
+@management_router.post("/{source_id}/publish", response_model=DetailResponse)
+def publish_library_source(
+    source_id: int, request: MemoryPublish, db: Session = Depends(memory_db)
+) -> dict:
+    return _commit(db, service.publish_source(db, None, source_id, request))
+
+
+@management_router.put("/{source_id}/state", response_model=DetailResponse)
+def disable_library_source(
+    source_id: int, request: MemorySourceDisable, db: Session = Depends(memory_db)
+) -> dict:
+    return _commit(db, service.change_source_state(
+        db, None, source_id, request.expected_version, SourceState.DISABLED,
+        request.acknowledged_project_ids,
+    ))
+
+
+@management_router.delete("/{source_id}", response_model=DetailResponse)
+def delete_library_source(
+    source_id: int,
+    expected_version: int = Query(alias="expectedVersion", gt=0),
+    acknowledged_project_ids: list[Annotated[int, Field(gt=0)]] | None = Query(
+        default=None, alias="acknowledgedProjectIds", max_length=1000,
+    ),
+    db: Session = Depends(memory_db),
+) -> dict:
+    return _commit(db, service.change_source_state(
+        db, None, source_id, expected_version, SourceState.DELETED, acknowledged_project_ids,
+    ))
