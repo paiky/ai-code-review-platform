@@ -18,7 +18,7 @@ import {
 import { PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { fetchApi } from '../api.js';
 import { registerSettingsNavigationGuard } from '../settingsNavigation.js';
-import { listLibrarySources, listSources } from './api.js';
+import { listLibrarySources } from './api.js';
 import {
   ISSUE_OPTIONS,
   KIND_OPTIONS,
@@ -34,6 +34,8 @@ import MemoryAssociationDrawer from './MemoryAssociationDrawer.jsx';
 import MemoryFeedbackDrawer from './MemoryFeedbackDrawer.jsx';
 import MemoryFeedbackList from './MemoryFeedbackList.jsx';
 import MemoryInjectionSettings from './MemoryInjectionSettings.jsx';
+import MemoryProjectBindings from './MemoryProjectBindings.jsx';
+import MemorySourceProjectsDrawer from './MemorySourceProjectsDrawer.jsx';
 import './reviewMemory.css';
 
 const { Title, Paragraph, Text } = Typography;
@@ -66,8 +68,9 @@ export default function ReviewMemoryPage() {
   const [projectRetry, setProjectRetry] = useState(0);
   const [category, setCategory] = useState('rules');
   const [caseTab, setCaseTab] = useState('saved');
-  const feedbackView = !isLibrary && category === 'cases' && caseTab === 'feedbacks';
-  const [view, setView] = useState('OWNED');
+  const feedbackView = !isLibrary && caseTab === 'feedbacks';
+  const [projectSettings, setProjectSettings] = useState(null);
+  const handleSettingsChange = useCallback((settings) => setProjectSettings({ projectId, settings }), [projectId]);
   const [filters, setFilters] = useState({
     kind: 'STANDARD',
     state: '',
@@ -212,15 +215,13 @@ export default function ReviewMemoryPage() {
   useEffect(() => {
     setPage({ items: [], total: 0 });
     setError(null);
-    if ((!isLibrary && !projectId) || feedbackView) {
+    if (!isLibrary) {
       setLoading(false);
       return undefined;
     }
     const controller = new AbortController();
     setLoading(true);
-    const request = isLibrary
-      ? listLibrarySources({ ...filters, ownerProjectId, usingProjectId }, controller.signal)
-      : listSources(projectId, { ...filters, view }, controller.signal);
+    const request = listLibrarySources({ ...filters, ownerProjectId, usingProjectId }, controller.signal);
     request
       .then((data) => {
         if (!controller.signal.aborted) setPage(data);
@@ -232,7 +233,7 @@ export default function ReviewMemoryPage() {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [projectId, filters, view, refresh, feedbackView, isLibrary, ownerProjectId, usingProjectId]);
+  }, [filters, refresh, isLibrary, ownerProjectId, usingProjectId]);
 
   useEffect(() => {
     setLegacy(null);
@@ -264,7 +265,7 @@ export default function ReviewMemoryPage() {
     Object.entries(patch).forEach(([key, value]) => value ? query.set(key, value) : query.delete(key));
     query.delete('sourceId');
     navigate({ pathname: location.pathname, search: query.toString(), hash: location.hash });
-    changeFilter(patch.tab === 'projects' && view === 'USED' ? { state: '' } : {});
+    changeFilter({});
   });
   const openDrawer = (initial) => {
     drawerSequence.current += 1;
@@ -318,21 +319,14 @@ export default function ReviewMemoryPage() {
       )
     },
     {
-      title: isLibrary ? '已添加项目' : '本项目关联',
+      title: '已添加项目',
       width: 150,
-      render: (_, record) => isLibrary ? (
+      render: (_, record) => (
         <div>
           <Text>{record.activeBindingCount} 个项目</Text>
           {record.usingProjectIds?.map((id) => <div key={id}>{projectLabel(id)}</div>)}
           {record.usingProjectsTruncated && <Text type="secondary">仅展示前 3 个项目</Text>}
         </div>
-      ) : (
-        <>
-          <Tag color={record.binding?.state === 'ACTIVE' ? 'green' : 'default'}>
-            {record.binding?.state === 'ACTIVE' ? '已关联' : '已解除 / 未关联'}
-          </Tag>
-          <div>{record.binding?.pathGlobs?.join('、') || '不限路径'}</div>
-        </>
       )
     },
     {
@@ -347,9 +341,8 @@ export default function ReviewMemoryPage() {
       render: (_, record) => (
         <Space wrap>
           <Button onClick={() => openDrawer({ mode: 'view', sourceId: record.id, projectId: isLibrary ? String(record.projectId) : projectId })}>查看</Button>
-          {!isLibrary && <Button onClick={() => openDrawer({ mode: 'binding', source: record })}>
-            本项目关联
-          </Button>}
+          <Button onClick={() => openDrawer({ mode: 'projects', source: record })}>管理使用项目</Button>
+          {record.origin === 'FEEDBACK' && record.sourceFeedbackId && <Button onClick={() => openDrawer({ mode: 'feedback', projectId: String(record.projectId), feedbackId: record.sourceFeedbackId })}>查看来源反馈</Button>}
         </Space>
       )
     }
@@ -421,27 +414,15 @@ export default function ReviewMemoryPage() {
         <Alert type="warning" title="项目参数无效，请重新选择项目。" />
       )}
       {!isLibrary && !projectId ? (
-        <Empty className="memory-empty" description="先选择项目，再查看或维护资料" />
+        <Empty className="memory-empty" description="先选择项目，再配置使用资料" />
       ) : (
         <>
           {!isLibrary && <MemoryInjectionSettings key={`${projectId}-${settingsReset}`} projectId={projectId}
-            onDirtyChange={handleSettingsDirty} onBusyChange={handleSettingsBusy} />}
-          {!isLibrary && <Tabs
-            aria-label="资料视图"
-            style={feedbackView ? { display: 'none' } : undefined}
-            activeKey={view}
-            items={[
-              { key: 'OWNED', label: '维护资料' },
-              { key: 'USED', label: '本项目使用' }
-            ]}
-            onChange={(next) =>
-              requestLeave(() => {
-                setView(next);
-                changeFilter({ state: '' });
-              })
-            }
-          />}
-          <Tabs
+            onDirtyChange={handleSettingsDirty} onBusyChange={handleSettingsBusy} onSettingsChange={handleSettingsChange} />}
+          {!isLibrary && <Tabs aria-label="项目使用配置视图" activeKey={caseTab}
+            items={[{ key: 'saved', label: '项目资料' }, { key: 'feedbacks', label: '待确认反馈' }]}
+            onChange={(next) => requestLeave(() => setCaseTab(next))} />}
+          {isLibrary && <Tabs
             activeKey={category}
             items={CATEGORIES}
             onChange={(next) =>
@@ -452,12 +433,14 @@ export default function ReviewMemoryPage() {
                 setSearch('');
               })
             }
-          />
-          {!isLibrary && category === 'cases' && <Tabs aria-label="踩坑案例视图" activeKey={caseTab}
-            items={[{ key: 'saved', label: '已沉淀' }, { key: 'feedbacks', label: '待确认反馈' }]}
-            onChange={(next) => requestLeave(() => setCaseTab(next))} />}
+          />}
+
           {feedbackView ? <MemoryFeedbackList key={projectId} projectId={projectId} refresh={refresh}
-            onOpen={(feedbackId) => openDrawer({ mode: 'feedback', feedbackId })} /> : <>
+            onOpen={(feedbackId) => openDrawer({ mode: 'feedback', feedbackId })} /> : !isLibrary ? (
+            <MemoryProjectBindings key={projectId} projectId={projectId} refresh={refresh}
+              memoryEnabled={projectSettings?.projectId === projectId ? projectSettings.settings?.enabled : null}
+              projectLabel={projectLabel} onOpen={openDrawer} onAdd={() => openDrawer({ mode: 'candidates' })} />
+          ) : <>
           {isLibrary && <div className="memory-toolbar memory-top-space">
             {[['ownerProjectId', '归属项目筛选', ownerProjectId], ['usingProjectId', '使用项目筛选', usingProjectId]].map(([key, label, value]) => (
               <label className="memory-project-select" key={key}>
@@ -480,7 +463,6 @@ export default function ReviewMemoryPage() {
             />
             <Select
               aria-label="资料状态筛选"
-              disabled={!isLibrary && view === 'USED'}
               allowClear
               value={filters.state || undefined}
               placeholder="全部状态"
@@ -524,14 +506,10 @@ export default function ReviewMemoryPage() {
           </div>
           <div className="memory-toolbar memory-list-actions">
             <Text type="secondary">
-              {isLibrary ? '集中维护各项目资料；共享及添加项目不代表本次审查会加载。' : view === 'OWNED'
-                ? '维护本项目资料；解除自关联不删除资料。'
-                : '仅显示有效资料的 ACTIVE 关联；已解除的共享资料可从共享库恢复。'}
+              集中维护各项目资料；共享及添加项目不代表本次审查会加载。
             </Text>
             <Space wrap>
-              {!isLibrary && <Button onClick={() => openDrawer({ mode: 'shared' })}>从共享库关联</Button>}
-              {(isLibrary || view === 'OWNED') && (
-                <>
+              <>
                   <Button
                     aria-label="上传资料"
                     icon={<UploadOutlined />}
@@ -547,8 +525,7 @@ export default function ReviewMemoryPage() {
                   >
                     新建条目
                   </Button>
-                </>
-              )}
+              </>
             </Space>
           </div>
           {error && (
@@ -571,9 +548,7 @@ export default function ReviewMemoryPage() {
                 ? '加载失败，请重试'
                 : filters.keyword || filters.state || filters.targetType || filters.issueType
                   ? '没有符合筛选条件的资料'
-                  : !isLibrary && view === 'USED'
-                    ? '暂无有效关联，可从共享库关联'
-                    : '暂无该类型资料，可以上传或新建'
+                  : '暂无该类型资料，可以上传或新建'
             }}
             pagination={{
               current: filters.pageNo,
@@ -632,7 +607,12 @@ export default function ReviewMemoryPage() {
         <MemoryFeedbackDrawer key={`${drawer.projectId || projectId}-${drawer.key}`} projectId={drawer.projectId || projectId}
           feedbackId={drawer.feedbackId} onClose={() => requestLeave(() => {})}
           onDirtyChange={handleDirty} onBusyChange={handleBusy} onSaved={handleSaved} />
-      ) : drawer && ['shared', 'binding'].includes(drawer.mode) ? (
+      ) : drawer?.mode === 'projects' ? (
+        <MemorySourceProjectsDrawer key={drawer.key} initial={drawer}
+          projectLabel={projectLabel} projectOptions={projectOptions} projectLoading={projectLoading}
+          projectError={projectError} onProjectSearch={setProjectSearch}
+          onClose={() => requestLeave(() => {})} onDirtyChange={handleDirty} onBusyChange={handleBusy} onSaved={handleSaved} />
+      ) : drawer && ['candidates', 'binding'].includes(drawer.mode) ? (
         <MemoryAssociationDrawer
           key={`${projectId}-${drawer.key}`}
           projectId={drawer.projectId || projectId}
@@ -661,7 +641,7 @@ export default function ReviewMemoryPage() {
             projectLabel={projectLabel}
             onViewFeedback={(feedbackId) => requestLeave(() => openDrawer({ mode: 'feedback', feedbackId, projectId: drawer.projectId || projectId }))}
             onManageBinding={(source) =>
-              requestLeave(() => openDrawer({ mode: 'binding', source, projectId: isLibrary ? String(source.projectId) : projectId }))
+              requestLeave(() => openDrawer({ mode: isLibrary ? 'projects' : 'binding', source, projectId: isLibrary ? String(source.projectId) : projectId }))
             }
           />
         )

@@ -104,3 +104,16 @@ export function publicationError(entry) {
       .join('；');
   return null;
 }
+
+export function sourceUseProblem(source, projectId, hasActiveEntries) {
+  if (!source) return '资料已缺失，无法修改关系';
+  if (source.state !== 'PUBLISHED') return `资料${STATE_LABELS[source.state] || '未发布'}`;
+  if (source.replacementOfId && source.confirmedAt === null) return '替换草稿尚未首次发布';
+  if (String(source.projectId) !== String(projectId)) {
+    if (source.origin === 'FEEDBACK' || ['PITFALL', 'INCIDENT'].includes(source.kind))
+      return '案例仅限归属项目使用';
+    if (source.visibility !== 'SHARED') return '私有资料不能跨项目使用';
+  }
+  if (hasActiveEntries === false) return '无已发布章节';
+  return null;
+}

@@ -30,6 +30,14 @@ export function listLibrarySources(filters, signal) {
   return request(`/api/review-memory/sources?${query}`, { signal });
 }
 
+export function listSourceProjects(sourceId, filters, signal) {
+  return request(`/api/review-memory/sources/${sourceId}/projects?${new URLSearchParams(filters)}`, { signal });
+}
+
+export function listProjectBindings(projectId, filters, signal) {
+  return request(`${root(projectId)}/bindings?${new URLSearchParams(filters)}`, { signal });
+}
+
 export function getSource(projectId, sourceId, signal) {
   return request(`${root(projectId)}/sources/${sourceId}`, { signal });
 }

@@ -761,17 +761,17 @@ export default function MemorySourceDrawer({
                         disabled={Boolean(busy)}
                         onClick={() =>
                           confirmAction(
-                            '全局停用这份资料？',
+                            '停用资料并影响全部使用项目？',
                             () =>
                               changeSource(`sources/${source.id}/state`, 'PUT', {
                                 state: 'DISABLED',
                                 expectedVersion: source.version
                               }),
-                            '停用后不参与新的记忆检索；历史任务不变。'
+                            '所有使用项目均无法在后续审查中检索这份资料；历史任务不变。'
                           )
                         }
                       >
-                        全局停用资料
+                        停用资料
                       </Button>
                     )}
                     <Button
@@ -779,17 +779,17 @@ export default function MemorySourceDrawer({
                       disabled={Boolean(busy)}
                       onClick={() =>
                         confirmAction(
-                          '全局逻辑删除这份资料？',
+                          '删除资料并影响全部使用项目？',
                           () =>
                             changeSource(
                               `sources/${source.id}?expectedVersion=${source.version}`,
                               'DELETE'
                             ),
-                          '资料保留用于追溯，当前没有恢复入口。'
+                          '影响全部使用项目，资料仅保留用于追溯，当前没有恢复入口。'
                         )
                       }
                     >
-                      全局删除资料
+                      删除资料
                     </Button>
                   </>
                 )}
@@ -806,7 +806,7 @@ export default function MemorySourceDrawer({
             </Paragraph>
             <Space wrap className="memory-top-space">
               <Button disabled={Boolean(busy)} onClick={() => onManageBinding(source)}>
-                {ownerOptions ? '归属项目使用范围' : '管理本项目关联'}
+                {ownerOptions ? '管理使用项目' : '项目使用范围'}
               </Button>
               {!readOnly && (
                 <Button

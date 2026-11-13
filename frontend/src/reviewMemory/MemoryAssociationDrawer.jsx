@@ -17,11 +17,13 @@ import {
 import {
   downloadOriginal,
   getBinding,
+  getSource,
+  listSources,
   getSharedSource,
   listSharedSources,
   mutateSource
 } from './api.js';
-import { KIND_OPTIONS, labelFor, TARGET_TYPE_OPTIONS, validateEntry } from './model.js';
+import { KIND_OPTIONS, labelFor, TARGET_TYPE_OPTIONS, STATE_LABELS, sourceUseProblem, validateEntry } from './model.js';
 
 const { Paragraph, Text, Title } = Typography;
 const draftFor = (binding) => ({
@@ -37,7 +39,8 @@ export default function MemoryAssociationDrawer({
   onClose,
   onDirtyChange,
   onBusyChange,
-  onSaved
+  onSaved,
+  onBack
 }) {
   const [filters, setFilters] = useState({
     kind: '',
@@ -45,6 +48,9 @@ export default function MemoryAssociationDrawer({
     pageNo: 1,
     pageSize: 20
   });
+  const [catalog, setCatalog] = useState('shared');
+  const [conflict, setConflict] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState({ items: [], total: 0 });
   const [record, setRecord] = useState(initial.source || null);
@@ -79,7 +85,10 @@ export default function MemoryAssociationDrawer({
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    listSharedSources(filters, controller.signal)
+    const request = catalog === 'owned'
+      ? listSources(projectId, { ...filters, view: 'OWNED', state: 'PUBLISHED' }, controller.signal)
+      : listSharedSources(filters, controller.signal);
+    request
       .then((next) => {
         if (!controller.signal.aborted) setPage(next);
       })
@@ -90,7 +99,7 @@ export default function MemoryAssociationDrawer({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [record, filters, retry]);
+  }, [record, filters, retry, catalog, projectId]);
 
   useEffect(() => {
     if (!record) return undefined;
@@ -100,6 +109,7 @@ export default function MemoryAssociationDrawer({
     setPreviewError(null);
     setDetail(null);
     setSnapshot(null);
+    setConflict(false);
     async function load() {
       try {
         // Only an explicit 404 means a first association. Network failures must not imply absence.
@@ -108,7 +118,9 @@ export default function MemoryAssociationDrawer({
           next = await getBinding(projectId, record.id, controller.signal);
         } catch (err) {
           if (err.status !== 404) throw err;
-          const current = await getSharedSource(record.id, controller.signal);
+          const current = String(record.projectId) === String(projectId)
+            ? await getSource(projectId, record.id, controller.signal)
+            : await getSharedSource(record.id, controller.signal);
           next = { sourceVersion: current.version, binding: null };
         }
         if (controller.signal.aborted) return;
@@ -119,7 +131,9 @@ export default function MemoryAssociationDrawer({
           setBaseline(JSON.stringify(value));
         }
         try {
-          const current = await getSharedSource(record.id, controller.signal);
+          const current = String(record.projectId) === String(projectId)
+            ? await getSource(projectId, record.id, controller.signal)
+            : await getSharedSource(record.id, controller.signal);
           if (!controller.signal.aborted) setDetail(current);
         } catch (err) {
           if (err.name !== 'AbortError') setPreviewError(err.message);
@@ -143,6 +157,7 @@ export default function MemoryAssociationDrawer({
       setBaseline(JSON.stringify(value));
       setRecord(next);
       setError(null);
+      setSaved(false);
     };
     if (dirty)
       Modal.confirm({
@@ -154,8 +169,19 @@ export default function MemoryAssociationDrawer({
     else action();
   }
 
+  function requestRefresh() {
+    if (busy || loading) return;
+    if (!record) { setRetry((v) => v + 1); return; }
+    Modal.confirm({
+      title: '保留输入并刷新关联版本？',
+      content: '请核对最新状态后再重试；不会自动重新提交。',
+      okText: '刷新版本', cancelText: '取消', onOk: () => setRetry((v) => v + 1)
+    });
+  }
+
   async function save(state) {
-    if (!snapshot || busy) return;
+    if (!snapshot || busy || loading || conflict) return;
+    if (state === 'ACTIVE' && useProblem) return;
     const value = state === 'DISABLED' ? draftFor(snapshot.binding) : draft;
     const problem = validateEntry({
       ...value,
@@ -168,6 +194,7 @@ export default function MemoryAssociationDrawer({
       return;
     }
     setBusy(true);
+    setSaved(false);
     onBusyChange('save');
     setError(null);
     try {
@@ -179,11 +206,13 @@ export default function MemoryAssociationDrawer({
       });
       if (!mounted.current) return;
       setSnapshot(next);
+      setDetail((current) => current ? { ...current, version: next.sourceVersion } : current);
+      setSaved(true);
       setDraft(value);
       setBaseline(JSON.stringify(value));
       onSaved();
     } catch (err) {
-      if (mounted.current) setError(err);
+      if (mounted.current) { setError(err); setConflict(err.status === 409); }
     } finally {
       if (mounted.current) {
         setBusy(false);
@@ -192,11 +221,17 @@ export default function MemoryAssociationDrawer({
     }
   }
 
+  const saveLabel = snapshot?.binding?.state === 'ACTIVE' ? '保存使用范围'
+    : snapshot?.binding ? '恢复到该项目' : '添加到该项目';
+  const useProblem = !detail || detail.id !== record?.id ? '资料当前不可引用，不能添加或恢复'
+    : detail.version !== snapshot?.sourceVersion ? '资料版本已变化，请刷新版本后核对'
+      : sourceUseProblem(detail, projectId, detail.entries.some((entry) => entry.state === 'ACTIVE'));
+
   return (
     <Drawer
       open
-      title={initial.mode === 'shared' ? '从共享库关联' : '本项目关联管理'}
-      size={880}
+      title={initial.mode === 'candidates' ? '添加记忆资料' : '项目使用范围'}
+      size="min(880px, 100vw)" styles={{ wrapper: { maxWidth: '100vw', minWidth: 0 } }}
       className="memory-source-drawer"
       onClose={onClose}
       mask={{ closable: !busy }}
@@ -204,15 +239,16 @@ export default function MemoryAssociationDrawer({
       footer={
         <Space wrap>
           <Button onClick={onClose}>关闭</Button>
-          {record && initial.mode === 'shared' && (
+          {onBack && <Button disabled={busy || loading} onClick={onBack}>返回使用项目</Button>}
+          {record && initial.mode === 'candidates' && (
             <Button disabled={busy || loading} onClick={() => select(null)}>
-              返回共享目录
+              返回资料目录
             </Button>
           )}
         </Space>
       }
     >
-      <Paragraph>当前使用项目：{projectName}。本页只修改本项目的关联，不修改共享正文。</Paragraph>
+      <Paragraph>使用项目：{projectName}。只修改该项目的使用范围，资料正文由归属项目维护。</Paragraph>
       {error && (
         <Alert
           type="error"
@@ -221,34 +257,29 @@ export default function MemoryAssociationDrawer({
           action={
             <Button
               disabled={busy || loading}
-              onClick={() => {
-                if (record)
-                  Modal.confirm({
-                    title: '保留输入并刷新关联版本？',
-                    content: '请核对最新状态后再重试；不会自动重新提交。',
-                    okText: '刷新版本',
-                    cancelText: '取消',
-                    onOk: () => setRetry((v) => v + 1)
-                  });
-                else setRetry((v) => v + 1);
-              }}
+              onClick={requestRefresh}
             >
               重试 / 刷新版本
             </Button>
           }
         />
       )}
+      {dirty && <Tag color="gold">使用范围有未保存修改</Tag>}
+      {saved && !dirty && <Alert type="success" title="本项目关系已保存；其他项目的已保存关系保留" />}
       <Spin spinning={loading}>
         {!record ? (
           <>
-            <div className="memory-toolbar">
+            <Select aria-label="资料目录" value={catalog} className="memory-top-space"
+              options={[{ value: 'shared', label: '已发布共享资料' }, { value: 'owned', label: '本项目已发布资料' }]}
+              onChange={(value) => { setCatalog(value); setFilters((v) => ({ ...v, kind: '', pageNo: 1 })); }} />
+            <div className="memory-toolbar memory-top-space">
               <Select
                 aria-label="共享资料类型"
                 value={filters.kind || undefined}
                 allowClear
                 placeholder="全部共享类型"
                 options={KIND_OPTIONS.filter((item) =>
-                  ['STANDARD', 'ARCHITECTURE', 'SKILL'].includes(item.value)
+                  catalog === 'owned' || ['STANDARD', 'ARCHITECTURE', 'SKILL'].includes(item.value)
                 )}
                 onChange={(kind) => setFilters((v) => ({ ...v, kind: kind || '', pageNo: 1 }))}
               />
@@ -273,24 +304,24 @@ export default function MemoryAssociationDrawer({
               loading={loading}
               scroll={{ x: 570 }}
               columns={[
-                { title: '共享资料', dataIndex: 'title' },
+                { title: '资料名称', dataIndex: 'title' },
                 {
                   title: '类型',
                   dataIndex: 'kind',
                   render: (kind) => labelFor(KIND_OPTIONS, kind)
                 },
                 {
-                  title: '维护项目',
+                  title: '归属项目',
                   dataIndex: 'projectId',
                   render: projectLabel
                 },
                 {
                   title: '操作',
-                  render: (_, item) => <Button onClick={() => select(item)}>预览 / 关联</Button>
+                  render: (_, item) => <Button onClick={() => select(item)}>预览 / 添加</Button>
                 }
               ]}
               locale={{
-                emptyText: error ? '加载失败，请重试' : '暂无已发布共享资料'
+                emptyText: error ? '加载失败，请重试' : '暂无该目录的已发布资料'
               }}
               pagination={{
                 current: filters.pageNo,
@@ -303,33 +334,36 @@ export default function MemoryAssociationDrawer({
           </>
         ) : (
           <>
-            <Title level={4}>{record.title}</Title>
+            <Title level={4}>{detail?.title || record.title}</Title>
+            <Tag>{STATE_LABELS[detail?.state || record.state]}</Tag>
             <Paragraph>
-              维护项目：{projectLabel(record.projectId)} · 来源 v
+              归属项目：{projectLabel(record.projectId)} · 来源 v
               {snapshot?.sourceVersion || record.version}
             </Paragraph>
             <Tag color={snapshot?.binding?.state === 'ACTIVE' ? 'green' : 'default'}>
               {snapshot?.binding?.state === 'ACTIVE'
-                ? '本项目已关联'
+                ? '已添加'
                 : snapshot?.binding
-                  ? '本项目已解除'
-                  : '本项目尚未关联'}
+                  ? '已移除'
+                  : '尚未添加'}
             </Tag>
             {previewError && (
               <Alert
                 className="memory-top-space"
                 type="warning"
-                title="共享正文不可预览"
-                description={`${previewError}；已有关系仍可解除。私有自有资料请返回维护资料查看正文。`}
+                title="资料正文不可预览"
+                description={`${previewError}；已有关系仍可移除，添加或恢复需先满足资料条件。`}
               />
             )}
             {snapshot && (
               <>
+                {useProblem && <Alert type="warning" className="memory-top-space" title={useProblem} />}
                 <Alert
                   className="memory-top-space"
                   type="info"
-                  title="关联范围与章节范围取交集；留空不限，“通用”是独立端。关联不会立即触发审查。"
+                  title="项目范围与章节范围取交集；实际按本次变更匹配。添加资料不会开启记忆或立即触发审查。"
                 />
+                <Button className="memory-top-space" disabled={busy || loading} onClick={requestRefresh}>刷新关联状态</Button>
                 <Form layout="vertical" disabled={busy || loading}>
                   <Form.Item label="本项目适用端">
                     <Select
@@ -365,32 +399,29 @@ export default function MemoryAssociationDrawer({
                   <Space wrap>
                     <Button
                       type="primary"
-                      disabled={loading}
+                      aria-label={saveLabel}
+                      disabled={loading || conflict || Boolean(useProblem)}
                       loading={busy}
                       onClick={() => save('ACTIVE')}
                     >
-                      {snapshot.binding?.state === 'ACTIVE'
-                        ? '保存本项目范围'
-                        : snapshot.binding
-                          ? '恢复本项目关联'
-                          : '确认关联到本项目'}
+                      {saveLabel}
                     </Button>
                     {snapshot.binding?.state === 'ACTIVE' && (
                       <Button
                         danger
-                        disabled={busy || loading}
+                        disabled={busy || loading || conflict}
                         onClick={() =>
                           Modal.confirm({
-                            title: '仅解除本项目关联？',
+                            title: '仅从该项目移除？',
                             content:
-                              '其他项目和共享资料保留；本地未保存范围将丢弃，恢复时使用已保存范围。',
-                            okText: '解除本项目关联',
+                              '其他项目的关系和资料正文保留；本地未保存范围将丢弃，恢复时使用已保存范围。',
+                            okText: '从该项目移除',
                             cancelText: '取消',
                             onOk: () => save('DISABLED')
                           })
                         }
                       >
-                        解除本项目关联
+                        从该项目移除
                       </Button>
                     )}
                   </Space>
@@ -405,7 +436,7 @@ export default function MemoryAssociationDrawer({
                   setBusy(true);
                   onBusyChange('save');
                   try {
-                    await downloadOriginal(null, detail);
+                    await downloadOriginal(String(record.projectId) === String(projectId) ? projectId : null, detail);
                   } catch (err) {
                     if (mounted.current) setError(err);
                   } finally {

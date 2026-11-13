@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Space, Switch, Tag, Typography } from 'antd';
 import { getMemorySettings, saveMemorySettings } from './api.js';
 
-export default function MemoryInjectionSettings({ projectId, onDirtyChange, onBusyChange }) {
+export default function MemoryInjectionSettings({ projectId, onDirtyChange, onBusyChange, onSettingsChange }) {
   const [settings, setSettings] = useState(null);
   const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -15,6 +15,7 @@ export default function MemoryInjectionSettings({ projectId, onDirtyChange, onBu
   const saveController = useRef(null);
   const dirty = Boolean(settings && settings.enabled !== enabled);
 
+  useEffect(() => { onSettingsChange?.(settings); }, [settings, onSettingsChange]);
   useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => {
     saveController.current?.abort();
