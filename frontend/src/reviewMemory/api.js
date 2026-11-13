@@ -67,6 +67,14 @@ export function listMemoryFeedbacks(projectId, filters, signal) {
   return request(`${root(projectId)}/feedbacks?${query}`, { signal });
 }
 
+export function listGlobalMemoryFeedbacks(filters, signal) {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== '' && value != null) query.set(key, String(value));
+  });
+  return request(`/api/review-memory/feedbacks?${query}`, { signal });
+}
+
 export function getMemoryFeedback(projectId, feedbackId, signal) {
   return request(`${root(projectId)}/feedbacks/${feedbackId}`, { signal });
 }

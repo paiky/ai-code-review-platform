@@ -450,7 +450,7 @@ export default function ReviewMemoryPage() {
         onChange={(tab) => updateQuery({ tab })} />
       {projectError && <Alert type="error" title={`项目加载失败：${projectError}`}
         action={<Button onClick={() => setProjectRetry((value) => value + 1)}>重试</Button>} />}
-      {(isProjects || feedbackView) && projectPicker}
+      {isProjects && projectPicker}
       {(isProjects || feedbackView) && rawProjectId && !projectId && <Alert type="warning" title="项目参数无效，请重新选择项目。" />}
       {activeTab === 'upload' ? <MemoryUploadPanel key={uploadReset}
         projectOptions={projectOptions} projectLoading={projectLoading} onProjectSearch={setProjectSearch} projectLabel={projectLabel}
@@ -511,12 +511,9 @@ export default function ReviewMemoryPage() {
         <Tabs aria-label="案例与打标视图" activeKey={caseTab}
           items={[{ key: 'feedbacks', label: '待整理打标' }, { key: 'saved', label: '已沉淀案例' }]}
           onChange={(next) => requestLeave(() => setCaseTab(next))} />
-        {feedbackView ? <>
-          <Paragraph type="secondary">先选择项目查看人工误报反馈；保存打标不等于已沉淀案例。全局打标筛选后续开放。</Paragraph>
-          {projectId ? <MemoryFeedbackList key={projectId} projectId={projectId} refresh={refresh}
-            onOpen={(feedbackId) => openDrawer({ mode: 'feedback', feedbackId, projectId })} /> :
-            <Empty className="memory-empty" description="请选择反馈项目，查看并整理已有打标" />}
-        </> : sourceList}
+        {feedbackView ? <MemoryFeedbackList key={`global-${projectId}`} globalView projectId={projectId} refresh={refresh}
+          projectOptions={projectOptions} projectLoading={projectLoading} onProjectSearch={setProjectSearch} projectLabel={projectLabel}
+          onOpen={(feedbackId, actualProjectId) => openDrawer({ mode: 'feedback', feedbackId, projectId: String(actualProjectId) })} /> : sourceList}
       </> : sourceList}
       {drawer?.mode === 'feedback' ? (
         <MemoryFeedbackDrawer key={`${drawer.projectId || projectId}-${drawer.key}`} projectId={drawer.projectId || projectId}

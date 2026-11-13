@@ -185,7 +185,7 @@ export default function MemoryFeedbackDrawer({
       }
     >
       <Alert type="info" showIcon title="确认后沉淀为本项目私有案例"
-        description="反馈已独立保存，关闭不会撤销反馈。案例用于提示下次查证，不能直接证明代码安全；自动审查读取将在后续阶段接入。" />
+        description="反馈已独立保存，关闭不会撤销反馈。案例用于提示下次查证，不能直接证明代码安全；项目开启记忆且匹配适用范围与预算时才可能用于后续 Agent Review。" />
       {loading && <Paragraph role="status">正在加载反馈与案例…</Paragraph>}
       {error && <Alert type="error" showIcon title={error} />}
       {conflict && <Alert type="warning" title="当前输入已保留。请刷新最新反馈和案例，核对差异后重新确认。" />}

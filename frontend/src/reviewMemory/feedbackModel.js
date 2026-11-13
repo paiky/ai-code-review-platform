@@ -34,10 +34,11 @@ export const WRITEBACK_LABELS = {
 
 export function memoryFeedbackState(row) {
   if (isWritebackPending(row.writebackState)) return WRITEBACK_LABELS[row.writebackState];
+  if (row.sourceState === 'DELETED') return '案例已删除';
+  if (row.sourceState === 'DISABLED') return '已失效 / 停用';
   if (row.writebackState === 'FAILED') return row.sourceState === 'PUBLISHED' ? '更新失败，原案例仍发布' : '回写失败';
   if (row.sourceState === 'PUBLISHED') return '已沉淀';
-  if (row.sourceState === 'DELETED') return '案例已删除';
-  if (row.sourceState === 'DISABLED' || row.writebackState === 'CANCELLED_STALE_SOURCE') return '已失效 / 停用';
+  if (row.writebackState === 'CANCELLED_STALE_SOURCE') return '已失效 / 停用';
   if (row.status === 'CONVERTED') return '已转为旧项目策略';
   return '尚未沉淀';
 }
