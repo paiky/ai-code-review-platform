@@ -42,6 +42,10 @@ export function getSource(projectId, sourceId, signal) {
   return request(projectId ? `${root(projectId)}/sources/${sourceId}` : `/api/review-memory/sources/${sourceId}`, { signal });
 }
 
+export function getMemoryCapabilities(signal) {
+  return request('/api/review-memory/capabilities', { signal });
+}
+
 export function getMemorySettings(projectId, signal) {
   return request(`${root(projectId)}/settings`, { signal });
 }
@@ -100,7 +104,7 @@ export function withdrawFeedback(feedbackId) {
 }
 
 export function getSourceImpact(projectId, sourceId) {
-  return request(`${root(projectId)}/sources/${sourceId}/impact`);
+  return request(`${projectId ? root(projectId) : '/api/review-memory'}/sources/${sourceId}/impact`);
 }
 
 export function getBinding(projectId, sourceId, signal) {
@@ -120,7 +124,7 @@ export function getSharedSource(sourceId, signal) {
 }
 
 export function mutateSource(projectId, suffix, method, payload) {
-  return request(`${root(projectId)}/${suffix}`, {
+  return request(`${projectId ? root(projectId) : '/api/review-memory'}/${suffix}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
     ...(payload == null ? {} : { body: JSON.stringify(payload) })
@@ -131,7 +135,7 @@ export function uploadSource(projectId, file, metadata, signal) {
   const form = new FormData();
   form.append('file', file);
   form.append('metadata', JSON.stringify(metadata));
-  return request(`${root(projectId)}/uploads`, {
+  return request(`${projectId ? root(projectId) : '/api/review-memory'}/uploads`, {
     method: 'POST',
     body: form,
     signal

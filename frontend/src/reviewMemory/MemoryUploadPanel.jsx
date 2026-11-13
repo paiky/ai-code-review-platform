@@ -11,9 +11,8 @@ const targets = [{ value: '', label: '不限' }, ...TARGET_TYPE_OPTIONS];
 const states = { pending: '待上传', uploading: '上传与解析中', succeeded: '已上传（生成草稿）', failed: '上传失败', unknown: '结果待确认' };
 
 export default function MemoryUploadPanel({
-  projectOptions, projectLoading, onProjectSearch, projectLabel, onDirtyChange, onBusyChange, onSaved, onPreview
+  libraryReady, onDirtyChange, onBusyChange, onSaved, onPreview
 }) {
-  const [projectId, setProjectId] = useState('');
   const [metadata, setMetadata] = useState({ kind: 'STANDARD', title: '', description: '' });
   const [labels, setLabels] = useState(() => blankEntry('STANDARD'));
   const [rows, setRows] = useState([]);
@@ -26,7 +25,6 @@ export default function MemoryUploadPanel({
   const running = useRef(false);
   const stop = useRef(false);
   const dirty = touched || rows.some((row) => row.status !== 'succeeded');
-  const projectLocked = rows.some((row) => row.status !== 'pending');
 
   useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => {
@@ -61,8 +59,8 @@ export default function MemoryUploadPanel({
   async function submit(onlyId) {
     if (running.current) return;
     const selected = rows.filter((row) => onlyId ? row.id === onlyId && row.status === 'failed' : row.status === 'pending');
-    if (!projectId || !selected.length) {
-      setError(new Error(!projectId ? '请选择归属项目。' : '没有待上传文件；失败项请逐项检查后重试。'));
+    if (!libraryReady || !selected.length) {
+      setError(new Error(!libraryReady ? '公共资料创建尚未就绪，请完成迁移并重新读取。' : '没有待上传文件；失败项请逐项检查后重试。'));
       return;
     }
     const { heading: _heading, content: _content, ...scope } = labels;
@@ -86,8 +84,8 @@ export default function MemoryUploadPanel({
         changeRow(row.id, { status: 'uploading', error: null, submitted: row.metadata });
         controller.current = new AbortController();
         try {
-          const source = await uploadSource(projectId, row.file, row.metadata, controller.current.signal);
-          if (!source?.id || String(source.projectId) !== String(projectId)) throw new Error('响应缺少有效草稿信息');
+          const source = await uploadSource(null, row.file, row.metadata, controller.current.signal);
+          if (!source?.id || source.projectId !== null || source.assetScope !== 'LIBRARY') throw new Error('响应缺少有效公共草稿信息');
           if (!mounted.current) break;
           changeRow(row.id, { status: 'succeeded', source });
           onSaved();
@@ -122,7 +120,7 @@ export default function MemoryUploadPanel({
         <div className="memory-upload-footer">
           <Text type="secondary">MD / TXT ≤ 1 MiB · DOCX / PDF ≤ 5 MiB<br />Skill 仅支持 Markdown；PDF 最多 100 页，不支持扫描件 OCR。</Text>
           <Space wrap>
-            <Button aria-label="开始上传" type="primary" disabled={busy} onClick={() => submit()}>开始上传</Button>
+            <Button aria-label="开始上传" type="primary" disabled={busy || !libraryReady} onClick={() => submit()}>开始上传</Button>
             {busy && <Button aria-label="停止后续上传" disabled={stopping} onClick={() => { stop.current = true; setStopping(true); }}>停止后续上传</Button>}
           </Space>
         </div>
@@ -130,13 +128,6 @@ export default function MemoryUploadPanel({
       </Card>
       <Card title="批次默认设置" className="memory-upload-settings">
         <Form layout="vertical" disabled={busy}>
-          <Form.Item label="归属项目" required extra={projectLocked ? '已有上传记录，清空队列后可切换归属项目。' : null}>
-            <Select aria-label="归属项目" placeholder="搜索并选择归属项目" value={projectId || undefined} disabled={busy || projectLocked}
-              showSearch={{ filterOption: false, onSearch: onProjectSearch }} loading={projectLoading}
-              options={projectId && !projectOptions.some((item) => item.value === projectId)
-                ? [{ value: projectId, label: projectLabel(projectId) }, ...projectOptions] : projectOptions}
-              onChange={(value) => { setProjectId(value); setTouched(true); }} />
-          </Form.Item>
           <Form.Item label="资料类型">
             <Select aria-label="资料类型" value={metadata.kind}
               options={kinds}
@@ -161,7 +152,7 @@ export default function MemoryUploadPanel({
           <MemoryEntryFields kind={metadata.kind} content={false} showTargetType={false} value={labels}
             disabled={busy} onChange={(value) => { setLabels(value); setTouched(true); }} />
         </> }]} />
-        <Paragraph type="secondary" className="memory-top-space">创建后默认添加到归属项目。上传生成草稿，核对后再发布；不会自动共享或开启记忆。</Paragraph>
+        <Paragraph type="secondary" className="memory-top-space">上传无需选择项目。核对并发布后，到“项目关联”选择使用项目；不会自动关联或开启记忆。</Paragraph>
       </Card>
     </div>
     <Card title={`文件队列（${rows.length} / 20）`} className="memory-top-space"
@@ -188,7 +179,7 @@ export default function MemoryUploadPanel({
           </> },
           { title: '操作', width: 210, render: (_, row) => <Space wrap>
             {row.source && <Button disabled={busy} onClick={() => onPreview(row.source)}>核对草稿</Button>}
-            {row.status === 'failed' && <Button disabled={busy} onClick={() => submit(row.id)}>重试此文件</Button>}
+            {row.status === 'failed' && <Button disabled={busy || !libraryReady} onClick={() => submit(row.id)}>重试此文件</Button>}
             <Button disabled={busy} onClick={() => setRows((current) => current.filter((item) => item.id !== row.id))}>移除</Button>
           </Space> }
         ]} />

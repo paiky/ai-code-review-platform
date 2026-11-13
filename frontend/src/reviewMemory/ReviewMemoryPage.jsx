@@ -18,7 +18,7 @@ import {
 import { PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { fetchApi } from '../api.js';
 import { registerSettingsNavigationGuard } from '../settingsNavigation.js';
-import { listLibrarySources } from './api.js';
+import { getMemoryCapabilities, listLibrarySources } from './api.js';
 import {
   ISSUE_OPTIONS,
   KIND_OPTIONS,
@@ -63,8 +63,8 @@ export default function ReviewMemoryPage() {
   const [projectError, setProjectError] = useState(null);
   const [projectRetry, setProjectRetry] = useState(0);
   const [caseTab, setCaseTab] = useState('feedbacks');
-  const [projectView, setProjectView] = useState('saved');
-  const feedbackView = activeTab === 'cases' ? caseTab === 'feedbacks' : isProjects && projectView === 'feedbacks';
+  const [projectFeedbackOpen, setProjectFeedbackOpen] = useState(false);
+  const feedbackView = activeTab === 'cases' && caseTab === 'feedbacks';
   const showList = isLibrary && !feedbackView;
   const [uploadReset, setUploadReset] = useState(0);
   const uploadDirtyRef = useRef(false);
@@ -87,6 +87,9 @@ export default function ReviewMemoryPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [refresh, setRefresh] = useState(0);
+  const [capabilities, setCapabilities] = useState(null);
+  const [capabilityError, setCapabilityError] = useState(null);
+  const [capabilityRetry, setCapabilityRetry] = useState(0);
   const [drawer, setDrawer] = useState(() => {
     return /^[1-9]\d*$/.test(linkedSourceId)
       ? { mode: 'view', sourceId: linkedSourceId, projectId, library: !projectId, key: 0 } : null;
@@ -113,6 +116,18 @@ export default function ReviewMemoryPage() {
     busyRef.current = busy;
   }, []);
   const handleSaved = useCallback(() => setRefresh((value) => value + 1), []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setCapabilities(null);
+    setCapabilityError(null);
+    getMemoryCapabilities(controller.signal).then((data) => {
+      if (!controller.signal.aborted) setCapabilities(data);
+    }).catch((err) => {
+      if (!controller.signal.aborted) setCapabilityError(err.message);
+    });
+    return () => controller.abort();
+  }, [capabilityRetry]);
 
   const discard = useCallback(() => {
     dirtyRef.current = false;
@@ -422,7 +437,7 @@ export default function ReviewMemoryPage() {
       <Space wrap>
         <Button icon={<ReloadOutlined />} aria-label="刷新" loading={loading} onClick={() => setRefresh((value) => value + 1)}>刷新</Button>
         {activeTab === 'library' && <Button aria-label="上传资料" icon={<UploadOutlined />} onClick={() => updateQuery({ tab: 'upload' })}>上传资料</Button>}
-        <Button aria-label="新建条目" icon={<PlusOutlined />} onClick={() => openDrawer({ mode: 'manual', kind: filters.kind || (activeTab === 'cases' ? 'PITFALL' : 'STANDARD') })}>新建条目</Button>
+        <Button aria-label="新建条目" icon={<PlusOutlined />} onClick={() => openDrawer({ mode: 'manual', kind: filters.kind || (activeTab === 'cases' ? 'PITFALL' : 'STANDARD'), library: activeTab !== 'cases' })}>新建条目</Button>
       </Space>
     </div>
     <Paragraph type="secondary">适用端汇总所有管理章节（含草稿和停用）；资料发布、项目开启且匹配本次变更后才可能采用。</Paragraph>
@@ -445,25 +460,31 @@ export default function ReviewMemoryPage() {
       <Tabs aria-label="项目记忆库页签" activeKey={activeTab}
         items={[{ key: 'upload', label: '上传资料' }, { key: 'library', label: '记忆资料' }, { key: 'cases', label: '案例与打标' }, { key: 'projects', label: '项目关联' }]}
         onChange={(tab) => updateQuery({ tab })} />
+      {(capabilityError || capabilities?.schemaReady === false) && <Alert type="warning" showIcon
+        title="公共资料创建尚未就绪"
+        description={capabilityError ? `无法确认数据库状态：${capabilityError}。请更新后端后重新读取；旧资料和案例仍可维护。` : '请完成 V60 数据库迁移后重新读取；旧资料和案例仍可维护。'}
+        action={<Button onClick={() => setCapabilityRetry((value) => value + 1)}>重新检查资料库</Button>} />}
       {projectError && <Alert type="error" title={`项目加载失败：${projectError}`}
         action={<Button onClick={() => setProjectRetry((value) => value + 1)}>重试</Button>} />}
       {isProjects && projectPicker}
       {(isProjects || feedbackView) && rawProjectId && !projectId && <Alert type="warning" title="项目参数无效，请重新选择项目。" />}
       {activeTab === 'upload' ? <MemoryUploadPanel key={uploadReset}
-        projectOptions={projectOptions} projectLoading={projectLoading} onProjectSearch={setProjectSearch} projectLabel={projectLabel}
+        libraryReady={capabilities?.schemaReady === true}
         onDirtyChange={handleUploadDirty} onBusyChange={handleUploadBusy} onSaved={handleSaved}
-        onPreview={(source) => openDrawer({ mode: 'view', sourceId: source.id, projectId: String(source.projectId) })} /> : isProjects ? (
+        onPreview={(source) => openDrawer({ mode: 'view', sourceId: source.id, library: true })} /> : isProjects ? (
         !projectId ? <Empty className="memory-empty" description="先选择项目，再配置使用资料" /> : <>
           <MemoryInjectionSettings key={`${projectId}-${settingsReset}`} projectId={projectId}
             onDirtyChange={handleSettingsDirty} onBusyChange={handleSettingsBusy} onSettingsChange={handleSettingsChange} />
-          <Tabs aria-label="项目使用配置视图" activeKey={projectView}
-            items={[{ key: 'saved', label: '项目资料' }, { key: 'feedbacks', label: '待确认反馈' }]}
-            onChange={(next) => requestLeave(() => setProjectView(next))} />
-          {feedbackView ? <MemoryFeedbackList key={projectId} projectId={projectId} refresh={refresh}
-            onOpen={(feedbackId) => openDrawer({ mode: 'feedback', feedbackId })} /> :
-            <MemoryProjectBindings key={projectId} projectId={projectId} refresh={refresh}
+          <Title level={4} className="memory-top-space">已关联资料</Title>
+          <MemoryProjectBindings key={projectId} projectId={projectId} refresh={refresh}
+              onBusyChange={handleBusy}
               memoryEnabled={projectSettings?.projectId === projectId ? projectSettings.settings?.enabled : null}
-              projectLabel={projectLabel} onOpen={openDrawer} onAdd={() => openDrawer({ mode: 'candidates' })} />}
+              projectLabel={projectLabel} onOpen={openDrawer} onAdd={() => openDrawer({ mode: 'candidates' })} />
+          <Collapse className="memory-top-space" activeKey={projectFeedbackOpen ? ['feedbacks'] : []}
+            onChange={(keys) => setProjectFeedbackOpen(keys.includes('feedbacks'))}
+            items={[{ key: 'feedbacks', label: '更多信息 · 本项目待确认反馈', children: projectFeedbackOpen &&
+              <MemoryFeedbackList key={projectId} projectId={projectId} refresh={refresh}
+                onOpen={(feedbackId) => openDrawer({ mode: 'feedback', feedbackId })} /> }]} />
           {isProjects && <Collapse
             className="memory-top-space"
             activeKey={legacyOpen ? ['legacy'] : []}
@@ -471,7 +492,7 @@ export default function ReviewMemoryPage() {
             items={[
               {
                 key: 'legacy',
-                label: '旧项目策略 · 只读来源',
+                label: '更多信息 · 旧项目策略（只读）',
                 children: (
                   <>
                     <Paragraph type="secondary">
@@ -505,6 +526,7 @@ export default function ReviewMemoryPage() {
           />}
         </>
       ) : activeTab === 'cases' ? <>
+        <Paragraph type="secondary">人工确认的误报案例会自动关联原项目，无需再手动添加；不会跨项目共享，也不会自动开启项目记忆。</Paragraph>
         <Tabs aria-label="案例与打标视图" activeKey={caseTab}
           items={[{ key: 'feedbacks', label: '待整理打标' }, { key: 'saved', label: '已沉淀案例' }]}
           onChange={(next) => requestLeave(() => setCaseTab(next))} />
@@ -543,6 +565,7 @@ export default function ReviewMemoryPage() {
             ownerLoading={projectLoading}
             onOwnerSearch={setProjectSearch}
             initial={drawer}
+            libraryReady={capabilities?.schemaReady === true}
             onClose={() => activeTab === 'upload' ? closeUploadPreview() : requestLeave(() => {})}
             onDirtyChange={handleDirty}
             onBusyChange={handleBusy}

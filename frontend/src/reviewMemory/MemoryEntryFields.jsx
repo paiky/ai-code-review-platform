@@ -42,13 +42,13 @@ export default function MemoryEntryFields({
         </>
       )}
       <div className="memory-field-grid">
-        {showTargetType && <Form.Item label="适用端" extra="留空表示本项目所有端；“通用”是独立端。">
+        {showTargetType && <Form.Item label="适用端" extra="留空不限定端；“通用”是独立端。">
           <Select
             aria-label="适用端"
             allowClear
             value={value.targetType || undefined}
             options={TARGET_TYPE_OPTIONS}
-            placeholder="本项目所有端"
+            placeholder="所有端"
             onChange={(next) => change('targetType', next || null)}
           />
         </Form.Item>}
@@ -63,7 +63,7 @@ export default function MemoryEntryFields({
           />
         </Form.Item>
       </div>
-      <Form.Item label="路径范围" extra="每行一个相对 glob，最多 8 条；留空表示整个项目。">
+      <Form.Item label="路径范围" extra="每行一个相对 glob，最多 8 条；留空不限定路径。">
         <Input.TextArea
           aria-label="路径范围"
           rows={2}

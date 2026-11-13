@@ -80,8 +80,8 @@ export default function MemorySourceProjectsDrawer({
           options={selectedProject && !projectOptions.some((item) => item.value === selectedProject)
             ? [{ value: selectedProject, label: projectLabel(selectedProject) }, ...projectOptions] : projectOptions}
           onChange={setSelectedProject} />
-        <Button type="primary" disabled={source.projectId == null || loading || Boolean(error) || Boolean(addProblem)}
-          onClick={() => setEditor({ projectId: selectedProject, binding: null })}>配置该项目范围</Button>
+        <Button type="primary" disabled={loading || Boolean(error) || Boolean(addProblem)}
+          onClick={() => setEditor({ projectId: selectedProject, binding: null })}>关联到该项目</Button>
       </div>
       {projectError && <Alert type="error" title={`项目搜索失败：${projectError}`} />}
       {addProblem && <Paragraph type="secondary">{addProblem}</Paragraph>}
@@ -97,7 +97,7 @@ export default function MemorySourceProjectsDrawer({
           { title: '使用项目', dataIndex: 'projectId', render: projectLabel },
           { title: '关系', dataIndex: 'state', render: (state) => <Tag>{state === 'ACTIVE' ? '已添加' : '已移除'}</Tag> },
           { title: '该项目适用范围', render: (_, row) => <>{row.targetType ? labelFor(TARGET_TYPE_OPTIONS, row.targetType) : '所有端'}<div>{row.pathGlobs.join('、') || '所有路径'}</div></> },
-          { title: '操作', render: (_, row) => <Button disabled={source.projectId == null || loading || Boolean(error)} onClick={() => setEditor({ projectId: String(row.projectId), binding: row })}>{row.state === 'ACTIVE' ? '修改范围 / 移除' : '查看 / 恢复'}</Button> }
+          { title: '操作', render: (_, row) => <Button disabled={loading || Boolean(error)} onClick={() => setEditor({ projectId: String(row.projectId), binding: row })}>{row.state === 'ACTIVE' ? '修改范围 / 移除' : '查看 / 恢复'}</Button> }
         ]}
         locale={{ emptyText: error ? '加载失败，请重试' : '暂无该状态的使用项目' }}
         pagination={{ current: filters.pageNo, pageSize: filters.pageSize, total: page.total, showSizeChanger: true,

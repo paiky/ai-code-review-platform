@@ -47,6 +47,7 @@ export default function MemorySourceDrawer({
   ownerLoading,
   onOwnerSearch,
   initial,
+  libraryReady,
   onClose,
   onDirtyChange,
   onBusyChange,
@@ -57,8 +58,8 @@ export default function MemorySourceDrawer({
   onLoaded
 }) {
   const [selectedOwner, setSelectedOwner] = useState(initialProjectId || '');
-  const projectId = initial.library ? null : selectedOwner;
   const [source, setSource] = useState(null);
+  const projectId = initial.library ? source?.projectId ?? null : selectedOwner;
   const [creation, setCreation] = useState(initial.mode === 'view' ? null : initial.mode);
   const [metadata, setMetadata] = useState({
     kind: initial.kind,
@@ -86,7 +87,7 @@ export default function MemorySourceDrawer({
   const dirty = creation
     ? touched
     : Boolean(editor && JSON.stringify(editor.value) !== editor.baseline);
-  const readOnly = !source?.canManage || source?.projectId === null;
+  const readOnly = !source?.canManage;
 
   useEffect(() => {
     if (source) onLoaded?.(source);
@@ -247,8 +248,8 @@ export default function MemorySourceDrawer({
   }
 
   async function saveCreation() {
-    if (!projectId) {
-      setError(new Error('请选择归属项目。'));
+    if (initial.library && projectId == null ? !libraryReady : !projectId) {
+      setError(new Error(initial.library && projectId == null ? '公共资料创建尚未就绪，请完成迁移并重新读取。' : '请选择归属项目。'));
       return;
     }
     if (creation === 'manual' && !metadata.title.trim()) {
@@ -420,6 +421,7 @@ export default function MemorySourceDrawer({
         aria-label={creation === 'upload' ? '上传并预览草稿' : '保存草稿并预览'}
         type="primary"
         loading={Boolean(busy)}
+        disabled={initial.library && projectId == null && !libraryReady}
         onClick={saveCreation}
       >
         {creation === 'upload' ? '上传并预览草稿' : '保存草稿并预览'}
@@ -453,8 +455,8 @@ export default function MemorySourceDrawer({
           ? replacement
             ? '替换资料 · 先保存新草稿'
             : creation === 'upload'
-              ? '上传项目资料'
-              : '新建项目资料'
+              ? '上传资料'
+              : '新建资料'
           : '资料详情'
       }
       size={960}
@@ -470,7 +472,7 @@ export default function MemorySourceDrawer({
         items={[{ title: '选择资料 / 录入' }, { title: '预览并确认发布' }]}
       />
       <Paragraph type="secondary" className="memory-top-space">
-        {initial.library ? '公共资料，无归属项目' : ownerOptions ? `归属项目：${projectId ? projectLabel(projectId) : '待选择'}` : `查看项目：${projectName}`} · 保存草稿或发布资料均不会立即触发审查。
+        {initial.library && projectId == null ? '公共资料，无归属项目' : ownerOptions ? `归属项目：${projectId ? projectLabel(projectId) : '待选择'}` : `查看项目：${projectName}`} · 保存草稿或发布资料均不会立即触发审查。
       </Paragraph>
       {error && (
         <Alert
@@ -548,7 +550,7 @@ export default function MemorySourceDrawer({
               />
             )}
             <Form layout="vertical" disabled={Boolean(busy)}>
-              {ownerOptions && (
+              {ownerOptions && !initial.library && (
                 <Form.Item label="归属项目" required>
                   <Select
                     aria-label="归属项目"
@@ -568,7 +570,9 @@ export default function MemorySourceDrawer({
                 <Select
                   aria-label="资料类型"
                   disabled={Boolean(replacement) || Boolean(busy)}
-                  options={KIND_OPTIONS}
+                  options={KIND_OPTIONS.filter((item) => replacement ? item.value === replacement.kind : initial.library
+                    ? ['STANDARD', 'ARCHITECTURE', 'SKILL'].includes(item.value)
+                    : ['PITFALL', 'INCIDENT'].includes(item.value))}
                   value={metadata.kind}
                   onChange={(kind) => {
                     setMetadata((current) => ({ ...current, kind }));
@@ -780,12 +784,12 @@ export default function MemorySourceDrawer({
             </div>
             <Paragraph>{source.description || '未填写简介'}</Paragraph>
             <Paragraph type="secondary">
-              {source.projectId == null ? '公共资料，无默认项目关联' : `归属项目：${projectLabel(source.projectId)}`} · {ownerOptions ? '归属项目关联' : '本项目关联'}：
+              {source.projectId == null ? '公共资料；使用项目请在“管理使用项目”查看' : `归属项目：${projectLabel(source.projectId)}`} {source.projectId != null && <>· {ownerOptions ? '归属项目关联' : '本项目关联'}：
               {source.binding?.state === 'ACTIVE' ? '已关联' : '已解除 / 未关联'} · 范围：
               {source.binding?.targetType
                 ? labelFor(TARGET_TYPE_OPTIONS, source.binding.targetType)
                 : '所有端'}{' '}
-              / {source.binding?.pathGlobs?.join('、') || '所有路径'}
+              / {source.binding?.pathGlobs?.join('、') || '所有路径'}</>}
             </Paragraph>
             <Space wrap className="memory-top-space">
               <Button disabled={Boolean(busy)} onClick={() => onManageBinding(source)}>
@@ -824,9 +828,7 @@ export default function MemorySourceDrawer({
                     ? '反馈来源只读，通过来源反馈的专用确认流程维护。'
                     : source.state === 'DELETED'
                       ? '资料已删除，只保留追溯信息。'
-                      : source.projectId == null && initial.library
-                        ? '公共资料暂为只读，独立维护入口将在后续阶段开放。'
-                        : '引用资料只读，正文由维护项目统一管理。'
+                      : '引用资料只读，请从记忆资料页进入维护。'
                 }
               />
             )}
@@ -920,7 +922,7 @@ export default function MemorySourceDrawer({
                     }
                   />
                 </Form.Item>
-                {['STANDARD', 'ARCHITECTURE', 'SKILL'].includes(source.kind) && (
+                {source.projectId != null && ['STANDARD', 'ARCHITECTURE', 'SKILL'].includes(source.kind) && (
                   <Form.Item
                     label="共享范围"
                     extra="仅已发布共享资料进入共享目录；存在其他 ACTIVE 引用时不能改回私有。"

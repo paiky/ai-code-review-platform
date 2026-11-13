@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Button,
+  Collapse,
   Drawer,
   Empty,
   Form,
@@ -222,7 +223,7 @@ export default function MemoryAssociationDrawer({
   }
 
   const saveLabel = snapshot?.binding?.state === 'ACTIVE' ? '保存使用范围'
-    : snapshot?.binding ? '恢复到该项目' : '添加到该项目';
+    : snapshot?.binding ? '恢复到该项目' : '关联到该项目';
   const useProblem = !detail || detail.id !== record?.id ? '资料当前不可引用，不能添加或恢复'
     : detail.version !== snapshot?.sourceVersion ? '资料版本已变化，请刷新版本后核对'
       : sourceUseProblem(detail, projectId, detail.entries.some((entry) => entry.state === 'ACTIVE'));
@@ -248,7 +249,7 @@ export default function MemoryAssociationDrawer({
         </Space>
       }
     >
-      <Paragraph>使用项目：{projectName}。只修改该项目的使用范围，资料正文由归属项目维护。</Paragraph>
+      <Paragraph>使用项目：{projectName}。只修改该项目的关联，资料正文在“记忆资料”中维护。</Paragraph>
       {error && (
         <Alert
           type="error"
@@ -270,7 +271,7 @@ export default function MemoryAssociationDrawer({
         {!record ? (
           <>
             <Select aria-label="资料目录" value={catalog} className="memory-top-space"
-              options={[{ value: 'shared', label: '已发布共享资料' }, { value: 'owned', label: '本项目已发布资料' }]}
+              options={[{ value: 'shared', label: '已发布公共与共享资料' }, { value: 'owned', label: '本项目已发布资料' }]}
               onChange={(value) => { setCatalog(value); setFilters((v) => ({ ...v, kind: '', pageNo: 1 })); }} />
             <div className="memory-toolbar memory-top-space">
               <Select
@@ -313,7 +314,7 @@ export default function MemoryAssociationDrawer({
                 {
                   title: '归属项目',
                   dataIndex: 'projectId',
-                  render: projectLabel
+                  render: (id) => id == null ? '公共资料' : projectLabel(id)
                 },
                 {
                   title: '操作',
@@ -337,7 +338,7 @@ export default function MemoryAssociationDrawer({
             <Title level={4}>{detail?.title || record.title}</Title>
             <Tag>{STATE_LABELS[detail?.state || record.state]}</Tag>
             <Paragraph>
-              归属项目：{projectLabel(record.projectId)} · 来源 v
+              {record.projectId == null ? '公共资料' : `归属项目：${projectLabel(record.projectId)}`} · 来源 v
               {snapshot?.sourceVersion || record.version}
             </Paragraph>
             <Tag color={snapshot?.binding?.state === 'ACTIVE' ? 'green' : 'default'}>
@@ -364,7 +365,9 @@ export default function MemoryAssociationDrawer({
                   title="项目范围与章节范围取交集；实际按本次变更匹配。添加资料不会开启记忆或立即触发审查。"
                 />
                 <Button className="memory-top-space" disabled={busy || loading} onClick={requestRefresh}>刷新关联状态</Button>
+                <Paragraph className="memory-top-space" type="secondary">当前范围：{draft.targetType ? labelFor(TARGET_TYPE_OPTIONS, draft.targetType) : '所有端'} / {draft.pathGlobs.join('、') || '所有路径'}。默认无需修改。</Paragraph>
                 <Form layout="vertical" disabled={busy || loading}>
+                  <Collapse className="memory-top-space" items={[{ key: 'scope', label: '高级范围（适用端 / 路径）', children: <>
                   <Form.Item label="本项目适用端">
                     <Select
                       aria-label="本项目适用端"
@@ -396,6 +399,7 @@ export default function MemoryAssociationDrawer({
                       }
                     />
                   </Form.Item>
+                  </> }]} />
                   <Space wrap>
                     <Button
                       type="primary"
