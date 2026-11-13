@@ -83,6 +83,68 @@ class MemorySchema(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid", str_strip_whitespace=False)
 
 
+class MemorySettings(MemorySchema):
+    enabled: bool
+    version: int = Field(ge=1)
+    schema_ready: bool = Field(alias="schemaReady")
+
+
+class MemorySettingsUpdate(MemorySchema):
+    enabled: bool = Field(strict=True)
+    expected_version: int = Field(alias="expectedVersion", gt=0, strict=True)
+
+
+class MemorySelectedSummary(MemorySchema):
+    source_id: int = Field(alias="sourceId", gt=0)
+    entry_id: int = Field(alias="entryId", gt=0)
+    binding_id: int = Field(alias="bindingId", gt=0)
+    owner_project_id: int = Field(alias="ownerProjectId", gt=0)
+    source_version: int = Field(alias="sourceVersion", gt=0)
+    entry_version: int = Field(alias="entryVersion", gt=0)
+    binding_version: int = Field(alias="bindingVersion", gt=0)
+    kind: MemoryKind
+    load_mode: LoadMode = Field(alias="loadMode")
+    content_hash: str = Field(alias="contentHash", pattern=r"^[a-f0-9]{64}$")
+    title: str = Field(max_length=160)
+    applicability: str = Field(max_length=160)
+    selection_reason: list[
+        Literal["CORE_REQUIRED", "ON_DEMAND", "ISSUE_MATCH", "PATH_MATCH", "KEYWORD_MATCH"]
+    ] = Field(alias="selectionReason", max_length=8)
+    path_sample: str | None = Field(alias="pathSample", default=None, max_length=160)
+    path_count: int = Field(alias="pathCount", ge=0)
+
+
+class MemorySnapshot(MemorySchema):
+    schema_version: Literal["review-memory-v1"] = Field(
+        default="review-memory-v1", alias="schemaVersion"
+    )
+    policy_version: int = Field(alias="policyVersion", ge=1)
+    project_id: int = Field(alias="projectId", gt=0)
+    target_type: TargetType | None = Field(alias="targetType")
+    lookup_status: Literal["DISABLED", "EMPTY", "NO_MATCH", "LOADED", "PARTIAL_LOOKUP"] = Field(
+        alias="lookupStatus"
+    )
+    disabled_reason: Literal["PROJECT_DISABLED", "SCHEMA_PENDING"] | None = Field(
+        default=None, alias="disabledReason"
+    )
+    selected: list[MemorySelectedSummary] = Field(default_factory=list, max_length=28)
+    injected_bytes: int = Field(default=0, alias="injectedBytes", ge=0, le=14000)
+    skip_reasons: dict[str, int] = Field(default_factory=dict, alias="skipReasons")
+    issue_hints_unknown: bool = Field(default=False, alias="issueHintsUnknown")
+    candidate_scan_limited: bool = Field(default=False, alias="candidateScanLimited")
+
+
+class MemoryRunSummary(MemorySchema):
+    run_id: int = Field(alias="runId")
+    project_id: int = Field(alias="projectId")
+    recorded: bool
+    snapshot: MemorySnapshot | None = None
+    effective_engine: str | None = Field(alias="effectiveEngine")
+    adoption: Literal[
+        "HISTORICAL", "PENDING", "AGENT", "NOT_LOADED", "STANDARD_FALLBACK", "UNAVAILABLE"
+    ]
+
+
 class MemoryEntryDraft(MemorySchema):
     heading: str = Field(min_length=1, max_length=255)
     content: str = Field(min_length=1, max_length=MAX_SOURCE_CONTENT_BYTES)
@@ -367,7 +429,14 @@ class CoreBudgetItem(MemoryEntryDraft):
     entry_version: int = Field(alias="entryVersion", gt=0)
     source_kind: MemoryKind = Field(alias="sourceKind")
     source_title: str = Field(alias="sourceTitle", min_length=1, max_length=255)
+    binding_path_globs: list[str] = Field(
+        default_factory=list, alias="bindingPathGlobs", max_length=8
+    )
     load_mode: LoadMode = Field(default=LoadMode.CORE, alias="loadMode")
+
+    _binding_paths = field_validator("binding_path_globs")(
+        MemoryEntryDraft.validate_path_globs.__func__
+    )
 
 
 class MemoryImpactConfirmation(MemorySchema):

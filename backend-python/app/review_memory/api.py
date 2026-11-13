@@ -16,6 +16,8 @@ from app.core.errors import AppError
 from app.core.response import ok
 from app.review_memory import service
 from app.review_memory import feedback as memory_feedback
+from app.review_memory import settings as memory_settings
+from app.review_memory.summary import get_run_memory_summary
 from app.review_memory.parsing import (
     MAX_METADATA_BYTES,
     MAX_REQUEST_BYTES,
@@ -44,12 +46,43 @@ from app.review_memory.schemas import (
     MemoryWritebackSummary,
     MemoryUploadMetadata,
     SourceState,
+    MemorySettings,
+    MemorySettingsUpdate,
+    MemoryRunSummary,
 )
 
 
 router = APIRouter(prefix="/api/projects/{project_id}/review-memory", tags=["review-memory"])
 shared_router = APIRouter(prefix="/api/review-memory/shared-sources", tags=["review-memory"])
+run_router = APIRouter(prefix="/api/agent-review/runs", tags=["review-memory"])
 DetailResponse = MemoryApiResponse[MemorySourceDetail]
+
+
+@router.get("/settings", response_model=MemoryApiResponse[MemorySettings])
+def get_memory_settings(project_id: int, db: Session = Depends(get_db)) -> dict:
+    return ok(memory_settings.read_settings(db, project_id))
+
+
+@router.put("/settings", response_model=MemoryApiResponse[MemorySettings])
+def update_memory_settings(
+    project_id: int, request: MemorySettingsUpdate, db: Session = Depends(get_db)
+) -> dict:
+    try:
+        result = memory_settings.update_settings(db, project_id, request)
+        db.commit()
+        return ok(result)
+    except Exception:
+        db.rollback()
+        raise
+
+
+@run_router.get("/{run_id}/memory-summary", response_model=MemoryApiResponse[MemoryRunSummary])
+def get_memory_summary(
+    run_id: int,
+    project_id: int = Query(alias="projectId", gt=0),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok(get_run_memory_summary(db, run_id, project_id))
 
 
 @router.get("/feedbacks", response_model=MemoryApiResponse[MemoryFeedbackPage])

@@ -560,6 +560,37 @@ def _migration_statement_already_satisfied(
     connection, migration: MigrationFile, statement: str
 ) -> bool:
     """Reconcile migration effects that already exist outside the migration ledger."""
+    if migration.version == 59:
+        column_name = (
+            "memory_settings_version" if "memory_settings_version" in statement else "memory_enabled"
+        )
+        inspector = inspect(connection)
+        if not inspector.has_table("project_review_settings"):
+            return False
+        existing = next(
+            (
+                column
+                for column in inspector.get_columns("project_review_settings")
+                if column["name"] == column_name
+            ),
+            None,
+        )
+        if existing is None:
+            return False
+        type_name = str(existing["type"]).lower()
+        expected_default = "1" if column_name == "memory_settings_version" else "0"
+        default = str(existing.get("default")).lower().strip("()'\"")
+        default = {"false": "0", "true": "1"}.get(default, default)
+        compatible_type = (
+            re.fullmatch(r"(?:int|integer)(?:\(\d+\))?", type_name) is not None
+            if expected_default == "1"
+            else type_name == "boolean" or re.fullmatch(r"tinyint(?:\(1\))?", type_name) is not None
+        )
+        if existing.get("nullable") or default != expected_default or not compatible_type:
+            raise MigrationError(
+                f"Existing project_review_settings.{column_name} is incompatible with V59"
+            )
+        return True
     if migration.version == 58:
         inspector = inspect(connection)
         if statement.strip().upper().startswith("ALTER TABLE REVIEW_MEMORY_SOURCES"):

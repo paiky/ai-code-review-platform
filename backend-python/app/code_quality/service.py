@@ -780,6 +780,16 @@ def _agent_preflight_fallback_metadata(
     task_id: int,
     exception: AppError,
 ) -> dict[str, Any]:
+    from app.review_memory.retrieval import BLOCKING_MEMORY_CODES
+
+    if exception.code in BLOCKING_MEMORY_CODES:
+        # Required memory failures must never silently bypass project rules via STANDARD.
+        task = db.get(ReviewTask, task_id)
+        if task is not None:
+            task.review_status = "REVIEW_FAILED"
+            task.updated_at = datetime.now()
+        db.commit()
+        raise exception
     failure_code = str(exception.code or "AGENT_UNAVAILABLE")[:64]
     failure_message = (
         scrub_sensitive(str(exception.message or "Agent Review preflight failed"))
@@ -1371,9 +1381,10 @@ def run_auto_review_job(
 def schedule_agent_standard_fallback(db: Session, run_id: int) -> None:
     """Queue the existing STANDARD pipeline for a failed Agent run."""
     from app.agent_review.models import AgentReviewRun
+    from app.review_memory.retrieval import BLOCKING_MEMORY_CODES
 
     run = db.get(AgentReviewRun, run_id)
-    if run is None or run.status == "CANCELLED":
+    if run is None or run.status == "CANCELLED" or run.failure_code in BLOCKING_MEMORY_CODES:
         return
     task = db.get(ReviewTask, run.task_id)
     if task is None:
@@ -1414,6 +1425,7 @@ def schedule_agent_standard_fallback(db: Session, run_id: int) -> None:
 def list_unscheduled_agent_standard_fallback_run_ids(db: Session) -> list[int]:
     """Find terminal Agent runs whose persisted STANDARD fallback job was never created."""
     from app.agent_review.models import AgentReviewRun
+    from app.review_memory.retrieval import BLOCKING_MEMORY_CODES
 
     runs = db.scalars(
         select(AgentReviewRun)
@@ -1424,6 +1436,12 @@ def list_unscheduled_agent_standard_fallback_run_ids(db: Session) -> list[int]:
     ).all()
     pending: list[int] = []
     for run in runs:
+        if run.failure_code in BLOCKING_MEMORY_CODES:
+            continue
+        input_payload = read_json(run.input_json, {})
+        if not isinstance(input_payload, dict) or not isinstance(input_payload.get("case"), dict):
+            # Completed fallback retains memory metadata only; it has no input to recover.
+            continue
         existing_job_id = db.scalar(
             select(CodeQualitySchedulerJob.id)
             .where(CodeQualitySchedulerJob.job_type == "AI_REVIEW")
@@ -1440,12 +1458,15 @@ def list_unscheduled_agent_standard_fallback_run_ids(db: Session) -> list[int]:
 def run_agent_standard_fallback_job(run_id: int) -> dict[str, Any]:
     from app.agent_review.models import AgentReviewRun
     from app.agent_review.repository import run_to_summary
+    from app.review_memory.retrieval import BLOCKING_MEMORY_CODES
 
     db = SessionLocal()
     try:
         run = db.get(AgentReviewRun, run_id)
         if run is None:
             raise AppError("RESOURCE_NOT_FOUND", f"Agent Review run not found: {run_id}", 404)
+        if run.failure_code in BLOCKING_MEMORY_CODES:
+            raise AppError("MEMORY_LOOKUP_FAILED", "Required memory failure cannot use Standard fallback", 503)
         task = db.get(ReviewTask, run.task_id)
         if task is None:
             raise AppError("RESOURCE_NOT_FOUND", "Agent fallback task or project no longer exists", 404)
@@ -1509,7 +1530,9 @@ def run_agent_standard_fallback_job(run_id: int) -> dict[str, Any]:
                 context.get("notificationContext") or {},
                 reminder_card_enabled,
             )
-        run.input_json = None
+        from app.review_memory.summary import retain_memory_summary
+
+        run.input_json = retain_memory_summary(run.input_json)
         db.commit()
         return result
     except Exception as exception:
@@ -2156,7 +2179,9 @@ def _sync_cancelled_agent_run(db: Session, job: dict[str, Any]) -> None:
     run.status = "CANCELLED"
     run.effective_engine = "AGENT"
     run.failure_code = "AGENT_CANCELLED"
-    run.input_json = None
+    from app.review_memory.summary import retain_memory_summary
+
+    run.input_json = retain_memory_summary(run.input_json)
     run.finished_at = now
     run.updated_at = now
 

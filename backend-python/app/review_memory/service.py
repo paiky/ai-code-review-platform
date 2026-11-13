@@ -50,6 +50,12 @@ from app.review_memory.schemas import (
 )
 
 
+def select_review_memories(db: Session, **kwargs):
+    from app.review_memory.retrieval import select_review_memories as select_memories
+
+    return select_memories(db, **kwargs)
+
+
 def require_project(db: Session, project_id: int) -> None:
     if repository.get_project(db, project_id) is None:
         raise AppError("RESOURCE_NOT_FOUND", "Project not found", 404)
@@ -410,6 +416,7 @@ def get_project_core_items(
             entry_version=entry.version,
             source_kind=source.kind,
             source_title=source.title,
+            binding_path_globs=_string_list(binding.path_globs_json),
         )
         for source, entry, binding in repository.list_project_core_entries(
             db, project_id, lock=lock

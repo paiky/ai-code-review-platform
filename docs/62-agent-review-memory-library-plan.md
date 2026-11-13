@@ -2,7 +2,7 @@
 
 ## 0. 状态与使用范围
 
-- 设计日期：2026-11-11。实施日期：2026-11-12。状态：M1～M5、S1～S3 已落地，本地运行库已迁移 V58；M4 完成隔离 MySQL/API 验证，M5 完成 build、受控 Chrome 及本地服务只读验收；M6 及后续阶段尚未开始，未部署远程环境。
+- 设计日期：2026-11-11。实施日期：2026-11-12～13。状态：M1～M6、S1～S3 已落地；M6 完成隔离 MySQL/API、四 Runner synthetic 及本地接口只读验收。2026-11-13 用户授权后，本地运行库已备份并迁移 V59，记忆注入仍全部关闭，见第 21 节；M7 及后续阶段尚未开始，未部署远程环境。
 - 2026-11-12 用户确认调整为“共享资料 + 项目多对多关联”，第 13 节是调整后的设计基线；先按 S1～S3 完成调整，再进入 M4。第 3～5 节中的单项目归属、查询、修改和 UI 约定以第 13 节修订为准，第 10～12 节保留实际已交付记录，不表示当前代码已支持共享。
 - 用户随后授权调整代码及继续推进，S1 关联数据及兼容层、S2 共享与关联后端、S3 共享 UI 已完成，分别见第 14～16 节；S2 通过独立临时 MySQL/API 验证，S3 通过构建与隔离浏览器交互验收。2026-11-12 经用户另行授权，本地运行库已备份并迁移至 V58，真实页面只读验收通过，见第 17 节；未部署远程环境。
 - 本文是后续**记忆库专项**的独立开发依据，完整定义功能、数据、接口、UI、接入和阶段停止点，不需要查阅 60 号文档才能开发。60 号文档的记忆方案、61 号文档的估时不作为本专项实施基线；未来阶段以本文与当阶段用户授权为准。
@@ -1174,3 +1174,68 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-backend.ps1 
 - 复用现有 5173/8090 做真实业务只读核验：已完成任务可见“标记误报”；项目 24 的反馈列表返回 200，浏览器无 pageerror。浏览器拦截所有非 GET 请求，未写真实业务反馈、未触发真实 Review，未新增或停止常驻服务。后端、接口、schema、依赖及数据库迁移均无变更。
 
 **停止点：M5 已完成。** 本次改动保留在工作区，未自动提交、推送或部署；M6 检索与 prompt 注入等待单独授权。
+
+## 20. M6 入队检索与注入（已完成，2026-11-12）
+
+- 用户已授权本地提交 M5 后推进 M6；M5 提交 `be0d217`。改动量等级：**中**，范围限 Backend 入队准备、两个独立配置列及摘要接口，复用现有资料、Worker payload 和结果链路，不联动前端或容器协议。
+- V59 仅新增 `project_review_settings.memory_enabled`（默认 false）、`memory_settings_version`（默认 1）。ORM 延迟读取新列，旧入口创建配置时不依赖新列回读；未迁移库的注入视为关闭并记录 SCHEMA_PENDING，设置接口明确返回迁移未就绪，不通过请求自动 ALTER。运行库迁移仍独立授权；本阶段只在随机隔离库实际执行并核验 SQL。
+- 设置 GET 返回 enabled/version/schemaReady；PUT 接受 enabled/expectedVersion，锁项目后创建缺失配置并原子核验独立版本。默认关闭时不读记忆正文；旧资料管理和 Standard 流程保持原行为。
+- `review_memory/retrieval.py` 承担一致性只读选择，`service.select_review_memories` 是统一入口。以新独立 REPEATABLE READ 会话冻结设置、关联、来源、章节和反馈版本；两层端/路径限制必须同时命中同一安全变更文件。CORE 独立读取并完整校验；按需候选按第 4.4 节三组预取/保留名额，查询词仅来自安全路径、有限安全 diff 和已有线索，不扫描整仓、不调用模型、不读取原件。
+- 沿用 `render_core_context` 的 CORE 完整包装及预算；按需以另一个独立背景块承载来源、适用条件和完整内容，控制新增合计 14000 UTF-8 字节。旧策略只对实际完整注入正文做同源/规范化 hash 去重，截断旧策略仅记录重叠，不替代完整新记忆。
+- CORE 包装补充 bindingPathGlobs，明确它与章节 pathGlobs 取交集，避免多文件审查时把关联范围内的规则误用于其它文件；发布预算与实际渲染共用此字段。旧资料若新增包装后超限，入队明确阻止并要求拆分，不截断必载规则。
+- 同内容去重须保留本次适用范围：只有已选条目覆盖了当前条目全部匹配文件时才抑制；同文本分别约束不同文件时保留各自范围，避免去重丢规则。完整旧策略在现有项目级指令中生效，仍按同源/hash 去重。
+- `agent_review/service.enqueue_agent_review` 在输入组装阶段读取一次、先保留旧 `_bounded_context` 再追加新背景，root `memorySnapshot` 保存 source/entry/binding 版本及有界摘要。固定审查说明明确资料不具备指令权限、不执行 Skill 命令、不自动豁免结论；四 Runner 继续使用原 `review_input`，无需宿主 Skill 或 DB 连接。
+- 必载读取/配置异常返回稳定 MEMORY 错误并记录进度，自动 MR/Push 入队及失败恢复不得将其静默变为 Standard fallback；执行开始后的普通 Agent 失败仍保留既有 fallback。summary API 只从冻结输入读取白名单摘要，核验 run/task/project 一致，标明历史未记录及最终 fallback 未采用新增记忆，不返回 Prompt/diff/完整正文。
+- 验收：聚焦静态检查、随机隔离 MySQL 手动 API/synthetic，覆盖配置 CAS/默认关闭/迁移前兼容、共享关联交集、排序/预算/去重、失效反馈、未知线索/三组限额/降级、冻结/重跑/重领、四 Runner 初始输入及失败分类。不开单元测试，不运行真实模型 Review，不写业务资料/反馈，不执行运行库迁移或部署；完成 M6 后停止，M7 单独授权。
+
+### 20.1 实际接口与接入位置
+
+| 接口 | 输入与返回 | 保护及兼容 |
+| --- | --- | --- |
+| `GET /api/projects/{projectId}/review-memory/settings` | 返回 `enabled/version/schemaReady` | 不创建配置；未迁移返回 `false/1/false`，配置不存在但 schema 就绪返回 `false/1/true` |
+| `PUT /api/projects/{projectId}/review-memory/settings` | 严格布尔 `enabled`、正整数 `expectedVersion`；返回递增版本 | 项目锁＋独立版本 CAS；并发/旧版本 409 `MEMORY_VERSION_CONFLICT`；V59 未就绪 503 `MEMORY_SCHEMA_PENDING`；只改记忆设置，不改旧触发条件 |
+| `GET /api/agent-review/runs/{runId}/memory-summary?projectId={projectId}` | 返回 `recorded/snapshot/effectiveEngine/adoption` | 校验任务归属，跨项目 404；只读冻结白名单，无当前库补造；历史 `recorded=false/HISTORICAL`；实际采用 `AGENT`、排队 `PENDING`、降级 `STANDARD_FALLBACK`，未采用及执行不可确认分别标识 |
+
+接入链路为 `enqueue_agent_review → review_memory.service.select_review_memories → retrieval`；现有自动完成上下文中的 `focusChangeTypes` 经有限映射转为问题标签，另从安全路径和有限 diff 提取关键词/问题线索。DB/DB_SQL/ORM 等映射 DATABASE，API 映射 API_CONTRACT，CACHE/MQ 子类沿用现有聚合映射。没有这些线索时仍保留近期专项候选，不把未知视为无关。
+
+CORE 最多 20 条、8000 UTF-8 字节；ON_DEMAND 最多 8 条、6000 字节，均含实际包装且整条选择。按需三组各最多预取 300 条，保留名额分别为 80/80/40，合并最多 200 条再排序；`candidateScanLimited` 标识命中预取上限，`issueHintsUnknown` 标识线索未知。关键词最多 16 个、每词最多 64 字符，LIKE 自动转义；重复命中不累积加分。`skipReasons` 是选择过程的事件计数，同条目出现在多个候选组时可能重复计数，不应显示为唯一条目数。
+
+`baselineContext` 保留旧背景的 100000 字符限制，再追加完整新记忆块；`reviewInstructions` 继续包含原项目策略。新旧策略去重依赖实际装入策略的 `contentTruncated`，不会改变旧策略文本。Run 根节点保存最大 32 KiB 的 `memorySnapshot`，含配置版本、资料/章节/关联 ID 和版本、维护项目、有限适用摘要、hash、选择原因及跳过统计；不保存检索词、diff 或正文。Worker 仍从 `case` 读取冻结输入，不新增 DB 连接或工具。
+
+成功、取消及 Standard fallback 完成时，沿用源码/Prompt 清理，只保留经 schema 校验的 `memorySnapshot`；旧任务仍清为空。恢复扫描区分完整 `case` 与仅有摘要的已清理输入，避免摘要保留导致再次排队。必载校验失败落既有失败进度，阻止入队及自动降级；按需 SQL 失败保留同一读取视图内已取得的 CORE 并记录 `PARTIAL_LOOKUP`，不跨事务重读资料。普通执行/超时故障仍按原链路降级。
+
+### 20.2 验收结果
+
+- 聚焦 Ruff 检查、Python app 导入/OpenAPI、新接口注册、V59 迁移发现及 `git diff --check` 通过。调用现有 `scripts/run-backend.ps1 ruff ...` 执行静态检查；临时验收脚本仅用于受控手动 API/synthetic，不新增、修改或运行单元测试。
+- 随机隔离 MySQL 8.0.45 库实际验证：移除新列模拟 V58，旧 ORM 创建/读取配置、默认关闭与新设置读取仍成功；更新返回 503；执行真实 V59 两条 ALTER 后设置生效，重复迁移效果核对成功。真实双连接 CAS 一成功一冲突，缺失配置可原子创建，旧 MR 配置不变。
+- 检索验证：默认关闭/空库/未知线索、无关联和私有跨项目隔离、端 NULL 通配与 GENERAL 精确值、同文件双层路径交集、共享禁用、CORE 优先及完整预算、按需整条字节/条数预算、310 条候选的有限预取与去重、同文本互补路径范围、完整/截断旧策略、同反馈去重及 digest 变更失效均通过。真实第二事务更新来源/章节/关联后，原 REPEATABLE READ 仍得到一致旧正文和旧版本，后续读取获得新版本。
+- 入队到结果摘要闭环：实际 Scheduler Job/Run/初始结果/进度写入隔离库，仅替换 Git worktree 准备及外部运行配置。验证新记忆追加后不被旧背景截断、敏感路径及 diff 不进入检索、重跑重读与租约重领复用原冻结 case、必载失败落进度且不建 Job、成功/取消清理、跨项目摘要及历史不补造、降级未采用标识、仅有摘要不恢复、记忆失败不安排 Standard、普通失败仍安排 Standard。
+- 四 Runner 合成验证通过：Responses、Chat Completions、Anthropic Messages 实际 Runner 使用无网络 transport，首轮收到完整冻结背景及固定资料解释并成功提交；Claude Code 拦截进程启动，验证 stdin 传完整背景、argv 只含固定说明并合成提交成功；大 diff 分页模式仍保留背景。未启动真实 CLI、模型调用或容器任务，不把合成结果视为审查准确率/耗时效果证明。
+- 临时脚本在 `.local/memory-m6-acceptance.ps1`、`.local/memory-m6-runners.ps1`；各随机隔离库均在 finally 中精确删除，无业务资料/反馈写入，不停止已有服务。已有 5173 代理下，项目 24 新 settings 与原 OWNED 资料列表均 200；settings 为 `enabled=false/version=1/schemaReady=false`，证明真实 V58 环境正常降级。后端阶段无新 UI，不要求浏览器验收。
+
+### 20.3 运行前置与停止点
+
+本阶段仅交付 V59 文件，不执行运行库迁移或开关写入。后续单独授权迁移时：先确认本地 MySQL 身份并备份，再用 `scripts/run-backend.ps1 migrate dry-run` 核对 pending **仅 V59**；如出现其它版本先重新评估，不直接 apply。确认后按已有迁移流程 apply、verify。V59 只有两个非空默认列，不改现有数据意义；迁移完成仍默认关闭。回退优先关闭项目记忆配置并回退代码，新列可保留，不自动删除列或覆盖数据。
+
+迁移后最小人工复验：新项目 GET settings 确认为关闭，PUT 携带最新版本开启；发布一份有明确端/路径范围的 CORE 规范，再加一份按需 Skill/五段案例。仅在另行选定并授权的 Review 上验证 summary 的 ID/版本/字节预算与实际输入一致；修改资料只影响新任务，关闭开关只影响新入队任务。M7 才开放页面注入开关和任务摘要展示，目前资料页提示仍按 M5 状态，不据此声称已启用自动记忆。
+
+保留限制：当前是有限标签/关键词检索，不具备语义相似召回；超过预取窗口的较旧按需资料可能漏选，摘要明确标识有限扫描；按需预算不足整条跳过，CORE 超限阻止入队。记忆预算不等于模型完整输入的 token 精确估算。尚未测真实模型质量、时延或生产故障效果，不引入向量库、执行中自主查记忆、AST/调用图或源码裁剪。
+
+**停止点：M6 已完成。** M5 已本地提交 `be0d217`，M6 改动保留工作区，未自动提交、推送或部署；运行库仍 V58，V59 未执行，注入默认关闭。M7 UI 等待下一阶段授权。
+
+## 21. 本地 V59 迁移（已完成，2026-11-13）
+
+- 用户授权在 M7 前处理 V59。改动量等级：**中**，只执行既有本地 schema 迁移及兼容核验，不新增功能或公开契约。
+- 范围：核对本地库身份，确认 pending 仅 V59，完整备份并记录 SHA-256、迁移前项目配置；通过现有脚本 apply/verify，核验两个新列默认值、旧配置不变及资料/设置 API。
+- 非目标及授权边界：不自动启用任何项目、不触发 Review、不操作远程库、不提交/推送，不在本轮进入 M7。备份失败或 pending 不符即停止；不自动恢复覆盖数据库。
+- 验收完成后记录实际库版本及备份位置，停止等待 M7 授权；本次不新增、修改或运行单元测试，不要求浏览器验收。
+
+### 21.1 执行与验收结果
+
+- 确认目标 `127.0.0.1:3306/ai_code_review_local`，MySQL 8.0.45；现有迁移脚本 dry-run 显示 current=V58、pending=V59，未涉及其它迁移。
+- 完整备份：`.local/database-backups/memory-v59-20261113-093913/before-v59.sql`，195121468 字节，SHA-256 `25e898a996e2a304be3268d9ce5f3e4e97ede48c47346ca493dcad1dd8c02530`；已核验 dump 完成标记，同目录 manifest 留存原表行数、24 个项目端配置及原审查设置。备份含业务数据，保持本地忽略，不纳入 Git。
+- 执行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-backend.ps1 migrate apply`，随后 `migrate verify`；均成功，current=V59、pending=none，ledger=present，无需破坏性迁移选项。
+- 数据核对通过：新列均非空、默认 false/1；所有现有记忆开关仍关闭且版本为 1；原审查设置逐字段、项目端与端配置、四张记忆表行数均与备份清单一致。
+- 复用已有本地服务，只读核验 5173 代理下项目 24 settings HTTP 200，返回 `enabled=false/version=1/schemaReady=true`；原 OWNED 资料列表 HTTP 200。未开关写入、创建演示资料、触发 Review、启动/重启服务或运行单元测试。
+
+**停止点：本地 V59 迁移及兼容验收完成，已具备 M7 的数据库前置条件。** 未进入 M7，未提交、推送或部署；M6 实施时的 V58 记录为当时状态，以本节的 V59 为当前状态。

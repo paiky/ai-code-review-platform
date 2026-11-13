@@ -105,8 +105,16 @@ class GitLabPushEvent(Base):
 
 class ProjectReviewSettings(Base):
     __tablename__ = "project_review_settings"
+    # New optional features must not make legacy reads/inserts require an unapplied migration.
+    __mapper_args__ = {"eager_defaults": False}
 
     project_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    memory_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="0", deferred=True
+    )
+    memory_settings_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1", deferred=True
+    )
     trigger_on_mr: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     trigger_on_push: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     trigger_only_when_risk_matched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

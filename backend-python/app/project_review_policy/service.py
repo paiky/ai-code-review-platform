@@ -144,6 +144,7 @@ def build_project_review_policy_prompt_context(db: Session, project_id: int) -> 
             "title": record.title,
             "content": content,
             "sourceFeedbackId": record.source_feedback_id,
+            "contentTruncated": content_truncated,
         }
         next_text = _render_policy_prompt_text(header, [*items, item])
         if len(next_text) > PROMPT_POLICY_MAX_TOTAL_CHARS:

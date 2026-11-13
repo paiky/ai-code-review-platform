@@ -30,6 +30,7 @@ from app.review_record.repository import (
     parse_agent_completion_context,
     resolve_agent_completion_notification,
 )
+from app.review_memory.service import select_review_memories
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -304,6 +305,17 @@ def enqueue_agent_review(
     db.commit()
 
     try:
+        memory = select_review_memories(
+            db,
+            project_id=int(project.id),
+            target_type=task.target_type,
+            changed_files=changed_files,
+            diff_text=diff_text,
+            issue_hints=repository.normalize_completion_context(completion_context).get(
+                "focusChangeTypes", []
+            ),
+            policy_context=policy_context,
+        )
         review_instructions = "\n\n".join(
             value
             for value in (
@@ -323,7 +335,7 @@ def enqueue_agent_review(
             "diff": diff_text,
             "diffMode": diff_mode,
             "reviewInstructions": review_instructions,
-            "baselineContext": _bounded_context(request),
+            "baselineContext": _bounded_context(request) + memory.text,
             "reviewCoverage": {
                 "totalChangedFileCount": len(requested_files),
                 "includedFileCount": len(changed_files),
@@ -368,6 +380,9 @@ def enqueue_agent_review(
         "excludedFileCount": len(excluded_files),
         "diffBytes": diff_bytes,
         "diffMode": input_case["diffMode"],
+        "memoryLookupStatus": memory.snapshot.lookup_status,
+        "memoryInjectedBytes": memory.snapshot.injected_bytes,
+        "memorySelectedCount": len(memory.snapshot.selected),
     }
     _append_dispatch_progress(
         db,
@@ -401,6 +416,7 @@ def enqueue_agent_review(
                 "worktree": worktree_relative,
                 "case": input_case,
                 "budgets": budgets,
+                "memorySnapshot": memory.snapshot.model_dump(mode="json", by_alias=True),
             },
             completion_context=completion_context,
             comparison_mode=comparison_mode,

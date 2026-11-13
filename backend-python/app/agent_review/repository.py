@@ -2053,7 +2053,9 @@ def finish_agent_records(
     run.updated_at = now
     _apply_safe_run_summary(run, summary)
     if clear_input:
-        run.input_json = None
+        from app.review_memory.summary import retain_memory_summary
+
+        run.input_json = retain_memory_summary(run.input_json)
     job.status = "SUCCESS" if status == "SUCCEEDED" else ("SKIPPED" if status == "CANCELLED" else "FAILED")
     job.error_message = _bounded(failure_message or failure_code, 1024)
     job.finished_at = now
