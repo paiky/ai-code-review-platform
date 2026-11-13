@@ -1,3 +1,5 @@
+import { REVIEW_MEMORY_UI_ENABLED } from './settingsNavigation.js';
+
 export const APP_SHELL_SIDEBAR_PREFERENCE_KEY = 'ai-code-review.app-shell.sidebar-collapsed.v1';
 
 export const APP_SHELL_BREAKPOINTS = Object.freeze({
@@ -18,8 +20,13 @@ export const SETTINGS_NAVIGATION_ROUTES = Object.freeze([
   {
     key: '/settings/ai-review/models',
     label: 'AI Review 配置',
-    matchRoutes: ['/settings/ai-review/models', '/settings/ai-review/policies', '/settings/ai-review/memory']
+    matchRoutes: ['/settings/ai-review/models', '/settings/ai-review/policies']
   },
+  ...(REVIEW_MEMORY_UI_ENABLED ? [{
+    key: '/settings/review-memory',
+    label: '项目记忆库',
+    matchRoutes: ['/settings/review-memory', '/settings/ai-review/memory']
+  }] : []),
   { key: '/settings/global', label: '全局设置' }
 ]);
 

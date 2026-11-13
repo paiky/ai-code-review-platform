@@ -10427,12 +10427,12 @@ function RiskFeedbackPage() {
 
 function SettingsPage() {
   const location = useLocation();
-  const redirectRoute = resolveSettingsRedirect(location.pathname);
+  const redirectRoute = resolveSettingsRedirect(location.pathname, location.search, location.hash);
   if (redirectRoute) return <Navigate to={redirectRoute} replace />;
   if (!resolveSettingsSection(location.pathname)) {
     return <Navigate to={DEFAULT_SETTINGS_ROUTE} replace />;
   }
-  if (resolveSettingsSection(location.pathname)?.tabKey === 'memory') {
+  if (resolveSettingsSection(location.pathname)?.contentKey === 'review-memory') {
     return <TaskWorkspaceShell><ReviewMemoryPage /></TaskWorkspaceShell>;
   }
   return <TemplateConfig />;

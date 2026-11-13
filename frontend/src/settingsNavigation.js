@@ -1,6 +1,7 @@
 export const AI_REVIEW_MODELS_ROUTE = '/settings/ai-review/models';
 export const AI_REVIEW_POLICIES_ROUTE = '/settings/ai-review/policies';
 export const AI_REVIEW_MEMORY_ROUTE = '/settings/ai-review/memory';
+export const REVIEW_MEMORY_ROUTE = '/settings/review-memory';
 export const REVIEW_MEMORY_UI_ENABLED = String(import.meta.env?.VITE_REVIEW_MEMORY_UI_ENABLED || 'true').toLowerCase() !== 'false';
 export const DEFAULT_SETTINGS_ROUTE = AI_REVIEW_MODELS_ROUTE;
 
@@ -16,13 +17,7 @@ export const AI_REVIEW_SETTINGS_TABS = Object.freeze([
     route: AI_REVIEW_POLICIES_ROUTE,
     label: '策略与 Prompt',
     contentKey: 'profile-settings'
-  },
-  ...(REVIEW_MEMORY_UI_ENABLED ? [{
-    key: 'memory',
-    route: AI_REVIEW_MEMORY_ROUTE,
-    label: '项目记忆库',
-    contentKey: 'review-memory'
-  }] : [])
+  }
 ]);
 
 const SETTINGS_ROUTE_REDIRECTS = Object.freeze({
@@ -48,6 +43,12 @@ export const SETTINGS_SECTIONS = Object.freeze([
     route: DEFAULT_SETTINGS_ROUTE,
     label: 'AI Review 配置'
   },
+  ...(REVIEW_MEMORY_UI_ENABLED ? [{
+    key: 'review-memory',
+    route: REVIEW_MEMORY_ROUTE,
+    label: '项目记忆库',
+    contentKey: 'review-memory'
+  }] : []),
   {
     key: 'global-settings',
     route: '/settings/global',
@@ -65,7 +66,13 @@ export function resolveSettingsSection(pathname) {
   return SETTINGS_SECTIONS.find(section => normalizedPathname === section.route) || null;
 }
 
-export function resolveSettingsRedirect(pathname) {
+export function resolveSettingsRedirect(pathname, search = '', hash = '') {
+  if (normalizeSettingsPathname(pathname) === AI_REVIEW_MEMORY_ROUTE) {
+    if (!REVIEW_MEMORY_UI_ENABLED) return DEFAULT_SETTINGS_ROUTE;
+    const query = new URLSearchParams(search);
+    query.set('tab', query.has('projectId') ? 'projects' : 'library');
+    return `${REVIEW_MEMORY_ROUTE}?${query}${hash}`;
+  }
   return SETTINGS_ROUTE_REDIRECTS[normalizeSettingsPathname(pathname)] || null;
 }
 

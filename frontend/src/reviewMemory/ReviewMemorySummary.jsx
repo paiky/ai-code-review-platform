@@ -50,7 +50,7 @@ export default function ReviewMemorySummary({ projectId, runId, reviewStatus, ef
   const columns = [
     { title: '当时的资料', width: 230, render: (_, item) => <>
       <div className="memory-snapshot-text">{item.title}</div>
-      <Link to={`/settings/ai-review/memory?projectId=${encodeURIComponent(projectId)}&sourceId=${item.sourceId}`}>
+      <Link to={`/settings/review-memory?tab=projects&projectId=${encodeURIComponent(projectId)}&sourceId=${item.sourceId}`}>
         查看当前资料 #{item.sourceId}
       </Link>
     </> },

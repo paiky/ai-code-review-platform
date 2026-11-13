@@ -63,8 +63,11 @@ const DOCUMENT_ERRORS = {
 };
 
 export default function MemorySourceDrawer({
-  projectId,
+  projectId: initialProjectId,
   projectName,
+  ownerOptions,
+  ownerLoading,
+  onOwnerSearch,
   initial,
   onClose,
   onDirtyChange,
@@ -74,6 +77,8 @@ export default function MemorySourceDrawer({
   onManageBinding,
   onViewFeedback
 }) {
+  const [selectedOwner, setSelectedOwner] = useState(initialProjectId || '');
+  const projectId = selectedOwner;
   const [source, setSource] = useState(null);
   const [creation, setCreation] = useState(initial.mode === 'view' ? null : initial.mode);
   const [metadata, setMetadata] = useState({
@@ -259,6 +264,10 @@ export default function MemorySourceDrawer({
   }
 
   async function saveCreation() {
+    if (!projectId) {
+      setError(new Error('请选择归属项目。'));
+      return;
+    }
     if (creation === 'manual' && !metadata.title.trim()) {
       setError(new Error('请填写资料标题。'));
       return;
@@ -478,7 +487,7 @@ export default function MemorySourceDrawer({
         items={[{ title: '选择资料 / 录入' }, { title: '预览并确认发布' }]}
       />
       <Paragraph type="secondary" className="memory-top-space">
-        项目：{projectName} · 保存草稿或发布资料均不会立即触发审查。
+        {ownerOptions ? `归属项目：${projectId ? projectLabel(projectId) : '待选择'}` : `查看项目：${projectName}`} · 保存草稿或发布资料均不会立即触发审查。
       </Paragraph>
       {error && (
         <Alert
@@ -556,6 +565,22 @@ export default function MemorySourceDrawer({
               />
             )}
             <Form layout="vertical" disabled={Boolean(busy)}>
+              {ownerOptions && (
+                <Form.Item label="归属项目" required>
+                  <Select
+                    aria-label="归属项目"
+                    value={projectId || undefined}
+                    disabled={Boolean(busy) || Boolean(replacement)}
+                    showSearch={{ filterOption: false, onSearch: onOwnerSearch }}
+                    loading={ownerLoading}
+                    options={projectId && !ownerOptions.some((item) => item.value === projectId)
+                      ? [{ value: projectId, label: projectLabel(projectId) }, ...ownerOptions] : ownerOptions}
+                    placeholder="搜索并选择归属项目"
+                    onChange={(value) => { setSelectedOwner(value); setTouched(true); }}
+                  />
+                  <Text type="secondary">创建后默认添加到归属项目；发布及开启记忆后，仍需按本次变更匹配。</Text>
+                </Form.Item>
+              )}
               <Form.Item label="资料类型">
                 <Select
                   aria-label="资料类型"
@@ -772,7 +797,7 @@ export default function MemorySourceDrawer({
             </div>
             <Paragraph>{source.description || '未填写简介'}</Paragraph>
             <Paragraph type="secondary">
-              维护项目：{projectLabel(source.projectId)} · 本项目关联：
+              归属项目：{projectLabel(source.projectId)} · {ownerOptions ? '归属项目关联' : '本项目关联'}：
               {source.binding?.state === 'ACTIVE' ? '已关联' : '已解除 / 未关联'} · 范围：
               {source.binding?.targetType
                 ? labelFor(TARGET_TYPE_OPTIONS, source.binding.targetType)
@@ -781,7 +806,7 @@ export default function MemorySourceDrawer({
             </Paragraph>
             <Space wrap className="memory-top-space">
               <Button disabled={Boolean(busy)} onClick={() => onManageBinding(source)}>
-                管理本项目关联
+                {ownerOptions ? '归属项目使用范围' : '管理本项目关联'}
               </Button>
               {!readOnly && (
                 <Button

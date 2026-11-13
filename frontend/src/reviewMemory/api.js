@@ -22,6 +22,14 @@ export function listSources(projectId, filters, signal) {
   return request(`${root(projectId)}/sources?${query}`, { signal });
 }
 
+export function listLibrarySources(filters, signal) {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== '' && value != null) query.set(key, String(value));
+  });
+  return request(`/api/review-memory/sources?${query}`, { signal });
+}
+
 export function getSource(projectId, sourceId, signal) {
   return request(`${root(projectId)}/sources/${sourceId}`, { signal });
 }
