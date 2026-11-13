@@ -155,6 +155,17 @@ export default function ReviewMemoryPage() {
     [discard, messageApi]
   );
 
+  function closeUploadPreview() {
+    if (busyRef.current) {
+      messageApi.info('正在保存或发布，请等待完成后再离开。');
+      return;
+    }
+    const close = () => { dirtyRef.current = false; setDrawer(null); };
+    if (!dirtyRef.current) { close(); return; }
+    Modal.confirm({ title: '放弃当前未保存修改？', content: '未保存的详情修改将丢弃，文件队列继续保留。',
+      okText: '放弃并离开', cancelText: '继续编辑', onOk: close });
+  }
+
   useEffect(() => {
     const link = `${projectId}:${linkedSourceId}`;
     if (previousSourceLink.current === link) return;
@@ -538,7 +549,7 @@ export default function ReviewMemoryPage() {
             ownerLoading={projectLoading}
             onOwnerSearch={setProjectSearch}
             initial={drawer}
-            onClose={() => requestLeave(() => {})}
+            onClose={() => activeTab === 'upload' ? closeUploadPreview() : requestLeave(() => {})}
             onDirtyChange={handleDirty}
             onBusyChange={handleBusy}
             onSaved={handleSaved}

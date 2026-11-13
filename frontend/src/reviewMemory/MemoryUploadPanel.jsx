@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Collapse, Form, Input, Select, Table, Tag, Typography, Upload } from 'antd';
+import { Alert, Button, Card, Collapse, Form, Input, Select, Space, Table, Tag, Typography, Upload } from 'antd';
 import { CloudUploadOutlined } from '@ant-design/icons';
 import { uploadSource } from './api.js';
 import { allowsCore, blankEntry, DOCUMENT_ERRORS, KIND_OPTIONS, labelFor, TARGET_TYPE_OPTIONS, uploadProblem } from './model.js';
 import MemoryEntryFields from './MemoryEntryFields.jsx';
 
 const { Paragraph, Text, Title } = Typography;
+const kinds = KIND_OPTIONS.filter((item) => ['STANDARD', 'SKILL', 'ARCHITECTURE'].includes(item.value));
+const targets = [{ value: '', label: '不限' }, ...TARGET_TYPE_OPTIONS];
+const states = { pending: '待上传', uploading: '上传与解析中', succeeded: '已上传（生成草稿）', failed: '上传失败', unknown: '结果待确认' };
 
 export default function MemoryUploadPanel({
   projectOptions, projectLoading, onProjectSearch, projectLabel, onDirtyChange, onBusyChange, onSaved, onPreview
@@ -13,18 +16,22 @@ export default function MemoryUploadPanel({
   const [projectId, setProjectId] = useState('');
   const [metadata, setMetadata] = useState({ kind: 'STANDARD', title: '', description: '' });
   const [labels, setLabels] = useState(() => blankEntry('STANDARD'));
-  const [file, setFile] = useState(null);
-  const [saved, setSaved] = useState(null);
+  const [rows, setRows] = useState([]);
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState(null);
   const controller = useRef(null);
   const mounted = useRef(true);
-  const problem = file && uploadProblem(file, metadata.kind);
+  const running = useRef(false);
+  const stop = useRef(false);
+  const dirty = touched || rows.some((row) => row.status !== 'succeeded');
+  const projectLocked = rows.some((row) => row.status !== 'pending');
 
-  useEffect(() => { onDirtyChange(touched); }, [touched, onDirtyChange]);
+  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => {
     mounted.current = false;
+    stop.current = true;
     controller.current?.abort();
     onDirtyChange(false);
     onBusyChange(null);
@@ -36,32 +43,63 @@ export default function MemoryUploadPanel({
     setTouched(true);
   }
 
-  async function submit() {
-    if (busy) return;
-    if (!projectId || !file || problem) {
-      setError(new Error(!projectId ? '请选择归属项目。' : problem || '请先选择一个文件。'));
+  function changeRow(id, patch) {
+    setRows((current) => current.map((row) => row.id === id ? { ...row, ...patch } : row));
+  }
+
+  function addFiles(files) {
+    setRows((current) => {
+      if (current.length + files.length > 20 || [...current.map((row) => row.file), ...files].reduce((sum, file) => sum + file.size, 0) > 50 * 1024 * 1024) {
+        setError(new Error('队列最多 20 个文件、合计 50 MiB；本次选择未添加，请减少文件后重选。'));
+        return current;
+      }
+      setError(null);
+      return [...current, ...files.map((file) => ({ id: crypto.randomUUID(), file, kind: null, targetType: null, status: 'pending' }))];
+    });
+  }
+
+  async function submit(onlyId) {
+    if (running.current) return;
+    const selected = rows.filter((row) => onlyId ? row.id === onlyId && row.status === 'failed' : row.status === 'pending');
+    if (!projectId || !selected.length) {
+      setError(new Error(!projectId ? '请选择归属项目。' : '没有待上传文件；失败项请逐项检查后重试。'));
       return;
     }
-    setBusy(true);
+    const { heading: _heading, content: _content, ...scope } = labels;
+    const batch = selected.map((row) => {
+      const kind = row.kind || metadata.kind;
+      return { ...row, metadata: { ...metadata, ...scope, kind,
+        targetType: row.targetType === null ? labels.targetType : row.targetType || null,
+        loadMode: allowsCore(kind) ? scope.loadMode : 'ON_DEMAND',
+        title: metadata.title.trim() || row.file.name } };
+    });
+    running.current = true;
+    stop.current = false;
+    setBusy(true); setStopping(false); setTouched(false);
     onBusyChange('upload');
     setError(null);
-    controller.current = new AbortController();
-    const { heading: _heading, content: _content, ...scope } = labels;
     try {
-      const source = await uploadSource(projectId, file, {
-        ...metadata, ...scope, title: metadata.title.trim() || file.name
-      }, controller.current.signal);
-      if (!mounted.current) return;
-      setSaved({ source, filename: file.name, size: file.size });
-      setFile(null);
-      setTouched(false);
-      onDirtyChange(false);
-      onSaved();
-      onPreview(source);
-    } catch (err) {
-      if (mounted.current && err.name !== 'AbortError') setError(err);
+      for (const row of batch) {
+        if (stop.current || !mounted.current) break;
+        const problem = uploadProblem(row.file, row.metadata.kind);
+        if (problem) { changeRow(row.id, { status: 'failed', error: problem }); continue; }
+        changeRow(row.id, { status: 'uploading', error: null, submitted: row.metadata });
+        controller.current = new AbortController();
+        try {
+          const source = await uploadSource(projectId, row.file, row.metadata, controller.current.signal);
+          if (!source?.id || String(source.projectId) !== String(projectId)) throw new Error('响应缺少有效草稿信息');
+          if (!mounted.current) break;
+          changeRow(row.id, { status: 'succeeded', source });
+          onSaved();
+        } catch (err) {
+          if (!mounted.current) break;
+          const definite = err.status >= 400 && err.status < 500;
+          changeRow(row.id, { status: definite ? 'failed' : 'unknown', error: DOCUMENT_ERRORS[err.code] || err.message });
+        }
+      }
     } finally {
-      if (mounted.current) { setBusy(false); onBusyChange(null); }
+      running.current = false;
+      if (mounted.current) { setBusy(false); setStopping(false); onBusyChange(null); }
     }
   }
 
@@ -70,28 +108,30 @@ export default function MemoryUploadPanel({
       description={DOCUMENT_ERRORS[error.code] || error.message} />}
     <div className="memory-upload-layout">
       <Card className="memory-upload-drop-card">
-        <Upload.Dragger name="file" multiple={false} maxCount={1} showUploadList={false} disabled={busy}
-          accept={metadata.kind === 'SKILL' ? '.md' : '.md,.txt,.docx,.pdf'}
-          beforeUpload={(next) => {
-            const nextProblem = uploadProblem(next, metadata.kind);
-            if (nextProblem) { setError(new Error(nextProblem)); return Upload.LIST_IGNORE; }
-            setFile(next); setError(null); setTouched(true);
+        <Upload.Dragger name="file" multiple showUploadList={false} disabled={busy}
+          accept=".md,.txt,.docx,.pdf"
+          beforeUpload={(file, files) => {
+            if (file === files[0]) addFiles(files);
             return false;
           }}>
           <CloudUploadOutlined className="memory-upload-icon" />
           <Title level={3}>上传记忆资料</Title>
-          <Paragraph>拖拽文件到此处，或点击选择文件</Paragraph>
-          <Text type="secondary">每次上传一个文件，支持 MD、TXT、DOCX、文本 PDF</Text>
+          <Paragraph>拖拽文件到此处，或点击选择多个文件</Paragraph>
+          <Text type="secondary">最多 20 个文件、合计 50 MiB，逐份上传并生成草稿</Text>
         </Upload.Dragger>
         <div className="memory-upload-footer">
           <Text type="secondary">MD / TXT ≤ 1 MiB · DOCX / PDF ≤ 5 MiB<br />Skill 仅支持 Markdown；PDF 最多 100 页，不支持扫描件 OCR。</Text>
-          <Button aria-label="开始上传" type="primary" loading={busy} onClick={submit}>开始上传</Button>
+          <Space wrap>
+            <Button aria-label="开始上传" type="primary" disabled={busy} onClick={() => submit()}>开始上传</Button>
+            {busy && <Button aria-label="停止后续上传" disabled={stopping} onClick={() => { stop.current = true; setStopping(true); }}>停止后续上传</Button>}
+          </Space>
         </div>
+        <Paragraph type="secondary">停止后当前文件继续处理。刷新或离开不会保留本地文件队列；上传成功后请逐份核对发布。</Paragraph>
       </Card>
-      <Card title="上传设置" className="memory-upload-settings">
+      <Card title="批次默认设置" className="memory-upload-settings">
         <Form layout="vertical" disabled={busy}>
-          <Form.Item label="归属项目" required>
-            <Select aria-label="归属项目" placeholder="搜索并选择归属项目" value={projectId || undefined}
+          <Form.Item label="归属项目" required extra={projectLocked ? '已有上传记录，清空队列后可切换归属项目。' : null}>
+            <Select aria-label="归属项目" placeholder="搜索并选择归属项目" value={projectId || undefined} disabled={busy || projectLocked}
               showSearch={{ filterOption: false, onSearch: onProjectSearch }} loading={projectLoading}
               options={projectId && !projectOptions.some((item) => item.value === projectId)
                 ? [{ value: projectId, label: projectLabel(projectId) }, ...projectOptions] : projectOptions}
@@ -99,7 +139,7 @@ export default function MemoryUploadPanel({
           </Form.Item>
           <Form.Item label="资料类型">
             <Select aria-label="资料类型" value={metadata.kind}
-              options={KIND_OPTIONS.filter((item) => ['STANDARD', 'SKILL', 'ARCHITECTURE'].includes(item.value))}
+              options={kinds}
               onChange={(kind) => {
                 changeMetadata({ kind });
                 setLabels((current) => ({ ...current, loadMode: allowsCore(kind) ? current.loadMode : 'ON_DEMAND' }));
@@ -114,7 +154,7 @@ export default function MemoryUploadPanel({
         <Collapse items={[{ key: 'advanced', label: '高级设置', children: <>
           <Form layout="vertical" disabled={busy}>
             <Form.Item label="自定义标题"><Input aria-label="资料标题" maxLength={255} value={metadata.title}
-              placeholder="默认采用文件名" onChange={(event) => changeMetadata({ title: event.target.value })} /></Form.Item>
+              placeholder="默认采用各自文件名" onChange={(event) => changeMetadata({ title: event.target.value })} /></Form.Item>
             <Form.Item label="简介"><Input.TextArea aria-label="资料简介" maxLength={4000} value={metadata.description}
               onChange={(event) => changeMetadata({ description: event.target.value })} /></Form.Item>
           </Form>
@@ -124,19 +164,33 @@ export default function MemoryUploadPanel({
         <Paragraph type="secondary" className="memory-top-space">创建后默认添加到归属项目。上传生成草稿，核对后再发布；不会自动共享或开启记忆。</Paragraph>
       </Card>
     </div>
-    <Card title="文件状态" className="memory-top-space">
-      {problem && <Alert type="warning" title={problem} />}
-      <Table rowKey="name" pagination={false} scroll={{ x: 660 }}
-        dataSource={file ? [{ name: file.name, size: file.size }] : saved ? [{ name: saved.filename, size: saved.size, source: saved.source }] : []}
+    <Card title={`文件队列（${rows.length} / 20）`} className="memory-top-space"
+      extra={<Button disabled={busy || !rows.length} onClick={() => { setRows([]); setTouched(false); setError(null); }}>清空队列</Button>}>
+      <Table rowKey="id" pagination={false} scroll={{ x: 1200 }} dataSource={rows}
         locale={{ emptyText: '尚未选择文件，点击或拖拽到上方上传区' }}
         columns={[
-          { title: '文件名', dataIndex: 'name', width: 240 },
-          { title: '大小', dataIndex: 'size', render: (size) => `${(size / 1024).toFixed(1)} KiB` },
-          { title: '资料类型', render: (_, row) => labelFor(KIND_OPTIONS, row.source?.kind || metadata.kind) },
-          { title: '状态', render: (_, row) => <Tag color={row.source ? 'green' : 'default'}>{row.source ? '已上传（生成草稿）' : busy ? '上传与解析中' : problem || error ? '待检查 / 重试' : '待上传'}</Tag> },
-          { title: '操作', render: (_, row) => row.source
-            ? <Button onClick={() => onPreview(row.source)}>核对草稿</Button>
-            : <Button disabled={busy} onClick={() => { setFile(null); setError(null); }}>移除</Button> }
+          { title: '文件名', width: 220, render: (_, row) => row.file.name },
+          { title: '大小', width: 100, render: (_, row) => `${(row.file.size / 1024).toFixed(1)} KiB` },
+          { title: '资料类型', width: 150, render: (_, row) => ['pending', 'failed'].includes(row.status)
+            ? <Select aria-label={`${row.file.name} 资料类型`} disabled={busy} value={row.kind || ''} style={{ width: '100%' }}
+              options={[{ value: '', label: '跟随批次' }, ...kinds]} onChange={(kind) => changeRow(row.id, { kind: kind || null })} />
+            : labelFor(kinds, row.submitted?.kind || row.kind || metadata.kind) },
+          { title: '适用端', width: 150, render: (_, row) => ['pending', 'failed'].includes(row.status)
+            ? <Select aria-label={`${row.file.name} 适用端`} disabled={busy} value={row.targetType === null ? 'DEFAULT' : row.targetType} style={{ width: '100%' }}
+              options={[{ value: 'DEFAULT', label: '跟随批次' }, ...targets]} onChange={(targetType) => changeRow(row.id, { targetType: targetType === 'DEFAULT' ? null : targetType })} />
+            : labelFor(targets, row.submitted?.targetType || '') },
+          { title: '状态 / 错误', width: 300, render: (_, row) => <>
+            <Tag color={row.status === 'succeeded' ? 'green' : ['unknown', 'failed'].includes(row.status) ? 'orange' : 'default'}>{states[row.status]}</Tag>
+            {row.error && <div className="memory-feedback-summary">{row.error}</div>}
+            {row.status === 'pending' && <Text type="danger">{uploadProblem(row.file, row.kind || metadata.kind)}</Text>}
+            {row.status === 'unknown' && <div>请先到记忆资料核对是否已生成草稿，不能仅凭同名认定结果。本项不直接重试。</div>}
+            {row.source && <div>草稿 #{row.source.id}</div>}
+          </> },
+          { title: '操作', width: 210, render: (_, row) => <Space wrap>
+            {row.source && <Button disabled={busy} onClick={() => onPreview(row.source)}>核对草稿</Button>}
+            {row.status === 'failed' && <Button disabled={busy} onClick={() => submit(row.id)}>重试此文件</Button>}
+            <Button disabled={busy} onClick={() => setRows((current) => current.filter((item) => item.id !== row.id))}>移除</Button>
+          </Space> }
         ]} />
     </Card>
   </div>;
