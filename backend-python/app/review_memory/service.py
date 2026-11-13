@@ -225,7 +225,7 @@ def _is_shared(source: ReviewMemorySource) -> bool:
 def _readable_source(db: Session, project_id: int | None, source_id: int) -> ReviewMemorySource:
     source = repository.get_source(db, None, source_id)
     if source is not None:
-        if project_id == source.project_id:
+        if project_id is not None and project_id == source.project_id:
             return source
         binding = (
             repository.get_project_source_binding(db, project_id, source_id)
@@ -240,9 +240,9 @@ def _readable_source(db: Session, project_id: int | None, source_id: int) -> Rev
 
 
 def _source_detail(
-    db: Session, source: ReviewMemorySource, project_id: int | None
+    db: Session, source: ReviewMemorySource, project_id: int | None, *, management: bool = False
 ) -> MemorySourceDetail:
-    owner = project_id == source.project_id
+    owner = management or project_id is not None and project_id == source.project_id
     binding = (
         repository.get_project_source_binding(db, project_id, source.id)
         if project_id is not None
@@ -791,7 +791,7 @@ def get_original(db: Session, project_id: int | None, source_id: int) -> tuple[s
     source = _readable_source(db, project_id, source_id)
     if source.original_filename is None or source.original_bytes is None:
         raise AppError("RESOURCE_NOT_FOUND", "Memory source has no original file", 404)
-    if project_id != source.project_id and any(
+    if (project_id is None or project_id != source.project_id) and any(
         entry.state != EntryState.ACTIVE
         for entry in repository.list_entries(db, source.project_id, source_id)
     ):
@@ -865,6 +865,7 @@ def _source_summary(
     return MemorySourceSummary(
         id=record.id,
         project_id=record.project_id,
+        asset_scope="LIBRARY" if record.project_id is None else "PROJECT",
         kind=record.kind,
         origin=record.origin,
         title=record.title,

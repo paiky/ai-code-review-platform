@@ -98,7 +98,7 @@ class MemorySelectedSummary(MemorySchema):
     source_id: int = Field(alias="sourceId", gt=0)
     entry_id: int = Field(alias="entryId", gt=0)
     binding_id: int = Field(alias="bindingId", gt=0)
-    owner_project_id: int = Field(alias="ownerProjectId", gt=0)
+    owner_project_id: int | None = Field(alias="ownerProjectId", gt=0)
     source_version: int = Field(alias="sourceVersion", gt=0)
     entry_version: int = Field(alias="entryVersion", gt=0)
     binding_version: int = Field(alias="bindingVersion", gt=0)
@@ -257,6 +257,7 @@ class MemoryEntryResponse(MemoryEntryDraft):
 
 
 class MemoryLibraryQuery(MemorySchema):
+    asset_scope: Literal["LIBRARY", "PROJECT"] | None = Field(default=None, alias="assetScope")
     owner_project_id: int | None = Field(default=None, alias="ownerProjectId", gt=0)
     using_project_id: int | None = Field(default=None, alias="usingProjectId", gt=0)
     category: Literal["DOCUMENT", "CASE"] | None = None
@@ -321,7 +322,8 @@ class MemorySharedQuery(MemorySchema):
 
 class MemorySourceSummary(MemorySchema):
     id: int
-    project_id: int = Field(alias="projectId")
+    project_id: int | None = Field(alias="projectId")
+    asset_scope: Literal["LIBRARY", "PROJECT"] = Field(default="PROJECT", alias="assetScope")
     kind: MemoryKind
     origin: MemoryOrigin
     title: str

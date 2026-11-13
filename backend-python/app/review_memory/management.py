@@ -17,6 +17,26 @@ from app.review_memory.schemas import (
     MemorySourceProjectsPage,
 )
 from app.review_memory.service import _binding_summary, _is_shared, _source_summary, require_project
+from app.review_memory.service import _source_detail, get_project_source
+
+
+def get_source(db: Session, source_id: int):
+    source = repository.get_source(db, None, source_id)
+    if source is None:
+        raise AppError("RESOURCE_NOT_FOUND", "Memory source not found", 404)
+    if source.project_id is not None:
+        return get_project_source(db, source.project_id, source_id)
+    if source.kind not in {"STANDARD", "ARCHITECTURE", "SKILL"} or source.origin == "FEEDBACK":
+        raise AppError("MEMORY_DATA_INVALID", "Project cases require a real project", 409)
+    return _source_detail(db, source, None, management=True)
+
+
+def get_original(db: Session, source_id: int) -> tuple[str, bytes]:
+    get_source(db, source_id)
+    source = repository.get_source(db, None, source_id)
+    if source.original_filename is None or source.original_bytes is None:
+        raise AppError("RESOURCE_NOT_FOUND", "Memory source has no original file", 404)
+    return source.original_filename, source.original_bytes
 
 
 @contextmanager

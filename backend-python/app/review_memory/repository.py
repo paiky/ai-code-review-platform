@@ -77,7 +77,7 @@ def get_entry(
 
 
 def list_entries(
-    db: Session, project_id: int, source_id: int, *, lock: bool = False
+    db: Session, project_id: int | None, source_id: int, *, lock: bool = False
 ) -> list[ReviewMemoryEntry]:
     query = (
         select(ReviewMemoryEntry)
@@ -179,6 +179,9 @@ def list_library_sources(
         if filters.state is not None
         else ReviewMemorySource.state != SourceState.DELETED
     ]
+    if filters.asset_scope is not None:
+        conditions.append(ReviewMemorySource.project_id.is_(None) if filters.asset_scope == "LIBRARY"
+                          else ReviewMemorySource.project_id.is_not(None))
     if filters.category is not None:
         conditions.append(
             ReviewMemorySource.kind.in_(

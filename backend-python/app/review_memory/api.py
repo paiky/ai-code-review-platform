@@ -196,6 +196,16 @@ def list_source_projects(
     return ok(management.list_source_projects(db, source_id, query))
 
 
+@management_router.get("/{source_id}", response_model=DetailResponse)
+def get_managed_source(source_id: Annotated[int, Path(gt=0)], db: Session = Depends(memory_db)) -> dict:
+    return ok(management.get_source(db, source_id))
+
+
+@management_router.get("/{source_id}/original", response_class=Response)
+def get_managed_original(source_id: Annotated[int, Path(gt=0)], db: Session = Depends(memory_db)) -> Response:
+    return _original_response(*management.get_original(db, source_id))
+
+
 @router.get("/bindings", response_model=MemoryApiResponse[MemoryProjectBindingsPage])
 def list_project_bindings(
     project_id: Annotated[int, Path(gt=0)],
