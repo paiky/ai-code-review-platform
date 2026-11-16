@@ -58,6 +58,7 @@ export default function ReviewMemoryPage() {
   const linkedSourceId = params.get('sourceId') || '';
   const projectId = /^[1-9]\d*$/.test(rawProjectId) ? rawProjectId : '';
   const [projects, setProjects] = useState([]);
+  const [projectNames, setProjectNames] = useState({});
   const [projectSearch, setProjectSearch] = useState('');
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState(null);
@@ -226,8 +227,14 @@ export default function ReviewMemoryPage() {
         });
         fetchApi(`/api/projects?${query}`, { signal: controller.signal })
           .then((data) => {
-            if (!controller.signal.aborted)
-              setProjects(Array.isArray(data) ? data : data?.items || []);
+            if (!controller.signal.aborted) {
+              const items = Array.isArray(data) ? data : data?.items || [];
+              setProjects(items);
+              setProjectNames((current) => ({
+                ...current,
+                ...Object.fromEntries(items.map((item) => [String(item.id), item.name]))
+              }));
+            }
           })
           .catch((err) => {
             if (err.name !== 'AbortError') setProjectError(err.message);
@@ -286,7 +293,7 @@ export default function ReviewMemoryPage() {
   }, [projectId, legacyOpen, legacyRetry, isProjects]);
 
   const currentProject = projects.find((item) => String(item.id) === projectId);
-  const projectName = currentProject?.name || `项目 #${projectId}`;
+  const projectName = projectNames[projectId] || `项目 #${projectId}`;
   const projectOptions = projects.map((item) => ({
     value: String(item.id),
     label: item.name
@@ -307,7 +314,7 @@ export default function ReviewMemoryPage() {
   };
   const changeFilter = (patch) => setFilters((current) => ({ ...current, ...patch, pageNo: 1 }));
   const projectLabel = (id) =>
-    `${projects.find((item) => String(item.id) === String(id))?.name || '项目'} #${id}`;
+    `${projectNames[String(id)] || '项目'} #${id}`;
 
   const columns = [
     {

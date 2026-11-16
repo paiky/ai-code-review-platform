@@ -239,6 +239,35 @@ export default function MemoryAssociationDrawer({
       keyboard={!busy}
       footer={
         <Space wrap>
+          {record && snapshot && <>
+            <Button
+              type="primary"
+              aria-label={saveLabel}
+              disabled={loading || conflict || Boolean(useProblem)}
+              loading={busy}
+              onClick={() => save('ACTIVE')}
+            >
+              {saveLabel}
+            </Button>
+            {snapshot.binding?.state === 'ACTIVE' && (
+              <Button
+                danger
+                disabled={busy || loading || conflict}
+                onClick={() =>
+                  Modal.confirm({
+                    title: '仅从该项目移除？',
+                    content:
+                      '其他项目的关系和资料正文保留；本地未保存范围将丢弃，恢复时使用已保存范围。',
+                    okText: '从该项目移除',
+                    cancelText: '取消',
+                    onOk: () => save('DISABLED')
+                  })
+                }
+              >
+                从该项目移除
+              </Button>
+            )}
+          </>}
           <Button onClick={onClose}>关闭</Button>
           {onBack && <Button disabled={busy || loading} onClick={onBack}>返回使用项目</Button>}
           {record && initial.mode === 'candidates' && (
@@ -400,39 +429,10 @@ export default function MemoryAssociationDrawer({
                     />
                   </Form.Item>
                   </> }]} />
-                  <Space wrap>
-                    <Button
-                      type="primary"
-                      aria-label={saveLabel}
-                      disabled={loading || conflict || Boolean(useProblem)}
-                      loading={busy}
-                      onClick={() => save('ACTIVE')}
-                    >
-                      {saveLabel}
-                    </Button>
-                    {snapshot.binding?.state === 'ACTIVE' && (
-                      <Button
-                        danger
-                        disabled={busy || loading || conflict}
-                        onClick={() =>
-                          Modal.confirm({
-                            title: '仅从该项目移除？',
-                            content:
-                              '其他项目的关系和资料正文保留；本地未保存范围将丢弃，恢复时使用已保存范围。',
-                            okText: '从该项目移除',
-                            cancelText: '取消',
-                            onOk: () => save('DISABLED')
-                          })
-                        }
-                      >
-                        从该项目移除
-                      </Button>
-                    )}
-                  </Space>
                 </Form>
               </>
             )}
-            {detail?.canDownloadOriginal && (
+            {initial.mode === 'candidates' && detail?.canDownloadOriginal && (
               <Button
                 className="memory-top-space"
                 disabled={busy}
@@ -454,10 +454,10 @@ export default function MemoryAssociationDrawer({
                 下载共享原件
               </Button>
             )}
-            {detail?.hasOriginal && !detail.canDownloadOriginal && (
+            {initial.mode === 'candidates' && detail?.hasOriginal && !detail.canDownloadOriginal && (
               <Paragraph type="secondary">原件包含未发布章节，当前不可下载。</Paragraph>
             )}
-            {detail?.entries.map((entry) => (
+            {initial.mode === 'candidates' && detail?.entries.map((entry) => (
               <div key={entry.id} className="memory-top-space">
                 <Text strong>{entry.heading}</Text>
                 <Paragraph type="secondary">
@@ -469,7 +469,7 @@ export default function MemoryAssociationDrawer({
                 <pre className="memory-plain-text">{entry.content}</pre>
               </div>
             ))}
-            {detail && !detail.entries.length && <Empty description="暂无已发布章节" />}
+            {initial.mode === 'candidates' && detail && !detail.entries.length && <Empty description="暂无已发布章节" />}
           </>
         )}
       </Spin>

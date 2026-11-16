@@ -77,9 +77,10 @@ export default function MemorySourceProjectsDrawer({
         <Select aria-label="添加使用项目" className="memory-owner-picker" value={selectedProject || undefined}
           placeholder="搜索并选择项目" loading={projectLoading}
           showSearch={{ filterOption: false, onSearch: onProjectSearch }}
+          onOpenChange={(open) => { if (!open) onProjectSearch(''); }}
           options={selectedProject && !projectOptions.some((item) => item.value === selectedProject)
             ? [{ value: selectedProject, label: projectLabel(selectedProject) }, ...projectOptions] : projectOptions}
-          onChange={setSelectedProject} />
+          onChange={(value) => { setSelectedProject(value); onProjectSearch(''); }} />
         <Button type="primary" disabled={loading || Boolean(error) || Boolean(addProblem)}
           onClick={() => setEditor({ projectId: selectedProject, binding: null })}>关联到该项目</Button>
       </div>
