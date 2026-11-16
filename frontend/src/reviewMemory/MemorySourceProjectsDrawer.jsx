@@ -68,8 +68,7 @@ export default function MemorySourceProjectsDrawer({
       footer={<Button onClick={onClose}>关闭</Button>}>
       <Title level={4}>{source.title}</Title>
       <Paragraph>{source.projectId == null ? '公共资料，无归属项目' : `归属项目：${projectLabel(source.projectId)}`} · {STATE_LABELS[source.state]} · {source.visibility === 'SHARED' ? '共享资料' : '项目私有'}</Paragraph>
-      <Alert type="info" showIcon title="每次保存一个项目的使用关系"
-        description="添加不代表本次会加载，也不会自动共享、发布或开启项目记忆。已保存项目保留，下一项目保存失败不会撤销之前的结果。" />
+      <Paragraph type="secondary">每次保存一个项目，已保存结果独立保留。添加只建立使用关系，不会自动共享、发布或开启项目记忆，也不代表本次会加载。</Paragraph>
       {error && <Alert type="error" className="memory-top-space" title="使用项目加载失败" description={error}
         action={<Button onClick={() => setRefresh((v) => v + 1)}>重试</Button>} />}
       <Title level={5}>添加使用项目</Title>

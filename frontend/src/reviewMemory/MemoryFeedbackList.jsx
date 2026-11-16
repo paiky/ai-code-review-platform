@@ -38,10 +38,12 @@ export default function MemoryFeedbackList({ projectId, refresh, onOpen, globalV
   });
   return (
     <>
-      <Alert type="info" showIcon title={globalView ? '人工误报打标池' : '本项目人工误报反馈'}
-        description={globalView
-          ? '汇总各项目 AI finding 的误报标记。有效反馈不等于已沉淀案例；任务主端来自历史任务，未记录时不推断，多端任务不代表具体问题归属。完整说明与证据请打开详情核对。'
-          : '只收集 AI finding 反馈。保存标记不会直接生效；已沉淀、已撤回及失败记录也保留在列表中，便于追溯。'} />
+      <Typography.Text strong>{globalView ? '人工误报打标池' : '本项目人工误报反馈'}</Typography.Text>
+      <Typography.Paragraph type="secondary">保存误报标记不会自动加入记忆库；已沉淀、已撤回及失败记录均保留。</Typography.Paragraph>
+      {globalView && <details className="memory-usage-notes">
+        <summary>任务主端说明</summary>
+        <Typography.Paragraph type="secondary">任务主端来自历史任务，未记录时不推断；多端任务不代表具体问题归属，完整说明与证据请打开详情核对。</Typography.Paragraph>
+      </details>}
       {globalView && <div className="memory-simple-filters memory-top-space">
         <label><Typography.Text>项目</Typography.Text><Select aria-label="反馈项目筛选" allowClear placeholder="全部项目" value={filters.projectId || undefined}
           showSearch={{ filterOption: false, onSearch: onProjectSearch }} loading={projectLoading}

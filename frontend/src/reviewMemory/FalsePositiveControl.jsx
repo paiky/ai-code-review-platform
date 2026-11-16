@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Alert, Button, Checkbox, Form, Input, message, Modal, Select, Space, Tag } from 'antd';
+import { Alert, Button, Checkbox, Form, Input, message, Modal, Select, Space, Tag, Typography } from 'antd';
 import { fetchApi } from '../api.js';
 import { registerSettingsNavigationGuard } from '../settingsNavigation.js';
 import { saveFindingFeedback, withdrawFeedback } from './api.js';
@@ -134,14 +134,15 @@ export default function FalsePositiveControl({ projectId, taskId, review, findin
         confirmLoading={saving} okButtonProps={{ disabled: loading || !loaded }}
         cancelButtonProps={{ disabled: saving }} maskClosable={!saving} keyboard={!saving}
         okText="保存误报反馈" cancelText="取消">
-        <Alert type="info" showIcon title="仅保存反馈不会自动发布案例"
-          description="请在说明中填写判断依据、参考证据或缺失背景。修改已有反馈会使原案例失效，需重新确认。" />
+        <Typography.Paragraph type="secondary">
+          保存反馈不会自动发布案例；修改已有反馈会使原案例失效，需重新确认。
+        </Typography.Paragraph>
         {loading ? <p role="status">正在读取已有反馈…</p> : <Form layout="vertical" disabled={saving} className="memory-top-space">
           <Form.Item label="误报原因"><Select aria-label="误报原因" value={draft.reasonType} options={REVIEW_FEEDBACK_REASON_OPTIONS}
             onChange={(reasonType) => change({ reasonType, missingContextTypes: reasonType === 'CONTEXT_MISSING' ? draft.missingContextTypes : [] })} /></Form.Item>
           {draft.reasonType === 'CONTEXT_MISSING' && <Form.Item label="缺失背景"><Select aria-label="缺失背景" mode="multiple"
             value={draft.missingContextTypes} options={MISSING_CONTEXT_TYPE_OPTIONS} onChange={(missingContextTypes) => change({ missingContextTypes })} /></Form.Item>}
-          <Form.Item label="说明 / 参考证据"><Input.TextArea aria-label="说明 / 参考证据" rows={5} maxLength={4000}
+          <Form.Item label="说明 / 参考证据" extra="填写判断依据、参考证据或缺失背景。"><Input.TextArea aria-label="说明 / 参考证据" rows={5} maxLength={4000}
             value={draft.reasonText} onChange={(event) => change({ reasonText: event.target.value })} /></Form.Item>
           <Checkbox checked={draft.organize} onChange={(event) => change({ organize: event.target.checked })}>提交后整理为踩坑案例</Checkbox>
         </Form>}

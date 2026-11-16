@@ -672,11 +672,7 @@ export default function MemorySourceDrawer({
               )}
             </Form>
             {metadata.kind === 'SKILL' && (
-              <Alert
-                type="info"
-                showIcon
-                title="Skill 仅导入审查文本；脚本、工具声明和权限均不执行。"
-              />
+              <Paragraph type="secondary">Skill 仅导入审查文本；脚本、工具声明和权限均不执行。</Paragraph>
             )}
             <MemoryEntryFields
               value={creationEntry}
@@ -821,16 +817,15 @@ export default function MemorySourceDrawer({
               <Paragraph type="secondary">原件包含未发布章节，当前不可下载。</Paragraph>
             )}
             {readOnly && (
-              <Alert
-                type="info"
-                title={
+              <Paragraph type="secondary">
+                {
                   source.origin === 'FEEDBACK'
                     ? '反馈来源只读，通过来源反馈的专用确认流程维护。'
                     : source.state === 'DELETED'
                       ? '资料已删除，只保留追溯信息。'
                       : '引用资料只读，请从记忆资料页进入维护。'
                 }
-              />
+              </Paragraph>
             )}
             {source.state === 'DISABLED' && (
               <Alert type="warning" title="当前资料已停用。重新发布只恢复本次明确勾选的章节。" />
@@ -1124,10 +1119,9 @@ export default function MemorySourceDrawer({
               {publishPreview.entries.reduce((total, item) => total + bytes(item.content), 0)} UTF-8
               字节
             </Paragraph>
-            <Alert
-              type="info"
-              title="正文大小不等于项目 CORE 总占用，最终预算由服务端校验。仅项目开启记忆且范围、预算匹配时，才会用于后续 Agent Review。"
-            />
+            <Paragraph type="secondary">
+              正文大小不等于项目 CORE 总占用，最终预算由服务端校验；用于后续 Agent Review 仍需满足项目开关、范围和预算。
+            </Paragraph>
             {impactContent(publishPreview.impact)}
             {publishPreview.entries.map((item) => (
               <Paragraph key={item.id}>

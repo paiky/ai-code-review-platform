@@ -388,11 +388,9 @@ export default function MemoryAssociationDrawer({
             {snapshot && (
               <>
                 {useProblem && <Alert type="warning" className="memory-top-space" title={useProblem} />}
-                <Alert
-                  className="memory-top-space"
-                  type="info"
-                  title="项目范围与章节范围取交集；实际按本次变更匹配。添加资料不会开启记忆或立即触发审查。"
-                />
+                <Paragraph className="memory-top-space" type="secondary">
+                  项目范围与章节范围取交集；实际按本次变更匹配。添加资料不会开启记忆或触发审查。
+                </Paragraph>
                 <Button className="memory-top-space" disabled={busy || loading} onClick={requestRefresh}>刷新关联状态</Button>
                 <Paragraph className="memory-top-space" type="secondary">当前范围：{draft.targetType ? labelFor(TARGET_TYPE_OPTIONS, draft.targetType) : '所有端'} / {draft.pathGlobs.join('、') || '所有路径'}。默认无需修改。</Paragraph>
                 <Form layout="vertical" disabled={busy || loading}>

@@ -184,8 +184,6 @@ export default function MemoryFeedbackDrawer({
         </Space>
       }
     >
-      <Alert type="info" showIcon title="确认后沉淀为本项目私有案例"
-        description="反馈已独立保存，关闭不会撤销反馈。案例用于提示下次查证，不能直接证明代码安全；项目开启记忆且匹配适用范围与预算时才可能用于后续 Agent Review。" />
       {loading && <Paragraph role="status">正在加载反馈与案例…</Paragraph>}
       {error && <Alert type="error" showIcon title={error} />}
       {conflict && <Alert type="warning" title="当前输入已保留。请刷新最新反馈和案例，核对差异后重新确认。" />}
@@ -201,13 +199,20 @@ export default function MemoryFeedbackDrawer({
         action={<Button onClick={() => setPollCycle((value) => value + 1)}>重新查询状态</Button>} />}
       {detail && (
         <>
+          <Paragraph type="secondary">反馈已保存，关闭不会撤销。{!blocked && '确认后保存为本项目私有案例。'}</Paragraph>
+          {!blocked && <details className="memory-usage-notes">
+            <summary>案例使用说明</summary>
+            <Paragraph type="secondary">案例用于提示下次查证，不能直接证明代码安全；项目开启记忆且匹配适用范围与预算时，才可能用于后续 Agent Review。</Paragraph>
+          </details>}
           <Descriptions column={1} size="small" className="memory-top-space" items={[
             { key: 'feedback', label: '原反馈', children: `#${detail.id} · ${labelFor(FEEDBACK_STATUS_OPTIONS, detail.status)} · ${labelFor(REVIEW_FEEDBACK_REASON_OPTIONS, detail.reasonType) || '未填原因'}` },
             { key: 'source', label: '案例来源', children: source ? `#${source.id} · v${source.version} · ${STATE_LABELS[source.state] || source.state}` : '尚未生成案例' },
             { key: 'task', label: '关联任务', children: <a href={`/tasks/${detail.taskId}`} target="_blank" rel="noreferrer">查看任务 #{detail.taskId}</a> }
           ]} />
-          {detail.status === 'CONVERTED' && <Alert type="info" title="此反馈已转为旧项目策略，不重复生成记忆案例。"
-            description={legacyPolicies.length ? legacyPolicies.map((item) => `#${item.id} ${item.title}`).join('、') : '未查到同源旧策略记录，可在项目记忆库的“旧项目策略 · 只读来源”继续核对。'} />}
+          {detail.status === 'CONVERTED' && <Paragraph type="secondary">
+            <Text>此反馈已转为旧项目策略，不重复生成记忆案例。</Text><br />
+            {legacyPolicies.length ? legacyPolicies.map((item) => `#${item.id} ${item.title}`).join('、') : '未查到同源旧策略记录，可在项目记忆库的“旧项目策略 · 只读来源”继续核对。'}
+          </Paragraph>}
           {blocked && detail.status !== 'CONVERTED' && <Alert type="warning" title="当前反馈不能确认案例"
             description={!detail.findingAvailable ? '原 finding 已不存在或发生变化。' : source?.state === 'DELETED' ? '来源已删除，不能重新确认恢复。' : detail.reasonType === 'CONTEXT_MISSING' && !detail.reasonText?.trim() ? '请先修改原反馈，描述缺失背景或参考证据。' : '仅待分析或有效的误报反馈可确认；已撤回或信息不足的反馈不能直接发布。'} />}
           {needsCompare && <Checkbox className="memory-top-space" checked={compared} onChange={(event) => setCompared(event.target.checked)}>
