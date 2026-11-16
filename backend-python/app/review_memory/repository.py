@@ -256,33 +256,38 @@ def library_binding_summaries(
 ) -> dict[int, tuple[int, list[int]]]:
     if not source_ids:
         return {}
-    ranked = (
+    counts = (
         select(
             ReviewMemoryProjectSource.source_id,
-            ReviewMemoryProjectSource.project_id,
-            func.count().over(partition_by=ReviewMemoryProjectSource.source_id).label("total"),
-            func.row_number()
-            .over(
-                partition_by=ReviewMemoryProjectSource.source_id,
-                order_by=ReviewMemoryProjectSource.project_id,
-            )
-            .label("ordinal"),
+            func.count().label("total"),
         )
         .where(
             ReviewMemoryProjectSource.source_id.in_(source_ids),
             ReviewMemoryProjectSource.state == BindingState.ACTIVE,
         )
+        .group_by(ReviewMemoryProjectSource.source_id)
         .subquery()
     )
+    # Scalar subqueries keep the three-project preview bounded on MySQL 5.7 too.
+    projects = [
+        select(ReviewMemoryProjectSource.project_id)
+        .where(
+            ReviewMemoryProjectSource.source_id == counts.c.source_id,
+            ReviewMemoryProjectSource.state == BindingState.ACTIVE,
+        )
+        .order_by(ReviewMemoryProjectSource.project_id)
+        .offset(index)
+        .limit(1)
+        .scalar_subquery()
+        for index in range(3)
+    ]
     rows = db.execute(
-        select(ranked.c.source_id, ranked.c.project_id, ranked.c.total)
-        .where(ranked.c.ordinal <= 3)
-        .order_by(ranked.c.source_id, ranked.c.project_id)
+        select(counts.c.source_id, counts.c.total, *projects).order_by(counts.c.source_id)
     )
-    result = {}
-    for source_id, project_id, total in rows:
-        result.setdefault(source_id, (total, []))[1].append(project_id)
-    return result
+    return {
+        source_id: (total, [project_id for project_id in project_ids if project_id is not None])
+        for source_id, total, *project_ids in rows
+    }
 
 
 def list_source_projects(

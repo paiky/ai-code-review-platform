@@ -321,6 +321,7 @@ $env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?chars
 - `/api/health` 不访问数据库，不能仅凭 health 判断数据库链路可用；还应访问 `/api/review-tasks` 或 `/api/projects`。
 - Python 后端以 `backend-python/migrations/bootstrap_sql/` 为 schema 基准，日常不要依赖 legacy Java Flyway 迁移。
 - Agent Worker 上线后若出现 `1064 ... near 'SKIP LOCKED'`，通常是后端连接到了 MySQL 5.7。Agent Job claim 在 MySQL 5.7 下必须使用带行锁的普通 `FOR UPDATE` 串行领取，在 MySQL 8.0+ 才使用 `FOR UPDATE SKIP LOCKED`；不要通过移除行锁来规避语法错误。生产仍推荐 MySQL 8.0+。
+- MySQL 5.7 不支持 `COUNT(*) OVER (...)`、`ROW_NUMBER() OVER (...)` 等窗口函数；列表接口出现 `1064 ... near '(PARTITION BY ...'` 时，先从后端实际数据库连接执行 `SELECT VERSION()`，不能用同机其它 MySQL 容器的镜像版本代替。关联摘要使用分组计数与有序、有限条数的标量子查询兼容，保留总数与预览上限，无需迁移数据库。
 - 手动 SQL 使用 `@变量` 与 `utf8mb4_unicode_ci` 列比较时，只有 `SET NAMES utf8mb4` 可能让变量采用 `utf8mb4_general_ci`，在 MySQL 5.7 报 `1267 Illegal mix of collations ... for operation '='`。`SET NAMES ... COLLATE ...` 不会追溯修改已有变量的排序规则；客户端单独重跑语句或恢复连接设置时，仅设置会话规则仍可能报错。核对目标列规则后，在比较及混合文本拼接处显式使用 `CONVERT(@变量 USING utf8mb4) COLLATE utf8mb4_unicode_ci`，创建、查询、回滚均需覆盖，不需要修改表结构；事务中报错后先在同一会话 rollback，再完整重跑。
 - MySQL 5.7 的只读事务会拒绝 `EXPLAIN INSERT/UPDATE`，报 `1792 Cannot execute statement in a READ ONLY transaction`；这不能直接证明原 SQL 有误。核对语法和执行计划时可在普通会话中仅执行 `EXPLAIN`，结束后 rollback；不要为了验证语法执行实际写语句。
 
