@@ -42,6 +42,7 @@ import {
   webhookTestMeta
 } from './projectConfigurationModel.js';
 import WebhookEditorModal from './WebhookEditorModal.jsx';
+import { getMemorySettings } from '../reviewMemory/api.js';
 
 const { Text, Title } = Typography;
 
@@ -89,8 +90,12 @@ export default function ProjectConfigurationDrawer({
   const [detectionPreview, setDetectionPreview] = useState(null);
   const [detectionLoading, setDetectionLoading] = useState(false);
   const [detectionApplying, setDetectionApplying] = useState(false);
+  const [memoryConflict, setMemoryConflict] = useState(false);
+  const [memoryLoading, setMemoryLoading] = useState(false);
 
   const dirty = Boolean(draft) && configurationFingerprint(draft) !== baseline;
+  const memoryDirty = Boolean(draft?.memorySettings?.schemaReady && baseline) &&
+    draft.memorySettings.enabled !== JSON.parse(baseline).memorySettings?.enabled;
 
   useEffect(() => {
     onDirtyChange?.(open && (dirty || webhookEditorDirty));
@@ -103,6 +108,7 @@ export default function ProjectConfigurationDrawer({
     setError(null);
     setTargetChange(null);
     setDetectionPreview(null);
+    setMemoryConflict(false);
     const configurationRequest = fetchProjectConfiguration(project.id);
     Promise.all([
       configurationRequest,
@@ -181,11 +187,18 @@ export default function ProjectConfigurationDrawer({
   };
 
   const requestClose = () => {
-    onDirtyChange?.(false);
-    onClose?.();
+    if (saving || memoryLoading) return;
+    const close = () => { onDirtyChange?.(false); onClose?.(); };
+    if (!memoryDirty) { close(); return; }
+    Modal.confirm({
+      title: '放弃当前未保存修改？',
+      content: '记忆库开关尚未保存，关闭将丢弃本次项目配置修改。',
+      okText: '放弃并关闭', cancelText: '继续编辑', onOk: close
+    });
   };
 
   const save = async () => {
+    if (saving || memoryLoading || memoryConflict) return;
     if (!draft?.targetConfig?.templateCode?.trim()) {
       setError('请选择规则模板');
       return;
@@ -197,7 +210,13 @@ export default function ProjectConfigurationDrawer({
     setSaving(true);
     setError(null);
     try {
-      const saved = await saveProjectConfiguration(project.id, draft);
+      const saved = await saveProjectConfiguration(project.id, {
+        ...draft,
+        memorySettings: memoryDirty ? {
+          enabled: draft.memorySettings.enabled,
+          expectedVersion: draft.memorySettings.version
+        } : undefined
+      });
       const normalized = normalizeProjectConfiguration(saved);
       setDraft(normalized);
       setBaseline(configurationFingerprint(normalized));
@@ -206,8 +225,23 @@ export default function ProjectConfigurationDrawer({
       onSaved?.(saved);
     } catch (err) {
       setError(err.message);
+      if (err.code === 'MEMORY_VERSION_CONFLICT') setMemoryConflict(true);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const refreshMemorySettings = async () => {
+    setMemoryLoading(true);
+    try {
+      const latest = await getMemorySettings(project.id);
+      setDraft(current => ({ ...current, memorySettings: { ...latest, enabled: current.memorySettings.enabled } }));
+      setMemoryConflict(false);
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setMemoryLoading(false);
     }
   };
 
@@ -263,11 +297,12 @@ export default function ProjectConfigurationDrawer({
           </div>
         )}
         onClose={requestClose}
-        mask={{ closable: !saving }}
+        mask={{ closable: !saving && !memoryLoading }}
+        keyboard={!saving && !memoryLoading}
         footer={(
           <div className="project-config-drawer-footer">
             <Button onClick={requestClose} disabled={saving}>取消</Button>
-            <Button type="primary" onClick={save} loading={saving} disabled={loading || !draft}>
+            <Button type="primary" onClick={save} loading={saving} disabled={loading || !draft || memoryConflict || memoryLoading}>
               保存项目配置
             </Button>
           </div>
@@ -329,6 +364,18 @@ export default function ProjectConfigurationDrawer({
                       onChange={checked => updateTargetConfig('reminderCardEnabled', checked)}
                     />
                   </div>
+                  <div className="project-config-switch-field">
+                    <div>
+                      <Text strong>记忆库</Text>
+                      <Text type="secondary">Agent Review 使用已关联且匹配本次变更的资料</Text>
+                    </div>
+                    <Switch aria-label="项目记忆库" checked={draft.memorySettings?.enabled === true}
+                      disabled={!draft.memorySettings?.schemaReady || saving || memoryConflict || memoryLoading}
+                      onChange={enabled => updateDraft('memorySettings', { ...draft.memorySettings, enabled })} />
+                  </div>
+                  {!draft.memorySettings?.schemaReady && <Alert type="warning" title="记忆设置尚未就绪，请更新后端并完成数据库迁移。" />}
+                  {memoryConflict && <Alert type="warning" title="记忆设置已变化，当前选择已保留"
+                    action={<Button loading={memoryLoading} onClick={refreshMemorySettings}>读取最新记忆设置并保留选择</Button>} />}
                   {targetChange && (
                     <Alert
                       type="warning"

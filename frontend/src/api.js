@@ -16,7 +16,10 @@ export async function fetchApi(path, options = {}) {
     }
   }
   if (!response.ok || body.success === false) {
-    throw new Error(body?.message || `Request failed: ${response.status}`);
+    const error = new Error(body?.message || `Request failed: ${response.status}`);
+    error.code = body?.code;
+    error.status = response.status;
+    throw error;
   }
   return body?.data;
 }

@@ -106,6 +106,11 @@ export function normalizeProjectConfiguration(configuration) {
       pushMaxDiffBytes: Number(reviewSettings.pushMaxDiffBytes ?? -1),
       pushDebounceSeconds: Number(reviewSettings.pushDebounceSeconds ?? 300)
     },
+    memorySettings: configuration?.memorySettings ? {
+      enabled: configuration.memorySettings.enabled === true,
+      version: configuration.memorySettings.version,
+      schemaReady: configuration.memorySettings.schemaReady === true
+    } : null,
     webhookIds: Array.isArray(configuration?.webhookIds) ? configuration.webhookIds.map(Number) : []
   };
 }

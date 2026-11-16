@@ -110,7 +110,7 @@ class ProjectReviewSettings(Base):
 
     project_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     memory_enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="0", deferred=True
+        Boolean, nullable=False, server_default="1", deferred=True
     )
     memory_settings_version: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="1", deferred=True

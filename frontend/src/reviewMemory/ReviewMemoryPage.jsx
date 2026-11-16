@@ -18,7 +18,7 @@ import {
 import { PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { fetchApi } from '../api.js';
 import { registerSettingsNavigationGuard } from '../settingsNavigation.js';
-import { getMemoryCapabilities, listLibrarySources } from './api.js';
+import { getMemoryCapabilities, getMemorySettings, listLibrarySources } from './api.js';
 import {
   ISSUE_OPTIONS,
   KIND_OPTIONS,
@@ -34,7 +34,6 @@ import MemoryUploadPanel from './MemoryUploadPanel.jsx';
 import MemoryAssociationDrawer from './MemoryAssociationDrawer.jsx';
 import MemoryFeedbackDrawer from './MemoryFeedbackDrawer.jsx';
 import MemoryFeedbackList from './MemoryFeedbackList.jsx';
-import MemoryInjectionSettings from './MemoryInjectionSettings.jsx';
 import MemoryProjectBindings from './MemoryProjectBindings.jsx';
 import MemorySourceProjectsDrawer from './MemorySourceProjectsDrawer.jsx';
 import './reviewMemory.css';
@@ -73,7 +72,6 @@ export default function ReviewMemoryPage() {
   const handleUploadDirty = useCallback((dirty) => { uploadDirtyRef.current = dirty; }, []);
   const handleUploadBusy = useCallback((busy) => { uploadBusyRef.current = busy; }, []);
   const [projectSettings, setProjectSettings] = useState(null);
-  const handleSettingsChange = useCallback((settings) => setProjectSettings({ projectId, settings }), [projectId]);
   const [filters, setFilters] = useState({
     kind: '',
     state: '',
@@ -95,11 +93,6 @@ export default function ReviewMemoryPage() {
     return /^[1-9]\d*$/.test(linkedSourceId)
       ? { mode: 'view', sourceId: linkedSourceId, projectId, library: !projectId, key: 0 } : null;
   });
-  const [settingsReset, setSettingsReset] = useState(0);
-  const settingsDirtyRef = useRef(false);
-  const settingsBusyRef = useRef(false);
-  const handleSettingsDirty = useCallback((dirty) => { settingsDirtyRef.current = dirty; }, []);
-  const handleSettingsBusy = useCallback((busy) => { settingsBusyRef.current = busy; }, []);
   const [legacyOpen, setLegacyOpen] = useState(false);
   const [legacy, setLegacy] = useState(null);
   const [legacyError, setLegacyError] = useState(null);
@@ -117,6 +110,18 @@ export default function ReviewMemoryPage() {
     busyRef.current = busy;
   }, []);
   const handleSaved = useCallback(() => setRefresh((value) => value + 1), []);
+
+  useEffect(() => {
+    if (!isProjects || !projectId) return;
+    const controller = new AbortController();
+    setProjectSettings(null);
+    getMemorySettings(projectId, controller.signal).then((settings) => {
+      if (!controller.signal.aborted) setProjectSettings({ projectId, settings });
+    }).catch(() => {
+      if (!controller.signal.aborted) setProjectSettings(null);
+    });
+    return () => controller.abort();
+  }, [isProjects, projectId, location.key]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -137,18 +142,14 @@ export default function ReviewMemoryPage() {
       uploadDirtyRef.current = false; uploadBusyRef.current = null;
       setUploadReset((value) => value + 1);
     }
-    if (settingsDirtyRef.current) {
-      settingsDirtyRef.current = false;
-      setSettingsReset((value) => value + 1);
-    }
   }, []);
   const requestLeave = useCallback(
     (next) => {
-      if (busyRef.current === 'save' || settingsBusyRef.current) {
+      if (busyRef.current === 'save') {
         messageApi.info('正在保存或发布，请等待完成后再离开。');
         return;
       }
-      if (!dirtyRef.current && !busyRef.current && !settingsDirtyRef.current && !uploadDirtyRef.current && !uploadBusyRef.current) {
+      if (!dirtyRef.current && !busyRef.current && !uploadDirtyRef.current && !uploadBusyRef.current) {
         discard();
         next();
         return;
@@ -158,7 +159,7 @@ export default function ReviewMemoryPage() {
         content:
           (busyRef.current === 'upload' || uploadBusyRef.current)
             ? '取消客户端等待不代表撤销服务端保存；请刷新列表检查是否已有草稿。'
-            : '已保存内容继续保留，未保存的资料输入及记忆开关选择将丢弃。',
+            : '已保存内容继续保留，未保存的资料输入将丢弃。',
         okText: '放弃并离开',
         cancelText: '继续编辑',
         okButtonProps: { danger: true },
@@ -194,8 +195,8 @@ export default function ReviewMemoryPage() {
   useEffect(
     () =>
       registerSettingsNavigationGuard({
-        isDirty: () => dirtyRef.current || Boolean(busyRef.current) || settingsDirtyRef.current || settingsBusyRef.current || uploadDirtyRef.current || Boolean(uploadBusyRef.current),
-        canNavigate: () => busyRef.current !== 'save' && !settingsBusyRef.current,
+        isDirty: () => dirtyRef.current || Boolean(busyRef.current) || uploadDirtyRef.current || Boolean(uploadBusyRef.current),
+        canNavigate: () => busyRef.current !== 'save',
         shouldConfirmNavigation: () => true,
         currentUrl: () => currentUrl.current,
         discard,
@@ -206,7 +207,7 @@ export default function ReviewMemoryPage() {
 
   useEffect(() => {
     const onBeforeUnload = (event) => {
-      if (!dirtyRef.current && !busyRef.current && !settingsDirtyRef.current && !uploadDirtyRef.current && !uploadBusyRef.current && !settingsBusyRef.current) return;
+      if (!dirtyRef.current && !busyRef.current && !uploadDirtyRef.current && !uploadBusyRef.current) return;
       event.preventDefault();
       event.returnValue = '';
     };
@@ -480,8 +481,6 @@ export default function ReviewMemoryPage() {
         onDirtyChange={handleUploadDirty} onBusyChange={handleUploadBusy} onSaved={handleSaved}
         onPreview={(source) => openDrawer({ mode: 'view', sourceId: source.id, library: true })} /> : isProjects ? (
         !projectId ? <Empty className="memory-empty" description="先选择项目，再配置使用资料" /> : <>
-          <MemoryInjectionSettings key={`${projectId}-${settingsReset}`} projectId={projectId}
-            onDirtyChange={handleSettingsDirty} onBusyChange={handleSettingsBusy} onSettingsChange={handleSettingsChange} />
           <Title level={4} className="memory-top-space">已关联资料</Title>
           <MemoryProjectBindings key={projectId} projectId={projectId} refresh={refresh}
               onBusyChange={handleBusy}

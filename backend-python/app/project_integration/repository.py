@@ -1146,6 +1146,11 @@ def update_project_configuration(
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
     try:
+        if request.get("memorySettings") is not None:
+            from app.review_memory.schemas import MemorySettingsUpdate
+            from app.review_memory.settings import update_settings
+
+            update_settings(db, project_id, MemorySettingsUpdate.model_validate(request["memorySettings"]))
         target_type = normalize_target_type(request["targetType"])
         target_request = request["targetConfig"]
         template_code = str(target_request["templateCode"]).strip()
@@ -1221,6 +1226,7 @@ def _project_configuration_to_dict(
     settings: ProjectReviewSettings,
 ) -> dict[str, Any]:
     from app.notification.models import ProjectNotificationWebhook
+    from app.review_memory.settings import read_settings
 
     target_type = effective_project_target_type(project)
     config = db.scalars(
@@ -1252,6 +1258,7 @@ def _project_configuration_to_dict(
         ),
         "aiReviewModels": list_project_ai_review_models(db, int(project.id)),
         "reviewSettings": project_review_settings_to_dict(settings),
+        "memorySettings": read_settings(db, int(project.id)).model_dump(by_alias=True),
         "webhookIds": webhook_ids,
     }
 

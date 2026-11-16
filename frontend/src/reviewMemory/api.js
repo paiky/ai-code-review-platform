@@ -50,15 +50,6 @@ export function getMemorySettings(projectId, signal) {
   return request(`${root(projectId)}/settings`, { signal });
 }
 
-export function saveMemorySettings(projectId, enabled, expectedVersion, signal) {
-  return request(`${root(projectId)}/settings`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled, expectedVersion }),
-    signal
-  });
-}
-
 export function getRunMemorySummary(projectId, runId, signal) {
   return request(`/api/agent-review/runs/${encodeURIComponent(runId)}/memory-summary?projectId=${encodeURIComponent(projectId)}`, { signal });
 }

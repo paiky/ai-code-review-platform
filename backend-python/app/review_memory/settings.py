@@ -1,4 +1,4 @@
-"""Memory settings are explicit opt-in; callers own writes, migrations never run here."""
+"""Memory defaults on for ready schemas; callers own writes and explicit overrides."""
 
 from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
@@ -30,7 +30,7 @@ def read_settings(db: Session, project_id: int) -> MemorySettings:
         ).where(ProjectReviewSettings.project_id == project_id)
     ).first()
     return MemorySettings(
-        enabled=bool(row[0]) if row else False,
+        enabled=bool(row[0]) if row else True,
         version=row[1] if row else 1,
         schema_ready=True,
     )

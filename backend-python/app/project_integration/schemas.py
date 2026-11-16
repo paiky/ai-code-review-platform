@@ -60,6 +60,13 @@ class ProjectAiReviewModelUpdateRequest(BaseModel):
     sort_order: int = Field(alias="sortOrder", default=0)
 
 
+class ProjectMemorySettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    enabled: bool = Field(strict=True)
+    expected_version: int = Field(alias="expectedVersion", gt=0, strict=True)
+
+
 class ProjectConfigurationUpdateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -68,6 +75,9 @@ class ProjectConfigurationUpdateRequest(BaseModel):
     ai_review_models: list[ProjectAiReviewModelUpdateRequest] = Field(alias="aiReviewModels")
     review_settings: ProjectReviewSettingsUpdateRequest = Field(alias="reviewSettings")
     webhook_ids: list[int] = Field(alias="webhookIds")
+    memory_settings: ProjectMemorySettingsUpdateRequest | None = Field(
+        default=None, alias="memorySettings"
+    )
 
 
 class ProjectTargetTypeAutoDetectionApplyRequest(BaseModel):

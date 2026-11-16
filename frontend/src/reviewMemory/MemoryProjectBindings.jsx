@@ -56,8 +56,6 @@ export default function MemoryProjectBindings({ projectId, memoryEnabled, refres
   }, [projectId, filters, refresh, retry]);
 
   return <>
-    <Alert type="info" showIcon title="已添加资料仍需按本次变更匹配"
-      description="项目范围与资料章节范围共同约束端和路径；本次实际采用以任务的冻结背景为准。移除只影响该项目，历史任务不变。" />
     <div className="memory-toolbar memory-top-space">
       <Select aria-label="资料关系状态" value={filters.state}
         options={[{ value: 'ACTIVE', label: '已添加资料' }, { value: 'DISABLED', label: '已移除资料' }]}
