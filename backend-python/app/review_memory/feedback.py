@@ -112,7 +112,9 @@ def case_entry(request: MemoryCaseConfirmation) -> MemoryEntryDraft:
     )
     entry = MemoryEntryDraft(
         heading=request.title,
-        content="\n\n".join(f"## {label}\n\n{value}" for label, value in zip(labels, values)),
+        content="\n\n".join(
+            f"## {label}\n\n{value}" for label, value in zip(labels, values) if value
+        ),
         target_type=request.target_type,
         issue_type=request.issue_type,
         path_globs=request.path_globs,
@@ -300,12 +302,6 @@ def confirm_feedback(
     if not finding_available(db, feedback):
         raise AppError(
             "MEMORY_FINDING_UNAVAILABLE", "Saved AI finding no longer matches feedback", 409
-        )
-    if feedback.reason_type == "CONTEXT_MISSING" and not (feedback.reason_text or "").strip():
-        raise AppError(
-            "MEMORY_MISSING_EVIDENCE_REQUIRED",
-            "Describe the missing evidence in the feedback first",
-            409,
         )
     business_payload = {k: v for k, v in payload.items() if k != "expected_source_version"}
     for job in jobs:

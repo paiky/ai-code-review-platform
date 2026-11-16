@@ -54,7 +54,7 @@ export const stateColor = (state) =>
 export function blankEntry(kind) {
   return {
     heading: '',
-    content: ['PITFALL', 'INCIDENT'].includes(kind) ? CASE_TEMPLATE : '',
+    content: kind === 'PITFALL' ? '## 原误判及原因\n\n' : kind === 'INCIDENT' ? CASE_TEMPLATE : '',
     targetType: null,
     issueType: null,
     pathGlobs: [],
@@ -98,7 +98,7 @@ export function publicationError(entry) {
         (code) =>
           ({
             MEMORY_ENTRY_TOO_LARGE: '正文超限，需人工拆分',
-            MEMORY_CASE_TEMPLATE_REQUIRED: '案例五段模板需完整且非空'
+            MEMORY_CASE_TEMPLATE_REQUIRED: '请检查案例章节；踩坑案例必填原误判及原因，事故复盘需完整五段'
           })[code] || code
       )
       .join('；');

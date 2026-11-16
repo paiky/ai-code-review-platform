@@ -67,13 +67,11 @@
   grid-template-columns: 1fr 1fr;
   gap: 16px;
 }
-.memory-feedback-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 24px;
-}
-.memory-feedback-original {
+.memory-feedback-risk {
   min-width: 0;
+}
+.memory-feedback-risk h4 {
+  margin-top: 0;
 }
 .memory-feedback-summary {
   white-space: pre-wrap;
@@ -176,7 +174,6 @@
     padding: 16px;
   }
   .memory-chapter-layout,
-  .memory-feedback-layout,
   .memory-field-grid {
     grid-template-columns: minmax(0, 1fr);
   }

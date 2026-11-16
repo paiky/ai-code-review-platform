@@ -116,15 +116,27 @@ def validate_entry_for_publication(kind: MemoryKind, entry: MemoryEntryDraft) ->
         labels = ("适用条件", "原误判及原因", "正确判断方法", "下次应查证据", "例外/失效条件")
         pattern = r"^\s*(?:#{1,6}\s+)?(" + "|".join(map(re.escape, labels)) + r")[：:]?\s*"
         matches = list(re.finditer(pattern, entry.content, re.MULTILINE))
-        if [match.group(1) for match in matches] != list(labels) or any(
-            not entry.content[
-                match.end() : matches[i + 1].start() if i + 1 < len(matches) else None
-            ].strip()
-            for i, match in enumerate(matches)
+        present = [match.group(1) for match in matches]
+        expected = (
+            [label for label in labels if label in present]
+            if kind == MemoryKind.PITFALL
+            else list(labels)
+        )
+        if (
+            present != expected
+            or "原误判及原因" not in present
+            or any(
+                not entry.content[
+                    match.end() : matches[i + 1].start() if i + 1 < len(matches) else None
+                ].strip()
+                for i, match in enumerate(matches)
+            )
         ):
             raise AppError(
                 "MEMORY_CASE_TEMPLATE_REQUIRED",
-                "Case requires five non-empty template sections",
+                "Case requires a non-empty misjudgment cause and valid optional sections"
+                if kind == MemoryKind.PITFALL
+                else "Case requires five non-empty template sections",
                 409,
             )
 

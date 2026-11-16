@@ -167,31 +167,45 @@ export default function MemoryFeedbackDrawer({
   };
 
   const blocked = !detail?.findingAvailable || detail?.feedbackType !== 'FALSE_POSITIVE'
-    || !['PENDING', 'VALID'].includes(detail?.status) || source?.state === 'DELETED'
-    || (detail?.reasonType === 'CONTEXT_MISSING' && !detail.reasonText?.trim());
+    || !['PENDING', 'VALID'].includes(detail?.status) || source?.state === 'DELETED';
   const snapshot = detail?.itemSnapshot || {};
   return (
     <Drawer
-      open title="误报反馈与踩坑案例" size="min(1080px, 100vw)" className="memory-source-drawer memory-feedback-drawer"
+      open title="误报反馈与踩坑案例" size="min(860px, 100vw)" className="memory-source-drawer memory-feedback-drawer"
       styles={{ wrapper: { maxWidth: '100vw', minWidth: 0 } }}
       onClose={onClose} mask={{ closable: !busy }} keyboard={!busy}
       footer={
         <Space wrap>
           <Button disabled={busy} onClick={onClose}>关闭</Button>
-          <Button disabled={busy || loading} onClick={() => setRefresh((value) => value + 1)}>刷新版本并对照（保留输入）</Button>
-          <Button type="primary" loading={busy} disabled={loading || !draft || blocked || conflict || (needsCompare && !compared) || pending}
-            onClick={submit}>{source ? '确认并更新记忆' : '确认并加入记忆'}</Button>
+          {(conflict || needsCompare || error) && <Button disabled={busy || loading} onClick={() => setRefresh((value) => value + 1)}>刷新版本并对照（保留输入）</Button>}
+          {detail && !blocked && <Button type="primary" loading={busy} disabled={loading || !draft || conflict || (needsCompare && !compared) || pending}
+            onClick={submit}>{source ? '确认并更新记忆' : '确认并加入记忆'}</Button>}
         </Space>
       }
     >
       {loading && <Paragraph role="status">正在加载反馈与案例…</Paragraph>}
+      {detail && <section className="memory-feedback-risk">
+        <Typography.Title level={4}>{snapshot.title || detail.riskTitle || '未命名风险'}</Typography.Title>
+        <Space wrap><Tag>{snapshot.severity || '未记录等级'}</Tag><Tag>{snapshot.category || detail.riskType || '未分类'}</Tag></Space>
+        <Paragraph type="secondary" className="memory-top-space">{snapshot.filePath || '未记录路径'}{snapshot.startLine ? `:${snapshot.startLine}` : ''}</Paragraph>
+        {snapshot.body && <Paragraph ellipsis={{ rows: 2 }}>{snapshot.body}</Paragraph>}
+        {(snapshot.body || snapshot.suggestion) && <details className="memory-usage-notes">
+          <summary>查看原审查详情</summary>
+          {snapshot.body && <pre className="memory-plain-text">{snapshot.body}</pre>}
+          {snapshot.suggestion && <pre className="memory-plain-text">建议：{snapshot.suggestion}</pre>}
+        </details>}
+      </section>}
       {error && <Alert type="error" showIcon title={error} />}
       {conflict && <Alert type="warning" title="当前输入已保留。请刷新最新反馈和案例，核对差异后重新确认。" />}
-      {job && (
-        <Alert showIcon type={job.state === 'SUCCEEDED' ? 'success' : ['FAILED', 'CANCELLED_STALE_SOURCE'].includes(job.state) ? 'warning' : 'info'}
-          title={job.state === 'SUCCEEDED' ? '回写已成功；当前案例状态见下方来源信息' : WRITEBACK_LABELS[job.state] || job.state}
-          description={job.lastErrorCode ? feedbackError(job.lastErrorCode) : pending ? '已受理不等于已入库。关闭后停止查询，可重新打开查看结果。' : source?.state === 'PUBLISHED' ? '已沉淀；仅在项目开启记忆且匹配适用范围和预算时，用于后续 Agent Review。' : '历史回写结果不能代表案例当前仍然生效，请核对来源状态。'} />
-      )}
+      {job && (job.state === 'SUCCEEDED' || pending ? (
+        <Space wrap role="status" className="memory-top-space">
+          <Tag color={pending ? 'processing' : 'success'}>{WRITEBACK_LABELS[job.state]}</Tag>
+          <Text type="secondary">{pending ? '关闭后可重新查看结果' : source ? `当前案例：${STATE_LABELS[source.state] || source.state}` : '正在读取案例状态'}</Text>
+        </Space>
+      ) : (
+        <Alert showIcon type="warning" title={WRITEBACK_LABELS[job.state] || job.state}
+          description={job.lastErrorCode ? feedbackError(job.lastErrorCode) : '请核对案例当前状态。'} />
+      ))}
       {pollError && <Alert type="warning" title={pollError} />}
       {submittedHere.current && ['FAILED', 'CANCELLED_STALE_SOURCE'].includes(job?.state) && <Alert type="warning"
         title="本次案例未生效，输入仍保留在当前窗口。" description="请刷新对照并修正后重新确认；相同内容可能返回原失败记录。关闭后需重新整理尚未写入来源的内容。" />}
@@ -199,60 +213,65 @@ export default function MemoryFeedbackDrawer({
         action={<Button onClick={() => setPollCycle((value) => value + 1)}>重新查询状态</Button>} />}
       {detail && (
         <>
-          <Paragraph type="secondary">反馈已保存，关闭不会撤销。{!blocked && '确认后保存为本项目私有案例。'}</Paragraph>
-          {!blocked && <details className="memory-usage-notes">
-            <summary>案例使用说明</summary>
-            <Paragraph type="secondary">案例用于提示下次查证，不能直接证明代码安全；项目开启记忆且匹配适用范围与预算时，才可能用于后续 Agent Review。</Paragraph>
-          </details>}
-          <Descriptions column={1} size="small" className="memory-top-space" items={[
-            { key: 'feedback', label: '原反馈', children: `#${detail.id} · ${labelFor(FEEDBACK_STATUS_OPTIONS, detail.status)} · ${labelFor(REVIEW_FEEDBACK_REASON_OPTIONS, detail.reasonType) || '未填原因'}` },
-            { key: 'source', label: '案例来源', children: source ? `#${source.id} · v${source.version} · ${STATE_LABELS[source.state] || source.state}` : '尚未生成案例' },
-            { key: 'task', label: '关联任务', children: <a href={`/tasks/${detail.taskId}`} target="_blank" rel="noreferrer">查看任务 #{detail.taskId}</a> }
-          ]} />
           {detail.status === 'CONVERTED' && <Paragraph type="secondary">
-            <Text>此反馈已转为旧项目策略，不重复生成记忆案例。</Text><br />
-            {legacyPolicies.length ? legacyPolicies.map((item) => `#${item.id} ${item.title}`).join('、') : '未查到同源旧策略记录，可在项目记忆库的“旧项目策略 · 只读来源”继续核对。'}
+            <Text>此反馈已转为旧项目策略，不重复生成记忆案例。</Text>
+            {legacyPolicies.length > 0 && <><br />{legacyPolicies.map((item) => `#${item.id} ${item.title}`).join('、')}</>}
           </Paragraph>}
           {blocked && detail.status !== 'CONVERTED' && <Alert type="warning" title="当前反馈不能确认案例"
-            description={!detail.findingAvailable ? '原 finding 已不存在或发生变化。' : source?.state === 'DELETED' ? '来源已删除，不能重新确认恢复。' : detail.reasonType === 'CONTEXT_MISSING' && !detail.reasonText?.trim() ? '请先修改原反馈，描述缺失背景或参考证据。' : '仅待分析或有效的误报反馈可确认；已撤回或信息不足的反馈不能直接发布。'} />}
-          {needsCompare && <Checkbox className="memory-top-space" checked={compared} onChange={(event) => setCompared(event.target.checked)}>
+            description={!detail.findingAvailable ? '原 finding 已不存在或发生变化。' : source?.state === 'DELETED' ? '来源已删除，不能重新确认恢复。' : '仅待分析或有效的误报反馈可确认；已撤回或信息不足的反馈不能直接发布。'} />}
+          {!blocked && needsCompare && <Checkbox className="memory-top-space" checked={compared} disabled={loading || busy || pending}
+            onChange={(event) => setCompared(event.target.checked)}>
             已核对下方最新反馈及案例，保留当前输入作为本次确认内容
           </Checkbox>}
-          <div className="memory-feedback-layout memory-top-space">
-            <div className="memory-feedback-original">
-              <Text strong>原 AI 结论与反馈（服务端快照）</Text>
-              <Paragraph className="memory-top-space"><Text strong>{snapshot.title || detail.riskTitle}</Text></Paragraph>
-              <Space wrap><Tag>{snapshot.severity || '未记录等级'}</Tag><Tag>{snapshot.category || detail.riskType || '未分类'}</Tag></Space>
-              <Paragraph className="memory-top-space">{snapshot.filePath || '未记录路径'}{snapshot.startLine ? `:${snapshot.startLine}` : ''}</Paragraph>
-              {snapshot.body && <pre className="memory-plain-text">{snapshot.body}</pre>}
-              {snapshot.suggestion && <pre className="memory-plain-text">建议：{snapshot.suggestion}</pre>}
-              <Text strong>人工说明 / 参考证据</Text>
-              <pre className="memory-plain-text">{detail.reasonText || '尚未填写说明'}</pre>
-              {!!detail.missingContextTypes?.length && <Paragraph>缺失背景：{detail.missingContextTypes.map((value) => labelFor(MISSING_CONTEXT_TYPE_OPTIONS, value)).join('、')}</Paragraph>}
-              {source?.entries?.map((entry) => <div key={entry.id}>
-                <Text strong>当前案例正文 · v{source.version}</Text>
-                <pre className="memory-plain-text">{entry.content}</pre>
-              </div>)}
-            </div>
-            {draft && <div>
-              <Form layout="vertical" disabled={busy || loading || pending || blocked}>
-                <Form.Item label="案例标题" required validateStatus={validationAttempted && !draft.title.trim() ? 'error' : undefined}
-                  help={validationAttempted && !draft.title.trim() ? '请填写案例标题。' : undefined}><Input aria-label="案例标题" maxLength={255} value={draft.title}
-                  onChange={(event) => change({ ...draft, title: event.target.value })} /></Form.Item>
-                {CASE_FIELDS.map(([key, label]) => <Form.Item label={label} required key={key}
-                  validateStatus={validationAttempted && !draft[key].trim() ? 'error' : undefined}
-                  help={validationAttempted && !draft[key].trim() ? `请填写${label}。` : undefined}>
-                  <Input.TextArea aria-label={label} value={draft[key]} maxLength={4000} autoSize={{ minRows: 3, maxRows: 10 }}
+          {draft && !blocked && <>
+            <Form layout="vertical" disabled={busy || loading || pending} className="memory-top-space">
+              <Form.Item label="误判原因" required
+                validateStatus={validationAttempted && !draft.misjudgmentCause.trim() ? 'error' : undefined}
+                help={validationAttempted && !draft.misjudgmentCause.trim() ? '请填写误判原因。' : undefined}>
+                <Input.TextArea aria-label="误判原因" value={draft.misjudgmentCause} maxLength={4000}
+                  autoSize={{ minRows: 4, maxRows: 10 }} placeholder="说明为什么这条风险是误判，可补充已有兜底、项目约定或相关证据。"
+                  onChange={(event) => change({ ...draft, misjudgmentCause: event.target.value })} />
+              </Form.Item>
+            </Form>
+            <details className="memory-usage-notes">
+              <summary>高级设置与补充信息</summary>
+              <Form layout="vertical" disabled={busy || loading || pending} className="memory-top-space">
+                <Form.Item label="案例标题" validateStatus={validationAttempted && !draft.title.trim() ? 'error' : undefined}
+                  help={validationAttempted && !draft.title.trim() ? '请填写案例标题。' : undefined}>
+                  <Input aria-label="案例标题" maxLength={255} value={draft.title}
+                    onChange={(event) => change({ ...draft, title: event.target.value })} />
+                </Form.Item>
+                {CASE_FIELDS.filter(([key]) => key !== 'misjudgmentCause').map(([key, label]) => <Form.Item label={label} key={key}>
+                  <Input.TextArea aria-label={label} value={draft[key]} maxLength={4000} autoSize={{ minRows: 2, maxRows: 8 }}
                     onChange={(event) => change({ ...draft, [key]: event.target.value })} />
                 </Form.Item>)}
-                <Paragraph type={bytes(caseContent(draft)) > 4000 ? 'danger' : 'secondary'}>
-                  完整案例 {bytes(caseContent(draft))} / 4000 UTF-8 字节（含五段标题）
-                </Paragraph>
               </Form>
               <MemoryEntryFields kind="PITFALL" content={false} value={draft} onChange={change}
-                disabled={busy || loading || pending || blocked} />
-            </div>}
-          </div>
+                disabled={busy || loading || pending} />
+            </details>
+            <Paragraph type={bytes(caseContent(draft)) > 4000 ? 'danger' : 'secondary'}>
+              案例 {bytes(caseContent(draft))} / 4000 UTF-8 字节
+            </Paragraph>
+          </>}
+          {blocked && (draft?.misjudgmentCause || detail.reasonText) && <>
+            <Text strong>误判原因</Text>
+            <Paragraph className="memory-top-space">{draft?.misjudgmentCause || detail.reasonText}</Paragraph>
+          </>}
+          <details className="memory-usage-notes" open={needsCompare || undefined}>
+            <summary>来源与版本</summary>
+            <Descriptions column={1} size="small" className="memory-top-space" items={[
+              { key: 'feedback', label: '原反馈', children: `#${detail.id} · ${labelFor(FEEDBACK_STATUS_OPTIONS, detail.status)} · ${labelFor(REVIEW_FEEDBACK_REASON_OPTIONS, detail.reasonType) || '未填原因'}` },
+              { key: 'source', label: '案例来源', children: source ? `#${source.id} · v${source.version} · ${STATE_LABELS[source.state] || source.state}` : '尚未生成案例' },
+              { key: 'task', label: '关联任务', children: <a href={`/tasks/${detail.taskId}`} target="_blank" rel="noreferrer">查看任务 #{detail.taskId}</a> }
+            ]} />
+            {detail.reasonText && <><Text strong>原人工说明 / 参考证据</Text><pre className="memory-plain-text">{detail.reasonText}</pre></>}
+            {!!detail.missingContextTypes?.length && <Paragraph>缺失背景：{detail.missingContextTypes.map((value) => labelFor(MISSING_CONTEXT_TYPE_OPTIONS, value)).join('、')}</Paragraph>}
+            {source?.entries?.map((entry) => <div key={entry.id}>
+              <Text strong>当前案例正文 · v{source.version}</Text>
+              <pre className="memory-plain-text">{entry.content}</pre>
+            </div>)}
+            <Paragraph type="secondary">反馈独立保存，关闭不会撤销。案例仅供后续查证；使用时仍需本次代码证据，并受项目开关、范围和预算约束。</Paragraph>
+          </details>
         </>
       )}
     </Drawer>

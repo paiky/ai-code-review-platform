@@ -46,7 +46,7 @@ export function memoryFeedbackState(row) {
 export function caseDraft(detail, source, targetType) {
   const entry = source?.entries?.[0];
   const draft = {
-    title: source?.title || detail.riskTitle || '',
+    title: (source?.title || detail.riskTitle || detail.itemSnapshot?.title || '误报案例').slice(0, 255),
     targetType: entry ? entry.targetType : targetType || null,
     issueType: entry ? entry.issueType : ISSUE_OPTIONS.some((o) => o.value === detail.riskType) ? detail.riskType : null,
     pathGlobs: entry?.pathGlobs || [], keywords: entry?.keywords || [], loadMode: 'ON_DEMAND',
@@ -54,24 +54,23 @@ export function caseDraft(detail, source, targetType) {
     requiredEvidence: '', exceptions: ''
   };
   if (entry) {
-    for (let i = 0; i < CASE_FIELDS.length; i += 1) {
-      const [key, label] = CASE_FIELDS[i];
-      const marker = `## ${label}\n\n`;
-      const start = entry.content.indexOf(marker);
-      const next = i < CASE_FIELDS.length - 1 ? entry.content.indexOf(`\n\n## ${CASE_FIELDS[i + 1][1]}\n\n`, start + marker.length) : -1;
-      draft[key] = start < 0 ? '' : entry.content.slice(start + marker.length, next < 0 ? undefined : next).trim();
+    const sections = [...entry.content.matchAll(/^## (适用条件|原误判及原因|正确判断方法|下次应查证据|例外\/失效条件)\r?\n\r?\n/gm)];
+    for (const [key, label] of CASE_FIELDS) {
+      const index = sections.findIndex((section) => section[1] === label);
+      const section = sections[index];
+      draft[key] = section ? entry.content.slice(section.index + section[0].length, sections[index + 1]?.index).trim() : '';
     }
   }
   return draft;
 }
 
-export const caseContent = (draft) => CASE_FIELDS.map(([key, label]) => `## ${label}\n\n${draft[key].trim()}`).join('\n\n');
+export const caseContent = (draft) => CASE_FIELDS.filter(([key]) => draft[key].trim())
+  .map(([key, label]) => `## ${label}\n\n${draft[key].trim()}`).join('\n\n');
 
 export function caseValidation(draft) {
   if (!draft.title.trim()) return '请填写案例标题。';
-  const missing = CASE_FIELDS.find(([key]) => !draft[key].trim());
-  if (missing) return `请填写“${missing[1]}”。`;
-  if (bytes(caseContent(draft)) > 4000) return '完整案例超过 4000 UTF-8 字节，请精简后确认，保留证据和例外条件。';
+  if (!draft.misjudgmentCause.trim()) return '请填写误判原因。';
+  if (bytes(caseContent(draft)) > 4000) return '案例超过 4000 UTF-8 字节，请精简后确认。';
   return validateEntry({ ...draft, heading: draft.title, content: caseContent(draft) });
 }
 

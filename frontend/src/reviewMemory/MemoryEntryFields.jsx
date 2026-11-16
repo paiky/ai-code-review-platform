@@ -36,7 +36,9 @@ export default function MemoryEntryFields({
           </Form.Item>
           {['PITFALL', 'INCIDENT'].includes(kind) && (
             <Typography.Paragraph type="secondary">
-              请依次填写五段：适用条件、原误判及原因、正确判断方法、下次应查证据、例外/失效条件。
+              {kind === 'PITFALL'
+                ? '必填“原误判及原因”；适用条件、正确判断方法、下次应查证据、例外/失效条件可按需补充。'
+                : '请依次填写五段：适用条件、原误判及原因、正确判断方法、下次应查证据、例外/失效条件。'}
             </Typography.Paragraph>
           )}
         </>

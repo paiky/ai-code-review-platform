@@ -502,28 +502,28 @@ class MemoryCaseConfirmation(MemorySchema):
     issue_type: IssueType | None = Field(default=None, alias="issueType")
     path_globs: list[str] = Field(default_factory=list, alias="pathGlobs", max_length=8)
     keywords: list[str] = Field(default_factory=list, max_length=12)
-    applicability: str = Field(min_length=1, max_length=4000)
+    applicability: str = Field(default="", max_length=4000)
     misjudgment_cause: str = Field(alias="misjudgmentCause", min_length=1, max_length=4000)
-    correct_approach: str = Field(alias="correctApproach", min_length=1, max_length=4000)
-    required_evidence: str = Field(alias="requiredEvidence", min_length=1, max_length=4000)
-    exceptions: str = Field(min_length=1, max_length=4000)
+    correct_approach: str = Field(alias="correctApproach", default="", max_length=4000)
+    required_evidence: str = Field(alias="requiredEvidence", default="", max_length=4000)
+    exceptions: str = Field(default="", max_length=4000)
     operator_name: str | None = Field(default=None, alias="operatorName", max_length=96)
 
     _paths = field_validator("path_globs")(MemoryEntryDraft.validate_path_globs.__func__)
     _keywords = field_validator("keywords")(MemoryEntryDraft.validate_keywords.__func__)
 
-    @field_validator(
-        "title",
-        "applicability",
-        "misjudgment_cause",
-        "correct_approach",
-        "required_evidence",
-        "exceptions",
-    )
+    @field_validator("title", "misjudgment_cause")
     @classmethod
     def nonblank(cls, value: str) -> str:
         if not value.strip() or "\x00" in value:
             raise ValueError("case fields must not be blank or contain NUL")
+        return value.strip()
+
+    @field_validator("applicability", "correct_approach", "required_evidence", "exceptions")
+    @classmethod
+    def optional_case_text(cls, value: str) -> str:
+        if "\x00" in value:
+            raise ValueError("case fields must not contain NUL")
         return value.strip()
 
 
