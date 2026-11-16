@@ -240,3 +240,10 @@
 - 验收/授权/停止点：用户授权本模块展示精简；完成构建、相关浏览器验收与本地提交后停止，不推送部署，不改真实业务数据。
 - 验收结果：前端 build、diff 检查通过，保留既有 bundle 大小提示。隔离浏览器覆盖案例筛选/分页、折叠说明、CAS/失败/撤回、误报字段帮助、公共资料编辑发布、连续项目关联和 390px；真实反馈 #2 桌面/窄屏只读验收通过，无 API 写请求和页面异常。未新增、修改或运行单元测试。
 - 本地人工验收脚本与截图保存在 ignored 的 `.local/memory-notice-*.ps1` 和 `.local/memory-notice-*.png`；资料及关联复用已有 `.local/memory-a5-manual-acceptance.ps1`、`.local/memory-association-fix-acceptance.ps1`。未修改后端、数据库、记忆开关及用户已有 `AGENTS.md`。
+
+### 上传队列 HTTP 兼容修复（2026-11-16）
+
+- 改动量等级：小。仅修改上传组件的本地行 ID 生成方式，不改变上传接口或数据语义。
+- 原因与范围：`crypto.randomUUID()` 依赖安全上下文，localhost 可用而远程普通 HTTP 通常不可用，选择文件时会导致页面异常。队列改为组件内递增编号，在状态更新函数外分配；同名文件独立编号，清空或移除不重置计数。编号仅供页面行定位，不作为上传参数或服务端资料 ID。
+- 验收结果：前端 build、diff 检查通过；复用现有本地服务，在局域网普通 HTTP 页面确认 `isSecureContext=false`、`crypto.randomUUID` 为 undefined，并通过同名文件增删、追加/清空重选、串行上传、逐项覆盖、停止恢复、失败重试、unknown 不重试、显式发布、20 文件/50 MiB 边界和 390px 隔离浏览器验收，无页面异常。保留既有 bundle 大小提示。
+- 验收脚本为 ignored `.local/memory-upload-http-acceptance.ps1`，全部 API mock；未新增、修改或运行单元测试，未改真实资料、数据库或用户已有 `AGENTS.md`，未执行远程部署。重新构建并部署前端资源后生效。

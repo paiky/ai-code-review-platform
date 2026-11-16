@@ -16,6 +16,7 @@ export default function MemoryUploadPanel({
   const [metadata, setMetadata] = useState({ kind: 'STANDARD', title: '', description: '' });
   const [labels, setLabels] = useState(() => blankEntry('STANDARD'));
   const [rows, setRows] = useState([]);
+  const nextRowId = useRef(0);
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -46,13 +47,14 @@ export default function MemoryUploadPanel({
   }
 
   function addFiles(files) {
+    const addedRows = files.map((file) => ({ id: ++nextRowId.current, file, kind: null, targetType: null, status: 'pending' }));
     setRows((current) => {
       if (current.length + files.length > 20 || [...current.map((row) => row.file), ...files].reduce((sum, file) => sum + file.size, 0) > 50 * 1024 * 1024) {
         setError(new Error('队列最多 20 个文件、合计 50 MiB；本次选择未添加，请减少文件后重选。'));
         return current;
       }
       setError(null);
-      return [...current, ...files.map((file) => ({ id: crypto.randomUUID(), file, kind: null, targetType: null, status: 'pending' }))];
+      return [...current, ...addedRows];
     });
   }
 
