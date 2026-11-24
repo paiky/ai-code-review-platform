@@ -45,6 +45,7 @@ README 只提供项目入口和最短运行方式。详细配置、部署、验�
 - `docs/49-review-progress-animation-style-extension-plan.md`：Review 进度动画风格扩展专项；在 `docs/48` 完成后实施。
 - `docs/62-agent-review-memory-library-plan.md`：项目记忆库、资料管理和后续 Review 接入；默认显示独立菜单 `/settings/review-memory`（旧 `/settings/ai-review/memory` 链接兼容），可通过 `VITE_REVIEW_MEMORY_UI_ENABLED=false` 隐藏。
 - `docs/63-memory-library-central-management-plan.md`：记忆库独立菜单、集中资料管理与项目关联调整。
+- `docs/ai-review-flow-map.html`：可从浏览器离线打开的 MR、Standard 与 Agent 链路地图。
 
 ### 排障与历史
 

@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Review 链路地图</title>
+<style>
+  :root {
+    color-scheme: light;
+    --paper: #f5f7f8;
+    --white: #fff;
+    --ink: #17282c;
+    --muted: #4f656a;
+    --line: #d6e0e1;
+    --teal: #096e63;
+    --mint: #e7f5f0;
+    --blue: #285aa2;
+    --ice: #edf4ff;
+    --amber: #835413;
+    --cream: #fff4df;
+    --mono: "IBM Plex Mono", Consolas, monospace;
+    font-family: "Inter", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; line-height: 1.55; }
+  button, input { font: inherit; }
+  button { cursor: pointer; }
+  button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visible {
+    outline: 3px solid #2567ae;
+    outline-offset: 3px;
+  }
+  button[hidden], [hidden] { display: none !important; }
+  .skip {
+    position: absolute; z-index: 4; top: 12px; left: 12px;
+    padding: 8px 12px; background: white; transform: translateY(-200%);
+  }
+  .skip:focus { transform: translateY(0); }
+  .masthead {
+    background: #142f33;
+    color: #f7ffff;
+    border-bottom: 4px solid #52b6a0;
+  }
+  .masthead-inner, .workspace { max-width: 1760px; margin: auto; padding-inline: clamp(16px, 3vw, 46px); }
+  .masthead-inner { padding-block: 22px 24px; }
+  .masthead-top { display: flex; gap: 10px 24px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: .86rem; color: #cce8e3; }
+  .brand-mark { width: 11px; height: 11px; background: #70d7bb; border-radius: 3px; transform: rotate(45deg); }
+  .revision { color: #cce8e3; font: .77rem var(--mono); }
+  h1 { margin: 11px 0 4px; font-size: clamp(1.85rem, 4vw, 2.75rem); letter-spacing: -.045em; line-height: 1.25; }
+  .masthead p { color: #d4e9e8; margin: 0; font-size: .91rem; }
+  .workspace { padding-block: 20px 30px; }
+  .toolbar { display: flex; gap: 12px; flex-wrap: wrap; justify-content: space-between; align-items: start; margin-bottom: 16px; }
+  .views, .replay-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+  .views { padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: #eaf0f0; }
+  .view, .action {
+    padding: 7px 11px; border: 1px solid transparent; border-radius: 7px;
+    background: transparent; color: var(--ink); font-size: .84rem; min-height: 36px;
+  }
+  .view[aria-pressed="true"] { background: white; border-color: var(--line); color: #0b514a; font-weight: 700; }
+  .action { background: var(--white); border-color: var(--line); }
+  .action:hover, .action[aria-pressed="true"] { border-color: var(--teal); background: var(--mint); }
+  .action:disabled { opacity: .45; cursor: default; }
+  .toolbar-right { display: flex; gap: 8px; }
+  .search { position: relative; width: 230px; min-width: 0; }
+  .search input { width: 100%; min-height: 37px; border: 1px solid var(--line); border-radius: 7px; padding: 7px 11px; background: white; color: var(--ink); font-size: .84rem; }
+  .search-results {
+    position: absolute; right: 0; top: calc(100% + 5px); z-index: 2;
+    width: min(315px, 84vw); max-height: 290px; overflow: auto;
+    padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: white; box-shadow: 0 12px 25px #142f331c;
+  }
+  .search-results button { width: 100%; text-align: left; border: 0; background: white; padding: 7px 9px; border-radius: 5px; color: var(--ink); }
+  .search-results button:hover, .search-results button:focus-visible { background: var(--mint); }
+  .search-results p { padding: 5px 9px; margin: 0; color: var(--muted); font-size: .85rem; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 390px); gap: 16px; align-items: start; }
+  .map, .detail { background: var(--white); border: 1px solid var(--line); border-radius: 13px; min-width: 0; }
+  .map { overflow: clip; }
+  .map-header, .detail-header { padding: 15px 17px 12px; border-bottom: 1px solid #e5eded; }
+  .map-header h2, .detail-header h2 { margin: 0; font-size: 1.17rem; line-height: 1.4; }
+  .map-header h2:focus, .detail-header h2:focus { outline: none; }
+  .map-header p, .detail-header p { margin: 4px 0 0; font-size: .84rem; color: var(--muted); }
+  .map-body { padding: 0 13px 12px; }
+  .lane { --lane-ink: var(--teal); --lane-bg: var(--mint); padding: 11px 0; }
+  .lane + .lane { border-top: 1px solid #e5eded; }
+  .lane.agent { --lane-ink: var(--blue); --lane-bg: var(--ice); }
+  .lane.failure { --lane-ink: var(--amber); --lane-bg: var(--cream); }
+  .lane-heading { display: flex; justify-content: space-between; align-items: center; gap: 6px 12px; margin-bottom: 8px; flex-wrap: wrap; }
+  .lane-heading h3 { font-size: .91rem; margin: 0; color: var(--lane-ink); }
+  .lane-heading h3::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 7px; vertical-align: 2px; }
+  .lane-links, .entry-list { display: flex; flex-wrap: wrap; gap: 5px; }
+  .flow { display: flex; align-items: stretch; gap: 2px; }
+  .node, .edge, .link-edge {
+    border: 1px solid var(--line); color: var(--ink); background: white; border-radius: 8px;
+  }
+  .node { flex: 1 1 0; min-width: 0; padding: 9px 6px; text-align: left; border-top: 2px solid var(--lane-ink); }
+  .node strong { display: block; font-size: .81rem; overflow-wrap: anywhere; line-height: 1.35; }
+  .node span { display: block; font-size: .7rem; color: var(--muted); margin-top: 4px; line-height: 1.4; overflow-wrap: anywhere; }
+  .link-edge { padding: 3px 7px; font-size: .73rem; min-height: 28px; }
+  .entry-list .link-edge { border-style: solid; }
+  .edge { align-self: center; background: transparent; border-color: transparent; padding: 0 1px; min-width: 24px; min-height: 28px; color: var(--lane-ink); font-size: .95rem; }
+  .node:hover, .edge:hover, .link-edge:hover,
+  .node[aria-current="location"], .edge[aria-current="location"], .link-edge[aria-current="location"] {
+    border-color: var(--lane-ink, var(--teal)); background: var(--lane-bg, var(--mint)); color: var(--lane-ink, var(--teal));
+  }
+  .node[aria-current="location"] { box-shadow: inset 0 0 0 1px var(--lane-ink); }
+  .node.replay-current, .edge.replay-current, .link-edge.replay-current { outline: 2px solid var(--lane-ink); outline-offset: 2px; }
+  .detail { position: sticky; top: 14px; max-height: calc(100vh - 28px); overflow: auto; scrollbar-gutter: stable; }
+  .detail-header .eyebrow { display: block; margin-bottom: 4px; color: var(--teal); font-size: .75rem; font-weight: 700; }
+  .detail-body { padding: 0 17px 16px; }
+  .detail-body h3 { margin: 15px 0 6px; font-size: .89rem; }
+  .detail-body p, .detail-body li, .detail-body dd { font-size: .83rem; margin: 0 0 5px; }
+  .detail-body ul, .detail-body ol { margin: 0; padding-left: 1.35em; }
+  .io { display: grid; grid-template-columns: max-content 1fr; gap: 6px 9px; margin: 12px 0 0; padding: 10px; background: #f2f6f6; border-radius: 8px; }
+  .io dt { color: var(--teal); font-weight: 700; font-size: .79rem; }
+  .io dd { margin: 0; overflow-wrap: anywhere; }
+  details { border: 1px solid var(--line); border-radius: 7px; margin: 6px 0; padding: 6px 8px; background: #fbfdfd; }
+  summary { cursor: pointer; font-size: .82rem; font-weight: 700; color: #164c4a; overflow-wrap: anywhere; }
+  details p { padding-top: 6px; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; color: #e8f6f5; background: #183438; border-radius: 8px; padding: 10px; font: .74rem/1.55 var(--mono); margin: 8px 0; tab-size: 2; }
+  .sources a { color: #155688; text-decoration-thickness: 1px; text-underline-offset: 2px; overflow-wrap: anywhere; }
+  .source-path { display: block; color: var(--muted); font: .69rem/1.4 var(--mono); overflow-wrap: anywhere; }
+  .replay { border: 1px solid #bbd3e2; background: #f2f8ff; border-radius: 11px; padding: 12px 13px; margin-bottom: 13px; }
+  .replay-main { display: flex; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; align-items: center; }
+  .replay h2 { margin: 0; font-size: 1rem; }
+  .replay p { margin: 3px 0 0; font-size: .83rem; color: var(--muted); }
+  .replay-step { margin-top: 10px; padding-top: 8px; border-top: 1px solid #c6d9e8; }
+  .replay-step strong { font-size: .88rem; }
+  .replay .step-code { margin-bottom: 0; }
+  .replay details { margin-top: 7px; }
+  .back { display: none; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  @media (max-width: 1160px) {
+    .layout { grid-template-columns: minmax(0, 1fr) minmax(275px, 33%); gap: 11px; }
+    .node { padding-inline: 5px; }
+  }
+  @media (max-width: 980px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    .detail { position: static; max-height: none; scrollbar-gutter: auto; }
+    .back { display: inline-block; margin-top: 10px; }
+  }
+  @media (max-width: 620px) {
+    .toolbar-right { width: 100%; }
+    .search { flex: 1 1 160px; width: auto; }
+    .flow { flex-direction: column; }
+    .node { padding: 8px 10px; border-top-width: 1px; border-left: 3px solid var(--lane-ink); width: 100%; }
+    .node strong, .node span { display: inline; }
+    .node span { margin-left: 7px; }
+    .edge { transform: rotate(90deg); min-width: 24px; min-height: 24px; line-height: 1; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#map-heading">跳到流程图</a>
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="masthead-top">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>研发质量平台</div>
+      <div class="revision">feat/review-memory-ui · f3c0498</div>
+    </div>
+    <h1>AI Review 链路地图</h1>
+    <p>从 GitLab MR 到审查结果。点击节点查看实现，点击箭头查看流转条件。</p>
+  </div>
+</header>
+<main class="workspace">
+  <div class="toolbar">
+    <div class="views" role="group" aria-label="路径视图">
+      <button class="view" data-view="all" aria-pressed="true">完整链路</button>
+      <button class="view" data-view="standard" aria-pressed="false">Standard</button>
+      <button class="view" data-view="agent" aria-pressed="false">Agent</button>
+      <button class="view" data-view="failure" aria-pressed="false">失败与降级</button>
+    </div>
+    <div class="toolbar-right">
+      <div class="search">
+        <label class="sr-only" for="search">搜索节点、信号或工具</label>
+        <input id="search" type="search" autocomplete="off" placeholder="搜索节点、信号或工具" aria-controls="search-results">
+        <div id="search-results" class="search-results" aria-label="搜索结果" hidden></div>
+      </div>
+      <button class="action" id="replay-toggle" aria-expanded="false" aria-controls="replay">示例回放</button>
+    </div>
+  </div>
+  <section class="replay" id="replay" aria-labelledby="replay-title" hidden>
+    <div class="replay-main">
+      <div>
+        <h2 id="replay-title">示例 MR · Java Service 方法改名</h2>
+        <p>演示数据。两条路线使用同一份 diff，降级回放复用同一任务。</p>
+      </div>
+      <div class="replay-actions" role="group" aria-label="选择回放路线">
+        <button class="action" data-replay="standard" aria-pressed="true">Standard</button>
+        <button class="action" data-replay="agent" aria-pressed="false">Agent</button>
+        <button class="action" data-replay="fallback" aria-pressed="false">Agent 降级</button>
+      </div>
+    </div>
+    <details id="replay-diff"><summary>查看共享 MR Diff</summary><pre></pre></details>
+    <div class="replay-step" id="replay-step" aria-live="polite"></div>
+    <div class="replay-actions">
+      <button class="action" id="prev-step">上一步</button>
+      <button class="action" id="next-step">下一步</button>
+    </div>
+  </section>
+  <div class="layout">
+    <section class="map" aria-labelledby="map-heading">
+      <div class="map-header">
+        <h2 id="map-heading" tabindex="-1">MR 审查全链路</h2>
+        <p>规则提醒、AI Review、反馈与后续任务</p>
+      </div>
+      <div class="map-body" id="map"></div>
+    </section>
+    <aside class="detail" id="detail" aria-labelledby="detail-title">
+      <div class="detail-header">
+        <span class="eyebrow" id="detail-kind"></span>
+        <h2 id="detail-title" tabindex="-1"></h2>
+        <p id="detail-summary"></p>
+        <a class="action back" id="back-to-map" href="#map-heading">返回地图</a>
+      </div>
+      <div class="detail-body" id="detail-body"></div>
+    </aside>
+  </div>
+  <noscript>请启用 JavaScript 以查看节点详情和示例回放。</noscript>
+</main>
+<script>
+const revision = "f3c0498";
+const backend = "backend-python/app/";
+const sources = {
+  webhook: [backend + "project_integration/api.py", 159, "Webhook 入口"],
+  mr: [backend + "project_integration/service.py", 50, "MR 事件与差异"],
+  push: [backend + "project_integration/service.py", 169, "Push 入口"],
+  manual: [backend + "code_quality/api.py", 53, "手动 AI Review 入口"],
+  manualRule: ["docs/03-api-contract.md", 313, "手动规则提醒入口"],
+  inputs: ["docs/03-api-contract.md", 535, "手动 AI Review 输入契约"],
+  gitlab: [backend + "project_integration/gitlab_client.py", 20, "GitLab Diff API"],
+  compare: [backend + "project_integration/gitlab_client.py", 32, "GitLab 比较两个引用"],
+  pipeline: [backend + "project_integration/service.py", 478, "任务、规则卡片与 AI 触发"],
+  rules: [backend + "change_analysis/service.py", 140, "变更规则匹配器"],
+  trigger: [backend + "code_quality/service.py", 940, "AI 自动触发"],
+  preflight: [backend + "deterministic_checks/service.py", 79, "确定性预检"],
+  route: [backend + "agent_review/service.py", 148, "审查引擎解析"],
+  policy: [backend + "project_integration/repository.py", 889, "当前项目策略与兼容默认值"],
+  planner: [backend + "review_context/service.py", 777, "Planner 信号提取"],
+  snippets: [backend + "review_context/service.py", 460, "同文件片段补全"],
+  retrieval: [backend + "review_context/local_retriever.py", 162, "本地引用检索"],
+  queries: [backend + "review_context/local_retriever.py", 241, "信号到搜索条件"],
+  relations: [backend + "review_context/local_retriever.py", 808, "轻量关系候选"],
+  rank: [backend + "review_context/local_retriever.py", 1147, "关系候选排序"],
+  pack: [backend + "review_context/service.py", 1329, "上下文预算裁剪"],
+  attach: [backend + "code_quality/service.py", 3087, "Context Pack 接入 Provider"],
+  standard: [backend + "code_quality/service.py", 1330, "Standard 自动任务"],
+  worktree: [backend + "agent_review/service.py", 1107, "Agent 工作树准备"],
+  agentInput: [backend + "agent_review/service.py", 307, "Agent 输入与记忆"],
+  memory: [backend + "review_memory/retrieval.py", 330, "记忆选择、去重与预算"],
+  memoryScope: [backend + "review_memory/retrieval.py", 95, "项目、端与路径过滤"],
+  worker: [backend + "agent_review/worker.py", 249, "Worker 与 Runner 选择"],
+  queue: [backend + "agent_review/service.py", 410, "Agent 任务入队"],
+  prompt: [backend + "agent_review_spike/prompting.py", 13, "Agent 审查指令"],
+  tools: [backend + "agent_review_spike/tool_executor.py", 26, "五个工具与参数"],
+  cli: [backend + "agent_review_spike/runner.py", 446, "Claude CLI 与 MCP 配置"],
+  responses: [backend + "agent_review_spike/responses_runner.py", 223, "Responses 工具调用循环"],
+  chat: [backend + "agent_review_spike/chat_completions_runner.py", 253, "Chat Completions 工具结果"],
+  anthropic: [backend + "agent_review_spike/anthropic_messages_runner.py", 242, "Anthropic Messages 工具结果"],
+  budget: [backend + "agent_review_spike/budgets.py", 6, "运行预算默认值"],
+  phase: [backend + "agent_review_spike/workspace.py", 98, "取证次数及收敛状态"],
+  executor: [backend + "agent_review_spike/tool_executor.py", 123, "执行、拒绝与输出修复"],
+  schema: [backend + "agent_review_spike/schema.py", 65, "Review Card Schema"],
+  complete: [backend + "agent_review/service.py", 661, "回传与结果落库"],
+  fail: [backend + "agent_review/service.py", 762, "Agent 失败与取消"],
+  fallback: [backend + "code_quality/service.py", 1381, "Standard 降级队列"],
+  fallbackRun: [backend + "code_quality/service.py", 1458, "执行 Standard 降级"],
+  notify: [backend + "code_quality/service.py", 2850, "自动 Review 通知"],
+  display: ["docs/38-review-lifecycle-and-frontend-entrypoints.md", 85, "任务详情与通知状态"],
+  feedback: [backend + "review_feedback/service.py", 94, "保存提醒或 AI Finding 反馈"],
+  confirm: [backend + "review_memory/feedback.py", 250, "人工确认误报"],
+  writeback: [backend + "review_memory/writeback.py", 131, "异步写入案例"],
+  design: ["docs/60-agent-review-memory-context-and-convergence-design.md", 237, "调用图与早停设计"]
+};
+
+const item = (type, title, subtitle, summary, input, output, rules, refs, drill = []) =>
+  ({ type, title, subtitle, summary, input, output, rules, refs, drill });
+const node = (...args) => item("节点", ...args);
+const edge = (title, summary, input, output, rules, refs) =>
+  item("流转", title, "", summary, input, output, rules, refs);
+const drill = (title, description, code = "") => ({ title, description, code });
+const demoCard = {
+  summary: "改名后仍有未更新的调用",
+  overallLevel: "HIGH",
+  findings: [{
+    severity: "MAJOR",
+    category: "CORRECTNESS",
+    filePath: "src/MemberService.java",
+    startLine: 18,
+    endLine: 18,
+    title: "旧调用仍引用已改名的方法",
+    body: "MemberController 调用 MemberService.updateUserStatus，但本次将方法改名为 changeUserStatus。",
+    suggestion: "同步更新该调用，或保留兼容入口。",
+    confidence: "HIGH",
+    contextStatus: "SUFFICIENT",
+    evidence: ["src/MemberService.java:18 改名", "src/MemberController.java:42,46 类型及旧调用"],
+    missingContext: [],
+    contextSummary: "已核对改名声明和直接调用。"
+  }]
+};
+
+const nodes = {
+  gitlab: node("GitLab MR", "Webhook 接入", "验证事件并建立 MR 审查任务。",
+    "MR webhook、项目与 MR 标识、分支、提交信息、可选变更摘要。",
+    "MR 事件记录、Review 任务、项目及适用端。",
+    ["入口读取 GitLab 事件类型并校验 payload。非开放状态的 MR 返回 SKIPPED。",
+      "记录源分支、目标分支、提交以及 base/head。适用端匹配出现歧义时，记录任务失败。"], ["webhook", "mr"]),
+  diff: node("变更范围", "Diff 与提交", "从 payload 或 GitLab API 取得本次审查的变更。",
+    "项目 ID、MR IID、已有的文件列表和每文件 diff。",
+    "changedFiles、每文件 diff、路径和增删属性。",
+    ["payload 已携带变更摘要时复用；否则补取 MR Diffs 并写回事件摘要。",
+      "获取失败会进入任务错误处理。后续证据按任务定位的版本取得。方法抽取使用具体文件的增删行。"], ["mr", "gitlab", "planner"]),
+  rule: node("变更分析", "提醒卡匹配", "根据文件路径、文本和变更行命中规则提醒。",
+    "归一化变更文件、diff、项目适用端与模板。",
+    "变更类型、关联资源、匹配器和证据，供风险提醒使用。",
+    ["提醒卡启用时匹配规则、生成卡片并落库。关闭时保留变更摘要。",
+      "同一文件可以命中多种变更类型。规则信号表示值得检查，具体 finding 仍需证据。"], ["pipeline", "rules"], [
+      drill("API · 路径或 Spring Web 注解", "路径含 controller、endpoint、/api/、dto、request、response，或正文含请求映射及 Controller 注解。能解析时提取 HTTP 方法和路由，否则用文件路径。", '+ @PostMapping("/members/{id}/status") → API_HEURISTIC_RULE'),
+      drill("DB · DDL、SQL 写入、ORM 与实体", "匹配 create/alter/drop table、add/drop/modify/rename column 等 DDL，迁移脚本中的写入和回填，以及 Mapper/ORM 映射、实体字段。资源优先用表或字段。", '+ ALTER TABLE member CHANGE COLUMN member_status membership_status VARCHAR(32);\n→ DB_DATA_WRITE_RULE'),
+      drill("缓存 · 写入、失效和序列化", "先由缓存路径或 Redis/Spring Cache 等特征入围，再看增删行里的序列化、写入、删除、TTL 或失效。只有读取时会跳过这个匹配器。", '+ redisTemplate.delete("member:status"); → CACHE_WRITE_DELETE_RULE'),
+      drill("MQ · 队列、交换机和路由声明", "在增删行匹配 Queue/Exchange 构造或构建器、BindingBuilder、routingKey 等声明，尝试提取队列、交换机或 route key。", '+ new Queue("member.updated") → MQ_CONFIG_RULE'),
+      drill("配置 · 配置文件或 @Value", "文件按 application、bootstrap、Nacos 或 YAML/Properties 等路径特征识别，从正文抽取键名。代码中的 @Value 要出现在改动行，从占位符提取配置键。", '+ member.refresh.enabled: true → CONFIG_HEURISTIC_RULE')
+    ]),
+  preflight: node("触发与预检", "项目策略", "按触发策略安排 AI Review，并准备确定性预检摘要。",
+    "规则结果、项目与端配置、Review Profile、触发类型。",
+    "AI 是否触发、审查范围和预检摘要。",
+    ["按项目、Profile、MR 或 Push 对应开关等条件决定是否调度。",
+      "进入 AI 调度后执行确定性预检，有适用的已有结果时可复用。预检状态进入进度或审查输入。",
+      "未调度 AI 时，仍可按通知策略发送已有的规则提醒。"], ["pipeline", "trigger", "preflight"]),
+  route: node("引擎路由", "Standard / Agent", "自动链路默认尝试 Agent，对应手动入口支持显式覆盖。",
+    "项目触发策略、可选引擎覆盖、源码外发兼容值、Agent 和 Worker 状态。",
+    "STANDARD、AGENT，或供自动路径处理的 AGENT_UNAVAILABLE。",
+    ["项目策略当前固定返回 AGENT 和外发许可兼容值。项目设置可编辑 MR、Push 等触发策略，支持覆盖的手动入口可显式选择引擎。",
+      "Agent 路由检查外发兼容值、运行时配置和在线 Worker。自动路径遇到 Agent 不可用可走 Standard，显式选择可能直接报错。",
+      "入队前和执行期分别判断降级。取消、安全范围耗尽、必需记忆失败有独立处理。"], ["policy", "route", "trigger", "fallback"]),
+  standardSign: node("提取信号", "增删行与文件类型", "从本次 diff 提取待核实的上下文信号。",
+    "逐文件路径和 diff，以及可用的反馈线索。",
+    "信号名、优先级、查询线索和所需上下文类型。",
+    ["Planner 根据代码模式、路径和增删行生成信号。一个文件可产生多个信号。",
+      "Retriever 只为支持的信号构造本地查询。"], ["planner", "queries"], [
+      drill("METHOD_DELETED / METHOD_SIGNATURE_CHANGED", "从删除行和新增行提取声明名。旧名只在删除侧，发出 METHOD_DELETED；两侧存在同名声明时，启发式产生 METHOD_SIGNATURE_CHANGED。前者请求引用和调用方，后者也请求被调方。改名在现有逻辑中通常按旧名删除处理。", "- public void updateUserStatus(long id)\n+ public void changeUserStatus(long id)\n→ METHOD_DELETED [updateUserStatus]"),
+      drill("FIELD_DELETED / DTO_FIELD_CHANGED", "删除字段集合减新增侧集合得到 FIELD_DELETED。DTO 路径有字段变化时还用增删字段并集生成 DTO_FIELD_CHANGED，再按字段名和访问方法补引用。", "- private String status;\n+ private String state;\n→ 搜索 status、getStatus、setStatus 等"),
+      drill("DB_SQL_MAPPER_CHANGED", "根据 SQL、Mapper 或 Entity 相关变更识别，提取表名、字段、Mapper 方法和实体名，用于补相关映射与读写片段。"),
+      drill("CACHE_WRITE_DELETE_CHANGED", "检测缓存写入、删除或失效相关变更，后续由缓存 key、方法或文件等线索找使用点。"),
+      drill("CONFIG_FILE_CHANGED / MQ_CONFIG_CHANGED", "形成配置、MQ 和测试证据需求。当前本地引用检索的支持集合没有这两种信号，配置读取点和生产消费链仍可能缺失。")
+    ]),
+  standardContext: node("规划与补全", "同文件源码", "按信号列出所需证据，并尝试补齐变更文件的上下文。",
+    "Planner 信号、变更文件、GitLab 项目 ID 和对应 head 引用。",
+    "有界同文件片段、上下文需求与未取得原因。",
+    ["按信号得到上下文请求，例如调用方、相邻方法、schema 或测试。",
+      "GitLab 原文件可用时读取对应 ref，围绕 diff 的变更位置提取有界窗口。读取依赖 API、项目标识、提交和文件范围。",
+      "配置文件、测试源码和运行时值、测试执行结果分别记录证据可用性。"], ["snippets", "planner", "attach"]),
+  standardRetrieve: node("关联引用", "轻量索引与文本搜索", "搜索与信号相关的调用位置和跨文件证据。",
+    "任务 worktree、方法/字段/SQL/缓存线索、文件范围与检索预算。",
+    "候选路径、行区间、关系、置信线索和源码片段。",
+    ["方法删除或签名信号取 methodNames，生成 METHOD_REFERENCE；字段线索还会衍生 Java 访问方法。",
+      "轻量 Java/MyBatis 索引可生成 caller、callee、接口实现、Mapper namespace/id 和字段等候选。rg 补文本召回，特定条件下用 git grep 兼容路径。",
+      "候选按关系、置信度、路径和行号等排序。词法命中需要结合源码类型核实。",
+      "默认最多 8 个查询、每查询 10 个命中文件和 6 个片段，累计 12,000 字符。"], ["retrieval", "queries", "relations", "rank"], [
+      drill("方法改名查询", "旧名字出现在 MemberController 的方法调用中。另一类的同名调用也可能被搜到，对照接收者和文件角色再选证据。", "signalType: METHOD_DELETED\nmethodNames: [updateUserStatus]\nquery: updateUserStatus\nreason: METHOD_REFERENCE")
+    ]),
+  standardPack: node("筛选与打包", "Context Pack", "按相关性和预算挑选证据，并记录覆盖范围。",
+    "diff、同文件片段、关系候选、上下文请求和预检摘要。",
+    "Context Pack、渲染文本、已纳入与未纳入证据摘要。",
+    ["按关系、信号优先级和路径等因素选择候选，尽量保留有辨识度的片段。",
+      "引用检索与 Context Pack 有独立预算。总包超限时可缩短或移除片段、候选等材料，并同步裁剪信息。",
+      "Provider 收到原变更与选定证据。缺失的相关信息作为上下文不完整的依据。"], ["rank", "pack", "attach"]),
+  provider: node("Standard Provider", "固定证据审查", "用服务端整理的材料执行模型审查。",
+    "Review Profile、Provider 配置、diff、Context Pack 和审查指令。",
+    "Provider 审查结果、进度和 findings。",
+    ["服务器预先整理证据，再以所选 Provider 执行审查。",
+      "成功后归一化并保存结果。Provider 失败有对应的错误和进度状态。",
+      "Agent 降级复用 Standard 执行管线，并保留实际生效引擎。"], ["standard", "attach", "fallbackRun"]),
+  agentPrepare: node("准备 Agent", "Worktree 与记忆", "准备只读工作树和模型的首轮上下文。",
+    "任务 head、变更文件、diff、审查指令、项目设置。",
+    "工作树、初始材料、预算与记忆快照。",
+    ["以任务 after SHA 或 commit SHA 准备本地 worktree，应用路径安全策略。可审查文件为空时按明确分支处理。",
+      "小 diff 直接放进初始输入。超过 inlineDiffBytes 时改用 read_diff_range 分页。",
+      "记忆按项目关联、有效状态、端和路径过滤。CORE 校验预算，ON_DEMAND 根据问题类型、关键词等排序去重。当前上限分别为 20 条/8,000 字节和 8 条/6,000 字节。",
+      "规范、Skill、历史案例用来提示需要核实的条件，代码结论仍受本次证据约束。"], ["worktree", "agentInput", "memoryScope", "memory", "prompt"]),
+  worker: node("队列与 Worker", "领取任务与运行时", "领取 Agent 任务并按选定运行时执行。",
+    "持久化输入、预算、运行时配置、租约与任务工作树。",
+    "实际 Runner、取证进度、心跳和终态。",
+    ["后端持久化待执行工作与 Agent 运行记录。Worker 领取任务、维持心跳并回传进度。",
+      "Claude CLI 使用项目 Review MCP；HTTP Runner 对接 Responses、Chat Completions 和 Anthropic Messages。",
+      "运行路径共享工具执行边界和结果契约。"], ["queue", "worker", "cli", "complete", "fail"]),
+  decision: node("模型决策", "假设 → 下一步", "根据 diff 和已有工具结果，选择取证或提交。",
+    "初始材料或模型消息历史、已配对的工具结果、reviewBudget。",
+    "工具名和参数，或 submit_review 调用。",
+    ["Prompt 先要求读 changedFiles 和 diff，最多形成三个要核实的假设。缺影响结论的证据时才查源码。",
+      "每个假设的提示词约束为最多一次 search_code 和两次 read_file_range。运行层另有强制总预算。",
+      "CONVERGE 阶段不应新增假设。证据充分可提前提交，缺失时按 PARTIAL 或 INSUFFICIENT 表达。"], ["prompt", "responses", "phase"]),
+  tools: node("只读工具", "调用与返回", "Python 执行模型选择的工具，返回结果供后续决策。",
+    "工具与参数、工作树、预算、工具调用 ID。",
+    "源码或 diff、匹配结果、预算提示、结构化拒绝或提交结果。",
+    ["这组工具由项目定义。CLI 关闭内置工具，通过 Review MCP 暴露白名单。HTTP Runner 按模型接口协议注册同组工具。",
+      "执行器约束参数、工作树、路径与行范围，统计工具与源码字节。受限路径或越界访问会被拒绝。",
+      "Responses 用 function_call_output + call_id；Chat Completions 用 role: tool + tool_call_id；Anthropic Messages 用 tool_result + tool_use_id。"], ["tools", "cli", "executor", "responses", "chat", "anthropic"], [
+      drill("list_files", "按 pattern 和 limit 枚举可读文件。limit 范围 1–500，计入取证次数。", '{ "pattern": "**/*Member*.java", "limit": 20 }'),
+      drill("search_code", "按 query 搜索，可带 globs、isRegex、caseSensitive 和 limit。最多 8 个 glob，limit 范围 1–100。结果需要结合源码核实。", '{ "query": "updateUserStatus", "globs": ["**/*.java"], "limit": 10 }'),
+      drill("read_file_range", "按相对路径和行范围读当前工作树，单次至多 400 行，计入取证次数。", '{ "path": "src/MemberController.java", "startLine": 42, "endLine": 50 }'),
+      drill("read_diff_range", "按文件和行范围读任务 diff，单次至多 400 行。文件须在本次可审查范围内。", '{ "path": "src/MemberService.java", "startLine": 1, "endLine": 20 }'),
+      drill("submit_review", "提交符合 Schema 的 Review Card。计入工具总次数。有效结果只成功提交一次。")
+    ]),
+  submit: node("收敛与提交", "Review Card 校验", "主动收口或触达预算时结束取证并提交结果。",
+    "已获证据、缺失项、预算状态和 Review Card。",
+    "有效卡片，或 schema 修正、取消和失败终态。",
+    ["默认上限为 12 个模型轮、40 次工具、10 次取证、200,000 源码字节、600 秒。运行时可配置。",
+      "第 8 次取证进入 CONVERGE。取证上限是第 10 次，之后取证会被拒绝。默认第 9 个模型轮是提交期限。模型轮、工具和取证分别计数。",
+      "Schema 检查 finding 的文件、行位置与必填证据。schema 不通过时最多三次提交尝试。验证通过后结束。",
+      "证据充分可以更早提交。连续两轮无新证据早停仍处于设计阶段。"], ["budget", "phase", "prompt", "executor", "schema", "design"], [
+      drill("取证触顶示例", "一次模型响应可产生多次工具调用。以下以运行时默认预算举例，独立计算模型轮、取证工具次数与所有工具次数。", "取证调用 1–7 → DISCOVERY\n取证调用 8–9 → CONVERGE\n取证调用 10 → SUBMIT，mustSubmit=true\n继续请求取证 → EVIDENCE_COLLECTION_COMPLETE\n第 9 模型轮为默认提交期限"),
+      drill("提交示例与校验", "示例 finding 用本次变更文件定位，关联未修改 Controller 的证据。无效提交会返回字段校验结果供模型修正，收到有效卡片后结束。", JSON.stringify(demoCard, null, 2))
+    ]),
+  failure: node("失败与跳过", "按原因处理", "区分可降级失败和需要独立处理的终态。",
+    "调度或 Agent 执行的错误、租约失效、取消或安全事件。",
+    "失败或跳过状态，符合条件时生成 Standard 降级任务。",
+    ["自动路由遇到不可用与运行后失败的判断入口不同。执行失败、超时或租约异常可进入降级。",
+      "主动取消保持取消。必需记忆错误受阻断保护。无可审查的安全文件走专门分支。",
+      "保留原失败原因、实际引擎和降级进度。"], ["trigger", "fail", "fallback", "fallbackRun"]),
+  result: node("结果落库", "状态与 findings", "保存规则提醒、AI 审查结果和运行进度。",
+    "规则卡片、Provider 结果或 Worker 的 Review Card、进度与错误。",
+    "任务与 Review 结果、运行摘要和生效引擎。",
+    ["规则风险卡在事件处理阶段先落库，AI 链路随后保存独立的审查结果。",
+      "Agent 回传后由服务端更新记录，Standard 和降级结果也能按实际引擎识别。",
+      "证据不足在结果中说明缺失内容。"], ["pipeline", "standard", "complete", "display"]),
+  notify: node("详情与通知", "Web / 钉钉", "展示结果，并按触发来源与配置处理通知。",
+    "落库结果、自动触发上下文、项目与钉钉配置。",
+    "任务详情、通知发送记录，符合策略时发出卡片。",
+    ["任务详情展示规则提醒、AI finding 和进度。符合自动通知策略时发送钉钉卡片。",
+      "未触发 AI 时，规则提醒也可按条件通知。通知状态与审查结果分别记录。"], ["pipeline", "notify", "display"]),
+  feedback: node("反馈与记忆", "人工确认 → 回写", "把符合条件的误报原因沉淀给后续 Agent 任务。",
+    "规则或 finding 反馈、人工确认的误报原因。",
+    "反馈记录，或经确认后异步形成的项目案例。",
+    ["反馈记录与发布为记忆分开。当前案例确认入口受 AI finding 误报类型和状态限制。",
+      "写回校验反馈摘要和来源版本，生成项目案例与关联。反馈修改或撤回后有失效保护。",
+      "后续任务按范围召回。已入队任务使用自己的记忆快照。"], ["feedback", "confirm", "writeback", "memoryScope", "agentInput"]),
+  push: node("GitLab Push", "另一种 Webhook 入口", "由 push 事件和分支配置决定是否发起审查。",
+    "Push payload、分支、before/after SHA、commit 列表。",
+    "Push 任务与变更范围，或分支规则与空 diff 跳过。",
+    ["按项目和分支门槛判断，使用前后提交和可用 GitLab 数据整理差异。",
+      "共享后续规则和 Review 能力，自动触发使用 Push 对应开关。"], ["push", "trigger"]),
+  manual: node("手动 Review", "页面或 API 入口", "使用调用方提供的输入发起规则提醒或 AI 审查。",
+    "手动请求、项目和目标配置、diff 或任务来源，可选引擎。",
+    "手动任务、预检和审查结果。",
+    ["手动规则提醒使用 /api/review-tasks/manual，接收项目、模板、变更文件与 diff。",
+      "手动 AI Review 使用 /api/code-quality-reviews/manual，按请求或项目配置选择引擎并准备预检。显式 Agent 不可用时可能直接报错。"], ["manualRule", "manual", "route", "inputs"]),
+  range: node("Commit range / Branch diff", "比较范围差异", "先确定两个比较端，再将变更供审查使用。",
+    "起止提交或源/目标分支。",
+    "所选范围内的变更文件、diff 和引用版本。",
+    ["提交区间强调起止提交，分支差异强调比较引用。这些是差异来源。",
+      "GitLab compare 客户端用于 Push 的 before/after 比较。外部已取得的区间或分支差异可连同文件清单按 diffText 提交给手动入口。"], ["compare", "inputs", "manualRule"])
+};
+const edges = {
+  fetch: edge("GitLab MR → 变更范围", "开放 MR 进入变更范围准备。", "通过校验的 MR 事件。", "逐文件 diff。",
+    ["已携带变更摘要时复用；其他情况读取 GitLab API。请求异常进入任务错误处理。"], ["mr", "gitlab"]),
+  match: edge("变更范围 → 变更分析", "把标准化后的文件和 diff 交给规则分析。", "changedFiles、diff、项目配置。", "匹配结果或仅变更摘要。",
+    ["提醒卡开关控制是否执行规则匹配，模板控制提醒范围。"], ["pipeline", "rules"]),
+  trigger: edge("变更分析 → 触发与预检", "规则阶段之后评估是否触发 AI。", "已保存的规则结果、文件和项目策略。", "调度上下文或仅规则输出。",
+    ["自动任务检查 AI 开关和当前触发条件。规则命中与否不直接等同于是否可生成 AI finding。"], ["pipeline", "trigger"]),
+  choose: edge("触发与预检 → 引擎路由", "进入 AI 调度时将预检结果传给引擎选择。", "项目触发策略、任务与预检。", "候选引擎和输入。",
+    ["自动触发条件未满足时，走仅规则链路。命中安全策略时按入口分别处理。"], ["trigger", "preflight", "route"]),
+  toStandard: edge("引擎路由 → Standard", "进入固定的取证、打包和 Provider 流程。", "选择 Standard 的任务。", "开始构建 Standard 审查输入。",
+    ["支持引擎覆盖的入口显式选择 STANDARD。自动路径也可在 Agent 不可用或符合降级条件时进入该管线，保留实际生效引擎。"], ["route", "attach", "fallbackRun"]),
+  plan: edge("提取信号 → 规划与补全", "把信号翻译成需要核实的证据。", "变更信号及详细字段。", "所需上下文类型和同文件片段。",
+    ["例如 METHOD_DELETED 请求引用、调用方、同类方法和测试上下文；实际可用程度单独记录。"], ["planner", "snippets"]),
+  lookup: edge("规划与补全 → 关联引用", "对支持的信号补本地工作树中的关联证据。", "信号、当前 worktree、检索能力。", "本地关系和 grep 候选。",
+    ["按支持信号生成查询。工作树不可用、信号不支持或搜索超限时，现有材料可继续作为审查输入。"], ["retrieval", "queries"]),
+  fit: edge("关联引用 → 筛选与打包", "把片段按优先级和预算收入 Context Pack。", "检索候选与已有上下文。", "采纳片段和未纳入原因。",
+    ["选择高价值关系，处理重复、片段超长与总体预算。包中的候选仍有置信度与覆盖边界。"], ["rank", "pack"]),
+  send: edge("筛选与打包 → Standard Provider", "以当前项目的 Provider 和审查指令发起执行。", "diff、选定证据、Provider 参数。", "可归一化的审查输出。",
+    ["先以服务端准备好的 Context Pack 执行。Provider 结果和错误进入各自状态。"], ["attach", "standard"]),
+  toAgent: edge("引擎路由 → Agent", "Agent 可用时准备只读代码和任务输入。", "解析后的 AGENT、外发兼容值和可用运行时。", "Agent 准备流程。",
+    ["Agent 运行环境和 Worker 可用。安全范围与必需记忆在准备阶段继续校验。"], ["route", "agentInput", "queue"]),
+  enqueue: edge("准备 Agent → 队列与 Worker", "冻结输入和记忆后持久化任务。", "工作树、diff、预算、记忆快照。", "等待领取的 Agent job。",
+    ["必需输入准备成功才入队。大 diff 记录分页模式，文件仍受安全范围约束。"], ["agentInput", "queue"]),
+  run: edge("队列与 Worker → 模型决策", "由 Worker 选择运行时，并向模型提交初始输入。", "队列 job、运行时配置和输入。", "首轮模型请求及工具列表。",
+    ["成功领取和准备后开始执行。Worker 上报进度与终态，租约失败另行处理。"], ["worker", "prompt", "responses"]),
+  invoke: edge("模型决策 → 只读工具", "模型根据缺失证据提出工具调用。", "工具、参数、调用标识。", "执行器返回值或拒绝。",
+    ["执行前检查工具名、参数、访问范围和预算。模型以已有证据决定调用哪个工具。"], ["responses", "executor"]),
+  feedbackTools: edge("只读工具 → 下一轮模型决策", "用调用 ID 关联原请求和工具结果。", "结构化结果、调用 ID、预算状态。", "后续一轮的模型输入。",
+    ["普通取证返回即形成下一轮材料。Responses 使用 function_call_output，其他接口使用各自的工具结果结构。有效提交后结束循环。"], ["responses", "chat", "anthropic"]),
+  stop: edge("只读工具 → 收敛与提交", "模型主动结束取证，或按预算要求进入提交。", "当前证据、预算相位、提交请求。", "通过校验的卡片或结构化校验错误。",
+    ["证据够时即提交。达到取证上限后拒绝继续读，提交仍可进行。校验失败可在额度内修正。"], ["phase", "executor", "schema"]),
+  standardDone: edge("Standard Provider → 结果落库", "保存 Standard 的输出和执行状态。", "Provider 输出、进度与错误。", "归一化结果。",
+    ["执行成功时保存 findings；失败保留状态与原因。降级任务记录实际引擎。"], ["standard", "fallbackRun"]),
+  agentDone: edge("收敛与提交 → 结果落库", "Worker 回传校验通过的卡片。", "Review Card、运行摘要与任务租约信息。", "保存的 Agent 结果。",
+    ["后端校验并处理回传、更新任务进度。执行失败走失败处理。"], ["schema", "complete", "fail"]),
+  denied: edge("引擎路由 → Agent 不可用", "在入队前检查外发兼容值、运行时和 Worker。", "项目触发策略、当前可用性与请求方式。", "自动任务处理或显式错误。",
+    ["显式 Agent 不可用可以报错。自动路由可进入 Standard。"], ["route", "trigger"]),
+  failed: edge("Agent 执行 → 失败与跳过", "按终态或阻断原因确定后续。", "失败码、取消、租约或安全范围。", "失败记录及是否可以继续。",
+    ["普通执行失败可以调度降级。取消、无可审查安全文件或必需记忆阻断按专门分支处理。"], ["trigger", "fail", "fallback"]),
+  fallback: edge("Agent 失败 → Standard 降级", "复用 Standard 队列和 Context Pack。",
+    "允许降级的 Agent 错误与可恢复任务输入。", "Standard fallback job，或入队前直接走 Standard。",
+    ["运行后降级队列检查是否已存在，避免重复调度。取消和必需记忆阻断跳过降级。恢复任务后仍按 Standard 的材料和 Provider 设置运行。"], ["trigger", "fallback", "fallbackRun"]),
+  blocked: edge("失败与跳过 → 保存终态", "保存不能继续或降级失败的状态。",
+    "取消、阻断、跳过或 fallback failure。", "可见原因和进度。",
+    ["按当前入口保存实际终态，不产生成功卡片。可以在任务详情查看终态和已保留的规则结果。"], ["trigger", "fail", "display"]),
+  ruleOnly: edge("触发策略 → 仅规则结果", "AI 未被安排时按规则提醒路径结束。", "保存的规则卡片与触发判定。", "规则结果与可能的通知。",
+    ["未开启 AI、当前入口不满足触发等情况不会进入模型执行。通知仍受项目和入口策略控制。"], ["pipeline", "trigger"]),
+  present: edge("结果落库 → 详情与通知", "由任务详情展示审查记录，并按配置通知。", "保存的规则及 AI 结果。", "Web 展示与通知记录。",
+    ["有通知上下文且开关允许时尝试发送钉钉。通知失败可单独查状态。"], ["notify", "display"]),
+  annotate: edge("详情与通知 → 反馈与记忆", "从具体提醒或 finding 提交人工反馈。", "任务、具体审查条目和反馈内容。", "反馈记录或待确认的项目案例。",
+    ["确认误报的人工操作与普通反馈分开。回写另行异步执行。"], ["feedback", "confirm", "writeback"]),
+  reuse: edge("反馈与记忆 → 后续 Agent", "已生效的项目案例进入后续任务的记忆候选。", "案例、项目关联、端、路径与变更线索。", "新任务的记忆快照。",
+    ["查有效性，按范围筛选和预算去重。旧任务的快照继续保留它当时的采用信息。"], ["memoryScope", "memory", "agentInput"])
+};
+
+const lanes = [
+  { id: "common", title: "接入与路由", nodes: ["gitlab", "diff", "rule", "preflight", "route"],
+    edges: ["fetch", "match", "trigger", "choose"] },
+  { id: "standard", title: "Standard Review", nodes: ["standardSign", "standardContext", "standardRetrieve", "standardPack", "provider"],
+    edges: ["plan", "lookup", "fit", "send"], links: [["toStandard", "从引擎路由进入 ↓"], ["standardDone", "汇入结果 ↓"]] },
+  { id: "agent", title: "Agent Review", nodes: ["agentPrepare", "worker", "decision", "tools", "submit"],
+    edges: ["enqueue", "run", "invoke", "stop"], links: [["toAgent", "从引擎路由进入 ↓"], ["feedbackTools", "工具结果 ↺ 下一轮"], ["agentDone", "汇入结果 ↓"]] },
+  { id: "failure", title: "失败、跳过与降级", nodes: ["failure"],
+    edges: [], links: [["denied", "路由不可用 ↓"], ["failed", "Agent 失败 ↓"], ["fallback", "返回 Standard ↑"], ["blocked", "保存终态 ↓"]] },
+  { id: "outcome", title: "输出与反馈", nodes: ["result", "notify", "feedback"],
+    edges: ["present", "annotate"], links: [["ruleOnly", "仅规则结果 ↓"], ["reuse", "记忆 → 后续 Agent ↺"]] }
+];
+
+const demoDiff = [
+  "diff --git a/src/MemberService.java b/src/MemberService.java",
+  "--- a/src/MemberService.java",
+  "+++ b/src/MemberService.java",
+  "@@ -18,5 +18,5 @@ class MemberService {",
+  "-    public void updateUserStatus(long id) {",
+  "+    public void changeUserStatus(long id) {",
+  "         memberMapper.updateStatus(id);",
+  "         benefitService.refreshBenefits(id);",
+  "     }",
+  " }"
+].join("\n");
+const frame = (id, title, text, sample = "") => ({ id, title, text, sample });
+const start = frame("gitlab", "接收 MR 并取得 diff", "示例 MR 只改了 MemberService 的方法名。任务记录比较范围，后续证据按相应 head 获取。");
+const finish = frame("result", "保存并展示结果", "示例结论定位到变更文件第 18 行。任务详情可见原调用证据，符合通知策略时随审查结果发送。");
+const replays = {
+  standard: [
+    start,
+    frame("rule", "执行提醒规则", "纯 Service 方法改名未必触发 API、DB 等提醒。项目仍可按 MR 配置触发 AI，随后 Standard Planner 读取原 diff。"),
+    frame("standardSign", "旧名字命中 METHOD_DELETED", "删除侧有 updateUserStatus，新增侧只有 changeUserStatus。平台以旧名形成引用查询线索。",
+      'signalType: METHOD_DELETED\nmethodNames: ["updateUserStatus"]\npriority: HIGH'),
+    frame("standardContext", "生成所需上下文", "请求调用方、引用和同类方法等上下文。能读取 GitLab 原文件时，补 head 下第 18 行附近片段。",
+      "src/MemberService.java:18\npublic void changeUserStatus(long id) { … }"),
+    frame("standardRetrieve", "搜索旧名并收集关系候选", "搜索结果覆盖直接调用与同名文本，结合轻量索引形成关系证据。",
+      "METHOD_REFERENCE → updateUserStatus\nsrc/MemberController.java:46 → memberService.updateUserStatus(id)\nsrc/LegacyMemberSync.java:81 → legacyService.updateUserStatus(id)"),
+    frame("standardPack", "保留直接调用，裁剪低价值片段", "Controller 调用的接收者可核实，优先放入。旧适配器的同名调用证据较弱；示例预算下，重复测试命中被裁掉。",
+      "纳入：MemberController.java:42–50（待核实的直接调用）\n靠后：LegacyMemberSync.java:81（接收者不同）\n裁剪：旧测试中的重复同名片段（示例总包预算）"),
+    frame("provider", "用固定证据审查", "模型用第 18 行改名和未更新的 Controller 调用支撑 finding。若取不到类型证据，应降低确定性。"),
+    finish
+  ],
+  agent: [
+    start,
+    frame("agentPrepare", "准备工作树与初始材料", "示例 diff 可直接注入。Worker 后续只在该任务工作树取证。记忆按项目、端和路径选入。"),
+    frame("decision", "形成待核实假设", "手头只有改名 diff。要判断是否还有旧调用，先搜索旧名。这个示例只调查这一条假设。"),
+    frame("tools", "第 1 轮 · search_code", "只搜 Java 源码。命中说明出现了旧方法文本，下一步还要验证接收者。",
+      '调用 {"query":"updateUserStatus","globs":["**/*.java"],"limit":10}\n返回 src/MemberController.java:46\n返回 src/LegacyMemberSync.java:81'),
+    frame("feedbackTools", "工具结果进入下一轮", "Python 关联调用 ID 并把结果交还模型。以 Responses 为例，下一请求的历史包含这一条工具输出。",
+      '{"type":"function_call_output","call_id":"call_demo_1","output":"…匹配位置与 reviewBudget…"}'),
+    frame("tools", "第 2 轮 · read_file_range", "读取 Controller 的字段和调用，确认接收者类型是本次修改的 MemberService。",
+      '调用 {"path":"src/MemberController.java","startLine":42,"endLine":50}\n42  private final MemberService memberService;\n46  memberService.updateUserStatus(id);'),
+    frame("submit", "第 3 轮 · submit_review", "示例已拿到旧调用与变更声明，直接提交。如果接收者类型仍无法核实，可以保留缺失项并降低置信度。",
+      "Review Card 摘要\n定位 src/MemberService.java:18\n证据 src/MemberController.java:42,46\n结论 旧调用仍引用已删除的方法"),
+    finish
+  ],
+  fallback: [
+    start,
+    frame("worker", "Agent 已领取任务", "演示同一任务在执行期发生超时，未取得有效 Review Card。"),
+    frame("failure", "保存 Agent 超时状态", "本例可降级。主动取消和必需记忆阻断走各自的处理分支。", "failureCode: AGENT_TIMEOUT"),
+    frame("fallback", "创建 Standard 降级 job", "以保存的任务输入和项目策略排入 Standard。调度前检查是否已有降级 job。"),
+    frame("standardSign", "Standard 重新组织证据", "沿标准管线完成信号、关联引用和 Context Pack，随后调用 Provider。"),
+    frame("result", "记录实际使用的引擎", "返回任务详情时，可区分原始 Agent 失败和降级审查的最终状态。", "requestedEngine: AGENT\neffectiveEngine: STANDARD_FALLBACK")
+  ]
+};
+const items = { ...nodes, ...edges };
+const byId = id => document.getElementById(id);
+const map = byId("map");
+const searchInput = byId("search");
+const searchResults = byId("search-results");
+const replayPanel = byId("replay");
+const narrow = window.matchMedia("(max-width: 980px)");
+const sourceRoot = "https://github.com/paiky/ai-code-review-platform/blob/" + revision + "/";
+let activeView = "all";
+let activeItem = "gitlab";
+let activeDrill = null;
+let replayRoute = "standard";
+let stepIndex = 0;
+let lastMapButton = null;
+
+function element(tag, text, className) {
+  const result = document.createElement(tag);
+  if (text !== undefined) result.textContent = text;
+  if (className) result.className = className;
+  return result;
+}
+
+function chooseButton(id, label, className) {
+  const button = element("button", label, className);
+  button.type = "button";
+  button.dataset.item = id;
+  button.addEventListener("click", () => {
+    lastMapButton = button;
+    selectItem(id, { focus: true, reveal: true });
+  });
+  return button;
+}
+
+function renderMap() {
+  map.replaceChildren();
+  for (const lane of lanes) {
+    if (!["common", "outcome", activeView].includes(lane.id) && activeView !== "all") continue;
+    const section = element("section", undefined, "lane " + lane.id);
+    const heading = element("div", undefined, "lane-heading");
+    heading.append(element("h3", lane.title));
+    if (lane.links) {
+      const links = element("div", undefined, "lane-links");
+      for (const [id, label] of lane.links) {
+        const link = chooseButton(id, label, "link-edge");
+        link.title = items[id].title;
+        links.append(link);
+      }
+      heading.append(links);
+    }
+    section.append(heading);
+    const row = element("div", undefined, "flow");
+    lane.nodes.forEach((id, index) => {
+      const item = nodes[id];
+      const nodeButton = chooseButton(id, undefined, "node");
+      nodeButton.append(element("strong", item.title), element("span", item.subtitle));
+      row.append(nodeButton);
+      const transition = lane.edges[index];
+      if (transition) {
+        const arrow = chooseButton(transition, "→", "edge");
+        arrow.setAttribute("aria-label", edges[transition].title);
+        arrow.title = edges[transition].title;
+        row.append(arrow);
+      }
+    });
+    section.append(row);
+    if (lane.id === "common") {
+      const extras = element("div", undefined, "entry-list");
+      extras.style.marginTop = "8px";
+      for (const id of ["push", "manual", "range"]) {
+        extras.append(chooseButton(id, nodes[id].title, "link-edge"));
+      }
+      section.append(extras);
+    }
+    map.append(section);
+  }
+  highlightMap();
+}
+
+function setView(view) {
+  if (activeView === view) return;
+  activeView = view;
+  document.querySelectorAll("[data-view]").forEach(button => {
+    button.setAttribute("aria-pressed", String(button.dataset.view === view));
+  });
+  renderMap();
+}
+
+function highlightMap() {
+  const replayId = replayPanel.hidden ? "" : replays[replayRoute][stepIndex].id;
+  for (const button of map.querySelectorAll("[data-item]")) {
+    if (button.dataset.item === activeItem) button.setAttribute("aria-current", "location");
+    else button.removeAttribute("aria-current");
+    button.classList.toggle("replay-current", button.dataset.item === replayId);
+  }
+}
+
+function renderDetail() {
+  const item = items[activeItem];
+  byId("detail-kind").textContent = item.type;
+  byId("detail-title").textContent = item.title;
+  byId("detail-summary").textContent = item.summary;
+  const body = byId("detail-body");
+  const io = element("dl", undefined, "io");
+  io.append(element("dt", "输入"), element("dd", item.input), element("dt", "输出"), element("dd", item.output));
+  const conditions = element("ul");
+  for (const rule of item.rules) conditions.append(element("li", rule));
+  body.replaceChildren(io, element("h3", item.type === "流转" ? "进入或跳过条件" : "实现规则"), conditions);
+
+  if (item.drill.length) body.append(element("h3", "规则与工具详情"));
+  item.drill.forEach((entry, index) => {
+    const section = element("details");
+    const summary = element("summary", entry.title);
+    section.open = index === activeDrill;
+    summary.addEventListener("click", () => {
+      const next = section.open ? null : index;
+      history.replaceState(null, "", itemHash(activeItem, next));
+    });
+    section.append(summary, element("p", entry.description));
+    if (entry.code) section.append(element("pre", entry.code));
+    body.append(section);
+  });
+
+  const refs = element("ul", undefined, "sources");
+  for (const id of item.refs) {
+    const [path, line, label] = sources[id];
+    const reference = element("li");
+    const link = element("a", label);
+    link.href = sourceRoot + path + "#L" + line;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    reference.append(link, element("span", path + ":" + line, "source-path"));
+    refs.append(reference);
+  }
+  body.append(element("h3", "源码依据"), refs);
+  byId("detail").scrollTop = 0;
+}
+
+function itemHash(id, drillIndex) {
+  return "#" + id + (drillIndex === null ? "" : "/" + (drillIndex + 1));
+}
+
+function selectItem(id, options = {}) {
+  activeItem = id;
+  activeDrill = options.drill ?? null;
+  if (options.reveal && !map.querySelector('[data-item="' + id + '"]')) setView("all");
+  highlightMap();
+  renderDetail();
+  const hash = itemHash(id, activeDrill);
+  if (options.update !== false && location.hash !== hash) history.pushState(null, "", hash);
+  if (options.focus) {
+    const heading = byId("detail-title");
+    heading.focus({ preventScroll: true });
+    if (narrow.matches) byId("detail").scrollIntoView({ block: "start" });
+  }
+  if (activeDrill !== null && options.focus) {
+    const open = byId("detail-body").querySelector("details[open] > summary");
+    if (open) {
+      open.focus({ preventScroll: true });
+      open.scrollIntoView({ block: "nearest" });
+    }
+  }
+}
+
+function restoreHash() {
+  const [id, anchor] = location.hash.slice(1).split("/");
+  if (!id) {
+    selectItem("gitlab", { update: false });
+    return;
+  }
+  if (!Object.hasOwn(items, id)) return;
+  const index = Number(anchor) - 1;
+  const drill = Number.isInteger(index) && items[id].drill[index] ? index : null;
+  selectItem(id, { drill, update: false, reveal: true });
+}
+
+function matchingItems(query) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  const matches = [];
+  for (const [id, item] of Object.entries(items)) {
+    const title = item.title.toLowerCase();
+    const isNode = item.type === "节点";
+    if (title.includes(needle)) {
+      matches.push({ id, title: item.title, score: title === needle ? 116 : isNode ? 90 : 75 });
+    }
+    item.drill.forEach((entry, index) => {
+      const title = entry.title.toLowerCase();
+      if (title.includes(needle)) {
+        matches.push({ id, drill: index, title: item.title + " · " + entry.title, score: title === needle ? 120 : 95 });
+      } else if (entry.code.toLowerCase().includes(needle)) {
+        matches.push({ id, drill: index, title: item.title + " · " + entry.title, score: 65 });
+      }
+    });
+    const text = [item.subtitle, item.summary, ...item.rules].join(" ").toLowerCase();
+    if (text.includes(needle) && !matches.some(match => match.id === id)) {
+      matches.push({ id, title: item.title, score: isNode ? 50 : 40 });
+    }
+  }
+  return matches.sort((first, second) => second.score - first.score).slice(0, 10);
+}
+
+function closeSearch() {
+  searchResults.hidden = true;
+}
+
+function renderSearch() {
+  searchResults.replaceChildren();
+  const query = searchInput.value.trim();
+  searchResults.hidden = !query;
+  if (!query) return;
+  const matches = matchingItems(query);
+  if (!matches.length) searchResults.append(element("p", "没有找到匹配的节点、信号或工具。"));
+  for (const match of matches) {
+    const button = element("button", match.title);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      closeSearch();
+      selectItem(match.id, { drill: match.drill, focus: true, reveal: true });
+    });
+    searchResults.append(button);
+  }
+}
+
+function showStep() {
+  const steps = replays[replayRoute];
+  const frame = steps[stepIndex];
+  selectItem(frame.id, { reveal: true });
+  const description = byId("replay-step");
+  description.replaceChildren(
+    element("strong", (stepIndex + 1) + " / " + steps.length + " · " + frame.title),
+    element("p", frame.text)
+  );
+  if (frame.sample) description.append(element("pre", frame.sample, "step-code"));
+  const details = element("button", "查看当前节点详情", "action back");
+  details.type = "button";
+  details.addEventListener("click", () => selectItem(frame.id, { reveal: true, focus: true }));
+  description.append(details);
+  byId("prev-step").disabled = stepIndex === 0;
+  byId("next-step").disabled = stepIndex === steps.length - 1;
+}
+
+function changeReplay(route) {
+  replayRoute = route;
+  stepIndex = 0;
+  document.querySelectorAll("[data-replay]").forEach(button => {
+    button.setAttribute("aria-pressed", String(button.dataset.replay === route));
+  });
+  setView(route === "fallback" ? "all" : route);
+  showStep();
+}
+
+document.querySelectorAll("[data-view]").forEach(button => {
+  button.addEventListener("click", () => {
+    setView(button.dataset.view);
+    if (!map.querySelector('[data-item="' + activeItem + '"]')) selectItem("route");
+  });
+});
+document.querySelectorAll("[data-replay]").forEach(button => {
+  button.addEventListener("click", () => changeReplay(button.dataset.replay));
+});
+byId("replay-toggle").addEventListener("click", event => {
+  replayPanel.hidden = !replayPanel.hidden;
+  event.currentTarget.setAttribute("aria-expanded", String(!replayPanel.hidden));
+  if (!replayPanel.hidden) changeReplay(replayRoute);
+  else highlightMap();
+});
+byId("replay-diff").querySelector("pre").textContent = demoDiff;
+byId("prev-step").addEventListener("click", () => {
+  stepIndex -= 1;
+  showStep();
+  if (stepIndex === 0) byId("next-step").focus();
+});
+byId("next-step").addEventListener("click", () => {
+  stepIndex += 1;
+  showStep();
+  if (stepIndex === replays[replayRoute].length - 1) byId("prev-step").focus();
+});
+
+searchInput.addEventListener("input", renderSearch);
+searchInput.addEventListener("focus", renderSearch);
+searchInput.addEventListener("keydown", event => {
+  if (event.key === "Enter" || event.key === "ArrowDown") {
+    const result = searchResults.querySelector("button");
+    if (searchResults.hidden || !result) return;
+    event.preventDefault();
+    if (event.key === "Enter") result.click();
+    else result.focus();
+  }
+});
+searchResults.addEventListener("keydown", event => {
+  const current = event.target.closest("button");
+  if (!current) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    current.click();
+  } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const next = event.key === "ArrowDown" ? current.nextElementSibling : current.previousElementSibling;
+    if (next) next.focus();
+    else if (event.key === "ArrowUp") searchInput.focus();
+  }
+});
+document.addEventListener("focusin", event => {
+  if (!event.target.closest(".search")) closeSearch();
+});
+document.addEventListener("click", event => {
+  if (!event.target.closest(".search")) closeSearch();
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !searchResults.hidden) {
+    searchInput.focus();
+    closeSearch();
+  }
+});
+byId("back-to-map").addEventListener("click", event => {
+  event.preventDefault();
+  const selected = map.querySelector('[aria-current="location"]');
+  const target = lastMapButton?.isConnected && lastMapButton.dataset.item === activeItem
+    ? lastMapButton
+    : selected || byId("map-heading");
+  target.focus();
+  target.scrollIntoView({ block: "nearest" });
+});
+window.addEventListener("hashchange", restoreHash);
+
+renderMap();
+renderDetail();
+restoreHash();
+</script>
+</body>
+</html>
