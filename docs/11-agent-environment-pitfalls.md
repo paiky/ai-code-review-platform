@@ -240,6 +240,10 @@ docker version
 - 只修改 Agent Worker 时可使用
   `scripts/package-docker-deploy.ps1 -AgentWorkerOnly -ReuseVersion <上一个完整版本>`。增量模式仍输出四个
   应用镜像的完整离线包，但 Backend、Frontend 和出站代理复用指定旧版本；不得用它掩盖这些组件本身的改动。
+- Stage 3 升级时，Worker 容器显示 `Started` 但 `onlineCapacity` 持续为 0，可先用
+  `docker compose logs --tail=80 agent-worker` 检查启动异常。若日志报 `No module named 'app.agent_review.schemas'`，
+  检查 Worker 和独立 Agent CLI 镜像是否一并打包共享 schema、提示词元数据、标准提示词模块和 Pydantic 2。
+  两个镜像在构建时都用运行用户导入入口模块，以便打包时发现缺失依赖。
 - 非 root Squid 容器若启动后立即退出，先检查是否仍尝试写默认 PID 文件；只读代理镜像可配置 `pid_filename none`，并关闭 cache/access log，再用 `squid -k parse -f /etc/squid/squid.conf` 验证。仅设置 `read_only` 不能限制外网，必须结合 internal network 与域名白名单代理或等效防火墙。
 - Docker 前端镜像构建使用 `npm ci`，要求 `frontend/package.json` 和 `frontend/package-lock.json` 同步。不要使用 `latest` 或浮动顶层依赖；更新依赖后同步 lock。
 - 如果本机 npm 与 Dockerfile 的 Node / npm 版本差异导致 lock 不一致，用与 Dockerfile 一致的 Node 镜像更新 lock。
