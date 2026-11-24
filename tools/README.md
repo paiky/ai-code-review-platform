@@ -1,6 +1,6 @@
 # Local JDK
 
-This directory is reserved for a local JDK used by development scripts.
+This directory can hold a local JDK for inspecting the legacy Java backend in `backend/`.
 
 Recommended layout on Windows:
 
@@ -11,4 +11,4 @@ tools/
       java.exe
 ```
 
-The `scripts/run-backend.ps1` script prefers this local JDK 21 when running the Spring Boot backend. The actual JDK binaries are intentionally ignored by Git because they are large, platform-specific, and should be updated independently.
+The active backend is Python/FastAPI. Its `scripts/run-backend.ps1` entry point uses Python and does not require a JDK. Local JDK binaries are ignored by Git.

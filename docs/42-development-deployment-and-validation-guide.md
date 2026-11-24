@@ -5,8 +5,8 @@
 ## 一、环境要求
 
 - Python 3.12+
-- MySQL 8.0+
-- Node.js 20+
+- 新部署和生产多 Worker 使用 MySQL 8.0+。既有 MySQL 5.7 兼容及串行领取见 [Worker 部署](#七服务器侧只读-agent-review)。
+- 前端 Node.js `^20.19.0 || >=22.12.0`，以 Vite 锁定依赖为准。
 - Windows 本地开发使用 PowerShell 和仓库 `scripts/` 脚本
 - Docker 部署需要 Docker Engine 和 Docker Compose plugin
 
@@ -256,7 +256,7 @@ dump 文件；连接凭据只写入执行期临时 client option 文件，命令
 本地事务中执行安全清理：
 
 - 清空普通 Provider Key、Agent 双 Key、Webhook、Worker 注册和 Scheduler Job；
-- 关闭 Agent Review、普通 AI Review、钉钉通知、项目组自动触发和自动修复预览；
+- 关闭 Agent Review、普通 AI Review、钉钉通知、项目自动触发和自动修复预览；
 - 清除通知目标/响应、Worker 心跳和配置测试状态；
 - 把未完成 Agent Run 标记为本地迁移取消，保留已完成任务、Review 结果和进度用于复现；
 - Review/source 历史会复制到本地，因此 apply 额外要求 `-ConfirmSourceData`，本地机器仍须满足源码数据授权。
@@ -311,7 +311,7 @@ LOCAL_REPO_MIRROR_RETENTION_DAYS=180
 CODE_QUALITY_REVIEW_ENABLED=true
 ```
 
-模型 Key 可通过部署环境完成首次初始化，之后推荐在设置页维护。钉钉 webhook 不通过 `.env` 默认配置，应在设置页按项目组添加。
+模型 Key 可通过部署环境完成首次初始化，之后在「AI Review 配置」维护。钉钉 webhook 在「项目 / 端类型配置 → 钉钉机器人库」录入，再在「项目配置」关联机器人。
 
 启用内置 MySQL：
 
@@ -459,14 +459,15 @@ docker compose logs -f backend
 
 ## 七、服务器侧只读 Agent Review
 
-完整设计、安全边界、当前停止点和生产验收见 `docs/41-server-side-readonly-agent-review-plan.md`。部署至少需要：
+安全边界及该专项的生产验收记录见 `docs/41-server-side-readonly-agent-review-plan.md`。部署至少需要：
 
 ```text
 AGENT_REVIEW_CONFIG_ENCRYPTION_KEY=Fernet URL-safe base64 key
 AGENT_REVIEW_WORKER_TOKEN=后端与Worker共用的高强度随机Token
 AGENT_REVIEW_BACKEND_URL=http://backend:8090
-AGENT_REVIEW_WORKER_ID=agent-worker-1
 ```
+
+Linux runtime 默认按 `AGENT_REVIEW_WORKER_ID_PREFIX` 和容器 hostname 生成节点 ID。只有单节点需要固定身份时才显式覆盖 `AGENT_REVIEW_WORKER_ID`，多副本各节点的 ID 必须唯一。
 
 自定义 OpenAI Responses Agent 的目标地址以设置页保存的 Base URL 为准，不再需要额外环境白名单。Backend 接受
 HTTP/HTTPS、IP 和自定义端口，拒绝通配符、userinfo、query 和 fragment；Worker 仍通过隔离的 Squid 出站，代理允许
@@ -560,11 +561,11 @@ Windows 自动启动配置不会进入远程 runtime，也不会改变原离线�
 安全约束：
 
 - Worker 不持有数据库或 GitLab 凭据，只读挂载 review workspace。
-- Agent 仅使用仓库提供的只读 MCP 工具，不开放 Bash、文件编辑、Web 或子 Agent。
-- 项目组必须选择 `AGENT` 并确认源码外发授权，自动任务才进入 Agent 队列。
+- Agent 使用本仓库的受控工具。Claude CLI 通过 MCP 暴露工具，HTTP Runner 使用模型协议注册的函数工具。运行时不开放 Bash、文件编辑、Web 或子 Agent。
+- 自动审查受全局能力开关、项目触发策略、Agent 运行时和 Worker 可用性约束。项目策略当前固定返回 `AGENT` 和外发许可兼容值。部署时应按组织要求确认可发送到模型端点的源码范围。
 - Worker 使用受限出站网络，只允许访问已批准模型端点。
 - 脱敏导出不包含源码、完整 diff、Key、Prompt、模型思维过程或 MCP 源码。
-- 样本不足门禁、STANDARD 对照、fallback 和生产扩大条件以 `docs/41` 为准。
+- `docs/41` 保存该专项的样本门禁与 STANDARD 对照要求。Worker 当前扩缩容操作见本手册部署章节。
 
 无真实 Provider Key 时，可使用阶段 3A 合成观察接口验证：
 
@@ -607,7 +608,7 @@ Invoke-RestMethod `
 curl http://localhost:8090/api/review-tasks
 curl http://localhost:8090/api/review-tasks/$taskId
 curl http://localhost:8090/api/review-tasks/$taskId/result
-curl http://localhost:8090/api/review-tasks/$taskId/code-quality-result
+curl http://localhost:8090/api/review-tasks/$taskId/code-quality-results
 curl http://localhost:8090/api/review-tasks/$taskId/code-quality-progress
 Invoke-RestMethod -Method Post -Uri "http://localhost:8090/api/review-tasks/$taskId/rerun"
 ```
@@ -661,9 +662,9 @@ MR、Push、manual 和 retry 会在 Provider 调用前运行一次自动 Preflig
 
 ## 十一、自动化验证
 
-按影响范围选择最小测试集。
+按影响范围选择最小验证集。Agent 仅在用户当前任务明确要求时新增、修改或运行单元测试。
 
-Python 后端全量测试：
+Python 后端全量测试（包含单元测试）：
 
 ```powershell
 .\scripts\run-backend.ps1 test
@@ -681,15 +682,15 @@ Python lint：
 .\scripts\run-frontend.ps1 build
 ```
 
-局部后端改动优先运行相关 pytest 文件；只有修改 webhook 主链路、共享模型、通知、数据库兼容或跨模块契约时才跑全量。前端样式和交互改动优先只跑 production build。
+局部后端改动优先做静态检查、人工核验或适用的契约验证。授权运行单元测试时按风险和影响范围选择目标。前端样式和交互改动优先考虑 production build 或浏览器验收。
 
 ## 十二、相关文档
 
 - 接入手册：`docs/18-project-integration-user-guide.md`
-- GitLab / 钉钉 / 项目组接入：`docs/23-help-gitlab-dingtalk-project-onboarding.md`
+- GitLab / 钉钉 / 项目接入：`docs/23-help-gitlab-dingtalk-project-onboarding.md`
 - HTTP API：`docs/03-api-contract.md`
 - Review 生命周期与前端入口：`docs/38-review-lifecycle-and-frontend-entrypoints.md`
-- 当前路线和阶段记录：`docs/36-review-platform-current-roadmap.md`
+- 历史路线归档：`docs/36-review-platform-current-roadmap.md`
 - Review 证据链和多端专项：`docs/40-review-evidence-pipeline-and-multi-target-roadmap.md`
 - 服务器侧只读 Agent Review：`docs/41-server-side-readonly-agent-review-plan.md`
 - 环境与工具避坑：`docs/11-agent-environment-pitfalls.md`

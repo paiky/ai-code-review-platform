@@ -27,7 +27,7 @@ README 只提供项目入口和最短运行方式。详细配置、部署、验�
 
 - `docs/42-development-deployment-and-validation-guide.md`：本地配置、启动、数据库迁移、Docker 部署、离线打包和验证命令。
 - `docs/18-project-integration-user-guide.md`：项目接入使用手册。
-- `docs/23-help-gitlab-dingtalk-project-onboarding.md`：GitLab、钉钉和项目组首次接入。
+- `docs/23-help-gitlab-dingtalk-project-onboarding.md`：GitLab、钉钉和项目首次接入。
 - `docs/03-api-contract.md`：HTTP API 契约。
 - `docs/04-risk-card-schema.md`：提醒卡片 JSON schema。
 - `docs/02-domain-model.md`：领域模型。
@@ -42,9 +42,10 @@ README 只提供项目入口和最短运行方式。详细配置、部署、验�
 - `docs/41-server-side-readonly-agent-review-plan.md`：服务器侧只读 Agent Review、安全边界和生产验收。
 - `docs/47-agent-review-multi-worker-pool-and-queue-governance-plan.md`：Agent Worker 池化、并发领取、扩缩容和队列治理。
 - `docs/48-review-task-detail-unified-progress-ui-plan.md`：任务详情统一 Review 进度 UI 专项。
-- `docs/49-review-progress-animation-style-extension-plan.md`：Review 进度动画风格扩展专项；在 `docs/48` 完成后实施。
+- `docs/49-review-progress-animation-style-extension-plan.md`：暂停的 Review 进度动画专项；运行态工作台见 `docs/50-review-running-immersive-workspace-plan.md`。
 - `docs/62-agent-review-memory-library-plan.md`：项目记忆库、资料管理和后续 Review 接入；默认显示独立菜单 `/settings/review-memory`（旧 `/settings/ai-review/memory` 链接兼容），可通过 `VITE_REVIEW_MEMORY_UI_ENABLED=false` 隐藏。
 - `docs/63-memory-library-central-management-plan.md`：记忆库独立菜单、集中资料管理与项目关联调整。
+- `docs/65-memory-assets-project-decoupling-plan.md` 和 `docs/66-memory-settings-project-configuration-plan.md`：当前公共资料关联、项目记忆开关与默认值。
 - `docs/ai-review-flow-map.html`：可从浏览器离线打开的 MR、Standard 与 Agent 链路地图。
 
 ### 排障与历史
@@ -80,11 +81,11 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
   -> 获取 changed files / diff
   -> 变更分析
   -> 规则引擎生成提醒卡片
-  -> 结果与通知记录落库
-  -> 钉钉推送或 SKIPPED
-  -> 前端任务详情
-  -> 可选触发标准 AI Review 或只读 Agent Review
-  -> 进度、finding、确定性证据和质量数据可见
+  -> 规则结果落库
+  -> 按全局开关和项目策略判断是否调度 AI Review
+     -> 已调度：Standard / Agent 执行，保存 AI 结果与进度，按策略通知
+     -> 未调度：按规则提醒策略处理通知
+  -> 任务详情展示结果、进度、确定性证据和通知记录
 ```
 
 后端 JSON 仍兼容历史 `riskCard`、`riskItems`、`riskLevel` 等字段；展示层统一使用“提醒卡片 / 提醒项”。字段重命名需要单独迁移 schema、API、数据库和历史数据。
@@ -98,21 +99,21 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 - 识别 API、DB、缓存、MQ、配置等信号，并通过模板生成结构化提醒卡片。
 - 提醒项保留命中证据、文件位置和 diff，可生成 SQL、Redis、MQ、Nacos 等维护草稿。
 - 审查任务、分析结果、提醒卡片和通知记录统一落库。
-- 钉钉按项目组 webhook 和模板关注类型发送提醒。
+- 钉钉使用项目关联的机器人和模板关注类型发送提醒。
 
 ### AI Review
 
 - 支持 OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM 和 OpenAI-compatible 自定义 Provider。
-- 支持全局开关、Provider、Profile、Prompt、模型、Key、超时和项目组多模型配置。
+- 支持全局开关、Provider、Profile、Prompt、模型、Key、超时和项目级多模型配置。
 - 支持 MR 自动触发、Push 策略触发、manual review、retry 和多模型并行执行。
 - finding 包含风险等级、证据、上下文状态、置信度、缺失上下文和安全摘要。
 - 支持调度队列、失败通知、finding 级补证据和修复 Patch 预览。
-- Provider 调用保持非流式 HTTP；前端通过结果和 progress API 轮询展示过程。
+- Standard 的 HTTP Provider 调用为非流式。前端通过结果和 progress API 轮询展示审查进度。
 
 ### 证据与准确率
 
 - Context Planner 识别变更信号、端类型、语言和覆盖状态。
-- Local Retriever 在受控 worktree 内检索调用关系、DTO 字段、DB/Mapper、缓存、MQ 和配置证据。
+- Local Retriever 在受控 worktree 内检索方法、字段和 DTO 引用，以及 DB/Mapper、缓存证据。MQ 和配置变更可由 Planner 提出上下文需求。
 - 预算裁剪后通过安全摘要说明未注入证据，避免模型把“未提供”误解为“不存在”。
 - `SECRET_SCAN` 在 MR、Push、manual 和 retry 的 Provider 调用前自动运行；同次多模型调度复用一个 run。
 - 确定性检查失败默认 fail-open，脱敏失败摘要进入 progress 和 Context Pack。
@@ -120,17 +121,17 @@ GitLab MR webhook / GitLab Push webhook / 手动审查
 
 ### 服务器侧只读 Agent Review
 
-- 项目组可选择 `STANDARD` 或 `AGENT`，启用 Agent 前必须确认源码外发授权。
-- 独立 Worker 使用加密 Key、持久化 Job/Run、只读 workspace 和受限 MCP 工具。
-- Agent 失败会显式执行 `STANDARD_FALLBACK`，不会伪装成 Agent 成功。
+- 自动审查按项目触发策略进入 Agent 路由，实际执行检查运行时和 Worker 可用性。支持引擎覆盖的手动入口可显式选择 `STANDARD` 或 `AGENT`。
+- 独立 Worker 使用加密 Key、持久化 Job/Run 和只读 workspace。Claude CLI 通过 MCP 使用项目自定义工具，HTTP Runner 通过模型协议使用同一组函数工具。
+- 符合条件的 Agent 不可用或失败会进入 Standard 降级。主动取消、安全路径跳过和必需记忆失败按各自分支处理。
 - 生产观察支持 STANDARD / AGENT 对照、人工标注、脱敏导出和合成 demo。
-- 当前停止点、样本门禁和扩大范围条件以 `docs/41-server-side-readonly-agent-review-plan.md` 为准。
+- `docs/41-server-side-readonly-agent-review-plan.md` 记录只读 Agent 专项的安全边界与生产样本门禁。
 
 ## 环境要求
 
 - Python 3.12+
-- MySQL 8.0+
-- Node.js 20+
+- 新部署和生产多 Worker 使用 MySQL 8.0+。既有 MySQL 5.7 保留兼容路径，Agent Job 使用串行领取。
+- 前端 Node.js `^20.19.0 || >=22.12.0`，以 Vite 锁定依赖为准。
 - 可选：Docker Engine + Docker Compose plugin
 
 详细环境和依赖安装见 `docs/42-development-deployment-and-validation-guide.md`。
@@ -151,7 +152,7 @@ GITLAB_BASE_URL=https://你的GitLab地址
 GITLAB_TOKEN=具备项目读取权限的token
 ```
 
-AI Review 默认关闭。Provider、Profile、模型和 Key 推荐在前端“设置”页维护。完整变量表见 `docs/42-development-deployment-and-validation-guide.md`，部署示例见 `deploy/.env.example`。
+AI Review 全局能力初始默认关闭。模型连接和审查策略在「设置 → AI Review 配置」维护，项目触发开关在「设置 → 项目 / 端类型配置」维护。完整变量表见 `docs/42-development-deployment-and-validation-guide.md`，部署示例见 `deploy/.env.example`。
 
 ## 快速启动
 
@@ -231,7 +232,7 @@ Worker 相关配置：
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--scale agent-worker=N` | 未指定时单副本 | Worker 容器数量；当前远程验收值为 `2` |
+| `--scale agent-worker=N` | 未指定时单副本 | Worker 容器数量；`2` 为历史池化验收基线 |
 | `AGENT_REVIEW_WORKER_ID_PREFIX` | `agent-worker` | Worker ID 前缀；Linux 容器自动追加 hostname，通常无需修改 |
 | `AGENT_REVIEW_WORKER_TOKEN` | 无 | Backend 与 Worker 共用的内部鉴权密钥，必须配置且不得写入仓库 |
 | `LOCAL_REPO_WORKSPACE_HOST_DIR` | 部署配置决定 | 挂载到 Worker 的只读仓库工作区宿主机目录 |
@@ -241,8 +242,7 @@ Worker 相关配置：
 - 普通 `docker compose up -d` 不应作为保持多副本数量的部署命令；升级、执行 `down` 后重建或调整数量时，
   应重新显式传入 `--scale agent-worker=N`。
 - `docker compose restart` 和服务器基于 `restart: unless-stopped` 的重启通常会保留现有容器数量。
-- 当前只验收 2 个 Worker，不建议在完成容量与队列治理前扩大到更多副本。
-- 阶段三优雅排空落地前，缩容必须先禁用 Agent Review 并等待运行任务结束。
+- Worker 收到 SIGTERM 后进入 `DRAINING`。离线部署使用 `deploy-stage3.sh upgrade --workers N`，调整副本数使用 `deploy-stage3.sh scale --workers N`，以操作手册的容量检查为准。
 - 生产多 Worker 要求 MySQL 8；MySQL 5.7 只保留串行领取兼容。
 
 GitLab webhook：
@@ -277,7 +277,7 @@ curl http://localhost:8090/api/review-tasks
 
 ## 常用验证命令
 
-按影响范围选择最小集，不要默认执行全量测试。
+按影响范围选择最小验证集。全量测试命令包含单元测试，Agent 仅在当前任务明确要求运行单元测试时使用。
 
 ```powershell
 # Python 后端全量测试
@@ -290,9 +290,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-backend.ps
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-frontend.ps1 build
 ```
 
-- 前端样式或交互改动：优先只跑前端 build。
-- Python 局部逻辑：优先跑相关 pytest 文件或测试类。
-- webhook 主链路、共享模型、通知、数据库兼容或跨模块改动：运行全量 Python 测试。
+- 前端样式或交互改动优先考虑 build 或浏览器验收。
+- Python 局部逻辑优先考虑聚焦静态检查、人工核验或适用的契约验证。授权运行单元测试时按影响范围选择目标。
 
 ## 主要接口入口
 
@@ -325,7 +324,7 @@ GET  /api/code-quality-review-providers
 
 - `任务`：任务列表、详情、提醒卡片、分析、AI Review、执行过程和调度队列。
 - `质量治理`：质量看板、评估样本、规则缺口、验收记录和回放记录。
-- `设置`：全局开关、Provider、Profile、Prompt、项目组、端类型和 Push 策略。
+- `设置`：项目 / 端类型配置、钉钉机器人库、AI Review 配置、项目记忆库和全局设置。
 - `版本更新`：近期功能变化、部署注意和验证提示。
 - `反馈池`：默认隐藏，仅在对应前端 feature flag 开启后显示。
 

@@ -1,4 +1,4 @@
-# GitLab / 钉钉 / 项目组接入
+# GitLab / 钉钉 / 项目接入
 
 > 状态说明：本文是面向内部环境的接入帮助页文档源。Webhook URL 示例 `http://ai-review.ihere.net` 需替换为你实际部署的平台地址；通用步骤亦见 `docs/18-project-integration-user-guide.md`。
 
@@ -52,50 +52,31 @@ Secret Token 保持为空即可。
 
 ![image-20260527110201878](https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/image-20260527110201878.png)
 
-## 三、配置平台项目组
+## 三、维护钉钉机器人库
 
 进入平台：
 
 ```text
-设置 -> 项目组 / 端类型配置
+设置 -> 项目 / 端类型配置 -> 钉钉机器人库
 ```
 
-先创建或复用已有项目组。项目组通常按业务线、团队或产品域划分，用于：
+录入从钉钉复制的 Webhook URL，保存并启用机器人。
 
-```text
-归类多个 GitLab 项目
-筛选任务列表
-配置项目组钉钉机器人
-配置默认 AI Review Profile
-配置默认模型 Provider
-维护 Push 审核策略
-```
+## 四、配置 GitLab 项目
 
-给项目组配置钉钉机器人时，把上一步从钉钉复制的 Webhook URL 填入该项目组的机器人配置，并启用它。平台只会按项目所属项目组发送通知；如果该项目组没有启用机器人，本次通知会记录为跳过，不会发送到默认项目组或其它项目组的机器人。
-
-![image-20260527110201878](https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-27_11-10-57.png)
-
-## 四、配置GitLab 项目
-
-首次收到某个 GitLab 项目的 Webhook 后，平台可以自动创建项目记录。自动创建的项目会进入默认项目组，后续可以再人工调整。
-
-![image-20260527110201878](https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/cd00250a14cb455e95f79c07f7cd6a03.png)
+平台可从首个满足条件的 Webhook 自动创建项目。需要提前配置时，使用 [项目创建 API](03-api-contract.md#42-创建项目接入配置)。在「项目 / 端类型配置 → 项目配置」编辑项目，确认所属端、Profile、审查范围、MR/Push 触发设置，并关联已启用的机器人。通知按项目关联发送，项目没有可用机器人时会记录为跳过。
 
 ## 五、配置模型 Provider 和默认模型
 
-如果项目只需要规则提醒和钉钉通知，可以先跳过模型配置。需要启用代码质量 AI Review 时，先在设置页配置全局 Provider，再为项目组选择默认 AI Review Profile 和默认 Provider。
+如果项目只需要规则提醒和钉钉通知，可以先跳过模型配置。启用 AI Review 时，在「设置 → AI Review 配置」维护模型连接和审查策略，并到「项目配置」确认 Profile 与对应触发开关。
 
 ```text
 Provider 已启用
 API Key 已填写
 Endpoint URL 已填写
 Model 名称已填写
-点击“测试联通性”确认模型服务可访问
+点击“测试连接”确认模型服务可访问
 全局默认 Provider 已设置
 ```
 
-当前内置 Provider 包括 OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM 和自定义 OpenAI-compatible。“测试联通性”会使用当前表单中的端点、模型名称和临时输入的 API Key 发起一次最小请求，不会保存临时 Key。
-
-项目组默认 Provider 会作为该组项目的默认模型选择。单个项目或端类型如果有特殊需要，仍可以在项目端类型配置中覆盖 Provider 和 Profile。
-
-![image-20260527112725](https://seeworld-internal-gn.oss-cn-beijing.aliyuncs.com/images/temp/screenshot_2026-05-27_11-27-25.png)
+当前内置 Provider 包括 OpenAI、Anthropic、DeepSeek、XiaoMIMO、GLM 和自定义 OpenAI-compatible。「测试连接」会使用当前表单中的端点、模型名称和临时输入的 API Key 发起一次最小请求，临时 Key 不会被保存。

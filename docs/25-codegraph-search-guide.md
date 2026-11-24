@@ -95,10 +95,9 @@ CodeGraph 是静态图，不是唯一事实来源。
 ### 排查 Push 为什么没有触发 AI Review
 
 ```text
-1. codegraph_context：描述 Push 未触发 AI Review 的业务现象
-2. rg：搜索 trigger_auto_review、pushBranchPatterns、GLOBAL_DISABLED、reason_code
-3. codegraph_callees(trigger_auto_review)：展开 Push gate、调度和通知分支
-4. 阅读 backend-python/app/code_quality/service.py 的局部源码确认实际条件
+1. rg：搜索 trigger_auto_review、pushBranchPatterns、GLOBAL_DISABLED、reason_code
+2. 阅读 backend-python/app/code_quality/service.py 的局部源码确认实际条件
+3. 需要继续展开跨模块链路时，使用 codegraph_callees(trigger_auto_review)
 ```
 
 ### 定位前端任务详情页的进度请求
@@ -111,7 +110,9 @@ CodeGraph 是静态图，不是唯一事实来源。
 
 ## 索引维护
 
-首次启用或索引不可用时：
+以下命令仅用于用户明确要求的索引维护。日常项目任务遇到索引不可用时直接使用 `rg`。
+
+首次启用：
 
 ```powershell
 .\scripts\setup-codegraph.ps1
@@ -129,4 +130,4 @@ codegraph.cmd index --force
 codegraph.cmd sync
 ```
 
-Codex App 与 Cursor 的 MCP 配置和常见问题见 `docs/11-agent-environment-pitfalls.md`。
+仓库 MCP 配置见 Codex 的 `.codex/config.toml` 和 Cursor 的 `.cursor/mcp.json`。排障见 [Agent 环境与工具避坑](11-agent-environment-pitfalls.md#搜索与-codegraph)。

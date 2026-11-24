@@ -31,7 +31,7 @@ Review 前配置
 ```text
 任务 -> 任务详情 / 运行态沉浸工作台 / 结果优先 Review / 统一阶段时间轴与 Drawer
 质量治理 -> 质量看板 / 评估样本 / 规则缺口 / 验收记录 / 回放记录
-设置 -> Review 配置 / Provider / 项目组 / 通知 / Push 策略
+设置 -> 项目 / 端类型配置、AI Review 配置、项目记忆库、全局设置
 版本更新 / 接入帮助 -> 发布说明和接入说明
 ```
 
@@ -64,9 +64,9 @@ Review 前配置
 - 配置 OpenAI / Anthropic / DeepSeek / XiaoMIMO / GLM / CUSTOM Provider。
 - 配置模型端点、模型名称、API Key 和超时。
 - 配置 AI Review Profile 和 Review Instructions。
-- 配置项目组、端类型、项目端类型和默认 Profile。
-- 配置项目组多模型执行项。
-- 配置钉钉 webhook 和通知开关。
+- 在「项目 / 端类型配置」维护项目所属端、Profile、路径范围和项目触发策略。
+- 在「AI Review 配置」维护模型连接和审查策略。
+- 在「钉钉机器人库」维护 webhook，再由项目关联机器人。全局设置维护全局发送开关。
 - 配置 Push 审核策略。
 
 它决定：
@@ -113,7 +113,7 @@ Review 前配置
 - 项目、分支、作者、触发类型。
 - 任务状态和 Review 状态。
 - 风险等级和 finding 数。
-- 项目组、端类型和 Profile。
+- 项目、端类型和 Profile。
 
 任务详情用于查看：
 

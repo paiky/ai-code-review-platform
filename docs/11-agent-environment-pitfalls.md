@@ -35,7 +35,7 @@ Get-Content -Raw -Encoding UTF8 <path>
 .\scripts\run-backend.ps1 migrate
 ```
 
-- `run-backend.ps1 lint` 当前固定扫描整个 Python 后端，不会把后续路径参数透传给 Ruff。若本次只需检查新增文件，且全量 lint 被既有无关问题阻塞，可改用同一虚拟环境执行聚焦检查，并在结论中同时说明全量 lint 的阻塞项：
+- `run-backend.ps1 lint` 会将后续参数透传给 Ruff，同时固定传入 `check .`。`lint --no-cache` 可用，追加文件路径仍会检查整个 Python 后端。仅检查指定文件或目录时，可使用同一虚拟环境：
 
 ```powershell
 .\backend-python\.venv\Scripts\ruff.exe check <本次文件或目录>
@@ -78,8 +78,8 @@ backend-python\.venv\Scripts\python.exe
 ## 验证范围
 
 - 前端样式或交互改动：优先跑 `.\scripts\run-frontend.ps1 build`。
-- Python 后端局部逻辑改动：优先跑相关 pytest 文件或测试类。
-- 改到 webhook -> 分析 -> 提醒卡片 -> 通知 -> 落库主链路、共享模型、数据库兼容或跨模块边界时，再跑全量：
+- Python 局部改动优先做聚焦静态检查、人工核验或适用的契约验证。新增、修改或运行单元测试，须由用户在当前任务明确要求。
+- 下列全量命令包含单元测试。获得对应授权后，按风险和影响范围决定是否使用：
 
 ```powershell
 .\scripts\run-backend.ps1 test
@@ -90,7 +90,7 @@ backend-python\.venv\Scripts\python.exe
 
 ## Codex 沙箱
 
-- 普通沙箱内 `git push` 可能因为 Git Credential Manager 需要启动 Git Bash / 凭据提示而失败。若用户授权，可在沙箱外重跑 `git push`；仍失败时，只完成 commit，并把 push 命令和 commit hash 告知用户。
+- 普通沙箱内 `git push` 可能因为 Git Credential Manager 需要启动 Git Bash / 凭据提示而失败。已有推送授权时可按权限规则重试；仍失败时报告阻塞。任务已有本地提交时附提交 hash。
 - `Start-Process` 在 Codex / PowerShell 环境里可能因 `Path` / `PATH` 环境键冲突失败。
   `.NET System.Diagnostics.ProcessStartInfo` 配合 `UseShellExecute = $false`、`CreateNoWindow = $true`
   可以绕过部分启动或窗口问题，但不能据此认定长驻服务已经脱离 Codex 的进程树、Job Object 或继承句柄。
@@ -117,7 +117,7 @@ backend-python\.venv\Scripts\python.exe
 正确处理：
 
 1. 启动前先检查目标端口和 HTTP endpoint；已经 ready 时直接复用。
-2. 未 ready 时用后台 / 分离方式启动，记录 PID，并把 stdout / stderr 写入工作区临时日志。
+2. 未 ready 时用能够有界返回的启动方式，记录 PID 与工作区临时日志。Windows/Codex 启动器未能有界返回时，按下一节使用独立 owner。
 3. 使用有界循环分别核对进程、端口和 HTTP 响应；三者形成 ready 证据后立即进入下一步，不等待服务退出。
 4. 若误以前台方式启动，先终止当前工具的等待，再重新检查端口与 HTTP。服务已经 ready 时不要重启；
    没有 ready 才按后台方式重启。
@@ -195,15 +195,15 @@ command lifecycle: STARTED -> RETURNED(success/failure)
 ## 搜索与 CodeGraph
 
 - 已知接口路径、字段名、错误文案、日志内容或前端请求路径时，优先使用 `rg`。
-- 从业务逻辑、异常现象或架构问题排查 Python 后端时，可先用 CodeGraph 获取候选地图，再用 `rg` 和局部源码核验。
+- 从业务现象排查 Python 后端时先用 `rg` 和局部源码定位关键符号；需要展开调用关系或跨模块影响时再按 `AGENTS.md` 使用 CodeGraph。
 - CodeGraph 是静态索引，不是唯一事实来源；动态调用、异步任务、框架 hook、前端语义召回都可能漏报或误报。
-- 旧 Java 后端同名符号容易干扰检索。索引应聚焦 `backend-python/` 和 `frontend/`，修改忽略规则后需要强制重建：
+- 旧 Java 后端同名符号容易干扰检索。索引应聚焦 `backend-python/` 和 `frontend/`。仅在明确的索引维护任务中，修改忽略规则后按需重建：
 
 ```powershell
 codegraph.cmd index --force
 ```
 
-- Codex App 或 Cursor 看不到 CodeGraph MCP 工具时，优先检查 MCP 配置、索引状态和当前应用是否已重载。完整搜索策略见 `docs/25-codegraph-search-guide.md`。
+- 日常任务中 CodeGraph 不可用时直接使用 `rg`。若任务是排查 MCP，核对 Codex 的 `.codex/config.toml` 或 Cursor 的 `.cursor/mcp.json`，以及应用是否已重载。搜索策略见 `docs/25-codegraph-search-guide.md`。
 
 ## Docker 与部署
 
@@ -286,7 +286,7 @@ BACKEND_PORT = 容器内后端监听端口，只在 Docker 网络内使用
 - Windows 本地后端不要直接执行生产完整 Compose 来“补一个 Worker”，否则可能额外启动连接同一数据库的 backend 并形成重复调度。使用 `.\scripts\run-agent-worker.ps1 start`，它只启动 Windows 专用 Worker 和代理。
 - Docker internal 网络不能假设可直接解析或访问 `host.docker.internal`。Windows 专用方案通过双网卡代理严格放行 `host.docker.internal:8090`；不要把 Worker 直接加入普通网络来绕过连接问题。
 - Docker Desktop 可能同时返回 IPv6/IPv4，而 Squid 5 已移除 `dns_v4_first`。Windows 一键脚本会查询实际 IPv4 host-gateway，并生成 `.local/agent-review-squid-hosts` 只读挂载给代理；不要硬编码 Docker Desktop 网段。
-- Worker 容器有 `HTTP_PROXY/HTTPS_PROXY` 但配置测试恰好在 90 秒返回 `AGENT_TIMEOUT` 时，检查 Claude Code 子进程是否丢失了代理变量。子进程只能选择性继承代理变量，不能复制包含数据库、GitLab 等凭据的整个 Worker 环境。局域网上游代理应配置到白名单 Squid 的 `AGENT_REVIEW_UPSTREAM_PROXY`，不得让 Worker 绕过 Squid 直连。
+- 配置测试约 90 秒返回 `AGENT_TIMEOUT` 时，先确认运行时。Claude CLI 路径检查子进程是否正确继承代理变量，HTTP Runner 检查模型端点和出站链路。CLI 子进程只选择性继承代理变量。局域网上游代理配置在 Squid 的 `AGENT_REVIEW_UPSTREAM_PROXY`。
 - `connect_error: [Errno -2] Name or service not known` 是发起请求一侧的 DNS / 出站链路错误，不是模型业务错误。Agent 可用但普通 DeepSeek 失败时，通常是只配置了 `AGENT_REVIEW_UPSTREAM_PROXY`；普通 Provider 应配置 `CODE_QUALITY_REVIEW_PROXY`，该变量只代理模型请求，不要用全局 `HTTP_PROXY` 误伤 GitLab、钉钉和内网请求。
 - Linux 生产不使用 Windows 专用 Compose。生产 Worker 通过 internal 网络访问 Compose backend，并与 backend 只读挂载同一个 `LOCAL_REPO_WORKSPACE_HOST_DIR`。
 - Windows 的 `run-backend.ps1 dev` 会异步启动 Worker，不能在 uvicorn 启动前同步等待 Worker 心跳，否则会形成启动死锁。失败详情查看 `.local/agent-worker-startup.*.log`；设置 `AGENT_REVIEW_AUTO_START_WORKER=false` 可排除 Docker 启动因素。
@@ -305,9 +305,8 @@ BACKEND_PORT = 容器内后端监听端口，只在 Docker 网络内使用
 - 不要让 Windows 本地 Backend 与 Linux 生产 Backend 同时连接同一生产数据库。旧版本使用无时区 `DATETIME` 和
   `datetime.now()` 判断 Worker 心跳、租约，UTC 与东八区进程并存会把刚领取的任务误判为超时 8 小时。修复后
   Agent 租约统一存 UTC，Compose 也显式设置 `TZ=UTC`；页面统一转换为 `UTC+8` 展示。
-- Worker `healthy` 必须同时满足 `workerStatus=ONLINE` 和设置页返回的 `workerId` 等于容器自己的
-  `AGENT_REVIEW_WORKER_ID`。只检查全局 ONLINE 会被另一台 Worker 的心跳误导，出现“Linux 容器健康，但实际由
-  Windows Worker 领取任务”的假健康状态。
+- 容器 healthcheck 在 `workerPool.nodes` 按自身解析后的 Worker ID 查找节点，要求 `online=true`。池级 `workerStatus`
+  只反映整体状态。Windows 启动脚本判断能否接单时还会排除 `DRAINING` 节点。
 
 ## 数据库与迁移
 

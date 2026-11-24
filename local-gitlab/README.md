@@ -22,7 +22,11 @@
 从仓库根目录执行：
 
 ```powershell
-.\scripts\run-local-gitlab.cmd
+New-Item -ItemType Directory -Force .local | Out-Null
+if (-not (Test-Path .local\local-gitlab.env)) {
+    Copy-Item local-gitlab\.env.example .local\local-gitlab.env
+}
+docker compose --env-file .local/local-gitlab.env -f local-gitlab/docker-compose.yml up -d
 ```
 
 启动后访问：
@@ -38,7 +42,7 @@ username: root
 password: Acr!9vKp47mQzLs2026
 ```
 
-如果改过密码、端口或镜像版本，复制 `local-gitlab/.env.example` 到 `.local/local-gitlab.env` 后编辑，再重新运行启动脚本。
+首次启动前可在 `.local/local-gitlab.env` 修改初始密码或镜像版本。Compose 的容器 HTTP 端口固定为 `8929`，需要改端口时同时核对 GitLab `external_url`、端口映射与后端 GitLab 地址。已有数据目录中的账号密码以 GitLab 内的实际设置为准。
 
 说明：GitLab 会拒绝包含常见词组合的弱密码。如果你自定义 `LOCAL_GITLAB_ROOT_PASSWORD`，请使用足够随机的强密码。
 
@@ -53,8 +57,7 @@ gitlab/gitlab-ce:14.10.5-ce.0
 ## 查看启动日志
 
 ```powershell
-$env:DOCKER_CONFIG=(Resolve-Path .local\docker-config).Path
-docker logs -f ai-code-review-local-gitlab
+docker compose --env-file .local/local-gitlab.env -f local-gitlab/docker-compose.yml logs --tail=100 gitlab
 ```
 
 看到 GitLab 页面可访问后再继续创建项目。首次初始化比较慢。
@@ -68,8 +71,9 @@ docker logs -f ai-code-review-local-gitlab
 5. 复制示例环境变量：
 
 ```powershell
-New-Item -ItemType Directory -Force .local
-Copy-Item examples\gitlab.env.example .local\gitlab.env
+if (-not (Test-Path .local\gitlab.env)) {
+    Copy-Item examples\gitlab.env.example .local\gitlab.env
+}
 ```
 
 6. 修改 `.local/gitlab.env`：
@@ -82,12 +86,13 @@ GITLAB_MR_IID=<MR iid，不是数据库 id>
 GITLAB_API_ENABLED=true
 ```
 
-7. 重启后端并验证：
+7. 按根 README 准备数据库，再启动或重启后端：
 
 ```powershell
-.\scripts\run-backend.cmd
-.\scripts\verify-gitlab-diff.cmd
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-backend.ps1 dev
 ```
+
+在另一终端调用 `Invoke-RestMethod http://localhost:8090/api/health` 确认后端就绪。配置下面的回调后，发起真实 MR，在任务详情核对 changed files 和 diff。也可使用 [真实 GitLab diff 联调示例](../examples/README.md#4-真实-gitlab-diff-联调)。
 
 ## 配置真实 webhook 回调本地后端
 
@@ -100,21 +105,21 @@ Settings -> Webhooks
 Webhook URL 填：
 
 ```text
-http://host.docker.internal:8080/api/webhooks/gitlab/merge-request
+http://host.docker.internal:8090/api/webhooks/gitlab/merge-request
 ```
 
 选择 `Merge request events` 后保存并测试。
 
 注意：
 
-- 如果后端跑在非 8080 端口，需要同步修改 URL。
+- 如果后端使用非默认端口，需要同步修改 URL。
 - 本地 GitLab 配置已设置允许 webhook 请求本地网络。
 - 如果仍提示 local network 被阻止，到 Admin Area 的 outbound request 设置里确认允许本地网络请求。
 
 ## 停止
 
 ```powershell
-.\scripts\stop-local-gitlab.cmd
+docker compose --env-file .local/local-gitlab.env -f local-gitlab/docker-compose.yml stop gitlab
 ```
 
 停止不会删除 `.local/gitlab` 下的数据。需要重置 GitLab 时，先停止容器，再手动删除 `.local/gitlab`。

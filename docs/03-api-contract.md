@@ -112,7 +112,7 @@ X-Gitlab-Token: optional-secret-token
 
 - 当前 Python 后端在 webhook 接收后同步执行规则提醒主链路，并异步调度 AI Review。
 - MR `action` 为 close、merge 等非审查触发动作时可返回 `SKIPPED`。
-- Push Hook 会先按项目组 Push 策略与分支规则过滤；不匹配时直接 `SKIPPED`，不会创建任务。
+- Push Hook 创建任务前检查项目分支规则；不匹配时返回 `SKIPPED`。是否调度 AI Review 另由项目 Push 策略及全局能力开关判断。
 
 ## 3. Review Task API
 
@@ -127,7 +127,6 @@ GET /api/review-tasks
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | projectId | Long | 否 | 项目 ID |
-| groupId | Long | 否 | 项目组 ID |
 | targetType | String | 否 | 端类型，例如 BACKEND / WEB_PC |
 | triggerType | String | 否 | GITLAB_MR_WEBHOOK / GITLAB_PUSH_WEBHOOK / MANUAL |
 | status | String | 否 | PENDING / RUNNING / SUCCESS / FAILED |
@@ -139,7 +138,7 @@ GET /api/review-tasks
 
 列表项补充字段：
 
-- `groupId`、`targetType`、`targetTypes`、`codeQualityProfileCode`、`reviewStatus`、`focusIndicators`。
+- `targetType`、`targetTypes`、`codeQualityProfileCode`、`reviewStatus`、`focusIndicators`。
 - `riskItemCount` 表示该任务下 AI Review finding 总数（跨模型求和）；无 AI Review 时为 `0`。规则提醒项数量请查看 `/result` 返回的 `riskCard.riskItems`。
 
 响应 data：
@@ -151,7 +150,6 @@ GET /api/review-tasks
       "id": 10001,
       "projectId": 1,
       "projectName": "demo-service",
-      "groupId": 1,
       "triggerType": "GITLAB_MR_WEBHOOK",
       "targetType": "BACKEND",
       "targetTypes": ["BACKEND"],
@@ -190,7 +188,6 @@ GET /api/review-tasks/{taskId}
   "id": 10001,
   "projectId": 1,
   "projectName": "demo-service",
-  "groupId": 1,
   "gitProjectId": "1001",
   "triggerType": "GITLAB_MR_WEBHOOK",
   "mrId": "12",
@@ -369,8 +366,8 @@ POST /api/projects
   "gitProvider": "GITLAB",
   "gitProjectId": "1001",
   "repositoryUrl": "https://gitlab.example.com/group/demo-service",
+  "targetType": "BACKEND",
   "defaultTemplateCode": "backend-default",
-  "dingTalkWebhookId": 1,
   "description": "订单服务"
 }
 ```
@@ -379,38 +376,50 @@ POST /api/projects
 
 ```json
 {
-  "id": 1
+  "id": 1,
+  "name": "demo-service",
+  "gitProvider": "GITLAB",
+  "gitProjectId": "1001",
+  "targetType": "BACKEND",
+  "status": "ENABLED"
 }
 ```
+
+此处仅列出常用响应字段。创建后的机器人关联通过项目综合配置的 `webhookIds` 维护。
 
 ## 4.3 项目端类型配置
 
 ```http
 GET /api/projects/{projectId}/target-configs
 PUT /api/projects/{projectId}/target-configs/{targetType}
-PUT /api/projects/{projectId}/group
 GET /api/target-type-path-mappings
 PUT /api/target-type-path-mappings
 ```
 
 `target-configs` 用于按端类型绑定规则模板、AI Review profile、provider、路径匹配和是否启用提醒卡片。项目默认 AI Review profile 也通过端类型配置维护，不再单独提供 `PUT /api/projects/{projectId}/code-quality-profile`。
 
-## 4.4 项目组 AI Review 模型配置
+## 4.4 项目综合配置
 
 ```http
-GET /api/project-groups
-POST /api/project-groups
-PUT /api/project-groups/{groupId}
+GET /api/projects/configuration-defaults
+GET /api/projects/{projectId}/configuration
+PUT /api/projects/{projectId}/configuration
+GET /api/projects/{projectId}/review-settings
+PUT /api/projects/{projectId}/review-settings
 ```
 
-项目组响应和创建 / 更新请求支持 `aiReviewModels`：
+综合配置查询返回 `projectId`、`targetType`、单值 `targetTypes`、`targetConfig`、`aiReviewModels`、`reviewSettings`、`webhookIds` 和 `memorySettings`。下例为综合配置更新请求：
 
 ```json
 {
-  "groupName": "后端业务组",
-  "groupCode": "backend",
-  "defaultCodeQualityProfileCode": "backend-default-ai-review",
-  "defaultProviderCode": "DEEPSEEK",
+  "targetType": "BACKEND",
+  "targetConfig": {
+    "templateCode": "backend-default",
+    "codeQualityProfileCode": "backend-default-ai-review",
+    "providerCode": null,
+    "pathPatterns": ["**/*"],
+    "reminderCardEnabled": true
+  },
   "aiReviewModels": [
     {
       "reviewKey": "deepseek-main",
@@ -420,17 +429,21 @@ PUT /api/project-groups/{groupId}
       "enabled": true,
       "sortOrder": 10
     }
-  ]
+  ],
+  "reviewSettings": {
+    "triggerOnMr": true,
+    "triggerOnPush": false
+  },
+  "webhookIds": []
 }
 ```
 
 说明：
 
-- `defaultProviderCode` 继续保留作旧数据和旧调用方兼容；未配置 `aiReviewModels` 时会回退为单模型执行项。
-- `providerCode` 必填；`modelName` 为空时使用 Profile / Provider 默认模型；`displayName` 用于任务详情模型子 tab。
-- 同一项目组内 `reviewKey` 稳定标识模型结果；未传时后端根据 provider / model 自动生成。
-- 项目组主引擎固定为 Agent Review。响应中的 `reviewEngine=AGENT`、`agentSourceExportAllowed=true`、`aiReviewEnabled=true`、`triggerOnManual=true` 是兼容字段，设置页不再提供对应选项；创建或更新请求传入相反值不会关闭这些能力。
-- `triggerOnMr`、`triggerOnPush`、自动修复预览和 Push 审核阈值仍按项目组配置。
+- 综合更新同时提交所属端、端配置、模型、触发策略和机器人 ID 列表。`aiReviewModels` 和 `webhookIds` 传空数组可清除对应项目关系。`review-settings` 用于单独查询或更新项目触发策略。
+- 项目模型项要求 `providerCode`，可选 `modelName`、`displayName`、`reviewKey`、`enabled` 和 `sortOrder`。Standard 优先使用端配置的 Provider 覆盖，其次使用启用的项目模型项，最后使用 Profile 或全局默认解析出的 Provider，结果以 `reviewKey` 标识。
+- 项目触发策略支持 `triggerOnMr`、`triggerOnPush`、`triggerOnlyWhenRiskMatched`、Push 分支与阈值、自动修复预览。自动链路默认解析为 Agent，由全局能力、Profile、项目触发条件和运行时可用性决定执行。
+- 综合更新可选传 `memorySettings: {enabled, expectedVersion}`。缺省或 `null` 保留现有设置，版本冲突返回 `409` 并回滚该次配置更新。
 
 ## 5. Rule Template API
 
@@ -590,12 +603,11 @@ Content-Type: application/json
 - `OPENAI` 使用 Provider 配置中的 API Key 调用 OpenAI Responses API，并要求 `diffText`。
 - `ANTHROPIC` 使用 Provider 配置中的 API Key 调用 Anthropic Messages API，并要求 `diffText`。
 - `DEEPSEEK` 与 `CUSTOM` 使用 OpenAI-compatible Chat Completions API，并要求 `diffText`。
-- GitLab MR webhook 风险审查成功后，如果 `reviewEnabled=true` 且项目绑定的 AI Review 配置处于启用状态，系统会异步触发 AI Code Review，并将结果保存到同一个 `taskId` 下。
-- 项目组可配置多个 `aiReviewModels`。自动触发和重试会为每个启用模型分别保存一条结果，并并行进入调度队列；仅配置单个模型时仍表现为单结果。
+- GitLab MR webhook 保存规则结果后，按全局 `reviewEnabled`、项目 `triggerOnMr` 及已启用的 Profile 等条件判断是否异步调度 AI Review。结果关联同一个 `taskId`。
+- Standard 读取项目级 `aiReviewModels`，为各执行项保存结果并进入调度队列。Agent 使用独立运行时和队列。
 - MR 自动 AI Review 启动后会先保存 `RUNNING` 结果，执行完成后更新为 `SUCCESS` 或 `FAILED`，前端可轮询本接口展示进度。
 - 所有 API Provider 自动触发都直接使用 MR diff 文本。
-- Provider 请求会附带后端构造的 `reviewContext / contextPack`。V0 包含 changed files 摘要、同文件上下文可用性说明、预算内同文件上下文片段、同项目上下文不足反馈统计摘要、Context Planner 的 `contextPlan / plannerSignals / requestedContexts` 和 `unavailableContexts`。同文件上下文片段只读取当前 changed files 的 GitLab raw file，并只注入变更 hunk 附近窗口；Context Planner 只基于当前 changed files、diff text、文件路径和已有上下文不足反馈统计输出缺失证据提示，不做全项目扫描、引用搜索、related files 读取、向量库 / RAG、自动降级或自动忽略 finding。
-- MR 自动 AI Review 受 `reviewEnabled` 全局能力开关和项目绑定 AI Review 配置的启用状态影响；设置页不再提供单独的 MR 自动触发开关。
+- Standard Provider 请求可附带 `reviewContext / contextPack`，包含 changed files 摘要、同文件片段、Planner 的信号和上下文请求、可用的本地引用证据及裁剪信息。同文件片段优先读取对应版本的 GitLab raw file，引用检索在启用时使用任务工作树及支持的信号。
 
 ### 7.2 查询代码质量 Review 结果
 
