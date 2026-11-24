@@ -18,7 +18,6 @@ import {
   LinkOutlined,
   PlusOutlined,
   PoweroffOutlined,
-  ReloadOutlined,
   SearchOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons';
@@ -38,7 +37,7 @@ import {
 } from './projectConfigurationModel.js';
 import WebhookEditorModal from './WebhookEditorModal.jsx';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 export default function WebhookLibrary({ onOpenProject, onDirtyChange }) {
   const [messageApi, contextHolder] = message.useMessage();
@@ -240,18 +239,6 @@ export default function WebhookLibrary({ onOpenProject, onDirtyChange }) {
   return (
     <section className="project-config-tab-panel" aria-label="钉钉机器人库">
       {contextHolder}
-      <div className="project-config-section-header">
-        <div>
-          <Title level={5}>钉钉机器人库</Title>
-          <Text type="secondary">集中维护被多个项目复用的钉钉通知机器人</Text>
-        </div>
-        <Space>
-          <Tooltip title="刷新机器人列表">
-            <Button icon={<ReloadOutlined />} loading={loading} onClick={() => load()} aria-label="刷新机器人列表" />
-          </Tooltip>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setEditor({})}>新增机器人</Button>
-        </Space>
-      </div>
 
       <div className="project-config-filter-bar webhook-filter-bar">
         <Input
@@ -284,9 +271,10 @@ export default function WebhookLibrary({ onOpenProject, onDirtyChange }) {
           ]}
           onChange={value => setFilters(current => ({ ...current, lastTestStatus: value }))}
         />
-        <Space>
+        <Space wrap>
           <Button type="primary" icon={<SearchOutlined />} onClick={search}>查询</Button>
           <Button onClick={reset}>重置</Button>
+          <Button color="green" variant="solid" icon={<PlusOutlined />} onClick={() => setEditor({})}>新增机器人</Button>
         </Space>
       </div>
 

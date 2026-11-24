@@ -54,6 +54,7 @@ import {
   CopyOutlined,
   DashboardOutlined,
   DeleteOutlined,
+  DownOutlined,
   ExportOutlined,
   EyeOutlined,
   FileTextOutlined,
@@ -461,13 +462,6 @@ function JsonBlock({ value }) {
 function formatRate(value) {
   const number = Number(value || 0);
   return `${(number * 100).toFixed(1)}%`;
-}
-
-function confidenceColor(value) {
-  if (value === 'HIGH') return 'red';
-  if (value === 'MEDIUM') return 'orange';
-  if (value === 'LOW') return 'green';
-  return 'default';
 }
 
 function confidenceLabel(value) {
@@ -1764,7 +1758,7 @@ function MaintenanceArtifacts({ artifacts }) {
   );
 }
 
-function TaskWorkspaceShell({ title, description, actions, actionMeta, children, leading, meta }) {
+function TaskWorkspaceShell({ title, description, actions, children, leading, meta }) {
   return (
     <Box
       sx={{
@@ -1775,7 +1769,7 @@ function TaskWorkspaceShell({ title, description, actions, actionMeta, children,
       }}
     >
       <Stack spacing={2.5}>
-        {(title || description || actions || actionMeta || leading) && <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
+        {(title || description || actions || leading) && <Paper variant="outlined" sx={{ p: { xs: 2, md: 2.25 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
           <Stack
             direction={{ xs: 'column', lg: 'row' }}
             spacing={2}
@@ -1787,11 +1781,11 @@ function TaskWorkspaceShell({ title, description, actions, actionMeta, children,
                   {leading}
                 </Box>
               )}
-              <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: description ? 0.75 : 0, color: '#1f2933' }}>
+              <MuiTypography variant="h5" component="h1" sx={{ fontWeight: 750, mb: description ? 0.75 : 0, color: '#1f2933', overflowWrap: 'anywhere' }}>
                 {title}
               </MuiTypography>
               {description && (
-                <MuiTypography variant="body2" sx={{ color: '#5f6b76' }}>
+                <MuiTypography variant="body2" sx={{ color: '#5f6b76', overflowWrap: 'anywhere' }}>
                   {description}
                 </MuiTypography>
               )}
@@ -1801,40 +1795,20 @@ function TaskWorkspaceShell({ title, description, actions, actionMeta, children,
                 </Box>
               )}
             </Box>
-            {(actions || actionMeta) && (
+            {actions && (
               <Stack
+                direction="row"
                 spacing={1}
                 useFlexGap
                 sx={{
                   flex: '0 0 auto',
-                  width: { xs: '100%', lg: 'auto' },
-                  ml: { lg: 'auto' },
-                  alignSelf: { lg: 'stretch' },
-                  pt: { lg: leading ? 4 : 0 },
-                  justifyContent: 'space-between',
-                  alignItems: { xs: 'stretch', lg: 'flex-end' }
+                  flexWrap: 'wrap',
+                  justifyContent: { xs: 'flex-start', lg: 'flex-end' },
+                  alignItems: 'center',
+                  '& .MuiButton-root': { minHeight: 36, height: 36, px: 1.75, flex: '0 0 auto' }
                 }}
               >
-                {actions && (
-                  <Stack
-                    direction={{ xs: 'column', sm: 'row' }}
-                    spacing={1}
-                    useFlexGap
-                    sx={{
-                      flexWrap: 'wrap',
-                      justifyContent: 'flex-end',
-                      alignItems: { xs: 'stretch', sm: 'center' },
-                      '& .MuiButton-root': { minHeight: 36, height: 36, px: 1.75, flex: '0 0 auto' }
-                    }}
-                  >
-                    {actions}
-                  </Stack>
-                )}
-                {actionMeta && (
-                  <Box sx={{ display: 'flex', minHeight: 24, alignItems: 'center', justifyContent: { xs: 'flex-start', sm: 'flex-end' } }}>
-                    {actionMeta}
-                  </Box>
-                )}
+                {actions}
               </Stack>
             )}
           </Stack>
@@ -3500,36 +3474,30 @@ function HighAccuracyFlowView({ progress, review }) {
 function FindingContext({ finding }) {
   const evidences = normalizeTextList(finding?.evidence);
   const missingContext = normalizeTextList(finding?.missingContext);
-  const hasContext = finding?.contextStatus || finding?.contextSummary || evidences.length > 0 || missingContext.length > 0;
-  if (!hasContext) return null;
+  if (!finding?.contextSummary && evidences.length === 0 && missingContext.length === 0) return null;
 
   return (
-    <div className="finding-context-panel">
-      <Space direction="vertical" size={8} className="full-width">
+    <div className="finding-context-content">
+      {missingContext.length > 0 && (
         <Space wrap>
-          {finding.contextStatus && (
-            <Tag color={contextStatusColor(finding.contextStatus)}>
-              上下文 {contextStatusLabel(finding.contextStatus)}
-            </Tag>
-          )}
           {missingContext.map(item => (
             <Tag key={item} color="orange">{missingContextLabel(item)}</Tag>
           ))}
         </Space>
-        {finding.contextSummary && (
-          <Text className="finding-context-summary">{cleanAiMarkdown(finding.contextSummary)}</Text>
-        )}
-        {evidences.length > 0 && (
-          <div className="finding-context-evidence">
-            <Text type="secondary">判断依据</Text>
-            <ul>
-              {evidences.map((item, index) => (
-                <li key={`${item}-${index}`}>{cleanAiMarkdown(item)}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </Space>
+      )}
+      {finding.contextSummary && (
+        <Text className="review-finding-copy">{cleanAiMarkdown(finding.contextSummary)}</Text>
+      )}
+      {evidences.length > 0 && (
+        <div className="finding-context-evidence">
+          <Text type="secondary">判断依据</Text>
+          <ul>
+            {evidences.map((item, index) => (
+              <li key={`${item}-${index}`}>{cleanAiMarkdown(item)}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -4096,13 +4064,6 @@ function fixPreviewActionText(status) {
   if (status === 'QUEUED') return '修复预览排队中';
   if (status === 'FAILED' || status === 'SKIPPED') return '重新生成修复预览';
   return '生成修复预览';
-}
-
-function fixPreviewActionClass(status) {
-  if (status === 'SUCCESS') return 'fix-preview-action-success';
-  if (status === 'RUNNING' || status === 'QUEUED') return 'fix-preview-action-pending';
-  if (status === 'FAILED' || status === 'SKIPPED') return 'fix-preview-action-failed';
-  return 'fix-preview-action-idle';
 }
 
 const agentReviewAnimationRegistry = Object.freeze({
@@ -5176,30 +5137,19 @@ function ReviewStageDrawerContent({
 }
 
 function OtherReviewJourneyEvents({ events }) {
-  const source = Array.isArray(events) ? events : [];
-  if (source.length === 0) return null;
   return (
-    <Collapse
-      className="review-other-events"
-      items={[{
-        key: 'other-events',
-        label: `其它执行记录 (${source.length})`,
-        children: (
-          <div className="review-stage-event-list">
-            {source.map((event, index) => (
-              <div className="review-stage-event" key={`${event.id ?? 'other'}-${index}`}>
-                <div>
-                  <Text strong>{event.safeLabel}</Text>
-                  <Tag>{safeProgressLevelLabel(event.level)}</Tag>
-                </div>
-                <Text type="secondary">{formatDateTime(event.createdAt)}</Text>
-                <Text>{event.safeSummary}</Text>
-              </div>
-            ))}
+    <div className="review-stage-event-list">
+      {events.map((event, index) => (
+        <div className="review-stage-event" key={`${event.id ?? 'other'}-${index}`}>
+          <div>
+            <Text strong>{event.safeLabel}</Text>
+            <Tag>{safeProgressLevelLabel(event.level)}</Tag>
           </div>
-        )
-      }]}
-    />
+          <Text type="secondary">{formatDateTime(event.createdAt)}</Text>
+          <Text>{event.safeSummary}</Text>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -5209,11 +5159,11 @@ function ReviewJourneyTimeline({
   formalResultId,
   taskCheckRunning,
   onRunTaskCheck,
-  variant = 'default',
-  anchorId = null
+  variant = 'default'
 }) {
   const mode = reviewTimelineMode(journey);
   const stages = visibleReviewJourneyStages(journey);
+  const otherEvents = safeArray(journey?.otherEvents);
   const [openStageId, setOpenStageId] = useState(null);
   const [modelView, setModelView] = useState('details');
   const [allowHiddenPreflight, setAllowHiddenPreflight] = useState(false);
@@ -5221,24 +5171,17 @@ function ReviewJourneyTimeline({
   const stageButtonRefs = useRef(new Map());
   const focusReturnStageIdRef = useRef(null);
   const journeyKeyRef = useRef(journey?.selectorKey);
-  const modelStage = journey?.stages?.find(stage => stage.id === 'model-review');
-  const showExecution = openStageId === 'model-review' && modelView === 'execution';
+  const showOtherEvents = openStageId === 'other-events' && otherEvents.length > 0;
+  const taskCheckInModelStage = mode === 'COMPACT' && stages.some(stage => stage.id === 'model-review');
   const openStage = allowHiddenPreflight && openStageId === 'preflight'
     ? journey?.stages?.find(stage => stage.id === 'preflight') || null
-    : showExecution ? modelStage || null
     : resolveOpenReviewJourneyStage(journey, openStageId);
+  const showExecution = openStage?.id === 'model-review' && modelView === 'execution';
   const stageSignature = stages.map(stage => stage.id).join('\u001f');
 
   const closeDrawer = () => {
     setOpenStageId(null);
     setAllowHiddenPreflight(false);
-  };
-  const openExecution = () => {
-    setOpenAlertStageId(null);
-    setAllowHiddenPreflight(false);
-    setModelView('execution');
-    focusReturnStageIdRef.current = 'execution';
-    setOpenStageId('model-review');
   };
   const openDrawer = stageId => {
     setOpenAlertStageId(null);
@@ -5247,10 +5190,10 @@ function ReviewJourneyTimeline({
     focusReturnStageIdRef.current = stageId;
     setOpenStageId(stageId);
   };
-  const openTaskPreflightDrawer = () => {
+  const openTaskPreflightDrawer = focusTarget => {
     setOpenAlertStageId(null);
     setAllowHiddenPreflight(true);
-    focusReturnStageIdRef.current = 'task-preflight';
+    focusReturnStageIdRef.current = focusTarget;
     setOpenStageId('preflight');
   };
   useEffect(() => {
@@ -5265,7 +5208,7 @@ function ReviewJourneyTimeline({
     if (
       openStageId
       && !allowHiddenPreflight
-      && !showExecution
+      && !showOtherEvents
       && !resolveOpenReviewJourneyStage(journey, openStageId)
     ) {
       setOpenStageId(null);
@@ -5281,7 +5224,7 @@ function ReviewJourneyTimeline({
     journey?.selectorKey,
     openStageId,
     allowHiddenPreflight,
-    showExecution,
+    showOtherEvents,
     openAlertStageId,
     stageSignature
   ]);
@@ -5301,52 +5244,50 @@ function ReviewJourneyTimeline({
 
   return (
     <section
-      id={anchorId || undefined}
-      tabIndex={anchorId ? -1 : undefined}
       className={`review-journey-timeline review-journey-${mode.toLowerCase()} review-journey-${variant}`}
     >
       <div className="review-journey-heading">
         <div>
           <Text strong>{mode === 'FULL' ? '统一 Review 进度' : 'Review 流程'}</Text>
-          <Text type="secondary">
-            {stages.length === 0
-              ? '历史任务未记录可可靠回看的阶段'
-              : mode === 'FULL'
-                ? '点击阶段查看当前安全详情'
-                : '结果优先展示，阶段仍可点击回看'}
-          </Text>
+          {stages.length === 0 && <Text type="secondary">历史任务未记录可可靠回看的阶段</Text>}
+          {stages.length > 0 && mode === 'FULL' && <Text type="secondary">点击阶段查看当前安全详情</Text>}
         </div>
         <div className="review-journey-heading-actions">
-          <Tag>{mode === 'FULL' ? '完整时间轴' : '紧凑时间轴'}</Tag>
-          {modelStage && (
+          {!taskCheckInModelStage && (
             <Button
               size="small"
+              icon={<ReloadOutlined />}
               ref={node => {
-                if (node) stageButtonRefs.current.set('execution', node);
-                else stageButtonRefs.current.delete('execution');
+                if (node) stageButtonRefs.current.set('task-preflight', node);
+                else stageButtonRefs.current.delete('task-preflight');
               }}
-              onClick={openExecution}
+              onClick={() => openTaskPreflightDrawer('task-preflight')}
             >
-              执行过程
+              任务级确定性检查
             </Button>
           )}
-          <Button
-            size="small"
-            icon={<ReloadOutlined />}
-            ref={node => {
-              if (node) stageButtonRefs.current.set('task-preflight', node);
-              else stageButtonRefs.current.delete('task-preflight');
-            }}
-            onClick={openTaskPreflightDrawer}
-          >
-            任务级确定性检查
-          </Button>
+          {otherEvents.length > 0 && (
+            <Button
+              type="link"
+              size="small"
+              ref={node => {
+                if (node) stageButtonRefs.current.set('other-events', node);
+                else stageButtonRefs.current.delete('other-events');
+              }}
+              onClick={() => openDrawer('other-events')}
+            >
+              其它执行记录（{otherEvents.length}）
+            </Button>
+          )}
         </div>
       </div>
       {stages.length > 0 && (
         <ol className="review-journey-stages" aria-label="Review 六阶段进度">
           {stages.map((stage, index) => {
             const alert = buildStageAlertModel(stage);
+            const title = mode === 'COMPACT' && stage.id === 'terminal' ? '审查结果' : stage.title;
+            const statusLabel = reviewJourneyStageStatusLabel(stage.status);
+            const duration = formatJourneyDuration(stage.durationMs);
             return (
               <li className={`review-journey-stage is-${stage.status.toLowerCase()}`} key={stage.id}>
                 <button
@@ -5357,7 +5298,7 @@ function ReviewJourneyTimeline({
                     else stageButtonRefs.current.delete(stage.id);
                   }}
                   aria-current={stage.status === 'ACTIVE' ? 'step' : undefined}
-                  aria-label={`${stage.title}，${reviewJourneyStageStatusLabel(stage.status)}`}
+                  aria-label={`${title}，${statusLabel}`}
                   onClick={() => openDrawer(stage.id)}
                   onKeyDown={event => {
                     if (!isReviewStageActivationKey(event.key)) return;
@@ -5367,9 +5308,9 @@ function ReviewJourneyTimeline({
                 >
                   <span className="review-journey-stage-index" aria-hidden="true">{index + 1}</span>
                   <span className="review-journey-stage-copy">
-                    <strong>{stage.title}</strong>
+                    <strong>{title}</strong>
                     <small>
-                      {reviewJourneyStageStatusLabel(stage.status)} · {formatJourneyDuration(stage.durationMs)}
+                      {statusLabel}{duration !== '-' && ` · ${duration}`}
                     </small>
                   </span>
                 </button>
@@ -5397,13 +5338,12 @@ function ReviewJourneyTimeline({
           })}
         </ol>
       )}
-      <OtherReviewJourneyEvents events={journey?.otherEvents} />
       <Drawer
         className="review-stage-drawer"
         rootClassName="review-stage-drawer-root"
-        title={openStage?.title || '阶段详情'}
+        title={showOtherEvents ? '其它执行记录' : openStage?.title || '阶段详情'}
         size="min(880px, 100vw)"
-        open={Boolean(openStage)}
+        open={showOtherEvents || Boolean(openStage)}
         keyboard
         onClose={closeDrawer}
         afterOpenChange={open => {
@@ -5424,6 +5364,7 @@ function ReviewJourneyTimeline({
           });
         }}
       >
+        {showOtherEvents && <OtherReviewJourneyEvents events={otherEvents} />}
         {openStage && (
           <>
             {openStage.id === 'model-review' && (
@@ -5438,11 +5379,15 @@ function ReviewJourneyTimeline({
                 <Button
                   type={showExecution ? 'default' : 'primary'}
                   aria-pressed={!showExecution}
-                  disabled={!modelStage?.visible}
                   onClick={() => setModelView('details')}
                 >
                   阶段详情
                 </Button>
+                {taskCheckInModelStage && (
+                  <Button type="text" onClick={() => openTaskPreflightDrawer(focusReturnStageIdRef.current)}>
+                    任务级确定性检查
+                  </Button>
+                )}
               </div>
             )}
             {showExecution ? (
@@ -5777,15 +5722,14 @@ function ReviewResultSummary({
   summaryId,
   summaryExpanded,
   onToggleSummary,
-  onViewJourney,
   actions,
   children
 }) {
   const riskItems = [
-    ['critical', '紧急', presentation.riskCounts.critical],
-    ['high', '高风险', presentation.riskCounts.high],
-    ['medium', '中风险', presentation.riskCounts.medium],
-    ['low', '低风险', presentation.riskCounts.low]
+    ['CRITICAL', presentation.riskCounts.critical],
+    ['HIGH', presentation.riskCounts.high],
+    ['MEDIUM', presentation.riskCounts.medium],
+    ['LOW', presentation.riskCounts.low]
   ];
   const showRiskCounts = presentation.status === 'SUCCESS' || presentation.issueCount > 0;
   const reasonType = presentation.status === 'FAILED'
@@ -5817,13 +5761,13 @@ function ReviewResultSummary({
           )}
           {showRiskCounts && (
             <div className="review-result-risk-counts" aria-label="风险分布">
-              {riskItems.map(([key, label, count]) => (
-                <Tag key={key} className={`review-risk-count review-risk-count-${key}`}>
-                  {label} {count}
+              {riskItems.map(([severity, count]) => (
+                <Tag key={severity} color={count > 0 ? severityColor(severity) : undefined} className="review-risk-count">
+                  {severityLabel(severity)} {count}
                 </Tag>
               ))}
               {presentation.riskCounts.unknown > 0 && (
-                <Tag className="review-risk-count review-risk-count-unknown">未分类 {presentation.riskCounts.unknown}</Tag>
+                <Tag color="purple" className="review-risk-count">未分类 {presentation.riskCounts.unknown}</Tag>
               )}
             </div>
           )}
@@ -5844,19 +5788,19 @@ function ReviewResultSummary({
         <div className="review-result-facts">
           <dl>
             <div><dt>引擎</dt><dd>{presentation.engineLabel}</dd></div>
-            <div><dt>模型</dt><dd><Tooltip title={presentation.providerModelLabel}><span>{presentation.providerModelLabel}</span></Tooltip></dd></div>
+            <div>
+              <dt>模型</dt>
+              <dd>
+                <Tooltip title={presentation.providerModelLabel} trigger={['hover', 'focus']}>
+                  <span tabIndex={0}>{presentation.modelLabel}</span>
+                </Tooltip>
+              </dd>
+            </div>
             {presentation.durationMs !== null && <div><dt>总耗时</dt><dd>{formatJourneyDuration(presentation.durationMs)}</dd></div>}
-            {presentation.agentDurationMs !== null && <div><dt>Agent 耗时</dt><dd>{formatJourneyDuration(presentation.agentDurationMs)}</dd></div>}
-            {presentation.agentRunId !== null && <div><dt>Agent Run</dt><dd>#{presentation.agentRunId}</dd></div>}
           </dl>
-          <div className="review-result-fact-controls">
-            <Button className="review-result-journey-link" onClick={onViewJourney}>
-              查看 Review 流程
-            </Button>
-            {actions && <div className="review-result-fact-actions">{actions}</div>}
-          </div>
         </div>
       </div>
+      {actions && <div className="review-result-fact-controls">{actions}</div>}
       {children && (
         <div className="review-result-supporting">
           {children}
@@ -5896,7 +5840,6 @@ function CodeQualityReviewView({
   const initializedFindingReviewsRef = useRef(new Set());
   const findings = Array.isArray(review?.findings) ? review.findings : [];
   const reviewStateKey = resolveReviewPresentationKey(review, journey);
-  const journeyAnchorId = `review-journey-${reviewStateKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
   const summaryId = `review-summary-${reviewStateKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
   const activeFindingIndexes = findingExpansionByReview[reviewStateKey] || [];
   const activeFindingKeys = activeFindingIndexes.map(index => `finding-${index}`);
@@ -5944,16 +5887,9 @@ function CodeQualityReviewView({
               ...current,
               [reviewStateKey]: !current[reviewStateKey]
             }))}
-            onViewJourney={() => {
-              const target = document.getElementById(journeyAnchorId);
-              const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-              target?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
-              window.requestAnimationFrame(() => target?.focus({ preventScroll: true }));
-            }}
           />
           <ReviewJourneyTimeline
             journey={journey}
-            anchorId={journeyAnchorId}
             taskCheckRunning={taskCheckRunning}
             onRunTaskCheck={onRunTaskCheck}
           />
@@ -5964,9 +5900,6 @@ function CodeQualityReviewView({
       <Space orientation="vertical" size="large" className="full-width">
         <Card>
           <Empty description="暂无代码质量 Review 结果" />
-          <div className="empty-action-row">
-            <Button type="primary" loading={retrying} onClick={() => onRetry?.()}>重试 AI Review</Button>
-          </div>
         </Card>
         {journey && (
           <ReviewJourneyTimeline
@@ -6048,9 +5981,11 @@ function CodeQualityReviewView({
   const fallbackDiagnosticText = effectiveEngine === 'STANDARD_FALLBACK'
     ? agentFallbackDiagnostic(agentRunSummary, journey?.agentSummary)
     : null;
-  const reviewActionButtons = (
+  const reviewRunning = review.status === 'RUNNING';
+  const canCompareEngines = isGitLabTask && (alternateEngine === 'AGENT' || STANDARD_REVIEW_COMPARISON_ACTION_VISIBLE);
+  const reviewActionButtons = (reviewRunning || canCompareEngines) ? (
     <Space wrap>
-      {review.status === 'RUNNING' && (
+      {reviewRunning && (
         <Button
           danger
           icon={<CloseOutlined />}
@@ -6060,27 +5995,17 @@ function CodeQualityReviewView({
           中断 AI Review
         </Button>
       )}
-      {isGitLabTask && (
-        alternateEngine === 'AGENT'
-        || STANDARD_REVIEW_COMPARISON_ACTION_VISIBLE
-      ) && (
+      {canCompareEngines && (
         <Button
           loading={retrying}
-          disabled={review.status === 'RUNNING'}
+          disabled={reviewRunning}
           onClick={() => onRetry?.(undefined, alternateEngine)}
         >
           {alternateEngine === 'AGENT' ? '追加 Agent 对照' : '追加普通 Review 对照'}
         </Button>
       )}
-      <Button
-        loading={retrying}
-        disabled={review.status === 'RUNNING'}
-        onClick={() => onRetry?.(requestedEngine === 'AGENT' ? undefined : review?.reviewKey, requestedEngine)}
-      >
-        重试 AI Review
-      </Button>
     </Space>
-  );
+  ) : null;
   const reviewSupportingAlerts = (
     <Space orientation="vertical" size="small" className="full-width">
       {reviewCoverage && (
@@ -6103,6 +6028,9 @@ function CodeQualityReviewView({
           <Empty description="本次 Review 未发现需要报告的代码质量问题" />
         ) : (
           <Collapse
+            className="review-finding-list"
+            bordered={false}
+            expandIconPlacement="end"
             activeKey={activeFindingKeys}
             onChange={keys => {
               const sourceKeys = Array.isArray(keys) ? keys : [keys];
@@ -6122,108 +6050,155 @@ function CodeQualityReviewView({
               const fixPreviewStatus = fixPreviewByIndex[index]?.status;
               const fixPreviewBusy = fixPreviewStatus === 'RUNNING' || fixPreviewStatus === 'QUEUED';
               const fixPreviewLoading = fixPreviewLoadingIndex === index || fixPreviewStatus === 'RUNNING';
+              const filePath = finding.filePath || '';
+              const fileNameStart = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')) + 1;
+              const findingLocation = codeLocationText(filePath, finding.startLine, finding.endLine);
+              const contextIncomplete = ['PARTIAL', 'INSUFFICIENT'].includes(finding.contextStatus)
+                || normalizeTextList(finding.missingContext).length > 0;
               return {
                 key: `finding-${index}`,
-                className: `review-finding-item review-finding-item-${String(finding.severity || 'unknown').toLowerCase()}`,
+                className: 'review-finding-item',
                 label: (
-                  <Space className="risk-item-heading" id={`finding-${index}`} wrap>
-                    <Tag color={severityColor(finding.severity)}>{severityLabel(finding.severity)}</Tag>
-                    {finding.category && <Tag color="blue">{categoryLabel(finding.category)}</Tag>}
-                    {finding.confidence && <Tag color={confidenceColor(finding.confidence)}>置信度 {confidenceLabel(finding.confidence)}</Tag>}
-                    {finding.contextStatus && <Tag color={contextStatusColor(finding.contextStatus)}>上下文 {contextStatusLabel(finding.contextStatus)}</Tag>}
-                    <Text strong>{cleanAiMarkdown(finding.title) || '未命名问题'}</Text>
-                  </Space>
+                  <span className="review-finding-heading" id={`finding-${index}`}>
+                    <span className="review-finding-title">
+                      <Tag color={severityColor(finding.severity)}>{severityLabel(finding.severity)}</Tag>
+                      <Text strong>{cleanAiMarkdown(finding.title) || '未命名问题'}</Text>
+                    </span>
+                    {filePath && !activeFindingIndexes.includes(index) && (
+                      <Text
+                        type="secondary"
+                        className="review-finding-location"
+                        title={findingLocation}
+                      >
+                        {fileNameStart > 0 && (
+                          <span className="review-finding-directory">{filePath.slice(0, fileNameStart)}</span>
+                        )}
+                        <span className="review-finding-file-reference">
+                          <span className="review-finding-filename">{filePath.slice(fileNameStart)}</span>
+                          <span className="review-finding-line-range">{findingLocation.slice(filePath.length)}</span>
+                        </span>
+                      </Text>
+                    )}
+                  </span>
                 ),
                 children: (
-                  <Space direction="vertical" className="full-width" id={`fix-preview-${index}`}>
-                    <Descriptions size="small" className="quality-finding-meta" column={{ xs: 1, md: 6 }}>
-                      <Descriptions.Item label="位置" span={4}>
-                        <Space className="code-location-row" wrap>
-                          <Text code className="code-location-text">
-                            {codeLocationText(finding.filePath, finding.startLine, finding.endLine)}
+                  <div className="review-finding-content" id={`fix-preview-${index}`}>
+                    {filePath && (
+                      <Text type="secondary" className="review-finding-full-location">{findingLocation}</Text>
+                    )}
+                    {finding.body && <Paragraph className="review-finding-copy">{cleanAiMarkdown(finding.body)}</Paragraph>}
+                    {finding.suggestion && (
+                      <div className="review-finding-suggestion">
+                        <Text strong>修复建议</Text>
+                        <Paragraph className="review-finding-copy">{finding.suggestion}</Paragraph>
+                      </div>
+                    )}
+                    <details className="review-finding-disclosure review-finding-context">
+                      <summary>
+                        上下文与判断依据
+                        {(finding.contextStatus || contextIncomplete) && (
+                          <Text
+                            type={contextIncomplete ? 'warning' : 'secondary'}
+                            className="review-finding-disclosure-note"
+                          >
+                            {contextIncomplete && (!finding.contextStatus || finding.contextStatus === 'SUFFICIENT')
+                              ? '缺少部分上下文'
+                              : `上下文${contextStatusLabel(finding.contextStatus)}`}
                           </Text>
-                          <Button
-                            size="small"
-                            icon={<FileSearchOutlined />}
-                            className="finding-action-button finding-diff-action"
-                            disabled={!finding.filePath}
-                            onClick={() => setDiffTarget({
-                              finding,
-                              changedFile: findChangedFileForFinding(finding, changedFilesSummary)
-                            })}
-                          >
-                            查看 Diff
-                          </Button>
-                          <Button
-                            size="small"
-                            className={`finding-action-button fix-preview-action ${fixPreviewActionClass(fixPreviewStatus)}`}
-                            loading={fixPreviewLoading}
-                            disabled={!taskId || review.status === 'RUNNING' || !finding.filePath || fixPreviewBusy}
-                            onClick={() => generateFixPreview(index)}
-                          >
-                            {fixPreviewActionText(fixPreviewStatus)}
-                          </Button>
-                          {fixPreviewBusy && (
-                            <Button
-                              danger
-                              size="small"
-                              icon={<CloseOutlined />}
-                              loading={cancelingAction === `fix-${index}`}
-                              onClick={() => cancelFixPreview(index)}
-                            >
-                              中断
-                            </Button>
+                        )}
+                      </summary>
+                      <div className="review-finding-disclosure-content">
+                        <div className="review-finding-facts">
+                          <Text type="secondary">来源 {sourceLabel(finding.source || review.provider)}</Text>
+                          <Text type="secondary">分类 {categoryLabel(finding.category)}</Text>
+                          {finding.confidence && (
+                            <Text type="secondary">置信度 {confidenceLabel(finding.confidence)}</Text>
                           )}
-                          {FINDING_REFINEMENT_ACTION_VISIBLE && (
-                            <FindingRefinementControl
+                        </div>
+                        <FindingContext finding={finding} />
+                        <FindingRefinementPanel overlay={finding.refinementOverlay} />
+                        {FINDING_REFINEMENT_ACTION_VISIBLE && (
+                          <FindingRefinementControl
+                            taskId={taskId}
+                            review={review}
+                            finding={finding}
+                            findingIndex={index}
+                            onRefresh={onRefresh}
+                          />
+                        )}
+                      </div>
+                    </details>
+                    {(REVIEW_LEARNING_UI_ENABLED || EVALUATION_CASE_ACTION_VISIBLE) && (
+                      <details className="review-finding-disclosure">
+                        <summary>更多操作</summary>
+                        <div className="review-finding-disclosure-content">
+                          <ReviewFeedbackControl
+                            taskId={taskId}
+                            sourceType="AI_FINDING"
+                            itemFingerprint={finding.fingerprint}
+                            feedback={finding.feedback}
+                            compact
+                            payload={{
+                              reviewKey: review?.reviewKey,
+                              findingIndex: index,
+                              riskType: finding.category,
+                              riskTitle: finding.title,
+                              originalRiskLevel: finding.severity
+                            }}
+                          />
+                          {EVALUATION_CASE_ACTION_VISIBLE && (
+                            <EvaluationCaseControl
                               taskId={taskId}
                               review={review}
                               finding={finding}
-                              findingIndex={index}
-                              onRefresh={onRefresh}
+                              compact
                             />
                           )}
-                        </Space>
-                      </Descriptions.Item>
-                      <Descriptions.Item label="来源">{sourceLabel(finding.source || review.provider)}</Descriptions.Item>
-                      <Descriptions.Item label="分类">{categoryLabel(finding.category)}</Descriptions.Item>
-                    </Descriptions>
-                    {finding.body && <Paragraph>{cleanAiMarkdown(finding.body)}</Paragraph>}
-                    {finding.suggestion && <Alert type="info" showIcon message="建议" description={finding.suggestion} />}
-                    <FindingContext finding={finding} />
-                    <FindingRefinementPanel overlay={finding.refinementOverlay} />
-                    <FalsePositiveControl
-                      key={finding.fingerprint || `${review.reviewKey}-${index}`}
-                      projectId={projectId}
-                      taskId={taskId}
-                      review={{ ...review, targetType }}
-                      finding={finding}
-                      findingIndex={index}
-                      onRefresh={onRefresh}
-                    />
-                    <ReviewFeedbackControl
-                      taskId={taskId}
-                      sourceType="AI_FINDING"
-                      itemFingerprint={finding.fingerprint}
-                      feedback={finding.feedback}
-                      compact
-                      payload={{
-                        reviewKey: review?.reviewKey,
-                        findingIndex: index,
-                        riskType: finding.category,
-                        riskTitle: finding.title,
-                        originalRiskLevel: finding.severity
-                      }}
-                    />
-                    {EVALUATION_CASE_ACTION_VISIBLE && (
-                      <EvaluationCaseControl
-                        taskId={taskId}
-                        review={review}
-                        finding={finding}
-                        compact
-                      />
+                        </div>
+                      </details>
                     )}
-                  </Space>
+                    <div className="review-finding-actions">
+                      {filePath && (
+                        <Button
+                          size="small"
+                          onClick={() => setDiffTarget({
+                            finding,
+                            changedFile: findChangedFileForFinding(finding, changedFilesSummary)
+                          })}
+                        >
+                          查看 Diff
+                        </Button>
+                      )}
+                      <Button
+                        size="small"
+                        loading={fixPreviewLoading}
+                        disabled={!taskId || review.status === 'RUNNING' || !filePath || fixPreviewBusy}
+                        onClick={() => generateFixPreview(index)}
+                      >
+                        {fixPreviewActionText(fixPreviewStatus)}
+                      </Button>
+                      <FalsePositiveControl
+                        key={finding.fingerprint || `${review.reviewKey}-${index}`}
+                        projectId={projectId}
+                        taskId={taskId}
+                        review={{ ...review, targetType }}
+                        finding={finding}
+                        findingIndex={index}
+                        onRefresh={onRefresh}
+                      />
+                      {fixPreviewBusy && (
+                        <Button
+                          danger
+                          size="small"
+                          icon={<CloseOutlined />}
+                          loading={cancelingAction === `fix-${index}`}
+                          onClick={() => cancelFixPreview(index)}
+                        >
+                          中断
+                        </Button>
+                      )}
+                    </div>
+                  </div>
                 )
               };
             })}
@@ -6248,12 +6223,6 @@ function CodeQualityReviewView({
           ...current,
           [reviewStateKey]: !current[reviewStateKey]
         }))}
-        onViewJourney={() => {
-          const target = document.getElementById(journeyAnchorId);
-          const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-          target?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
-          window.requestAnimationFrame(() => target?.focus({ preventScroll: true }));
-        }}
         actions={reviewActionButtons}
       >
         {hasSupportingAlerts ? reviewSupportingAlerts : null}
@@ -6269,7 +6238,6 @@ function CodeQualityReviewView({
         journey={journey}
         review={review}
         formalResultId={formalResultId}
-        anchorId={journeyAnchorId}
         taskCheckRunning={taskCheckRunning}
         onRunTaskCheck={onRunTaskCheck}
       />
@@ -6372,7 +6340,7 @@ function CodeQualityReviewsPanel({
   retrying,
   onCancelReview,
   onCancelFixPreview,
-  terminalFallbackStatus,
+  fallbackJourney,
   deterministicChecks,
   runningDeterministicCheck,
   onRunDeterministicCheck
@@ -6386,14 +6354,7 @@ function CodeQualityReviewsPanel({
     : journeys[0]?.selectorKey;
   if (reviewItems.length <= 1) {
     const review = reviewItems[0] || null;
-    const journey = journeys[0] || buildReviewJourney(
-      terminalFallbackStatus ? { status: terminalFallbackStatus } : {},
-      progress,
-      {
-      deterministicChecks,
-      allowUnscopedCompatibility: true
-      }
-    );
+    const journey = journeys[0] || fallbackJourney;
     const scopedProgress = review
       ? selectReviewJourneyEvents(review, progress)
       : progress;
@@ -6493,6 +6454,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   const { reportMode } = useReviewWorkspaceMode();
   const selectedReviewKey = new URLSearchParams(location.search).get('reviewKey');
   const [detail, setDetail] = useState(null);
+  const [taskDetailsOpen, setTaskDetailsOpen] = useState(false);
   const [codeQualityResult, setCodeQualityResult] = useState(null);
   const [codeQualityResults, setCodeQualityResults] = useState([]);
   const [codeQualityProgress, setCodeQualityProgress] = useState([]);
@@ -6841,6 +6803,13 @@ function TaskDetail({ taskId, onBack, onOpen }) {
     }
   };
 
+  const terminalFallbackStatus = terminalReviewStatusFromTask(detail?.reviewStatus);
+  const fallbackJourney = codeQualityResults.length === 0
+    ? buildReviewJourney(terminalFallbackStatus ? { status: terminalFallbackStatus } : {}, codeQualityProgress, {
+        deterministicChecks,
+        allowUnscopedCompatibility: true
+      })
+    : null;
   const qualityReviewContent = (
     <CodeQualityReviewsPanel
       taskId={taskId}
@@ -6860,7 +6829,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       retrying={retrying}
       onCancelReview={cancelCodeQualityJob}
       onCancelFixPreview={cancelCodeQualityJob}
-      terminalFallbackStatus={terminalReviewStatusFromTask(detail?.reviewStatus)}
+      fallbackJourney={fallbackJourney}
       deterministicChecks={deterministicChecks}
       runningDeterministicCheck={runningDeterministicCheck}
       onRunDeterministicCheck={runDeterministicCheck}
@@ -6890,6 +6859,25 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   }
 
   const canRerunTask = Boolean(detail && ['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(detail.triggerType));
+  const detailActionItems = [];
+  if (activeReview || !isTerminalReviewStatus(fallbackJourney?.status)) {
+    detailActionItems.push({
+      key: 'retry-review',
+      label: '重试 AI Review',
+      disabled: loading || retrying || activeReview?.status === 'RUNNING',
+      onClick: () => {
+        if (!activeReview) return retryCodeQualityReview();
+        const requestedEngine = String(activeReview.requestedEngine || 'STANDARD').toUpperCase();
+        return retryCodeQualityReview(requestedEngine === 'AGENT' ? undefined : activeReview.reviewKey, requestedEngine);
+      }
+    });
+  }
+  if (canRerunTask) {
+    detailActionItems.push(
+      { key: 'rerun', label: '重新执行审阅', disabled: rerunning, onClick: rerunReviewTask },
+      { key: 'clone', label: '复制为新任务重跑', disabled: rerunning, onClick: cloneAndRerunReviewTask }
+    );
+  }
   const taskHeaderTitle = detail ? taskTitle(detail) : `任务 #${taskId}`;
   const taskHeaderDescription = detail
     ? branchSummary(detail)
@@ -6901,6 +6889,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       <Tag>{targetTypeLabel(detail.targetType)}</Tag>
       <Text>{detail.authorName || detail.authorUsername || '-'}</Text>
       <Text type="secondary"><ClockCircleOutlined /> {formatDateTime(detail.eventTime)}</Text>
+      <Tag color={taskExecutionStatusColor(detail.status)}>任务状态：{taskExecutionStatusLabel(detail.status)}</Tag>
       {detail.externalUrl && (
         <Button
           type="link"
@@ -6915,27 +6904,20 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       )}
     </Space>
   ) : null;
-  const detailActions = (
+  const detailActions = detail ? (
     <>
-      <MuiButton
-        variant="contained"
-        startIcon={<ReloadOutlined />}
-        disabled={!canRerunTask || rerunning}
-        onClick={rerunReviewTask}
-      >
-        {rerunning ? '执行中' : '重新执行审阅'}
-      </MuiButton>
-      <MuiButton
-        variant="outlined"
-        disabled={!canRerunTask || rerunning}
-        onClick={cloneAndRerunReviewTask}
-      >
-        复制为新任务重跑
-      </MuiButton>
+      <Button type="text" onClick={() => setTaskDetailsOpen(true)}>任务详情</Button>
+      {detailActionItems.length > 0 && (
+        <Dropdown
+          trigger={['click']}
+          menu={{ items: detailActionItems }}
+        >
+          <Button type="text" icon={<DownOutlined />} iconPlacement="end" loading={rerunning || retrying} aria-haspopup="menu">
+            {rerunning || retrying ? '执行中' : '更多操作'}
+          </Button>
+        </Dropdown>
+      )}
     </>
-  );
-  const taskHeaderStatus = detail ? (
-    <Tag color={taskExecutionStatusColor(detail.status)}>任务状态：{taskExecutionStatusLabel(detail.status)}</Tag>
   ) : null;
 
   return (
@@ -6949,7 +6931,6 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       )}
       meta={taskHeaderMeta}
       actions={detailActions}
-      actionMeta={taskHeaderStatus}
     >
       {error && <Alert className="section-gap" type="error" showIcon message={error} />}
       <Spin spinning={loading}>
@@ -6961,26 +6942,6 @@ function TaskDetail({ taskId, onBack, onOpen }) {
             <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 2 }, borderRadius: 1, backgroundColor: '#ffffff' }}>
               <Space direction="vertical" size="large" className="full-width">
                 {qualityReviewContent}
-                <Collapse
-                  className="task-metadata-collapse"
-                  items={[{
-                    key: 'task-metadata',
-                    label: '任务信息',
-                    children: (
-                      <Descriptions column={{ xs: 1, md: 2, xl: 3 }} size="small">
-                        <Descriptions.Item label="任务 ID">{detail.id}</Descriptions.Item>
-                        <Descriptions.Item label="GitLab 项目">{detail.gitProjectId}</Descriptions.Item>
-                        <Descriptions.Item label="触发类型">{detail.triggerType}</Descriptions.Item>
-                        <Descriptions.Item label="作者">{detail.authorName || detail.authorUsername || '-'}</Descriptions.Item>
-                        <Descriptions.Item label="模板">{detail.templateCode}</Descriptions.Item>
-                        <Descriptions.Item label="端类型">{targetTypeLabel(detail.targetType)}</Descriptions.Item>
-                        <Descriptions.Item label="Profile">{detail.codeQualityProfileCode || '-'}</Descriptions.Item>
-                        <Descriptions.Item label="底层任务状态">{detail.status || '-'}</Descriptions.Item>
-                        <Descriptions.Item label="事件时间">{formatDateTime(detail.eventTime)}</Descriptions.Item>
-                      </Descriptions>
-                    )
-                  }]}
-                />
                 {detail.triggerType === 'GITLAB_PUSH_WEBHOOK' && (
                   <Collapse
                     className="task-push-gate-collapse"
@@ -6996,6 +6957,16 @@ function TaskDetail({ taskId, onBack, onOpen }) {
           </Space>
         ) : !loading ? <Empty description="任务不存在" /> : null}
       </Spin>
+      {detail && (
+        <Drawer title="任务详情" size="min(480px, 100vw)" open={taskDetailsOpen} onClose={() => setTaskDetailsOpen(false)}>
+          <Descriptions column={1} size="small">
+            <Descriptions.Item label="GitLab 项目 ID">{detail.gitProjectId}</Descriptions.Item>
+            <Descriptions.Item label="模板">{detail.templateCode}</Descriptions.Item>
+            <Descriptions.Item label="Profile">{detail.codeQualityProfileCode || '-'}</Descriptions.Item>
+            <Descriptions.Item label="底层任务状态">{detail.status || '-'}</Descriptions.Item>
+          </Descriptions>
+        </Drawer>
+      )}
     </TaskWorkspaceShell>
   );
 }
@@ -8990,7 +8961,6 @@ function TemplateConfig() {
           <Space orientation="vertical" size="middle" className="full-width">
             <SettingsCardHeader
               title="模型连接与 Review 配置"
-              description="统一查看 Agent Runtime 与 Standard Provider；配置继续按 Review 域独立保存。"
               extra={(
                 <Space wrap className="review-model-page-actions">
                   <div className="review-agent-global-switch">

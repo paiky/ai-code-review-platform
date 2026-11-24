@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Alert, Button, Checkbox, Form, Input, message, Modal, Select, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Checkbox, Form, Input, message, Modal, Select, Tag, Typography } from 'antd';
 import { fetchApi } from '../api.js';
 import { registerSettingsNavigationGuard } from '../settingsNavigation.js';
 import { saveFindingFeedback, withdrawFeedback } from './api.js';
@@ -120,16 +120,14 @@ export default function FalsePositiveControl({ projectId, taskId, review, findin
   });
   const isFalsePositive = feedback?.feedbackType === 'FALSE_POSITIVE';
   return (
-    <div className="feedback-control feedback-control-compact">
+    <>
       {contextHolder}
-      <Space wrap>
-        {isFalsePositive && <Tag>误报 · {labelFor(FEEDBACK_STATUS_OPTIONS, feedback.status)}</Tag>}
-        <Button size="small" disabled={!projectId || !taskId || !finding.fingerprint || saving} onClick={open}>
-          {isFalsePositive ? '修改误报标记' : '标记误报'}
-        </Button>
-        {isFalsePositive && <Button size="small" disabled={saving} onClick={() => { opened.current = true; setCaseId(feedback.id); }}>整理 / 查看踩坑案例</Button>}
-        {isFalsePositive && feedback.status !== 'IGNORED' && <Button size="small" danger loading={saving} onClick={withdraw}>撤回误报标记</Button>}
-      </Space>
+      <Button size="small" disabled={!projectId || !taskId || !finding.fingerprint || saving} onClick={open}>
+        {isFalsePositive ? '修改误报标记' : '标记误报'}
+      </Button>
+      {isFalsePositive && <Tag>误报 · {labelFor(FEEDBACK_STATUS_OPTIONS, feedback.status)}</Tag>}
+      {isFalsePositive && <Button size="small" disabled={saving} onClick={() => { opened.current = true; setCaseId(feedback.id); }}>整理 / 查看踩坑案例</Button>}
+      {isFalsePositive && feedback.status !== 'IGNORED' && <Button size="small" danger loading={saving} onClick={withdraw}>撤回误报标记</Button>}
       <Modal title="标记误报" open={modalOpen} onCancel={() => requestLeave()} onOk={submit}
         confirmLoading={saving} okButtonProps={{ disabled: loading || !loaded }}
         cancelButtonProps={{ disabled: saving }} maskClosable={!saving} keyboard={!saving}
@@ -152,6 +150,6 @@ export default function FalsePositiveControl({ projectId, taskId, review, findin
       {caseId && <MemoryFeedbackDrawer key={`${projectId}-${caseId}`} projectId={projectId} feedbackId={caseId}
         targetType={review.targetType} onClose={() => requestLeave()} onDirtyChange={handleDirty}
         onBusyChange={handleBusy} onSaved={handleSaved} />}
-    </div>
+    </>
   );
 }

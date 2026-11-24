@@ -65,6 +65,8 @@ Review 前配置
 - 配置模型端点、模型名称、API Key 和超时。
 - 配置 AI Review Profile 和 Review Instructions。
 - 在「项目 / 端类型配置」维护项目所属端、Profile、路径范围和项目触发策略。
+- 在「项目 / 端类型配置」的第三个页签「端类型自动识别规则」维护自动识别使用的路径规则。
+  切换启用开关、增删匹配路径和重置路径均即时保存对应规则。重置路径保留当前启用状态。
 - 在「AI Review 配置」维护模型连接和审查策略。
 - 在「钉钉机器人库」维护 webhook，再由项目关联机器人。全局设置维护全局发送开关。
 - 配置 Push 审核策略。
@@ -139,6 +141,8 @@ Review 前配置
   复用同一 Review 身份、ReviewJourney、阶段 Drawer、finding、severity、category、confidence、
   contextStatus、evidence 和建议。
 - `多模型选择`：只有多个 Review 结果时显示选择器；单 Review 不再显示重复的身份横条。
+- `任务页头`：普通任务详情的身份、分支、作者、时间和任务状态集中展示；项目 ID、模板、Profile 等字段
+  通过“任务详情”打开。“更多操作”提供重试当前 Review 的入口，MR 和 Push 任务还可重新执行审阅或复制为新任务重跑。
 - `沉浸顶栏`：保留返回、任务安全标识、Review 身份、Provider / model、状态、多 Review 选择、
   当前 Review 中断和任务信息 Drawer；普通品牌导航与全局操作区仅在当前运行态任务详情路由隐藏。
 - `中央 Canvas 舞台`：Agent 使用固定种子的原生 Canvas 2D 粒子核心，Standard 与 fallback 使用克制
@@ -147,10 +151,10 @@ Review 前配置
 - `Push 审核`：仅 Push 任务在 Review 内容下方提供独立折叠区，不占用默认首屏。
 - `上下文准备`：点击时间轴阶段，在 Drawer 查看 Context Planner、Local Retriever、Context Pack、
   Requested Context、预算裁剪和补证据安全摘要；没有可靠事件时不显示空阶段入口。
-- `确定性预检`：点击时间轴阶段查看当前 Review 的 AUTO_PREFLIGHT；时间轴区域的“任务级确定性检查”
-  辅助入口负责手动运行 / 重新运行，任务级最新记录不会改写已完成 Review 阶段。
-- `执行记录`：已归类的安全记录位于对应阶段 Drawer；少量允许展示但无法归类的记录位于时间轴后的
-  “其它执行记录”折叠区，不显示原始 detail、模型原文或基础设施信息。
+- `确定性预检`：点击时间轴阶段查看当前 Review 的 AUTO_PREFLIGHT。紧凑时间轴通过“模型 Review”阶段打开
+  “任务级确定性检查”。完整时间轴或缺少模型阶段时可从流程标题旁进入。任务级最新记录独立于已完成 Review 阶段。
+- `执行记录`：已归类的安全记录位于对应阶段 Drawer，模型的执行过程可在“模型 Review”阶段内切换查看。
+  少量允许展示但无法归类的记录可从流程标题旁的“其它执行记录”打开，内容限于安全标签、级别、时间和摘要。
 - `补证据`：对高影响且上下文不足的 finding 触发 finding 级 refinement。
 - `标注评估样本`：把 finding 沉淀为 evaluation case。
 

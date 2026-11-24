@@ -188,6 +188,7 @@ export function buildTerminalReviewResultPresentation(review, journey) {
   else if (status === 'SKIPPED') reason = '本次 Review 已跳过。';
   const formalSummary = cleanFormalReviewSummary(review?.summary);
   const hasFormalSummary = formalSummary && formalSummary.toLowerCase() !== 'findings';
+  const providerModelLabel = journey?.providerModelLabel || [review?.provider, review?.model].filter(Boolean).join(' / ') || '历史任务未记录';
 
   return {
     status,
@@ -203,7 +204,8 @@ export function buildTerminalReviewResultPresentation(review, journey) {
         ? formalSummary
         : reason,
     engineLabel: journey?.engineLabel || '历史任务未记录',
-    providerModelLabel: journey?.providerModelLabel || [review?.provider, review?.model].filter(Boolean).join(' / ') || '历史任务未记录',
+    providerModelLabel,
+    modelLabel: String(review?.model || '').trim() || providerModelLabel,
     durationMs: nonNegativeNumber(journey?.durationMs),
     agentDurationMs: nonNegativeNumber(review?.agentRunSummary?.durationMs),
     agentRunId: review?.agentRunSummary?.runId ?? review?.agentRunId ?? null

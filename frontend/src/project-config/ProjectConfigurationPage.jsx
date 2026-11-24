@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Button,
-  Collapse,
   Input,
   message,
   Modal,
@@ -15,7 +14,6 @@ import {
   Typography
 } from 'antd';
 import {
-  BranchesOutlined,
   CloseOutlined,
   FolderOpenOutlined,
   ReloadOutlined,
@@ -75,11 +73,9 @@ export default function ProjectConfigurationPage({ onDirtyChange }) {
   const [batchDirty, setBatchDirty] = useState(false);
   const [webhookLibraryDirty, setWebhookLibraryDirty] = useState(false);
   const [mappings, setMappings] = useState([]);
-  const [mappingBaseline, setMappingBaseline] = useState('[]');
   const [mappingsLoading, setMappingsLoading] = useState(false);
-  const [mappingsSaving, setMappingsSaving] = useState(false);
-  const mappingsDirty = JSON.stringify(mappings) !== mappingBaseline;
-  const hasDirtyDraft = projectDrawerDirty || batchDirty || webhookLibraryDirty || mappingsDirty;
+  const [savingTargetType, setSavingTargetType] = useState(null);
+  const hasDirtyDraft = projectDrawerDirty || batchDirty || webhookLibraryDirty;
 
   useEffect(() => onDirtyChange?.(hasDirtyDraft), [hasDirtyDraft, onDirtyChange]);
 
@@ -103,11 +99,7 @@ export default function ProjectConfigurationPage({ onDirtyChange }) {
   useEffect(() => {
     setMappingsLoading(true);
     fetchTargetPathMappings()
-      .then(data => {
-        const normalized = normalizeMappings(data);
-        setMappings(normalized);
-        setMappingBaseline(JSON.stringify(normalized));
-      })
+      .then(data => setMappings(normalizeMappings(data)))
       .catch(err => messageApi.error(err.message))
       .finally(() => setMappingsLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -140,7 +132,6 @@ export default function ProjectConfigurationPage({ onDirtyChange }) {
     setBatchOpen(false);
     setBatchDirty(false);
     setWebhookLibraryDirty(false);
-    setMappings(JSON.parse(mappingBaseline));
   };
 
   const changeTab = nextTab => {
@@ -156,45 +147,31 @@ export default function ProjectConfigurationPage({ onDirtyChange }) {
     }
     Modal.confirm({
       title: '放弃当前未保存修改？',
-      content: '切换页签会关闭当前抽屉或弹窗草稿。',
+      content: '切换页签会放弃当前未保存的修改。',
       okText: '放弃并切换',
       cancelText: '继续编辑',
       onOk: switchTab
     });
   };
 
-  const updateMapping = (targetType, field, value) => {
-    setMappings(current => current.map(item => item.targetType === targetType
-      ? { ...item, [field]: value }
-      : item));
-  };
-
-  const resetMapping = targetType => {
-    updateMapping(targetType, 'pathPatterns', DEFAULT_TARGET_PATHS[targetType]);
-    setMappings(current => current.map(item => item.targetType === targetType
-      ? { ...item, enabled: true }
-      : item));
-    messageApi.info(`已恢复 ${targetTypeMeta(targetType).label} 默认路径，请保存后生效`);
-  };
-
-  const saveMappings = async () => {
-    setMappingsSaving(true);
+  const saveMapping = async (row, changes) => {
+    if (savingTargetType) return;
+    const mapping = { ...row, ...changes };
+    setSavingTargetType(row.targetType);
     try {
-      const saved = await saveTargetPathMappings(mappings.map((item, index) => ({
-        targetType: item.targetType,
-        pathPatterns: item.pathPatterns || [],
-        enabled: item.enabled !== false,
-        sortOrder: item.sortOrder ?? ((index + 1) * 10),
-        description: item.description || null
-      })));
-      const normalized = normalizeMappings(saved);
-      setMappings(normalized);
-      setMappingBaseline(JSON.stringify(normalized));
+      const saved = await saveTargetPathMappings([{
+        targetType: mapping.targetType,
+        pathPatterns: mapping.pathPatterns || [],
+        enabled: mapping.enabled !== false,
+        sortOrder: mapping.sortOrder,
+        description: mapping.description || null
+      }]);
+      setMappings(normalizeMappings(saved));
       messageApi.success('端类型自动识别规则已保存');
     } catch (err) {
       messageApi.error(err.message);
     } finally {
-      setMappingsSaving(false);
+      setSavingTargetType(null);
     }
   };
 
@@ -270,56 +247,55 @@ export default function ProjectConfigurationPage({ onDirtyChange }) {
         onConfigure={setProjectDrawer}
       />
 
-      <Collapse
-        className="project-config-rules-collapse"
-        expandIconPosition="end"
-        items={[{
-          key: 'rules',
-          label: (
-            <div className="project-config-rules-label">
-              <span className="project-config-rules-icon"><BranchesOutlined /></span>
-              <span className="project-config-rules-copy">
-                <Text strong>端类型自动识别规则</Text>
-                <Text type="secondary">仅用于项目分类和默认 Review 配置，不参与通知路由</Text>
-              </span>
-              <Tag className="project-config-rules-status" color="blue">
-                {mappings.filter(item => item.enabled !== false).length} 个启用
-              </Tag>
-            </div>
-          ),
-          children: (
-            <div className="project-config-rules-content">
-              <Alert type="info" showIcon title="人工端类型优先；恢复自动识别前会展示候选、证据版本与配置变化" />
-              <Table
-                rowKey="targetType"
-                size="small"
-                loading={mappingsLoading}
-                pagination={false}
-                dataSource={mappings}
-                scroll={{ x: 820 }}
-                columns={[
-                  { title: '端类型', dataIndex: 'targetType', width: 140, render: value => {
-                    const meta = targetTypeMeta(value);
-                    return <Tag color={meta.color}>{meta.label}</Tag>;
-                  } },
-                  { title: '路径匹配', dataIndex: 'pathPatterns', render: (_, row) => (
-                    <Select mode="tags" className="full-width" value={row.pathPatterns} onChange={value => updateMapping(row.targetType, 'pathPatterns', value)} />
-                  ) },
-                  { title: '启用', dataIndex: 'enabled', width: 90, render: (_, row) => (
-                    <Switch checked={row.enabled !== false} onChange={checked => updateMapping(row.targetType, 'enabled', checked)} />
-                  ) },
-                  { title: '操作', width: 90, render: (_, row) => (
-                    <Button type="link" icon={<ReloadOutlined />} onClick={() => resetMapping(row.targetType)}>重置</Button>
-                  ) }
-                ]}
+    </section>
+  );
+
+  const rulesPanel = (
+    <section className="project-config-tab-panel" aria-label="端类型自动识别规则">
+      <div className="project-config-table-shell">
+        <Table
+          rowKey="targetType"
+          size="small"
+          loading={mappingsLoading}
+          pagination={false}
+          dataSource={mappings}
+          scroll={{ x: 820 }}
+          columns={[
+            { title: '端类型', dataIndex: 'targetType', width: 140, render: value => {
+              const meta = targetTypeMeta(value);
+              return <Tag color={meta.color}>{meta.label}</Tag>;
+            } },
+            { title: '路径匹配', dataIndex: 'pathPatterns', render: (_, row) => (
+              <Select
+                mode="tags"
+                className="full-width"
+                value={row.pathPatterns}
+                disabled={Boolean(savingTargetType)}
+                onChange={pathPatterns => saveMapping(row, { pathPatterns })}
               />
-              <div className="project-config-rules-actions">
-                <Button type="primary" loading={mappingsSaving} disabled={!mappingsDirty} onClick={saveMappings}>保存识别规则</Button>
-              </div>
-            </div>
-          )
-        }]}
-      />
+            ) },
+            { title: '启用', dataIndex: 'enabled', width: 90, render: (_, row) => (
+              <Switch
+                aria-label={`${targetTypeMeta(row.targetType).label}自动识别`}
+                checked={row.enabled !== false}
+                disabled={Boolean(savingTargetType)}
+                loading={savingTargetType === row.targetType}
+                onChange={enabled => saveMapping(row, { enabled })}
+              />
+            ) },
+            { title: '操作', width: 90, render: (_, row) => (
+              <Button
+                type="link"
+                icon={<ReloadOutlined />}
+                disabled={Boolean(savingTargetType)}
+                onClick={() => saveMapping(row, { pathPatterns: DEFAULT_TARGET_PATHS[row.targetType] })}
+              >
+                重置
+              </Button>
+            ) }
+          ]}
+        />
+      </div>
     </section>
   );
 
@@ -329,10 +305,7 @@ export default function ProjectConfigurationPage({ onDirtyChange }) {
       <header className="project-config-page-header">
         <div className="project-config-page-title">
           <span className="project-config-title-icon"><FolderOpenOutlined /></span>
-          <div>
-            <Title level={4}>项目通知与 Review 配置</Title>
-            <Text type="secondary">按项目维护端类型、Review 配置、MR/PUSH 触发与钉钉通知机器人</Text>
-          </div>
+          <Title level={4}>项目通知与 Review 配置</Title>
         </div>
       </header>
 
@@ -345,7 +318,8 @@ export default function ProjectConfigurationPage({ onDirtyChange }) {
             key: 'webhooks',
             label: '钉钉机器人库',
             children: <WebhookLibrary onOpenProject={openProjectFromLibrary} onDirtyChange={setWebhookLibraryDirty} />
-          }
+          },
+          { key: 'rules', label: '端类型自动识别规则', children: rulesPanel }
         ]}
       />
 
