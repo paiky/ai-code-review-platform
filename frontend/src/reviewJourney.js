@@ -1,11 +1,12 @@
 import {
+  collectAgentTraceEvents,
   getLatestAgentTraceScope,
   isAgentHeartbeatProgressEvent,
   isAgentTraceProgressEvent,
   isEventInAgentTraceScope,
   summarizeAgentTrace
 } from './agentReviewTrace.js';
-import { buildSafeTraceViewModel } from './safeTracePresentation.js';
+import { buildSafeTraceEvent, buildSafeTraceViewModel, groupSafeTraceEvents } from './safeTracePresentation.js';
 
 export const REVIEW_JOURNEY_STAGE_STATUSES = Object.freeze([
   'WAITING',
@@ -233,6 +234,7 @@ const safePhaseLabels = Object.freeze({
   AGENT_OUTPUT_CONVERGENCE_FAILED: 'Review Card 输出收敛失败',
   AGENT_HEARTBEAT: 'Agent 最新安全心跳',
   PROVIDER_START: 'Provider 调用已启动',
+  PROVIDER_FAILED: 'Provider 调用失败',
   HTTP_REQUEST_START: 'Provider 请求已发起',
   OUTPUT_EXTRACTED: 'Provider 输出已提取',
   JSON_PARSE_START: '结构化解析已启动',
@@ -249,6 +251,7 @@ const safePhaseLabels = Object.freeze({
   JOB_INTERRUPTED: 'Review 已中断',
   AGENT_SENSITIVE_PATHS_EXCLUDED: 'Agent 已应用敏感路径隔离',
   AGENT_ALL_PATHS_EXCLUDED: 'Agent 已安全跳过全部敏感路径',
+  AGENT_PREFLIGHT_FAILED: 'Agent 入队前检查未通过',
   HTTP_RESPONSE_HEADERS: 'Provider 响应已到达',
   HTTP_RESPONSE_BODY_PREVIEW: 'Provider 响应已进入安全解析',
   CODEX_REPOSITORY: '历史执行已完成仓库准备',
@@ -263,6 +266,8 @@ const safePhaseLabels = Object.freeze({
 const otherSafePhaseSet = new Set([
   'AGENT_SENSITIVE_PATHS_EXCLUDED',
   'AGENT_ALL_PATHS_EXCLUDED',
+  'AGENT_PREFLIGHT_FAILED',
+  'PROVIDER_FAILED',
   'HTTP_RESPONSE_HEADERS',
   'HTTP_RESPONSE_BODY_PREVIEW',
   'CODEX_REPOSITORY',
@@ -324,8 +329,12 @@ export function buildReviewJourney(review, events, options = {}) {
   const scopedEvents = selectReviewJourneyEvents(sourceReview, events, {
     allowUnscopedCompatibility: options.allowUnscopedCompatibility !== false
   });
-  const attemptScopedEvents = selectLatestAgentAttempt(scopedEvents);
   const identity = deriveReviewIdentity(sourceReview);
+  const agentConversation = ['AGENT', 'FALLBACK'].includes(identity.engineKind)
+    ? selectAgentConversation(sourceReview, scopedEvents)
+    : null;
+  const standardInstructions = selectStandardInstructions(sourceReview, scopedEvents, identity);
+  const attemptScopedEvents = selectLatestAgentAttempt(scopedEvents, agentConversation?.scope, sourceReview.taskId);
   const status = deriveReviewStatus(sourceReview, attemptScopedEvents);
   const agentSummary = ['AGENT', 'FALLBACK'].includes(identity.engineKind)
     ? safeAgentSummary(summarizeAgentTrace(attemptScopedEvents, nowMs), nowMs)
@@ -415,6 +424,17 @@ export function buildReviewJourney(review, events, options = {}) {
     finishedAt: reviewTimes.finishedAt,
     durationMs: reviewTimes.durationMs,
     agentSummary,
+    agentInput: agentInputSummary(attemptScopedEvents, nowMs),
+    agentInstructions: agentConversation?.instructions || null,
+    standardInstructions,
+    agentConversation: agentConversation?.input || agentConversation?.turns.length > 0 ? {
+      scope: agentConversation.scope,
+      input: agentConversation.input,
+      ...associateAgentConversationTools(
+        agentConversation.turns,
+        attemptScopedEvents.filter(event => event.taskId === sourceReview.taskId)
+      )
+    } : null,
     stages,
     otherEvents
   };
@@ -543,13 +563,227 @@ function deriveReviewStatus(review, events) {
   return 'UNKNOWN';
 }
 
-function selectLatestAgentAttempt(events) {
-  const scope = getLatestAgentTraceScope(events);
+function selectLatestAgentAttempt(events, conversationScope, taskId) {
+  const scope = conversationScope || getLatestAgentTraceScope(events);
   if (!scope) return events;
   return events.filter(event => (
     (!isAgentTraceProgressEvent(event) && !isAgentHeartbeatProgressEvent(event))
-    || isEventInAgentTraceScope(event, scope)
+    || ((!conversationScope || event.taskId == null || event.taskId === taskId)
+      && isEventInAgentTraceScope(event, scope))
   ));
+}
+
+const conversationProtocols = new Set([
+  'OPENAI_RESPONSES', 'OPENAI_CHAT_COMPLETIONS', 'ANTHROPIC_MESSAGES', 'ANTHROPIC_COMPATIBLE'
+]);
+const conversationPhases = new Set(['AGENT_CONVERSATION_INPUT', 'AGENT_CONVERSATION_TURN']);
+const platformPromptPhase = 'REVIEW_PLATFORM_PROMPT';
+const instructionSources = new Map([
+  ['STANDARD_HTTP', { templateId: 'STANDARD_SYSTEM_V1', label: '已交给 HTTP 传输层的平台系统指令片段' }],
+  ['AGENT_HTTP', { templateId: 'AGENT_SYSTEM_V1', label: '已交给 HTTP 传输层的平台系统指令片段' }],
+  ['CLAUDE_CLI_APPEND', { templateId: 'AGENT_SYSTEM_V1', label: '已交给 Claude CLI 的平台附加系统指令' }]
+]);
+const maxPlatformInstructionBytes = 16 * 1024;
+const conversationSources = new Set([
+  'PLATFORM_INSTRUCTIONS', 'PROFILE', 'PROJECT_POLICY', 'PREFLIGHT', 'MEMORY',
+  'BASELINE_CONTEXT', 'CHANGED_FILES', 'DIFF'
+]);
+const conversationToolTypes = new Set([
+  'LIST_FILES', 'SEARCH_CODE', 'READ_FILE_RANGE', 'READ_DIFF_RANGE', 'SUBMIT_REVIEW'
+]);
+const conversationUsageFields = [
+  'input_tokens', 'output_tokens', 'prompt_tokens', 'completion_tokens', 'total_tokens',
+  'cache_creation_input_tokens', 'cache_read_input_tokens'
+];
+const conversationSummaryLabels = new Map([
+  ['CHECK_CALL_SITES', '准备核对调用点'],
+  ['READ_SOURCE', '准备读取源码'],
+  ['INSPECT_DIFF', '准备查看变更'],
+  ['PREPARE_SUBMISSION', '准备提交审查结果']
+]);
+const maxConversationBytes = 10 * 1024 * 1024;
+const maxConversationTurns = 18;
+const maxConversationToolSequences = 60;
+
+function conversationInteger(value, max = Number.MAX_SAFE_INTEGER, min = 0) {
+  return Number.isSafeInteger(value) && value >= min && value <= max ? value : null;
+}
+
+function selectAgentConversation(review, events) {
+  const reviewKey = normalizeReviewKey(review.reviewKey);
+  const taskId = conversationInteger(review.taskId, undefined, 1);
+  if (!reviewKey || taskId === null) return null;
+  const confirmedRunId = conversationInteger(review.agentRunId ?? review.agentRunSummary?.runId, undefined, 1);
+  let scope = null;
+  const conversation = [];
+  for (const event of events) {
+    if (event.taskId !== taskId || normalizeReviewKey(event.reviewKey) !== reviewKey) continue;
+    const isTrace = isAgentTraceProgressEvent(event) || isAgentHeartbeatProgressEvent(event);
+    const isPrompt = event.phase === platformPromptPhase;
+    if (!isTrace && !isPrompt && !conversationPhases.has(event.phase)) continue;
+    const detail = parseDetailObject(event.detail);
+    const runId = conversationInteger(detail?.runId, undefined, 1);
+    const claimAttempt = conversationInteger(detail?.claimAttempt, undefined, 1);
+    if (runId === null || claimAttempt === null || (confirmedRunId !== null && runId !== confirmedRunId)) continue;
+    const record = isTrace ? null : isPrompt
+      ? projectPlatformInstructions(detail, 'AGENT_SYSTEM_V1', `${taskId}:${reviewKey}:${runId}:${claimAttempt}`)
+      : projectAgentConversationRecord(event.phase, detail);
+    if (!isTrace && !record) continue;
+    if (record) conversation.push({ runId, claimAttempt, record });
+    if (!scope || runId > scope.runId || (runId === scope.runId && claimAttempt > scope.claimAttempt)) {
+      scope = { runId, claimAttempt };
+    }
+  }
+  if (!scope && confirmedRunId === null) return null;
+  if (!scope) {
+    scope = getLatestAgentTraceScope(events.filter(event => (
+      (event.taskId == null || event.taskId === taskId)
+      && (isAgentTraceProgressEvent(event) || isAgentHeartbeatProgressEvent(event))
+      && parseDetailObject(event.detail)?.runId === confirmedRunId
+    )));
+  }
+  // A result can confirm a run before progress for that run arrives.
+  if (!scope) scope = { runId: confirmedRunId, claimAttempt: 0 };
+  let input = null;
+  let instructions = null;
+  const turns = new Map();
+  for (const item of conversation) {
+    if (item.runId !== scope.runId || item.claimAttempt !== scope.claimAttempt) continue;
+    const record = item.record;
+    if (record.text !== undefined) instructions ??= record;
+    else if (record.turn === undefined) input ??= record;
+    else if (!turns.has(record.turn)) turns.set(record.turn, record);
+  }
+  return {
+    scope,
+    input,
+    instructions,
+    turns: [...turns.values()].sort((left, right) => left.turn - right.turn)
+  };
+}
+
+function selectStandardInstructions(review, events, identity) {
+  const confirmedRunId = conversationInteger(review.agentRunId ?? review.agentRunSummary?.runId, undefined, 1);
+  // A fallback request can be in flight while the saved result still identifies the Agent run.
+  const pendingFallback = identity.engineKind === 'AGENT' && confirmedRunId !== null;
+  if (!pendingFallback && !['STANDARD', 'FALLBACK'].includes(identity.engineKind)) return null;
+  const effectiveEngine = pendingFallback ? 'STANDARD_FALLBACK' : identity.effectiveEngine;
+  const agentRunId = effectiveEngine === 'STANDARD_FALLBACK' ? confirmedRunId ?? undefined : undefined;
+  const reviewKey = normalizeReviewKey(review.reviewKey);
+  const taskId = conversationInteger(review.taskId, undefined, 1);
+  if (!reviewKey || taskId === null) return null;
+  for (const event of events) {
+    if (event.phase !== platformPromptPhase || event.taskId !== taskId || normalizeReviewKey(event.reviewKey) !== reviewKey) {
+      continue;
+    }
+    const detail = parseDetailObject(event.detail);
+    if (detail?.effectiveEngine !== effectiveEngine || (detail.runId ?? undefined) !== agentRunId) continue;
+    if (detail.claimAttempt != null || detail.submitByTurn != null) continue;
+    const instructions = projectPlatformInstructions(detail, 'STANDARD_SYSTEM_V1', `${taskId}:${reviewKey}:${effectiveEngine}:${agentRunId ?? ''}`);
+    if (instructions) return instructions;
+  }
+  return null;
+}
+
+function projectPlatformInstructions(detail, templateId, key) {
+  if (detail?.schemaVersion !== 1 || detail.templateId !== templateId) return null;
+  const source = instructionSources.get(detail.source);
+  if (source?.templateId !== templateId || !conversationProtocols.has(detail.protocol)) return null;
+  if ((detail.source === 'CLAUDE_CLI_APPEND') !== (detail.protocol === 'ANTHROPIC_COMPATIBLE')) return null;
+  if (templateId === 'AGENT_SYSTEM_V1' && (
+    detail.effectiveEngine != null || conversationInteger(detail.submitByTurn, 15, 3) === null
+  )) return null;
+  const text = detail.platformInstructions;
+  if (typeof text !== 'string' || !text.trim() || text.length > maxPlatformInstructionBytes
+    || new TextEncoder().encode(text).length > maxPlatformInstructionBytes) {
+    return null;
+  }
+  return { key, sourceLabel: source.label, text };
+}
+
+function projectAgentConversationRecord(phase, detail) {
+  if (detail.schemaVersion !== 1) return null;
+  if (phase === 'AGENT_CONVERSATION_INPUT') {
+    if (!conversationProtocols.has(detail.protocol) || !['INLINE', 'TOOL_PAGED'].includes(detail.diffMode)) {
+      return null;
+    }
+    const sources = Array.isArray(detail.sourceSummaries) ? detail.sourceSummaries.slice(0, 8) : [];
+    const sourceSummaries = new Map();
+    for (const source of sources) {
+      if (!conversationSources.has(source?.source) || sourceSummaries.has(source.source)) continue;
+      sourceSummaries.set(source.source, {
+        source: source.source,
+        count: conversationInteger(source.count, 10_000),
+        bytes: conversationInteger(source.bytes, maxConversationBytes),
+        truncated: source.truncated === true
+      });
+    }
+    return {
+      protocol: detail.protocol,
+      diffMode: detail.diffMode,
+      changedFileCount: conversationInteger(detail.changedFileCount, 10_000),
+      requestBytes: conversationInteger(detail.requestBytes, maxConversationBytes),
+      diffBytes: conversationInteger(detail.diffBytes, maxConversationBytes),
+      sourceSummaries: [...sourceSummaries.values()],
+      truncated: detail.truncated === true
+    };
+  }
+  if (phase !== 'AGENT_CONVERSATION_TURN') return null;
+  const turn = conversationInteger(detail.turn, maxConversationTurns, 1);
+  if (turn === null) return null;
+  const sequences = Array.isArray(detail.toolSequences) ? detail.toolSequences.slice(0, maxConversationToolSequences) : [];
+  const measured = detail.evidenceStatus === 'MEASURED';
+  return {
+    turn,
+    toolSequences: [...new Set(sequences
+      .map(value => conversationInteger(value, maxConversationToolSequences, 1))
+      .filter(value => value !== null))],
+    modelRequestMs: conversationInteger(detail.modelRequestMs, 900_000),
+    usage: Object.fromEntries(conversationUsageFields
+      .map(field => [field, conversationInteger(detail.usage?.[field], 10_000_000_000)])
+      .filter(([, value]) => value !== null)),
+    newEvidenceCount: measured ? conversationInteger(detail.newEvidenceCount, 1_000_000) : null,
+    consecutiveNoNewEvidenceTurns: measured ? conversationInteger(detail.consecutiveNoNewEvidenceTurns, turn) : null,
+    modelNote: detail.summarySource === 'OPENAI_RESPONSES_REASONING_SUMMARY'
+      ? conversationSummaryLabels.get(detail.summaryKind) ?? null
+      : null,
+    truncated: detail.truncated === true
+  };
+}
+
+function associateAgentConversationTools(turns, events) {
+  const trace = [];
+  const toolsBySequence = new Map();
+  const convergingSequences = new Set();
+  for (const event of collectAgentTraceEvents(events)) {
+    const reportedTool = event.phase === 'AGENT_SUBMITTING' ? parseDetailObject(event.detail)?.activity : null;
+    // In submission mode the backend can label a blocked retrieval with the submission phase.
+    const isRetrieval = conversationToolTypes.has(reportedTool) && reportedTool !== 'SUBMIT_REVIEW';
+    const activity = buildSafeTraceEvent(isRetrieval ? { ...event, phase: 'AGENT_TOOL_ACTIVITY' } : event);
+    if (!activity) continue;
+    trace.push(activity);
+    if (!conversationToolTypes.has(activity.activityType)) continue;
+    if (event.phase === 'AGENT_CONVERGING') convergingSequences.add(activity.sequence);
+    if (!toolsBySequence.has(activity.sequence)) toolsBySequence.set(activity.sequence, []);
+    toolsBySequence.get(activity.sequence).push(activity);
+  }
+  const assigned = new Set();
+  const associatedTurns = turns.map(turn => {
+    const sequences = turn.toolSequences.filter(sequence => !assigned.has(sequence));
+    sequences.forEach(sequence => assigned.add(sequence));
+    return {
+      ...turn,
+      tools: sequences.flatMap(sequence => toolsBySequence.get(sequence) || []),
+      missingToolCount: sequences.filter(sequence => !toolsBySequence.has(sequence)).length,
+      converging: sequences.some(sequence => convergingSequences.has(sequence))
+    };
+  });
+  return {
+    turns: associatedTurns,
+    otherActivities: groupSafeTraceEvents(trace.filter(activity => (
+      !assigned.has(activity.sequence) || !conversationToolTypes.has(activity.activityType)
+    )))
+  };
 }
 
 function stageIdForPhase(value) {
@@ -685,7 +919,7 @@ function safeJourneyEvent(event, timestamp) {
     && String(event.detail).trim() !== '';
   const detailAvailable = !hasDetail || parseDetailObject(event.detail) !== null;
   return {
-    id: nonNegativeNumber(event?.id),
+    id: event?.id == null ? null : nonNegativeNumber(event.id),
     reviewKey: normalizeReviewKey(event?.reviewKey),
     phase,
     level: safeJourneyLevel(event?.level),
@@ -848,13 +1082,14 @@ export function buildReviewJourneyContextDetails(events, review, now = Date.now(
     repositoryEvent ? repositoryPayload : undefined,
     retrieverEvent ? retrieverPayload : undefined
   ].filter(value => value !== undefined && value !== null).length;
+  const packCount = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 
   return {
     hasReliableRecord: true,
     detailState: detailState(parsedDetailCount, reliableEvents.length),
     contextPack: {
       built: Boolean(contextEvent),
-      changedFileCount: nonNegativeNumber(contextSummary.changedFileCount),
+      changedFileCount: packCount(contextSummary.changedFileCount),
       truncated: booleanValue(
         contextSummary.truncated !== undefined
           ? contextSummary.truncated
@@ -868,7 +1103,7 @@ export function buildReviewJourneyContextDetails(events, review, now = Date.now(
     planner: {
       targetType: safeEnumToken(contextSummary.plannerTargetType),
       detectedLanguages: safeDisplayTokenList(contextSummary.detectedLanguages),
-      signalCount: nonNegativeNumber(
+      signalCount: packCount(
         contextSummary.plannerSignalCount ?? contextMeta.plannerSignalCount
       ),
       signalTypeCounts: safeCountItems(contextSummary.plannerSignalTypeCounts),
@@ -885,13 +1120,13 @@ export function buildReviewJourneyContextDetails(events, review, now = Date.now(
       matchedFileCount: nonNegativeNumber(
         localReferenceSearch.matchedFileCount ?? contextMeta.localReferenceMatchedFileCount
       ),
-      includedSnippetCount: nonNegativeNumber(
+      includedSnippetCount: packCount(
         localReferenceSearch.includedSnippetCount ?? contextMeta.localReferenceSnippetCount
       )
     },
     requestedContext: {
       available: nonNegativeNumber(requestedAvailability.available),
-      unavailable: nonNegativeNumber(requestedAvailability.unavailable),
+      unavailable: packCount(requestedAvailability.unavailable),
       items: arrayValue(requestedAvailability.items)
         .slice(0, 16)
         .map(item => {
@@ -1033,6 +1268,20 @@ function latestJourneyEvent(events, phases, nowMs) {
     }))
     .sort(compareMappedEventRecency)
     .at(-1)?.event || null;
+}
+
+function agentInputSummary(events, nowMs) {
+  const event = latestJourneyEvent(events, ['AGENT_INPUT_BUILD_COMPLETED'], nowMs);
+  if (!event) return null;
+  const detail = parseDetailObject(event.detail);
+  const count = key => Number.isSafeInteger(detail?.[key]) && detail[key] >= 0 ? detail[key] : null;
+  return {
+    changedFileCount: count('changedFileCount'),
+    includedFileCount: count('includedFileCount'),
+    diffBytes: count('diffBytes'),
+    diffMode: ['INLINE', 'TOOL_PAGED'].includes(detail?.diffMode) ? detail.diffMode : null,
+    memoryCount: count('memorySelectedCount')
+  };
 }
 
 function detailState(parsedCount, recordCount) {

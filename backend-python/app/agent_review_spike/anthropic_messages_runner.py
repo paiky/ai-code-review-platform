@@ -11,6 +11,11 @@ from urllib.parse import urlparse
 import httpx
 
 from app.agent_review_spike.budgets import DEFAULT_AGENT_BUDGETS, validate_agent_budgets
+from app.agent_review_spike.conversation_capture import (
+    AgentReviewProgress,
+    ConversationCallback,
+    ConversationCapture,
+)
 from app.agent_review_spike.prompting import agent_system_prompt, review_input
 from app.agent_review_spike.tool_executor import ReviewToolExecutor, tool_definitions
 from app.agent_review_spike.workspace import ReviewWorkspace, ToolBudget
@@ -187,7 +192,10 @@ class AnthropicMessagesAgentRunner:
         *,
         cancel_event: Any = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        conversation_callback: ConversationCallback | None = None,
     ) -> dict[str, Any]:
+        if conversation_callback is None and isinstance(progress_callback, AgentReviewProgress):
+            conversation_callback = progress_callback.conversation
         started = perf_counter()
         usage: dict[str, int] = {}
         turn_count = 0
@@ -214,17 +222,25 @@ class AnthropicMessagesAgentRunner:
                     ),
                     _split_diff_by_file(effective_case),
                 )
+                conversation = ConversationCapture(
+                    "ANTHROPIC_MESSAGES",
+                    effective_case,
+                    executor.diff_by_file,
+                    conversation_callback,
+                    self.config.submit_by_turn,
+                )
                 messages: list[dict[str, Any]] = [
                     {"role": "user", "content": review_input(effective_case)}
                 ]
                 seen_call_ids: set[str] = set()
                 while turn_count < self.config.max_turns:
                     self._check_control(cancel_event, deadline)
+                    payload = self._request_payload(effective_case, messages)
+                    requested_at = perf_counter()
                     response = self._request_with_retry(
-                        self._request_payload(effective_case, messages),
-                        cancel_event,
-                        deadline,
+                        payload, cancel_event, deadline, conversation
                     )
+                    request_ms = max(int((perf_counter() - requested_at) * 1000), 0)
                     turn_count += 1
                     _merge_usage(usage, response.get("usage"))
                     assistant, calls = _validate_response(response)
@@ -240,7 +256,7 @@ class AnthropicMessagesAgentRunner:
                             "AGENT_CUSTOM_TOOL_CALL_INVALID"
                         )
                     tool_results: list[dict[str, Any]] = []
-                    for call in calls:
+                    for index, call in enumerate(calls, 1):
                         self._check_control(cancel_event, deadline)
                         call_id = _required_call_id(call, seen_call_ids)
                         tool_name = call["name"]
@@ -250,6 +266,7 @@ class AnthropicMessagesAgentRunner:
                             )
                         result = executor.execute(tool_name, call["input"])
                         audit = executor.audit_summary()
+                        conversation.record_tool(tool_name, result)
                         tool_results.append(
                             {
                                 "type": "tool_result",
@@ -263,6 +280,10 @@ class AnthropicMessagesAgentRunner:
                             }
                         )
                         self._notify_progress(progress_callback, executor)
+                        if index == len(calls):
+                            conversation.finish_turn(
+                                turn_count, request_ms, response.get("usage"), audit
+                            )
                         if cancel_event is not None and cancel_event.is_set():
                             raise AnthropicMessagesAgentError("AGENT_CANCELLED")
                         if executor.output_repair_exhausted:
@@ -322,12 +343,20 @@ class AnthropicMessagesAgentRunner:
         }
 
     def _request_with_retry(
-        self, payload: dict[str, Any], cancel_event: Any, deadline: float
+        self,
+        payload: dict[str, Any],
+        cancel_event: Any,
+        deadline: float,
+        conversation: ConversationCapture | None = None,
     ) -> dict[str, Any]:
+        if conversation is not None:
+            conversation.prepare_request(payload)
         attempts = 0
         while True:
             self._check_control(cancel_event, deadline)
             try:
+                if conversation is not None:
+                    conversation.record_request()
                 return self.transport.create(
                     payload, max(deadline - self.clock(), 0.001)
                 )

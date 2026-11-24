@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from copy import deepcopy
 from pathlib import Path
 import re
 import signal
@@ -30,6 +31,7 @@ from app.agent_review_spike.chat_completions_runner import (
     HttpxChatCompletionsTransport,
     OpenAIChatCompletionsAgentRunner,
 )
+from app.agent_review_spike.conversation_capture import AgentReviewProgress
 from app.agent_review_spike.responses_runner import (
     HttpxResponsesTransport,
     OpenAIResponsesAgentRunner,
@@ -63,6 +65,7 @@ class _LatestAuditSnapshot:
     def __init__(self) -> None:
         self._lock = Lock()
         self._value: dict[str, Any] = {}
+        self._conversation: list[dict[str, Any]] = []
 
     def update(self, value: dict[str, Any]) -> None:
         if not isinstance(value, dict):
@@ -70,9 +73,16 @@ class _LatestAuditSnapshot:
         with self._lock:
             self._value = json.loads(json.dumps(value, ensure_ascii=False))
 
-    def snapshot(self) -> dict[str, Any]:
+    def update_conversation(self, events: list[dict[str, Any]]) -> None:
         with self._lock:
-            return json.loads(json.dumps(self._value, ensure_ascii=False))
+            self._conversation = deepcopy(events)
+
+    def summary_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            result = {"audit": self._value} if self._value else {}
+            if self._conversation:
+                result["conversationEvents"] = self._conversation
+            return deepcopy(result)
 
 
 class _WorkerActivityState:
@@ -257,6 +267,7 @@ def _run_job(
     stop = Event()
     cancelled = Event()
     latest_audit = _LatestAuditSnapshot()
+    review_progress = AgentReviewProgress(latest_audit.update, latest_audit.update_conversation)
     heartbeat = Thread(
         target=_heartbeat_loop,
         args=(
@@ -293,7 +304,7 @@ def _run_job(
                 job.get("input") or {},
                 worktree,
                 cancel_event=cancelled,
-                progress_callback=latest_audit.update,
+                progress_callback=review_progress,
             )
             summary = _normalize_anthropic_summary(anthropic_result)
         elif runner_type == OPENAI_CHAT_RUNNER:
@@ -312,7 +323,7 @@ def _run_job(
                 job.get("input") or {},
                 worktree,
                 cancel_event=cancelled,
-                progress_callback=latest_audit.update,
+                progress_callback=review_progress,
             )
             summary = _normalize_chat_summary(chat_result)
         elif runner_type == OPENAI_RESPONSES_RUNNER or runtime_type == CUSTOM_RUNTIME:
@@ -332,7 +343,7 @@ def _run_job(
                 job.get("input") or {},
                 worktree,
                 cancel_event=cancelled,
-                progress_callback=latest_audit.update,
+                progress_callback=review_progress,
             )
             summary = _normalize_responses_summary(responses_result)
         elif runner_type == CLAUDE_CODE_RUNNER or runtime_type == DEFAULT_RUNTIME:
@@ -342,13 +353,14 @@ def _run_job(
                 str(runtime.get("apiKey") or job.get("apiKey") or ""),
                 _runner_config_from_budgets(job.get("budgets"), runtime=runtime),
                 cancel_event=cancelled,
-                progress_callback=latest_audit.update,
+                progress_callback=review_progress,
             )
         else:
             raise ValueError("unsupported Agent runtime")
-        final_audit = latest_audit.snapshot()
-        if final_audit:
-            summary["audit"] = final_audit
+        snapshot = latest_audit.summary_snapshot()
+        if "conversationEvents" in summary and "conversationEvents" in snapshot:
+            snapshot["conversationEvents"] += summary["conversationEvents"]
+        summary.update(snapshot)
         base = {
             "workerId": worker_id,
             "claimAttempt": claim_attempt,
@@ -384,7 +396,7 @@ def _run_job(
             "idempotencyKey": job["idempotencyKey"],
             "failureCode": error_code,
             "failureMessage": _failure_message(error_code),
-            "runSummary": {"audit": latest_audit.snapshot()},
+            "runSummary": {"audit": {}, **latest_audit.summary_snapshot()},
         })
     finally:
         stop.set()
@@ -555,9 +567,9 @@ def _heartbeat_loop(
                 "claimAttempt": claim_attempt,
                 "heartbeatSequence": heartbeat_sequence,
             }
-            audit = latest_audit.snapshot()
-            if audit:
-                payload["runSummary"] = {"audit": audit}
+            summary = latest_audit.summary_snapshot()
+            if summary:
+                payload["runSummary"] = summary
             response = _post(
                 backend_url,
                 token,

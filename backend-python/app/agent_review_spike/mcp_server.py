@@ -55,7 +55,12 @@ class ReviewMcpServer:
             return _response(request_id, {"tools": tool_definitions()})
         if method == "tools/call":
             params = message.get("params") or {}
-            return _response(request_id, self.call_tool(params.get("name"), params.get("arguments")))
+            event_count = len(self.budget.events)
+            result = self.call_tool(params.get("name"), params.get("arguments"))
+            if len(self.budget.events) == event_count + 1:
+                # Claude exposes MCP result metadata locally on the matching tool_result event.
+                result["_meta"] = {"reviewAuditSequence": self.budget.events[-1]["sequence"]}
+            return _response(request_id, result)
         return _error(request_id, -32601, "method not found")
 
     def call_tool(self, name: Any, arguments: Any) -> dict[str, Any]:

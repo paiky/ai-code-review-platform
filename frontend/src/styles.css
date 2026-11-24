@@ -816,7 +816,10 @@ body {
 }
 
 .review-journey-experience {
+  display: flex;
   min-width: 0;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .task-detail-back-action {
@@ -1692,6 +1695,95 @@ body {
 
 .review-stage-event .ant-tag {
   margin-inline-end: 0;
+}
+
+.review-stage-model-view {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.review-execution-process {
+  display: grid;
+  gap: 12px;
+}
+
+.review-execution-bubble {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #e0e6ef;
+  border-radius: 4px 14px 14px;
+  background: #f8fafc;
+  overflow-wrap: anywhere;
+}
+
+.review-execution-bubble.is-response {
+  border-radius: 14px 4px 14px 14px;
+  background: #f0f8f5;
+}
+
+.review-execution-bubble > h5.ant-typography {
+  margin: 0;
+}
+
+.review-execution-summary,
+.review-execution-transfer {
+  display: grid;
+  min-width: 0;
+  align-items: start;
+  justify-items: stretch;
+  gap: 6px;
+}
+
+.review-execution-summary > .ant-btn,
+.review-execution-transfer > .ant-tag {
+  justify-self: start;
+}
+
+.review-execution-transfer {
+  padding-inline-start: 10px;
+  border-inline-start: 3px solid #c4851a;
+}
+
+.review-execution-disclosure {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #e0e6ef;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.review-execution-disclosure > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.review-execution-disclosure[open] > summary {
+  margin-bottom: 8px;
+}
+
+.review-execution-instructions {
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border-radius: 6px;
+  background: #f8fafc;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.review-execution-events {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-inline-start: 20px;
+}
+
+.review-execution-events > li > * + * {
+  margin-inline-start: 8px;
 }
 
 .safe-trace-details,

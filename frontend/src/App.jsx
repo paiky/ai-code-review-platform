@@ -137,7 +137,8 @@ import {
   buildReviewJourney,
   buildReviewJourneys,
   resolveReviewSelectionKey,
-  selectReviewJourneyEvents
+  selectReviewJourneyEvents,
+  reviewJourneyStatusLabel
 } from './reviewJourney.js';
 import {
   buildReviewHeroModel,
@@ -149,6 +150,7 @@ import {
   shouldAnimateReview,
   visibleReviewJourneyStages
 } from './reviewJourneyPresentation.js';
+import { buildReviewExecutionPresentation } from './reviewExecutionPresentation.js';
 import {
   buildTerminalReviewResultPresentation,
   isTerminalReviewStatus,
@@ -4768,6 +4770,292 @@ function AgentSafeTraceDetails({ safeTrace }) {
   );
 }
 
+function ReviewExecutionEvents({ events }) {
+  return (
+    <ul className="review-execution-events">
+      {events.map(event => (
+        <li key={event.id ?? [event.phase, event.createdAt, event.level].join(':')}>
+          <Text>{event.safeLabel}</Text>
+          {event.createdAt && <Text type="secondary">{formatDateTime(event.createdAt)}</Text>}
+          {['ERROR', 'WARN', 'WARNING'].includes(event.level) && (
+            <Tag color={event.level === 'ERROR' ? 'red' : 'orange'}>
+              {safeProgressLevelLabel(event.level)}
+            </Tag>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const agentRequestProtocolLabels = {
+  OPENAI_RESPONSES: 'OpenAI Responses',
+  OPENAI_CHAT_COMPLETIONS: 'OpenAI Chat Completions',
+  ANTHROPIC_MESSAGES: 'Anthropic Messages',
+  ANTHROPIC_COMPATIBLE: 'Anthropic 兼容协议'
+};
+
+const agentRequestSourceLabels = {
+  PLATFORM_INSTRUCTIONS: '平台指令',
+  PROFILE: 'Review Profile',
+  PROJECT_POLICY: '项目规范',
+  PREFLIGHT: '确定性预检',
+  MEMORY: 'Review 记忆',
+  BASELINE_CONTEXT: '基础上下文',
+  CHANGED_FILES: '变更文件清单',
+  DIFF: 'Diff'
+};
+
+const agentTurnUsageLabels = {
+  input_tokens: '输入 Token',
+  output_tokens: '输出 Token',
+  prompt_tokens: 'Prompt Token',
+  completion_tokens: 'Completion Token',
+  total_tokens: '总 Token',
+  cache_creation_input_tokens: '缓存写入 Token',
+  cache_read_input_tokens: '缓存读取 Token'
+};
+
+function AgentInitialRequest({ input }) {
+  const paged = input.diffMode === 'TOOL_PAGED';
+  return (
+    <div className="review-execution-summary">
+      <Text strong>Agent 首轮请求</Text>
+      <Text type="secondary">首轮请求已交给传输层</Text>
+      <Space wrap size={[6, 6]}>
+        <Tag>{agentRequestProtocolLabels[input.protocol]}</Tag>
+        {input.changedFileCount !== null && <Tag>变更文件 {input.changedFileCount}</Tag>}
+        {input.requestBytes !== null && <Tag>请求体 {input.requestBytes} bytes</Tag>}
+        <Tag>{paged ? 'Diff 待按需读取' : 'Diff 已内联'}</Tag>
+        {!paged && input.diffBytes !== null && <Tag>Diff {input.diffBytes} bytes</Tag>}
+        {input.truncated && <Tag color="orange">已裁剪</Tag>}
+      </Space>
+      {input.sourceSummaries.length > 0 && (
+        <details className="review-execution-disclosure">
+          <summary>请求来源</summary>
+          <ul className="review-execution-events">
+            {input.sourceSummaries.map(source => (
+              <li key={source.source}>
+                <Text>{agentRequestSourceLabels[source.source]}</Text>
+                {source.count !== null && <Text type="secondary">{source.count} 条</Text>}
+                {source.source === 'DIFF' && paged
+                  ? <Text type="secondary">待按需读取</Text>
+                  : source.bytes !== null && <Text type="secondary">{source.bytes} bytes</Text>}
+                {source.truncated && <Tag color="orange">已裁剪</Tag>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function ReviewInitialInstructions({ instructions, title }) {
+  return (
+    <details className="review-execution-disclosure">
+      <summary>{title}</summary>
+      <div className="review-execution-summary">
+        <Text type="secondary">{instructions.sourceLabel}</Text>
+        <pre className="review-execution-instructions">{instructions.text}</pre>
+      </div>
+    </details>
+  );
+}
+
+function AgentModelTurn({ turn }) {
+  return (
+    <details className="review-execution-disclosure">
+      <summary>第 {turn.turn} 轮</summary>
+      <div className="review-execution-summary">
+        <Space wrap size={[6, 6]}>
+          {turn.modelRequestMs !== null && <Tag>模型请求耗时 {formatJourneyDuration(turn.modelRequestMs)}</Tag>}
+          {Object.entries(turn.usage).map(([key, count]) => (
+            <Tag key={key}>{agentTurnUsageLabels[key]} {count}</Tag>
+          ))}
+          {turn.newEvidenceCount !== null && <Tag>新增证据 {turn.newEvidenceCount}</Tag>}
+          {turn.consecutiveNoNewEvidenceTurns !== null && <Tag>连续无新增 {turn.consecutiveNoNewEvidenceTurns} 轮</Tag>}
+          {turn.converging && <Tag color="gold">按预算收敛</Tag>}
+          {turn.truncated && <Tag color="orange">已裁剪</Tag>}
+        </Space>
+        {turn.modelNote && (
+          <div className="review-execution-summary">
+            <Text strong>模型说明</Text>
+            <Text>{turn.modelNote}</Text>
+            <Text type="secondary">来自 OpenAI Responses 对外摘要</Text>
+          </div>
+        )}
+        {turn.tools.length > 0 && <SafeTraceEventList events={turn.tools} />}
+        {turn.missingToolCount > 0 && (
+          <Text type="secondary">{turn.missingToolCount} 条工具活动暂未记录</Text>
+        )}
+        {turn.toolSequences.length === 0 && <Text type="secondary">本轮暂无关联的工具活动</Text>}
+      </div>
+    </details>
+  );
+}
+
+function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
+  const process = buildReviewExecutionPresentation(journey, review);
+  const { agentConversation, agentInput, agentInstructions, standardInput, standardInstructions, final } = process;
+  const conversationKey = agentConversation
+    ? `${journey.selectorKey}:${agentConversation.scope.runId}:${agentConversation.scope.claimAttempt}`
+    : null;
+  const standardMetrics = [
+    ['变更文件', standardInput?.changedFileCount],
+    ['变更信号', standardInput?.signalCount],
+    ['纳入片段', standardInput?.includedSnippetCount],
+    ['缺失上下文', standardInput?.unavailableContextCount],
+    ['未注入证据', standardInput?.notInjectedEvidenceCount]
+  ];
+  const agentMetrics = [
+    ['变更文件', agentInput?.changedFileCount],
+    ['纳入文件', agentInput?.includedFileCount],
+    ['Diff', agentInput?.diffBytes == null ? null : agentInput.diffBytes + ' bytes'],
+    ['记忆条目', agentInput?.memoryCount]
+  ];
+  const showsAgent = ['AGENT', 'FALLBACK'].includes(journey?.engineKind);
+  let missingFinal = '暂无可核验的最终响应';
+  if (journey?.running) missingFinal = '等待正式结果保存';
+  else if (isTerminalReviewStatus(final.status)) {
+    missingFinal = reviewJourneyStatusLabel(final.status) + '，暂无已保存的模型响应';
+  }
+  return (
+    <div className="review-execution-process" aria-label="Review 执行过程">
+      <section className="review-execution-bubble">
+        <Title level={5}>初始输入</Title>
+        {process.input.length > 0
+          ? <ReviewExecutionEvents events={process.input} />
+          : <Text type="secondary">暂无可核验的输入准备记录</Text>}
+        {agentConversation?.input && <AgentInitialRequest key={conversationKey} input={agentConversation.input} />}
+        {agentInput && !agentConversation?.input && (
+          <div className="review-execution-summary">
+            <Text strong>Agent 输入摘要</Text>
+            <Space wrap size={[6, 6]}>
+              {agentMetrics.filter(([, value]) => value != null).map(([label, value]) => (
+                <Tag key={label}>{label} {value}</Tag>
+              ))}
+              {agentInput.diffMode && (
+                <Tag>{agentInput.diffMode === 'TOOL_PAGED' ? 'Diff 待按需读取' : 'Diff 准备内联'}</Tag>
+              )}
+            </Space>
+          </div>
+        )}
+        {agentInstructions && (
+          <ReviewInitialInstructions
+            key={agentInstructions.key}
+            instructions={agentInstructions}
+            title="Agent 首轮固定指令"
+          />
+        )}
+        {standardInput && (
+          <div className="review-execution-summary">
+            <Text strong>Standard Context Pack</Text>
+            <Space wrap size={[6, 6]}>
+              {standardMetrics.filter(([, value]) => value != null).map(([label, value]) => (
+                <Tag key={label}>{label} {value}</Tag>
+              ))}
+              {standardInput.truncated && (
+                <Tag color="orange">已裁剪</Tag>
+              )}
+            </Space>
+          </div>
+        )}
+        {standardInstructions && (
+          <ReviewInitialInstructions
+            key={standardInstructions.key}
+            instructions={standardInstructions}
+            title="Standard 首轮固定指令"
+          />
+        )}
+      </section>
+      <section className="review-execution-bubble">
+        <Title level={5}>执行过程</Title>
+        {agentConversation?.turns.length > 0 ? (
+          <div className="review-execution-summary" key={conversationKey}>
+            <Text strong>Agent 模型轮次</Text>
+            {agentConversation.turns.map(turn => <AgentModelTurn key={turn.turn} turn={turn} />)}
+            {process.agentOtherActivities.length > 0 && (
+              <details className="review-execution-disclosure">
+                <summary>其他 Agent 活动</summary>
+                <SafeTraceEventList events={process.agentOtherActivities} />
+              </details>
+            )}
+            {process.agentTracePartial && <Text type="secondary">仅展示可核验的 Agent 活动</Text>}
+          </div>
+        ) : showsAgent && (
+          <div className="review-execution-summary">
+            <Text strong>Agent 工具活动</Text>
+            {process.agentEvents.length > 0 ? (
+              <SafeTraceEventList events={process.agentEvents} />
+            ) : (
+              <Text type="secondary">暂无可核验的 Agent 工具活动</Text>
+            )}
+            {process.agentTracePartial && <Text type="secondary">仅展示可核验的 Agent 活动</Text>}
+          </div>
+        )}
+        {process.transfer && (
+          <div className="review-execution-transfer">
+            <Text strong>Agent → Standard 降级</Text>
+            <Text type="secondary">
+              {process.transfer.event?.safeLabel || '已记录降级，转交时间未记录'}
+            </Text>
+            {process.transfer.event && (
+              <Text type="secondary">
+                {process.transfer.event.createdAt
+                  ? formatDateTime(process.transfer.event.createdAt)
+                  : '转交时间未记录'}
+              </Text>
+            )}
+            {process.transfer.errorCode && <Tag color="orange">错误码 {process.transfer.errorCode}</Tag>}
+          </div>
+        )}
+        {process.transfer && process.standard.length > 0 && (
+          <Text strong>{process.transfer.event ? 'Standard 接续阶段' : 'Standard 已记录的阶段'}</Text>
+        )}
+        {process.standard.map(section => (
+          <div className="review-execution-summary" key={section.id}>
+            <Text strong>{section.title}</Text>
+            <ReviewExecutionEvents events={section.events} />
+          </div>
+        ))}
+        {process.standard.length === 0 && !showsAgent && (
+          <Text type="secondary">暂无可核验的模型执行过程记录</Text>
+        )}
+        {process.transfer && process.standard.length === 0 && (
+          <Text type="secondary">暂无可核验的 Standard 接续记录</Text>
+        )}
+      </section>
+      <section className="review-execution-bubble is-response">
+        <Title level={5}>最终响应</Title>
+        {final.hasSavedResult ? (
+          <div className="review-execution-summary">
+            <Space wrap size={[6, 6]}>
+              <Tag color={reviewJourneyStatusColor(final.status)}>
+                {reviewJourneyStatusLabel(final.status)}
+              </Tag>
+              {final.issueCount !== null && <Tag>质量问题 {final.issueCount}</Tag>}
+              {final.missingContextCount > 0 && <Tag>缺少上下文 {final.missingContextCount}</Tag>}
+            </Space>
+            {final.riskCounts?.total > 0 && (
+              <Space wrap size={[6, 6]} aria-label="风险分布">
+                <Tag>紧急 {final.riskCounts.critical}</Tag>
+                <Tag>高风险 {final.riskCounts.high}</Tag>
+                <Tag>中风险 {final.riskCounts.medium}</Tag>
+                <Tag>低风险 {final.riskCounts.low}</Tag>
+                {final.riskCounts.unknown > 0 && <Tag>未分类 {final.riskCounts.unknown}</Tag>}
+              </Space>
+            )}
+            {final.status === 'SUCCESS' && onViewFormalResult && (
+              <Button type="link" onClick={onViewFormalResult}>查看正式结果</Button>
+            )}
+          </div>
+        ) : <Text type="secondary">{missingFinal}</Text>}
+      </section>
+    </div>
+  );
+}
+
 function ReviewStageDrawerContent({
   journey,
   stage,
@@ -4917,6 +5205,8 @@ function OtherReviewJourneyEvents({ events }) {
 
 function ReviewJourneyTimeline({
   journey,
+  review,
+  formalResultId,
   taskCheckRunning,
   onRunTaskCheck,
   variant = 'default',
@@ -4925,13 +5215,17 @@ function ReviewJourneyTimeline({
   const mode = reviewTimelineMode(journey);
   const stages = visibleReviewJourneyStages(journey);
   const [openStageId, setOpenStageId] = useState(null);
+  const [modelView, setModelView] = useState('details');
   const [allowHiddenPreflight, setAllowHiddenPreflight] = useState(false);
   const [openAlertStageId, setOpenAlertStageId] = useState(null);
   const stageButtonRefs = useRef(new Map());
   const focusReturnStageIdRef = useRef(null);
   const journeyKeyRef = useRef(journey?.selectorKey);
+  const modelStage = journey?.stages?.find(stage => stage.id === 'model-review');
+  const showExecution = openStageId === 'model-review' && modelView === 'execution';
   const openStage = allowHiddenPreflight && openStageId === 'preflight'
     ? journey?.stages?.find(stage => stage.id === 'preflight') || null
+    : showExecution ? modelStage || null
     : resolveOpenReviewJourneyStage(journey, openStageId);
   const stageSignature = stages.map(stage => stage.id).join('\u001f');
 
@@ -4939,9 +5233,17 @@ function ReviewJourneyTimeline({
     setOpenStageId(null);
     setAllowHiddenPreflight(false);
   };
+  const openExecution = () => {
+    setOpenAlertStageId(null);
+    setAllowHiddenPreflight(false);
+    setModelView('execution');
+    focusReturnStageIdRef.current = 'execution';
+    setOpenStageId('model-review');
+  };
   const openDrawer = stageId => {
     setOpenAlertStageId(null);
     setAllowHiddenPreflight(false);
+    setModelView('details');
     focusReturnStageIdRef.current = stageId;
     setOpenStageId(stageId);
   };
@@ -4963,6 +5265,7 @@ function ReviewJourneyTimeline({
     if (
       openStageId
       && !allowHiddenPreflight
+      && !showExecution
       && !resolveOpenReviewJourneyStage(journey, openStageId)
     ) {
       setOpenStageId(null);
@@ -4978,6 +5281,7 @@ function ReviewJourneyTimeline({
     journey?.selectorKey,
     openStageId,
     allowHiddenPreflight,
+    showExecution,
     openAlertStageId,
     stageSignature
   ]);
@@ -5014,6 +5318,18 @@ function ReviewJourneyTimeline({
         </div>
         <div className="review-journey-heading-actions">
           <Tag>{mode === 'FULL' ? '完整时间轴' : '紧凑时间轴'}</Tag>
+          {modelStage && (
+            <Button
+              size="small"
+              ref={node => {
+                if (node) stageButtonRefs.current.set('execution', node);
+                else stageButtonRefs.current.delete('execution');
+              }}
+              onClick={openExecution}
+            >
+              执行过程
+            </Button>
+          )}
           <Button
             size="small"
             icon={<ReloadOutlined />}
@@ -5094,33 +5410,62 @@ function ReviewJourneyTimeline({
           if (open) return;
           const stageId = focusReturnStageIdRef.current;
           focusReturnStageIdRef.current = null;
-          window.requestAnimationFrame(() => stageButtonRefs.current.get(stageId)?.focus());
+          window.requestAnimationFrame(() => {
+            if (stageId === 'formal-result') {
+              const target = document.getElementById(formalResultId);
+              target?.focus({ preventScroll: true });
+              target?.scrollIntoView({
+                behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+                block: 'start'
+              });
+              return;
+            }
+            stageButtonRefs.current.get(stageId)?.focus();
+          });
         }}
       >
         {openStage && (
-          <ReviewStageDrawerContent
-            journey={journey}
-            stage={openStage}
-            taskCheckRunning={taskCheckRunning}
-            onRunTaskCheck={onRunTaskCheck}
-          />
+          <>
+            {openStage.id === 'model-review' && (
+              <div className="review-stage-model-view" role="group" aria-label="模型 Review 显示方式">
+                <Button
+                  type={showExecution ? 'primary' : 'default'}
+                  aria-pressed={showExecution}
+                  onClick={() => setModelView('execution')}
+                >
+                  执行过程
+                </Button>
+                <Button
+                  type={showExecution ? 'default' : 'primary'}
+                  aria-pressed={!showExecution}
+                  disabled={!modelStage?.visible}
+                  onClick={() => setModelView('details')}
+                >
+                  阶段详情
+                </Button>
+              </div>
+            )}
+            {showExecution ? (
+              <ReviewExecutionProcess
+                journey={journey}
+                review={review}
+                onViewFormalResult={formalResultId ? () => {
+                  focusReturnStageIdRef.current = 'formal-result';
+                  closeDrawer();
+                } : undefined}
+              />
+            ) : (
+              <ReviewStageDrawerContent
+                journey={journey}
+                stage={openStage}
+                taskCheckRunning={taskCheckRunning}
+                onRunTaskCheck={onRunTaskCheck}
+              />
+            )}
+          </>
         )}
       </Drawer>
     </section>
-  );
-}
-
-function ReviewJourneyExperience({ journey, taskCheckRunning, onRunTaskCheck }) {
-  if (!journey) return null;
-  return (
-    <Space orientation="vertical" size="middle" className="full-width review-journey-experience">
-      <ReviewStatusHero journey={journey} />
-      <ReviewJourneyTimeline
-        journey={journey}
-        taskCheckRunning={taskCheckRunning}
-        onRunTaskCheck={onRunTaskCheck}
-      />
-    </Space>
   );
 }
 
@@ -5284,6 +5629,7 @@ function ReviewImmersiveWorkspace({
         <nav className="review-immersive-timeline" aria-label="Review 阶段导航">
           <ReviewJourneyTimeline
             journey={journey}
+            review={review}
             taskCheckRunning={taskCheckRunning}
             onRunTaskCheck={onRunTaskCheck}
             variant="immersive"
@@ -5448,7 +5794,12 @@ function ReviewResultSummary({
       ? 'warning'
       : 'info';
   return (
-    <section className={`review-result-summary review-result-summary-${presentation.status.toLowerCase()}`} aria-labelledby={`${summaryId}-title`}>
+    <section
+      id={`${summaryId}-result`}
+      tabIndex={-1}
+      className={`review-result-summary review-result-summary-${presentation.status.toLowerCase()}`}
+      aria-labelledby={`${summaryId}-title`}
+    >
       <div className="review-result-summary-grid">
         <div className="review-result-overview">
           <div className="review-result-title-row">
@@ -5886,8 +6237,9 @@ function CodeQualityReviewView({
       projectId={projectId} runId={memoryRunId}
       reviewStatus={agentRunSummary?.status || review.status} effectiveEngine={effectiveEngine} />
   ) : null;
-  const resultContent = terminalResult ? (
-    <Space orientation="vertical" size="large" className="full-width review-result-first">
+  const formalResultId = `${summaryId}-result`;
+  const terminalContent = terminalResult ? (
+    <>
       <ReviewResultSummary
         presentation={resultPresentation}
         summaryId={summaryId}
@@ -5908,20 +6260,23 @@ function CodeQualityReviewView({
       </ReviewResultSummary>
       {memorySummary}
       {findingsSection}
+    </>
+  ) : null;
+  const reviewProcess = (
+    <div key="review-process" className="review-journey-experience">
+      {!terminalResult && <ReviewStatusHero journey={journey} />}
       <ReviewJourneyTimeline
         journey={journey}
+        review={review}
+        formalResultId={formalResultId}
         anchorId={journeyAnchorId}
         taskCheckRunning={taskCheckRunning}
         onRunTaskCheck={onRunTaskCheck}
       />
-    </Space>
-  ) : (
-    <Space direction="vertical" size="large" className="full-width">
-      <ReviewJourneyExperience
-        journey={journey}
-        taskCheckRunning={taskCheckRunning}
-        onRunTaskCheck={onRunTaskCheck}
-      />
+    </div>
+  );
+  const activeContent = terminalResult ? null : (
+    <>
       <Card>
         <Space direction="vertical" size="small" className="full-width">
           <div className="quality-result-head">
@@ -5940,12 +6295,16 @@ function CodeQualityReviewView({
         </Space>
       </Card>
       {memorySummary}
-    </Space>
+    </>
   );
 
   return (
     <Space direction="vertical" size="large" className="full-width">
-      {resultContent}
+      <Space orientation="vertical" size="large" className="full-width review-result-first">
+        {terminalContent}
+        {reviewProcess}
+        {activeContent}
+      </Space>
       <DiffViewerModal
         open={Boolean(diffTarget)}
         taskId={taskId}

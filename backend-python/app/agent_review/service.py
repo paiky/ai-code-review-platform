@@ -9,13 +9,24 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.agent_review import repository
-from app.agent_review.runtime import DEFAULT_RUNTIME, runtime_provider, runtime_review_key
+from app.agent_review.runtime import (
+    ANTHROPIC_MESSAGES_RUNNER,
+    CLAUDE_CODE_RUNNER,
+    DEFAULT_RUNTIME,
+    OPENAI_CHAT_RUNNER,
+    OPENAI_RESPONSES_RUNNER,
+    runtime_provider,
+    runtime_review_key,
+)
+from app.agent_review.schemas import AgentConversationTurnEvent, parse_agent_conversation_events
 from app.agent_review_spike.schema import ReviewSchemaError, validate_review_card
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
+from app.code_quality.models import CodeQualitySchedulerJob
 from app.code_quality.repository import append_progress, save_result, scrub_sensitive
 from app.core.config import get_settings
 from app.core.database import SessionLocal
@@ -31,9 +42,16 @@ from app.review_record.repository import (
     resolve_agent_completion_notification,
 )
 from app.review_memory.service import select_review_memories
+from app.review_prompt_metadata import PlatformPromptMarker
 
 
 _LOGGER = logging.getLogger(__name__)
+_AGENT_PROMPT_PROTOCOLS = {
+    OPENAI_RESPONSES_RUNNER: "OPENAI_RESPONSES",
+    OPENAI_CHAT_RUNNER: "OPENAI_CHAT_COMPLETIONS",
+    ANTHROPIC_MESSAGES_RUNNER: "ANTHROPIC_MESSAGES",
+    CLAUDE_CODE_RUNNER: "ANTHROPIC_COMPATIBLE",
+}
 _DISPATCH_PROGRESS_SCHEMA_VERSION = "agent-dispatch-progress-v1"
 _DISPATCH_OPERATION = "AGENT_ENQUEUE"
 _AGENT_ACTIVITY_NAMES = {
@@ -631,14 +649,16 @@ def recover_unavailable_agent_jobs() -> int:
 
 def heartbeat_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any]:
     run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
+    legacy_summary = {key: value for key, value in run_summary.items() if key != "conversationEvents"}
     heartbeat_sequence = _safe_heartbeat_sequence(request.get("heartbeatSequence"))
     claim_attempt = _required_claim_attempt(request)
+    worker_id = _required(request, "workerId")
     response = repository.heartbeat_agent_job(
         db,
         job_id=job_id,
-        worker_id=_required(request, "workerId"),
+        worker_id=worker_id,
         claim_attempt=claim_attempt,
-        run_summary=run_summary or None,
+        run_summary=legacy_summary or None,
     )
     run = repository.find_agent_run_by_job(db, job_id)
     if run is not None:
@@ -655,19 +675,40 @@ def heartbeat_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str
             run_summary,
             claim_attempt=claim_attempt,
         )
+        _persist_agent_conversation_safely(
+            db,
+            job_id=job_id,
+            run_id=int(run.id),
+            worker_id=worker_id,
+            claim_attempt=claim_attempt,
+            value=run_summary.get("conversationEvents"),
+        )
     return response
 
 
 def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any]:
     claim_attempt = _required_claim_attempt(request)
+    worker_id = _required(request, "workerId")
+    idempotency_key = _required(request, "idempotencyKey")
     job, run = repository.get_run_for_completion(
         db,
         job_id=job_id,
-        worker_id=_required(request, "workerId"),
-        idempotency_key=_required(request, "idempotencyKey"),
+        worker_id=worker_id,
+        idempotency_key=idempotency_key,
         claim_attempt=claim_attempt,
     )
+    run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
     if run.status == "SUCCEEDED":
+        _persist_agent_conversation_safely(
+            db,
+            job_id=job_id,
+            run_id=int(run.id),
+            worker_id=worker_id,
+            claim_attempt=claim_attempt,
+            value=run_summary.get("conversationEvents"),
+            terminal_status="SUCCEEDED",
+            idempotency_key=idempotency_key,
+        )
         return {"accepted": True, "idempotent": True, "run": repository.run_to_summary(run)}
     input_payload = _json_object(run.input_json)
     runtime_snapshot = (
@@ -680,7 +721,6 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         card = validate_review_card(request.get("reviewCard"), changed_files)
     except (ReviewSchemaError, ValueError, TypeError) as exception:
         raise AppError("AGENT_REVIEW_SCHEMA_INVALID", str(exception), 400) from exception
-    run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
     _persist_agent_trace_safely(
         db,
         run,
@@ -755,24 +795,50 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         review_key=run.review_key,
     )
     _finish_existing_review_flow(db, run, result)
+    run_id = int(run.id)
     db.commit()
+    _persist_agent_conversation_safely(
+        db,
+        job_id=job_id,
+        run_id=run_id,
+        worker_id=worker_id,
+        claim_attempt=claim_attempt,
+        value=run_summary.get("conversationEvents"),
+        terminal_status="SUCCEEDED",
+        idempotency_key=idempotency_key,
+    )
     return {"accepted": True, "idempotent": False, "run": result["agentRunSummary"]}
 
 
 def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any]:
     claim_attempt = _required_claim_attempt(request)
+    worker_id = _required(request, "workerId")
+    idempotency_key = _required(request, "idempotencyKey")
     job, run = repository.get_run_for_completion(
         db,
         job_id=job_id,
-        worker_id=_required(request, "workerId"),
-        idempotency_key=_required(request, "idempotencyKey"),
+        worker_id=worker_id,
+        idempotency_key=idempotency_key,
         claim_attempt=claim_attempt,
     )
-    if run.status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
-        return {"accepted": True, "idempotent": True, "run": repository.run_to_summary(run)}
     failure_code = str(request.get("failureCode") or "AGENT_RUN_FAILED")[:64]
-    failure_message = str(request.get("failureMessage") or "Agent Review failed")[:1024]
+    cancelled = failure_code == "AGENT_CANCELLED"
+    terminal_status = "CANCELLED" if cancelled else ("TIMED_OUT" if failure_code == "AGENT_TIMEOUT" else "FAILED")
     run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
+    if run.status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
+        if run.status == terminal_status:
+            _persist_agent_conversation_safely(
+                db,
+                job_id=job_id,
+                run_id=int(run.id),
+                worker_id=worker_id,
+                claim_attempt=claim_attempt,
+                value=run_summary.get("conversationEvents"),
+                terminal_status=terminal_status,
+                idempotency_key=idempotency_key,
+            )
+        return {"accepted": True, "idempotent": True, "run": repository.run_to_summary(run)}
+    failure_message = str(request.get("failureMessage") or "Agent Review failed")[:1024]
     safe_audit = repository.sanitize_agent_audit(run_summary.get("audit"))
     _persist_agent_trace_safely(
         db,
@@ -780,12 +846,11 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
         run_summary,
         claim_attempt=claim_attempt,
     )
-    cancelled = failure_code == "AGENT_CANCELLED"
     repository.finish_agent_records(
         db,
         job=job,
         run=run,
-        status="CANCELLED" if cancelled else ("TIMED_OUT" if failure_code == "AGENT_TIMEOUT" else "FAILED"),
+        status=terminal_status,
         effective_engine="AGENT" if cancelled else "STANDARD_FALLBACK",
         summary=run_summary,
         failure_code=failure_code,
@@ -829,7 +894,18 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
         ),
         review_key=run.review_key,
     )
+    run_id = int(run.id)
     db.commit()
+    _persist_agent_conversation_safely(
+        db,
+        job_id=job_id,
+        run_id=run_id,
+        worker_id=worker_id,
+        claim_attempt=claim_attempt,
+        value=run_summary.get("conversationEvents"),
+        terminal_status=terminal_status,
+        idempotency_key=idempotency_key,
+    )
     if not cancelled:
         from app.code_quality.service import schedule_agent_standard_fallback
 
@@ -863,6 +939,113 @@ def _finish_existing_review_flow(db: Session, run: Any, result: dict[str, Any]) 
         context.get("notificationContext") or {},
         reminder_card_enabled,
     )
+
+
+def _persist_agent_conversation_safely(
+    db: Session,
+    *,
+    job_id: int,
+    run_id: int,
+    worker_id: str,
+    claim_attempt: int,
+    value: Any,
+    terminal_status: str | None = None,
+    idempotency_key: str | None = None,
+) -> None:
+    expected_job_status = {
+        None: "RUNNING",
+        "SUCCEEDED": "SUCCESS",
+        "FAILED": "FAILED",
+        "TIMED_OUT": "FAILED",
+        "CANCELLED": "SKIPPED",
+    }[terminal_status]
+    try:
+        events = parse_agent_conversation_events(value)
+        if not events:
+            return
+        # The scheduler's lease comes from the job row. Lock it before locking the Run,
+        # as the claim path does, so a takeover cannot race this attempt's insert.
+        with Session(bind=db.get_bind(), autoflush=False) as progress_db:
+            job = progress_db.scalars(
+                select(CodeQualitySchedulerJob)
+                .where(CodeQualitySchedulerJob.id == job_id)
+                .with_for_update()
+            ).first()
+            if (
+                job is None
+                or job.job_type != "AGENT_REVIEW"
+                or job.lease_owner != worker_id
+                or job.attempt != claim_attempt
+                or job.status != expected_job_status
+                or (
+                    terminal_status is None
+                    and (job.lease_expires_at is None or job.lease_expires_at <= utc_now())
+                )
+            ):
+                return
+            run = repository.lock_agent_run_for_trace(progress_db, run_id)
+            if (
+                run is None
+                or run.scheduler_job_id != job_id
+                or run.status != (terminal_status or "RUNNING")
+                or (terminal_status is not None and run.idempotency_key != idempotency_key)
+            ):
+                return
+            written = repository.agent_conversation_turns(
+                progress_db, run=run, claim_attempt=claim_attempt
+            )
+            for event in events:
+                is_turn = isinstance(event, AgentConversationTurnEvent)
+                if isinstance(event, PlatformPromptMarker):
+                    turn = -1
+                    if turn in written or (
+                        event.source == "STANDARD_HTTP"
+                        or event.runId is not None
+                        or event.protocol != _AGENT_PROMPT_PROTOCOLS.get(run.runner_type)
+                        or event.submitByTurn != repository.agent_prompt_submit_by_turn(run)
+                    ):
+                        continue
+                    message = "Agent 平台系统指令已记录"
+                else:
+                    turn = event.turn if is_turn else 0
+                    message = "Agent 模型轮次已记录" if is_turn else "Agent 首轮输入清单已记录"
+                if turn in written:
+                    continue
+                detail = event.model_dump(exclude={"phase"}, exclude_none=True)
+                if run.runner_type != OPENAI_RESPONSES_RUNNER:
+                    detail.pop("summarySource", None)
+                    detail.pop("summaryKind", None)
+                detail["runId"] = run_id
+                detail["claimAttempt"] = claim_attempt
+                encoded = json.dumps(detail, separators=(",", ":"))
+                if len(encoded) > 4000:
+                    # Keep the identifying fields even if optional v1 fields grow later.
+                    required = ("turn",) if is_turn else ("protocol", "diffMode")
+                    detail = {
+                        "schemaVersion": 1,
+                        "runId": run_id,
+                        "claimAttempt": claim_attempt,
+                        "truncated": True,
+                        **{field: detail[field] for field in required},
+                    }
+                    encoded = json.dumps(detail, separators=(",", ":"))
+                append_progress(
+                    progress_db,
+                    run.task_id,
+                    event.phase,
+                    "INFO",
+                    message,
+                    encoded,
+                    review_key=run.review_key,
+                )
+                written.add(turn)
+            progress_db.commit()
+    except Exception as exception:
+        _LOGGER.warning(
+            "Agent Review conversation progress persistence failed runId=%s errorType=%s",
+            run_id,
+            type(exception).__name__,
+        )
 
 
 def _persist_agent_trace_safely(

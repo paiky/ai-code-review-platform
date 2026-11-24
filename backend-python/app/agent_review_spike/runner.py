@@ -19,17 +19,20 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from app.agent_review_spike.budgets import AGENT_BUDGET_LIMITS
+from app.agent_review_spike.conversation_capture import AgentReviewProgress
 from app.agent_review_spike.metrics import (
     build_report_metrics,
     execution_summary,
     expected_outcome,
 )
 from app.agent_review_spike.prompting import (
+    AGENT_SYSTEM_TEMPLATE,
     agent_system_prompt,
     baseline_system_prompt,
     review_input,
 )
 from app.agent_review_spike.schema import normalize_relative_path, validate_review_card
+from app.review_prompt_metadata import PlatformPromptMarker
 
 
 DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions"
@@ -349,6 +352,18 @@ def _run_candidate(
                         audit=audit,
                     )
                 try:
+                    if prompt_input is not None and isinstance(progress_callback, AgentReviewProgress):
+                        try:
+                            marker = PlatformPromptMarker(
+                                templateId=AGENT_SYSTEM_TEMPLATE,
+                                source="CLAUDE_CLI_APPEND",
+                                protocol="ANTHROPIC_COMPATIBLE",
+                                submitByTurn=config.submit_by_turn,
+                            )
+                            progress_callback.conversation([marker.model_dump(exclude_none=True)])
+                        except Exception:
+                            # Reporting the optional prompt marker must not interrupt Claude.
+                            pass
                     stdout, _stderr = process.communicate(
                         input=prompt_input, timeout=min(5.0, remaining)
                     )
@@ -394,6 +409,13 @@ def _run_candidate(
                     audit=audit,
                 )
             session = _parse_claude_session(stdout)
+            conversation = {}
+            if include_card and session:
+                try:
+                    conversation = _claude_conversation_summary(stdout, audit, config.max_turns)
+                except (KeyError, TypeError, ValueError, RecursionError):
+                    # A malformed optional conversation trace must not affect the review result.
+                    pass
             if process.returncode != 0:
                 return execution_summary(
                     case,
@@ -402,7 +424,7 @@ def _run_candidate(
                     error_code=_candidate_cli_failure_code(session, config.max_turns),
                     audit=audit,
                     session=session,
-                )
+                ) | conversation
             if not result_path.is_file():
                 return execution_summary(
                     case,
@@ -411,7 +433,7 @@ def _run_candidate(
                     error_code="AGENT_REVIEW_NOT_SUBMITTED",
                     audit=audit,
                     session=session,
-                )
+                ) | conversation
             card = validate_review_card(
                 json.loads(result_path.read_text(encoding="utf-8")), case["changedFiles"]
             )
@@ -426,7 +448,7 @@ def _run_candidate(
             summary["usage"] = session.get("usage") or {}
             if include_card:
                 summary["reviewCard"] = card
-            return summary
+            return summary | conversation
     except FileNotFoundError:
         return execution_summary(
             case,
@@ -679,6 +701,86 @@ def _parse_claude_session(stdout: str) -> dict[str, Any]:
             "isError": bool(event.get("is_error")),
         }
     return result
+
+
+def _claude_conversation_summary(
+    stdout: str, audit: dict[str, Any], max_turns: int
+) -> dict[str, Any]:
+    audited_tools = {event["sequence"]: event["tool"] for event in audit.get("events", [])}
+    turns: dict[str, dict[str, str]] = {}
+    result_sequences: dict[str, int] = {}
+    claimed_sequences: set[int] = set()
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("parent_tool_use_id") is not None:
+            continue
+        kind = event.get("type")
+        if kind == "result":
+            break
+        message = event.get("message")
+        if kind not in ("assistant", "user") or not isinstance(message, dict):
+            continue
+        blocks = message.get("content")
+        if not isinstance(blocks, list):
+            continue
+        if kind == "assistant":
+            message_id = message.get("id")
+            if not isinstance(message_id, str) or not message_id:
+                return {}
+            calls = turns.setdefault(message_id, {})
+            for block in blocks:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                call_id, name = block.get("id"), block.get("name")
+                if not isinstance(call_id, str) or not call_id or not isinstance(name, str):
+                    return {}
+                if calls.setdefault(call_id, name) != name:
+                    return {}
+            continue
+
+        result = event.get("tool_use_result")
+        metadata = result.get("_meta") if isinstance(result, dict) else None
+        sequence = metadata.get("reviewAuditSequence") if isinstance(metadata, dict) else None
+        if type(sequence) is not int or sequence not in audited_tools:
+            continue
+        if len(blocks) != 1 or not isinstance(blocks[0], dict) or blocks[0].get("type") != "tool_result":
+            return {}
+        call_id = blocks[0].get("tool_use_id")
+        if not isinstance(call_id, str) or not call_id:
+            return {}
+        if result_sequences.get(call_id) == sequence:
+            continue
+        if call_id in result_sequences or sequence in claimed_sequences:
+            return {}
+        result_sequences[call_id] = sequence
+        claimed_sequences.add(sequence)
+
+    if not claimed_sequences:
+        return {}
+
+    events = []
+    seen_calls: set[str] = set()
+    for turn, calls in enumerate(turns.values(), 1):
+        if seen_calls.intersection(calls):
+            return {}
+        seen_calls.update(calls)
+        sequences = [result_sequences.get(call_id) for call_id in calls]
+        if not calls or turn > max_turns or any(
+            sequence is None or name != f"mcp__review__{audited_tools[sequence]}"
+            for sequence, name in zip(sequences, calls.values())
+        ):
+            continue
+        events.append({
+            "phase": "AGENT_CONVERSATION_TURN",
+            "schemaVersion": 1,
+            "turn": turn,
+            "toolSequences": sorted(sequences),
+            "evidenceStatus": "UNAVAILABLE",
+        })
+    return {"conversationEvents": events} if events else {}
 
 
 def _candidate_cli_failure_code(session: dict[str, Any], max_turns: int) -> str:

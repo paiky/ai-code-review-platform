@@ -2322,6 +2322,8 @@ def delete_progress(db: Session, task_id: int, review_key: str | None = None) ->
 
 
 def list_progress(db: Session, task_id: int, review_key: str | None = None) -> list[dict[str, Any]]:
+    from app.review_prompt_metadata import REVIEW_PLATFORM_PROMPT, public_platform_prompt_detail
+
     stmt = (
         select(CodeQualityReviewProgressEvent)
         .where(CodeQualityReviewProgressEvent.task_id == task_id)
@@ -2337,7 +2339,8 @@ def list_progress(db: Session, task_id: int, review_key: str | None = None) -> l
             "phase": record.phase,
             "level": record.level,
             "message": record.message,
-            "detail": record.detail,
+            "detail": public_platform_prompt_detail(record.detail)
+            if record.phase == REVIEW_PLATFORM_PROMPT else record.detail,
             "createdAt": format_datetime(record.created_at),
         }
         for record in records

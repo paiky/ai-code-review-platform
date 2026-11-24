@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from time import perf_counter
 from typing import Any, Callable
@@ -13,6 +14,10 @@ from app.code_quality.models import CodeQualityModelProvider
 from app.code_quality.repository import append_progress, scrub_sensitive
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.review_prompt_metadata import PlatformPromptMarker
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def run_provider(
@@ -155,6 +160,7 @@ def _run_openai_responses(
         db,
         task_id,
         source="OPENAI",
+        protocol="OPENAI_RESPONSES",
         request_message="准备调用 OpenAI Responses API",
         response_message="OpenAI API 已返回响应",
         endpoint=endpoint,
@@ -245,6 +251,7 @@ def _run_anthropic_messages(
         db,
         task_id,
         source="ANTHROPIC",
+        protocol="ANTHROPIC_MESSAGES",
         request_message="准备调用 Anthropic Messages API",
         response_message="Anthropic API 已返回响应",
         endpoint=endpoint,
@@ -341,6 +348,7 @@ def _run_openai_compatible(
         db,
         task_id,
         source=provider.provider_code,
+        protocol="OPENAI_CHAT_COMPLETIONS",
         request_message="准备调用 OpenAI-compatible Chat Completions API",
         response_message=f"{provider.provider_code} API 已返回响应",
         endpoint=endpoint,
@@ -618,6 +626,7 @@ def _run_json_http_provider(
     task_id: int,
     *,
     source: str,
+    protocol: str,
     request_message: str,
     response_message: str,
     endpoint: str,
@@ -660,6 +669,7 @@ def _run_json_http_provider(
         db.commit()
 
         with _provider_http_client(timeout_seconds, verify_tls=verify_tls) as client:
+            _persist_standard_prompt_marker(db, task_id, protocol, review_request)
             response = client.post(endpoint, json=body, headers=headers)
         raw = response.text
         append_progress(
@@ -758,6 +768,32 @@ def _run_json_http_provider(
         append_progress(db, task_id, f"{source}_FAILED", "ERROR", f"{source} API Review 执行失败", error_message)
         db.commit()
         return _failed_result(source, error_message, started_at)
+
+
+def _persist_standard_prompt_marker(
+    db: Session, task_id: int, protocol: str, review_request: dict[str, Any]
+) -> None:
+    try:
+        engine = review_request.get("effectiveEngine") or "STANDARD"
+        marker = PlatformPromptMarker(
+            templateId=prompt.STANDARD_SYSTEM_TEMPLATE,
+            source="STANDARD_HTTP",
+            protocol=protocol,
+            effectiveEngine=engine,
+            runId=review_request.get("agentRunId") if engine == "STANDARD_FALLBACK" else None,
+        )
+        with Session(bind=db.get_bind()) as progress_db:
+            append_progress(
+                progress_db,
+                task_id,
+                marker.phase,
+                "INFO",
+                "Standard 平台系统指令已记录",
+                json.dumps(marker.detail(), separators=(",", ":")),
+            )
+            progress_db.commit()
+    except Exception as exception:
+        _LOGGER.warning("Standard prompt marker could not be recorded: %s", type(exception).__name__)
 
 
 def _run_text_http_provider(

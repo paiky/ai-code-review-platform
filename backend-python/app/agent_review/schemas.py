@@ -1,6 +1,9 @@
-from typing import Literal
+from typing import Annotated, Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
+
+from app.agent_review_spike.budgets import AGENT_BUDGET_LIMITS
+from app.review_prompt_metadata import PlatformPromptMarker, REVIEW_PLATFORM_PROMPT
 
 
 AgentRuntimeProtocol = Literal[
@@ -9,6 +12,161 @@ AgentRuntimeProtocol = Literal[
     "ANTHROPIC_MESSAGES",
 ]
 ReasoningEffort = Literal["low", "medium", "high"]
+
+AGENT_CONVERSATION_INPUT = "AGENT_CONVERSATION_INPUT"
+AGENT_CONVERSATION_TURN = "AGENT_CONVERSATION_TURN"
+AGENT_CONVERSATION_PHASES = (
+    AGENT_CONVERSATION_INPUT, AGENT_CONVERSATION_TURN, REVIEW_PLATFORM_PROMPT
+)
+AgentConversationSummarySource = Literal["OPENAI_RESPONSES_REASONING_SUMMARY"]
+AgentConversationSummaryKind = Literal[
+    "CHECK_CALL_SITES", "READ_SOURCE", "INSPECT_DIFF", "PREPARE_SUBMISSION"
+]
+OPENAI_RESPONSES_SUMMARY_SOURCE: AgentConversationSummarySource = "OPENAI_RESPONSES_REASONING_SUMMARY"
+_MAX_CONVERSATION_TURNS = AGENT_BUDGET_LIMITS["maxTurns"]["max"]
+_MAX_CONVERSATION_TOOL_SEQUENCES = AGENT_BUDGET_LIMITS["maxToolCalls"]["max"]
+_MAX_CONVERSATION_SOURCES = 8
+_MAX_CONVERSATION_BYTES = 10 * 1024 * 1024
+_TOKEN_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+class AgentConversationInputSource(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    source: Literal[
+        "PLATFORM_INSTRUCTIONS",
+        "PROFILE",
+        "PROJECT_POLICY",
+        "PREFLIGHT",
+        "MEMORY",
+        "BASELINE_CONTEXT",
+        "CHANGED_FILES",
+        "DIFF",
+    ]
+    count: int | None = Field(default=None, ge=0, le=10_000)
+    bytes: int | None = Field(default=None, ge=0, le=_MAX_CONVERSATION_BYTES)
+    truncated: bool | None = None
+
+
+class AgentConversationInputEvent(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    phase: Literal["AGENT_CONVERSATION_INPUT"]
+    schemaVersion: Literal[1]
+    protocol: Literal[
+        "OPENAI_RESPONSES",
+        "OPENAI_CHAT_COMPLETIONS",
+        "ANTHROPIC_MESSAGES",
+        "ANTHROPIC_COMPATIBLE",
+    ]
+    diffMode: Literal["INLINE", "TOOL_PAGED"]
+    changedFileCount: int | None = Field(default=None, ge=0, le=10_000)
+    requestBytes: int | None = Field(default=None, ge=0, le=_MAX_CONVERSATION_BYTES)
+    diffBytes: int | None = Field(default=None, ge=0, le=_MAX_CONVERSATION_BYTES)
+    sourceSummaries: list[AgentConversationInputSource] | None = Field(
+        default=None, max_length=_MAX_CONVERSATION_SOURCES
+    )
+    truncated: bool | None = None
+
+
+class AgentConversationTurnEvent(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    phase: Literal["AGENT_CONVERSATION_TURN"]
+    schemaVersion: Literal[1]
+    turn: int = Field(ge=1, le=_MAX_CONVERSATION_TURNS)
+    toolSequences: list[Annotated[int, Field(ge=1, le=_MAX_CONVERSATION_TOOL_SEQUENCES)]] | None = Field(
+        default=None, max_length=_MAX_CONVERSATION_TOOL_SEQUENCES
+    )
+    modelRequestMs: int | None = Field(
+        default=None, ge=0, le=AGENT_BUDGET_LIMITS["timeoutSeconds"]["max"] * 1_000
+    )
+    usage: dict[str, int] | None = None
+    evidenceStatus: Literal["MEASURED", "UNAVAILABLE"] | None = None
+    newEvidenceCount: int | None = Field(default=None, ge=0, le=1_000_000)
+    consecutiveNoNewEvidenceTurns: int | None = Field(default=None, ge=0, le=_MAX_CONVERSATION_TURNS)
+    summarySource: AgentConversationSummarySource | None = None
+    summaryKind: AgentConversationSummaryKind | None = None
+    truncated: bool | None = None
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def filter_usage(cls, value: object) -> dict[str, int] | None:
+        if not isinstance(value, dict):
+            return None
+        counts = {
+            key: value[key]
+            for key in _TOKEN_USAGE_FIELDS
+            if type(value.get(key)) is int and 0 <= value[key] <= 10_000_000_000
+        }
+        return counts or None
+
+    @field_validator("evidenceStatus", mode="before")
+    @classmethod
+    def filter_evidence_status(cls, value: object) -> object:
+        return value if value in ("MEASURED", "UNAVAILABLE") else None
+
+    @field_validator("summarySource", mode="before")
+    @classmethod
+    def filter_summary_source(cls, value: object) -> object:
+        return value if value == OPENAI_RESPONSES_SUMMARY_SOURCE else None
+
+    @field_validator("summaryKind", mode="before")
+    @classmethod
+    def filter_summary_kind(cls, value: object) -> object:
+        return value if value in get_args(AgentConversationSummaryKind) else None
+
+    @model_validator(mode="after")
+    def normalize_optional_fields(self) -> "AgentConversationTurnEvent":
+        if self.evidenceStatus != "MEASURED":
+            self.newEvidenceCount = None
+            self.consecutiveNoNewEvidenceTurns = None
+        elif (
+            self.consecutiveNoNewEvidenceTurns is not None
+            and self.consecutiveNoNewEvidenceTurns > self.turn
+        ):
+            self.consecutiveNoNewEvidenceTurns = None
+        if self.summarySource is None or self.summaryKind is None:
+            self.summarySource = None
+            self.summaryKind = None
+        return self
+
+
+AgentConversationEvent = AgentConversationInputEvent | AgentConversationTurnEvent | PlatformPromptMarker
+_CONVERSATION_EVENT_ADAPTER = TypeAdapter(Annotated[AgentConversationEvent, Field(discriminator="phase")])
+
+
+def parse_agent_conversation_events(value: Any) -> list[AgentConversationEvent]:
+    if not isinstance(value, list):
+        return []
+    events: list[AgentConversationEvent] = []
+    for item in value[: _MAX_CONVERSATION_TURNS + 2]:
+        if not isinstance(item, dict) or type(item.get("schemaVersion")) is not int:
+            continue
+        if item["schemaVersion"] != 1:
+            continue
+        event = dict(item)
+        for field, limit in (
+            ("sourceSummaries", _MAX_CONVERSATION_SOURCES),
+            ("toolSequences", _MAX_CONVERSATION_TOOL_SEQUENCES),
+        ):
+            values = item.get(field)
+            if isinstance(values, list) and len(values) > limit:
+                event[field] = values[:limit]
+                event["truncated"] = True
+        try:
+            events.append(_CONVERSATION_EVENT_ADAPTER.validate_python(event))
+        except ValidationError:
+            continue
+    return events
 
 
 class CreateAgentRuntimeRequest(BaseModel):

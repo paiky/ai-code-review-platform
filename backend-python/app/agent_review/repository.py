@@ -39,6 +39,7 @@ from app.agent_review.runtime import (
     runtime_snapshot,
     worker_supports,
 )
+from app.agent_review.schemas import AGENT_CONVERSATION_INPUT, AGENT_CONVERSATION_PHASES
 from app.agent_review_spike.budgets import (
     AGENT_BUDGET_KEYS,
     AGENT_BUDGET_LIMITS,
@@ -56,6 +57,7 @@ from app.code_quality.repository import ensure_result_schema, ensure_scheduler_j
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.json_utils import utc_now
+from app.review_prompt_metadata import REVIEW_PLATFORM_PROMPT
 
 
 AGENT_REVIEW_KEY = DEFAULT_REVIEW_KEY
@@ -1902,15 +1904,11 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
         snapshot.get("runtimeCode") or snapshot.get("runtimeType") or DEFAULT_RUNTIME
     ).strip().upper()
     raw_budgets = input_payload.get("budgets")
-    if raw_budgets is None:
-        # 兼容配置化上线前已排队的 Run；旧任务必须使用原默认值，而不是后来保存的全局配置。
-        budgets: dict[str, Any] = default_agent_budgets()
-    else:
-        try:
-            budgets = validate_agent_budgets(raw_budgets)
-        except AgentBudgetValidationError:
-            # 不把损坏的持久化原文返回给 Worker；安全哨兵会触发 Worker 的严格拒绝。
-            budgets = {"invalidBudgetContract": 1}
+    try:
+        budgets = _dispatched_agent_budgets(raw_budgets)
+    except AgentBudgetValidationError:
+        # 不把损坏的持久化原文返回给 Worker；安全哨兵会触发 Worker 的严格拒绝。
+        budgets = {"invalidBudgetContract": 1}
     try:
         api_key = _decrypt_runtime_code_api_key(db, settings_record, runtime_code)
     except AppError as exception:
@@ -2051,7 +2049,12 @@ def finish_agent_records(
     run.failure_message = _bounded(failure_message, 1024)
     run.finished_at = now
     run.updated_at = now
+    submit_by_turn = _dispatched_submit_by_turn(run)
     _apply_safe_run_summary(run, summary)
+    if submit_by_turn is not None:
+        audit = _read_json(run.tool_summary_json, {})
+        audit["dispatchedSubmitByTurn"] = submit_by_turn
+        run.tool_summary_json = json.dumps(audit, ensure_ascii=False)
     if clear_input:
         from app.review_memory.summary import retain_memory_summary
 
@@ -2096,6 +2099,29 @@ def run_to_summary(run: AgentReviewRun, *, fallback_triggered: bool | None = Non
     if effective_budgets:
         result["effectiveBudgets"] = effective_budgets
     return result
+
+
+def agent_prompt_submit_by_turn(run: AgentReviewRun) -> int | None:
+    if run.status == "RUNNING":
+        return _dispatched_submit_by_turn(run)
+    audit = _read_json(run.tool_summary_json, {})
+    value = audit.get("dispatchedSubmitByTurn") if isinstance(audit, dict) else None
+    return value if type(value) is int else None
+
+
+def _dispatched_submit_by_turn(run: AgentReviewRun) -> int | None:
+    payload = _read_json(run.input_json, {})
+    if not isinstance(payload, dict) or not isinstance(payload.get("case"), dict):
+        return None
+    try:
+        return _dispatched_agent_budgets(payload.get("budgets"))["submitByTurn"]
+    except AgentBudgetValidationError:
+        return None
+
+
+def _dispatched_agent_budgets(value: Any) -> dict[str, int]:
+    # A legacy queued Run without budgets still uses the same defaults as its Worker claim.
+    return default_agent_budgets() if value is None else validate_agent_budgets(value)
 
 
 def sanitize_agent_audit(value: Any) -> dict[str, Any]:
@@ -2231,6 +2257,34 @@ def find_agent_run_by_job(db: Session, job_id: int) -> AgentReviewRun | None:
     return db.scalars(
         select(AgentReviewRun).where(AgentReviewRun.scheduler_job_id == job_id)
     ).first()
+
+
+def agent_conversation_turns(
+    db: Session,
+    *,
+    run: AgentReviewRun,
+    claim_attempt: int,
+) -> set[int]:
+    records = db.execute(
+        select(CodeQualityReviewProgressEvent.phase, CodeQualityReviewProgressEvent.detail)
+        .where(CodeQualityReviewProgressEvent.task_id == run.task_id)
+        .where(CodeQualityReviewProgressEvent.review_key == run.review_key)
+        .where(CodeQualityReviewProgressEvent.phase.in_(AGENT_CONVERSATION_PHASES))
+    ).all()
+    turns: set[int] = set()
+    for phase, raw_detail in records:
+        detail = _read_json(raw_detail, {})
+        if not isinstance(detail, dict) or detail.get("schemaVersion") != 1:
+            continue
+        if detail.get("runId") != run.id or detail.get("claimAttempt") != claim_attempt:
+            continue
+        if phase == REVIEW_PLATFORM_PROMPT:
+            turns.add(-1)
+        elif phase == AGENT_CONVERSATION_INPUT:
+            turns.add(0)
+        elif type(turn := detail.get("turn")) is int and 1 <= turn <= ABSOLUTE_MAX_TURNS:
+            turns.add(turn)
+    return turns
 
 
 def agent_trace_sequences(

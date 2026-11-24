@@ -10,7 +10,13 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.agent_review.schemas import AgentConversationSummaryKind
 from app.agent_review_spike.budgets import DEFAULT_AGENT_BUDGETS, validate_agent_budgets
+from app.agent_review_spike.conversation_capture import (
+    AgentReviewProgress,
+    ConversationCallback,
+    ConversationCapture,
+)
 from app.agent_review_spike.prompting import agent_system_prompt, review_input
 from app.agent_review_spike.tool_executor import ReviewToolExecutor, tool_definitions
 from app.agent_review_spike.workspace import ReviewWorkspace, ToolBudget
@@ -19,6 +25,17 @@ from app.agent_review_spike.workspace import ReviewWorkspace, ToolBudget
 ALLOWED_RESPONSE_ITEM_TYPES = frozenset({"reasoning", "function_call", "message"})
 ALLOWED_TOOL_NAMES = frozenset(item["name"] for item in tool_definitions())
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+_PUBLIC_SUMMARY_KINDS: dict[str, AgentConversationSummaryKind] = {
+    "I will check the call sites.": "CHECK_CALL_SITES",
+    "I will read the source code.": "READ_SOURCE",
+    "I will inspect the diff.": "INSPECT_DIFF",
+    "I will prepare the review submission.": "PREPARE_SUBMISSION",
+    "我会检查调用点。": "CHECK_CALL_SITES",
+    "我会读取源码。": "READ_SOURCE",
+    "我会查看变更。": "INSPECT_DIFF",
+    "我会准备提交审查结果。": "PREPARE_SUBMISSION",
+}
+_MAX_PUBLIC_SUMMARY_LENGTH = max(map(len, _PUBLIC_SUMMARY_KINDS))
 SAFE_ERROR_MESSAGES = {
     "AGENT_CUSTOM_CONFIG_INCOMPLETE": "自定义 Agent 配置不完整",
     "AGENT_RESPONSES_UNSUPPORTED": "中转站不支持 Responses 协议",
@@ -183,7 +200,10 @@ class OpenAIResponsesAgentRunner:
         *,
         cancel_event: Any = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        conversation_callback: ConversationCallback | None = None,
     ) -> dict[str, Any]:
+        if conversation_callback is None and isinstance(progress_callback, AgentReviewProgress):
+            conversation_callback = progress_callback.conversation
         started = perf_counter()
         usage: dict[str, int] = {}
         turn_count = 0
@@ -211,6 +231,13 @@ class OpenAIResponsesAgentRunner:
                     ),
                     _split_diff_by_file(effective_case),
                 )
+                conversation = ConversationCapture(
+                    "OPENAI_RESPONSES",
+                    effective_case,
+                    executor.diff_by_file,
+                    conversation_callback,
+                    self.config.submit_by_turn,
+                )
                 history: list[dict[str, Any]] = [
                     {
                         "role": "user",
@@ -223,7 +250,11 @@ class OpenAIResponsesAgentRunner:
                 while turn_count < self.config.max_turns:
                     self._check_control(cancel_event, deadline)
                     payload = self._request_payload(effective_case, history)
-                    response = self._request_with_retry(payload, cancel_event, deadline)
+                    requested_at = perf_counter()
+                    response = self._request_with_retry(
+                        payload, cancel_event, deadline, conversation
+                    )
+                    request_ms = max(int((perf_counter() - requested_at) * 1000), 0)
                     turn_count += 1
                     _merge_usage(usage, response.get("usage"))
                     output, function_calls = _validate_response(response)
@@ -236,7 +267,7 @@ class OpenAIResponsesAgentRunner:
                         raise ResponsesAgentError("AGENT_SUBMIT_DEADLINE_EXCEEDED")
                     if any(item.get("name") == "submit_review" for item in function_calls[:-1]):
                         raise ResponsesAgentError("AGENT_CUSTOM_TOOL_CALL_INVALID")
-                    for item in function_calls:
+                    for index, item in enumerate(function_calls, 1):
                         self._check_control(cancel_event, deadline)
                         call_id = _required_call_id(item, seen_call_ids)
                         name = str(item.get("name") or "")
@@ -245,6 +276,7 @@ class OpenAIResponsesAgentRunner:
                         arguments = _parse_tool_arguments(item.get("arguments"))
                         result = executor.execute(name, arguments)
                         audit = executor.audit_summary()
+                        conversation.record_tool(name, result)
                         history.append(
                             {
                                 "type": "function_call_output",
@@ -257,6 +289,18 @@ class OpenAIResponsesAgentRunner:
                             }
                         )
                         self._notify_progress(progress_callback, executor)
+                        if index == len(function_calls):
+                            conversation.finish_turn(
+                                turn_count,
+                                request_ms,
+                                response.get("usage"),
+                                audit,
+                                summary_kind=(
+                                    _public_summary_kind(output)
+                                    if conversation_callback is not None
+                                    else None
+                                ),
+                            )
                         if cancel_event is not None and cancel_event.is_set():
                             raise ResponsesAgentError("AGENT_CANCELLED")
                         if executor.output_repair_exhausted:
@@ -324,12 +368,17 @@ class OpenAIResponsesAgentRunner:
         payload: dict[str, Any],
         cancel_event: Any,
         deadline: float,
+        conversation: ConversationCapture | None = None,
     ) -> dict[str, Any]:
+        if conversation is not None:
+            conversation.prepare_request(payload)
         attempts = 0
         while True:
             self._check_control(cancel_event, deadline)
             remaining = deadline - self.clock()
             try:
+                if conversation is not None:
+                    conversation.record_request()
                 return self.transport.create(payload, max(remaining, 0.001))
             except ResponsesAgentError:
                 raise
@@ -396,6 +445,22 @@ def _validate_response(
         if item.get("type") == "function_call":
             function_calls.append(item)
     return safe_output, function_calls
+
+
+def _public_summary_kind(output: list[dict[str, Any]]) -> AgentConversationSummaryKind | None:
+    reasoning_items = [item for item in output if item.get("type") == "reasoning"]
+    if len(reasoning_items) != 1:
+        return None
+    summary = reasoning_items[0].get("summary")
+    if not isinstance(summary, list) or len(summary) != 1:
+        return None
+    item = summary[0]
+    if not isinstance(item, dict) or item.get("type") != "summary_text":
+        return None
+    text = item.get("text")
+    if not isinstance(text, str) or len(text) > _MAX_PUBLIC_SUMMARY_LENGTH:
+        return None
+    return _PUBLIC_SUMMARY_KINDS.get(text)
 
 
 def _required_call_id(item: dict[str, Any], seen: set[str]) -> str:
