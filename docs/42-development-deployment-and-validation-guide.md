@@ -368,6 +368,29 @@ docker compose up -d --build
 
 ## 六、本地打包并上传服务器
 
+### 从 Windows 一键升级已有部署
+
+本机启动 Docker Desktop 的 Linux Engine，并准备 Node.js、已获服务器授权的 OpenSSH 私钥，以及通过可信渠道核对的服务器 host key `SHA256:…` 指纹。服务器需启用 SFTP，部署账号需能操作 Docker/Compose，且对部署根目录、其中的 `runtime/` 和已配置好的 `runtime/.env` 有写权限。服务器上的 `runtime/docker-compose.yml` 应为现有部署文件，系统需提供 `bash` 和 `flock`。
+
+从仓库根目录运行。已有可用的 `ssh2` 时，可以跳过安装，并在部署命令中通过 `-Ssh2ModulePath` 指向本机对应的 `node_modules/ssh2` 目录。
+
+```powershell
+npm.cmd install --prefix .local/docker-deploy/ssh --no-save --no-package-lock ssh2@1.17.0
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy-remote.ps1 `
+  -Server 192.0.2.10 -Port 22 -User deploy `
+  -DeployRoot /opt/ai-code-review-platform -Workers 2 `
+  -PrivateKeyPath C:\keys\deploy_ed25519 -HostKeyFingerprint 'SHA256:<服务器指纹>'
+```
+
+`-DeployRoot` 填 `runtime` 的上一级目录，`-Workers` 默认是 `2`。脚本当前使用未加口令的私钥文件，私钥只在本机读取。脚本先校验 SSH 主机指纹和远端运行环境，再打包并通过 SFTP 上传到独立暂存目录。上传完成后，自动在服务器版本目录执行 `bash load-images.sh`，随后切换到 `runtime` 执行 `./deploy-stage3.sh upgrade --workers 2`。
+
+已配置本机启动文件时，在资源管理器里双击 `scripts\deploy-remote-double-click.cmd`。双击入口从同目录的 `deploy-remote.local.ps1` 读取本机连接配置。直接调用 `scripts\deploy-remote.ps1` 时，请传入上例中的连接参数。缺少参数时，脚本会列出缺少的参数并停止。
+
+终端会显示出错阶段和版本号，打包与远端执行日志位于 `.local/docker-deploy/logs/`。上传失败时服务器可能留有 `.upload-*` 暂存目录，运行目录尚未更新。若镜像加载或 Stage 3 升级失败，先根据日志核对服务器状态，再按下文的手动升级或回滚流程处理。对同一运行目录，请将手动部署、扩缩容和一键升级分开执行。
+
+### 仅打包或手动部署
+
 本机需要先启动 Docker Desktop，并确认 Linux Engine 可用：
 
 ```powershell

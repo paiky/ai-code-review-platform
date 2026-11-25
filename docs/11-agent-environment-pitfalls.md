@@ -22,6 +22,7 @@ Get-Content -Raw -Encoding UTF8 <path>
 
 - 如果第一次读取出现乱码，立即用 `-Encoding UTF8` 重新读取，不要基于乱码内容总结或修改。
 - 小范围源码和文档修改优先用 `apply_patch`。Windows PowerShell 5 的 `Set-Content -Encoding UTF8` 可能写入 BOM，Java / SQL 等文件可能因此出现 `\ufeff` 编译或解析错误。
+- Windows PowerShell 5.1 从 `.cmd` 启动时，向原生命令的标准输入传递 JSON 可能把中文路径替换成 `?`。`deploy-remote.ps1` 会将 JSON 中的非 ASCII 字符转义为 `\uXXXX`，由 Node.js 解析还原。若 PowerShell 的 `Test-Path` 通过，但 Node.js 对同一路径报 `ENOENT`，先检查传输编码。
 - 需要批量写 UTF-8 无 BOM 时，显式使用 `.NET UTF8Encoding($false)`，并在结论中说明原因。
 
 ## 脚本入口
@@ -265,6 +266,7 @@ docker version
   `python:3.12-slim-bookworm` 等可信 Debian 镜像，可用禁网、只读挂载的临时容器执行
   `bash -n /workspace/deploy/deploy-stage3.sh`；不要为语法检查联网拉取未知镜像，也不要把真实 `.env` 挂入容器。
 - 远程 Docker Compose 若提示 `services.backend.env_file.0 must be a string`，说明运行文件使用了当前 Compose 不支持的 `env_file.path/required` 长语法。当前 Compose 已逐项声明容器环境变量，并由运行目录 `.env` 完成插值，因此应移除该 `env_file` 块；不需要升级 Docker 或删除现有 `.env`。
+- `deploy-remote.ps1` 的 SSH 指纹校验失败时，先核对 `ssh2` 协商的服务器主机密钥类型。同一台服务器可同时提供 RSA 和 ED25519 主机密钥，两者的指纹不同。若已有可信的 RSA 指纹，可用 `ssh2` 指定 `rsa-sha2-512` 或 `rsa-sha2-256` 建立连接，并在远端执行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256`。核对该输出与默认握手协商的 ED25519 指纹一致后，再填写 `-HostKeyFingerprint`。
 
 ## 端口与外链
 

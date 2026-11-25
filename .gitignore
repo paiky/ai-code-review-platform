@@ -16,4 +16,6 @@ backend-python/**/__pycache__/
 tools/jdk-21*/
 .jdk/
 .local/
+/scripts/deploy-remote.local.ps1
+/scripts/deploy-remote-double-click.cmd
 .codegraph/
