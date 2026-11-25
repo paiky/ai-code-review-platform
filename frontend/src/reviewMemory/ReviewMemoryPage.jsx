@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Alert,
   Button,
+  Card,
   Collapse,
   Empty,
   Input,
@@ -10,12 +11,13 @@ import {
   Modal,
   Select,
   Space,
+  Spin,
   Table,
   Tabs,
   Tag,
   Typography
 } from 'antd';
-import { PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { BookOutlined, FilterOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { fetchApi } from '../api.js';
 import { registerSettingsNavigationGuard } from '../settingsNavigation.js';
 import { getMemoryCapabilities, getMemorySettings, listLibrarySources } from './api.js';
@@ -49,8 +51,9 @@ export default function ReviewMemoryPage() {
   const params = new URLSearchParams(location.search);
   const activeTab = ['upload', 'cases', 'projects'].includes(params.get('tab')) ? params.get('tab') : 'library';
   const isProjects = activeTab === 'projects';
-  const isLibrary = activeTab === 'library' || activeTab === 'cases';
-  const kindOptions = activeTab === 'cases' ? CASE_KINDS : DOCUMENT_KINDS;
+  const isCases = activeTab === 'cases';
+  const isLibrary = activeTab === 'library' || isCases;
+  const kindOptions = isCases ? CASE_KINDS : DOCUMENT_KINDS;
   const ownerProjectId = /^[1-9]\d*$/.test(params.get('ownerProjectId') || '') ? params.get('ownerProjectId') : '';
   const usingProjectId = /^[1-9]\d*$/.test(params.get('usingProjectId') || '') ? params.get('usingProjectId') : '';
   const rawProjectId = params.get('projectId') || '';
@@ -63,8 +66,9 @@ export default function ReviewMemoryPage() {
   const [projectError, setProjectError] = useState(null);
   const [projectRetry, setProjectRetry] = useState(0);
   const [caseTab, setCaseTab] = useState('feedbacks');
+  const [caseFiltersOpen, setCaseFiltersOpen] = useState(false);
   const [projectFeedbackOpen, setProjectFeedbackOpen] = useState(false);
-  const feedbackView = activeTab === 'cases' && caseTab === 'feedbacks';
+  const feedbackView = isCases && caseTab === 'feedbacks';
   const showList = isLibrary && !feedbackView;
   const [uploadReset, setUploadReset] = useState(0);
   const uploadDirtyRef = useRef(false);
@@ -319,7 +323,7 @@ export default function ReviewMemoryPage() {
 
   const columns = [
     {
-      title: '资料名称',
+      title: isCases ? '案例名称' : '资料名称',
       dataIndex: 'title',
       width: 250,
       render: (value, record) => (
@@ -407,139 +411,184 @@ export default function ReviewMemoryPage() {
     </label>
     <Text type="secondary">每次搜索最多显示 100 个项目，可输入名称查找。</Text>
   </div>;
+  const changeCaseTab = (next) => requestLeave(() => setCaseTab(next));
+  const selectedKind = kindOptions.includes(filters.kind) ? filters.kind : undefined;
+  const sourceSearch = <Input.Search aria-label={isCases ? '搜索案例' : '搜索资料'} value={search} maxLength={128}
+    placeholder={isCases ? '搜索案例标题或正文' : '搜索标题或正文'} allowClear onChange={(event) => setSearch(event.target.value)}
+    onSearch={(keyword) => changeFilter({ keyword: keyword.trim() })} />;
+  const issueTypeFilter = <Select aria-label="问题类型筛选" allowClear value={filters.issueType || undefined} placeholder="全部问题"
+    options={ISSUE_OPTIONS} onChange={(issueType) => changeFilter({ issueType: issueType || '' })} />;
+  const sourceFilters = <>
+    <label><Text strong>适用端</Text><Select aria-label="适用端筛选" allowClear
+      value={filters.targetType || undefined} placeholder="全部端" options={TARGET_TYPE_OPTIONS}
+      onChange={(targetType) => changeFilter({ targetType: targetType || '' })} /></label>
+    <label><Text strong>{isCases ? '案例类型' : '资料类型'}</Text><Select aria-label={isCases ? '案例类型筛选' : '资料类型筛选'} allowClear
+      value={selectedKind} placeholder="全部类型"
+      options={KIND_OPTIONS.filter((item) => kindOptions.includes(item.value))}
+      onChange={(kind) => changeFilter({ kind: kind || '' })} /></label>
+    <label><Text strong>发布状态</Text><Select aria-label="资料状态筛选" allowClear value={filters.state || undefined}
+      placeholder="全部状态" options={STATE_OPTIONS} onChange={(state) => changeFilter({ state: state || '' })} /></label>
+  </>;
+  const advancedSourceFilters = <>
+    {[['ownerProjectId', '归属项目筛选', ownerProjectId], ['usingProjectId', '使用项目筛选', usingProjectId]].map(([key, label, value]) => (
+      <label className={isCases ? undefined : 'memory-project-select'} key={key}><Text strong>{label}</Text>
+        <Select aria-label={label} allowClear showSearch={{ filterOption: false, onSearch: setProjectSearch }}
+          value={value || undefined} loading={projectLoading}
+          options={value && !projectOptions.some((item) => item.value === value) ? [{ value, label: projectLabel(value) }, ...projectOptions] : projectOptions}
+          placeholder="全部项目" onChange={(next) => updateQuery({ [key]: next })} />
+      </label>
+    ))}
+    {isCases ? <label><Text strong>问题类型</Text>{issueTypeFilter}</label> : issueTypeFilter}
+    <Text type="secondary">使用项目按已添加关系筛选，不代表本次审查加载。</Text>
+  </>;
+  const sourceActions = <Space wrap>
+    <Button icon={<ReloadOutlined />} aria-label={isCases ? '刷新案例' : '刷新'} title={isCases ? '刷新案例' : undefined}
+      loading={loading} onClick={() => setRefresh((value) => value + 1)}>{!isCases && '刷新'}</Button>
+    {!isCases && <Button aria-label="上传资料" icon={<UploadOutlined />} onClick={() => updateQuery({ tab: 'upload' })}>上传资料</Button>}
+    <Button type={isCases ? 'primary' : 'default'} icon={<PlusOutlined />}
+      onClick={() => openDrawer({ mode: 'manual', kind: filters.kind || (isCases ? 'PITFALL' : 'STANDARD'), library: !isCases })}>
+      {isCases ? '新建案例' : '新建条目'}
+    </Button>
+  </Space>;
+  const caseFilterCount = [filters.targetType, selectedKind, filters.state, ownerProjectId, usingProjectId, filters.issueType].filter(Boolean).length;
   const sourceList = <>
-    <div className="memory-simple-filters">
-      <label><Text strong>关键词</Text><Input.Search aria-label="搜索资料" value={search} maxLength={128}
-        placeholder="搜索标题或正文" allowClear onChange={(event) => setSearch(event.target.value)}
-        onSearch={(keyword) => changeFilter({ keyword: keyword.trim() })} /></label>
-      <label><Text strong>适用端</Text><Select aria-label="适用端筛选" allowClear
-        value={filters.targetType || undefined} placeholder="全部端" options={TARGET_TYPE_OPTIONS}
-        onChange={(targetType) => changeFilter({ targetType: targetType || '' })} /></label>
-      <label><Text strong>资料类型</Text><Select aria-label="资料类型筛选" allowClear
-        value={kindOptions.includes(filters.kind) ? filters.kind : undefined} placeholder="全部类型"
-        options={KIND_OPTIONS.filter((item) => kindOptions.includes(item.value))}
-        onChange={(kind) => changeFilter({ kind: kind || '' })} /></label>
-      <label><Text strong>发布状态</Text><Select aria-label="资料状态筛选" allowClear value={filters.state || undefined}
-        placeholder="全部状态" options={STATE_OPTIONS} onChange={(state) => changeFilter({ state: state || '' })} /></label>
-    </div>
-    <Collapse className="memory-more-filters" items={[{ key: 'more', label: '更多筛选（项目 / 问题类型）', children:
-      <div className="memory-toolbar">
-        {[['ownerProjectId', '归属项目筛选', ownerProjectId], ['usingProjectId', '使用项目筛选', usingProjectId]].map(([key, label, value]) => (
-          <label className="memory-project-select" key={key}><Text strong>{label}</Text>
-            <Select aria-label={label} allowClear showSearch={{ filterOption: false, onSearch: setProjectSearch }}
-              value={value || undefined} loading={projectLoading}
-              options={value && !projectOptions.some((item) => item.value === value) ? [{ value, label: projectLabel(value) }, ...projectOptions] : projectOptions}
-              placeholder="全部项目" onChange={(next) => updateQuery({ [key]: next })} />
-          </label>
-        ))}
-        <Select aria-label="问题类型筛选" allowClear value={filters.issueType || undefined} placeholder="全部问题"
-          options={ISSUE_OPTIONS} onChange={(issueType) => changeFilter({ issueType: issueType || '' })} />
-        <Text type="secondary">使用项目按已添加关系筛选，不代表本次审查加载。</Text>
+    {isCases ? <>
+      <div className="memory-case-toolbar">
+        <div className="memory-case-controls">
+          {sourceSearch}
+          <Button icon={<FilterOutlined />} aria-expanded={caseFiltersOpen} aria-controls="memory-saved-case-filters"
+            onClick={() => setCaseFiltersOpen((open) => !open)}>筛选{caseFilterCount ? `（${caseFilterCount}）` : ''}</Button>
+        </div>
+        {sourceActions}
       </div>
-    }]} />
-    {(ownerProjectId || usingProjectId || filters.issueType) && <Paragraph type="secondary">
-      当前额外筛选：{ownerProjectId && `归属 ${projectLabel(ownerProjectId)}；`}{usingProjectId && `使用 ${projectLabel(usingProjectId)}；`}{filters.issueType && labelFor(ISSUE_OPTIONS, filters.issueType)}
-    </Paragraph>}
-    <div className="memory-toolbar memory-list-actions memory-top-space">
-      <Title level={4}>{activeTab === 'cases' ? '已沉淀案例' : '记忆资料列表'}</Title>
-      <Space wrap>
-        <Button icon={<ReloadOutlined />} aria-label="刷新" loading={loading} onClick={() => setRefresh((value) => value + 1)}>刷新</Button>
-        {activeTab === 'library' && <Button aria-label="上传资料" icon={<UploadOutlined />} onClick={() => updateQuery({ tab: 'upload' })}>上传资料</Button>}
-        <Button aria-label="新建条目" icon={<PlusOutlined />} onClick={() => openDrawer({ mode: 'manual', kind: filters.kind || (activeTab === 'cases' ? 'PITFALL' : 'STANDARD'), library: activeTab !== 'cases' })}>新建条目</Button>
-      </Space>
-    </div>
-    <Paragraph type="secondary">适用端汇总所有管理章节（含草稿和停用）；资料发布、项目开启且匹配本次变更后才可能采用。</Paragraph>
+      <div id="memory-saved-case-filters" className="memory-case-filter-panel" hidden={!caseFiltersOpen}>
+        {sourceFilters}
+        {advancedSourceFilters}
+      </div>
+    </> : <>
+      <div className="memory-simple-filters">
+        <label><Text strong>关键词</Text>{sourceSearch}</label>
+        {sourceFilters}
+      </div>
+      <Collapse className="memory-more-filters" items={[{ key: 'more', label: '更多筛选（项目 / 问题类型）', children:
+        <div className="memory-toolbar">{advancedSourceFilters}</div>
+      }]} />
+      {(ownerProjectId || usingProjectId || filters.issueType) && <Paragraph type="secondary">
+        当前额外筛选：{ownerProjectId && `归属 ${projectLabel(ownerProjectId)}；`}{usingProjectId && `使用 ${projectLabel(usingProjectId)}；`}{filters.issueType && labelFor(ISSUE_OPTIONS, filters.issueType)}
+      </Paragraph>}
+      <div className="memory-toolbar memory-list-actions memory-top-space">
+        <Title level={4}>记忆资料列表</Title>
+        {sourceActions}
+      </div>
+      <Paragraph type="secondary">适用端汇总所有管理章节（含草稿和停用）；资料发布、项目开启且匹配本次变更后才可能采用。</Paragraph>
+    </>}
     {error && <Alert type="error" showIcon title="资料加载失败" description={error}
       action={<Button onClick={() => setRefresh((value) => value + 1)}>重试</Button>} />}
-    <Table rowKey="id" dataSource={page.items} columns={columns} loading={loading} scroll={{ x: 1100 }}
+    {isCases && page.total === 0 ? <Spin spinning={loading}>
+      <div className="memory-case-results" aria-busy={loading}>
+        {!loading && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={error ? '加载失败，请重试' : caseFilterCount || filters.keyword ? '没有符合筛选条件的案例' : '暂无已沉淀案例'}>
+          {!error && !caseFilterCount && !filters.keyword && <Button type="link" onClick={() => changeCaseTab('feedbacks')}>去整理误报</Button>}
+        </Empty>}
+      </div>
+    </Spin> : <Table rowKey="id" dataSource={page.items} columns={columns} loading={loading} scroll={{ x: 1100 }}
       locale={{ emptyText: error ? '加载失败，请重试' : '暂无符合条件的资料，可以上传或新建' }}
       pagination={{ current: filters.pageNo, pageSize: filters.pageSize, total: page.total,
-        showSizeChanger: true, pageSizeOptions: [20, 50, 100], showTotal: (total) => `共 ${total} 份资料`,
-        onChange: (pageNo, pageSize) => setFilters((current) => ({ ...current, pageNo, pageSize })) }} />
+        hideOnSinglePage: isCases && page.total <= 20, showSizeChanger: !isCases || page.total > 20,
+        pageSizeOptions: [20, 50, 100], showTotal: (total) => isCases ? `共 ${total} 条案例` : `共 ${total} 份资料`,
+        onChange: (pageNo, pageSize) => setFilters((current) => ({ ...current, pageNo, pageSize })) }} />}
   </>;
+
+  const isUploadTab = activeTab === 'upload';
+  const TabContent = isUploadTab ? 'div' : Card;
 
   return (
     <section className="settings-route-panel memory-page" aria-label="项目记忆库" data-settings-section="review-memory">
       {contextHolder}
-      <div className="memory-page-heading">
-        <div><Title level={3}>项目记忆库</Title>
-          <Paragraph type="secondary">上传资料、维护规范与 Skill，将人工误报整理为可追溯的案例。</Paragraph></div>
-      </div>
+      <header className="settings-page-heading">
+        <span className="settings-card-icon" aria-hidden="true"><BookOutlined /></span>
+        <Title level={4}>项目记忆库</Title>
+      </header>
       <Tabs aria-label="项目记忆库页签" activeKey={activeTab}
         items={[{ key: 'upload', label: '上传资料' }, { key: 'library', label: '记忆资料' }, { key: 'cases', label: '案例与打标' }, { key: 'projects', label: '项目关联' }]}
         onChange={(tab) => updateQuery({ tab })} />
-      {(capabilityError || capabilities?.schemaReady === false) && <Alert type="warning" showIcon
-        title="公共资料创建尚未就绪"
-        description={capabilityError ? `无法确认数据库状态：${capabilityError}。请更新后端后重新读取；旧资料和案例仍可维护。` : '请完成 V60 数据库迁移后重新读取；旧资料和案例仍可维护。'}
-        action={<Button onClick={() => setCapabilityRetry((value) => value + 1)}>重新检查资料库</Button>} />}
-      {projectError && <Alert type="error" title={`项目加载失败：${projectError}`}
-        action={<Button onClick={() => setProjectRetry((value) => value + 1)}>重试</Button>} />}
-      {isProjects && projectPicker}
-      {(isProjects || feedbackView) && rawProjectId && !projectId && <Alert type="warning" title="项目参数无效，请重新选择项目。" />}
-      {activeTab === 'upload' ? <MemoryUploadPanel key={uploadReset}
-        libraryReady={capabilities?.schemaReady === true}
-        onDirtyChange={handleUploadDirty} onBusyChange={handleUploadBusy} onSaved={handleSaved}
-        onPreview={(source) => openDrawer({ mode: 'view', sourceId: source.id, library: true })} /> : isProjects ? (
-        !projectId ? <Empty className="memory-empty" description="先选择项目，再配置使用资料" /> : <>
-          <Title level={4} className="memory-top-space">已关联资料</Title>
-          <MemoryProjectBindings key={projectId} projectId={projectId} refresh={refresh}
-              onBusyChange={handleBusy}
-              memoryEnabled={projectSettings?.projectId === projectId ? projectSettings.settings?.enabled : null}
-              projectLabel={projectLabel} onOpen={openDrawer} onAdd={() => openDrawer({ mode: 'candidates' })} />
-          <Collapse className="memory-top-space" activeKey={projectFeedbackOpen ? ['feedbacks'] : []}
-            onChange={(keys) => setProjectFeedbackOpen(keys.includes('feedbacks'))}
-            items={[{ key: 'feedbacks', label: '更多信息 · 本项目待确认反馈', children: projectFeedbackOpen &&
-              <MemoryFeedbackList key={projectId} projectId={projectId} refresh={refresh}
-                onOpen={(feedbackId) => openDrawer({ mode: 'feedback', feedbackId })} /> }]} />
-          {isProjects && <Collapse
-            className="memory-top-space"
-            activeKey={legacyOpen ? ['legacy'] : []}
-            onChange={(keys) => setLegacyOpen(keys.includes('legacy'))}
-            items={[
-              {
-                key: 'legacy',
-                label: '更多信息 · 旧项目策略（只读）',
-                children: (
-                  <>
-                    <Paragraph type="secondary">
-                      旧策略继续按原机制加载，此处只读展示，不复制到新记忆库。
-                    </Paragraph>
-                    {legacyError ? (
-                      <Alert
-                        type="error"
-                        title={legacyError}
-                        action={
-                          <Button onClick={() => setLegacyRetry((value) => value + 1)}>重试</Button>
-                        }
-                      />
-                    ) : legacy == null ? (
-                      <Text>正在加载…</Text>
-                    ) : !legacy.length ? (
-                      <Empty description="暂无旧项目策略" />
-                    ) : (
-                      legacy.map((item) => (
-                        <div key={item.id} className="memory-legacy-item">
-                          <Text strong>{item.title}</Text>
-                          <Tag>{item.enabled ? '已启用' : '已停用'}</Tag>
-                          <pre className="memory-plain-text">{item.content}</pre>
-                        </div>
-                      ))
-                    )}
-                  </>
-                )
-              }
-            ]}
-          />}
-        </>
-      ) : activeTab === 'cases' ? <>
-        <Paragraph type="secondary">人工确认的误报案例会自动关联原项目，无需再手动添加；不会跨项目共享，也不会自动开启项目记忆。</Paragraph>
-        <Tabs aria-label="案例与打标视图" activeKey={caseTab}
-          items={[{ key: 'feedbacks', label: '待整理打标' }, { key: 'saved', label: '已沉淀案例' }]}
-          onChange={(next) => requestLeave(() => setCaseTab(next))} />
-        {feedbackView ? <MemoryFeedbackList key={`global-${projectId}`} globalView projectId={projectId} refresh={refresh}
-          projectOptions={projectOptions} projectLoading={projectLoading} onProjectSearch={setProjectSearch} projectLabel={projectLabel}
-          onOpen={(feedbackId, actualProjectId) => openDrawer({ mode: 'feedback', feedbackId, projectId: String(actualProjectId) })} /> : sourceList}
-      </> : sourceList}
+      <TabContent
+        className={isUploadTab ? 'settings-content' : 'settings-inner-card'}
+        variant={isUploadTab ? undefined : 'borderless'}
+      >
+        {(capabilityError || capabilities?.schemaReady === false) && <Alert type="warning" showIcon
+          title="公共资料创建尚未就绪"
+          description={capabilityError ? `无法确认数据库状态：${capabilityError}。请更新后端后重新读取；旧资料和案例仍可维护。` : '请完成 V60 数据库迁移后重新读取；旧资料和案例仍可维护。'}
+          action={<Button onClick={() => setCapabilityRetry((value) => value + 1)}>重新检查资料库</Button>} />}
+        {projectError && <Alert type="error" title={`项目加载失败：${projectError}`}
+          action={<Button onClick={() => setProjectRetry((value) => value + 1)}>重试</Button>} />}
+        {isProjects && projectPicker}
+        {(isProjects || feedbackView) && rawProjectId && !projectId && <Alert type="warning" title="项目参数无效，请重新选择项目。" />}
+        {isUploadTab ? <MemoryUploadPanel key={uploadReset}
+          libraryReady={capabilities?.schemaReady === true}
+          onDirtyChange={handleUploadDirty} onBusyChange={handleUploadBusy} onSaved={handleSaved}
+          onPreview={(source) => openDrawer({ mode: 'view', sourceId: source.id, library: true })} /> : isProjects ? (
+          !projectId ? <Empty className="memory-empty" description="先选择项目，再配置使用资料" /> : <>
+            <Title level={4} className="memory-top-space">已关联资料</Title>
+            <MemoryProjectBindings key={projectId} projectId={projectId} refresh={refresh}
+                onBusyChange={handleBusy}
+                memoryEnabled={projectSettings?.projectId === projectId ? projectSettings.settings?.enabled : null}
+                projectLabel={projectLabel} onOpen={openDrawer} onAdd={() => openDrawer({ mode: 'candidates' })} />
+            <Collapse className="memory-top-space" activeKey={projectFeedbackOpen ? ['feedbacks'] : []}
+              onChange={(keys) => setProjectFeedbackOpen(keys.includes('feedbacks'))}
+              items={[{ key: 'feedbacks', label: '更多信息 · 本项目待确认反馈', children: projectFeedbackOpen &&
+                <MemoryFeedbackList key={projectId} projectId={projectId} refresh={refresh}
+                  onOpen={(feedbackId) => openDrawer({ mode: 'feedback', feedbackId })} /> }]} />
+            {isProjects && <Collapse
+              className="memory-top-space"
+              activeKey={legacyOpen ? ['legacy'] : []}
+              onChange={(keys) => setLegacyOpen(keys.includes('legacy'))}
+              items={[
+                {
+                  key: 'legacy',
+                  label: '更多信息 · 旧项目策略（只读）',
+                  children: (
+                    <>
+                      <Paragraph type="secondary">
+                        旧策略继续按原机制加载，此处只读展示，不复制到新记忆库。
+                      </Paragraph>
+                      {legacyError ? (
+                        <Alert
+                          type="error"
+                          title={legacyError}
+                          action={
+                            <Button onClick={() => setLegacyRetry((value) => value + 1)}>重试</Button>
+                          }
+                        />
+                      ) : legacy == null ? (
+                        <Text>正在加载…</Text>
+                      ) : !legacy.length ? (
+                        <Empty description="暂无旧项目策略" />
+                      ) : (
+                        legacy.map((item) => (
+                          <div key={item.id} className="memory-legacy-item">
+                            <Text strong>{item.title}</Text>
+                            <Tag>{item.enabled ? '已启用' : '已停用'}</Tag>
+                            <pre className="memory-plain-text">{item.content}</pre>
+                          </div>
+                        ))
+                      )}
+                    </>
+                  )
+                }
+              ]}
+            />}
+          </>
+        ) : isCases ? <div className="memory-case-content">
+          <Tabs aria-label="案例与打标视图" activeKey={caseTab}
+            items={[{ key: 'feedbacks', label: '误报打标' }, { key: 'saved', label: '已沉淀案例' }]}
+            onChange={changeCaseTab} />
+          {feedbackView && <Paragraph type="secondary" className="memory-case-hint">在任务详情标记误报，整理确认后加入原项目记忆。</Paragraph>}
+          {feedbackView ? <MemoryFeedbackList key={`global-${projectId}`} globalView projectId={projectId} refresh={refresh}
+            projectOptions={projectOptions} projectLoading={projectLoading} onProjectSearch={setProjectSearch} projectLabel={projectLabel}
+            onOpen={(feedbackId, actualProjectId) => openDrawer({ mode: 'feedback', feedbackId, projectId: String(actualProjectId) })} /> : sourceList}
+        </div> : sourceList}
+      </TabContent>
       {drawer?.mode === 'feedback' ? (
         <MemoryFeedbackDrawer key={`${drawer.projectId || projectId}-${drawer.key}`} projectId={drawer.projectId || projectId}
           feedbackId={drawer.feedbackId} onClose={() => requestLeave(() => {})}

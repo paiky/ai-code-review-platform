@@ -1,7 +1,6 @@
 .memory-page {
   min-width: 0;
 }
-.memory-page-heading,
 .memory-detail-header {
   display: flex;
   gap: 16px;
@@ -9,7 +8,6 @@
   align-items: flex-start;
   flex-wrap: wrap;
 }
-.memory-page-heading h3,
 .memory-detail-header h4 {
   margin-top: 0;
 }
@@ -78,6 +76,174 @@
   overflow-wrap: anywhere;
   max-height: 100px;
   overflow: auto;
+}
+.memory-case-content {
+  container-type: inline-size;
+}
+.memory-case-content .memory-case-hint {
+  margin-bottom: 12px;
+}
+.memory-case-toolbar,
+.memory-case-controls,
+.memory-feedback-meta,
+.memory-feedback-states,
+.memory-feedback-actions,
+.memory-feedback-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.memory-case-toolbar {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.memory-case-controls {
+  flex: 1;
+  min-width: min(100%, 340px);
+}
+.memory-case-controls .ant-input-search {
+  width: min(100%, 280px);
+}
+.memory-case-controls > .ant-select {
+  min-width: 156px;
+}
+.memory-case-filter-panel:not([hidden]) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr));
+  gap: 10px 12px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #e5e9f0;
+  border-radius: 8px;
+  background: #fff;
+}
+.memory-case-filter-panel > label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.memory-case-filter-panel > .ant-typography {
+  grid-column: 1 / -1;
+}
+.memory-feedback-toolbar + .memory-case-filter-panel:not([hidden]) {
+  grid-template-columns: repeat(2, minmax(0, 240px));
+}
+.memory-case-results {
+  min-height: 72px;
+  border: 1px solid #e5e9f0;
+  border-radius: 8px;
+  background: #fff;
+}
+.memory-case-results > .ant-empty {
+  margin: 32px 16px;
+}
+.memory-feedback-rows {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.memory-feedback-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 29%) minmax(0, 312px);
+  align-items: center;
+  gap: 24px;
+  padding: 14px 16px;
+}
+.memory-feedback-row + .memory-feedback-row {
+  border-top: 1px solid #eef1f5;
+}
+.memory-feedback-content,
+.memory-feedback-source {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  overflow-wrap: anywhere;
+}
+.memory-feedback-preview {
+  display: -webkit-box;
+  max-width: 82ch;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.memory-feedback-meta {
+  gap: 2px 10px;
+  font-size: 12px;
+}
+.memory-feedback-meta .ant-typography {
+  font-size: inherit;
+}
+.memory-feedback-processing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.memory-feedback-states {
+  justify-content: flex-end;
+}
+.memory-feedback-states .ant-tag {
+  max-width: 100%;
+  margin-inline-end: 0;
+  white-space: normal;
+}
+.memory-feedback-actions {
+  flex-wrap: nowrap;
+}
+.memory-feedback-footer {
+  justify-content: flex-end;
+  margin-block: 12px;
+}
+@container (max-width: 960px) {
+  .memory-feedback-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 312px);
+    gap: 6px 20px;
+  }
+  .memory-feedback-source {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+  }
+  .memory-feedback-processing {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
+@container (max-width: 680px) {
+  .memory-feedback-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .memory-feedback-processing {
+    grid-column: auto;
+    grid-row: auto;
+  }
+  .memory-feedback-states {
+    justify-content: flex-start;
+  }
+}
+@container (max-width: 560px) {
+  .memory-case-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .memory-feedback-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+  .memory-case-controls {
+    display: contents;
+  }
+  .memory-case-controls .ant-input-search {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+  .memory-case-controls > .ant-select {
+    min-width: 0;
+  }
+  .memory-case-controls > .ant-btn {
+    justify-self: start;
+  }
 }
 .memory-chapter-layout {
   display: grid;
