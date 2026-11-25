@@ -98,6 +98,19 @@ backend-python\.venv\Scripts\python.exe
 - 启动本地服务前先检查目标端口是否已被监听，避免误停用户已有进程；烟测结束只停止本次启动的进程。
 - Codex 沙箱映射路径可能导致 Vite / Rolldown 误判 HTML 输出路径，报错中出现真实工作区和 `.codex/.sandbox/cwd/...` 混用时，先在用户批准后用真实工作区路径重跑同一 build。只有沙箱外仍失败，才排查前端源码或 Vite 配置。
 
+### Windows 沙箱启动失败导致无法连接 Chrome
+
+- `cua.getState()` 或普通沙箱命令启动时出现 `helper_unknown_error: setup refresh had errors`，先看 `%USERPROFILE%\.codex\.sandbox\` 下最新的 `sandbox.YYYY-MM-DD.log`。本次日志显示 `deny ACE failed on <工作区>\.codex`，更新权限时请求 `READ_CONTROL | WRITE_DAC` 被 Windows 拒绝（`os error 5`）。
+- 用 `Get-Acl` 核对项目根目录和项目内 `.codex` 的 `Owner`。本次项目根目录归日常运行 Codex 的 Windows 用户，项目内 `.codex` 归 `CodexSandboxOffline`。只有日志和所有者均符合上述现象时，才用管理员 PowerShell 将 `.codex` 目录本身的所有者恢复为日常运行 Codex 的 Windows 账号。
+
+```powershell
+icacls.exe '<工作区>\.codex' /setowner '<计算机名或域>\<日常 Windows 用户名>'
+(Get-Acl -LiteralPath '<工作区>\.codex').Owner
+```
+
+- 读回所有者后重试。日志出现 `applied deny ACE` 且本次 `setup refresh` 的 `errors=[]`，可以确认 `.codex` 权限设置已通过。
+- 本次随后遇到 `CreateProcessWithLogonW failed: 32`（`ERROR_SHARING_VIOLATION`），浏览器控制、Windows 桌面操作和普通沙箱命令都在进程启动时失败。日志只给出文件共享冲突，具体文件和占用进程待查。重启 Windows 后，`cua.getState()` 成功列出 Chrome 标签页，普通沙箱命令也恢复。若错误复发，按新一轮日志区分沙箱权限设置失败和进程启动失败。
+
 ### 长驻 dev / mock 服务被误当作一次性命令
 
 症状：
