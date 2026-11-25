@@ -330,6 +330,13 @@ def ensure_settings_schema(db: Session) -> None:
         db,
         columns,
         "code_quality_review_settings",
+        "standard_review_enabled",
+        "BOOLEAN NOT NULL DEFAULT TRUE",
+    )
+    _add_column_if_missing(
+        db,
+        columns,
+        "code_quality_review_settings",
         "dingtalk_notification_enabled",
         "BOOLEAN NOT NULL DEFAULT TRUE",
     )
@@ -495,6 +502,7 @@ def ensure_result_schema(db: Session) -> None:
     _add_column_if_missing(db, columns, "code_quality_review_results", "effective_engine", "VARCHAR(32) NOT NULL DEFAULT 'STANDARD'")
     _add_column_if_missing(db, columns, "code_quality_review_results", "agent_run_id", "BIGINT NULL")
     _add_column_if_missing(db, columns, "code_quality_review_results", "agent_summary_json", "TEXT NULL")
+    _add_column_if_missing(db, columns, "code_quality_review_results", "review_snapshot_json", "TEXT NULL")
     _drop_index_if_exists(db, "code_quality_review_results", "uk_task")
     _add_index_if_missing(
         db,
@@ -803,6 +811,7 @@ def get_settings_record(db: Session) -> CodeQualityReviewSettings:
 def settings_to_dict(record: CodeQualityReviewSettings) -> dict[str, Any]:
     return {
         "reviewEnabled": record.review_enabled,
+        "standardReviewEnabled": record.standard_review_enabled,
         "mrAutoReviewEnabled": record.mr_auto_review_enabled,
         "dingtalkNotificationEnabled": record.dingtalk_notification_enabled,
         "autoFixPreviewEnabled": record.auto_fix_preview_enabled,
@@ -819,6 +828,8 @@ def update_settings_record(db: Session, request: dict[str, Any]) -> dict[str, An
     record = get_settings_record(db)
     if "reviewEnabled" in request:
         record.review_enabled = bool(request["reviewEnabled"])
+    if "standardReviewEnabled" in request:
+        record.standard_review_enabled = request["standardReviewEnabled"]
     if "mrAutoReviewEnabled" in request:
         record.mr_auto_review_enabled = bool(request["mrAutoReviewEnabled"])
     if "dingtalkNotificationEnabled" in request:
@@ -2003,6 +2014,8 @@ def save_result(
     ensure_result_schema(db)
     now = datetime.now()
     normalized_review_key = review_key or DEFAULT_REVIEW_KEY
+    snapshot = result.get("reviewSnapshot")
+    snapshot_json = json.dumps(snapshot, ensure_ascii=False) if isinstance(snapshot, dict) else None
     existing = db.scalars(
         select(CodeQualityReviewResult)
         .where(CodeQualityReviewResult.task_id == task_id)
@@ -2030,6 +2043,7 @@ def save_result(
             effective_engine=str(result.get("effectiveEngine") or result.get("requestedEngine") or "STANDARD"),
             agent_run_id=result.get("agentRunId"),
             agent_summary_json=json.dumps(result.get("agentRunSummary"), ensure_ascii=False) if result.get("agentRunSummary") is not None else None,
+            review_snapshot_json=snapshot_json,
             started_at=result.get("startedAt"),
             finished_at=result.get("finishedAt"),
             created_at=now,
@@ -2055,6 +2069,7 @@ def save_result(
         existing.effective_engine = str(result.get("effectiveEngine") or result.get("requestedEngine") or "STANDARD")
         existing.agent_run_id = result.get("agentRunId")
         existing.agent_summary_json = json.dumps(result.get("agentRunSummary"), ensure_ascii=False) if result.get("agentRunSummary") is not None else None
+        existing.review_snapshot_json = snapshot_json
         existing.started_at = result.get("startedAt")
         existing.finished_at = result.get("finishedAt")
         existing.updated_at = now
@@ -2133,6 +2148,7 @@ def result_to_response(db: Session, result: CodeQualityReviewResult | None) -> d
         "effectiveEngine": result.effective_engine or result.requested_engine or "STANDARD",
         "agentRunId": result.agent_run_id,
         "agentRunSummary": read_json(result.agent_summary_json, None),
+        "reviewSnapshot": read_json(result.review_snapshot_json, None),
         "startedAt": format_datetime(result.started_at),
         "finishedAt": format_datetime(result.finished_at),
     }

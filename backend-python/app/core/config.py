@@ -87,7 +87,7 @@ class Settings:
             local_repo_mirror_retention_days=int(
                 os.getenv("LOCAL_REPO_MIRROR_RETENTION_DAYS", "30")
             ),
-            code_quality_review_enabled=os.getenv("CODE_QUALITY_REVIEW_ENABLED", "false").lower()
+            code_quality_review_enabled=os.getenv("CODE_QUALITY_REVIEW_ENABLED", "true").lower()
             == "true",
             code_quality_review_provider=os.getenv("CODE_QUALITY_REVIEW_PROVIDER", "DEEPSEEK"),
             code_quality_review_proxy=os.getenv(

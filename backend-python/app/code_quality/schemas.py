@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 
 ProviderType = Literal[
@@ -17,6 +17,12 @@ ReviewModelConnectionProtocol = Literal[
     "OPENAI_CHAT_COMPATIBLE",
     "ANTHROPIC_MESSAGES",
 ]
+
+
+class UpdateReviewSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    standard_review_enabled: StrictBool = Field(default=True, alias="standardReviewEnabled")
 
 
 class CreateReviewProfileRequest(BaseModel):

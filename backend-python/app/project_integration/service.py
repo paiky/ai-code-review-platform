@@ -38,18 +38,24 @@ from app.rule_template.repository import get_enabled_template
 _LOGGER = logging.getLogger(__name__)
 
 
-def handle_gitlab_webhook(db: Session, gitlab_event: str | None, payload: dict[str, Any]) -> dict:
+def handle_gitlab_webhook(
+    db: Session, gitlab_event: str | None, payload: dict[str, Any], *, trusted_auto_fix_ingress: bool = False,
+) -> dict:
     object_kind = _text(payload, "object_kind")
     if gitlab_event == "Merge Request Hook" or object_kind == "merge_request":
-        return handle_merge_request_webhook(db, payload)
+        return handle_merge_request_webhook(db, payload, trusted_auto_fix_ingress=trusted_auto_fix_ingress)
     if gitlab_event == "Push Hook" or object_kind == "push":
         return handle_push_webhook(db, payload)
     raise AppError("BAD_REQUEST", f"Unsupported GitLab event: {gitlab_event}", 400)
 
 
-def handle_merge_request_webhook(db: Session, payload: dict[str, Any]) -> dict:
+def handle_merge_request_webhook(
+    db: Session, payload: dict[str, Any], *, trusted_auto_fix_ingress: bool = False,
+) -> dict:
     _validate_mr_payload(payload)
     event = _parse_mr_event(payload)
+    if _managed_fix_ref(db, event["gitProjectId"], event["sourceBranch"], event["headSha"]):
+        return _skipped_fix_event(event["gitProjectId"])
     if not _is_opened_mr(event):
         return {
             "taskId": None,
@@ -149,7 +155,10 @@ def handle_merge_request_webhook(db: Session, payload: dict[str, Any]) -> dict:
                     "reasonCode": "TARGET_TYPE_AMBIGUOUS",
                     "message": task.error_message,
                 }
-        result = _process_task(db, task, event["changedFilesSummary"].get("files", []), None)
+        result = _process_task(
+            db, task, event["changedFilesSummary"].get("files", []), None,
+            trusted_auto_fix_ingress=trusted_auto_fix_ingress,
+        )
         db.commit()
         return {
             "taskId": task.id,
@@ -172,6 +181,11 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
     git_project_id = str(_nested(payload, "project", "id") or payload.get("project_id") or "")
     if not git_project_id:
         raise AppError("BAD_REQUEST", "GitLab project id is required", 400)
+    branch = _text(payload, "ref")
+    if branch and branch.startswith("refs/heads/") and _managed_fix_ref(
+        db, git_project_id, branch.removeprefix("refs/heads/"), payload.get("before"), payload.get("after"),
+    ):
+        return _skipped_fix_event(git_project_id)
     project = payload.get("project") or {}
     project_name = project.get("path_with_namespace") or project.get("name") or f"gitlab-project-{git_project_id}"
     repository_url = project.get("web_url") or (payload.get("repository") or {}).get("homepage") or (payload.get("repository") or {}).get("git_http_url")
@@ -480,6 +494,8 @@ def _process_task(
     task,
     changed_files: list[dict[str, Any]],
     diff_text: str | None,
+    *,
+    trusted_auto_fix_ingress: bool = False,
 ) -> dict:
     project = task_project(db, task.project_id)
     target_config = resolve_project_target_config(db, project, changed_files)
@@ -529,6 +545,7 @@ def _process_task(
         focus_rule_codes=template.get("focusRuleCodes", []),
         notification_context=notification_context,
         reminder_card_enabled=reminder_card_enabled,
+        trusted_auto_fix_ingress=trusted_auto_fix_ingress,
     )
     if not ai_review_scheduled:
         settings = get_settings_record(db)
@@ -589,6 +606,21 @@ def _validate_mr_payload(payload: dict[str, Any]) -> None:
         raise AppError("BAD_REQUEST", "GitLab project id is required", 400)
     if not (_nested(payload, "object_attributes", "iid") or _nested(payload, "object_attributes", "id")):
         raise AppError("BAD_REQUEST", "Merge request id is required", 400)
+
+
+def _managed_fix_ref(db: Session, project_id: str, branch: str | None, *shas: str | None) -> bool:
+    if not branch or not branch.startswith("ai-fix/"):
+        return False
+    from app.auto_fix.service import is_managed_ref
+
+    return is_managed_ref(db, project_id, branch, *shas)
+
+
+def _skipped_fix_event(git_project_id: str) -> dict:
+    return {
+        "taskId": None, "status": "SKIPPED", "gitProjectId": git_project_id,
+        "reasonCode": "AUTO_FIX_MANAGED_REF",
+    }
 
 
 def _parse_mr_event(payload: dict[str, Any]) -> dict:

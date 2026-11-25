@@ -88,10 +88,12 @@ export function normalizeProjectConfiguration(configuration) {
         sortOrder: Number(item.sortOrder ?? ((index + 1) * 10))
       }))
       : [],
+    autoFixEditable: configuration?.autoFixEditable === true,
     reviewSettings: {
       triggerOnMr: reviewSettings.triggerOnMr !== false,
       triggerOnPush: Boolean(reviewSettings.triggerOnPush),
       triggerOnlyWhenRiskMatched: Boolean(reviewSettings.triggerOnlyWhenRiskMatched),
+      autoFixEnabled: reviewSettings.autoFixEnabled === true,
       autoFixPreviewEnabled: Boolean(reviewSettings.autoFixPreviewEnabled),
       autoFixPreviewSeverities: Array.isArray(reviewSettings.autoFixPreviewSeverities)
         ? reviewSettings.autoFixPreviewSeverities

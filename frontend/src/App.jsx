@@ -105,6 +105,7 @@ import 'prismjs/components/prism-tsx';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-yaml';
 import { fetchApi, riskColor, statusColor } from './api.js';
+import AutoFixProgress from './AutoFixProgress.jsx';
 import ReviewMemoryPage from './reviewMemory/ReviewMemoryPage.jsx';
 import ReviewMemorySummary from './reviewMemory/ReviewMemorySummary.jsx';
 import FalsePositiveControl from './reviewMemory/FalsePositiveControl.jsx';
@@ -922,6 +923,7 @@ function taskTypeLabel(value) {
   if (value === 'GITLAB_MR_WEBHOOK') return 'MR';
   if (value === 'GITLAB_PUSH_WEBHOOK') return 'Push';
   if (value === 'CODE_QUALITY_MANUAL') return '手动';
+  if (value === 'AUTO_FIX_REVIEW') return '修复复审';
   return value || '-';
 }
 
@@ -5505,7 +5507,7 @@ function ReviewImmersiveWorkspace({
           />
         )}
         <div className="review-immersive-actions">
-          {journey?.running && (
+          {journey?.running && onCancelReview && (
             <Button
               danger
               ghost
@@ -5821,6 +5823,7 @@ function CodeQualityReviewView({
   diffContextCapabilities,
   initialFixPreviews,
   triggerType,
+  active = true,
   onRefresh,
   onRetry,
   retrying,
@@ -5977,13 +5980,14 @@ function CodeQualityReviewView({
     }
   };
   const terminalResult = isTerminalReviewStatus(journey?.status || review.status);
+  const autoFixChild = triggerType === 'AUTO_FIX_REVIEW';
   const resultPresentation = buildTerminalReviewResultPresentation(review, journey);
   const fallbackDiagnosticText = effectiveEngine === 'STANDARD_FALLBACK'
     ? agentFallbackDiagnostic(agentRunSummary, journey?.agentSummary)
     : null;
   const reviewRunning = review.status === 'RUNNING';
   const canCompareEngines = isGitLabTask && (alternateEngine === 'AGENT' || STANDARD_REVIEW_COMPARISON_ACTION_VISIBLE);
-  const reviewActionButtons = (reviewRunning || canCompareEngines) ? (
+  const reviewActionButtons = !autoFixChild && (reviewRunning || canCompareEngines) ? (
     <Space wrap>
       {reviewRunning && (
         <Button
@@ -6117,7 +6121,7 @@ function CodeQualityReviewView({
                         </div>
                         <FindingContext finding={finding} />
                         <FindingRefinementPanel overlay={finding.refinementOverlay} />
-                        {FINDING_REFINEMENT_ACTION_VISIBLE && (
+                        {!autoFixChild && FINDING_REFINEMENT_ACTION_VISIBLE && (
                           <FindingRefinementControl
                             taskId={taskId}
                             review={review}
@@ -6128,7 +6132,7 @@ function CodeQualityReviewView({
                         )}
                       </div>
                     </details>
-                    {(REVIEW_LEARNING_UI_ENABLED || EVALUATION_CASE_ACTION_VISIBLE) && (
+                    {!autoFixChild && (REVIEW_LEARNING_UI_ENABLED || EVALUATION_CASE_ACTION_VISIBLE) && (
                       <details className="review-finding-disclosure">
                         <summary>更多操作</summary>
                         <div className="review-finding-disclosure-content">
@@ -6169,33 +6173,37 @@ function CodeQualityReviewView({
                           查看 Diff
                         </Button>
                       )}
-                      <Button
-                        size="small"
-                        loading={fixPreviewLoading}
-                        disabled={!taskId || review.status === 'RUNNING' || !filePath || fixPreviewBusy}
-                        onClick={() => generateFixPreview(index)}
-                      >
-                        {fixPreviewActionText(fixPreviewStatus)}
-                      </Button>
-                      <FalsePositiveControl
-                        key={finding.fingerprint || `${review.reviewKey}-${index}`}
-                        projectId={projectId}
-                        taskId={taskId}
-                        review={{ ...review, targetType }}
-                        finding={finding}
-                        findingIndex={index}
-                        onRefresh={onRefresh}
-                      />
-                      {fixPreviewBusy && (
-                        <Button
-                          danger
-                          size="small"
-                          icon={<CloseOutlined />}
-                          loading={cancelingAction === `fix-${index}`}
-                          onClick={() => cancelFixPreview(index)}
-                        >
-                          中断
-                        </Button>
+                      {!autoFixChild && (
+                        <>
+                          <Button
+                            size="small"
+                            loading={fixPreviewLoading}
+                            disabled={!taskId || review.status === 'RUNNING' || !filePath || fixPreviewBusy}
+                            onClick={() => generateFixPreview(index)}
+                          >
+                            {fixPreviewActionText(fixPreviewStatus)}
+                          </Button>
+                          <FalsePositiveControl
+                            key={finding.fingerprint || `${review.reviewKey}-${index}`}
+                            projectId={projectId}
+                            taskId={taskId}
+                            review={{ ...review, targetType }}
+                            finding={finding}
+                            findingIndex={index}
+                            onRefresh={onRefresh}
+                          />
+                          {fixPreviewBusy && (
+                            <Button
+                              danger
+                              size="small"
+                              icon={<CloseOutlined />}
+                              loading={cancelingAction === `fix-${index}`}
+                              onClick={() => cancelFixPreview(index)}
+                            >
+                              中断
+                            </Button>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
@@ -6227,6 +6235,9 @@ function CodeQualityReviewView({
       >
         {hasSupportingAlerts ? reviewSupportingAlerts : null}
       </ReviewResultSummary>
+      {active && triggerType === 'GITLAB_MR_WEBHOOK' && review.reviewKey && (
+        <AutoFixProgress key={`${taskId}:${review.reviewKey}`} taskId={taskId} reviewKey={review.reviewKey} />
+      )}
       {memorySummary}
       {findingsSection}
     </>
@@ -6411,6 +6422,7 @@ function CodeQualityReviewsPanel({
                   ? (fixPreviews || []).filter(item => item.reviewKey === review.reviewKey)
                   : []}
                 triggerType={triggerType}
+                active={journey.selectorKey === displayedActiveReviewKey}
                 onRefresh={onRefresh}
                 onRetry={onRetry}
                 retrying={retrying}
@@ -6491,6 +6503,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
   );
   const activeJourney = activeReviewIndex >= 0 ? journeys[activeReviewIndex] : null;
   const activeReview = activeReviewIndex >= 0 ? codeQualityResults[activeReviewIndex] : null;
+  const autoFixChild = detail?.triggerType === 'AUTO_FIX_REVIEW';
   const changedFileCount = Array.isArray(detail?.changedFilesSummary?.files)
     ? detail.changedFilesSummary.files.length
     : Number.isFinite(Number(detail?.changedFilesSummary?.count))
@@ -6832,7 +6845,7 @@ function TaskDetail({ taskId, onBack, onOpen }) {
       fallbackJourney={fallbackJourney}
       deterministicChecks={deterministicChecks}
       runningDeterministicCheck={runningDeterministicCheck}
-      onRunDeterministicCheck={runDeterministicCheck}
+      onRunDeterministicCheck={autoFixChild ? undefined : runDeterministicCheck}
     />
   );
 
@@ -6851,16 +6864,16 @@ function TaskDetail({ taskId, onBack, onOpen }) {
         activeReviewKey={displayedActiveReviewKey}
         onSelectReview={selectActiveReview}
         onBack={onBack}
-        onCancelReview={cancelCodeQualityJob}
+        onCancelReview={autoFixChild ? undefined : cancelCodeQualityJob}
         taskCheckRunning={runningDeterministicCheck}
-        onRunTaskCheck={runDeterministicCheck}
+        onRunTaskCheck={autoFixChild ? undefined : runDeterministicCheck}
       />
     );
   }
 
   const canRerunTask = Boolean(detail && ['GITLAB_MR_WEBHOOK', 'GITLAB_PUSH_WEBHOOK'].includes(detail.triggerType));
   const detailActionItems = [];
-  if (activeReview || !isTerminalReviewStatus(fallbackJourney?.status)) {
+  if (!autoFixChild && (activeReview || !isTerminalReviewStatus(fallbackJourney?.status))) {
     detailActionItems.push({
       key: 'retry-review',
       label: '重试 AI Review',
@@ -7155,10 +7168,8 @@ function TemplateConfig() {
       setAgentSettingsTestResult(agentSettingsData?.configurationTest || null);
       setAgentSettingsTesting(['QUEUED', 'RUNNING'].includes(agentSettingsData?.configurationTest?.status));
       setSettingsDraft({
-        reviewEnabled: settingsData?.reviewEnabled ?? false,
-        dingtalkNotificationEnabled: settingsData?.dingtalkNotificationEnabled ?? true,
-        autoFixPreviewEnabled: settingsData?.autoFixPreviewEnabled ?? false,
-        autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(settingsData?.autoFixPreviewSeverities)
+        standardReviewEnabled: settingsData?.standardReviewEnabled ?? true,
+        dingtalkNotificationEnabled: settingsData?.dingtalkNotificationEnabled ?? true
       });
       setProviders(providerItems);
       setReviewModelPresets({ AGENT: agentPresetItems, STANDARD: standardPresetItems });
@@ -7324,25 +7335,22 @@ function TemplateConfig() {
     };
   }, [agentSettingsTestResult?.requestId]);
 
-  const saveAiSettings = async (nextSettings = settingsDraft, successText = '设置已保存') => {
-    if (!nextSettings) return;
+  const commitSettingsChange = async (field, value, successText) => {
+    if (!settingsDraft || settingsSaving) return;
     setSettingsSaving(true);
     try {
       const settings = await fetchApi('/api/code-quality-reviews/settings', {
         method: 'PUT',
-        body: JSON.stringify({
-          reviewEnabled: nextSettings.reviewEnabled,
-          dingtalkNotificationEnabled: nextSettings.dingtalkNotificationEnabled,
-          autoFixPreviewEnabled: nextSettings.autoFixPreviewEnabled,
-          autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(nextSettings.autoFixPreviewSeverities)
-        })
+        body: JSON.stringify({ [field]: value })
       });
-      setAiSettings(settings);
+      setAiSettings(current => ({
+        ...settings,
+        autoFixAvailable: settings?.autoFixAvailable ?? current?.autoFixAvailable,
+        autoFixEnabled: settings?.autoFixEnabled ?? current?.autoFixEnabled
+      }));
       setSettingsDraft({
-        reviewEnabled: settings?.reviewEnabled ?? false,
-        dingtalkNotificationEnabled: settings?.dingtalkNotificationEnabled ?? true,
-        autoFixPreviewEnabled: settings?.autoFixPreviewEnabled ?? false,
-        autoFixPreviewSeverities: normalizeAutoFixPreviewSeverities(settings?.autoFixPreviewSeverities)
+        standardReviewEnabled: settings?.standardReviewEnabled ?? true,
+        dingtalkNotificationEnabled: settings?.dingtalkNotificationEnabled ?? true
       });
       messageApi.success(successText);
     } catch (err) {
@@ -7352,11 +7360,21 @@ function TemplateConfig() {
     }
   };
 
-  const commitSettingsChange = (field, value, successText) => {
-    if (!settingsDraft || settingsSaving) return;
-    const nextSettings = { ...settingsDraft, [field]: value };
-    setSettingsDraft(nextSettings);
-    saveAiSettings(nextSettings, successText);
+  const saveAutoFixSetting = async enabled => {
+    if (settingsSaving || aiSettings?.autoFixAvailable !== true) return;
+    setSettingsSaving(true);
+    try {
+      const settings = await fetchApi('/api/code-quality-reviews/auto-fix-settings', {
+        method: 'PUT',
+        body: JSON.stringify({ enabled })
+      });
+      setAiSettings(current => ({ ...current, autoFixEnabled: settings?.autoFixEnabled === true }));
+      messageApi.success('自动修复设置已保存');
+    } catch (err) {
+      messageApi.error(err.message);
+    } finally {
+      setSettingsSaving(false);
+    }
   };
 
   const saveAgentRuntimeSelection = async () => {
@@ -8881,7 +8899,7 @@ function TemplateConfig() {
       label: (
         <Space wrap>
           <Text strong>全局设置</Text>
-          <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(settingsDraft?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
+          <Tag color={(aiSettings?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(aiSettings?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
           <Tag color={(settingsDraft?.dingtalkNotificationEnabled ?? true) ? 'blue' : 'default'}>钉钉 {(settingsDraft?.dingtalkNotificationEnabled ?? true) ? '开启' : '关闭'}</Tag>
         </Space>
       ),
@@ -8895,28 +8913,76 @@ function TemplateConfig() {
             <SettingsCardHeader
               icon={<GlobalOutlined />}
               title="平台全局能力"
-              description="控制全平台 AI Review 调用和钉钉消息推送；规则分析与结果落库不受影响。"
+              description="控制审查引擎、紧急风险自动修复和钉钉消息推送。"
               tags={(
                 <>
-                  <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(settingsDraft?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
+                  <Tag color={(aiSettings?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(aiSettings?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
                   <Tag color={(settingsDraft?.dingtalkNotificationEnabled ?? true) ? 'blue' : 'default'}>钉钉 {(settingsDraft?.dingtalkNotificationEnabled ?? true) ? '开启' : '关闭'}</Tag>
                 </>
               )}
             />
             <div className="global-setting-field">
               <div className="settings-inline-head">
-                <Text strong>代码质量 AI Review 全局能力</Text>
+                <Text strong>Agent Review</Text>
                 <Switch
-                  checked={settingsDraft?.reviewEnabled ?? false}
-                  loading={settingsSaving}
-                  checkedChildren="开启"
-                  unCheckedChildren="关闭"
-                  onChange={checked => commitSettingsChange('reviewEnabled', checked, 'AI Review 全局能力已保存')}
+                  aria-label="Agent Review"
+                  checked={agentSettings?.enabled === true}
+                  loading={agentSettingsSaving}
+                  disabled={
+                    agentSettingsSaving
+                    || Boolean(dirtyReviewConnectionId)
+                    || (!agentSettings?.encryptionAvailable && agentSettings?.enabled !== true)
+                  }
+                  checkedChildren="启用"
+                  unCheckedChildren="停用"
+                  onChange={updateAgentReviewEnabled}
                 />
               </div>
               <Text type="secondary" className="settings-description">
-                关闭后，手动触发、MR 和 Push 自动流程都不会调用模型；规则提醒与落库仍正常执行。
+                启用后，符合条件的自动任务优先使用 Agent。Agent 不可用时，可由已启用的 Standard Review 接手。
               </Text>
+              {agentSettings && !agentSettings.encryptionAvailable && (
+                <Text type="danger" className="settings-description">Agent 加密主密钥不可用</Text>
+              )}
+            </div>
+            <div className="global-setting-field">
+              <div className="settings-inline-head">
+                <Text strong>Standard Review</Text>
+                <Switch
+                  aria-label="Standard Review"
+                  checked={settingsDraft?.standardReviewEnabled ?? true}
+                  loading={settingsSaving}
+                  checkedChildren="启用"
+                  unCheckedChildren="停用"
+                  onChange={checked => commitSettingsChange('standardReviewEnabled', checked, 'Standard Review 设置已保存')}
+                />
+              </div>
+              <Text type="secondary" className="settings-description">
+                控制普通模型审查和 Agent 降级。两个引擎都关闭时，自动任务仅执行规则分析。
+              </Text>
+            </div>
+            <div className="global-setting-field">
+              <div className="settings-inline-head">
+                <Text strong>自动修复紧急风险</Text>
+                <Switch
+                  aria-label="自动修复紧急风险"
+                  checked={aiSettings?.autoFixEnabled === true}
+                  loading={settingsSaving}
+                  disabled={aiSettings?.autoFixAvailable !== true || (!aiSettings.reviewEnabled && !aiSettings.autoFixEnabled)}
+                  checkedChildren="开启"
+                  unCheckedChildren="关闭"
+                  onChange={saveAutoFixSetting}
+                />
+              </div>
+              <Text type="secondary" className="settings-description">
+                全局与项目开关均开启后，对符合条件的新 MR Review 自动修复紧急风险，最多 3 轮，完成后等待人工合并。
+              </Text>
+              {aiSettings?.autoFixAvailable === false && (
+                <Text type="warning" className="settings-description">当前不可用。请核对 GitLab 集成配置和数据库迁移。</Text>
+              )}
+              {aiSettings?.autoFixAvailable === true && !aiSettings.reviewEnabled && (
+                <Text type="warning" className="settings-description">AI Review 全局能力关闭，自动修复已暂停。</Text>
+              )}
             </div>
             <div className="global-setting-field">
               <div className="settings-inline-head">
@@ -8963,22 +9029,6 @@ function TemplateConfig() {
               title="模型连接与 Review 配置"
               extra={(
                 <Space wrap className="review-model-page-actions">
-                  <div className="review-agent-global-switch">
-                    <Text strong>Agent Review</Text>
-                    <Switch
-                      aria-label="全局启用 Agent Review"
-                      checked={agentSettings?.enabled === true}
-                      loading={agentSettingsSaving}
-                      disabled={
-                        agentSettingsSaving
-                        || Boolean(dirtyReviewConnectionId)
-                        || (!agentSettings?.encryptionAvailable && agentSettings?.enabled !== true)
-                      }
-                      checkedChildren="启用"
-                      unCheckedChildren="停用"
-                      onChange={updateAgentReviewEnabled}
-                    />
-                  </div>
                   <Button type="primary" icon={<PlusOutlined />} onClick={openCreateProviderModal}>
                     新增模型连接
                   </Button>
@@ -9012,7 +9062,9 @@ function TemplateConfig() {
                     <Descriptions.Item label="协议 / 模型">
                       {reviewConnectionProtocolLabel(currentAgentRuntime?.protocol)} / {currentAgentRuntime?.model || '-'}
                     </Descriptions.Item>
-                    <Descriptions.Item label="Fallback">失败后继承 Standard 动态解析链</Descriptions.Item>
+                    <Descriptions.Item label="Fallback">
+                      {settingsDraft?.standardReviewEnabled === false ? 'Standard Review 已停用' : '失败后继承 Standard 动态解析链'}
+                    </Descriptions.Item>
                   </Descriptions>
                   {!agentSettings?.encryptionAvailable && (
                     <Text type="danger">Agent 加密主密钥不可用</Text>
@@ -9026,8 +9078,8 @@ function TemplateConfig() {
                     <div className="review-runtime-card-heading-copy">
                       <Text strong>Standard Review 运行配置</Text>
                       <Space wrap size={[4, 4]}>
-                        <Tag color={(settingsDraft?.reviewEnabled ?? false) ? 'green' : 'default'}>
-                          平台 Review {(settingsDraft?.reviewEnabled ?? false) ? '已开启' : '已关闭'}
+                        <Tag color={(settingsDraft?.standardReviewEnabled ?? true) ? 'green' : 'default'}>
+                          Standard Review {(settingsDraft?.standardReviewEnabled ?? true) ? '已启用' : '已停用'}
                         </Tag>
                         <Tag color={currentStandardProviderAvailable ? 'green' : 'gold'}>
                           Provider {currentStandardProviderAvailable ? '可用' : '配置不完整'}

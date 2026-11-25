@@ -45,7 +45,8 @@ class CodeQualityReviewSettings(Base):
     __tablename__ = "code_quality_review_settings"
 
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
-    review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    standard_review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     mr_auto_review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     dingtalk_notification_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     auto_fix_preview_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -113,6 +114,7 @@ class CodeQualityReviewResult(Base):
     effective_engine: Mapped[str] = mapped_column(String(32), nullable=False, default="STANDARD")
     agent_run_id: Mapped[int | None] = mapped_column(BigInteger)
     agent_summary_json: Mapped[str | None] = mapped_column(Text)
+    review_snapshot_json: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[object | None] = mapped_column(DateTime)
     finished_at: Mapped[object | None] = mapped_column(DateTime)
     created_at: Mapped[object | None] = mapped_column(DateTime)

@@ -560,6 +560,55 @@ def _migration_statement_already_satisfied(
     connection, migration: MigrationFile, statement: str
 ) -> bool:
     """Reconcile migration effects that already exist outside the migration ledger."""
+    if migration.version == 65 and "ADD COLUMN auto_fix_enabled" in statement:
+        existing = next((
+            column for column in inspect(connection).get_columns("project_review_settings")
+            if column["name"] == "auto_fix_enabled"
+        ), None)
+        if existing is None:
+            return False
+        type_name = str(existing["type"]).lower()
+        default = str(existing.get("default")).lower().strip("()'\"")
+        if (
+            existing.get("nullable") is not False
+            or default not in {"0", "false"}
+            or (type_name != "boolean" and not re.fullmatch(r"tinyint(?:\(1\))?", type_name))
+        ):
+            raise MigrationError("Existing project_review_settings.auto_fix_enabled is incompatible with V65")
+        return True
+    if migration.version == 64 and "ADD COLUMN standard_review_enabled" in statement:
+        existing = next((
+            column for column in inspect(connection).get_columns("code_quality_review_settings")
+            if column["name"] == "standard_review_enabled"
+        ), None)
+        if existing is None:
+            return False
+        type_name = str(existing["type"]).lower()
+        default = str(existing.get("default")).lower().strip("()'\"")
+        if (
+            existing.get("nullable") is not False
+            or default not in {"1", "true"}
+            or (type_name != "boolean" and not re.fullmatch(r"tinyint(?:\(1\))?", type_name))
+        ):
+            raise MigrationError("Existing code_quality_review_settings.standard_review_enabled is incompatible with V64")
+        return True
+    if migration.version == 62 and "ADD COLUMN review_snapshot_json" in statement:
+        inspector = inspect(connection)
+        if not inspector.has_table("code_quality_review_results"):
+            return False
+        existing = next((
+            column for column in inspector.get_columns("code_quality_review_results")
+            if column["name"] == "review_snapshot_json"
+        ), None)
+        if existing is None:
+            return False
+        if (
+            existing.get("nullable") is not True
+            or str(existing["type"]).lower().split(" collate ", 1)[0] != "text"
+            or existing.get("default") is not None
+        ):
+            raise MigrationError("Existing code_quality_review_results.review_snapshot_json is incompatible with V62")
+        return True
     if migration.version == 59:
         column_name = (
             "memory_settings_version" if "memory_settings_version" in statement else "memory_enabled"

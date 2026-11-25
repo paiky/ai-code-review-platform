@@ -60,7 +60,7 @@ Review 前配置
 
 主要用途：
 
-- 开启或关闭全局代码质量 AI Review。
+- 在「全局设置」分别启用或停用 Agent Review 和 Standard Review。
 - 配置 OpenAI / Anthropic / DeepSeek / XiaoMIMO / GLM / CUSTOM Provider。
 - 配置模型端点、模型名称、API Key 和超时。
 - 配置 AI Review Profile 和 Review Instructions。
@@ -68,6 +68,7 @@ Review 前配置
 - 在「项目 / 端类型配置」的第三个页签「端类型自动识别规则」维护自动识别使用的路径规则。
   切换启用开关、增删匹配路径和重置路径均即时保存对应规则。重置路径保留当前启用状态。
 - 在「AI Review 配置」维护模型连接和审查策略。
+- 在「模型与运行」查看两个审查引擎的状态及 Agent Worker Pool 状态。
 - 在「钉钉机器人库」维护 webhook，再由项目关联机器人。全局设置维护全局发送开关。
 - 配置 Push 审核策略。
 
@@ -77,6 +78,15 @@ Review 前配置
 - 使用哪个 Provider / model / Profile。
 - MR / Push 是否自动进入 Review。
 - Review 结果是否推送钉钉。
+
+平台 AI Review 总能力默认开启，页面只提供两个引擎开关。已有 `GET/PUT /api/code-quality-reviews/settings`
+继续支持 `reviewEnabled`，新增 `standardReviewEnabled` 布尔字段。迁移 V64 开启平台总能力和 Standard Review，
+Agent Review 继续使用原有 `GET/PUT /api/code-quality-reviews/agent-settings` 的 `enabled` 字段。
+
+两个引擎均关闭时，符合自动触发条件的 MR / Push 将 AI Review 标记为 `SKIPPED`，规则分析、通知和结果落库照常。
+手动发起、重试和对比返回 HTTP 409 `NO_REVIEW_ENGINE_AVAILABLE`。Standard Review 关闭后，显式请求 Standard
+在 Agent 开启时返回 HTTP 409 `STANDARD_REVIEW_DISABLED`，Agent 执行失败时保留原始失败原因。
+开关控制新调度，已受理的普通 Review 可以完成。Agent 降级在调度及执行前分别检查 Standard 开关。
 
 边界：
 

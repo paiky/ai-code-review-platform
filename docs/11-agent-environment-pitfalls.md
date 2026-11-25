@@ -240,6 +240,11 @@ docker version
 - 只修改 Agent Worker 时可使用
   `scripts/package-docker-deploy.ps1 -AgentWorkerOnly -ReuseVersion <上一个完整版本>`。增量模式仍输出四个
   应用镜像的完整离线包，但 Backend、Frontend 和出站代理复用指定旧版本；不得用它掩盖这些组件本身的改动。
+- Stage 3 升级停在 `Waiting for Backend Agent Settings and Stage 3 metrics...`，且静态页面正常、`/api/health`
+  返回 502 时，先在 `runtime` 执行 `docker compose ps`、`docker compose top backend` 和
+  `docker compose logs --tail=80 backend`。Backend 在启动 Gunicorn 前先执行数据库迁移，长时间执行的迁移会延后 API 监听。
+  如果容器仍在运行迁移，从实际数据库连接只读查看会话状态和迁移账本；本次 MySQL 5.7.31 的 V62 耗时约 201 秒。
+  迁移完成后，核对脚本输出 `Stage 3 deployment completed.`，并复查公网健康检查及 Agent Settings 接口。
 - Stage 3 升级时，Worker 容器显示 `Started` 但 `onlineCapacity` 持续为 0，可先用
   `docker compose logs --tail=80 agent-worker` 检查启动异常。若日志报 `No module named 'app.agent_review.schemas'`，
   检查 Worker 和独立 Agent CLI 镜像是否一并打包共享 schema、提示词元数据、标准提示词模块和 Pydantic 2。
@@ -323,6 +328,7 @@ $env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?chars
 - 如果沿用旧 `MYSQL_URL`，不要把 JDBC 专属参数如 `serverTimezone`、`useSSL`、`allowPublicKeyRetrieval` 透传给 PyMySQL。
 - `/api/health` 不访问数据库，不能仅凭 health 判断数据库链路可用；还应访问 `/api/review-tasks` 或 `/api/projects`。
 - Python 后端以 `backend-python/migrations/bootstrap_sql/` 为 schema 基准，日常不要依赖 legacy Java Flyway 迁移。
+- V62 遇到已由运行期补齐的 `review_snapshot_json` 时，MySQL 反射可能返回带 `COLLATE` 后缀的 `TEXT`。先核对实际列类型、可空性和默认值，迁移器按基本类型识别等价列并登记 V62。保留已有列和数据。
 - Agent Worker 上线后若出现 `1064 ... near 'SKIP LOCKED'`，通常是后端连接到了 MySQL 5.7。Agent Job claim 在 MySQL 5.7 下必须使用带行锁的普通 `FOR UPDATE` 串行领取，在 MySQL 8.0+ 才使用 `FOR UPDATE SKIP LOCKED`；不要通过移除行锁来规避语法错误。生产仍推荐 MySQL 8.0+。
 - MySQL 5.7 不支持 `COUNT(*) OVER (...)`、`ROW_NUMBER() OVER (...)` 等窗口函数；列表接口出现 `1064 ... near '(PARTITION BY ...'` 时，先从后端实际数据库连接执行 `SELECT VERSION()`，不能用同机其它 MySQL 容器的镜像版本代替。关联摘要使用分组计数与有序、有限条数的标量子查询兼容，保留总数与预览上限，无需迁移数据库。
 - 手动 SQL 使用 `@变量` 与 `utf8mb4_unicode_ci` 列比较时，只有 `SET NAMES utf8mb4` 可能让变量采用 `utf8mb4_general_ci`，在 MySQL 5.7 报 `1267 Illegal mix of collations ... for operation '='`。`SET NAMES ... COLLATE ...` 不会追溯修改已有变量的排序规则；客户端单独重跑语句或恢复连接设置时，仅设置会话规则仍可能报错。核对目标列规则后，在比较及混合文本拼接处显式使用 `CONVERT(@变量 USING utf8mb4) COLLATE utf8mb4_unicode_ci`，创建、查询、回滚均需覆盖，不需要修改表结构；事务中报错后先在同一会话 rollback，再完整重跑。

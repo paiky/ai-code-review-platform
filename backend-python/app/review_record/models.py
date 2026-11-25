@@ -5,6 +5,7 @@ from app.core.database import Base
 
 
 ID_TYPE = BigInteger().with_variant(Integer, "sqlite")
+AUTO_FIX_REVIEW_TRIGGER = "AUTO_FIX_REVIEW"
 
 
 class ReviewTask(Base):

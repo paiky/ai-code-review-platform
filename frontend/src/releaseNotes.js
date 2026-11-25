@@ -1,5 +1,18 @@
 export const releaseNotes = [
   {
+    id: '2026-11-24-review-auto-fix',
+    version: 'v1.4.0',
+    releaseDate: '2026-11-24',
+    title: '紧急风险自动修复与逐轮复审',
+    summary: 'GitLab MR 发现紧急风险后，可自动生成补丁并在独立修复分支上复审。紧急风险归零后创建修复 MR，等待人工合并回原开发分支。',
+    highlights: [
+      '全局设置和项目「Review 触发」均提供「自动修复紧急风险」开关，默认关闭。两级开关同时开启后生效，写入使用平台已有的 GitLab Token。',
+      '最多自动修复并复审 3 轮。任务详情可查看每轮提交差异、前后风险和剩余紧急风险。',
+      '修复完成后向项目钉钉机器人推送待合并通知，包含平台最终复审和 GitLab 修复 MR 链接。'
+    ],
+    tags: ['自动修复', '逐轮复审', 'GitLab MR']
+  },
+  {
     id: '2026-08-05-ai-review-command-center-1-3-0',
     version: 'v1.3.0',
     releaseDate: '2026-08-05',

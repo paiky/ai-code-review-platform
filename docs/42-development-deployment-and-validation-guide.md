@@ -52,7 +52,7 @@ $env:DATABASE_URL="mysql+pymysql://root:root@localhost:3306/ai_code_review?chars
 | `LOCAL_REPO_CLEANUP_ENABLED` | `true` | 是否执行 best-effort workspace 清理 |
 | `LOCAL_REPO_WORKTREE_RETENTION_HOURS` | `24` | task worktree 保留时间 |
 | `LOCAL_REPO_MIRROR_RETENTION_DAYS` | `30` | 项目 mirror 保留时间 |
-| `CODE_QUALITY_REVIEW_ENABLED` | `false` | AI Review 首次初始化兼容值；以后以数据库设置为准 |
+| `CODE_QUALITY_REVIEW_ENABLED` | `true` | 平台 AI Review 初始化值，后续以数据库设置为准。引擎开关在「全局设置」维护。 |
 | `CODE_QUALITY_REVIEW_PROVIDER` | `DEEPSEEK` | 默认 Provider 初始化值 |
 | `CODE_QUALITY_REVIEW_PROXY` | 空 | 普通 Review / Provider 测试 / 修复预览专用 HTTP 代理；不影响 GitLab、钉钉和数据库 |
 | `OPENAI_API_KEY` | 空 | OpenAI 初始化 Key |

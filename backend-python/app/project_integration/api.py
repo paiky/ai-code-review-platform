@@ -1,8 +1,10 @@
+from hmac import compare_digest
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy.orm import Session
 
+from app.auto_fix.config import gitlab_webhook_token
 from app.core.database import get_db
 from app.core.response import ok
 from app.project_integration.repository import (
@@ -160,5 +162,11 @@ async def receive_gitlab_webhook(
     payload: dict[str, Any],
     gitlab_event: str | None = Header(default=None, alias="X-Gitlab-Event"),
     db: Session = Depends(get_db),
+    incoming_token: list[str] | None = Header(default=None, alias="X-Gitlab-Token"),
 ) -> dict:
-    return ok(handle_gitlab_webhook(db, gitlab_event, payload))
+    expected = gitlab_webhook_token()
+    trusted = not expected or bool(
+        incoming_token and len(incoming_token) == 1
+        and compare_digest(expected.encode(), incoming_token[0].encode())
+    )
+    return ok(handle_gitlab_webhook(db, gitlab_event, payload, trusted_auto_fix_ingress=trusted))

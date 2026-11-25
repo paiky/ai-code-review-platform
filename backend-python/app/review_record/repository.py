@@ -13,7 +13,7 @@ from app.core.json_utils import format_datetime, page_response, read_json
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.project_integration.repository import ensure_project_config_schema
 from app.review_feedback.service import attach_rule_feedbacks
-from app.review_record.models import NotificationRecord, ReviewResult, ReviewTask
+from app.review_record.models import AUTO_FIX_REVIEW_TRIGGER, NotificationRecord, ReviewResult, ReviewTask
 from app.risk_engine.service import generate_risk_card
 from app.rule_template.models import RuleTemplate
 from app.rule_template.repository import normalize_rule_codes
@@ -313,6 +313,8 @@ def get_review_task_detail(db: Session, task_id: int) -> dict:
         if mr_event
         else (push_event.changed_files_summary if push_event else None)
     )
+    if task.trigger_type == AUTO_FIX_REVIEW_TRIGGER:
+        changed_files_summary = auto_fix_review_files(db, task.id)
     raw_payload = mr_event.raw_payload if mr_event else (push_event.raw_payload if push_event else None)
     mr_id = mr_event.mr_id if mr_event else task.external_source_id
     return {
@@ -358,9 +360,27 @@ def _diff_context_capabilities(task: ReviewTask) -> dict[str, bool]:
     is_gitlab_task = task.trigger_type in {"GITLAB_MR_WEBHOOK", "GITLAB_PUSH_WEBHOOK"}
     head_ref = task.after_sha or task.commit_sha
     return {
-        "diff": bool(api_ready and is_gitlab_task and task.before_sha and head_ref),
+        "diff": bool(
+            api_ready
+            and (is_gitlab_task or task.trigger_type == AUTO_FIX_REVIEW_TRIGGER)
+            and task.before_sha
+            and head_ref
+        ),
         "fixPreview": bool(api_ready and is_gitlab_task and head_ref),
     }
+
+
+def auto_fix_review_files(db: Session, task_id: int) -> dict[str, Any] | None:
+    snapshot = read_json(
+        db.scalar(
+            select(CodeQualityReviewResult.review_snapshot_json)
+            .where(CodeQualityReviewResult.task_id == task_id)
+            .limit(1)
+        ),
+        {},
+    )
+    files = snapshot.get("changedFiles") if isinstance(snapshot, dict) else None
+    return {"count": len(files), "files": files} if isinstance(files, list) else None
 
 
 def get_review_task_result(db: Session, task_id: int) -> dict:

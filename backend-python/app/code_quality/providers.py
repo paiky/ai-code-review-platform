@@ -741,7 +741,10 @@ def _run_json_http_provider(
         db.commit()
 
         try:
-            result = _success_result(source, output_text, raw, started_at)
+            result = _success_result(
+                source, output_text, raw, started_at,
+                check_complete=bool(review_request.get("_reviewSnapshot")),
+            )
         except json.JSONDecodeError as exception:
             append_progress(
                 db,
@@ -814,6 +817,9 @@ def _run_text_http_provider(
 ) -> dict[str, Any]:
     request_json = json.dumps(body, ensure_ascii=False)
     started_at = datetime.now()
+    auto_fix = request.get("mode") == "AUTO_FIX"
+    if auto_fix:
+        timeout_seconds = min(timeout_seconds, 180)
     try:
         append_progress(db, task_id, f"{source}_FIX_REQUEST", "INFO", request_message, f"url={endpoint}, model={model}")
         append_progress(
@@ -827,8 +833,11 @@ def _run_text_http_provider(
         append_progress(db, task_id, "FIX_HTTP_REQUEST_START", "INFO", "已发起修复预览 Provider HTTP 请求", f"provider={source}, url={endpoint}, model={model}, timeoutSeconds={timeout_seconds}")
         db.commit()
         with _provider_http_client(timeout_seconds, verify_tls=verify_tls) as client:
-            response = client.post(endpoint, json=body, headers=headers)
-        raw = response.text
+            if auto_fix:
+                response, raw = _read_auto_fix_response(client, endpoint, body, headers, timeout_seconds)
+            else:
+                response = client.post(endpoint, json=body, headers=headers)
+                raw = response.text
         append_progress(
             db,
             task_id,
@@ -838,16 +847,21 @@ def _run_text_http_provider(
             _response_summary(response, raw),
         )
         if response.is_error:
-            append_progress(db, task_id, "FIX_HTTP_RESPONSE_BODY_PREVIEW", "ERROR", "Provider 返回 HTTP 错误响应", _abbreviate(raw, 3000))
+            if not auto_fix:
+                append_progress(db, task_id, "FIX_HTTP_RESPONSE_BODY_PREVIEW", "ERROR", "Provider 返回 HTTP 错误响应", _abbreviate(raw, 3000))
             db.commit()
             response.raise_for_status()
         append_progress(db, task_id, f"{source}_FIX_RESPONSE", "INFO", response_message, f"responseBytes={len(raw)}")
-        append_progress(db, task_id, f"{source}_FIX_RESPONSE_RAW", "DEBUG", f"{source} 修复预览原始响应预览", _abbreviate(raw, 3000))
+        if not auto_fix:
+            append_progress(db, task_id, f"{source}_FIX_RESPONSE_RAW", "DEBUG", f"{source} 修复预览原始响应预览", _abbreviate(raw, 3000))
         db.commit()
         output_text = output_extractor(raw)
-        patch_text = _strip_patch_fence(output_text)
+        patch_text = (output_text or "").lstrip("\r\n") if auto_fix else _strip_patch_fence(output_text)
         if not _looks_like_unified_diff(patch_text):
-            append_progress(db, task_id, "FIX_PATCH_PARSE_FAILED", "ERROR", "模型输出不是合法 unified diff", _abbreviate(patch_text, 3000))
+            detail = "mode=AUTO_FIX" if auto_fix else _abbreviate(patch_text, 3000)
+            append_progress(db, task_id, "FIX_PATCH_PARSE_FAILED", "ERROR", "模型输出不是合法 unified diff", detail)
+            if auto_fix:
+                db.commit()
             return _failed_fix_result(source, "parse_error: Model output is not a unified diff patch", started_at)
         append_progress(
             db,
@@ -864,16 +878,46 @@ def _run_text_http_provider(
             "summary": "AI 修复预览已生成",
             "patchText": patch_text,
             "warnings": [],
-            "rawOutput": scrub_sensitive(raw),
+            "rawOutput": None if auto_fix else scrub_sensitive(raw),
             "errorMessage": None,
             "startedAt": started_at,
             "finishedAt": datetime.now(),
         }
     except Exception as exception:
-        error_message = _provider_error_message(exception, timeout_seconds)
+        if not auto_fix:
+            error_message = _provider_error_message(exception, timeout_seconds)
+        elif isinstance(exception, httpx.HTTPStatusError):
+            error_message = f"http_status_error: status={exception.response.status_code}"
+        else:
+            error_message = type(exception).__name__
         append_progress(db, task_id, f"{source}_FIX_FAILED", "ERROR", f"{source} 修复预览执行失败", error_message)
         db.commit()
         return _failed_fix_result(source, error_message, started_at)
+
+
+def _read_auto_fix_response(
+    client: httpx.Client,
+    endpoint: str,
+    body: dict[str, Any],
+    headers: dict[str, str],
+    timeout_seconds: int,
+) -> tuple[httpx.Response, str]:
+    deadline = perf_counter() + timeout_seconds
+    content = bytearray()
+    with client.stream(
+        "POST", endpoint, json=body, headers={**headers, "Accept-Encoding": "identity"},
+    ) as response:
+        if response.is_error:
+            return response, ""
+        if response.headers.get("Content-Encoding", "").lower() not in {"", "identity"}:
+            raise ValueError("Unexpected automatic repair model response encoding")
+        for chunk in response.iter_raw():
+            if perf_counter() >= deadline:
+                raise TimeoutError("Automatic repair model response exceeded the time limit")
+            if len(content) + len(chunk) > 1024 * 1024:
+                raise ValueError("Automatic repair model response exceeded the byte limit")
+            content.extend(chunk)
+        return response, content.decode("utf-8")
 
 
 def _success_result(
@@ -881,13 +925,15 @@ def _success_result(
     output_text: str,
     raw_output: str,
     started_at: datetime,
+    *,
+    check_complete: bool = False,
 ) -> dict[str, Any]:
     card = json.loads(_strip_json_fence(output_text))
     findings = []
     for finding in card.get("findings") or []:
         findings.append(_normalize_finding(finding, source, card.get("overallLevel")))
     overall_level = _normalize_overall_level(card.get("overallLevel")) or _overall_level_from_findings(findings)
-    return {
+    result = {
         "status": "SUCCESS",
         "provider": source,
         "overallLevel": overall_level,
@@ -899,6 +945,34 @@ def _success_result(
         "startedAt": started_at,
         "finishedAt": datetime.now(),
     }
+    if check_complete:
+        result["_reviewOutputComplete"] = _review_output_complete(card, raw_output)
+    return result
+
+
+def _review_output_complete(card: dict[str, Any], raw_output: str) -> bool:
+    overall = _normalize_overall_level(card.get("overallLevel"))
+    findings = card.get("findings")
+    if not overall or not isinstance(card.get("summary"), str) or not card["summary"].strip():
+        return False
+    if not isinstance(findings, list):
+        return False
+    severities = [
+        _normalize_severity(_first_present(finding, "severity", "level", "riskLevel", "risk_level"))
+        for finding in findings
+    ]
+    if any(severity is None for severity in severities) or (overall == "CRITICAL" and "CRITICAL" not in severities):
+        return False
+    envelope = json.loads(raw_output)
+    if envelope.get("status") not in (None, "completed") or envelope.get("incomplete_details"):
+        return False
+    if envelope.get("stop_reason") not in (None, "end_turn", "stop_sequence"):
+        return False
+    choices = envelope.get("choices") or []
+    return not choices or (
+        isinstance(choices, list) and isinstance(choices[0], dict)
+        and choices[0].get("finish_reason") in (None, "stop")
+    )
 
 
 def _failed_fix_result(provider: str, error_message: str | None, started_at: datetime) -> dict[str, Any]:

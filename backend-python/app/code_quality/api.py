@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.code_quality import service
@@ -9,8 +9,10 @@ from app.code_quality.schemas import (
     CreateReviewModelConnectionRequest,
     ReviewType,
     UpdateReviewProfileRequest,
+    UpdateReviewSettingsRequest,
 )
 from app.core.database import get_db
+from app.core.errors import AppError
 from app.core.response import ok
 
 
@@ -55,8 +57,11 @@ async def manual_review(request: dict, db: Session = Depends(get_db)) -> dict:
 
 
 @review_router.get("/settings")
-async def get_settings(db: Session = Depends(get_db)) -> dict:
-    return ok(service.get_settings_response(db))
+async def get_settings(response: Response, db: Session = Depends(get_db)) -> dict:
+    from app.auto_fix.api import settings_fields
+
+    response.headers["Cache-Control"] = "private, no-store"
+    return ok({**service.get_settings_response(db), **settings_fields(db)})
 
 
 @review_router.get("/agent-settings")
@@ -117,8 +122,11 @@ async def get_rule_gaps(
 
 
 @review_router.put("/settings")
-async def update_settings(request: dict, db: Session = Depends(get_db)) -> dict:
-    return ok(service.update_settings(db, request))
+async def update_settings(request: UpdateReviewSettingsRequest, db: Session = Depends(get_db)) -> dict:
+    payload = request.model_dump(by_alias=True, exclude_unset=True)
+    if "autoFixEnabled" in payload or "auto_fix_enabled" in payload:
+        raise AppError("BAD_REQUEST", "请通过专用接口修改自动修复设置", 400)
+    return ok(service.update_settings(db, payload))
 
 
 @review_router.post("/tasks/{task_id}/retry")

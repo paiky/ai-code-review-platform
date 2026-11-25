@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent_review.api import router as agent_review_worker_router
 from app.agent_review.api import runtime_router as agent_review_runtime_router
+from app.auto_fix.api import router as auto_fix_router
 from app.review_memory.api import run_router as review_memory_run_router
 from app.code_quality.api import profile_router as code_quality_profile_router
 from app.code_quality.api import model_preset_router as review_model_preset_router
@@ -55,15 +56,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         log.warning("Code quality startup recovery skipped: %s", exception)
     recovery_task = asyncio.create_task(_agent_recovery_loop())
     memory_task = asyncio.create_task(_memory_writeback_loop())
+    auto_fix_task = asyncio.create_task(_auto_fix_loop())
     try:
         yield
     finally:
         recovery_task.cancel()
         memory_task.cancel()
+        auto_fix_task.cancel()
         with suppress(asyncio.CancelledError):
             await recovery_task
         with suppress(asyncio.CancelledError):
             await memory_task
+        with suppress(asyncio.CancelledError):
+            await auto_fix_task
 
 
 async def _memory_writeback_loop() -> None:
@@ -92,6 +97,19 @@ async def _agent_recovery_loop() -> None:
         await asyncio.sleep(15)
 
 
+async def _auto_fix_loop() -> None:
+    from app.auto_fix.service import sweep
+
+    while True:
+        try:
+            await asyncio.to_thread(sweep)
+        except asyncio.CancelledError:
+            return
+        except Exception as error:
+            log.warning("Auto-fix sweep skipped (%s)", type(error).__name__)
+        await asyncio.sleep(5)
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.application_name, lifespan=lifespan)
@@ -113,6 +131,7 @@ def create_app() -> FastAPI:
     app.include_router(project_policy_project_router)
     app.include_router(project_policy_router)
     app.include_router(review_task_router)
+    app.include_router(auto_fix_router)
     app.include_router(task_feedback_router)
     app.include_router(feedback_pool_router)
     app.include_router(review_memory_router)

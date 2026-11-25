@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import re
+import subprocess
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
@@ -36,7 +37,7 @@ from app.project_integration.models import Project
 from app.project_integration.repository import get_project_review_policy
 from app.project_review_policy.service import build_project_review_policy_prompt_context
 from app.review_context.local_repo import prepare_local_repository_context, task_head_worktree_path
-from app.review_record.models import ReviewTask
+from app.review_record.models import AUTO_FIX_REVIEW_TRIGGER, ReviewTask
 from app.review_record.repository import (
     parse_agent_completion_context,
     resolve_agent_completion_notification,
@@ -213,6 +214,7 @@ def enqueue_agent_review(
     request: dict[str, Any],
     comparison_mode: bool = False,
     completion_context: dict[str, Any] | None = None,
+    expected_runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings_record = repository.assert_agent_available(db, require_worker=False)
     runtime = repository.selected_agent_runtime_snapshot(db)
@@ -220,6 +222,20 @@ def enqueue_agent_review(
     review_key = runtime_review_key(runtime_code)
     provider = runtime_provider(runtime)
     model = str(runtime.get("model") or repository.AGENT_MODEL)
+    review_snapshot = request.get("_reviewSnapshot")
+    if review_snapshot:
+        from app.code_quality.service import review_runtime_digest
+
+        runtime_contract = {
+            "runtimeCode": runtime_code,
+            "runtimeDigest": review_runtime_digest(runtime),
+            "reviewKey": review_key,
+            "provider": provider,
+            "model": model,
+        }
+        if expected_runtime is not None and runtime_contract != expected_runtime:
+            raise AppError("AUTO_FIX_REVIEW_CONFIG_CHANGED", "Agent runtime changed since the original result", 409)
+        review_snapshot = {**review_snapshot, **runtime_contract}
     display_name = f"Agent · {runtime.get('displayName') or 'Claude Code + DeepSeek'}"
     budgets, _ = repository.effective_agent_budgets(settings_record)
     requested_files = _changed_file_paths(request)
@@ -263,6 +279,14 @@ def enqueue_agent_review(
         diff_bytes=diff_bytes,
         mark_review_failed=mark_review_failed,
     )
+    if review_snapshot:
+        # A reused worktree may predate an in-place rerun of the source review.
+        worktree_matches = _worktree_matches_head(worktree, review_snapshot["headSha"])
+        if expected_runtime is not None and not worktree_matches:
+            raise AppError("AUTO_FIX_REVIEW_INPUT_INCOMPLETE", "Agent worktree does not match the repair commit", 409)
+        review_snapshot["complete"] = bool(
+            review_snapshot.get("complete") and worktree_matches and not excluded_files
+        )
     dispatch_detail = _dispatch_progress_base(
         review_key=review_key,
         dispatch_attempt_id=dispatch_attempt_id,
@@ -343,6 +367,8 @@ def enqueue_agent_review(
             if str(value or "").strip()
         )
         diff_mode = "INLINE" if diff_bytes <= budgets["inlineDiffBytes"] else "TOOL_PAGED"
+        if review_snapshot and diff_mode != "INLINE":
+            review_snapshot["complete"] = False
         input_case = {
             "id": f"task-{task.id}",
             "title": request.get("title")
@@ -426,16 +452,19 @@ def enqueue_agent_review(
     db.commit()
 
     try:
+        input_payload = {
+            "worktree": worktree_relative,
+            "case": input_case,
+            "budgets": budgets,
+            "memorySnapshot": memory.snapshot.model_dump(mode="json", by_alias=True),
+        }
+        if review_snapshot:
+            input_payload["reviewSnapshot"] = review_snapshot
         run = repository.create_agent_job(
             db,
             task_id=int(task.id),
             project_id=int(project.id),
-            input_payload={
-                "worktree": worktree_relative,
-                "case": input_case,
-                "budgets": budgets,
-                "memorySnapshot": memory.snapshot.model_dump(mode="json", by_alias=True),
-            },
+            input_payload=input_payload,
             completion_context=completion_context,
             comparison_mode=comparison_mode,
             runtime=runtime,
@@ -454,6 +483,7 @@ def enqueue_agent_review(
             "effectiveEngine": "AGENT",
             "agentRunId": run.id,
             "agentRunSummary": repository.run_to_summary(run),
+            "reviewSnapshot": review_snapshot,
         }
         save_result(
             db,
@@ -746,6 +776,23 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         "effectiveEngine": "AGENT",
         "agentRunId": run.id,
     }
+    review_snapshot = input_payload.get("reviewSnapshot")
+    if isinstance(review_snapshot, dict):
+        result["reviewSnapshot"] = {
+            **review_snapshot,
+            "complete": bool(
+                review_snapshot.get("complete")
+                and all(
+                    finding.get("contextStatus") == "SUFFICIENT"
+                    and not finding.get("missingContext")
+                    for finding in result["findings"]
+                )
+                and (
+                    request["reviewCard"]["overallLevel"] != "CRITICAL"
+                    or any(finding["severity"] == "CRITICAL" for finding in result["findings"])
+                )
+            ),
+        }
     repository.finish_agent_records(
         db,
         job=job,
@@ -795,6 +842,10 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         review_key=run.review_key,
     )
     _finish_existing_review_flow(db, run, result)
+    if task.trigger_type == "GITLAB_MR_WEBHOOK" and not run.comparison_mode:
+        from app.code_quality.service import record_auto_fix_candidate
+
+        record_auto_fix_candidate(db, saved)
     run_id = int(run.id)
     db.commit()
     _persist_agent_conversation_safely(
@@ -839,6 +890,11 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
             )
         return {"accepted": True, "idempotent": True, "run": repository.run_to_summary(run)}
     failure_message = str(request.get("failureMessage") or "Agent Review failed")[:1024]
+    task = db.get(ReviewTask, run.task_id)
+    is_fix_review = task is not None and task.trigger_type == AUTO_FIX_REVIEW_TRIGGER
+    from app.code_quality.service import agent_standard_fallback_enabled, finish_agent_without_standard
+
+    fallback_enabled = not cancelled and not is_fix_review and agent_standard_fallback_enabled(db)
     safe_audit = repository.sanitize_agent_audit(run_summary.get("audit"))
     _persist_agent_trace_safely(
         db,
@@ -851,11 +907,11 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
         job=job,
         run=run,
         status=terminal_status,
-        effective_engine="AGENT" if cancelled else "STANDARD_FALLBACK",
+        effective_engine="STANDARD_FALLBACK" if fallback_enabled else "AGENT",
         summary=run_summary,
         failure_code=failure_code,
         failure_message=failure_message,
-        clear_input=cancelled,
+        clear_input=not fallback_enabled,
     )
     if failure_code == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED":
         append_progress(
@@ -878,12 +934,20 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
             ),
             review_key=run.review_key,
         )
+    if cancelled:
+        phase, message = "AGENT_CANCELLED", "Agent Review 已取消"
+    elif is_fix_review:
+        phase, message = "FAILED", "修复复审失败"
+    elif fallback_enabled:
+        phase, message = "AGENT_FALLBACK", "Agent Review 失败，准备执行普通 Review 降级"
+    else:
+        phase, message = "FAILED", "Agent Review 失败，Standard 降级不可用"
     append_progress(
         db,
         run.task_id,
-        "AGENT_CANCELLED" if cancelled else "AGENT_FALLBACK",
+        phase,
         "WARN" if not cancelled else "INFO",
-        "Agent Review 已取消" if cancelled else "Agent Review 失败，准备执行普通 Review 降级",
+        message,
         json.dumps(
             {
                 **repository.run_to_summary(run),
@@ -894,6 +958,12 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
         ),
         review_key=run.review_key,
     )
+    if is_fix_review and not cancelled:
+        from app.code_quality.service import fail_auto_fix_review
+
+        fail_auto_fix_review(db, run.task_id, run.review_key, failure_message)
+    elif not cancelled and not fallback_enabled and task is not None:
+        finish_agent_without_standard(db, task, run)
     run_id = int(run.id)
     db.commit()
     _persist_agent_conversation_safely(
@@ -906,7 +976,7 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
         terminal_status=terminal_status,
         idempotency_key=idempotency_key,
     )
-    if not cancelled:
+    if fallback_enabled:
         from app.code_quality.service import schedule_agent_standard_fallback
 
         schedule_agent_standard_fallback(db, run.id)
@@ -917,6 +987,9 @@ def _finish_existing_review_flow(db: Session, run: Any, result: dict[str, Any]) 
     from app.code_quality.service import _send_auto_review_notification, _sync_task_status_after_review
 
     _sync_task_status_after_review(db, run.task_id, result)
+    task = db.get(ReviewTask, run.task_id)
+    if task is not None and task.trigger_type == AUTO_FIX_REVIEW_TRIGGER:
+        return
     context = parse_agent_completion_context(
         run.completion_context_json,
         task_id=run.task_id,
@@ -1324,6 +1397,20 @@ def _ensure_worktree(task: ReviewTask, project: Project) -> Path:
         f"{reason} (failurePhase={failure_phase}, attempts={len(summaries)})"[:500],
         409,
     )
+
+
+def _worktree_matches_head(worktree: Path, head_sha: str) -> bool:
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "--verify", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return commit.stdout.strip().lower() == head_sha
 
 
 def _prepare_agent_worktree_with_progress(

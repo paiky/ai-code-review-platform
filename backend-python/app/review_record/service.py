@@ -25,8 +25,9 @@ from app.project_integration.service import (
 )
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent, Project
 from app.project_integration import gitlab_client
-from app.review_record.models import NotificationRecord, ReviewResult, ReviewTask
+from app.review_record.models import AUTO_FIX_REVIEW_TRIGGER, NotificationRecord, ReviewResult, ReviewTask
 from app.review_record.repository import (
+    auto_fix_review_files,
     create_review_task,
     get_review_task_detail,
     mark_task_failed,
@@ -195,12 +196,14 @@ def get_diff_context(db: Session, task_id: int, file_path: str, view_type: str =
     task = db.get(ReviewTask, task_id)
     if task is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
-    if task.trigger_type not in {"GITLAB_MR_WEBHOOK", "GITLAB_PUSH_WEBHOOK"}:
+    if task.trigger_type not in {"GITLAB_MR_WEBHOOK", "GITLAB_PUSH_WEBHOOK", AUTO_FIX_REVIEW_TRIGGER}:
         raise AppError("BAD_REQUEST", "Diff context is only available for GitLab webhook tasks", 400)
     project = db.get(Project, task.project_id)
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
     normalized_view_type = str(view_type or "DIFF").strip().upper()
+    if task.trigger_type == AUTO_FIX_REVIEW_TRIGGER and normalized_view_type == "FIX_PREVIEW":
+        raise AppError("BAD_REQUEST", "Auto-fix round reviews are read-only", 400)
     if normalized_view_type not in {"DIFF", "FIX_PREVIEW"}:
         raise AppError("VALIDATION_ERROR", f"Unsupported viewType: {view_type}", 400)
     normalized_path = _normalize_file_path(file_path)
@@ -215,6 +218,8 @@ def get_diff_context(db: Session, task_id: int, file_path: str, view_type: str =
 
 
 def _changed_files_for_task(db: Session, task: ReviewTask) -> list[dict[str, Any]]:
+    if task.trigger_type == AUTO_FIX_REVIEW_TRIGGER:
+        return (auto_fix_review_files(db, task.id) or {}).get("files", [])
     event_record = None
     if task.trigger_type == "GITLAB_MR_WEBHOOK":
         event_record = db.query(GitLabMergeRequestEvent).filter_by(task_id=task.id).first()

@@ -118,6 +118,9 @@ class ProjectReviewSettings(Base):
     trigger_on_mr: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     trigger_on_push: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     trigger_only_when_risk_matched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    auto_fix_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="0", deferred=True
+    )
     auto_fix_preview_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     auto_fix_preview_severities: Mapped[str | None] = mapped_column(Text)
     push_branch_patterns: Mapped[str | None] = mapped_column(Text)

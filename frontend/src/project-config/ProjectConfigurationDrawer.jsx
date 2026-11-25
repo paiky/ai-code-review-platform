@@ -94,8 +94,11 @@ export default function ProjectConfigurationDrawer({
   const [memoryLoading, setMemoryLoading] = useState(false);
 
   const dirty = Boolean(draft) && configurationFingerprint(draft) !== baseline;
+  const initialConfig = baseline ? JSON.parse(baseline) : null;
+  const autoFixDirty = draft?.autoFixEditable && initialConfig
+    && draft.reviewSettings.autoFixEnabled !== initialConfig.reviewSettings.autoFixEnabled;
   const memoryDirty = Boolean(draft?.memorySettings?.schemaReady && baseline) &&
-    draft.memorySettings.enabled !== JSON.parse(baseline).memorySettings?.enabled;
+    draft.memorySettings.enabled !== initialConfig.memorySettings?.enabled;
 
   useEffect(() => {
     onDirtyChange?.(open && (dirty || webhookEditorDirty));
@@ -212,6 +215,11 @@ export default function ProjectConfigurationDrawer({
     try {
       const saved = await saveProjectConfiguration(project.id, {
         ...draft,
+        autoFixEditable: undefined,
+        reviewSettings: {
+          ...draft.reviewSettings,
+          autoFixEnabled: autoFixDirty ? draft.reviewSettings.autoFixEnabled : undefined
+        },
         memorySettings: memoryDirty ? {
           enabled: draft.memorySettings.enabled,
           expectedVersion: draft.memorySettings.version
@@ -419,6 +427,18 @@ export default function ProjectConfigurationDrawer({
                   <div className="project-config-switch-field">
                     <div><Text strong>风险命中后才触发</Text><Text type="secondary">仅在规则识别到风险时调用 Review</Text></div>
                     <Switch checked={draft.reviewSettings.triggerOnlyWhenRiskMatched} onChange={checked => updateReviewSettings('triggerOnlyWhenRiskMatched', checked)} />
+                  </div>
+                  <div className="project-config-switch-field">
+                    <div>
+                      <Text strong>自动修复紧急风险</Text>
+                      <Text type="secondary">全局与项目开关均开启后生效。开启前请确认平台 GitLab Token 能向此项目推送修复分支并创建 MR。</Text>
+                    </div>
+                    <Switch
+                      aria-label="项目自动修复紧急风险"
+                      checked={draft.reviewSettings.autoFixEnabled}
+                      disabled={!draft.autoFixEditable}
+                      onChange={checked => updateReviewSettings('autoFixEnabled', checked)}
+                    />
                   </div>
                   <div className="project-config-switch-field">
                     <div><Text strong>自动修复预览</Text><Text type="secondary">为指定严重级别生成修复预览</Text></div>

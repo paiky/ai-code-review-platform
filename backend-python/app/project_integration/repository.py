@@ -832,7 +832,7 @@ def project_review_settings_response(db: Session, project_id: int) -> dict[str, 
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
     settings = _get_or_create_project_review_settings(db, project)
     db.commit()
-    return project_review_settings_to_dict(settings)
+    return {**project_review_settings_to_dict(settings), "autoFixEnabled": project_auto_fix_enabled(db, project_id)}
 
 
 def update_project_review_settings(db: Session, project_id: int, request: dict[str, Any]) -> dict[str, Any]:
@@ -840,19 +840,38 @@ def update_project_review_settings(db: Session, project_id: int, request: dict[s
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
     settings = _get_or_create_project_review_settings(db, project)
-    _apply_project_review_settings(settings, request)
+    _apply_project_review_settings(db, settings, request)
     db.commit()
-    return project_review_settings_to_dict(settings)
+    return {**project_review_settings_to_dict(settings), "autoFixEnabled": project_auto_fix_enabled(db, project_id)}
+
+
+def project_auto_fix_schema_ready(db: Session) -> bool:
+    inspector = inspect(db.connection())
+    return inspector.has_table(ProjectReviewSettings.__tablename__) and any(
+        column["name"] == "auto_fix_enabled"
+        for column in inspector.get_columns(ProjectReviewSettings.__tablename__)
+    )
+
+
+def project_auto_fix_enabled(db: Session, project_id: int, *, for_update: bool = False) -> bool:
+    if not project_auto_fix_schema_ready(db):
+        return False
+    query = select(ProjectReviewSettings.auto_fix_enabled).where(ProjectReviewSettings.project_id == project_id)
+    return db.scalar(query.with_for_update() if for_update else query) is True
 
 
 def _apply_project_review_settings(
+    db: Session,
     settings: ProjectReviewSettings,
     request: dict[str, Any],
 ) -> None:
+    if request.get("autoFixEnabled") is not None and not project_auto_fix_schema_ready(db):
+        raise AppError("AUTO_FIX_UNAVAILABLE", "项目自动修复设置尚未迁移", 409)
     bool_fields = {
         "triggerOnMr": "trigger_on_mr",
         "triggerOnPush": "trigger_on_push",
         "triggerOnlyWhenRiskMatched": "trigger_only_when_risk_matched",
+        "autoFixEnabled": "auto_fix_enabled",
         "autoFixPreviewEnabled": "auto_fix_preview_enabled",
     }
     for json_field, column_name in bool_fields.items():
@@ -1209,7 +1228,7 @@ def update_project_configuration(
         project.default_code_quality_profile_code = config.code_quality_profile_code
         project.default_code_quality_provider_code = config.provider_code
         settings = _get_or_create_project_review_settings(db, project)
-        _apply_project_review_settings(settings, request["reviewSettings"])
+        _apply_project_review_settings(db, settings, request["reviewSettings"])
         _replace_project_ai_review_models(db, project, model_requests)
         _replace_project_notification_webhooks(db, project, webhook_ids)
         project.updated_at = now
@@ -1257,7 +1276,11 @@ def _project_configuration_to_dict(
             else _default_target_config_response(project)
         ),
         "aiReviewModels": list_project_ai_review_models(db, int(project.id)),
-        "reviewSettings": project_review_settings_to_dict(settings),
+        "autoFixEditable": project_auto_fix_schema_ready(db),
+        "reviewSettings": {
+            **project_review_settings_to_dict(settings),
+            "autoFixEnabled": project_auto_fix_enabled(db, project.id),
+        },
         "memorySettings": read_settings(db, int(project.id)).model_dump(by_alias=True),
         "webhookIds": webhook_ids,
     }

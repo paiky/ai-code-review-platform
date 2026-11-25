@@ -7,10 +7,12 @@ import hashlib
 import json
 import logging
 import os
+import re
 from itertools import count
 from queue import PriorityQueue
 from threading import Lock, Thread
 from typing import Any, Callable
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -87,7 +89,7 @@ from app.project_integration.repository import (
 from app.project_review_policy.service import build_project_review_policy_prompt_context
 from app.review_context.service import build_review_context_pack
 from app.notification.service import send_review_summary
-from app.review_record.models import ReviewTask
+from app.review_record.models import AUTO_FIX_REVIEW_TRIGGER, ReviewTask
 from app.review_record.repository import (
     create_review_task,
     mark_task_failed,
@@ -102,11 +104,15 @@ from app.review_feedback.service import ai_finding_fingerprint
 _LOGGER = logging.getLogger(__name__)
 
 
+NO_REVIEW_ENGINE_CODE = "NO_REVIEW_ENGINE_AVAILABLE"
+NO_REVIEW_ENGINE_MESSAGE = "当前没有可用的审查引擎，请检查 Agent Review 和 Standard Review 设置。"
+STANDARD_REVIEW_DISABLED_MESSAGE = "Standard Review 已关闭。"
 REVIEW_JOB_PRIORITY = 10
 FIX_PREVIEW_JOB_PRIORITY = 50
 REFINEMENT_ALLOWED_SEVERITIES = {"CRITICAL", "MAJOR", "HIGH"}
 REFINEMENT_ALLOWED_CONTEXT_STATUSES = {"PARTIAL", "INSUFFICIENT"}
 SCHEDULER_MAX_WORKERS = PROVIDER_SCHEDULER_CAPACITY
+_DIFF_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$")
 
 
 class _ProviderJobScheduler:
@@ -336,6 +342,7 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
     project = find_project_by_id(db, int(project_id))
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {project_id}", 404)
+    standard_enabled = _check_requested_review_engine(db, request.get("reviewEngine"))
     changed_files = [
         item if isinstance(item, dict) else {"path": item}
         for item in request.get("changedFiles") or []
@@ -362,6 +369,8 @@ def enqueue_manual_review(db: Session, request: dict[str, Any]) -> dict[str, Any
         request.get("reviewEngine"),
         explicit="reviewEngine" in request,
     )
+    if resolved_engine != "AGENT" and not standard_enabled:
+        raise AppError(NO_REVIEW_ENGINE_CODE, NO_REVIEW_ENGINE_MESSAGE, 409)
     fallback_to_standard = resolved_engine == "AGENT_UNAVAILABLE"
     requested_engine = "AGENT" if fallback_to_standard else resolved_engine
     effective_engine = "STANDARD_FALLBACK" if fallback_to_standard else resolved_engine
@@ -542,8 +551,11 @@ def retry_review_task(db: Session, task_id: int, request: dict[str, Any] | None 
     project = find_project_by_id(db, task.project_id)
     if project is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Project not found: {task.project_id}", 404)
+    if not _enabled(db):
+        raise AppError("BAD_REQUEST", "Code quality review is disabled", 400)
     from app.agent_review.service import enqueue_agent_review, resolve_review_engine
 
+    standard_enabled = _check_requested_review_engine(db, request.get("reviewEngine"))
     requested_engine = resolve_review_engine(
         db,
         project,
@@ -564,6 +576,8 @@ def retry_review_task(db: Session, task_id: int, request: dict[str, Any] | None 
             comparison_mode=True,
         )
         return {**response, "reviews": list_result_responses(db, task_id)}
+    if not standard_enabled:
+        raise AppError(NO_REVIEW_ENGINE_CODE, NO_REVIEW_ENGINE_MESSAGE, 409)
     review_key = (request or {}).get("reviewKey")
     response = enqueue_retry_review(db, task_id, review_key=review_key)
     preflight_summary = ensure_deterministic_preflight(db, task_id, review_key=review_key)
@@ -779,7 +793,8 @@ def _agent_preflight_fallback_metadata(
     *,
     task_id: int,
     exception: AppError,
-) -> dict[str, Any]:
+    standard_enabled: bool,
+) -> dict[str, Any] | None:
     from app.review_memory.retrieval import BLOCKING_MEMORY_CODES
 
     if exception.code in BLOCKING_MEMORY_CODES:
@@ -797,7 +812,7 @@ def _agent_preflight_fallback_metadata(
     )[:1000]
     summary = {
         "status": "UNAVAILABLE",
-        "fallbackTriggered": True,
+        "fallbackTriggered": standard_enabled,
         "failureCode": failure_code,
         "failureMessage": failure_message,
     }
@@ -806,9 +821,16 @@ def _agent_preflight_fallback_metadata(
         task_id,
         "AGENT_PREFLIGHT_FAILED",
         "WARN",
-        "Agent Review 入队前检查失败，准备执行普通 Review 降级",
+        "Agent Review 入队前检查失败，准备执行普通 Review 降级"
+        if standard_enabled else "Agent Review 入队前检查失败，Standard Review 已关闭",
         json.dumps(summary, ensure_ascii=False),
     )
+    if not standard_enabled:
+        task = db.get(ReviewTask, task_id)
+        if task is not None:
+            task.review_status = "REVIEW_FAILED"
+            task.updated_at = datetime.now()
+        return None
     return {
         "requestedEngine": "AGENT",
         "effectiveEngine": "STANDARD_FALLBACK",
@@ -937,6 +959,138 @@ def _build_agent_completion_context(
     }
 
 
+def _review_config_digest(*values: Any) -> str:
+    return hashlib.sha256(json.dumps(values, default=str).encode("utf-8")).hexdigest()
+
+
+def review_profile_digest(profile: Any) -> str:
+    return _review_config_digest(profile.profile_code, profile.enabled, profile.review_instructions)
+
+
+def review_provider_digest(provider: CodeQualityModelProvider) -> str:
+    return _review_config_digest(
+        provider.provider_code,
+        provider.provider_type,
+        provider.endpoint_url,
+        provider.reasoning_effort,
+        provider.tls_verify,
+        provider.updated_at,
+    )
+
+
+def review_runtime_digest(runtime: dict[str, Any]) -> str:
+    return _review_config_digest(sorted(runtime.items()))
+
+
+def review_hunk_digest(changed_files: list[dict[str, Any]]) -> str | None:
+    files = []
+    for file in changed_files:
+        path = _normalize_path(file.get("path") or file.get("newPath") or file.get("oldPath"))
+        hunks: list[list[str]] = []
+        remaining = [0, 0]
+        had_change = False
+        for line in str(file.get("diffText") or "").splitlines():
+            header = _DIFF_HUNK.fullmatch(line)
+            if header:
+                if any(remaining):
+                    return None
+                old_start, old_count, new_start, new_count = header.groups()
+                remaining = [int(old_count or 1), int(new_count or 1)]
+                hunks.append([f"{old_start},{remaining[0]}:{new_start},{remaining[1]}"])
+            elif not hunks:
+                continue
+            elif line.startswith("\\ "):
+                hunks[-1].append(line)
+            elif line and line[0] in " -+":
+                remaining[0] -= int(line[0] in " -")
+                remaining[1] -= int(line[0] in " +")
+                if min(remaining) < 0:
+                    return None
+                had_change = had_change or line[0] in "-+"
+                hunks[-1].append(line)
+            elif line.strip():
+                return None
+        if not path or not hunks or not had_change or any(remaining):
+            return None
+        files.append((path, hunks))
+    return _review_config_digest(sorted(files)) if files else None
+
+
+def _review_input_snapshot(
+    task: ReviewTask, profile: Any, request: dict[str, Any],
+) -> dict[str, Any] | None:
+    if task.trigger_type not in {"GITLAB_MR_WEBHOOK", AUTO_FIX_REVIEW_TRIGGER}:
+        return None
+    base_sha, head_sha = (str(value or "").lower() for value in (task.before_sha, task.after_sha))
+    if not all(re.fullmatch(r"[0-9a-f]{40}", sha) and sha != "0" * 40 for sha in (base_sha, head_sha)):
+        return None
+    if base_sha == head_sha or str(request.get("commitSha") or "").lower() != head_sha:
+        return None
+    changed_files = request.get("changedFileDetails") or []
+    changed_paths = _changed_file_paths(changed_files)
+    diff_text = str(request.get("diffText") or "")
+    hunk_digest = None
+    if all(isinstance(file, dict) for file in changed_files):
+        hunk_digest = review_hunk_digest(changed_files)
+    expected_diff = _diff_text(changed_files)
+    if task.trigger_type == AUTO_FIX_REVIEW_TRIGGER:
+        expected_diff = "".join(str(file.get("diffText") or "") for file in changed_files)
+    complete = bool(
+        diff_text.strip()
+        and hunk_digest
+        and diff_text == expected_diff
+        and changed_paths
+        and len(changed_paths) == len(changed_files) == len(set(changed_paths))
+        and all(
+            isinstance(file, dict)
+            and not any(file.get(key) for key in ("collapsed", "tooLarge", "truncated"))
+            and str(file.get("diffText") or "").strip()
+            for file in changed_files
+        )
+    )
+    snapshot = {
+        "executionId": uuid4().hex,
+        "baseSha": base_sha,
+        "headSha": head_sha,
+        "diffSha256": hashlib.sha256(diff_text.encode("utf-8")).hexdigest(),
+        "hunkDigest": hunk_digest,
+        "profileDigest": review_profile_digest(profile),
+        "isPrimary": False,
+        "complete": complete,
+        "changedPaths": sorted(changed_paths),
+    }
+    if task.trigger_type == AUTO_FIX_REVIEW_TRIGGER:
+        snapshot["changedFiles"] = [
+            {
+                key: file[key]
+                for key in ("path", "oldPath", "newPath", "changeType", "deletedFile", "newFile")
+                if key in file
+            }
+            for file in changed_files if isinstance(file, dict)
+        ]
+    if len(json.dumps(snapshot, ensure_ascii=False).encode("utf-8")) > 30_000:
+        snapshot.pop("changedPaths")
+        snapshot.pop("changedFiles", None)
+        snapshot["complete"] = False
+    return snapshot
+
+
+def record_auto_fix_candidate(db: Session, saved: CodeQualityReviewResult) -> None:
+    snapshot = read_json(saved.review_snapshot_json, {})
+    if (
+        saved.status != "SUCCESS"
+        or saved.effective_engine not in {"AGENT", "STANDARD"}
+        or not isinstance(snapshot, dict)
+        or not snapshot.get("isPrimary")
+        or not snapshot.get("complete")
+        or snapshot.get("trustedIngress") is not True
+    ):
+        return
+    from app.auto_fix.service import record_review_candidate
+
+    record_review_candidate(db, saved)
+
+
 def trigger_auto_review(
     db: Session,
     *,
@@ -950,6 +1104,7 @@ def trigger_auto_review(
     focus_rule_codes: list[str] | None = None,
     notification_context: dict | None = None,
     reminder_card_enabled: bool = True,
+    trusted_auto_fix_ingress: bool = False,
 ) -> bool:
     task = db.get(ReviewTask, task_id)
     if task is None:
@@ -998,7 +1153,16 @@ def trigger_auto_review(
     )
     if not profile.enabled or not ai_policy.get("aiReviewEnabled") or not ai_policy.get("triggerOnMr"):
         return False
-    targets = _resolve_review_targets(db, project, profile, task.target_type)
+    from app.agent_review.service import enqueue_agent_review, resolve_review_engine
+
+    standard_enabled = get_settings_record(db).standard_review_enabled
+    selected_engine = resolve_review_engine(db, project, explicit=False)
+    if selected_engine != "AGENT" and not standard_enabled:
+        task.review_status = "SKIPPED"
+        task.updated_at = datetime.now()
+        append_progress(db, task.id, "SKIPPED", "INFO", NO_REVIEW_ENGINE_MESSAGE, NO_REVIEW_ENGINE_CODE)
+        return False
+    targets = _resolve_review_targets(db, project, profile, task.target_type) if standard_enabled else []
     base_request = {
         "mode": "DIFF_TEXT",
         "baseRef": task.target_branch,
@@ -1008,17 +1172,19 @@ def trigger_auto_review(
         "changedFiles": [file.get("path") for file in changed_files if file.get("path")],
         "changedFileDetails": changed_files,
     }
+    input_snapshot = _review_input_snapshot(task, profile, base_request) if trusted_auto_fix_ingress else None
+    if input_snapshot is not None:
+        input_snapshot["trustedIngress"] = trusted_auto_fix_ingress
     delete_progress(db, task.id)
     task.review_status = "REVIEWING"
     task.updated_at = datetime.now()
     preflight_summary = ensure_deterministic_preflight(db, task.id, changed_files=changed_files)
-    from app.agent_review.service import enqueue_agent_review, resolve_review_engine
-
-    selected_engine = resolve_review_engine(db, project, explicit=False)
     fallback_metadata: dict[str, Any] = {}
     if selected_engine == "AGENT":
         agent_request = _build_review_request(profile, base_request)
         agent_request["_deterministicPreflightSummary"] = preflight_summary
+        if input_snapshot is not None:
+            agent_request["_reviewSnapshot"] = {**input_snapshot, "isPrimary": True}
         try:
             enqueue_agent_review(
                 db,
@@ -1050,9 +1216,12 @@ def trigger_auto_review(
                 db,
                 task_id=task.id,
                 exception=exception,
+                standard_enabled=standard_enabled,
             )
+            if fallback_metadata is None:
+                return False
     with _auto_fallback_failure_guard(db, task, enabled=bool(fallback_metadata)):
-        for target in targets:
+        for index, target in enumerate(targets):
             provider = target["provider"]
             request = _build_review_request(
                 profile,
@@ -1061,6 +1230,12 @@ def trigger_auto_review(
             request["reviewKey"] = target["reviewKey"]
             request["_deterministicPreflightSummary"] = preflight_summary
             request.update(fallback_metadata)
+            if input_snapshot is not None:
+                request["_reviewSnapshot"] = {
+                    **input_snapshot,
+                    "isPrimary": index == 0 and not fallback_metadata,
+                    "providerDigest": review_provider_digest(provider),
+                }
             append_progress(
                 db,
                 task.id,
@@ -1175,14 +1350,30 @@ def _trigger_push_auto_review(
             reason_summary="当前项目 Review 设置未开启 Push 自动触发。",
         )
         return False
-    targets = _resolve_review_targets(db, project, profile, task.target_type)
-    primary_provider = targets[0]["provider"]
+    from app.agent_review.service import enqueue_agent_review, resolve_review_engine
+
+    standard_enabled = get_settings_record(db).standard_review_enabled
+    selected_engine = resolve_review_engine(db, project, explicit=False)
+    if selected_engine != "AGENT" and not standard_enabled:
+        _save_push_gate_rejection(
+            db,
+            task=task,
+            changed_files=changed_files,
+            risk_card=risk_card,
+            focus_change_types=focus_change_types,
+            focus_rule_codes=focus_rule_codes,
+            profile_code=profile.profile_code,
+            reason_code=NO_REVIEW_ENGINE_CODE,
+            reason_summary=NO_REVIEW_ENGINE_MESSAGE,
+        )
+        return False
+    targets = _resolve_review_targets(db, project, profile, task.target_type) if standard_enabled else []
     gate = _evaluate_push_gate(
         db,
         task=task,
         profile=profile,
         push_policy=ai_policy,
-        provider_code=primary_provider.provider_code,
+        provider_code=targets[0]["provider"].provider_code if targets else None,
         changed_files=changed_files,
         diff_text=diff_text,
         risk_card=risk_card,
@@ -1218,9 +1409,6 @@ def _trigger_push_auto_review(
     preflight_summary = ensure_deterministic_preflight(db, task.id, changed_files=changed_files)
     gate["ai_review_scheduled"] = True
     save_push_gate_decision(db, **gate)
-    from app.agent_review.service import enqueue_agent_review, resolve_review_engine
-
-    selected_engine = resolve_review_engine(db, project, explicit=False)
     fallback_metadata: dict[str, Any] = {}
     if selected_engine == "AGENT":
         agent_request = _build_review_request(profile, base_request)
@@ -1256,7 +1444,12 @@ def _trigger_push_auto_review(
                 db,
                 task_id=task.id,
                 exception=exception,
+                standard_enabled=standard_enabled,
             )
+            if fallback_metadata is None:
+                gate["ai_review_scheduled"] = False
+                save_push_gate_decision(db, **gate)
+                return False
     with _auto_fallback_failure_guard(db, task, enabled=bool(fallback_metadata)):
         for target in targets:
             provider = target["provider"]
@@ -1342,34 +1535,42 @@ def run_auto_review_job(
     target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     db = SessionLocal()
+    is_fix_review = False
     try:
+        task = db.get(ReviewTask, task_id)
+        is_fix_review = task is not None and task.trigger_type == AUTO_FIX_REVIEW_TRIGGER
         project = find_project_by_id(db, project_id)
         if project is None:
-            task = db.get(ReviewTask, task_id)
+            error_message = f"Project not found: {project_id}"
+            if is_fix_review:
+                fail_auto_fix_review(db, task_id, request.get("reviewKey"), error_message)
             if task is not None:
-                mark_task_failed(task, f"Project not found: {project_id}")
-            append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", f"Project not found: {project_id}", review_key=request.get("reviewKey"))
+                mark_task_failed(task, error_message)
+            append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", error_message, review_key=request.get("reviewKey"))
             db.commit()
-            return {"status": "FAILED", "errorMessage": f"Project not found: {project_id}"}
+            return {"status": "FAILED", "errorMessage": error_message}
         profile = get_profile(db, profile_code)
         provider = get_provider(db, provider_code)
         result = _run_review(db, task_id, project, profile, provider, request, target)
-        _send_auto_review_notification(
-            db,
-            task_id,
-            result,
-            rule_result_id,
-            risk_card,
-            focus_change_types,
-            focus_rule_codes,
-            notification_context,
-            reminder_card_enabled,
-        )
+        if not is_fix_review:
+            _send_auto_review_notification(
+                db,
+                task_id,
+                result,
+                rule_result_id,
+                risk_card,
+                focus_change_types,
+                focus_rule_codes,
+                notification_context,
+                reminder_card_enabled,
+            )
         db.commit()
         return result
     except Exception as exception:
-        task = db.get(ReviewTask, task_id)
-        if task is not None:
+        if is_fix_review:
+            db.rollback()
+            fail_auto_fix_review(db, task_id, request.get("reviewKey"), str(exception))
+        else:
             _sync_task_status_after_review(db, task_id, {"status": "FAILED", "errorMessage": str(exception)})
         append_progress(db, task_id, "FAILED", "ERROR", "AI Review 后台执行失败", str(exception), review_key=request.get("reviewKey"))
         db.commit()
@@ -1378,17 +1579,207 @@ def run_auto_review_job(
         db.close()
 
 
+def fail_auto_fix_review(
+    db: Session, task_id: int, review_key: str | None, error_message: str,
+) -> None:
+    review = db.scalar(
+        select(CodeQualityReviewResult)
+        .where(CodeQualityReviewResult.task_id == task_id)
+        .where(CodeQualityReviewResult.review_key == review_key)
+    )
+    if review is None or review.status != "RUNNING":
+        return
+    review.status = "FAILED"
+    review.error_message = error_message[:1024]
+    review.finished_at = utc_now()
+    review.updated_at = review.finished_at
+    snapshot = read_json(review.review_snapshot_json, {})
+    if isinstance(snapshot, dict):
+        review.review_snapshot_json = json.dumps({**snapshot, "complete": False}, ensure_ascii=False)
+    refresh_review_status(db, task_id)
+    _sync_task_status_after_review(db, task_id, {"status": "FAILED", "errorMessage": error_message})
+
+
+def dispatch_auto_fix_review(
+    db: Session,
+    *,
+    task_id: int,
+    source: dict[str, Any],
+    diff_text: str,
+    changed_files: list[dict[str, Any]],
+) -> None:
+    task = db.get(ReviewTask, task_id)
+    if task is None or task.trigger_type != AUTO_FIX_REVIEW_TRIGGER:
+        raise AppError("RESOURCE_NOT_FOUND", "Auto-fix review task not found", 404)
+    if find_result_response_by_key(db, task_id, source["reviewKey"]):
+        return
+    project = find_project_by_id(db, task.project_id)
+    if project is None:
+        raise AppError("RESOURCE_NOT_FOUND", "Auto-fix review project not found", 404)
+    profile = get_profile(db, source["profileCode"])
+    original_snapshot = source.get("reviewSnapshot") or {}
+    if not profile.enabled or review_profile_digest(profile) != original_snapshot.get("profileDigest"):
+        raise AppError("AUTO_FIX_REVIEW_CONFIG_CHANGED", "Review profile changed since the original result", 409)
+    request = _build_review_request(
+        profile,
+        {
+            "mode": "DIFF_TEXT",
+            "baseRef": task.before_sha,
+            "commitSha": task.after_sha,
+            "title": "自动修复后的复审",
+            "diffText": diff_text,
+            "changedFiles": changed_files,
+            "changedFileDetails": changed_files,
+            "model": source["model"],
+        },
+    )
+    review_key = source["reviewKey"]
+    snapshot = _review_input_snapshot(task, profile, request)
+    if not snapshot or not snapshot["complete"] or task.commit_sha != task.after_sha:
+        raise AppError("AUTO_FIX_REVIEW_INPUT_INCOMPLETE", "Auto-fix review requires a complete SHA-bound diff", 409)
+    request["reviewKey"] = review_key
+    request["_reviewSnapshot"] = snapshot
+    if source["effectiveEngine"] == "AGENT":
+        from app.agent_review.service import enqueue_agent_review
+
+        enqueue_agent_review(
+            db,
+            task=task,
+            project=project,
+            profile=profile,
+            request=request,
+            expected_runtime={
+                "runtimeCode": original_snapshot.get("runtimeCode"),
+                "runtimeDigest": original_snapshot.get("runtimeDigest"),
+                "reviewKey": review_key,
+                "provider": source["provider"],
+                "model": source["model"],
+            },
+        )
+        return
+    if source["effectiveEngine"] != "STANDARD":
+        raise AppError("AUTO_FIX_REVIEW_CONFIG_CHANGED", "Unsupported source review engine", 409)
+    if not get_settings_record(db).standard_review_enabled:
+        raise AppError("STANDARD_REVIEW_DISABLED", STANDARD_REVIEW_DISABLED_MESSAGE, 409)
+    provider = get_provider(db, source["provider"])
+    if not provider.enabled or review_provider_digest(provider) != original_snapshot.get("providerDigest"):
+        raise AppError("AUTO_FIX_REVIEW_CONFIG_CHANGED", "Review provider changed since the original result", 409)
+    snapshot["providerDigest"] = original_snapshot["providerDigest"]
+    display_name = source.get("displayName") or "Standard"
+    sort_order = int(source.get("sortOrder") or 0)
+    save_result(
+        db,
+        task_id=task_id,
+        review_key=review_key,
+        project_id=task.project_id,
+        profile_code=profile.profile_code,
+        provider=provider.provider_code,
+        model=source["model"],
+        display_name=display_name,
+        sort_order=sort_order,
+        result={**_running_result_payload(), "reviewSnapshot": snapshot},
+    )
+    append_progress(
+        db,
+        task_id,
+        "QUEUED",
+        "INFO",
+        "修复复审已进入执行队列",
+        review_key=review_key,
+    )
+    target = {"reviewKey": review_key, "displayName": display_name, "sortOrder": sort_order}
+    _submit_provider_job(
+        db,
+        run_auto_review_job,
+        task_id,
+        task.project_id,
+        profile.profile_code,
+        provider.provider_code,
+        request,
+        None,
+        None,
+        [],
+        [],
+        {},
+        False,
+        target,
+        job_type="AI_REVIEW",
+        task_id=task_id,
+        project_id=task.project_id,
+        priority=REVIEW_JOB_PRIORITY,
+        label="自动修复后的复审",
+        review_key=review_key,
+    )
+
+
+def agent_standard_fallback_enabled(db: Session) -> bool:
+    settings = get_settings_record(db)
+    return settings.review_enabled and settings.standard_review_enabled
+
+
+def finish_agent_without_standard(db: Session, task: ReviewTask, run) -> dict[str, Any]:
+    from app.agent_review.repository import run_to_summary
+    from app.agent_review.service import _finish_existing_review_flow
+    from app.review_memory.summary import retain_memory_summary
+
+    if run.effective_engine == "STANDARD_FALLBACK":
+        append_progress(
+            db, task.id, "FAILED", "WARN", "Agent Review 失败，Standard 降级不可用",
+            run.failure_code, review_key=run.review_key,
+        )
+    run.effective_engine = "AGENT"
+    run.input_json = retain_memory_summary(run.input_json)
+    result = {
+        **_running_result_payload(),
+        "status": "FAILED",
+        "requestedEngine": "AGENT",
+        "effectiveEngine": "AGENT",
+        "agentRunId": run.id,
+        "agentRunSummary": run_to_summary(run, fallback_triggered=False),
+        "errorMessage": run.failure_message or run.failure_code or "Agent Review failed",
+        "startedAt": run.started_at,
+        "finishedAt": run.finished_at,
+    }
+    existing = find_result_response_by_key(db, task.id, run.review_key)
+    if existing and existing.get("agentRunId") not in {None, run.id}:
+        return result
+    save_result(
+        db,
+        task_id=task.id,
+        review_key=run.review_key,
+        project_id=task.project_id,
+        profile_code=(existing or {}).get("profileCode") or task.code_quality_profile_code,
+        provider=run.provider,
+        model=run.model,
+        display_name=(existing or {}).get("displayName"),
+        sort_order=(existing or {}).get("sortOrder") or 5,
+        result=result,
+    )
+    _finish_existing_review_flow(db, run, result)
+    return result
+
+
 def schedule_agent_standard_fallback(db: Session, run_id: int) -> None:
     """Queue the existing STANDARD pipeline for a failed Agent run."""
     from app.agent_review.models import AgentReviewRun
     from app.review_memory.retrieval import BLOCKING_MEMORY_CODES
 
     run = db.get(AgentReviewRun, run_id)
-    if run is None or run.status == "CANCELLED" or run.failure_code in BLOCKING_MEMORY_CODES:
+    if run is None or run.status == "CANCELLED":
         return
     task = db.get(ReviewTask, run.task_id)
     if task is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Agent fallback task not found: {run.task_id}", 404)
+    if task.trigger_type == AUTO_FIX_REVIEW_TRIGGER:
+        from app.review_memory.summary import retain_memory_summary
+
+        run.effective_engine = "AGENT"
+        run.input_json = retain_memory_summary(run.input_json)
+        fail_auto_fix_review(db, task.id, run.review_key, run.failure_message or "Agent Review failed")
+        db.commit()
+        return
+    if run.failure_code in BLOCKING_MEMORY_CODES:
+        return
     existing_job_id = db.scalar(
         select(CodeQualitySchedulerJob.id)
         .where(CodeQualitySchedulerJob.job_type == "AI_REVIEW")
@@ -1398,6 +1789,10 @@ def schedule_agent_standard_fallback(db: Session, run_id: int) -> None:
         .limit(1)
     )
     if existing_job_id is not None:
+        return
+    if not agent_standard_fallback_enabled(db):
+        finish_agent_without_standard(db, task, run)
+        db.commit()
         return
     _submit_provider_job(
         db,
@@ -1470,6 +1865,10 @@ def run_agent_standard_fallback_job(run_id: int) -> dict[str, Any]:
         task = db.get(ReviewTask, run.task_id)
         if task is None:
             raise AppError("RESOURCE_NOT_FOUND", "Agent fallback task or project no longer exists", 404)
+        if not agent_standard_fallback_enabled(db):
+            result = finish_agent_without_standard(db, task, run)
+            db.commit()
+            return result
         project = find_project_by_id(db, task.project_id)
         if project is None:
             raise AppError("RESOURCE_NOT_FOUND", "Agent fallback task or project no longer exists", 404)
@@ -1610,7 +2009,7 @@ def _evaluate_push_gate(
     task: ReviewTask,
     profile,
     push_policy: dict[str, Any],
-    provider_code: str,
+    provider_code: str | None,
     changed_files: list[dict[str, Any]],
     diff_text: str | None,
     risk_card: dict | None,
@@ -2223,6 +2622,9 @@ def run_finding_refinement_response(db: Session, task_id: int, request: dict[str
 
 
 def generate_fix_preview_response(db: Session, task_id: int, request: dict[str, Any]) -> dict[str, Any]:
+    task = db.get(ReviewTask, task_id)
+    if task is not None and task.trigger_type == AUTO_FIX_REVIEW_TRIGGER:
+        raise AppError("BAD_REQUEST", "Auto-fix round reviews are read-only", 400)
     finding_index = request.get("findingIndex")
     if finding_index is None:
         raise AppError("VALIDATION_ERROR", "findingIndex is required", 400)
@@ -2692,6 +3094,17 @@ def _run_review(
     target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     review_key = request.get("reviewKey") or (target or {}).get("reviewKey")
+    task = db.get(ReviewTask, task_id)
+    is_fix_review = task is not None and task.trigger_type == AUTO_FIX_REVIEW_TRIGGER
+    input_snapshot = request.get("_reviewSnapshot")
+    config_matches = bool(
+        not input_snapshot or (
+            profile.enabled
+            and provider.enabled
+            and input_snapshot.get("profileDigest") == review_profile_digest(profile)
+            and input_snapshot.get("providerDigest") == review_provider_digest(provider)
+        )
+    )
     preflight_summary = request.get("_deterministicPreflightSummary")
     if preflight_summary:
         append_progress(
@@ -2746,6 +3159,8 @@ def _run_review(
     )
     db.commit()
     try:
+        if is_fix_review and not config_matches:
+            raise AppError("AUTO_FIX_REVIEW_CONFIG_CHANGED", "Review configuration changed while queued", 409)
         with progress_review_key(review_key):
             result = run_provider(db, task_id, provider, request)
     except Exception as exception:
@@ -2787,6 +3202,23 @@ def _run_review(
     result["effectiveEngine"] = request.get("effectiveEngine") or result["requestedEngine"]
     result["agentRunId"] = request.get("agentRunId")
     result["agentRunSummary"] = request.get("agentRunSummary")
+    if input_snapshot:
+        meta = review_context.get("meta") or {}
+        result["reviewSnapshot"] = {
+            **input_snapshot,
+            "complete": bool(
+                input_snapshot.get("complete")
+                and config_matches
+                and result.pop("_reviewOutputComplete", False)
+                and not meta.get("plannerUnavailableContextCount")
+                and all(
+                    finding.get("filePath") in input_snapshot.get("changedPaths", [])
+                    and finding.get("contextStatus") == "SUFFICIENT"
+                    and not finding.get("missingContext")
+                    for finding in result.get("findings", [])
+                )
+            ),
+        }
     saved_result = save_result(
         db,
         task_id=task_id,
@@ -2819,15 +3251,18 @@ def _run_review(
         f"status={result['status']}, overallLevel={result.get('overallLevel') or '-'}",
         review_key=review_key,
     )
+    if not is_fix_review:
+        record_auto_fix_candidate(db, saved_result)
     db.commit()
-    _enqueue_auto_fix_previews(
-        db,
-        task_id,
-        project,
-        provider,
-        request.get("model") or provider.model_name,
-        result,
-    )
+    if not is_fix_review:
+        _enqueue_auto_fix_previews(
+            db,
+            task_id,
+            project,
+            provider,
+            request.get("model") or provider.model_name,
+            result,
+        )
     return result
 
 
@@ -2842,7 +3277,10 @@ def _sync_task_status_after_review(db: Session, task_id: int, result: dict[str, 
             mark_task_failed(task, result.get("errorMessage") or "AI Review failed")
             refresh_review_status(db, task_id)
         return
-    if status == "SUCCESS" and (task.trigger_type == "CODE_QUALITY_MANUAL" or task.status == "FAILED"):
+    if status == "SUCCESS" and (
+        task.trigger_type in {"CODE_QUALITY_MANUAL", AUTO_FIX_REVIEW_TRIGGER}
+        or task.status == "FAILED"
+    ):
         mark_task_success(task, result.get("overallLevel") or task.risk_level or "LOW")
         refresh_review_status(db, task_id)
 
@@ -3094,6 +3532,7 @@ def _attach_review_context_pack(
     head_ref = None
     if task is not None:
         head_ref = task.after_sha or task.commit_sha
+    input_snapshot = request.get("_reviewSnapshot") or {}
     context = build_review_context_pack(
         db,
         task_id=task_id,
@@ -3103,7 +3542,7 @@ def _attach_review_context_pack(
         mode=request.get("mode"),
         repository_url=project.repository_url if project is not None else None,
         git_project_id=project.git_project_id if project is not None else None,
-        head_ref=head_ref or request.get("commitSha"),
+        head_ref=input_snapshot.get("headSha") or head_ref or request.get("commitSha"),
         deterministic_security_summary=request.get("_deterministicPreflightSummary"),
         target_type=task.target_type if task is not None else None,
     )
@@ -3437,6 +3876,8 @@ def _resolve_refinement_target(db: Session, task_id: int, request: dict[str, Any
     task = db.get(ReviewTask, task_id)
     if task is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {task_id}", 404)
+    if task.trigger_type == AUTO_FIX_REVIEW_TRIGGER:
+        raise AppError("BAD_REQUEST", "Auto-fix round reviews are read-only", 400)
     review_key = _clean_optional_text(request.get("reviewKey"), 64)
     requested_fingerprint = _clean_optional_text(request.get("fingerprint"), 128)
     finding_index = request.get("findingIndex")
@@ -3809,6 +4250,18 @@ def _enabled(db: Session | None = None) -> bool:
 
         return get_settings().code_quality_review_enabled
     return bool(get_settings_record(db).review_enabled)
+
+
+def _check_requested_review_engine(db: Session, override: Any) -> bool:
+    standard_enabled = get_settings_record(db).standard_review_enabled
+    if not standard_enabled:
+        from app.agent_review.repository import get_agent_settings_record
+
+        if not get_agent_settings_record(db).enabled:
+            raise AppError(NO_REVIEW_ENGINE_CODE, NO_REVIEW_ENGINE_MESSAGE, 409)
+        if str(override or "").strip().upper() == "STANDARD":
+            raise AppError("STANDARD_REVIEW_DISABLED", STANDARD_REVIEW_DISABLED_MESSAGE, 409)
+    return standard_enabled
 
 
 def _inline_enabled() -> bool:

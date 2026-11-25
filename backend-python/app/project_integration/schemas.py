@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 TargetType = Literal[
     "BACKEND",
@@ -21,6 +21,7 @@ class ProjectReviewSettingsUpdateRequest(BaseModel):
         default=None,
         alias="triggerOnlyWhenRiskMatched",
     )
+    auto_fix_enabled: StrictBool | None = Field(default=None, alias="autoFixEnabled")
     auto_fix_preview_enabled: bool | None = Field(default=None, alias="autoFixPreviewEnabled")
     auto_fix_preview_severities: list[Literal["CRITICAL", "MAJOR", "MINOR"]] | None = Field(
         default=None,
