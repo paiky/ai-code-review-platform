@@ -86,6 +86,15 @@ export function buildReviewExecutionPresentation(journey, result) {
     ? stages.find(stage => stage.id === 'model-review')?.details?.safeTrace
     : null;
   const agentConversation = isAgent ? journey?.agentConversation : null;
+  const agentStartActivities = [];
+  const agentOtherActivities = [];
+  for (const event of agentConversation?.otherActivities || []) {
+    if (event.sequence === 0 && event.activityType === 'ANALYZING') {
+      agentStartActivities.push(event);
+    } else if (event.activityType !== 'FALLBACK' || !transfer) {
+      agentOtherActivities.push(event);
+    }
+  }
   return {
     input,
     agentInput: isAgent ? journey?.agentInput : null,
@@ -101,9 +110,8 @@ export function buildReviewExecutionPresentation(journey, result) {
     standardInstructions: journey?.standardInstructions,
     standard,
     agentConversation,
-    agentOtherActivities: agentConversation?.otherActivities.filter(event => (
-      event.activityType !== 'FALLBACK' || !transfer
-    )) || [],
+    agentStartActivities,
+    agentOtherActivities,
     agentEvents: safeTrace?.events.filter(event => event.activityType !== 'FALLBACK' || !transfer) || [],
     agentTracePartial: safeTrace?.state === 'PARTIAL',
     transfer: isFallback ? {

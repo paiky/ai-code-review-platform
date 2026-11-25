@@ -4936,6 +4936,9 @@ function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
         <Title level={5}>执行过程</Title>
         {agentConversation?.turns.length > 0 ? (
           <div className="review-execution-summary" key={conversationKey}>
+            {process.agentStartActivities.length > 0 && (
+              <SafeTraceEventList events={process.agentStartActivities} />
+            )}
             <Text strong>Agent 模型轮次</Text>
             {agentConversation.turns.map(turn => <AgentModelTurn key={turn.turn} turn={turn} />)}
             {process.agentOtherActivities.length > 0 && (
