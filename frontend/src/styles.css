@@ -1647,6 +1647,109 @@ body {
   padding-bottom: 20px;
 }
 
+.review-preflight-overview,
+.review-preflight-details {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.review-preflight-overview {
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e0e6ef;
+}
+
+.review-preflight-overview-fields,
+.review-preflight-scan-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.review-preflight-overview-fields {
+  grid-template-columns: minmax(0, 1fr) repeat(2, minmax(0, 1.55fr)) minmax(0, .75fr);
+}
+
+.review-preflight-overview-fields dt,
+.review-preflight-scan-metrics dt {
+  color: #64748b;
+}
+
+.review-preflight-overview-fields dd,
+.review-preflight-scan-metrics dd {
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.review-preflight-details > section {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid #e0e6ef;
+  border-radius: 8px;
+}
+
+.review-preflight-details .review-stage-section-heading {
+  align-items: center;
+}
+
+.review-preflight-heading {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.review-preflight-details section > .review-preflight-heading {
+  margin-bottom: 12px;
+}
+
+.review-preflight-heading h5.ant-typography,
+.review-preflight-heading .ant-tag,
+.review-preflight-overview .ant-tag {
+  margin: 0;
+}
+
+.review-preflight-scan-metrics {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.review-preflight-scan-metrics dd {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.review-preflight-details .ant-descriptions-item-label {
+  flex-shrink: 0;
+}
+
+.review-preflight-details .ant-descriptions-item-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.review-preflight-details section > .ant-typography:last-child {
+  display: block;
+  margin-top: 8px;
+}
+
+@media (max-width: 600px) {
+  .review-preflight-overview-fields,
+  .review-preflight-scan-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .review-preflight-details .review-stage-section-heading {
+    align-items: stretch;
+  }
+}
+
 .review-stage-domain-details {
   min-width: 0;
 }

@@ -4485,13 +4485,67 @@ function ContextStageDrawerDetails({ details }) {
   );
 }
 
+const preflightDetailColumns = { xs: 1, sm: 2, md: 2, lg: 2, xl: 2, xxl: 2 };
+
 function PreflightStageDrawerDetails({ details, running, onRun }) {
   const auto = details?.auto || null;
   const taskLatest = details?.taskLatest || null;
   return (
-    <Space orientation="vertical" size="large" className="full-width review-stage-domain-details">
+    <div className="review-preflight-details">
       <section>
-        <Title level={5}>当前 Review · AUTO_PREFLIGHT</Title>
+        <div className="review-stage-section-heading">
+          <div className="review-preflight-heading">
+            <Title level={5}>任务级最新确定性检查</Title>
+            {taskLatest && (
+              <Tag color={deterministicCheckStatusColor(taskLatest.status)}>
+                {deterministicCheckStatusText(taskLatest.status)}
+              </Tag>
+            )}
+          </div>
+          {onRun && (
+            <Button icon={<ReloadOutlined />} loading={running} onClick={onRun}>
+              {taskLatest ? '重新运行敏感信息扫描' : '运行敏感信息扫描'}
+            </Button>
+          )}
+        </div>
+        {!taskLatest ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前任务暂无手动或自动检查记录" />
+        ) : (
+          <>
+            <dl className="review-preflight-scan-metrics">
+              <div><dt>扫描文件</dt><dd>{countText(taskLatest.scannedFileCount)}</dd></div>
+              <div><dt>新增行</dt><dd>{countText(taskLatest.addedLineCount)}</dd></div>
+              <div><dt>命中</dt><dd>{countText(taskLatest.findingCount)}</dd></div>
+              <div><dt>耗时</dt><dd>{formatJourneyDuration(taskLatest.durationMs)}</dd></div>
+            </dl>
+            <Descriptions size="small" column={preflightDetailColumns}>
+              <Descriptions.Item label="检查类型">{taskLatest.checkType || '历史任务未记录'}</Descriptions.Item>
+              <Descriptions.Item label="记录来源">{taskLatest.trigger || '历史任务未记录'}</Descriptions.Item>
+              <Descriptions.Item label="输入新鲜度">{taskLatest.freshness || '历史任务未记录'}</Descriptions.Item>
+              <Descriptions.Item label="扫描范围">{taskLatest.scope || '历史任务未记录'}</Descriptions.Item>
+              <Descriptions.Item label="完成时间" span="filled">{formatDateTime(taskLatest.finishedAt)}</Descriptions.Item>
+              <Descriptions.Item label="规则命中摘要" span="filled">
+                {safeCountTags(taskLatest.ruleTypeCounts, '无命中或历史任务未记录')}
+              </Descriptions.Item>
+            </Descriptions>
+          </>
+        )}
+        <Text type="secondary">手动运行仅更新任务级记录。</Text>
+      </section>
+      <section>
+        <div className="review-preflight-heading">
+          <Title level={5}>当前 Review 自动预检</Title>
+          {auto && (
+            <>
+              <Tag color={deterministicCheckStatusColor(auto.status)}>
+                {deterministicCheckStatusText(auto.status)}
+              </Tag>
+              {auto.shared && <Tag color="blue">本次调度共享</Tag>}
+              {auto.reused && <Tag color="geekblue">当前 reviewKey 复用</Tag>}
+              {auto.failOpen && <Tag color="orange">fail-open</Tag>}
+            </>
+          )}
+        </div>
         {!auto ? (
           <Alert
             type="info"
@@ -4501,15 +4555,7 @@ function PreflightStageDrawerDetails({ details, running, onRun }) {
           />
         ) : (
           <Space orientation="vertical" size="middle" className="full-width">
-            <Space wrap>
-              <Tag color={deterministicCheckStatusColor(auto.status)}>
-                {deterministicCheckStatusText(auto.status)}
-              </Tag>
-              {auto.shared && <Tag color="blue">本次调度共享</Tag>}
-              {auto.reused && <Tag color="geekblue">当前 reviewKey 复用</Tag>}
-              {auto.failOpen && <Tag color="orange">fail-open</Tag>}
-            </Space>
-            <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+            <Descriptions size="small" column={preflightDetailColumns}>
               <Descriptions.Item label="检查类型">{auto.checkType || '历史任务未记录'}</Descriptions.Item>
               <Descriptions.Item label="触发方式">{auto.trigger || '历史任务未记录'}</Descriptions.Item>
               <Descriptions.Item label="输入新鲜度">{auto.freshness || '历史任务未记录'}</Descriptions.Item>
@@ -4533,41 +4579,7 @@ function PreflightStageDrawerDetails({ details, running, onRun }) {
           </Space>
         )}
       </section>
-      <section>
-        <div className="review-stage-section-heading">
-          <div>
-            <Title level={5}>任务级最新确定性检查</Title>
-            <Text type="secondary">独立任务记录，不改写任何已完成 Review 的 AUTO_PREFLIGHT 阶段。</Text>
-          </div>
-          <Button icon={<ReloadOutlined />} loading={running} onClick={onRun}>
-            {taskLatest ? '重新运行敏感信息扫描' : '运行敏感信息扫描'}
-          </Button>
-        </div>
-        {!taskLatest ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前任务暂无手动或自动检查记录" />
-        ) : (
-          <Descriptions size="small" column={{ xs: 1, md: 2 }}>
-            <Descriptions.Item label="状态">
-              <Tag color={deterministicCheckStatusColor(taskLatest.status)}>
-                {deterministicCheckStatusText(taskLatest.status)}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="检查类型">{taskLatest.checkType || '历史任务未记录'}</Descriptions.Item>
-            <Descriptions.Item label="记录来源">{taskLatest.trigger || '历史任务未记录'}</Descriptions.Item>
-            <Descriptions.Item label="输入新鲜度">{taskLatest.freshness || '历史任务未记录'}</Descriptions.Item>
-            <Descriptions.Item label="扫描范围">{taskLatest.scope || '历史任务未记录'}</Descriptions.Item>
-            <Descriptions.Item label="扫描文件">{countText(taskLatest.scannedFileCount)}</Descriptions.Item>
-            <Descriptions.Item label="新增行">{countText(taskLatest.addedLineCount)}</Descriptions.Item>
-            <Descriptions.Item label="命中">{countText(taskLatest.findingCount)}</Descriptions.Item>
-            <Descriptions.Item label="耗时">{formatJourneyDuration(taskLatest.durationMs)}</Descriptions.Item>
-            <Descriptions.Item label="完成时间">{formatDateTime(taskLatest.finishedAt)}</Descriptions.Item>
-            <Descriptions.Item label="规则命中摘要" span={{ xs: 1, md: 2 }}>
-              {safeCountTags(taskLatest.ruleTypeCounts, '无命中或历史任务未记录')}
-            </Descriptions.Item>
-          </Descriptions>
-        )}
-      </section>
-    </Space>
+    </div>
   );
 }
 
@@ -5035,36 +5047,57 @@ function ReviewStageDrawerContent({
       && !(safeTrace && safeTraceJourneyPhases.has(event.phase))
     ));
   const hasReviewStageRecord = stage.visible !== false;
+  const isPreflight = stage.id === 'preflight';
+  const stageStatus = (
+    <Tag color={hasReviewStageRecord ? reviewJourneyStageStatusColor(stage.status) : 'default'}>
+      {hasReviewStageRecord ? reviewJourneyStageStatusLabel(stage.status) : '历史任务未记录'}
+    </Tag>
+  );
   return (
-    <Space orientation="vertical" size="large" className="full-width review-stage-drawer-content">
-      <Descriptions size="small" column={{ xs: 1, md: 2 }}>
-        <Descriptions.Item label="阶段状态">
-          <Tag color={hasReviewStageRecord ? reviewJourneyStageStatusColor(stage.status) : 'default'}>
-            {hasReviewStageRecord ? reviewJourneyStageStatusLabel(stage.status) : '历史任务未记录'}
-          </Tag>
-        </Descriptions.Item>
-        <Descriptions.Item label="Review">{journey?.engineLabel || '历史任务未记录'}</Descriptions.Item>
-        <Descriptions.Item label="开始时间">{formatDateTime(stage.startedAt)}</Descriptions.Item>
-        <Descriptions.Item label="结束时间">{formatDateTime(stage.finishedAt)}</Descriptions.Item>
-        <Descriptions.Item label="真实耗时">{formatJourneyDuration(stage.durationMs)}</Descriptions.Item>
-        {safeTrace?.summary?.agentDurationMs !== undefined && (
-          <Descriptions.Item label="Agent 总耗时">
-            {formatJourneyDuration(safeTrace.summary.agentDurationMs)}
-          </Descriptions.Item>
-        )}
-      </Descriptions>
-      <Alert
-        type={hasReviewStageRecord && stage.status === 'FAILED' ? 'error' : hasReviewStageRecord && stage.status === 'WARNING' ? 'warning' : 'info'}
-        showIcon
-        message={hasReviewStageRecord ? stage.summary : '当前 Review 未记录确定性预检阶段'}
-        description={
-          !hasReviewStageRecord
-            ? '任务级检查操作独立保留，不会补造当前 Review 的阶段、时间、耗时或执行结果。'
-            : stage.status === 'FAILED' || stage.status === 'WARNING'
-            ? stage.warningSummary
-            : '仅展示当前接口中可可靠验证的安全阶段记录。'
-        }
-      />
+    <Space orientation="vertical" size={isPreflight ? 16 : 'large'} className="full-width review-stage-drawer-content">
+      {isPreflight ? (
+        <section className="review-preflight-overview" aria-label="预检概览">
+          <Space wrap size={[8, 4]}>
+            {stageStatus}
+            {stage.safeMetrics.map(metric => (
+              <Tag key={metric.label}>{metric.label} <strong>{metric.value}</strong></Tag>
+            ))}
+          </Space>
+          <dl className="review-preflight-overview-fields">
+            <div><dt>Review</dt><dd>{journey?.engineLabel || '历史任务未记录'}</dd></div>
+            <div><dt>开始时间</dt><dd>{formatDateTime(stage.startedAt)}</dd></div>
+            <div><dt>结束时间</dt><dd>{formatDateTime(stage.finishedAt)}</dd></div>
+            <div><dt>真实耗时</dt><dd>{formatJourneyDuration(stage.durationMs)}</dd></div>
+          </dl>
+        </section>
+      ) : (
+        <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+          <Descriptions.Item label="阶段状态">{stageStatus}</Descriptions.Item>
+          <Descriptions.Item label="Review">{journey?.engineLabel || '历史任务未记录'}</Descriptions.Item>
+          <Descriptions.Item label="开始时间">{formatDateTime(stage.startedAt)}</Descriptions.Item>
+          <Descriptions.Item label="结束时间">{formatDateTime(stage.finishedAt)}</Descriptions.Item>
+          <Descriptions.Item label="真实耗时">{formatJourneyDuration(stage.durationMs)}</Descriptions.Item>
+          {safeTrace?.summary?.agentDurationMs !== undefined && (
+            <Descriptions.Item label="Agent 总耗时">
+              {formatJourneyDuration(safeTrace.summary.agentDurationMs)}
+            </Descriptions.Item>
+          )}
+        </Descriptions>
+      )}
+      {(!isPreflight || !hasReviewStageRecord || stage.status !== 'SUCCESS') && (
+        <Alert
+          type={hasReviewStageRecord && stage.status === 'FAILED' ? 'error' : hasReviewStageRecord && stage.status === 'WARNING' ? 'warning' : 'info'}
+          showIcon
+          message={hasReviewStageRecord ? stage.summary : '当前 Review 未记录确定性预检阶段'}
+          description={
+            !hasReviewStageRecord
+              ? '任务级检查操作独立保留，不会补造当前 Review 的阶段、时间、耗时或执行结果。'
+              : stage.status === 'FAILED' || stage.status === 'WARNING'
+              ? stage.warningSummary
+              : '仅展示当前接口中可可靠验证的安全阶段记录。'
+          }
+        />
+      )}
       {journey?.engineKind === 'FALLBACK' && stage.id === 'terminal' && (
         <div className="review-fallback-transfer" aria-label="Agent 向 Standard fallback 显式转交">
           <span>Agent</span>
@@ -5088,7 +5121,7 @@ function ReviewStageDrawerContent({
         </section>
       )}
       {safeTrace && <AgentSafeTraceDetails safeTrace={safeTrace} />}
-      {!safeTrace && stage.safeMetrics.length > 0 && (
+      {!isPreflight && !safeTrace && stage.safeMetrics.length > 0 && (
         <section>
           <Title level={5}>安全摘要</Title>
           <div className="review-stage-metrics">
@@ -5104,7 +5137,7 @@ function ReviewStageDrawerContent({
       {stage.id === 'context' && (
         <ContextStageDrawerDetails details={stage.details?.context} />
       )}
-      {stage.id === 'preflight' && (
+      {isPreflight && (
         <PreflightStageDrawerDetails
           details={stage.details?.preflight}
           running={taskCheckRunning}
