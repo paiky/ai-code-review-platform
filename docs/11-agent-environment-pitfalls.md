@@ -280,6 +280,7 @@ docker version
   `bash -n /workspace/deploy/deploy-stage3.sh`；不要为语法检查联网拉取未知镜像，也不要把真实 `.env` 挂入容器。
 - 远程 Docker Compose 若提示 `services.backend.env_file.0 must be a string`，说明运行文件使用了当前 Compose 不支持的 `env_file.path/required` 长语法。当前 Compose 已逐项声明容器环境变量，并由运行目录 `.env` 完成插值，因此应移除该 `env_file` 块；不需要升级 Docker 或删除现有 `.env`。
 - `deploy-remote.ps1` 的 SSH 指纹校验失败时，先核对 `ssh2` 协商的服务器主机密钥类型。同一台服务器可同时提供 RSA 和 ED25519 主机密钥，两者的指纹不同。若已有可信的 RSA 指纹，可用 `ssh2` 指定 `rsa-sha2-512` 或 `rsa-sha2-256` 建立连接，并在远端执行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256`。核对该输出与默认握手协商的 ED25519 指纹一致后，再填写 `-HostKeyFingerprint`。
+- Backend 容器日志出现 `Checksum mismatch for applied migration` 时，先比对最近成功部署和故障镜像中对应 SQL 文件的字节及换行。V58 起按 LF 交付，Backend 镜像构建会统一这些文件的 CRLF。更早版本的已发布文件包含历史换行差异，排查时保留已发布字节和迁移账本。
 
 ## 端口与外链
 

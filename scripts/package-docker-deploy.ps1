@@ -39,9 +39,12 @@ function Test-StartedFromExplorer {
 
 function Invoke-Docker {
   $Arguments = $args
+  $Timer = [System.Diagnostics.Stopwatch]::StartNew()
   & docker @Arguments
-  if ($LASTEXITCODE -ne 0) {
-    throw "Docker command failed with exit code ${LASTEXITCODE}: docker $($Arguments -join ' ')"
+  $ExitCode = $LASTEXITCODE
+  Write-Host ("docker {0} took {1:F1}s." -f $Arguments[0], $Timer.Elapsed.TotalSeconds)
+  if ($ExitCode -ne 0) {
+    throw "Docker command failed with exit code ${ExitCode}: docker $($Arguments -join ' ')"
   }
 }
 

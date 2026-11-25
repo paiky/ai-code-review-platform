@@ -1,1 +1,4 @@
 *.sh text eol=lf
+backend-python/migrations/bootstrap_sql/V5[89]__*.sql text eol=lf
+backend-python/migrations/bootstrap_sql/V[6-9][0-9]__*.sql text eol=lf
+backend-python/migrations/bootstrap_sql/V[1-9][0-9][0-9]*__*.sql text eol=lf

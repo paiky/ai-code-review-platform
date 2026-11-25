@@ -132,6 +132,9 @@ ${checkEnv}
 [ -f "$runtime/docker-compose.yml" ] || { echo "Existing runtime/docker-compose.yml is required." >&2; exit 1; }
 [ ! -e ${versionDir} ] || { echo "Remote version directory already exists." >&2; exit 1; }
 command -v flock >/dev/null || { echo "flock is required on the server." >&2; exit 1; }
+if [ -e "$runtime/.remote-deploy.lock" ]; then
+  flock -n 8 8<"$runtime/.remote-deploy.lock" || { echo "Another one-click deployment is using this runtime." >&2; exit 1; }
+fi
 docker info --format '{{.ServerVersion}}' >/dev/null
 docker compose version >/dev/null
 echo "Remote preflight passed."`);
@@ -141,7 +144,12 @@ echo "Remote preflight passed."`);
     stage = 'SFTP upload';
     const stagingDir = `${deployRoot}/.upload-${config.version}-${randomUUID()}`;
     console.log(`Remote staging directory: ${stagingDir}`);
-    await uploadPackage(client, config, stagingDir);
+    const uploadStarted = performance.now();
+    try {
+      await uploadPackage(client, config, stagingDir);
+    } finally {
+      console.log(`SFTP upload took ${((performance.now() - uploadStarted) / 1000).toFixed(1)}s.`);
+    }
 
     stage = 'Remote image loading and Stage 3 upgrade';
     await runRemote(client, `set -e
@@ -153,10 +161,17 @@ ${checkEnv}
 mv -T -- ${shellQuote(stagingDir)} ${versionDir}
 cd -- ${versionDir}
 echo "Loading images for version ${config.version}."
-DEPLOY_HOME="$runtime" bash ./load-images.sh || { code=$?; echo "Image loading failed." >&2; exit "$code"; }
+started=$SECONDS
+code=0
+DEPLOY_HOME="$runtime" bash ./load-images.sh || code=$?
+echo "Remote image loading took $((SECONDS - started))s."
+[ "$code" -eq 0 ] || { echo "Image loading failed." >&2; exit "$code"; }
 cd -- "$runtime"
 echo "Running Stage 3 upgrade with ${config.workers} workers."
-./deploy-stage3.sh upgrade --workers ${config.workers} || { code=$?; echo "Stage 3 upgrade failed." >&2; exit "$code"; }`);
+started=$SECONDS
+./deploy-stage3.sh upgrade --workers ${config.workers} || code=$?
+echo "Stage 3 upgrade took $((SECONDS - started))s."
+[ "$code" -eq 0 ] || { echo "Stage 3 upgrade failed." >&2; exit "$code"; }`);
   } catch (error) {
     throw new Error(`${stage}: ${error.message}`);
   } finally {

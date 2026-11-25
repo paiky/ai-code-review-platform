@@ -387,7 +387,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy-remote.
 
 已配置本机启动文件时，在资源管理器里双击 `scripts\deploy-remote-double-click.cmd`。双击入口从同目录的 `deploy-remote.local.ps1` 读取本机连接配置。直接调用 `scripts\deploy-remote.ps1` 时，请传入上例中的连接参数。缺少参数时，脚本会列出缺少的参数并停止。
 
-终端会显示出错阶段和版本号，打包与远端执行日志位于 `.local/docker-deploy/logs/`。上传失败时服务器可能留有 `.upload-*` 暂存目录，运行目录尚未更新。若镜像加载或 Stage 3 升级失败，先根据日志核对服务器状态，再按下文的手动升级或回滚流程处理。对同一运行目录，请将手动部署、扩缩容和一键升级分开执行。
+终端会显示出错阶段和版本号，打包与远端执行日志位于 `.local/docker-deploy/logs/`。日志分别记录各镜像的构建和导出、SFTP 上传、远端镜像加载以及 Stage 3 升级的耗时。预检发现已有一键部署持锁时会在本机打包前退出。若在打包或上传期间发生并发，加载镜像前的部署锁仍会拦住第二次升级。上传失败时服务器可能留有 `.upload-*` 暂存目录，运行目录尚未更新。若镜像加载或 Stage 3 升级失败，先根据日志核对服务器状态，再按下文的手动升级或回滚流程处理。对同一运行目录，请将手动部署、扩缩容和一键升级分开执行。
 
 ### 仅打包或手动部署
 
@@ -406,6 +406,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy-remote.
 镜像构建命令默认直接连接当前终端，保留 Docker BuildKit 的蓝色动态进度。脚本会把输出同步记录到
 `.local/docker-deploy/logs/`，失败时窗口暂停并给出日志路径。Docker Hub 鉴权、基础镜像元数据、DNS、
 TLS 或连接重置失败不会自动重试，请根据日志确认是临时网络问题后手动重新执行。
+
+Backend 镜像把 `pyproject.toml` 声明的构建依赖和运行依赖安装在独立层。该层已缓存时，只改 Backend 源码或迁移 SQL 会复用依赖，只重新安装项目本身。首次构建、依赖文件变化或构建缓存清理后会重新安装依赖。
 
 若本次只修改 Agent Worker，可复用一个已经完整打包成功、且仍存在于本机 Docker 中的旧版本镜像，
 只重新构建 Worker：

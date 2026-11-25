@@ -13,11 +13,22 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY backend-python/pyproject.toml /app/pyproject.toml
+RUN python -m pip install --upgrade pip \
+    && python -c '\
+import subprocess, sys, tomllib; \
+config = tomllib.loads(open("pyproject.toml", encoding="utf-8").read()); \
+subprocess.check_call([sys.executable, "-m", "pip", "install", *config["build-system"]["requires"], *config["project"]["dependencies"]])'
+
 COPY backend-python/app /app/app
 COPY backend-python/migrations /app/migrations
 
-RUN python -m pip install --upgrade pip \
-    && python -m pip install .
+# V58 onward was released with LF. Earlier migration checksums use the original bytes.
+RUN set -e; \
+    for migration in migrations/bootstrap_sql/V*__*.sql; do \
+        version="${migration##*/V}"; \
+        if [ "${version%%__*}" -ge 58 ]; then sed -i 's/\r$//' "$migration"; fi; \
+    done; \
+    python -m pip install --no-deps --no-build-isolation .
 
 EXPOSE 8090
 
