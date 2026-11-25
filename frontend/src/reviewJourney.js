@@ -367,17 +367,15 @@ export function buildReviewJourney(review, events, options = {}) {
     ) {
       statusCandidates.push('ACTIVE');
     }
-    if (
+    const terminalStatus = (
       definition.id === 'terminal'
       && isTerminalReviewStatus(status)
       && !identity.historical
-    ) {
-      statusCandidates.push(terminalStageStatus(status, identity.effectiveEngine));
-    }
-    const stageStatus = pickStageStatus(statusCandidates);
+    ) ? terminalStageStatus(status, identity.effectiveEngine) : null;
+    const stageStatus = terminalStatus ?? pickStageStatus(statusCandidates);
     const statusDerivedVisible = !identity.historical && (
       (definition.id === 'scheduling' && status === 'QUEUED')
-      || (definition.id === 'terminal' && isTerminalReviewStatus(status))
+      || terminalStatus !== null
     );
     return buildStage(
       definition,
@@ -531,14 +529,16 @@ function deriveReviewIdentity(review) {
 
 function deriveReviewStatus(review, events) {
   const phases = new Set(events.map(event => normalizeEnum(event?.phase)));
+  const rawStatus = normalizeEnum(review?.status);
+  if (rawStatus === 'SUCCESS' || rawStatus === 'COMPLETED') return 'SUCCESS';
+  if (rawStatus === 'FAILED') return 'FAILED';
   if (
     phases.has('AGENT_CANCELLED')
     || phases.has('JOB_INTERRUPTED')
-    || ['CANCELLED', 'CANCELED'].includes(normalizeEnum(review?.status))
+    || ['CANCELLED', 'CANCELED'].includes(rawStatus)
   ) {
     return 'CANCELLED';
   }
-  const rawStatus = normalizeEnum(review?.status);
   if (rawStatus === 'QUEUED') return 'QUEUED';
   if (rawStatus === 'RUNNING' || rawStatus === 'PENDING') {
     const runtimeEvents = events.filter(event => {
@@ -553,8 +553,6 @@ function deriveReviewStatus(review, events) {
     }
     return 'RUNNING';
   }
-  if (rawStatus === 'SUCCESS' || rawStatus === 'COMPLETED') return 'SUCCESS';
-  if (rawStatus === 'FAILED') return 'FAILED';
   if (rawStatus === 'SKIPPED') return 'SKIPPED';
   if ([...phases].some(phase => cancellationPhases.has(phase))) return 'CANCELLED';
   if ([...phases].some(phase => terminalSuccessPhases.has(phase))) return 'SUCCESS';
@@ -566,11 +564,18 @@ function deriveReviewStatus(review, events) {
 function selectLatestAgentAttempt(events, conversationScope, taskId) {
   const scope = conversationScope || getLatestAgentTraceScope(events);
   if (!scope) return events;
-  return events.filter(event => (
-    (!isAgentTraceProgressEvent(event) && !isAgentHeartbeatProgressEvent(event))
-    || ((!conversationScope || event.taskId == null || event.taskId === taskId)
-      && isEventInAgentTraceScope(event, scope))
-  ));
+  return events.filter(event => {
+    if (event.phase === 'FAILED') {
+      const detail = parseDetailObject(event.detail);
+      if (Number.isSafeInteger(detail?.runId)) {
+        return detail.runId === scope.runId
+          && (detail.claimAttempt == null || detail.claimAttempt === scope.claimAttempt);
+      }
+    }
+    if (!isAgentTraceProgressEvent(event) && !isAgentHeartbeatProgressEvent(event)) return true;
+    return (!conversationScope || event.taskId == null || event.taskId === taskId)
+      && isEventInAgentTraceScope(event, scope);
+  });
 }
 
 const conversationProtocols = new Set([

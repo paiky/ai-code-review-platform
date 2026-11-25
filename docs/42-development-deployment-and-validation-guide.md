@@ -496,6 +496,8 @@ Linux runtime 默认按 `AGENT_REVIEW_WORKER_ID_PREFIX` 和容器 hostname 生�
 HTTP/HTTPS、IP 和自定义端口，拒绝通配符、userinfo、query 和 fragment；Worker 仍通过隔离的 Squid 出站，代理允许
 普通 HTTP 和 HTTPS CONNECT 的有效端口。默认 `Claude Code + DeepSeek` 行为不变。
 
+Responses Agent 收到 HTTP 429、500、502、503、504 或 524 时，在本次执行的剩余时间内最多自动重试当前模型请求一次。HTTP Agent 失败后，任务结果及适用的钉钉通知使用 Runner 的安全错误文案。Responses 返回的 HTTP 错误可携带数字状态码，正文和凭据不进入失败文案。
+
 生成密钥：
 
 ```bash

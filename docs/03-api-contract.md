@@ -112,6 +112,7 @@ X-Gitlab-Token: optional-secret-token
 
 - 当前 Python 后端在 webhook 接收后同步执行规则提醒主链路，并异步调度 AI Review。
 - MR `action` 为 close、merge 等非审查触发动作时可返回 `SKIPPED`。
+- MR 批准事件（`approval`、`approved`）会按同一 GitLab 项目、MR、源分支、目标分支、Base SHA 和 Head SHA 查找可复用的自动审查任务。找到正在执行或成功且 AI Review 未失败的任务时，返回 `SKIPPED` 和该任务的 `taskId`。首次审查、版本变化和失败后重试仍可进入原审查流程。手动重跑可重新执行历史批准事件。
 - Push Hook 创建任务前检查项目分支规则；不匹配时返回 `SKIPPED`。是否调度 AI Review 另由项目 Push 策略及全局能力开关判断。
 
 ## 3. Review Task API

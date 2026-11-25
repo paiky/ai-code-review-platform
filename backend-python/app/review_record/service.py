@@ -133,7 +133,7 @@ def rerun_review_task(db: Session, source_task_id: int) -> dict:
     raw_payload = source.get("rawPayload")
     if not isinstance(raw_payload, dict):
         raise AppError("BAD_REQUEST", "Source task raw payload is missing", 400)
-    response = handle_gitlab_webhook(db, None, raw_payload)
+    response = handle_gitlab_webhook(db, None, raw_payload, is_manual_rerun=True)
     return {
         "sourceTaskId": source_task_id,
         "taskId": response.get("taskId"),

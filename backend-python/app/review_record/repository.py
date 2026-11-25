@@ -489,6 +489,36 @@ def list_notifications(db: Session, task_id: int) -> list[dict]:
     ]
 
 
+def find_reusable_mr_review_task_id(
+    db: Session,
+    *,
+    git_project_id: str,
+    mr_id: str,
+    source_branch: str | None,
+    target_branch: str | None,
+    base_sha: str,
+    head_sha: str,
+) -> int | None:
+    return db.scalar(
+        select(ReviewTask.id)
+        .select_from(GitLabMergeRequestEvent)
+        .join(ReviewTask, ReviewTask.id == GitLabMergeRequestEvent.task_id)
+        .where(
+            GitLabMergeRequestEvent.git_project_id == git_project_id,
+            GitLabMergeRequestEvent.mr_id == mr_id,
+            ReviewTask.trigger_type == "GITLAB_MR_WEBHOOK",
+            ReviewTask.source_branch == source_branch,
+            ReviewTask.target_branch == target_branch,
+            ReviewTask.before_sha == base_sha,
+            ReviewTask.after_sha == head_sha,
+            ReviewTask.status.in_(("RUNNING", "SUCCESS")),
+            ReviewTask.review_status.not_in(("REVIEW_FAILED", "TASK_FAILED")),
+        )
+        .order_by(ReviewTask.id.desc())
+        .limit(1)
+    )
+
+
 def create_review_task(
     db: Session,
     *,

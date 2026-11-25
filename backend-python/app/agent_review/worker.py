@@ -373,10 +373,15 @@ def _run_job(
             _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/complete", {**base, "reviewCard": summary["reviewCard"]})
         else:
             error_code = summary.get("errorCode") or "AGENT_RUN_FAILED"
+            failure_message = _failure_message(error_code)
+            if summary.get("runnerVersion") in {
+                RESPONSES_RUNNER_VERSION, CHAT_COMPLETIONS_RUNNER_VERSION, ANTHROPIC_MESSAGES_RUNNER_VERSION,
+            }:
+                failure_message = summary.get("message") or failure_message
             _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/fail", {
                 **base,
                 "failureCode": error_code,
-                "failureMessage": _failure_message(error_code),
+                "failureMessage": failure_message,
             })
     except Exception as exception:
         error_code = (
