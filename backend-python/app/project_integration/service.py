@@ -27,6 +27,7 @@ from app.project_integration.repository import (
 )
 from app.review_record.repository import (
     create_review_task,
+    find_reusable_mr_review_task_id,
     mark_task_failed,
     mark_task_success,
     save_notification_records,
@@ -39,18 +40,29 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def handle_gitlab_webhook(
-    db: Session, gitlab_event: str | None, payload: dict[str, Any], *, trusted_auto_fix_ingress: bool = False,
+    db: Session,
+    gitlab_event: str | None,
+    payload: dict[str, Any],
+    *,
+    trusted_auto_fix_ingress: bool = False,
+    is_manual_rerun: bool = False,
 ) -> dict:
     object_kind = _text(payload, "object_kind")
     if gitlab_event == "Merge Request Hook" or object_kind == "merge_request":
-        return handle_merge_request_webhook(db, payload, trusted_auto_fix_ingress=trusted_auto_fix_ingress)
+        return handle_merge_request_webhook(
+            db, payload, trusted_auto_fix_ingress=trusted_auto_fix_ingress, is_manual_rerun=is_manual_rerun
+        )
     if gitlab_event == "Push Hook" or object_kind == "push":
         return handle_push_webhook(db, payload)
     raise AppError("BAD_REQUEST", f"Unsupported GitLab event: {gitlab_event}", 400)
 
 
 def handle_merge_request_webhook(
-    db: Session, payload: dict[str, Any], *, trusted_auto_fix_ingress: bool = False,
+    db: Session,
+    payload: dict[str, Any],
+    *,
+    trusted_auto_fix_ingress: bool = False,
+    is_manual_rerun: bool = False,
 ) -> dict:
     _validate_mr_payload(payload)
     event = _parse_mr_event(payload)
@@ -66,6 +78,30 @@ def handle_merge_request_webhook(
         }
 
     event = _enrich_mr_detail(event)
+    if (
+        not is_manual_rerun
+        and str(event["eventAction"] or "").strip().lower() in {"approval", "approved"}
+        and event["baseSha"]
+        and event["headSha"]
+    ):
+        existing_task_id = find_reusable_mr_review_task_id(
+            db,
+            git_project_id=event["gitProjectId"],
+            mr_id=event["mrId"],
+            source_branch=event["sourceBranch"],
+            target_branch=event["targetBranch"],
+            base_sha=event["baseSha"],
+            head_sha=event["headSha"],
+        )
+        if existing_task_id is not None:
+            return {
+                "taskId": existing_task_id,
+                "status": "SKIPPED",
+                "gitProjectId": event["gitProjectId"],
+                "projectName": event["projectName"],
+                "mrId": event["mrId"],
+            }
+
     project = upsert_gitlab_project(
         db,
         event["gitProjectId"],
