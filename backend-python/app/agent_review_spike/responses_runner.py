@@ -24,7 +24,7 @@ from app.agent_review_spike.workspace import ReviewWorkspace, ToolBudget
 
 ALLOWED_RESPONSE_ITEM_TYPES = frozenset({"reasoning", "function_call", "message"})
 ALLOWED_TOOL_NAMES = frozenset(item["name"] for item in tool_definitions())
-RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504, 524})
 _PUBLIC_SUMMARY_KINDS: dict[str, AgentConversationSummaryKind] = {
     "I will check the call sites.": "CHECK_CALL_SITES",
     "I will read the source code.": "READ_SOURCE",
@@ -55,8 +55,9 @@ SAFE_ERROR_MESSAGES = {
 
 
 class ResponsesAgentError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, http_status: int | None = None) -> None:
         self.code = code
+        self.http_status = http_status
         super().__init__(SAFE_ERROR_MESSAGES.get(code, "Agent Review 执行失败"))
 
 
@@ -131,7 +132,7 @@ class ResponsesRunnerConfig:
     max_evidence_calls: int = DEFAULT_AGENT_BUDGETS["maxEvidenceCalls"]
     converge_at_calls: int = DEFAULT_AGENT_BUDGETS["convergeAtCalls"]
     submit_by_turn: int = DEFAULT_AGENT_BUDGETS["submitByTurn"]
-    max_retries: int = 2
+    max_retries: int = 1
 
     def __post_init__(self) -> None:
         validate_agent_budgets(self.effective_budgets())
@@ -147,7 +148,7 @@ class ResponsesRunnerConfig:
         *,
         model: str = "gpt-5.6-sol",
         reasoning_effort: str = "high",
-        max_retries: int = 2,
+        max_retries: int = 1,
     ) -> ResponsesRunnerConfig:
         validated = validate_agent_budgets(dict(budgets))
         if not model.strip() or reasoning_effort not in {"low", "medium", "high"}:
@@ -328,6 +329,7 @@ class OpenAIResponsesAgentRunner:
                 audit=audit,
                 budgets=self.config.effective_budgets(),
                 error_code=exception.code,
+                http_status=exception.http_status,
             )
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return _safe_summary(
@@ -386,12 +388,12 @@ class OpenAIResponsesAgentRunner:
                 status = exception.status_code
                 if status in RETRYABLE_STATUS_CODES and attempts < self.config.max_retries:
                     attempts += 1
-                    delay = min(0.1 * (2 ** (attempts - 1)), max(deadline - self.clock(), 0.0))
-                    if delay <= 0:
-                        raise ResponsesAgentError("AGENT_TIMEOUT") from exception
+                    delay = 0.1 * (2 ** (attempts - 1))
+                    if deadline - self.clock() <= delay:
+                        raise ResponsesAgentError("AGENT_TIMEOUT", http_status=status) from exception
                     self.sleeper(delay)
                     continue
-                raise ResponsesAgentError(_transport_error_code(status)) from exception
+                raise ResponsesAgentError(_transport_error_code(status), http_status=status) from exception
             except Exception as exception:
                 raise ResponsesAgentError("AGENT_CUSTOM_NETWORK_ERROR") from exception
 
@@ -529,6 +531,7 @@ def _safe_summary(
     budgets: dict[str, int],
     card: dict[str, Any] | None = None,
     error_code: str | None = None,
+    http_status: int | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "status": status,
@@ -547,5 +550,12 @@ def _safe_summary(
         result["card"] = card
     if error_code:
         result["errorCode"] = error_code
-        result["message"] = SAFE_ERROR_MESSAGES[error_code]
+        message = (
+            "模型中转站等待上游响应超时"
+            if http_status in {504, 524}
+            else SAFE_ERROR_MESSAGES[error_code]
+        )
+        if type(http_status) is int and 400 <= http_status <= 599:
+            message = f"{message}（HTTP {http_status}）"
+        result["message"] = message
     return result
