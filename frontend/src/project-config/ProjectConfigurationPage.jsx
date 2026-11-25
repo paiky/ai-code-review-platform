@@ -302,11 +302,9 @@ export default function ProjectConfigurationPage({ onDirtyChange }) {
   return (
     <div className="project-config-page">
       {contextHolder}
-      <header className="project-config-page-header">
-        <div className="project-config-page-title">
-          <span className="project-config-title-icon"><FolderOpenOutlined /></span>
-          <Title level={4}>项目通知与 Review 配置</Title>
-        </div>
+      <header className="settings-page-heading">
+        <span className="settings-card-icon" aria-hidden="true"><FolderOpenOutlined /></span>
+        <Title level={4}>项目通知与 Review 配置</Title>
       </header>
 
       <Tabs

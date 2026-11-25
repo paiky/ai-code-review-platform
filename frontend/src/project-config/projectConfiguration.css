@@ -4,7 +4,6 @@
   color: #172033;
 }
 
-.project-config-page-header,
 .project-config-selection-toolbar,
 .project-config-drawer-footer,
 .project-config-switch-field,
@@ -15,11 +14,6 @@
   gap: 16px;
 }
 
-.project-config-page-header {
-  padding: 16px 16px 8px;
-}
-
-.project-config-page-title,
 .project-config-drawer-section-header {
   display: flex;
   align-items: flex-start;
@@ -27,17 +21,11 @@
   min-width: 0;
 }
 
-.project-config-page-title {
-  align-items: center;
-}
-
-.project-config-page-title h4,
 .project-config-drawer-section-header h5,
 .project-config-drawer-section > h5 {
   margin: 0;
 }
 
-.project-config-title-icon,
 .project-config-section-icon {
   display: inline-flex;
   flex: 0 0 auto;
@@ -52,12 +40,8 @@
 }
 
 .project-config-page > .ant-alert {
-  margin: 4px 16px 0;
+  margin: 4px 0 0;
   border-radius: 6px;
-}
-
-.project-config-page > .ant-tabs > .ant-tabs-nav {
-  margin: 0 16px 12px;
 }
 
 .project-config-tab-panel {
@@ -65,7 +49,7 @@
   flex-direction: column;
   gap: 14px;
   min-width: 0;
-  padding: 0 16px 16px;
+  padding: var(--settings-content-padding);
 }
 
 .project-config-filter-bar {
@@ -312,11 +296,6 @@
 }
 
 @media (max-width: 760px) {
-  .project-config-page-header {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
   .project-config-filter-bar,
   .webhook-filter-bar,
   .project-config-form-grid.two-columns {
@@ -358,23 +337,6 @@
 }
 
 @media (max-width: 480px) {
-  .project-config-page-header,
-  .project-config-tab-panel {
-    padding-right: 10px;
-    padding-left: 10px;
-  }
-
-  .project-config-page > .ant-alert,
-  .project-config-page > .ant-tabs > .ant-tabs-nav {
-    margin-right: 10px;
-    margin-left: 10px;
-  }
-
-  .project-config-page-title .project-config-title-icon {
-    width: 30px;
-    height: 30px;
-  }
-
   .project-config-drawer-footer {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);

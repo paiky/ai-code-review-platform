@@ -7935,6 +7935,8 @@ function TemplateConfig() {
   const activeReviewConnection = reviewConnectionRows.find(
     item => item.id === selectedReviewConnectionId
   ) || null;
+  const hasUnsavedConnectionChanges = Boolean(dirtyReviewConnectionId)
+    && dirtyReviewConnectionId === selectedReviewConnectionId;
   const currentStandardProvider = providers.find(
     provider => provider.providerCode === aiSettings?.defaultProviderCode
       || provider.defaultProvider === true
@@ -7991,7 +7993,7 @@ function TemplateConfig() {
 
   const selectReviewConnection = connectionId => {
     if (!connectionId || connectionId === selectedReviewConnectionId) return;
-    if (dirtyReviewConnectionId === selectedReviewConnectionId) {
+    if (hasUnsavedConnectionChanges) {
       Modal.confirm({
         title: '放弃未保存的连接修改？',
         content: '切换后将恢复当前连接最近一次服务端配置，未保存的字段和 Key 草稿不会保留。',
@@ -8010,7 +8012,7 @@ function TemplateConfig() {
   };
 
   const runAfterDiscardingConnectionDraft = action => {
-    if (dirtyReviewConnectionId !== selectedReviewConnectionId) {
+    if (!hasUnsavedConnectionChanges) {
       action();
       return;
     }
@@ -8932,31 +8934,11 @@ function TemplateConfig() {
   const collapseItems = [
     {
       key: 'global-settings',
-      label: (
-        <Space wrap>
-          <Text strong>全局设置</Text>
-          <Tag color={(aiSettings?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(aiSettings?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
-          <Tag color={(settingsDraft?.dingtalkNotificationEnabled ?? true) ? 'blue' : 'default'}>钉钉 {(settingsDraft?.dingtalkNotificationEnabled ?? true) ? '开启' : '关闭'}</Tag>
-        </Space>
-      ),
+      label: <Text strong>全局设置</Text>,
       children: (
-        <Card
-          variant="borderless"
-          className="settings-inner-card"
-        >
+        <div className="settings-content">
           <div className="settings-subsection">
             <Space direction="vertical" size="middle" className="global-settings-stack">
-            <SettingsCardHeader
-              icon={<GlobalOutlined />}
-              title="平台全局能力"
-              description="控制审查引擎、紧急风险自动修复和钉钉消息推送。"
-              tags={(
-                <>
-                  <Tag color={(aiSettings?.reviewEnabled ?? false) ? 'green' : 'default'}>AI Review {(aiSettings?.reviewEnabled ?? false) ? '开启' : '关闭'}</Tag>
-                  <Tag color={(settingsDraft?.dingtalkNotificationEnabled ?? true) ? 'blue' : 'default'}>钉钉 {(settingsDraft?.dingtalkNotificationEnabled ?? true) ? '开启' : '关闭'}</Tag>
-                </>
-              )}
-            />
             <div className="global-setting-field">
               <div className="settings-inline-head">
                 <Text strong>Agent Review</Text>
@@ -9037,7 +9019,7 @@ function TemplateConfig() {
             </div>
             </Space>
           </div>
-        </Card>
+        </div>
       )
     },
     {
@@ -9059,18 +9041,8 @@ function TemplateConfig() {
         </Space>
       ),
       children: (
-        <Card variant="borderless" className="settings-inner-card review-model-workspace-card">
+        <div className="settings-content">
           <Space orientation="vertical" size="middle" className="full-width">
-            <SettingsCardHeader
-              title="模型连接与 Review 配置"
-              extra={(
-                <Space wrap className="review-model-page-actions">
-                  <Button type="primary" icon={<PlusOutlined />} onClick={openCreateProviderModal}>
-                    新增模型连接
-                  </Button>
-                </Space>
-              )}
-            />
             <div className="review-runtime-card-grid">
               <Card className="review-runtime-card review-runtime-card-agent">
                 <Space orientation="vertical" size="small" className="full-width">
@@ -9153,6 +9125,11 @@ function TemplateConfig() {
                   compact
                   title="模型连接目录"
                   tags={<Text type="secondary">共 {reviewConnectionRows.length} 条连接</Text>}
+                  extra={(
+                    <Button type="primary" icon={<PlusOutlined />} onClick={openCreateProviderModal}>
+                      新增模型连接
+                    </Button>
+                  )}
                 />
                 <Table
                   className="review-connection-table"
@@ -9212,7 +9189,7 @@ function TemplateConfig() {
               {agentBudgetError && <Alert type="error" showIcon title="运行参数无效" description={agentBudgetError} />}
             </section>
           </Space>
-        </Card>
+        </div>
       )
     },
     {
@@ -9224,10 +9201,7 @@ function TemplateConfig() {
         </Space>
       ),
       children: (
-        <Card
-          variant="borderless"
-          className="settings-inner-card"
-        >
+        <div className="settings-content">
           {profileDraft ? (
             <div className="review-profile-layout">
               <div className="review-profile-toolbar settings-subsection">
@@ -9344,7 +9318,7 @@ function TemplateConfig() {
           ) : (
             <Empty description="暂无 AI Review 设置" />
           )}
-        </Card>
+        </div>
       )
     }
   ];
@@ -9395,13 +9369,25 @@ function TemplateConfig() {
           aria-label={activeSettingsSection?.label || '设置'}
           data-settings-section={activeSettingsSection?.key || ''}
         >
+          {activeSettingsSection?.key === 'global-settings' && (
+            <header className="settings-page-heading">
+              <span className="settings-card-icon" aria-hidden="true"><GlobalOutlined /></span>
+              <Title level={4}>平台全局能力</Title>
+            </header>
+          )}
           {activeSettingsSection?.key === 'ai-review-settings' && (
-            <Tabs
-              aria-label="AI Review 配置页签"
-              activeKey={activeSettingsSection.tabKey}
-              items={aiReviewTabItems}
-              onChange={changeAiReviewSettingsTab}
-            />
+            <>
+              <header className="settings-page-heading">
+                <span className="settings-card-icon" aria-hidden="true"><ApiOutlined /></span>
+                <Title level={4}>模型连接与 Review 配置</Title>
+              </header>
+              <Tabs
+                aria-label="AI Review 配置页签"
+                activeKey={activeSettingsSection.tabKey}
+                items={aiReviewTabItems}
+                onChange={changeAiReviewSettingsTab}
+              />
+            </>
           )}
           {activeSettingsItem?.children || <Empty description="设置模块不存在" />}
         </section>
