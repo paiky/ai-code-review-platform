@@ -47,7 +47,7 @@ from app.review_record.repository import (
     resolve_agent_completion_notification,
 )
 from app.review_memory.service import select_review_memories
-from app.review_prompt_metadata import PlatformPromptMarker
+from app.review_prompt_metadata import PlatformPromptMarker, review_profile_input
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -376,10 +376,12 @@ def enqueue_agent_review(
             ),
             policy_context=policy_context,
         )
+        profile_instructions = str(getattr(profile, "review_instructions", None) or "").strip()
+        profile_input = review_profile_input(profile.profile_code, profile_instructions)
         review_instructions = "\n\n".join(
             value
             for value in (
-                getattr(profile, "review_instructions", None),
+                profile_instructions,
                 policy_context.get("promptText"),
             )
             if str(value or "").strip()
@@ -387,6 +389,8 @@ def enqueue_agent_review(
         diff_mode = "INLINE" if diff_bytes <= budgets["inlineDiffBytes"] else "TOOL_PAGED"
         if review_snapshot and diff_mode != "INLINE":
             review_snapshot["complete"] = False
+        preflight_summary = request.get("_deterministicPreflightSummary")
+        baseline_context = _bounded_context(request)
         input_case = {
             "id": f"task-{task.id}",
             "title": request.get("title")
@@ -397,7 +401,7 @@ def enqueue_agent_review(
             "diff": diff_text,
             "diffMode": diff_mode,
             "reviewInstructions": review_instructions,
-            "baselineContext": _bounded_context(request) + memory.text,
+            "baselineContext": baseline_context + memory.text,
             "reviewCoverage": {
                 "totalChangedFileCount": len(requested_files),
                 "includedFileCount": len(changed_files),
@@ -405,6 +409,19 @@ def enqueue_agent_review(
                 "excludedPaths": excluded_files,
             },
         }
+        input_case["inputSources"] = [
+            {
+                "source": "PROJECT_POLICY",
+                "count": policy_context["meta"]["injectedCount"],
+                "bytes": len(policy_context["promptText"].strip().encode("utf-8")),
+                "truncated": policy_context["meta"]["truncated"],
+            },
+            {"source": "MEMORY", "count": len(memory.snapshot.selected), "bytes": memory.snapshot.injected_bytes},
+        ]
+        if profile_input is not None:
+            input_case["profileInput"] = profile_input.model_dump(exclude_none=True)
+        if preflight_summary and len(baseline_context) < 100_000:
+            input_case["inputSources"].append({"source": "PREFLIGHT", "count": 1})
         workspace_root = (
             Path(get_settings().local_repo_workspace_root).expanduser().resolve(strict=False)
         )
@@ -1100,6 +1117,8 @@ def _persist_agent_conversation_safely(
                 else:
                     turn = event.turn if is_turn else 0
                     message = "Agent 模型轮次已记录" if is_turn else "Agent 首轮输入清单已记录"
+                    if not is_turn and event.protocol != _AGENT_PROMPT_PROTOCOLS.get(run.runner_type):
+                        continue
                 if turn in written:
                     continue
                 detail = event.model_dump(exclude={"phase"}, exclude_none=True)

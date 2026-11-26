@@ -14,7 +14,7 @@ from app.code_quality.models import CodeQualityModelProvider
 from app.code_quality.repository import append_progress, scrub_sensitive
 from app.core.config import get_settings
 from app.core.errors import AppError
-from app.review_prompt_metadata import PlatformPromptMarker
+from app.review_prompt_metadata import PlatformPromptMarker, ReviewInputSource, review_profile_input
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -669,7 +669,7 @@ def _run_json_http_provider(
         db.commit()
 
         with _provider_http_client(timeout_seconds, verify_tls=verify_tls) as client:
-            _persist_standard_prompt_marker(db, task_id, protocol, review_request)
+            _persist_standard_prompt_marker(db, task_id, protocol, review_request, body)
             response = client.post(endpoint, json=body, headers=headers)
         raw = response.text
         append_progress(
@@ -774,16 +774,29 @@ def _run_json_http_provider(
 
 
 def _persist_standard_prompt_marker(
-    db: Session, task_id: int, protocol: str, review_request: dict[str, Any]
+    db: Session, task_id: int, protocol: str, review_request: dict[str, Any], body: dict[str, Any],
 ) -> None:
     try:
         engine = review_request.get("effectiveEngine") or "STANDARD"
+        sources = [ReviewInputSource(source="PLATFORM_INSTRUCTIONS")]
+        if "_policyCount" in review_request:
+            sources.append(ReviewInputSource(
+                source="PROJECT_POLICY",
+                count=review_request["_policyCount"],
+                bytes=len(str(review_request.get("projectReviewPoliciesText") or "").strip().encode("utf-8")),
+            ))
+        for source, key in (("CONTEXT_PACK", "reviewContextText"), ("DIFF", "diffText")):
+            if value := review_request.get(key):
+                sources.append(ReviewInputSource(source=source, bytes=len(value.encode("utf-8"))))
         marker = PlatformPromptMarker(
             templateId=prompt.STANDARD_SYSTEM_TEMPLATE,
             source="STANDARD_HTTP",
             protocol=protocol,
             effectiveEngine=engine,
             runId=review_request.get("agentRunId") if engine == "STANDARD_FALLBACK" else None,
+            profile=review_profile_input(review_request.get("_profileCode"), review_request.get("_profileText")),
+            sourceSummaries=sources,
+            requestBytes=len(json.dumps(body, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")),
         )
         with Session(bind=db.get_bind()) as progress_db:
             append_progress(

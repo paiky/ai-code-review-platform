@@ -10,7 +10,7 @@ const LOOKUP_LABELS = {
   LOADED: '已加载背景', PARTIAL_LOOKUP: '部分读取失败'
 };
 const ADOPTION_LABELS = {
-  HISTORICAL: '历史未记录', PENDING: '等待执行结果', AGENT: 'Agent 已采用',
+  HISTORICAL: '历史未记录', PENDING: '等待执行结果', AGENT: 'Agent 已完成',
   NOT_LOADED: '未加载新增记忆', STANDARD_FALLBACK: 'Standard 未采用新增记忆', UNAVAILABLE: '执行采用情况不可确认'
 };
 const REASON_LABELS = {
@@ -24,7 +24,7 @@ const SKIP_LABELS = {
   ON_DEMAND_BYTE_BUDGET: '按需字节超限', OPTIONAL_LOOKUP_FAILED: '按需查询失败'
 };
 
-export default function ReviewMemorySummary({ projectId, runId, reviewStatus, effectiveEngine }) {
+export default function ReviewMemorySummary({ projectId, runId, reviewStatus, effectiveEngine, requestRecorded = false }) {
   const [expanded, setExpanded] = useState(false);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -50,6 +50,7 @@ export default function ReviewMemorySummary({ projectId, runId, reviewStatus, ef
   const columns = [
     { title: '当时的资料', width: 230, render: (_, item) => <>
       <div className="memory-snapshot-text">{item.title}</div>
+      {item.heading && <div className="memory-snapshot-text">{item.heading}</div>}
       <Link to={`/settings/review-memory?tab=projects&projectId=${encodeURIComponent(projectId)}&sourceId=${item.sourceId}`}>
         查看当前资料 #{item.sourceId}
       </Link>
@@ -87,7 +88,11 @@ export default function ReviewMemorySummary({ projectId, runId, reviewStatus, ef
                 <Tag color={snapshot.lookupStatus === 'PARTIAL_LOOKUP' ? 'orange' : 'blue'}>
                   {LOOKUP_LABELS[snapshot.lookupStatus] || snapshot.lookupStatus}
                 </Tag>
-                <Tag color={adoption === 'STANDARD_FALLBACK' ? 'orange' : undefined}>{ADOPTION_LABELS[adoption] || '执行采用情况不可确认'}</Tag>
+                <Tag color={adoption === 'STANDARD_FALLBACK' ? 'orange' : undefined}>
+                  {requestRecorded && selected.length > 0 && adoption !== 'STANDARD_FALLBACK'
+                    ? '已随 Agent 首轮请求交付'
+                    : ADOPTION_LABELS[adoption] || '执行采用情况不可确认'}
+                </Tag>
               </Space>
               {adoption === 'STANDARD_FALLBACK' && <Alert type="warning" showIcon title="最终 Standard 结果未采用新增记忆"
                 description={selected.length ? '下方是 Agent 入队时加载的背景，不代表最终 Standard 结果采用了这些资料。' : '本次最终由 Standard 产出结果，新增项目记忆未被采用。'} />}

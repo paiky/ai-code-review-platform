@@ -4804,13 +4804,14 @@ const agentRequestProtocolLabels = {
 
 const agentRequestSourceLabels = {
   PLATFORM_INSTRUCTIONS: '平台指令',
-  PROFILE: 'Review Profile',
-  PROJECT_POLICY: '项目规范',
+  PROFILE: '审查重点',
+  PROJECT_POLICY: '项目策略',
   PREFLIGHT: '确定性预检',
-  MEMORY: 'Review 记忆',
-  BASELINE_CONTEXT: '基础上下文',
+  MEMORY: '规范记忆',
+  BASELINE_CONTEXT: '基础上下文合计',
   CHANGED_FILES: '变更文件清单',
-  DIFF: 'Diff'
+  DIFF: 'Diff',
+  CONTEXT_PACK: 'Context Pack'
 };
 
 const agentTurnUsageLabels = {
@@ -4823,37 +4824,61 @@ const agentTurnUsageLabels = {
   cache_read_input_tokens: '缓存读取 Token'
 };
 
-function AgentInitialRequest({ input }) {
+function ReviewInputSources({ sources, paged = false }) {
+  if (sources.length === 0) return null;
+  return (
+    <details className="review-execution-disclosure">
+      <summary>请求来源</summary>
+      <ul className="review-execution-events">
+        {sources.map(source => (
+          <li key={source.source}>
+            <Text>{agentRequestSourceLabels[source.source]}</Text>
+            {source.count !== null && <Text type="secondary">{source.count} 条</Text>}
+            {source.source === 'DIFF' && paged
+              ? <Text type="secondary">待按需读取</Text>
+              : source.bytes !== null && <Text type="secondary">{source.bytes} bytes</Text>}
+            {source.truncated && <Tag color="orange">已裁剪</Tag>}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function ReviewInputProfile({ profile }) {
+  if (!profile) return null;
+  return <Space wrap size={[6, 6]}>
+    <Tag>Profile {profile.code}</Tag>
+    {profile.bytes != null && <Tag>审查重点 {profile.bytes} bytes</Tag>}
+    {profile.sha256 && <Tag title={profile.sha256}>SHA-256 {profile.sha256.slice(0, 12)}</Tag>}
+  </Space>;
+}
+
+function AgentInitialRequest({ input, prepared, review, templateId }) {
   const paged = input.diffMode === 'TOOL_PAGED';
+  const sources = [...input.sourceSummaries];
+  const policyPrepared = !sources.some(item => item.source === 'PROJECT_POLICY') ? prepared?.policyCount : null;
+  const memoryPrepared = !sources.some(item => item.source === 'MEMORY') ? prepared?.memoryCount : null;
   return (
     <div className="review-execution-summary">
       <Text strong>Agent 首轮请求</Text>
-      <Text type="secondary">首轮请求已交给传输层</Text>
+      <Text type="secondary">{input.protocol === 'ANTHROPIC_COMPATIBLE' ? '输入已交给 Claude CLI' : '首轮请求已交给传输层'}</Text>
       <Space wrap size={[6, 6]}>
         <Tag>{agentRequestProtocolLabels[input.protocol]}</Tag>
+        {review?.model && review.effectiveEngine === 'AGENT' && <Tag>{review.model}</Tag>}
+        {templateId && <Tag>{templateId}</Tag>}
         {input.changedFileCount !== null && <Tag>变更文件 {input.changedFileCount}</Tag>}
         {input.requestBytes !== null && <Tag>请求体 {input.requestBytes} bytes</Tag>}
         <Tag>{paged ? 'Diff 待按需读取' : 'Diff 已内联'}</Tag>
         {!paged && input.diffBytes !== null && <Tag>Diff {input.diffBytes} bytes</Tag>}
         {input.truncated && <Tag color="orange">已裁剪</Tag>}
       </Space>
-      {input.sourceSummaries.length > 0 && (
-        <details className="review-execution-disclosure">
-          <summary>请求来源</summary>
-          <ul className="review-execution-events">
-            {input.sourceSummaries.map(source => (
-              <li key={source.source}>
-                <Text>{agentRequestSourceLabels[source.source]}</Text>
-                {source.count !== null && <Text type="secondary">{source.count} 条</Text>}
-                {source.source === 'DIFF' && paged
-                  ? <Text type="secondary">待按需读取</Text>
-                  : source.bytes !== null && <Text type="secondary">{source.bytes} bytes</Text>}
-                {source.truncated && <Tag color="orange">已裁剪</Tag>}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+      <ReviewInputProfile profile={input.profile || (review?.effectiveEngine === 'AGENT' && review.profileCode ? { code: review.profileCode } : null)} />
+      <ReviewInputSources sources={sources} paged={paged} />
+      {(policyPrepared != null || memoryPrepared != null) && <Space wrap size={[6, 6]}>
+        {policyPrepared != null && <Tag>已准备项目策略 {policyPrepared} 条</Tag>}
+        {memoryPrepared != null && <Tag>已准备规范记忆 {memoryPrepared} 条{prepared.memoryBytes == null ? '' : ` / ${prepared.memoryBytes} bytes`}</Tag>}
+      </Space>}
     </div>
   );
 }
@@ -4912,6 +4937,7 @@ function AgentModelTurn({ turn }) {
 function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
   const process = buildReviewExecutionPresentation(journey, review);
   const { agentConversation, agentInput, agentInstructions, standardInput, standardInstructions, final } = process;
+  const memoryRunId = journey?.agentScope?.runId;
   const retrieval = process.agentRetrievalSummary;
   const conversationKey = agentConversation
     ? `${journey.selectorKey}:${agentConversation.scope.runId}:${agentConversation.scope.claimAttempt}`
@@ -4927,7 +4953,8 @@ function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
     ['变更文件', agentInput?.changedFileCount],
     ['纳入文件', agentInput?.includedFileCount],
     ['Diff', agentInput?.diffBytes == null ? null : agentInput.diffBytes + ' bytes'],
-    ['记忆条目', agentInput?.memoryCount]
+    ['规范记忆', agentInput?.memoryCount == null ? null : `${agentInput.memoryCount} 条`],
+    ['项目策略', agentInput?.policyCount == null ? null : `${agentInput.policyCount} 条`]
   ];
   const showsAgent = ['AGENT', 'FALLBACK'].includes(journey?.engineKind);
   let missingFinal = '暂无可核验的最终响应';
@@ -4942,10 +4969,13 @@ function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
         {process.input.length > 0
           ? <ReviewExecutionEvents events={process.input} />
           : <Text type="secondary">暂无可核验的输入准备记录</Text>}
-        {agentConversation?.input && <AgentInitialRequest key={conversationKey} input={agentConversation.input} />}
+        {agentConversation?.input && (
+          <AgentInitialRequest key={conversationKey} input={agentConversation.input} prepared={agentInput}
+            review={review} templateId={agentInstructions?.templateId} />
+        )}
         {agentInput && !agentConversation?.input && (
           <div className="review-execution-summary">
-            <Text strong>Agent 输入摘要</Text>
+            <Text strong>Agent 输入已准备</Text>
             <Space wrap size={[6, 6]}>
               {agentMetrics.filter(([, value]) => value != null).map(([label, value]) => (
                 <Tag key={label}>{label} {value}</Tag>
@@ -4960,8 +4990,13 @@ function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
           <ReviewInitialInstructions
             key={agentInstructions.key}
             instructions={agentInstructions}
-            title="Agent 首轮固定指令"
+            title="平台固定指令（Agent）"
           />
+        )}
+        {memoryRunId && review?.projectId && (
+          <ReviewMemorySummary key={memoryRunId} projectId={review.projectId} runId={memoryRunId}
+            reviewStatus={review.status} effectiveEngine={review.effectiveEngine}
+            requestRecorded={agentConversation?.input?.sourceSummaries.some(item => item.source === 'MEMORY' && item.count > 0) === true} />
         )}
         {standardInput && (
           <div className="review-execution-summary">
@@ -4977,11 +5012,17 @@ function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
           </div>
         )}
         {standardInstructions && (
-          <ReviewInitialInstructions
-            key={standardInstructions.key}
-            instructions={standardInstructions}
-            title="Standard 首轮固定指令"
-          />
+          <div className="review-execution-summary" key={standardInstructions.key}>
+            <Space wrap size={[6, 6]}>
+              <Tag>{agentRequestProtocolLabels[standardInstructions.protocol]}</Tag>
+              {review?.model && journey.engineKind !== 'AGENT' && <Tag>{review.model}</Tag>}
+              <Tag>{standardInstructions.templateId}</Tag>
+              {standardInstructions.requestBytes !== null && <Tag>请求体 {standardInstructions.requestBytes} bytes</Tag>}
+            </Space>
+            <ReviewInputProfile profile={standardInstructions.profile || (journey.engineKind !== 'AGENT' && review?.profileCode ? { code: review.profileCode } : null)} />
+            <ReviewInputSources sources={standardInstructions.sourceSummaries} />
+            <ReviewInitialInstructions instructions={standardInstructions} title="平台固定指令（Standard）" />
+          </div>
         )}
       </section>
       <section className="review-execution-bubble">
@@ -9279,7 +9320,6 @@ function TemplateConfig() {
                   <SettingsCardHeader
                     icon={<FileTextOutlined />}
                     title="基本信息与配置"
-                    description="审查指令持续作用于普通和 Agent Review；Provider 与模型覆盖仅沿用普通 Review 配置。"
                     tags={<Tag color="blue">{profileDraft.builtIn ? '内置 Profile' : '自定义 Profile'}</Tag>}
                   />
                   <Alert type="info" showIcon title="保存会影响所有引用该 Profile 的项目的新 Review；需要项目专用指令时，请先复制为新 Profile。" />
@@ -9323,8 +9363,8 @@ function TemplateConfig() {
                 </section>
                 <section className="settings-subsection review-profile-prompt-card">
                   <SettingsCardHeader
-                    title="Review Instructions（核心 Prompt）"
-                    description="提示词会同时用于普通 Review 和 Agent Review。"
+                    title="审查重点"
+                    description="Agent 与 Standard 共用审查重点。取证方式和结果格式由各自引擎决定。"
                   />
                   <Input.TextArea
                     className="prompt-textarea review-profile-prompt-input"
@@ -9341,7 +9381,7 @@ function TemplateConfig() {
                         key: 'preview',
                         label: (
                           <Space wrap>
-                            <Text strong>已保存 Prompt 预览</Text>
+                            <Text strong>已保存的 Standard Prompt 预览</Text>
                             <Tag>{promptPreview.provider}</Tag>
                             {promptPreview.model && <Tag>{promptPreview.model}</Tag>}
                             <Tag>{promptPreview.promptLength} 字符</Tag>
@@ -9354,9 +9394,9 @@ function TemplateConfig() {
                   )}
                   <div className="settings-action-row review-profile-action-row">
                     <Space wrap>
-                      <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={profileSaving || profileCreating || dirtySettingsDraftTokens.has('profile-settings:profile')}>预览已保存的普通 Review Prompt</Button>
+                      <Button loading={promptPreviewLoading} onClick={previewRenderedPrompt} disabled={profileSaving || profileCreating || dirtySettingsDraftTokens.has('profile-settings:profile')}>预览已保存的 Standard Prompt</Button>
                       {profileDraft.builtIn && (
-                        <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={profileCreating}>恢复当前 Profile 默认 Prompt</Button>
+                        <Button loading={profileSaving} onClick={resetProfilePrompt} disabled={profileCreating}>恢复默认审查重点</Button>
                       )}
                       <Button type="primary" loading={profileSaving} onClick={saveProfilePrompt} disabled={profileCreating}>保存 Profile</Button>
                     </Space>

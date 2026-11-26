@@ -1194,7 +1194,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-backend.ps1 
 | --- | --- | --- |
 | `GET /api/projects/{projectId}/review-memory/settings` | 返回 `enabled/version/schemaReady` | 不创建配置；未迁移返回 `false/1/false`，配置不存在但 schema 就绪返回 `false/1/true` |
 | `PUT /api/projects/{projectId}/review-memory/settings` | 严格布尔 `enabled`、正整数 `expectedVersion`；返回递增版本 | 项目锁＋独立版本 CAS；并发/旧版本 409 `MEMORY_VERSION_CONFLICT`；V59 未就绪 503 `MEMORY_SCHEMA_PENDING`；只改记忆设置，不改旧触发条件 |
-| `GET /api/agent-review/runs/{runId}/memory-summary?projectId={projectId}` | 返回 `recorded/snapshot/effectiveEngine/adoption` | 校验任务归属，跨项目 404；只读冻结白名单，无当前库补造；历史 `recorded=false/HISTORICAL`；实际采用 `AGENT`、排队 `PENDING`、降级 `STANDARD_FALLBACK`，未采用及执行不可确认分别标识 |
+| `GET /api/agent-review/runs/{runId}/memory-summary?projectId={projectId}` | 返回 `recorded/snapshot/effectiveEngine/adoption`，新快照的 `selected` 条目可附冻结章节名 `heading` | 校验任务归属，跨项目 404。只读当次冻结记录。历史 `recorded=false/HISTORICAL`，`AGENT` 表示带记忆的 Agent 运行已完成，`PENDING` 表示等待执行结果，`STANDARD_FALLBACK` 表示降级。首轮请求交付由当次输入事件独立证明。 |
 
 接入链路为 `enqueue_agent_review → review_memory.service.select_review_memories → retrieval`；现有自动完成上下文中的 `focusChangeTypes` 经有限映射转为问题标签，另从安全路径和有限 diff 提取关键词/问题线索。DB/DB_SQL/ORM 等映射 DATABASE，API 映射 API_CONTRACT，CACHE/MQ 子类沿用现有聚合映射。没有这些线索时仍保留近期专项候选，不把未知视为无关。
 

@@ -3128,6 +3128,10 @@ def _run_review(
         )
     policy_context = _attach_project_review_policies(db, project, request)
     review_context = _attach_review_context_pack(db, task_id, project, request)
+    request["_profileCode"] = profile.profile_code
+    profile_text = str(profile.review_instructions or "").strip()
+    request["_profileText"] = profile_text if str(request.get("instructions") or "").strip() == profile_text else None
+    request["_policyCount"] = policy_context["meta"]["injectedCount"]
     append_progress(
         db,
         task_id,

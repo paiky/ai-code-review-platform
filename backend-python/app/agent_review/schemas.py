@@ -3,7 +3,13 @@ from typing import Annotated, Any, Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
 from app.agent_review_spike.budgets import AGENT_BUDGET_LIMITS
-from app.review_prompt_metadata import PlatformPromptMarker, REVIEW_PLATFORM_PROMPT
+from app.review_prompt_metadata import (
+    MAX_REVIEW_INPUT_BYTES,
+    REVIEW_PLATFORM_PROMPT,
+    PlatformPromptMarker,
+    ReviewInputSource,
+    ReviewProfileInput,
+)
 
 
 AgentRuntimeProtocol = Literal[
@@ -26,7 +32,6 @@ OPENAI_RESPONSES_SUMMARY_SOURCE: AgentConversationSummarySource = "OPENAI_RESPON
 _MAX_CONVERSATION_TURNS = AGENT_BUDGET_LIMITS["maxTurns"]["max"]
 _MAX_CONVERSATION_TOOL_SEQUENCES = AGENT_BUDGET_LIMITS["maxToolCalls"]["max"]
 _MAX_CONVERSATION_SOURCES = 8
-_MAX_CONVERSATION_BYTES = 10 * 1024 * 1024
 _TOKEN_USAGE_FIELDS = (
     "input_tokens",
     "output_tokens",
@@ -36,24 +41,6 @@ _TOKEN_USAGE_FIELDS = (
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
 )
-
-
-class AgentConversationInputSource(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
-
-    source: Literal[
-        "PLATFORM_INSTRUCTIONS",
-        "PROFILE",
-        "PROJECT_POLICY",
-        "PREFLIGHT",
-        "MEMORY",
-        "BASELINE_CONTEXT",
-        "CHANGED_FILES",
-        "DIFF",
-    ]
-    count: int | None = Field(default=None, ge=0, le=10_000)
-    bytes: int | None = Field(default=None, ge=0, le=_MAX_CONVERSATION_BYTES)
-    truncated: bool | None = None
 
 
 class AgentConversationInputEvent(BaseModel):
@@ -69,9 +56,10 @@ class AgentConversationInputEvent(BaseModel):
     ]
     diffMode: Literal["INLINE", "TOOL_PAGED"]
     changedFileCount: int | None = Field(default=None, ge=0, le=10_000)
-    requestBytes: int | None = Field(default=None, ge=0, le=_MAX_CONVERSATION_BYTES)
-    diffBytes: int | None = Field(default=None, ge=0, le=_MAX_CONVERSATION_BYTES)
-    sourceSummaries: list[AgentConversationInputSource] | None = Field(
+    requestBytes: int | None = Field(default=None, ge=0, le=MAX_REVIEW_INPUT_BYTES)
+    diffBytes: int | None = Field(default=None, ge=0, le=MAX_REVIEW_INPUT_BYTES)
+    profile: ReviewProfileInput | None = None
+    sourceSummaries: list[ReviewInputSource] | None = Field(
         default=None, max_length=_MAX_CONVERSATION_SOURCES
     )
     truncated: bool | None = None
