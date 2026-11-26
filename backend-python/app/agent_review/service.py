@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 import re
 import subprocess
+from tempfile import TemporaryFile
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
@@ -57,6 +59,12 @@ _AGENT_PROMPT_PROTOCOLS = {
 }
 _DISPATCH_PROGRESS_SCHEMA_VERSION = "agent-dispatch-progress-v1"
 _DISPATCH_OPERATION = "AGENT_ENQUEUE"
+_PUSH_DIFF_TIMEOUT_SECONDS = 15
+_COMMIT_SHA = re.compile(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")
+_NON_REGULAR_DIFF_MODE = re.compile(
+    r"^(?:(?:old mode|new mode|new file mode|deleted file mode) |index [^\n ]+ )(?:120000|160000)$",
+    re.MULTILINE,
+)
 _AGENT_ACTIVITY_NAMES = {
     "list_files": "LIST_FILES",
     "search_code": "SEARCH_CODE",
@@ -281,6 +289,11 @@ def enqueue_agent_review(
         diff_bytes=diff_bytes,
         mark_review_failed=mark_review_failed,
     )
+    if task.trigger_type == "GITLAB_PUSH_WEBHOOK":
+        diff_text = _complete_push_diff(
+            task, worktree, changed_files, diff_text, changed_file_details=request.get("changedFileDetails"),
+        )
+        diff_bytes = len(diff_text.encode("utf-8"))
     if review_snapshot:
         # A reused worktree may predate an in-place rerun of the source review.
         worktree_matches = _worktree_matches_head(worktree, review_snapshot["headSha"])
@@ -1820,6 +1833,88 @@ def _complete_mr_diff(task: ReviewTask, project: Project, changed_files: list[st
         missing.remove(path)
         if not missing:
             break
+    return "\n".join(parts)
+
+
+def _complete_push_diff(
+    task: ReviewTask,
+    worktree: Path,
+    changed_files: list[str],
+    diff_text: str,
+    *,
+    changed_file_details: list[Any] | None = None,
+) -> str:
+    before, after = task.before_sha or "", task.after_sha or ""
+    if not all(_COMMIT_SHA.fullmatch(ref) and ref.strip("0") for ref in (before, after)):
+        return diff_text
+    remaining_bytes = repository.MAX_DIFF_BYTES - len(diff_text.encode("utf-8"))
+    if remaining_bytes <= 0:
+        return diff_text
+    existing = diff_by_file({"changedFiles": changed_files, "diff": diff_text})
+    missing = [path for path in changed_files if path not in existing]
+    if not missing:
+        return diff_text
+    renames = {
+        item["path"].strip().replace("\\", "/"): item.get("oldPath")
+        for item in changed_file_details or []
+        if isinstance(item, dict) and (item.get("renamedFile") is True or item.get("changeType") == "RENAMED")
+        and isinstance(item.get("path"), str)
+    }
+
+    env = {name: value for name, value in os.environ.items() if not name.upper().startswith("GIT_")}
+    env.update(GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+    git = [
+        "git", "--no-replace-objects", "--literal-pathspecs", "-C", str(worktree),
+        "-c", f"core.bigFileThreshold={repository.MAX_DIFF_BYTES}", "diff",
+        "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-submodules=all",
+        "--src-prefix=a/", "--dst-prefix=b/", "--unified=3",
+    ]
+    deadline = perf_counter() + _PUSH_DIFF_TIMEOUT_SECONDS
+    parts = [diff_text] if diff_text else []
+    for path in missing:
+        old_path = renames.get(path, path)
+        try:
+            old_path = validate_review_path(old_path)
+        except ReviewToolError:
+            continue
+        renamed = old_path != path
+        pathspecs = [old_path, path] if renamed else [path]
+        timeout = deadline - perf_counter()
+        patch_limit = remaining_bytes - int(bool(parts))
+        if timeout <= 0 or patch_limit <= 0:
+            break
+        try:
+            with TemporaryFile() as output:
+                subprocess.run(
+                    [*git, "--find-renames" if renamed else "--no-renames",
+                     f"{before}^{{commit}}", f"{after}^{{commit}}", "--", *pathspecs],
+                    stdout=output, stderr=subprocess.DEVNULL,
+                    env=env, timeout=timeout, check=True,
+                )
+                output.seek(0)
+                data = output.read(patch_limit + 2)
+        except (OSError, subprocess.SubprocessError) as exception:
+            _LOGGER.warning("Agent Push Diff completion unavailable taskId=%s errorType=%s", task.id, type(exception).__name__)
+            break
+        if len(data.rstrip(b"\n")) > patch_limit or len(data) == patch_limit + 2 or b"\0" in data:
+            continue
+        try:
+            sections = split_diff_sections(data.decode("utf-8"))
+        except UnicodeDecodeError:
+            continue
+        if len(sections) != 1:
+            continue
+        candidate = sections[0]
+        if not candidate.patch or (candidate.new_path or candidate.old_path) != path:
+            continue
+        if renamed and (candidate.old_path, candidate.new_path) != (old_path, path):
+            continue
+        section = candidate.text
+        header = section.partition("\n+++ ")[0]
+        if _NON_REGULAR_DIFF_MODE.search(header):
+            continue
+        parts.append(section)
+        remaining_bytes -= len(section.encode("utf-8")) + int(len(parts) > 1)
     return "\n".join(parts)
 
 
