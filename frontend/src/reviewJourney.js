@@ -6,7 +6,13 @@ import {
   isEventInAgentTraceScope,
   summarizeAgentTrace
 } from './agentReviewTrace.js';
-import { buildSafeTraceEvent, buildSafeTraceViewModel, groupSafeTraceEvents } from './safeTracePresentation.js';
+import {
+  buildSafeTraceEvent,
+  buildSafeTraceViewModel,
+  groupSafeTraceEvents,
+  summarizeTraceRetrieval,
+  traceRetrievalReason
+} from './safeTracePresentation.js';
 
 export const REVIEW_JOURNEY_STAGE_STATUSES = Object.freeze([
   'WAITING',
@@ -562,7 +568,8 @@ function deriveReviewStatus(review, events) {
 }
 
 function selectLatestAgentAttempt(events, conversationScope, taskId) {
-  const scope = conversationScope || getLatestAgentTraceScope(events);
+  const belongsToTask = event => taskId == null || event.taskId == null || event.taskId === taskId;
+  const scope = conversationScope || getLatestAgentTraceScope(events.filter(belongsToTask));
   if (!scope) return events;
   return events.filter(event => {
     if (event.phase === 'FAILED') {
@@ -573,8 +580,7 @@ function selectLatestAgentAttempt(events, conversationScope, taskId) {
       }
     }
     if (!isAgentTraceProgressEvent(event) && !isAgentHeartbeatProgressEvent(event)) return true;
-    return (!conversationScope || event.taskId == null || event.taskId === taskId)
-      && isEventInAgentTraceScope(event, scope);
+    return belongsToTask(event) && isEventInAgentTraceScope(event, scope);
   });
 }
 
@@ -761,10 +767,7 @@ function associateAgentConversationTools(turns, events) {
   const toolsBySequence = new Map();
   const convergingSequences = new Set();
   for (const event of collectAgentTraceEvents(events)) {
-    const reportedTool = event.phase === 'AGENT_SUBMITTING' ? parseDetailObject(event.detail)?.activity : null;
-    // In submission mode the backend can label a blocked retrieval with the submission phase.
-    const isRetrieval = conversationToolTypes.has(reportedTool) && reportedTool !== 'SUBMIT_REVIEW';
-    const activity = buildSafeTraceEvent(isRetrieval ? { ...event, phase: 'AGENT_TOOL_ACTIVITY' } : event);
+    const activity = buildSafeTraceEvent(event);
     if (!activity) continue;
     trace.push(activity);
     if (!conversationToolTypes.has(activity.activityType)) continue;
@@ -776,15 +779,21 @@ function associateAgentConversationTools(turns, events) {
   const associatedTurns = turns.map(turn => {
     const sequences = turn.toolSequences.filter(sequence => !assigned.has(sequence));
     sequences.forEach(sequence => assigned.add(sequence));
+    const tools = sequences.flatMap(sequence => toolsBySequence.get(sequence) || []);
     return {
       ...turn,
-      tools: sequences.flatMap(sequence => toolsBySequence.get(sequence) || []),
+      tools,
+      retrievalReasons: tools.flatMap(tool => {
+        const reason = traceRetrievalReason(tool);
+        return reason && reason !== 'RETURNED' ? [{ reason, activity: tool.activityType }] : [];
+      }),
       missingToolCount: sequences.filter(sequence => !toolsBySequence.has(sequence)).length,
       converging: sequences.some(sequence => convergingSequences.has(sequence))
     };
   });
   return {
     turns: associatedTurns,
+    retrievalSummary: summarizeTraceRetrieval(trace, associatedTurns),
     otherActivities: groupSafeTraceEvents(trace.filter(activity => (
       !assigned.has(activity.sequence) || !conversationToolTypes.has(activity.activityType)
     )))

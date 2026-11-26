@@ -69,7 +69,11 @@ def tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "read_diff_range",
-            "description": "Read at most 400 lines of the task diff for one changed file.",
+            "description": (
+                "Read at most 400 patch lines for one changed file. Line 1 is the +++ header "
+                "when present and the first patch line otherwise. These are patch offsets, not source line numbers. "
+                "Use totalDiffLines to choose the next range."
+            ),
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": False,
@@ -119,6 +123,7 @@ class ReviewToolExecutor:
         self.last_schema_failures: list[dict[str, str]] = []
         self.output_repair_exhausted = False
         self.output_termination_requested = False
+        self.search_ids: dict[tuple[str, tuple[str, ...], bool, bool, int], int] = {}
 
     def execute(self, name: Any, arguments: Any) -> ToolExecutionResult:
         tool = str(name or "")
@@ -136,9 +141,10 @@ class ReviewToolExecutor:
                 True,
             )
         started = None
+        range_detail = _requested_range_detail(tool, args)
         try:
-            started = self.budget.begin(tool)
-            value = self._execute_allowed_tool(tool, args, started)
+            started = self.budget.begin(tool, retrieval_detail=range_detail)
+            value = self._execute_allowed_tool(tool, args, started, range_detail)
             self.write_audit()
             return ToolExecutionResult(self._with_review_budget(tool, value), False)
         except (ReviewToolError, ReviewSchemaError) as exception:
@@ -151,6 +157,8 @@ class ReviewToolExecutor:
                 "errorCode": error_code,
                 "message": str(exception),
             }
+            if isinstance(exception, ReviewToolError) and exception.total_diff_lines is not None:
+                error_value["totalDiffLines"] = exception.total_diff_lines
             if isinstance(exception, ReviewSchemaError) and tool == "submit_review":
                 self.schema_failure_count += 1
                 self.last_schema_failures = list(exception.violations)
@@ -175,7 +183,9 @@ class ReviewToolExecutor:
                 "SYMLINK_DENIED",
             }:
                 self.budget.blocked()
-            self._finish_failed(tool, args, started, error_code)
+            if "totalDiffLines" in error_value:
+                range_detail["totalLines"] = error_value["totalDiffLines"]
+            self._finish_failed(tool, started, error_code, range_detail)
             if isinstance(exception, ReviewSchemaError) and tool == "submit_review":
                 self._annotate_submit_event(exception)
             self.write_audit()
@@ -186,8 +196,10 @@ class ReviewToolExecutor:
                 ),
                 True,
             )
-        except Exception:
-            self._finish_failed(tool, args, started, "INTERNAL_TOOL_ERROR")
+        except Exception as exception:
+            if isinstance(exception, OSError):
+                range_detail["outcome"] = "IO_ERROR"
+            self._finish_failed(tool, started, "INTERNAL_TOOL_ERROR", range_detail)
             self.write_audit()
             return ToolExecutionResult(
                 self._with_review_budget(
@@ -224,21 +236,29 @@ class ReviewToolExecutor:
         }
 
     def _execute_allowed_tool(
-        self, tool: str, args: dict[str, Any], started: float
+        self, tool: str, args: dict[str, Any], started: float, range_detail: dict[str, Any]
     ) -> dict[str, Any]:
         if tool == "list_files":
             value = self.workspace.list_files(args.get("pattern") or "**/*", args.get("limit") or 200)
             paths = [item["path"] for item in value["files"]]
-            self.budget.finish(tool, started, item_count=value["count"], paths=paths)
+            self.budget.finish(
+                tool, started, item_count=value["count"], paths=paths,
+                retrieval_detail=_match_detail(value),
+            )
             return value
         if tool == "search_code":
+            query = args.get("query")
+            globs = args.get("globs")
+            is_regex = bool(args.get("isRegex", False))
+            case_sensitive = bool(args.get("caseSensitive", True))
+            limit = args.get("limit") or 50
             value = self.workspace.search_code(
-                args.get("query"),
-                globs=args.get("globs"),
-                is_regex=bool(args.get("isRegex", False)),
-                case_sensitive=bool(args.get("caseSensitive", True)),
-                limit=args.get("limit") or 50,
+                query, globs=globs, is_regex=is_regex, case_sensitive=case_sensitive, limit=limit,
             )
+            # Store the comparison key in this executor. The audit only carries its ordinal.
+            patterns = {str(pattern or "**/*").strip().replace("\\", "/") or "**/*" for pattern in (globs or ["**/*"])}
+            search_key = (str(query), tuple(sorted(patterns)), is_regex, case_sensitive, int(limit))
+            search_id = self.search_ids.setdefault(search_key, len(self.search_ids) + 1)
             paths = [item["path"] for item in value["matches"]]
             source_bytes = sum(len(item["text"].encode("utf-8")) for item in value["matches"])
             self.budget.finish(
@@ -247,30 +267,44 @@ class ReviewToolExecutor:
                 source_bytes=source_bytes,
                 item_count=value["count"],
                 paths=paths,
-                query=str(args.get("query") or ""),
+                retrieval_detail={**_match_detail(value), "searchId": search_id},
             )
             return value
         if tool == "read_file_range":
             value = self.workspace.read_file_range(
                 args.get("path"), args.get("startLine"), args.get("endLine")
             )
+            total_lines = value.pop("totalLines", None)
             self.budget.finish(
                 tool,
                 started,
                 source_bytes=len(value["content"].encode("utf-8")),
                 item_count=value["lineCount"],
                 paths=[value["path"]],
+                retrieval_detail=_returned_range_detail(range_detail, value, total_lines),
             )
             return value
         if tool == "read_diff_range":
             path = str(args.get("path") or "").replace("\\", "/")
-            if path not in self.changed_files or path not in self.diff_by_file:
+            if path not in self.changed_files:
                 raise ReviewToolError("DIFF_PATH_NOT_ALLOWED", "diff path is not a changed file")
-            start_line = int(args.get("startLine") or 0)
-            end_line = int(args.get("endLine") or 0)
+            try:
+                start_line = int(args.get("startLine") or 0)
+                end_line = int(args.get("endLine") or 0)
+            except (TypeError, ValueError, OverflowError) as exception:
+                raise ReviewToolError("INVALID_ARGUMENT", "diff range must contain 1 to 400 lines") from exception
             if start_line < 1 or end_line < start_line or end_line - start_line + 1 > 400:
                 raise ReviewToolError("INVALID_ARGUMENT", "diff range must contain 1 to 400 lines")
-            lines = self.diff_by_file[path].splitlines()
+            patch = self.diff_by_file.get(path)
+            if not patch:
+                raise ReviewToolError("DIFF_CONTENT_UNAVAILABLE", "no readable patch is available for this changed file")
+            lines = patch.split("\n")
+            if start_line > len(lines):
+                raise ReviewToolError(
+                    "DIFF_RANGE_OUT_OF_BOUNDS",
+                    "diff startLine is beyond the end of the patch",
+                    total_diff_lines=len(lines),
+                )
             selected = lines[start_line - 1 : end_line]
             content = "\n".join(selected)
             value = {
@@ -278,6 +312,7 @@ class ReviewToolExecutor:
                 "startLine": start_line,
                 "endLine": min(end_line, len(lines)),
                 "lineCount": len(selected),
+                "totalDiffLines": len(lines),
                 "content": content,
             }
             self.budget.finish(
@@ -286,6 +321,7 @@ class ReviewToolExecutor:
                 source_bytes=len(content.encode("utf-8")),
                 item_count=value["lineCount"],
                 paths=[path],
+                retrieval_detail=_returned_range_detail(range_detail, value, value["totalDiffLines"]),
             )
             return value
         if tool == "submit_review":
@@ -305,9 +341,9 @@ class ReviewToolExecutor:
     def _finish_failed(
         self,
         tool: str,
-        args: dict[str, Any],
         started: float | None,
         error_code: str,
+        retrieval_detail: dict[str, Any],
     ) -> None:
         if started is None:
             return
@@ -317,7 +353,7 @@ class ReviewToolExecutor:
                 started,
                 status="FAILED",
                 error_code=error_code,
-                query=str(args.get("query")) if tool == "search_code" else None,
+                retrieval_detail=retrieval_detail,
             )
         except ReviewToolError:
             pass
@@ -339,6 +375,47 @@ class ReviewToolExecutor:
         if tool not in EVIDENCE_TOOLS:
             return value
         return {**value, "reviewBudget": self.budget.review_budget()}
+
+
+def _match_detail(value: dict[str, Any]) -> dict[str, Any]:
+    detail = {key: value[key] for key in ("timedOut", "truncated") if key in value}
+    if value["count"]:
+        detail["outcome"] = "RETURNED"
+    elif not (detail.get("timedOut") or detail.get("truncated")):
+        detail["outcome"] = "NO_MATCH"
+    return detail
+
+
+def _requested_range_detail(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    if tool not in {"read_file_range", "read_diff_range"}:
+        return {}
+    detail: dict[str, Any] = {
+        "coordinateSpace": "DIFF" if tool == "read_diff_range" else "SOURCE",
+    }
+    for argument, field in (("startLine", "requestedStartLine"), ("endLine", "requestedEndLine")):
+        value = args.get(argument)
+        if isinstance(value, bool):
+            continue
+        try:
+            detail[field] = int(value)
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return detail
+
+
+def _returned_range_detail(
+    requested: dict[str, Any], value: dict[str, Any], total_lines: int | None
+) -> dict[str, Any]:
+    detail = dict(requested)
+    if total_lines is not None:
+        detail["totalLines"] = total_lines
+    if value["lineCount"]:
+        detail.update(
+            outcome="RETURNED", returnedStartLine=value["startLine"], returnedEndLine=value["endLine"]
+        )
+    elif total_lines is not None and value["startLine"] > total_lines:
+        detail["outcome"] = "RANGE_OUT_OF_BOUNDS"
+    return detail
 
 
 def _atomic_write_json(path: Path, value: Any) -> None:

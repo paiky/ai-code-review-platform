@@ -49,6 +49,7 @@ from app.agent_review_spike.budgets import (
     default_agent_budgets,
     validate_agent_budgets,
 )
+from app.agent_review_spike.retrieval_audit import sanitize_retrieval_detail
 from app.code_quality.models import (
     CodeQualityReviewProgressEvent,
     CodeQualitySchedulerJob,
@@ -2155,6 +2156,9 @@ def sanitize_agent_audit(value: Any) -> dict[str, Any]:
         error_code = str(raw_event.get("errorCode") or "")
         if error_code and error_code.replace("_", "").isalnum():
             event["errorCode"] = error_code[:80]
+        detail = sanitize_retrieval_detail(raw_event.get("retrievalDetail"), event)
+        if detail:
+            event["retrievalDetail"] = detail
         if tool == "submit_review":
             event["attempt"] = _limited_non_negative(raw_event.get("attempt"), 3)
             event["maxAttempts"] = 3

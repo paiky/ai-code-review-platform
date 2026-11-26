@@ -18,7 +18,11 @@ from app.project_integration import gitlab_client
 from app.review_feedback.models import ReviewItemFeedback
 from app.review_feedback.repository import ensure_feedback_schema
 from app.review_context.local_repo import prepare_local_repository_context, task_head_worktree_path
-from app.review_context.local_retriever import SUPPORTED_REFERENCE_SIGNAL_TYPES, retrieve_local_reference_context
+from app.review_context.local_retriever import (
+    JAVA_GUARD_REMOVAL_SIGNAL,
+    SUPPORTED_REFERENCE_SIGNAL_TYPES,
+    retrieve_local_reference_context,
+)
 
 
 CONTEXT_PACK_VERSION = "context-pack-v0"
@@ -44,6 +48,7 @@ HIGH_MISJUDGMENT_SIGNAL_TYPES = {
     "FIELD_DELETED",
     "METHOD_SIGNATURE_CHANGED",
     "METHOD_DELETED",
+    JAVA_GUARD_REMOVAL_SIGNAL,
 }
 LOCAL_REFERENCE_MIN_SNIPPETS_PER_HIGH_SIGNAL_SEARCH = 1
 NOT_INJECTED_EVIDENCE_MAX_ITEMS = 8
@@ -100,6 +105,12 @@ _SQL_ASSIGNMENT_PATTERN = re.compile(r"\b([A-Za-z_][\w$]*)\s*=", re.IGNORECASE)
 _MYBATIS_ID_PATTERN = re.compile(r"\bid\s*=\s*['\"]([A-Za-z_$][\w$]*)['\"]", re.IGNORECASE)
 _MYBATIS_PARAM_PATTERN = re.compile(r"[#\$]\{\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)")
 _JAVA_CLASS_PATTERN = re.compile(r"\b(?:class|record|interface|enum)\s+([A-Za-z_$][\w$]*)")
+_JAVA_GUARD_PREFIX = re.compile(r"^\s*(?:}\s*)?(?:else\s+)?if\s*\(")
+_JAVA_GUARD_CALL = re.compile(
+    r"(?:^|&&|\|\|)\s*!?\s*[a-z_$][\w$]*\s*\.\s*([A-Za-z_$][\w$]*)\s*\("
+)
+_JAVA_GUARD_SOURCE_WINDOW_LINES = 3
+_JAVA_GUARD_SOURCE_WINDOW_REASON = "JAVA_GUARD_REMOVAL_WINDOW"
 _DB_IDENTIFIER_STOP_WORDS = {
     "add",
     "alter",
@@ -491,8 +502,10 @@ def _source_snippets_for_changed_files(
                 }
             )
             continue
-        changed_ranges = _changed_new_line_ranges(str(file.get("diffText") or ""))
-        if not changed_ranges:
+        diff = str(file.get("diffText") or "")
+        changed_ranges = _changed_new_line_ranges(diff)
+        guard_anchors = sorted({anchor for _, anchor in _java_guard_removals(file)})
+        if not changed_ranges and not guard_anchors:
             unavailable.append(
                 {
                     "type": "SAME_FILE_CONTEXT",
@@ -512,7 +525,16 @@ def _source_snippets_for_changed_files(
                 }
             )
             continue
-        snippets = _snippets_from_lines(lines, changed_ranges)
+        head_anchors = sorted({min(anchor, len(lines)) for anchor in guard_anchors})
+        guard_ranges = [(anchor, anchor) for anchor in head_anchors]
+        snippets = _snippets_from_lines(
+            lines,
+            guard_ranges,
+            window_lines=_JAVA_GUARD_SOURCE_WINDOW_LINES,
+            reason=_JAVA_GUARD_SOURCE_WINDOW_REASON,
+        )
+        ordinary_snippet_slots = CONTEXT_PACK_MAX_SNIPPETS_PER_FILE - len(snippets)
+        snippets.extend(_snippets_from_lines(lines, changed_ranges[:ordinary_snippet_slots]))
         if snippets:
             contexts.append(
                 {
@@ -520,7 +542,7 @@ def _source_snippets_for_changed_files(
                     "ref": str(head_ref),
                     "language": _language_for_path(path),
                     "snippetCount": len(snippets),
-                    "truncated": len(changed_ranges) > len(snippets),
+                    "truncated": len(changed_ranges) + len(guard_ranges) > len(snippets),
                     "snippets": snippets,
                 }
             )
@@ -634,14 +656,20 @@ def _merge_line_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return merged
 
 
-def _snippets_from_lines(lines: list[str], changed_ranges: list[tuple[int, int]]) -> list[dict[str, Any]]:
+def _snippets_from_lines(
+    lines: list[str],
+    changed_ranges: list[tuple[int, int]],
+    *,
+    window_lines: int = CONTEXT_PACK_SOURCE_CONTEXT_WINDOW_LINES,
+    reason: str = "CHANGED_LINES_WINDOW",
+) -> list[dict[str, Any]]:
     snippets: list[dict[str, Any]] = []
     total_lines = len(lines)
     if total_lines <= 0:
         return snippets
     for changed_start, changed_end in changed_ranges[:CONTEXT_PACK_MAX_SNIPPETS_PER_FILE]:
-        start = max(changed_start - CONTEXT_PACK_SOURCE_CONTEXT_WINDOW_LINES, 1)
-        end = min(changed_end + CONTEXT_PACK_SOURCE_CONTEXT_WINDOW_LINES, total_lines)
+        start = max(changed_start - window_lines, 1)
+        end = min(changed_end + window_lines, total_lines)
         if end < start:
             continue
         line_items = [
@@ -653,7 +681,7 @@ def _snippets_from_lines(lines: list[str], changed_ranges: list[tuple[int, int]]
             "endLine": end,
             "changedStartLine": changed_start,
             "changedEndLine": changed_end,
-            "reason": "CHANGED_LINES_WINDOW",
+            "reason": reason,
             "truncated": False,
             "lines": line_items,
         }
@@ -803,6 +831,18 @@ def _planner_signals_for_file(file: dict[str, Any]) -> list[dict[str, Any]]:
                 ["REFERENCE_SEARCH", "CALLER_CONTEXT", "CALLEE_CONTEXT", "TEST_RESULT_CONTEXT"],
                 priority="HIGH",
                 details={"methodNames": signature_changed[:5], "methodCount": len(signature_changed)},
+            )
+        )
+
+    guard_methods = list(dict.fromkeys(method for method, _ in _java_guard_removals(file)))
+    if guard_methods:
+        signals.append(
+            _planner_signal(
+                JAVA_GUARD_REMOVAL_SIGNAL,
+                file,
+                ["REFERENCE_SEARCH", "SAME_FILE_CONTEXT"],
+                priority="HIGH",
+                details={"methodNames": guard_methods[:3], "methodCount": len(guard_methods)},
             )
         )
 
@@ -996,6 +1036,41 @@ def _method_names(lines: list[str]) -> list[str]:
                 names.append(name)
             break
     return names
+
+
+def _java_guard_removals(file: dict[str, Any]) -> list[tuple[str, int]]:
+    if _change_type(file) != "MODIFIED" or _language_for_path(str(file.get("path") or "")) != "java":
+        return []
+    diff = str(file.get("diffText") or "")
+    deleted: list[tuple[str, int]] = []
+    added: set[str] = set()
+    head_line: int | None = None
+    hunk_has_additions = False
+    hunk_deletions: list[tuple[str, int]] = []
+    for line in diff.splitlines():
+        if line.startswith("@@ "):
+            if not hunk_has_additions:
+                deleted.extend(hunk_deletions)
+            head_line = _new_start_line_from_hunk(line)
+            hunk_has_additions = False
+            hunk_deletions = []
+        elif head_line is not None:
+            sign, body = line[:1], line[1:]
+            if sign in ("+", "-"):
+                condition = _JAVA_GUARD_PREFIX.match(body)
+                if condition:
+                    methods = _JAVA_GUARD_CALL.findall(body[condition.end():])
+                    if sign == "-":
+                        hunk_deletions.extend((method, head_line) for method in methods)
+                    else:
+                        added.update(methods)
+            if sign == "+":
+                hunk_has_additions = True
+            if sign in (" ", "+"):
+                head_line += 1
+    if not hunk_has_additions:
+        deleted.extend(hunk_deletions)
+    return [(method, anchor) for method, anchor in deleted if method not in added]
 
 
 def _field_names(lines: list[str]) -> list[str]:
@@ -1357,7 +1432,7 @@ def _fit_context_pack_budget(
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
             continue
-        if _remove_last_source_snippet(context_pack):
+        if _remove_last_source_snippet(context_pack, protect_guard_windows=True):
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
             continue
@@ -1373,6 +1448,10 @@ def _fit_context_pack_budget(
             prompt_text = _render_context_pack_text(review_context)
             continue
         if _remove_last_requested_context(context_pack):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
+        if _remove_guard_reference_metadata(context_pack):
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
             continue
@@ -1393,6 +1472,10 @@ def _fit_context_pack_budget(
             prompt_text = _render_context_pack_text(review_context)
             continue
         if _remove_last_not_injected_evidence(context_pack, protect_high_priority=False):
+            truncated_by_budget = True
+            prompt_text = _render_context_pack_text(review_context)
+            continue
+        if _remove_last_source_snippet(context_pack, protect_guard_windows=False):
             truncated_by_budget = True
             prompt_text = _render_context_pack_text(review_context)
             continue
@@ -1517,32 +1600,61 @@ def _remove_last_local_reference_snippet(
     return False
 
 
-def _remove_last_source_snippet(context_pack: dict[str, Any]) -> bool:
+def _remove_last_source_snippet(
+    context_pack: dict[str, Any], *, protect_guard_windows: bool = False,
+) -> bool:
     same_file = context_pack.get("sameFileContext") or {}
     source_contexts = same_file.get("sourceSnippets") or []
-    while source_contexts:
-        last_context = source_contexts[-1]
+    for file_index in reversed(range(len(source_contexts))):
+        last_context = source_contexts[file_index]
         snippets = last_context.get("snippets") or []
-        if snippets:
-            snippets.pop()
-            last_context["snippets"] = snippets
-            last_context["snippetCount"] = len(snippets)
-            last_context["truncated"] = True
-            same_file["sourceSnippetCount"] = max(int(same_file.get("sourceSnippetCount") or 0) - 1, 0)
-            same_file["sourceContextTruncated"] = True
-            if not snippets:
-                source_contexts.pop()
-                same_file["includedSourceFileCount"] = max(
-                    int(same_file.get("includedSourceFileCount") or 0) - 1,
-                    0,
-                )
-            same_file["sourceSnippets"] = source_contexts
-            if not source_contexts and same_file.get("filesWithDiff"):
-                same_file["status"] = "PARTIAL"
-                same_file["availableSource"] = "DIFF_HUNK_CONTEXT_ONLY"
-            return True
-        source_contexts.pop()
+        if not snippets:
+            source_contexts.pop(file_index)
+            continue
+        if protect_guard_windows and snippets[-1].get("reason") == _JAVA_GUARD_SOURCE_WINDOW_REASON:
+            continue
+        snippets.pop()
+        last_context["snippets"] = snippets
+        last_context["snippetCount"] = len(snippets)
+        last_context["truncated"] = True
+        same_file["sourceSnippetCount"] = max(int(same_file.get("sourceSnippetCount") or 0) - 1, 0)
+        same_file["sourceContextTruncated"] = True
+        if not snippets:
+            source_contexts.pop(file_index)
+            same_file["includedSourceFileCount"] = max(
+                int(same_file.get("includedSourceFileCount") or 0) - 1,
+                0,
+            )
+        same_file["sourceSnippets"] = source_contexts
+        if not source_contexts and same_file.get("filesWithDiff"):
+            same_file["status"] = "PARTIAL"
+            same_file["availableSource"] = "DIFF_HUNK_CONTEXT_ONLY"
+        return True
     same_file["sourceSnippets"] = source_contexts
+    return False
+
+
+def _remove_guard_reference_metadata(context_pack: dict[str, Any]) -> bool:
+    local_reference = context_pack.get("localReferenceContext") or {}
+    searches = local_reference.get("searches") or []
+    if not any(search.get("signalTypes") == [JAVA_GUARD_REMOVAL_SIGNAL] for search in searches):
+        return False
+    if _remove_last_not_injected_evidence(
+        context_pack,
+        protect_high_priority=False,
+        signal_type=JAVA_GUARD_REMOVAL_SIGNAL,
+    ):
+        return True
+    selected = local_reference.get("selectedEvidence") or []
+    for index in reversed(range(len(selected))):
+        if selected[index].get("signalTypes") == [JAVA_GUARD_REMOVAL_SIGNAL]:
+            selected.pop(index)
+            _sync_context_pack_evidence_budget_audit(context_pack)
+            return True
+    for search in searches:
+        if search.get("signalTypes") == [JAVA_GUARD_REMOVAL_SIGNAL] and search.get("topMatchedPaths"):
+            search.pop("topMatchedPaths")
+            return True
     return False
 
 
@@ -1645,6 +1757,7 @@ def _remove_last_not_injected_evidence(
     context_pack: dict[str, Any],
     *,
     protect_high_priority: bool,
+    signal_type: str | None = None,
 ) -> bool:
     summary = context_pack.get("notInjectedEvidence")
     if not isinstance(summary, dict):
@@ -1652,6 +1765,8 @@ def _remove_last_not_injected_evidence(
     items = [item for item in (summary.get("items") or []) if isinstance(item, dict)]
     for index in range(len(items) - 1, -1, -1):
         item = items[index]
+        if signal_type and item.get("signalTypes") != [signal_type]:
+            continue
         if protect_high_priority and item.get("type") == "LOCAL_REFERENCE_EVIDENCE" and bool(item.get("highPriority")):
             continue
         items.pop(index)

@@ -13,11 +13,17 @@ from typing import Any
 from app.core.config import get_settings
 
 
+JAVA_GUARD_REMOVAL_SIGNAL = "JAVA_GUARD_CALL_REMOVED"
+_JAVA_GUARD_CALLEE_REFERENCE = "JAVA_SAME_NAME_DECLARATION"
+_JAVA_GUARD_MAX_MATCHED_FILES = 20
+_JAVA_GUARD_REFERENCE_LINES = 15
+
 SUPPORTED_REFERENCE_SIGNAL_TYPES = {
     "DB_SQL_MAPPER_CHANGED",
     "CACHE_WRITE_DELETE_CHANGED",
     "METHOD_DELETED",
     "METHOD_SIGNATURE_CHANGED",
+    JAVA_GUARD_REMOVAL_SIGNAL,
     "FIELD_DELETED",
     "DTO_FIELD_CHANGED",
 }
@@ -43,6 +49,10 @@ _JAVA_METHOD_PATTERN = re.compile(
     r"\b(?:public|protected|private)?\s*(?:static\s+)?(?:final\s+)?"
     r"(?P<return>[A-Za-z_][A-Za-z0-9_<>\[\], ?.]*)\s+"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*(?:throws\s+[^{]+)?\{?"
+)
+_JAVA_METHOD_DECLARATION_START = re.compile(
+    r"^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|default)\s+)*"
+    r"[A-Za-z_$][\w$<>\[\],?. ]*\s+([A-Za-z_$][\w$]*)\s*\("
 )
 _MYBATIS_NAMESPACE_PATTERN = re.compile(r"<mapper\b[^>]*\bnamespace\s*=\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
 _MYBATIS_ID_PATTERN = re.compile(r"<(select|insert|update|delete)\b[^>]*\bid\s*=\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
@@ -387,7 +397,7 @@ def _queries_from_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]
                 )
             continue
 
-        if signal_type in {"METHOD_DELETED", "METHOD_SIGNATURE_CHANGED"}:
+        if signal_type in {"METHOD_DELETED", "METHOD_SIGNATURE_CHANGED", JAVA_GUARD_REMOVAL_SIGNAL}:
             method_names = details.get("methodNames") if isinstance(details, dict) else []
             if not isinstance(method_names, list):
                 continue
@@ -501,7 +511,9 @@ def _search_query(
     query: dict[str, Any],
     source_index: dict[str, Any],
 ) -> tuple[dict[str, Any], set[str]]:
-    output = _run_rg(worktree, str(query["query"]))
+    is_guard_query = query.get("signalTypes") == [JAVA_GUARD_REMOVAL_SIGNAL]
+    term = str(query["query"])
+    output = _run_rg(worktree, term, java_word=True) if is_guard_query else _run_rg(worktree, term)
     matches = _parse_rg_matches(output, worktree)
     matched_paths = set(matches)
     max_files = _env_int(
@@ -516,6 +528,12 @@ def _search_query(
     )
     snippets: list[dict[str, Any]] = []
     ranked_paths = _rank_paths(matches, query)
+    guard_callee_paths: set[str] = set()
+    guard_query_too_broad = is_guard_query and len(ranked_paths) > _JAVA_GUARD_MAX_MATCHED_FILES
+    if is_guard_query:
+        ranked_paths = [] if guard_query_too_broad else ranked_paths
+        ranked_paths, guard_callee_paths = _guard_reference_paths(worktree, ranked_paths, matches, term)
+        max_snippets = min(max_snippets, 2)
     candidate_snippet_count = 0
     for relative_path in ranked_paths[:max_files]:
         candidate_snippet_count += len(_line_windows(matches[relative_path], _line_count(worktree, relative_path)))
@@ -527,17 +545,25 @@ def _search_query(
                 relative_path,
                 matches[relative_path],
                 max_snippets=max_snippets - len(snippets),
-                reason=_snippet_reason(query),
+                reason=(
+                    _JAVA_GUARD_CALLEE_REFERENCE
+                    if relative_path in guard_callee_paths else _snippet_reason(query)
+                ),
+                guard_reference=is_guard_query,
             )
         )
-    evidence_candidates = _evidence_candidates_for_query(
-        query=query,
-        snippets=snippets,
-        source_index=source_index,
-    )
+    evidence_candidates = []
+    if not is_guard_query or ranked_paths:
+        evidence_candidates = _evidence_candidates_for_query(
+            query=query,
+            snippets=snippets,
+            source_index=source_index,
+            guard_callers=set(ranked_paths) - guard_callee_paths if is_guard_query else None,
+        )
     matched_paths.update(candidate["path"] for candidate in evidence_candidates if candidate.get("path"))
     truncated = (
-        len(matches) > max_files
+        guard_query_too_broad
+        or len(matches) > max_files
         or candidate_snippet_count > len(snippets)
         or any(bool(snippet.get("truncated")) for snippet in snippets)
         or bool(evidence_candidates and len(evidence_candidates) >= _max_evidence_per_query())
@@ -564,6 +590,45 @@ def _search_query(
         "snippets": snippets,
     }
     return search, matched_paths
+
+
+def _guard_reference_paths(
+    worktree: Path,
+    ranked_paths: list[str],
+    matches: dict[str, list[int]],
+    method_name: str,
+) -> tuple[list[str], set[str]]:
+    declarations: list[str] = []
+    declaration_files: set[str] = set()
+    callers: list[str] = []
+    for path in ranked_paths:
+        try:
+            lines = _safe_file_path(worktree, path).read_text(encoding="utf-8", errors="replace").splitlines()
+        except (OSError, LocalReferenceSearchError):
+            continue
+        declaration_lines: list[int] = []
+        call_lines: list[int] = []
+        for line_number in matches[path]:
+            line = lines[line_number - 1] if 0 < line_number <= len(lines) else ""
+            if line.lstrip().startswith(("//", "/*", "*")):
+                continue
+            declaration = _JAVA_METHOD_DECLARATION_START.match(line)
+            if declaration and declaration.group(1) == method_name:
+                declaration_lines.append(line_number)
+            elif _line_has_method_call(line, method_name):
+                call_lines.append(line_number)
+        if declaration_lines:
+            matches[path] = declaration_lines
+            declaration_files.add(path)
+            # A one-line interface declaration has less context than an implementation.
+            if lines[declaration_lines[0] - 1].rstrip().endswith(";"):
+                callers.append(path)
+            else:
+                declarations.append(path)
+        elif call_lines:
+            matches[path] = call_lines
+            callers.append(path)
+    return declarations + callers, declaration_files
 
 
 def _build_source_index(worktree: Path) -> dict[str, Any]:
@@ -798,9 +863,15 @@ def _evidence_candidates_for_query(
     query: dict[str, Any],
     snippets: list[dict[str, Any]],
     source_index: dict[str, Any],
+    guard_callers: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    candidates: list[EvidenceCandidate] = []
-    candidates.extend(_relation_index_candidates(query, source_index))
+    candidates = _relation_index_candidates(query, source_index)
+    if guard_callers is not None:
+        candidates = [
+            candidate for candidate in candidates
+            if candidate.relation in {EvidenceRelation.CALLER, EvidenceRelation.CONTROLLER_SERVICE}
+            and candidate.path in guard_callers
+        ]
     candidates.extend(_rg_evidence_candidates(query, snippets))
     return [candidate.to_dict() for candidate in _dedupe_evidence_candidates(candidates)[:_max_evidence_per_query()]]
 
@@ -827,6 +898,10 @@ def _rg_evidence_candidates(query: dict[str, Any], snippets: list[dict[str, Any]
     for snippet in snippets:
         path = str(snippet.get("path") or "")
         relation_for_path = _relation_for_reason(str(snippet.get("reason") or _snippet_reason(query)), path)
+        line = snippet.get("matchLine") or snippet.get("startLine")
+        safe_summary = f"{_enum_value(relation_for_path or relation)} evidence for {query.get('query')} in {path}:{line}"
+        if snippet.get("reason") == _JAVA_GUARD_CALLEE_REFERENCE:
+            safe_summary = f"Same-name Java declaration at {path}:{line}; receiver type unresolved."
         candidates.append(
             EvidenceCandidate(
                 relation=relation_for_path or relation,
@@ -838,7 +913,7 @@ def _rg_evidence_candidates(query: dict[str, Any], snippets: list[dict[str, Any]
                 symbol=str(query.get("query") or ""),
                 reason=str(snippet.get("reason") or _snippet_reason(query)),
                 confidence=72,
-                safe_summary=f"{_enum_value(relation_for_path or relation)} evidence for {query.get('query')} in {path}:{snippet.get('matchLine') or snippet.get('startLine')}",
+                safe_summary=safe_summary,
                 source=EvidenceSource.RG,
                 priority=_priority_for_relation(relation_for_path or relation),
                 budget_hint=_budget_hint_for_relation(relation_for_path or relation),
@@ -1042,6 +1117,8 @@ def _field_relation_candidates(
 def _relation_for_reason(reason: str, path: str) -> EvidenceRelation:
     normalized = str(reason or "").upper()
     lower_path = str(path or "").lower()
+    if normalized == _JAVA_GUARD_CALLEE_REFERENCE:
+        return EvidenceRelation.CALLEE
     if normalized == "MAPPER_METHOD_REFERENCE":
         return EvidenceRelation.MYBATIS_MAPPER_METHOD if lower_path.endswith(".xml") else EvidenceRelation.SERVICE_MAPPER
     if normalized in {"DB_SCHEMA_REFERENCE", "DB_FIELD_REFERENCE", "ENTITY_REFERENCE"}:
@@ -1179,20 +1256,23 @@ def _snippet_reason(query: dict[str, Any]) -> str:
     return "METHOD_REFERENCE"
 
 
-def _run_rg(worktree: Path, query: str) -> str:
-    args = _rg_args(query)
+def _run_rg(worktree: Path, query: str, *, java_word: bool = False) -> str:
+    args = _rg_args(query, java_word=True) if java_word else _rg_args(query)
     try:
         completed = subprocess.run(
             args,
             cwd=str(worktree),
             capture_output=True,
             text=True,
+            encoding="utf-8" if java_word else None,
             timeout=_env_int("LOCAL_REPO_MAX_SEARCH_SECONDS", _DEFAULT_MAX_SEARCH_SECONDS, minimum=1),
             check=False,
         )
     except subprocess.TimeoutExpired as exception:
         raise LocalReferenceSearchError("Local reference search timed out.") from exception
     except FileNotFoundError:
+        if java_word:
+            return _run_git_grep_as_rg_json(worktree, query, java_word=True)
         return _run_git_grep_as_rg_json(worktree, query)
     except OSError as exception:
         raise LocalReferenceSearchError(f"Local reference search cannot start: {_public_error(str(exception), worktree)}") from exception
@@ -1204,13 +1284,18 @@ def _run_rg(worktree: Path, query: str) -> str:
     return completed.stdout or ""
 
 
-def _run_git_grep_as_rg_json(worktree: Path, query: str) -> str:
+def _run_git_grep_as_rg_json(worktree: Path, query: str, *, java_word: bool = False) -> str:
+    args = ["git", "grep", "-n", "-I", "-F"]
+    if java_word:
+        args.append("-w")
+    args.extend(["-e", query, "--", "*.java" if java_word else "."])
     try:
         completed = subprocess.run(
-            ["git", "grep", "-n", "-I", "-F", "-e", query, "--", "."],
+            args,
             cwd=str(worktree),
             capture_output=True,
             text=True,
+            encoding="utf-8" if java_word else None,
             timeout=_env_int("LOCAL_REPO_MAX_SEARCH_SECONDS", _DEFAULT_MAX_SEARCH_SECONDS, minimum=1),
             check=False,
         )
@@ -1265,7 +1350,7 @@ def _run_git_grep_as_rg_json(worktree: Path, query: str) -> str:
     return "\n".join(json_lines)
 
 
-def _rg_args(query: str) -> list[str]:
+def _rg_args(query: str, *, java_word: bool = False) -> list[str]:
     args = [
         "rg",
         "--json",
@@ -1278,6 +1363,8 @@ def _rg_args(query: str) -> list[str]:
         "--max-count",
         str(_env_int("LOCAL_CONTEXT_RG_MAX_MATCHES_PER_FILE", _DEFAULT_RG_MAX_MATCHES_PER_FILE, minimum=1)),
     ]
+    if java_word:
+        args.extend(["--word-regexp", "--glob", "*.java"])
     for glob in _RG_EXCLUDE_GLOBS:
         args.extend(["--glob", glob])
     args.extend(["-e", query, "."])
@@ -1363,6 +1450,7 @@ def _snippets_for_file(
     *,
     max_snippets: int,
     reason: str = "METHOD_REFERENCE",
+    guard_reference: bool = False,
 ) -> list[dict[str, Any]]:
     try:
         file_path = _safe_file_path(worktree, relative_path)
@@ -1372,7 +1460,14 @@ def _snippets_for_file(
     if not lines:
         return []
     snippets: list[dict[str, Any]] = []
-    for start, end, match_line in _line_windows(match_lines, len(lines))[:max_snippets]:
+    if guard_reference:
+        windows = [
+            (line, min(line + _JAVA_GUARD_REFERENCE_LINES - 1, len(lines)), line)
+            for line in match_lines[:1]
+        ]
+    else:
+        windows = _line_windows(match_lines, len(lines))
+    for start, end, match_line in windows[:max_snippets]:
         snippet_lines = [{"number": number, "text": lines[number - 1]} for number in range(start, end + 1)]
         snippet = {
             "path": relative_path,

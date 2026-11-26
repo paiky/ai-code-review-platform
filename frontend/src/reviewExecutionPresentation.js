@@ -110,6 +110,7 @@ export function buildReviewExecutionPresentation(journey, result) {
     standardInstructions: journey?.standardInstructions,
     standard,
     agentConversation,
+    agentRetrievalSummary: agentConversation?.retrievalSummary ?? safeTrace?.retrievalSummary ?? null,
     agentStartActivities,
     agentOtherActivities,
     agentEvents: safeTrace?.events.filter(event => event.activityType !== 'FALLBACK' || !transfer) || [],

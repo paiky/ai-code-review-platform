@@ -25,6 +25,7 @@ from app.agent_review.runtime import (
     runtime_review_key,
 )
 from app.agent_review.schemas import AgentConversationTurnEvent, parse_agent_conversation_events
+from app.agent_review_spike.diff import DiffSection, split_diff_sections, with_diff_section_header
 from app.agent_review_spike.schema import ReviewSchemaError, validate_review_card
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
 from app.code_quality.models import CodeQualitySchedulerJob
@@ -251,15 +252,13 @@ def enqueue_agent_review(
             f"All {len(requested_files)} changed files are excluded by the Agent Review path policy",
             409,
         )
-    diff_text = str(request.get("diffText") or "")
-    if excluded_files:
-        diff_text = _filter_review_diff(request, changed_files)
-        if not diff_text.strip():
-            raise AppError(
-                "AGENT_SAFE_DIFF_UNAVAILABLE",
-                "Allowed changed files could not be separated from excluded sensitive diff content",
-                409,
-            )
+    diff_text = _filter_review_diff(request, changed_files, allow_unheaded=not excluded_files)
+    if excluded_files and not diff_text.strip():
+        raise AppError(
+            "AGENT_SAFE_DIFF_UNAVAILABLE",
+            "Allowed changed files could not be separated from excluded sensitive diff content",
+            409,
+        )
     diff_bytes = len(diff_text.encode("utf-8"))
     if diff_bytes > repository.MAX_DIFF_BYTES:
         raise AppError(
@@ -285,7 +284,10 @@ def enqueue_agent_review(
         if expected_runtime is not None and not worktree_matches:
             raise AppError("AUTO_FIX_REVIEW_INPUT_INCOMPLETE", "Agent worktree does not match the repair commit", 409)
         review_snapshot["complete"] = bool(
-            review_snapshot.get("complete") and worktree_matches and not excluded_files
+            review_snapshot.get("complete")
+            and worktree_matches
+            and not excluded_files
+            and diff_text == str(request.get("diffText") or "")
         )
     dispatch_detail = _dispatch_progress_base(
         review_key=review_key,
@@ -1168,6 +1170,8 @@ def _persist_agent_trace_safely(
             }
             if event.get("errorCode"):
                 detail["errorCode"] = event["errorCode"]
+            if event.get("retrievalDetail"):
+                detail["retrievalDetail"] = event["retrievalDetail"]
             if str(event.get("tool") or "") == "submit_review":
                 detail.update(
                     {
@@ -1719,62 +1723,52 @@ def _changed_files_with_sensitive_aliases(request: dict[str, Any]) -> set[str]:
     return forced_excluded
 
 
-def _filter_review_diff(request: dict[str, Any], included_paths: list[str]) -> str:
+def _filter_review_diff(
+    request: dict[str, Any], included_paths: list[str], *, allow_unheaded: bool = False,
+) -> str:
     included = set(included_paths)
-    sections = _split_unified_diff(str(request.get("diffText") or ""))
-    selected: list[str] = []
-    covered: set[str] = set()
-    for path, section in sections:
-        if path in included:
-            selected.append(section)
-            covered.add(path)
+    unheaded_path = included_paths[0] if allow_unheaded and len(included_paths) == 1 else None
+    original = str(request.get("diffText") or "")
+    sections = split_diff_sections(original, unheaded_path=unheaded_path)
+    selected: dict[str, DiffSection] = {}
+    for section in sections:
+        path = section.changed_path(included)
+        if path and (path not in selected or not selected[path].patch):
+            selected[path] = section
+
     details = request.get("changedFileDetails") or []
     if isinstance(details, list):
         for item in details:
             if not isinstance(item, dict):
                 continue
-            path = str(item.get("path") or item.get("newPath") or item.get("oldPath") or "").strip().replace("\\", "/")
-            diff = str(item.get("diffText") or "")
-            if path not in included or path in covered or not diff.strip():
+            deleted = item.get("deletedFile") is True or item.get("changeType") == "DELETED"
+            path = item.get("oldPath") if deleted else item.get("path") or item.get("newPath")
+            path = str(path or item.get("path") or item.get("oldPath") or "").strip().replace("\\", "/")
+            if path not in included:
                 continue
-            selected.append(_ensure_file_diff_header(path, diff))
-            covered.add(path)
-    return "\n".join(section.rstrip("\n") for section in selected if section.strip())
-
-
-def _split_unified_diff(diff_text: str) -> list[tuple[str, str]]:
-    sections: list[tuple[str, str]] = []
-    current_path: str | None = None
-    current_lines: list[str] = []
-    for line in diff_text.splitlines():
-        if line.startswith("diff --git "):
-            if current_path and current_lines:
-                sections.append((current_path, "\n".join(current_lines)))
-            current_path = _path_from_diff_header(line)
-            current_lines = [line]
-        elif current_path:
-            current_lines.append(line)
-    if current_path and current_lines:
-        sections.append((current_path, "\n".join(current_lines)))
-    return sections
-
-
-def _path_from_diff_header(line: str) -> str | None:
-    parts = line.split()
-    if len(parts) < 4:
-        return None
-    candidate = parts[3]
-    if candidate.startswith("b/"):
-        candidate = candidate[2:]
-    if candidate == "/dev/null" and parts[2].startswith("a/"):
-        candidate = parts[2][2:]
-    return candidate.strip().replace("\\", "/") or None
-
-
-def _ensure_file_diff_header(path: str, diff_text: str) -> str:
-    if diff_text.lstrip().startswith("diff --git "):
-        return diff_text
-    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n{diff_text}"
+            existing = selected.get(path)
+            if existing and existing.patch and (allow_unheaded or existing.patch.startswith("+++ ")):
+                continue
+            diff = str(item.get("diffText") or "").strip("\r\n")
+            if not diff:
+                continue
+            old_path = str(item.get("oldPath") or "").strip().replace("\\", "/")
+            file_sections = split_diff_sections(with_diff_section_header(
+                path,
+                diff,
+                old_path=old_path,
+                deleted=deleted and allow_unheaded,
+                added=item.get("newFile") is True or item.get("changeType") == "ADDED",
+            ))
+            if len(file_sections) == 1:
+                section = file_sections[0]
+                if section.changed_path(included) == path and (section.patch or path not in selected):
+                    selected[path] = section
+    filtered = "\n".join(section.text for section in selected.values())
+    # Preserve the byte-for-byte Review snapshot when filtering only changes blank separators.
+    original_lines = [line for line in original.replace("\r\n", "\n").split("\n") if line]
+    filtered_lines = [line for line in filtered.split("\n") if line]
+    return original if original_lines == filtered_lines else filtered
 
 
 def _bounded_context(request: dict[str, Any]) -> str:

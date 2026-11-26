@@ -16,6 +16,7 @@ from app.agent_review_spike.conversation_capture import (
     ConversationCallback,
     ConversationCapture,
 )
+from app.agent_review_spike.diff import diff_by_file
 from app.agent_review_spike.prompting import agent_system_prompt, review_input
 from app.agent_review_spike.tool_executor import ReviewToolExecutor, tool_definitions
 from app.agent_review_spike.workspace import ReviewWorkspace, ToolBudget
@@ -210,7 +211,7 @@ class OpenAIChatCompletionsAgentRunner:
                         max_evidence_calls=self.config.max_evidence_calls,
                         converge_at_evidence_calls=self.config.converge_at_calls,
                     ),
-                    _split_diff_by_file(effective_case),
+                    diff_by_file(effective_case),
                 )
                 conversation = ConversationCapture(
                     "OPENAI_CHAT_COMPLETIONS",
@@ -504,21 +505,6 @@ def _merge_usage(target: dict[str, int], value: Any) -> None:
         number = value.get(source)
         if isinstance(number, int) and not isinstance(number, bool) and number >= 0:
             target[destination] = target.get(destination, 0) + number
-
-
-def _split_diff_by_file(case: dict[str, Any]) -> dict[str, str]:
-    changed = [str(item).replace("\\", "/") for item in case.get("changedFiles") or []]
-    result: dict[str, list[str]] = {path: [] for path in changed}
-    current: str | None = None
-    for line in str(case.get("diff") or "").splitlines():
-        if line.startswith("+++ b/"):
-            candidate = line[6:].strip().replace("\\", "/")
-            current = candidate if candidate in result else None
-        if current is not None:
-            result[current].append(line)
-    if len(changed) == 1 and not result[changed[0]]:
-        result[changed[0]] = str(case.get("diff") or "").splitlines()
-    return {path: "\n".join(lines) for path, lines in result.items()}
 
 
 def _safe_summary(

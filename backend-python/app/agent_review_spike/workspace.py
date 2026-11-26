@@ -9,6 +9,11 @@ import re
 from time import monotonic, perf_counter
 from typing import Any, Iterable
 
+from app.agent_review_spike.retrieval_audit import (
+    EVIDENCE_TOOLS,
+    retrieval_failure_outcome,
+    sanitize_retrieval_detail,
+)
 from app.agent_review_spike.schema import normalize_relative_path
 
 
@@ -57,12 +62,6 @@ DENIED_SUFFIXES = {
     ".jks",
     ".keystore",
 }
-EVIDENCE_TOOLS = {
-    "list_files",
-    "search_code",
-    "read_file_range",
-    "read_diff_range",
-}
 REVIEW_BUDGET_MESSAGES = {
     "DISCOVERY": (
         "Only investigate an existing risk hypothesis; submit as soon as evidence is sufficient."
@@ -75,8 +74,9 @@ REVIEW_BUDGET_MESSAGES = {
 
 
 class ReviewToolError(ValueError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, total_diff_lines: int | None = None) -> None:
         self.code = code
+        self.total_diff_lines = total_diff_lines
         super().__init__(message)
 
 
@@ -95,7 +95,7 @@ class ToolBudget:
     events: list[dict[str, Any]] = field(default_factory=list)
     top_path_summaries: list[dict[str, Any]] = field(default_factory=list)
 
-    def begin(self, tool: str) -> float:
+    def begin(self, tool: str, *, retrieval_detail: dict[str, Any] | None = None) -> float:
         if self.calls >= self.max_calls:
             raise ReviewToolError("TOOL_CALL_BUDGET_EXCEEDED", "tool call budget exhausted")
         self.calls += 1
@@ -109,6 +109,7 @@ class ToolBudget:
                 started,
                 status="FAILED",
                 error_code="EVIDENCE_COLLECTION_COMPLETE",
+                retrieval_detail=retrieval_detail,
             )
             raise ReviewToolError(
                 "EVIDENCE_COLLECTION_COMPLETE",
@@ -127,7 +128,7 @@ class ToolBudget:
         paths: Iterable[str] = (),
         status: str = "SUCCESS",
         error_code: str | None = None,
-        query: str | None = None,
+        retrieval_detail: dict[str, Any] | None = None,
     ) -> None:
         if source_bytes > 0 and self.source_bytes + source_bytes > self.max_source_bytes:
             raise ReviewToolError("SOURCE_BUDGET_EXCEEDED", "source byte budget exhausted")
@@ -154,8 +155,13 @@ class ToolBudget:
         }
         if error_code:
             event["errorCode"] = error_code[:80]
-        if query is not None:
-            event["queryHash"] = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
+        if tool in EVIDENCE_TOOLS:
+            detail = dict(retrieval_detail or {})
+            if outcome := retrieval_failure_outcome(error_code):
+                detail["outcome"] = outcome
+            safe_detail = sanitize_retrieval_detail(detail, event)
+            if safe_detail:
+                event["retrievalDetail"] = safe_detail
         self.events.append(event)
 
     def blocked(self) -> None:
@@ -229,6 +235,7 @@ class ReviewWorkspace:
             "startLine": start,
             "endLine": start + len(selected) - 1 if selected else start,
             "lineCount": len(selected),
+            "totalLines": len(lines),
             "content": content,
         }
 

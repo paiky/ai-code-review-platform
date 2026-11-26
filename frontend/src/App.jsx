@@ -153,6 +153,7 @@ import {
   visibleReviewJourneyStages
 } from './reviewJourneyPresentation.js';
 import { buildReviewExecutionPresentation } from './reviewExecutionPresentation.js';
+import { traceRetrievalReason } from './safeTracePresentation.js';
 import {
   buildTerminalReviewResultPresentation,
   isTerminalReviewStatus,
@@ -4638,36 +4639,67 @@ function safeTraceSequenceLabel(event) {
     : `#${event.sequence}–${event.sequenceEnd}`;
 }
 
+const retrievalReasonLabels = {
+  DIFF_CONTENT_UNAVAILABLE: 'Diff 无可读内容',
+  INVALID_REQUEST: '参数无效',
+  ACCESS_DENIED: '工具拒绝读取',
+  BUDGET_EXHAUSTED: '取证预算已用完',
+  IO_ERROR: '读取失败',
+  UNKNOWN_EMPTY: '空结果，原因未记录',
+  FAILED: '工具执行失败'
+};
+
+function retrievalReasonLabel(reason, activity) {
+  if (reason === 'TIMED_OUT') return '搜索超时，尚未搜完';
+  if (reason === 'TRUNCATED') return activity === 'LIST_FILES' ? '文件列表已截断' : '搜索已截断，尚未搜完';
+  if (reason === 'NO_MATCH') return activity === 'LIST_FILES' ? '没有匹配文件' : '搜索已完成，零命中';
+  if (reason === 'RANGE_OUT_OF_BOUNDS') return activity === 'READ_FILE_RANGE' ? '源码范围越界' : 'Diff 范围越界';
+  return retrievalReasonLabels[reason] || null;
+}
+
 function SafeTraceEventList({ events }) {
   const source = Array.isArray(events) ? events : [];
   return (
     <div className="safe-trace-event-list" aria-label="Agent 安全运行记录">
-      {source.map((event, index) => (
-        <article
-          className={`safe-trace-event is-${String(event.status || 'unknown').toLowerCase()}`}
-          key={`${event.sequence}-${event.sequenceEnd ?? event.sequence}-${event.activityType}-${index}`}
-        >
-          <span className="safe-trace-event-marker" aria-hidden="true" />
-          <div className="safe-trace-event-body">
-            <div className="safe-trace-event-heading">
-              <Space size={6} wrap>
-                <Text code>{safeTraceSequenceLabel(event)}</Text>
-                <Text strong>{safeTraceActivityLabel(event.activityType)}</Text>
-                <Tag color={safeTraceStatusColor(event.status)}>
-                  {safeTraceStatusLabel(event.status)}
-                </Tag>
+      {source.map((event, index) => {
+        const reason = retrievalReasonLabel(traceRetrievalReason(event), event.activityType);
+        const detail = event.retrievalDetail;
+        return (
+          <article
+            className={`safe-trace-event is-${String(event.status || 'unknown').toLowerCase()}`}
+            key={`${event.sequence}-${event.sequenceEnd ?? event.sequence}-${event.activityType}-${index}`}
+          >
+            <span className="safe-trace-event-marker" aria-hidden="true" />
+            <div className="safe-trace-event-body">
+              <div className="safe-trace-event-heading">
+                <Space size={6} wrap>
+                  <Text code>{safeTraceSequenceLabel(event)}</Text>
+                  <Text strong>{safeTraceActivityLabel(event.activityType)}</Text>
+                  <Tag color={safeTraceStatusColor(event.status)}>
+                    {safeTraceStatusLabel(event.status)}
+                  </Tag>
+                </Space>
+              </div>
+              <Space size={[6, 6]} wrap className="safe-trace-event-metrics">
+                {event.groupCount > 1 && <Tag>合并活动 {event.groupCount} 次</Tag>}
+                {event.durationMs !== undefined && <Tag>耗时 {formatJourneyDuration(event.durationMs)}</Tag>}
+                {event.itemCount !== undefined && <Tag>返回条目 {event.itemCount}</Tag>}
+                {event.sourceBytes !== undefined && <Tag>返回 {event.sourceBytes} bytes</Tag>}
+                {detail?.requestedStartLine !== undefined && (
+                  <Tag>请求 {detail.coordinateSpace === 'DIFF' ? 'Diff' : '源码'} 行 {detail.requestedStartLine}–{detail.requestedEndLine}</Tag>
+                )}
+                {detail?.totalLines !== undefined && <Tag>共 {detail.totalLines} 行</Tag>}
+                {detail?.returnedStartLine !== undefined && (
+                  <Tag>实际返回 {detail.returnedStartLine}–{detail.returnedEndLine}</Tag>
+                )}
+                {detail?.searchId !== undefined && <Tag>搜索 #{detail.searchId}</Tag>}
+                {reason && <Tag color="orange">{reason}</Tag>}
+                {event.errorCode && <Tag color="red">错误码：{event.errorCode}</Tag>}
               </Space>
             </div>
-            <Space size={[6, 6]} wrap className="safe-trace-event-metrics">
-              {event.groupCount > 1 && <Tag>合并活动 {event.groupCount} 次</Tag>}
-              {event.durationMs !== undefined && <Tag>耗时 {formatJourneyDuration(event.durationMs)}</Tag>}
-              {event.itemCount !== undefined && <Tag>返回条目 {event.itemCount}</Tag>}
-              {event.sourceBytes !== undefined && <Tag>返回 {event.sourceBytes} bytes</Tag>}
-              {event.errorCode && <Tag color="red">错误码：{event.errorCode}</Tag>}
-            </Space>
-          </div>
-        </article>
-      ))}
+          </article>
+        );
+      })}
     </div>
   );
 }
@@ -4839,9 +4871,16 @@ function ReviewInitialInstructions({ instructions, title }) {
 }
 
 function AgentModelTurn({ turn }) {
+  const reasons = new Set((turn.retrievalReasons || []).map(({ reason, activity }) => (
+    retrievalReasonLabel(reason, activity)
+  )));
   return (
     <details className="review-execution-disclosure">
-      <summary>第 {turn.turn} 轮</summary>
+      <summary>{[
+        `第 ${turn.turn} 轮`,
+        turn.newEvidenceCount === 0 ? '无新增证据' : turn.newEvidenceCount === null ? '证据状态未记录' : null,
+        ...reasons
+      ].filter(Boolean).join(' · ')}</summary>
       <div className="review-execution-summary">
         <Space wrap size={[6, 6]}>
           {turn.modelRequestMs !== null && <Tag>模型请求耗时 {formatJourneyDuration(turn.modelRequestMs)}</Tag>}
@@ -4873,6 +4912,7 @@ function AgentModelTurn({ turn }) {
 function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
   const process = buildReviewExecutionPresentation(journey, review);
   const { agentConversation, agentInput, agentInstructions, standardInput, standardInstructions, final } = process;
+  const retrieval = process.agentRetrievalSummary;
   const conversationKey = agentConversation
     ? `${journey.selectorKey}:${agentConversation.scope.runId}:${agentConversation.scope.claimAttempt}`
     : null;
@@ -4946,6 +4986,15 @@ function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
       </section>
       <section className="review-execution-bubble">
         <Title level={5}>执行过程</Title>
+        {retrieval && (
+          <Space size={[6, 6]} wrap aria-label="取证摘要">
+            <Tag>有效 {retrieval.returned}</Tag>
+            <Tag>空结果 {retrieval.empty}</Tag>
+            <Tag>失败 {retrieval.failed}</Tag>
+            <Tag>部分返回 {retrieval.partial}</Tag>
+            <Tag>最长连续无新增证据 {retrieval.longestNoNewEvidenceTurns === null ? '未记录' : `${retrieval.longestNoNewEvidenceTurns} 轮`}</Tag>
+          </Space>
+        )}
         {agentConversation?.turns.length > 0 ? (
           <div className="review-execution-summary" key={conversationKey}>
             {process.agentStartActivities.length > 0 && (

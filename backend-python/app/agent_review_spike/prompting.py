@@ -44,7 +44,11 @@ def review_instructions(case: dict[str, Any]) -> str:
 
 def review_input(case: dict[str, Any]) -> str:
     if str(case.get("diffMode") or "INLINE").upper() == "TOOL_PAGED":
-        diff_section = "Diff is too large for the initial prompt. Use read_diff_range by changed file."
+        diff_section = (
+            "Diff is too large for the initial prompt. Use read_diff_range by changed file. "
+            "Start at patch line 1, then use totalDiffLines and the returned endLine for pagination. "
+            "Use hunk headers to map patch lines to source lines."
+        )
     else:
         diff_section = f"Diff:\n{case['diff']}"
     return (

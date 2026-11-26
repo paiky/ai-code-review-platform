@@ -26,6 +26,14 @@ export const SAFE_TRACE_STATUSES = Object.freeze([
 const safeActivityTypes = new Set(SAFE_TRACE_ACTIVITY_TYPES);
 const safeStatuses = new Set(SAFE_TRACE_STATUSES);
 const MAX_SAFE_TRACE_INTEGER = 2_147_483_647;
+const maxRetrievalLine = 10_000_399;
+const maxSearchId = 60;
+const retrievalTools = new Set(['LIST_FILES', 'SEARCH_CODE', 'READ_FILE_RANGE', 'READ_DIFF_RANGE']);
+const retrievalCoordinates = new Map([['READ_DIFF_RANGE', 'DIFF'], ['READ_FILE_RANGE', 'SOURCE']]);
+const failureOutcomes = new Set([
+  'DIFF_CONTENT_UNAVAILABLE', 'RANGE_OUT_OF_BOUNDS', 'INVALID_REQUEST',
+  'ACCESS_DENIED', 'BUDGET_EXHAUSTED', 'IO_ERROR'
+]);
 
 const phaseActivityTypes = Object.freeze({
   AGENT_RECLAIMED: 'RECLAIMED',
@@ -77,7 +85,8 @@ export function buildSafeTraceViewModel({
     reviewKey: safeReviewKey(reviewKey),
     state,
     events: safeEvents,
-    summary
+    summary,
+    retrievalSummary: summarizeTraceRetrieval(mappedEvents)
   };
 }
 
@@ -88,10 +97,12 @@ export function buildSafeTraceEvent(event) {
   if (sequence === null) return null;
 
   const phase = String(event?.phase || '').toUpperCase();
-  const rawActivityType = phaseActivityTypes[phase] || String(detail.activity || '').toUpperCase();
+  const reportedActivity = String(detail.activity || '').toUpperCase();
+  const retrievalInSubmitPhase = phase === 'AGENT_SUBMITTING' && retrievalTools.has(reportedActivity);
+  const rawActivityType = retrievalInSubmitPhase ? reportedActivity : phaseActivityTypes[phase] || reportedActivity;
   if (!safeActivityTypes.has(rawActivityType)) return null;
 
-  const rawStatus = phaseStatuses[phase] || String(detail.status || '').toUpperCase();
+  const rawStatus = (retrievalInSubmitPhase ? null : phaseStatuses[phase]) || String(detail.status || '').toUpperCase();
   const result = {
     sequence,
     activityType: rawActivityType,
@@ -105,6 +116,8 @@ export function buildSafeTraceEvent(event) {
   if (itemCount !== null) result.itemCount = itemCount;
   if (sourceBytes !== null) result.sourceBytes = sourceBytes;
   if (errorCode) result.errorCode = errorCode;
+  const retrievalDetail = safeRetrievalDetail(detail.retrievalDetail, result);
+  if (retrievalDetail) result.retrievalDetail = retrievalDetail;
   return result;
 }
 
@@ -116,6 +129,10 @@ export function groupSafeTraceEvents(events) {
     const previous = grouped.at(-1);
     if (
       !previous
+      || previous.retrievalDetail || event.retrievalDetail
+      || [previous, event].some(item => retrievalTools.has(item.activityType) && (
+        item.status === 'FAILED' || item.itemCount === 0
+      ))
       || previous.activityType !== event.activityType
       || previous.status !== event.status
       || event.sequence !== (previous.sequenceEnd ?? previous.sequence) + 1
@@ -131,6 +148,42 @@ export function groupSafeTraceEvents(events) {
     if (!previous.errorCode && event.errorCode) previous.errorCode = event.errorCode;
   }
   return grouped;
+}
+
+export function traceRetrievalReason(event) {
+  if (!retrievalTools.has(event.activityType)) return null;
+  const detail = event.retrievalDetail;
+  if (detail?.timedOut) return 'TIMED_OUT';
+  if (detail?.truncated) return 'TRUNCATED';
+  if (detail?.outcome) return detail.outcome;
+  if (event.status === 'FAILED') return 'FAILED';
+  if (event.status !== 'SUCCESS') return null;
+  if (event.itemCount === 0) return 'UNKNOWN_EMPTY';
+  return event.itemCount > 0 ? 'RETURNED' : null;
+}
+
+export function summarizeTraceRetrieval(events, turns = []) {
+  const summary = { returned: 0, empty: 0, failed: 0, partial: 0, longestNoNewEvidenceTurns: null };
+  const seen = new Set();
+  for (const event of events) {
+    const reason = traceRetrievalReason(event);
+    if (!reason || seen.has(event.sequence)) continue;
+    seen.add(event.sequence);
+    if (reason === 'RETURNED') summary.returned += 1;
+    else if (['TIMED_OUT', 'TRUNCATED'].includes(reason)) summary.partial += 1;
+    else if (['NO_MATCH', 'DIFF_CONTENT_UNAVAILABLE', 'RANGE_OUT_OF_BOUNDS', 'UNKNOWN_EMPTY'].includes(reason)) summary.empty += 1;
+    else summary.failed += 1;
+  }
+  let previousTurn = 0;
+  let streak = 0;
+  for (const turn of turns) {
+    streak = turn.newEvidenceCount === 0 ? (turn.turn === previousTurn + 1 ? streak : 0) + 1 : 0;
+    previousTurn = turn.turn;
+    if (turn.newEvidenceCount !== null) {
+      summary.longestNoNewEvidenceTurns = Math.max(summary.longestNoNewEvidenceTurns ?? 0, streak);
+    }
+  }
+  return seen.size || summary.longestNoNewEvidenceTurns !== null ? summary : null;
 }
 
 export function buildSafeTraceSummary(agentSummary, agentDurationMs) {
@@ -178,7 +231,57 @@ function cloneSafeTraceEvent(value) {
   if (itemCount !== null) result.itemCount = itemCount;
   if (sourceBytes !== null) result.sourceBytes = sourceBytes;
   if (errorCode) result.errorCode = errorCode;
+  const retrievalDetail = safeRetrievalDetail(value.retrievalDetail, result);
+  if (retrievalDetail) result.retrievalDetail = retrievalDetail;
   return result;
+}
+
+function safeRetrievalDetail(value, event) {
+  if (!value || typeof value !== 'object' || !retrievalTools.has(event.activityType)) return null;
+  const detail = {};
+  const expectedSpace = retrievalCoordinates.get(event.activityType);
+  const succeeded = event.status === 'SUCCESS';
+  if (succeeded && event.activityType === 'SEARCH_CODE') {
+    if (typeof value.timedOut === 'boolean') detail.timedOut = value.timedOut;
+    if (Number.isInteger(value.searchId) && value.searchId >= 1 && value.searchId <= maxSearchId) {
+      detail.searchId = value.searchId;
+    }
+  }
+  if (succeeded && ['SEARCH_CODE', 'LIST_FILES'].includes(event.activityType) && typeof value.truncated === 'boolean') {
+    detail.truncated = value.truncated;
+  }
+  if (expectedSpace && value.coordinateSpace === expectedSpace) {
+    detail.coordinateSpace = expectedSpace;
+    const total = retrievalLine(value.totalLines, 0);
+    if (total !== null) detail.totalLines = total;
+    const start = retrievalLine(value.requestedStartLine);
+    const end = retrievalLine(value.requestedEndLine);
+    if (start !== null && end !== null && end >= start && end - start < 400) {
+      detail.requestedStartLine = start;
+      detail.requestedEndLine = end;
+    }
+    const returnedStart = retrievalLine(value.returnedStartLine);
+    const returnedEnd = retrievalLine(value.returnedEndLine);
+    if (succeeded && event.itemCount > 0 && event.itemCount <= 400 && returnedStart !== null
+      && returnedEnd === returnedStart + event.itemCount - 1 && (total === null || returnedEnd <= total)
+      && (detail.requestedStartLine === undefined || (returnedStart === start && returnedEnd <= end))) {
+      detail.returnedStartLine = returnedStart;
+      detail.returnedEndLine = returnedEnd;
+    }
+  }
+  if ((succeeded && value.outcome === 'RETURNED' && event.itemCount > 0)
+    || (succeeded && value.outcome === 'NO_MATCH' && event.itemCount === 0 && !expectedSpace && !detail.timedOut && !detail.truncated)
+    || (succeeded && value.outcome === 'RANGE_OUT_OF_BOUNDS' && event.activityType === 'READ_FILE_RANGE'
+      && event.itemCount === 0 && detail.requestedStartLine > detail.totalLines)
+    || (event.status === 'FAILED' && failureOutcomes.has(value.outcome)
+      && (!['DIFF_CONTENT_UNAVAILABLE', 'RANGE_OUT_OF_BOUNDS'].includes(value.outcome) || event.activityType === 'READ_DIFF_RANGE'))) {
+    detail.outcome = value.outcome;
+  }
+  return Object.keys(detail).length ? detail : null;
+}
+
+function retrievalLine(value, min = 1) {
+  return Number.isInteger(value) && value >= min && value <= maxRetrievalLine ? value : null;
 }
 
 function mergeOptionalCount(target, source, key) {

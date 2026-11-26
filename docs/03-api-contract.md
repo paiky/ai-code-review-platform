@@ -727,6 +727,19 @@ GET /api/review-tasks/{taskId}/code-quality-progress
 - API Provider 会记录请求构建、Provider 调用、响应摘要、解析和保存结果等阶段，敏感字段会脱敏或省略。
 - `REVIEW_PLATFORM_PROMPT` 记录首轮使用的平台固定系统指令，沿用任务详情的读取范围。其 `detail` 是 JSON 字符串，包含 `schemaVersion`、`templateId`、`source`、`protocol` 和 `platformInstructions`。`source` 区分 `STANDARD_HTTP`、`AGENT_HTTP` 和 `CLAUDE_CLI_APPEND`。Claude CLI 对应平台传给进程的附加指令。Agent 事件还记录 `submitByTurn`、`runId` 和 `claimAttempt`。Standard 事件还记录 `effectiveEngine`（`STANDARD` 或 `STANDARD_FALLBACK`）。从 Agent Run 降级时附来源 `runId`，从入队前预检直接降级时该字段省略。历史任务可能没有此事件。
 - `platformInstructions` 由后端按已记录的模板版本和参数生成，包含平台固定指令。项目自定义指令、手动指令、diff、源码和其它任务上下文不在此字段中。
+- Agent 取证工具活动的 `detail` 仍是 JSON 字符串，按 `taskId`、`reviewKey`、`runId`、`claimAttempt` 和 `sequence` 识别同一次调用。`AGENT_TOOL_ACTIVITY`、`AGENT_CONVERGING` 或 `AGENT_SUBMITTING` 的取证事件可包含 `retrievalDetail`。此对象只记录已知的诊断事实，历史事件和旧 Worker 可省略。`status`、`errorCode`、`itemCount` 和 `sourceBytes` 保留原有含义。
+
+| `retrievalDetail` 字段 | 含义 |
+| --- | --- |
+| `outcome` | 已知结果枚举 `RETURNED`、`NO_MATCH`、`DIFF_CONTENT_UNAVAILABLE`、`RANGE_OUT_OF_BOUNDS`、`INVALID_REQUEST`、`ACCESS_DENIED`、`BUDGET_EXHAUSTED`、`IO_ERROR` |
+| `coordinateSpace` | 只读范围工具的坐标类型，取值为 `DIFF` 或 `SOURCE`。Diff 分页使用该文件自身的 patch 行号 |
+| `requestedStartLine`、`requestedEndLine` | 可用的请求区间，两端均包含 |
+| `returnedStartLine`、`returnedEndLine` | 实际返回的区间，无返回时省略 |
+| `totalLines` | 已知的文件或 patch 行数，可为 0 |
+| `timedOut`、`truncated` | 搜索实际超时或截断。文件列表也可记录 `truncated`。未搜完时，即使返回 0 条，也不写成 `NO_MATCH` |
+| `searchId` | 可用的搜索编号，仅在同一次 Run 的当前领取中用于识别重复搜索，不包含搜索词、哈希或原始工具参数 |
+
+- `retrievalDetail` 仅传递固定枚举、布尔值和有界整数。后端按工具校验字段，未知字段、无效字段和不一致的返回区间会被丢弃。
 - 注入项目策略时会记录 `PROJECT_POLICIES_INJECTED`，detail 仅包含策略摘要和数量，不包含策略正文。
 - 构造 Context Pack 时会记录 `CONTEXT_PACK_BUILT`，detail 仅包含 meta、changed file 数量、同文件上下文可用性、同文件 source snippet 数量、上下文不足反馈数量、planner 命中数量、requested context 类型统计和不可用上下文数量，不记录 diff 正文或源码片段。
 - 重试 AI Review 会清空同一任务旧过程事件，并重新写入本轮过程。

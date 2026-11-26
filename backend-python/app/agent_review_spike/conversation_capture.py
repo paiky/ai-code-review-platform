@@ -230,7 +230,7 @@ def _line_key(kind: str, path: str, line: int, content: str) -> _EvidenceKey:
 def _diff_lines(diff: str) -> Iterator[tuple[int, int | None, str]]:
     """Yield code-bearing diff offsets and new-side source coordinates when available."""
     old_remaining = new_remaining = new_line = 0
-    for offset, content in enumerate(diff.splitlines(), 1):
+    for offset, content in enumerate(diff.split("\n"), 1):
         if header := _HUNK_HEADER.match(content):
             old_remaining = int(header[1] or "1")
             new_line = int(header[2])

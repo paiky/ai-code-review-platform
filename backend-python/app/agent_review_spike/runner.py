@@ -20,6 +20,7 @@ from urllib.request import Request, urlopen
 
 from app.agent_review_spike.budgets import AGENT_BUDGET_LIMITS
 from app.agent_review_spike.conversation_capture import AgentReviewProgress
+from app.agent_review_spike.diff import diff_by_file
 from app.agent_review_spike.metrics import (
     build_report_metrics,
     execution_summary,
@@ -31,6 +32,7 @@ from app.agent_review_spike.prompting import (
     baseline_system_prompt,
     review_input,
 )
+from app.agent_review_spike.retrieval_audit import sanitize_retrieval_detail
 from app.agent_review_spike.schema import normalize_relative_path, validate_review_card
 from app.review_prompt_metadata import PlatformPromptMarker
 
@@ -270,7 +272,7 @@ def _run_candidate(
             diff_map_path = temporary / "diff-map.json"
             home = temporary / "home"
             home.mkdir()
-            diff_map_path.write_text(json.dumps(_split_diff_by_file(case), ensure_ascii=False), encoding="utf-8")
+            diff_map_path.write_text(json.dumps(diff_by_file(case), ensure_ascii=False), encoding="utf-8")
             mcp_environment = {
                 "PYTHONPATH": os.environ.get("PYTHONPATH", "/opt/agent-review"),
                 "REVIEW_WORKTREE_ROOT": str(worktree),
@@ -538,22 +540,6 @@ def run_agent_candidate(
     )
     summary["effectiveBudgets"] = effective_budgets
     return summary
-
-
-def _split_diff_by_file(case: dict[str, Any]) -> dict[str, str]:
-    changed = [str(item).replace("\\", "/") for item in case.get("changedFiles") or []]
-    diff = str(case.get("diff") or "")
-    result: dict[str, list[str]] = {path: [] for path in changed}
-    current: str | None = None
-    for line in diff.splitlines():
-        if line.startswith("+++ b/"):
-            candidate = line[6:].strip().replace("\\", "/")
-            current = candidate if candidate in result else None
-        if current is not None:
-            result[current].append(line)
-    if len(changed) == 1 and not result[changed[0]]:
-        result[changed[0]] = diff.splitlines()
-    return {path: "\n".join(lines) for path, lines in result.items()}
 
 
 def _candidate_environment(
@@ -884,6 +870,9 @@ def _sanitize_audit_snapshot(value: Any) -> dict[str, Any]:
         error_code = str(raw_event.get("errorCode") or "")
         if error_code and error_code.replace("_", "").isalnum():
             event["errorCode"] = error_code[:80]
+        detail = sanitize_retrieval_detail(raw_event.get("retrievalDetail"), event)
+        if detail:
+            event["retrievalDetail"] = detail
         if tool == "submit_review":
             event["attempt"] = _bounded_non_negative(raw_event.get("attempt"), 3)
             event["maxAttempts"] = 3
