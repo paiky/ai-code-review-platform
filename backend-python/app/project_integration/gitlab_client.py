@@ -108,6 +108,48 @@ def _get_latest_merge_request_diff_version(project_id: str, merge_request_iid: s
     return response[0] if response else {}
 
 
+def list_merge_request_version_diffs(
+    project_id: str, merge_request_iid: str, base_sha: str, head_sha: str,
+) -> list[dict[str, Any]]:
+    _validate_ready()
+    path = f"/api/v4/projects/{_quote(project_id)}/merge_requests/{_quote(merge_request_iid)}/versions"
+    page = 1
+    per_page = 100
+    while True:
+        versions = _get(
+            path,
+            params={"page": page, "per_page": per_page},
+            error_prefix="Failed to fetch GitLab MR diff versions",
+        )
+        if not isinstance(versions, list):
+            raise AppError("INTERNAL_ERROR", "GitLab MR diff versions response must be an array", 500)
+        version_id = next(
+            (
+                version["id"] for version in versions
+                if isinstance(version, dict)
+                and version.get("id")
+                and version.get("base_commit_sha") == base_sha
+                and version.get("head_commit_sha") == head_sha
+            ),
+            None,
+        )
+        if version_id is not None:
+            break
+        if len(versions) < per_page:
+            return []
+        page += 1
+
+    version = _get(f"{path}/{_quote(str(version_id))}", error_prefix="Failed to fetch GitLab MR diff version")
+    if not isinstance(version, dict) or (
+        version.get("base_commit_sha"), version.get("head_commit_sha")
+    ) != (base_sha, head_sha):
+        return []
+    diffs = version.get("diffs")
+    if not isinstance(diffs, list):
+        raise AppError("INTERNAL_ERROR", "GitLab MR diff version must contain a diffs array", 500)
+    return [_to_diff_file(item) for item in diffs if isinstance(item, dict)]
+
+
 def get_raw_file(project_id: str, file_path: str, ref: str) -> list[str]:
     _validate_ready()
     if not project_id:

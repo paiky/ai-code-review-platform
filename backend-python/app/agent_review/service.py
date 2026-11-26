@@ -25,7 +25,7 @@ from app.agent_review.runtime import (
     runtime_review_key,
 )
 from app.agent_review.schemas import AgentConversationTurnEvent, parse_agent_conversation_events
-from app.agent_review_spike.diff import DiffSection, split_diff_sections, with_diff_section_header
+from app.agent_review_spike.diff import DiffSection, diff_by_file, split_diff_sections, with_diff_section_header
 from app.agent_review_spike.schema import ReviewSchemaError, validate_review_card
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
 from app.code_quality.models import CodeQualitySchedulerJob
@@ -34,6 +34,7 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.errors import AppError
 from app.core.json_utils import utc_now
+from app.project_integration import gitlab_client
 from app.project_integration.models import Project
 from app.project_integration.repository import get_project_review_policy
 from app.project_review_policy.service import build_project_review_policy_prompt_context
@@ -253,6 +254,8 @@ def enqueue_agent_review(
             409,
         )
     diff_text = _filter_review_diff(request, changed_files, allow_unheaded=not excluded_files)
+    if task.trigger_type == "GITLAB_MR_WEBHOOK":
+        diff_text = _complete_mr_diff(task, project, changed_files, diff_text)
     if excluded_files and not diff_text.strip():
         raise AppError(
             "AGENT_SAFE_DIFF_UNAVAILABLE",
@@ -1769,6 +1772,55 @@ def _filter_review_diff(
     original_lines = [line for line in original.replace("\r\n", "\n").split("\n") if line]
     filtered_lines = [line for line in filtered.split("\n") if line]
     return original if original_lines == filtered_lines else filtered
+
+
+def _complete_mr_diff(task: ReviewTask, project: Project, changed_files: list[str], diff_text: str) -> str:
+    base_sha, head_sha = task.before_sha, task.after_sha
+    project_id, mr_iid = project.git_project_id, task.external_source_id
+    if not all((base_sha, head_sha, project_id, mr_iid)):
+        return diff_text
+    remaining_bytes = repository.MAX_DIFF_BYTES - len(diff_text.encode("utf-8"))
+    if remaining_bytes <= 0:
+        return diff_text
+    missing = set(changed_files) - diff_by_file({"changedFiles": changed_files, "diff": diff_text}).keys()
+    if not missing:
+        return diff_text
+
+    try:
+        files = gitlab_client.list_merge_request_version_diffs(project_id, mr_iid, base_sha, head_sha)
+    except (AppError, ValueError) as exception:
+        _LOGGER.warning("Agent MR Diff completion unavailable taskId=%s errorType=%s", task.id, type(exception).__name__)
+        return diff_text
+
+    parts = [diff_text] if diff_text else []
+    for item in files:
+        deleted = item.get("deletedFile") is True
+        old_path = item.get("oldPath")
+        path = old_path if deleted else item.get("path")
+        patch = item.get("diffText")
+        if path not in missing or not isinstance(patch, str) or not patch.strip():
+            continue
+        try:
+            for alias in (old_path, item.get("newPath")):
+                if alias:
+                    validate_review_path(alias)
+        except ReviewToolError:
+            continue
+        sections = split_diff_sections(with_diff_section_header(
+            path, patch, old_path=old_path, deleted=deleted, added=item.get("newFile") is True,
+        ))
+        if len(sections) != 1 or not sections[0].patch or (sections[0].new_path or sections[0].old_path) != path:
+            continue
+        section = sections[0].text
+        byte_count = len(section.encode("utf-8")) + int(bool(parts))
+        if byte_count > remaining_bytes:
+            continue
+        parts.append(section)
+        remaining_bytes -= byte_count
+        missing.remove(path)
+        if not missing:
+            break
+    return "\n".join(parts)
 
 
 def _bounded_context(request: dict[str, Any]) -> str:
