@@ -1,0 +1,227 @@
+{
+  "schemaVersion": 1,
+  "sourceKind": "DOCUMENTED_HISTORICAL_SAMPLES",
+  "agentRuns": [
+    {
+      "taskId": 2472,
+      "runId": 1022,
+      "triggerType": "PUSH",
+      "comparisonRole": "HISTORICAL",
+      "status": "SUCCEEDED",
+      "findingCount": 1,
+      "recoveredAfterDiffFailure": true,
+      "pagination": {
+        "emptySuccessCount": 2,
+        "unknownReasonCount": 2
+      }
+    },
+    {
+      "taskId": 2472,
+      "runId": 1089,
+      "triggerType": "PUSH",
+      "comparisonRole": "BASELINE",
+      "changedFileCount": 111,
+      "queuedDiffBytes": 283492,
+      "firstRequestKbApprox": 308,
+      "durationMs": 54300,
+      "status": "SUCCEEDED",
+      "findingCount": 1,
+      "recoveredAfterDiffFailure": true,
+      "maxNoNewEvidenceTurns": 2,
+      "pagination": {
+        "contentUnavailableCount": 2
+      }
+    },
+    {
+      "taskId": 2472,
+      "runId": 1091,
+      "triggerType": "PUSH",
+      "comparisonRole": "CANDIDATE",
+      "changedFileCount": 111,
+      "queuedDiffBytes": 437266,
+      "diffMode": "TOOL_PAGED",
+      "firstRequestKbApprox": 14,
+      "durationMs": 55000,
+      "status": "SUCCEEDED",
+      "effectiveEngine": "AGENT",
+      "formalRunId": 1091,
+      "findingCount": 0,
+      "pagination": {
+        "callCount": 9,
+        "nonEmptySuccessCount": 9,
+        "emptySuccessCount": 0,
+        "returnedLines": 1753,
+        "contentUnavailableCount": 0,
+        "outOfBoundsCount": 0,
+        "unknownReasonCount": 0
+      }
+    },
+    {
+      "taskId": 2538,
+      "runId": 1068,
+      "triggerType": "MR",
+      "comparisonRole": "HISTORICAL",
+      "pagination": {
+        "emptySuccessCount": 1,
+        "unknownReasonCount": 1
+      }
+    },
+    {
+      "taskId": 2538,
+      "runId": 1085,
+      "triggerType": "MR",
+      "comparisonRole": "HISTORICAL",
+      "changedFileCount": 185,
+      "durationMs": 36200,
+      "status": "SUCCEEDED",
+      "effectiveEngine": "AGENT",
+      "formalRunId": 1085,
+      "findingCount": 2,
+      "recoveredAfterDiffFailure": true,
+      "pagination": {
+        "callCount": 1,
+        "nonEmptySuccessCount": 0,
+        "emptySuccessCount": 0,
+        "returnedLines": 0,
+        "contentUnavailableCount": 1,
+        "outOfBoundsCount": 0,
+        "unknownReasonCount": 0
+      }
+    },
+    {
+      "taskId": 2538,
+      "runId": 1087,
+      "triggerType": "MR",
+      "comparisonRole": "BASELINE",
+      "changedFileCount": 185,
+      "queuedDiffBytes": 191418,
+      "firstRequestKbApprox": 221,
+      "durationMs": 37100,
+      "status": "SUCCEEDED",
+      "findingCount": 2,
+      "recoveredAfterDiffFailure": true,
+      "pagination": {
+        "contentUnavailableCount": 1
+      }
+    },
+    {
+      "taskId": 2538,
+      "runId": 1088,
+      "triggerType": "MR",
+      "comparisonRole": "CANDIDATE",
+      "changedFileCount": 185,
+      "queuedDiffBytes": 397830,
+      "diffMode": "TOOL_PAGED",
+      "firstRequestKbApprox": 24,
+      "durationMs": 80400,
+      "status": "SUCCEEDED",
+      "effectiveEngine": "AGENT",
+      "formalRunId": 1088,
+      "findingCount": 1,
+      "pagination": {
+        "callCount": 10,
+        "nonEmptySuccessCount": 10,
+        "emptySuccessCount": 0,
+        "returnedLines": 1254,
+        "contentUnavailableCount": 0,
+        "outOfBoundsCount": 0,
+        "unknownReasonCount": 0
+      }
+    }
+  ],
+  "agentReplays": [
+    {
+      "taskId": 2472,
+      "triggerType": "PUSH",
+      "beforeReadablePatchCount": 79,
+      "supplementedPatchCount": 22,
+      "afterReadablePatchCount": 101,
+      "verifiedPagedRead": true
+    },
+    {
+      "taskId": 2536,
+      "triggerType": "MR",
+      "verifiedPagedRead": true
+    },
+    {
+      "taskId": 2538,
+      "triggerType": "MR",
+      "beforeReadablePatchCount": 100,
+      "supplementedPatchCount": 85,
+      "afterReadablePatchCount": 185,
+      "readablePatchTargetCount": 185,
+      "verifiedPagedRead": true
+    }
+  ],
+  "standardRuns": [
+    {
+      "taskId": 2510,
+      "comparisonRole": "BASELINE",
+      "plannerSignalCount": 0,
+      "queryCount": 0,
+      "targetContextChars": 6000,
+      "hasDeletionNeighborEvidence": false
+    },
+    {
+      "taskId": 2510,
+      "comparisonRole": "CANDIDATE",
+      "queryCount": 1,
+      "matchedFileCount": 3,
+      "contextPromptChars": 5878,
+      "targetContextChars": 6000,
+      "hasDeletionNeighborEvidence": true,
+      "hasImplementationEvidence": true
+    },
+    {
+      "taskId": 2511,
+      "comparisonRole": "BASELINE",
+      "plannerSignalCount": 0,
+      "queryCount": 0,
+      "targetContextChars": 6000,
+      "hasDeletionNeighborEvidence": false
+    },
+    {
+      "taskId": 2511,
+      "comparisonRole": "CANDIDATE",
+      "queryCount": 1,
+      "matchedFileCount": 3,
+      "contextPromptChars": 5878,
+      "targetContextChars": 6000,
+      "hasDeletionNeighborEvidence": true,
+      "hasImplementationEvidence": true
+    },
+    {
+      "taskId": 2522,
+      "comparisonRole": "BASELINE",
+      "contextPromptChars": 21901,
+      "targetContextChars": 6000
+    },
+    {
+      "taskId": 2522,
+      "comparisonRole": "CANDIDATE",
+      "queryCount": 8,
+      "includedSnippetCount": 0,
+      "contextPromptChars": 21223,
+      "targetContextChars": 6000
+    }
+  ],
+  "historicalSignals": [
+    {
+      "scope": "RECENT_50_AGENT_TASKS",
+      "taskCount": 50,
+      "runCount": 56,
+      "firstRequestFailureCount": 6,
+      "affectedTaskCount": 5,
+      "recoveredTaskCount": 5,
+      "summaryTurnZeroCount": 56,
+      "summaryUsageMissingCount": 56,
+      "turnEventsCoveredRunCount": 16
+    },
+    {
+      "scope": "AGENT_72_HOURS",
+      "taskCount": 54,
+      "runCount": 60,
+      "firstRequestFailureCount": 6
+    }
+  ]
+}

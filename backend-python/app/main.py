@@ -40,6 +40,7 @@ from app.review_memory.api import management_router as memory_management_router
 from app.review_memory.api import library_router as memory_library_router
 from app.review_memory.api import feedback_management_router as memory_feedback_management_router
 from app.review_quality.api import router as review_quality_router
+from app.review_quality.monitoring_api import router as review_quality_monitoring_router
 from app.review_quality_acceptance.api import router as review_quality_acceptance_router
 from app.review_record.api import router as review_task_router
 from app.rule_template.api import router as rule_template_router
@@ -151,6 +152,7 @@ def create_app() -> FastAPI:
     app.include_router(evaluation_router)
     app.include_router(evaluation_run_router)
     app.include_router(review_quality_router)
+    app.include_router(review_quality_monitoring_router)
     app.include_router(review_quality_acceptance_router)
     app.include_router(command_center_router)
 

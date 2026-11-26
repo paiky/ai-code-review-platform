@@ -1,0 +1,68 @@
+name: Review quality evidence replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: Full platform commit containing the replay command
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - name: Validate baseline revision
+        env:
+          BASELINE: ${{ inputs.baseline }}
+        run: '[[ "$BASELINE" =~ ^[0-9a-f]{40}$ ]]'
+      - name: Check out candidate
+        uses: actions/checkout@v4
+        with:
+          path: candidate
+          persist-credentials: false
+      - name: Check out baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.baseline }}
+          path: baseline
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build a pinned synthetic evidence sample
+        run: python candidate/.github/workflows/review_quality_replay_fixture.py replay-materials
+      - name: Run baseline and candidate
+        env:
+          BASELINE: ${{ inputs.baseline }}
+          CANDIDATE: ${{ github.sha }}
+          WORKFLOW_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p replay-results
+          export LOCAL_REPO_WORKSPACE_ROOT="$PWD/replay-materials"
+          failed=0
+          for side in baseline candidate; do
+            if [[ "$side" == baseline ]]; then build="$BASELINE"; else build="$CANDIDATE"; fi
+            [[ "$(git -C "$side" rev-parse HEAD)" == "$build" ]] || { failed=1; continue; }
+            python -m venv "$side/.venv" || { failed=1; continue; }
+            "$side/.venv/bin/python" -m pip install "./$side/backend-python" || { failed=1; continue; }
+            for kind in agent standard; do
+              "$side/.venv/bin/python" -m app.review_quality.monitoring_replay run \
+                --build "$build" --ci-run-url "$WORKFLOW_RUN_URL" --fixture "$PWD/replay-materials/$kind.json" \
+                --worktree "$PWD/replay-materials/source" \
+                > "replay-results/$side-$kind.json" || failed=1
+            done
+          done
+          exit "$failed"
+      - name: Publish evidence measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-quality-replay-${{ github.run_id }}
+          path: replay-results/*.json
+          if-no-files-found: warn

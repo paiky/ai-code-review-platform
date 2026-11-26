@@ -5,6 +5,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/agent-review-worker.Dockerfile
+      args:
+        REVIEW_RELEASE_SHA: ${REVIEW_RELEASE_SHA:-}
     restart: unless-stopped
     stop_grace_period: 930s
     environment:

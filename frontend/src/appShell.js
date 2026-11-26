@@ -15,6 +15,9 @@ const GOVERNANCE_ROUTES = Object.freeze([
   { key: '/evaluation-runs', label: '回放记录', icon: 'replay' }
 ]);
 
+export const REVIEW_QUALITY_MONITOR_ROUTE = '/review-quality/monitoring';
+const MONITORING_ROUTE = { key: REVIEW_QUALITY_MONITOR_ROUTE, label: '监测报告', icon: 'quality' };
+
 export const SETTINGS_NAVIGATION_ROUTES = Object.freeze([
   { key: '/settings/project-targets', label: '项目 / 端类型配置' },
   {
@@ -37,7 +40,8 @@ function routeMatches(pathname, route, exact = false) {
 
 export function buildAppShellNavigation({
   qualityGovernanceVisible = false,
-  reviewLearningVisible = false
+  reviewLearningVisible = false,
+  qualityMonitoringVisible = false
 } = {}) {
   const items = [
     { key: '/', label: '运行总览', icon: 'overview', exact: true },
@@ -45,10 +49,12 @@ export function buildAppShellNavigation({
   ];
 
   if (qualityGovernanceVisible) {
-    const children = reviewLearningVisible
-      ? [...GOVERNANCE_ROUTES, { key: '/risk-feedback', label: '反馈池', icon: 'feedback' }]
-      : GOVERNANCE_ROUTES;
-    items.push({ key: 'quality-governance', label: '质量治理', icon: 'governance', children: [...children] });
+    const children = [...GOVERNANCE_ROUTES];
+    if (qualityMonitoringVisible) children.splice(1, 0, MONITORING_ROUTE);
+    if (reviewLearningVisible) children.push({ key: '/risk-feedback', label: '反馈池', icon: 'feedback' });
+    items.push({ key: 'quality-governance', label: '质量治理', icon: 'governance', children });
+  } else if (qualityMonitoringVisible) {
+    items.push(MONITORING_ROUTE);
   }
 
   items.push({

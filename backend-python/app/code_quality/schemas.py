@@ -23,6 +23,7 @@ class UpdateReviewSettingsRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     standard_review_enabled: StrictBool = Field(default=True, alias="standardReviewEnabled")
+    review_quality_monitoring_enabled: StrictBool = Field(default=False, alias="reviewQualityMonitoringEnabled")
 
 
 class CreateReviewProfileRequest(BaseModel):

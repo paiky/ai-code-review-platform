@@ -560,6 +560,22 @@ def _migration_statement_already_satisfied(
     connection, migration: MigrationFile, statement: str
 ) -> bool:
     """Reconcile migration effects that already exist outside the migration ledger."""
+    if migration.version == 67 and "ADD COLUMN review_quality_monitoring_enabled" in statement:
+        existing = next((
+            column for column in inspect(connection).get_columns("code_quality_review_settings")
+            if column["name"] == "review_quality_monitoring_enabled"
+        ), None)
+        if existing is None:
+            return False
+        type_name = str(existing["type"]).lower()
+        default = str(existing.get("default")).lower().strip("()'\"")
+        if (
+            existing.get("nullable") is not False
+            or default not in {"0", "false"}
+            or (type_name != "boolean" and not re.fullmatch(r"tinyint(?:\(1\))?", type_name))
+        ):
+            raise MigrationError("Existing review_quality_monitoring_enabled is incompatible with V67")
+        return True
     if migration.version == 65 and "ADD COLUMN auto_fix_enabled" in statement:
         existing = next((
             column for column in inspect(connection).get_columns("project_review_settings")

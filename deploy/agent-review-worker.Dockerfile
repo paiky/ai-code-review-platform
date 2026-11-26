@@ -36,6 +36,13 @@ COPY backend-python/app/agent_review/worker.py /opt/agent-review/app/agent_revie
 COPY backend-python/app/agent_review/schemas.py /opt/agent-review/app/agent_review/schemas.py
 COPY backend-python/app/review_prompt_metadata.py /opt/agent-review/app/review_prompt_metadata.py
 COPY backend-python/app/code_quality/__init__.py backend-python/app/code_quality/prompt.py /opt/agent-review/app/code_quality/
+COPY backend-python/app/release_metadata.py /opt/agent-review/app/release_metadata.py
+
+ARG REVIEW_RELEASE_SHA
+LABEL org.opencontainers.image.revision=${REVIEW_RELEASE_SHA}
+RUN install -d /usr/local/share/ai-review \
+    && printf '%s\n' "$REVIEW_RELEASE_SHA" > /usr/local/share/ai-review/release-sha \
+    && chmod 444 /usr/local/share/ai-review/release-sha
 
 USER 10001:10001
 RUN python3 -c "import app.agent_review.worker"

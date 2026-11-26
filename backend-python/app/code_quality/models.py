@@ -47,6 +47,7 @@ class CodeQualityReviewSettings(Base):
     id: Mapped[int] = mapped_column(ID_TYPE, primary_key=True)
     review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     standard_review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    review_quality_monitoring_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     mr_auto_review_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     dingtalk_notification_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     auto_fix_preview_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

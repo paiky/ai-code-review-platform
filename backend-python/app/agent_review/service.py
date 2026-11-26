@@ -48,6 +48,7 @@ from app.review_record.repository import (
 )
 from app.review_memory.service import select_review_memories
 from app.review_prompt_metadata import PlatformPromptMarker
+from app.release_metadata import image_release_sha, normalize_release_sha
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -552,6 +553,7 @@ def enqueue_agent_review(
                 "jobId": int(run.scheduler_job_id),
                 "runId": int(run.id),
                 **input_progress,
+                **_agent_release_detail(),
             },
             review_key=review_key,
         )
@@ -854,6 +856,7 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
             {
                 **result["agentRunSummary"],
                 "claimAttempt": claim_attempt,
+                **_agent_release_detail(request.get("workerReleaseSha")),
             },
             ensure_ascii=False,
         ),
@@ -970,6 +973,7 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
             {
                 **repository.run_to_summary(run),
                 "claimAttempt": claim_attempt,
+                **_agent_release_detail(request.get("workerReleaseSha")),
                 "failureChain": safe_audit.get("failureChain") or [],
             },
             ensure_ascii=False,
@@ -1378,6 +1382,15 @@ def _agent_trace_phase_and_message(event: dict[str, Any]) -> tuple[str, str]:
     if budget_phase == "CONVERGE":
         return "AGENT_CONVERGING", "Agent 已停止扩大范围，正在收敛结论"
     return "AGENT_TOOL_ACTIVITY", "Agent 正在补充审查证据"
+
+
+def _agent_release_detail(worker_release: object = None) -> dict[str, str]:
+    detail = {}
+    if backend_release := image_release_sha():
+        detail["backendReleaseSha"] = backend_release
+    if worker_sha := normalize_release_sha(worker_release):
+        detail["workerReleaseSha"] = worker_sha
+    return detail
 
 
 def _ensure_worktree(task: ReviewTask, project: Project) -> Path:

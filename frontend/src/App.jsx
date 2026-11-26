@@ -92,7 +92,7 @@ import MuiSelect from '@mui/material/Select';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import MuiTypography from '@mui/material/Typography';
-import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-bash';
 import 'prismjs/components/prism-java';
@@ -107,12 +107,14 @@ import 'prismjs/components/prism-yaml';
 import { fetchApi, riskColor, statusColor } from './api.js';
 import AutoFixProgress from './AutoFixProgress.jsx';
 import ReviewMemoryPage from './reviewMemory/ReviewMemoryPage.jsx';
+import ReviewQualityMonitoringPage from './review-quality/ReviewQualityMonitoringPage.jsx';
 import ReviewMemorySummary from './reviewMemory/ReviewMemorySummary.jsx';
 import FalsePositiveControl from './reviewMemory/FalsePositiveControl.jsx';
 import { MISSING_CONTEXT_TYPE_OPTIONS, REVIEW_FEEDBACK_REASON_OPTIONS } from './reviewMemory/feedbackModel.js';
 import { AppFrameOperationsContext } from './appFrameOperations.js';
 import {
   buildAppShellNavigation,
+  REVIEW_QUALITY_MONITOR_ROUTE,
   readSidebarCollapsedPreference,
   resolveAppShellOpenKeys,
   resolveAppShellSelectedKey,
@@ -7137,7 +7139,7 @@ function AgentBudgetFieldCard({
   );
 }
 
-function TemplateConfig() {
+function TemplateConfig({ onMonitoringEnabledChange }) {
   const location = useLocation();
   const navigate = useNavigate();
   const activeSettingsSection = resolveSettingsSection(location.pathname);
@@ -7254,6 +7256,7 @@ function TemplateConfig() {
       setAgentSettingsTesting(['QUEUED', 'RUNNING'].includes(agentSettingsData?.configurationTest?.status));
       setSettingsDraft({
         standardReviewEnabled: settingsData?.standardReviewEnabled ?? true,
+        reviewQualityMonitoringEnabled: settingsData?.reviewQualityMonitoringEnabled === true,
         dingtalkNotificationEnabled: settingsData?.dingtalkNotificationEnabled ?? true
       });
       setProviders(providerItems);
@@ -7435,8 +7438,10 @@ function TemplateConfig() {
       }));
       setSettingsDraft({
         standardReviewEnabled: settings?.standardReviewEnabled ?? true,
+        reviewQualityMonitoringEnabled: settings?.reviewQualityMonitoringEnabled === true,
         dingtalkNotificationEnabled: settings?.dingtalkNotificationEnabled ?? true
       });
+      onMonitoringEnabledChange(settings?.reviewQualityMonitoringEnabled === true);
       messageApi.success(successText);
     } catch (err) {
       messageApi.error(err.message);
@@ -9026,6 +9031,23 @@ function TemplateConfig() {
               </div>
               <Text type="secondary" className="settings-description">
                 控制普通模型审查和 Agent 降级。两个引擎都关闭时，自动任务仅执行规则分析。
+              </Text>
+            </div>
+            <div className="global-setting-field">
+              <div className="settings-inline-head">
+                <Text strong>审查质量监测</Text>
+                <Switch
+                  aria-label="审查质量监测"
+                  checked={settingsDraft?.reviewQualityMonitoringEnabled === true}
+                  disabled={!settingsDraft}
+                  loading={settingsSaving}
+                  checkedChildren="开启"
+                  unCheckedChildren="关闭"
+                  onChange={checked => commitSettingsChange('reviewQualityMonitoringEnabled', checked, '审查质量监测设置已保存')}
+                />
+              </div>
+              <Text type="secondary" className="settings-description">
+                开启后所有项目可生成、查看监测报告和处置问题。
               </Text>
             </div>
             <div className="global-setting-field">
@@ -10877,7 +10899,7 @@ function RiskFeedbackPage() {
   );
 }
 
-function SettingsPage() {
+function SettingsPage({ onMonitoringEnabledChange }) {
   const location = useLocation();
   const redirectRoute = resolveSettingsRedirect(location.pathname, location.search, location.hash);
   if (redirectRoute) return <Navigate to={redirectRoute} replace />;
@@ -10887,7 +10909,7 @@ function SettingsPage() {
   if (resolveSettingsSection(location.pathname)?.contentKey === 'review-memory') {
     return <TaskWorkspaceShell><ReviewMemoryPage /></TaskWorkspaceShell>;
   }
-  return <TemplateConfig />;
+  return <TemplateConfig onMonitoringEnabledChange={onMonitoringEnabledChange} />;
 }
 
 function ReleaseNotesPage() {
@@ -11056,7 +11078,7 @@ function HelpPage() {
   );
 }
 
-function ReviewQualityDashboardPage() {
+function ReviewQualityDashboardPage({ monitoringEnabled }) {
   const navigate = useNavigate();
   const location = useLocation();
   const route = currentRoute(location);
@@ -11309,6 +11331,9 @@ function ReviewQualityDashboardPage() {
                 面向管理员的 Review 质量治理视图，聚合评估样本、补证据、确定性检查、回放和改动记录。
               </MuiTypography>
             </Box>
+            {monitoringEnabled && (
+              <MuiButton component={Link} to={REVIEW_QUALITY_MONITOR_ROUTE} variant="outlined">监测报告</MuiButton>
+            )}
           </Stack>
         </Paper>
 
@@ -11703,7 +11728,7 @@ function EvaluationCasesPage() {
     load({ pageNo: 1, nextFilters });
   };
 
-  const openAttributionModal = async row => {
+  const openAttributionModal = useCallback(async row => {
     setEditingAttributionCase(row);
     setAttributionModalOpen(true);
     const fallback = row.ruleGapAttribution || {};
@@ -11724,7 +11749,17 @@ function EvaluationCasesPage() {
     } catch (err) {
       message.error(err.message);
     }
-  };
+  }, []);
+
+  const requestedCaseId = Number(new URLSearchParams(location.search).get('caseId'));
+  useEffect(() => {
+    if (!Number.isSafeInteger(requestedCaseId) || requestedCaseId < 1) return;
+    const controller = new AbortController();
+    fetchApi(`/api/evaluation-cases/${requestedCaseId}`, { signal: controller.signal })
+      .then(row => { if (!controller.signal.aborted) openAttributionModal(row); })
+      .catch(error => { if (!controller.signal.aborted) setError(error.message); });
+    return () => controller.abort();
+  }, [openAttributionModal, requestedCaseId]);
 
   const saveAttribution = async () => {
     if (!editingAttributionCase?.id) return;
@@ -12786,7 +12821,17 @@ function EvaluationRunDetailPage() {
     { title: '耗时', dataIndex: 'durationMs', width: 100, render: value => value == null ? '-' : `${value} ms` },
     { title: 'Baseline', dataIndex: 'baselineSummary', width: 220, render: value => value ? <JsonBlock value={value} /> : '-' },
     { title: 'Candidate', dataIndex: 'candidateSummary', width: 220, render: value => value ? <JsonBlock value={value} /> : '-' },
-    { title: '结果摘要', dataIndex: 'resultSummary', width: 240, render: value => value ? <JsonBlock value={value} /> : '-' },
+    {
+      title: '结果摘要', dataIndex: 'resultSummary', width: 240,
+      render: value => value ? (
+        <Space direction="vertical" size="small">
+          {typeof value.ciRunUrl === 'string' && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/[0-9]+$/.test(value.ciRunUrl) && (
+            <a href={value.ciRunUrl} target="_blank" rel="noreferrer">查看 CI 运行</a>
+          )}
+          <JsonBlock value={value} />
+        </Space>
+      ) : '-'
+    },
     { title: '错误', dataIndex: 'errorMessage', width: 180, ellipsis: true, render: value => value || '-' }
   ];
 
@@ -12975,6 +13020,19 @@ function AppFrame() {
   const frameRequestsRef = useRef({ queue: null, failures: null });
   const frameMountedRef = useRef(false);
   const [reviewWorkspaceMode, setReviewWorkspaceMode] = useState('RESULT');
+  const [monitoringEnabled, setMonitoringEnabled] = useState(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchApi('/api/code-quality-reviews/settings', { signal: controller.signal })
+      .then(settings => {
+        if (!controller.signal.aborted) setMonitoringEnabled(current => current ?? (settings?.reviewQualityMonitoringEnabled === true));
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setMonitoringEnabled(current => current ?? false);
+      });
+    return () => controller.abort();
+  }, []);
   const reportReviewWorkspaceMode = useCallback(mode => {
     setReviewWorkspaceMode(normalizeReviewWorkspaceMode(mode));
   }, []);
@@ -12988,8 +13046,9 @@ function AppFrame() {
   }), [reviewWorkspaceFrame.mode, reportReviewWorkspaceMode]);
   const navigationItems = useMemo(() => buildAppShellNavigation({
     qualityGovernanceVisible: QUALITY_GOVERNANCE_NAV_VISIBLE,
-    reviewLearningVisible: REVIEW_LEARNING_UI_ENABLED
-  }), []);
+    reviewLearningVisible: REVIEW_LEARNING_UI_ENABLED,
+    qualityMonitoringVisible: monitoringEnabled === true
+  }), [monitoringEnabled]);
   const selectedNavigationKey = resolveAppShellSelectedKey(location.pathname, navigationItems);
   const [openNavigationKeys, setOpenNavigationKeys] = useState(['/settings']);
 
@@ -13403,13 +13462,17 @@ function AppFrame() {
                 path={FEEDBACK_ROUTE}
                 element={REVIEW_LEARNING_UI_ENABLED ? <RiskFeedbackPage /> : <Navigate to={TASK_LIST_ROUTE} replace />}
               />
-              <Route path={REVIEW_QUALITY_ROUTE} element={<ReviewQualityDashboardPage />} />
+              <Route path={REVIEW_QUALITY_ROUTE} element={<ReviewQualityDashboardPage monitoringEnabled={monitoringEnabled} />} />
+              <Route path={`${REVIEW_QUALITY_MONITOR_ROUTE}/*`} element={
+                monitoringEnabled === null ? <Spin />
+                  : monitoringEnabled ? <ReviewQualityMonitoringPage /> : <Navigate to={HOME_ROUTE} replace />
+              } />
               <Route path={ACCEPTANCE_GATES_ROUTE} element={<AcceptanceGatesPage />} />
               <Route path={`${ACCEPTANCE_GATES_ROUTE}/:gateId`} element={<AcceptanceGateDetailPage />} />
               <Route path={EVALUATION_CASES_ROUTE} element={<EvaluationCasesPage />} />
               <Route path={EVALUATION_RUNS_ROUTE} element={<EvaluationRunsPage />} />
               <Route path={`${EVALUATION_RUNS_ROUTE}/:runId`} element={<EvaluationRunDetailPage />} />
-              <Route path={`${SETTINGS_ROUTE}/*`} element={<SettingsPage />} />
+              <Route path={`${SETTINGS_ROUTE}/*`} element={<SettingsPage onMonitoringEnabledChange={setMonitoringEnabled} />} />
               <Route path={RELEASES_ROUTE} element={<ReleaseNotesPage />} />
               <Route path={HELP_ROUTE} element={<HelpPage />} />
               <Route path="*" element={<Navigate to={HOME_ROUTE} replace />} />

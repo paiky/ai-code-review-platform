@@ -1763,6 +1763,21 @@ GET /api/review-quality/dashboard
 - `deterministicCheckSummary` 只能按项目范围精确过滤；当请求包含 `provider / profile / riskType / verdict` 时，响应通过 `scopeNote` 明确该辅助摘要不能直接应用这些过滤。
 - `ruleGapAttributionSummary` 来自匹配的 `evaluation_cases`，只统计人工归因结果，不自动推断因果。
 
+### 13.2 审查质量监测
+
+接口前缀为 `/api/review-quality/monitoring`。通过 `GET/PUT /api/code-quality-reviews/settings` 的布尔字段 `reviewQualityMonitoringEnabled` 读取和修改全局监测开关，默认关闭。关闭时监测接口返回 `404`。开启后所有项目可用，访问沿用平台现有方式。`projectId` 查询参数限定报告和问题的归属，使用其他项目的记录 ID 返回 `404`。
+
+| 方法与相对路径 | 请求与响应 |
+| --- | --- |
+| `GET /reports` | 接受 `pageNo`、`pageSize`，返回运行摘要列表与分页信息。 |
+| `POST /reports` | 请求包含时区明确的 `startAt`、`endAt` 和 `idempotencyKey`。最大窗口为 31 天，结束边界不包含在内。同项目、同触发来源和同幂等键复用同一运行。复用幂等键并更改窗口时返回 `409`。 |
+| `GET /reports/{reportId}` | 返回运行状态及已生成的报告快照。快照含指标覆盖率、问题及脱敏证据引用、截断标志和可确认的分引擎版本归属。 |
+| `POST /reports/{reportId}/retry` | 沿用既有窗口重新执行失败或已失效的运行。响应沿用同一报告 ID。 |
+| `GET /issues/{issueId}` | 返回问题的当前状态、最近观测时间、处理版本和评估关联。 |
+| `PATCH /issues/{issueId}` | 提交当前 `version` 和变更字段。支持状态、负责人、处理结论、验收条件和同项目评估样本或回放。并发版本冲突时返回 `409`。 |
+
+运行状态为 `RUNNING`、`SUCCEEDED` 或 `FAILED`。成功后快照固定。指标按可观察分母计量，字段缺失时保留未知。线上、隔离回放及部署版本的取证口径见专题方案。 [审查质量监测 Agent 推进方案](70-review-quality-monitoring-agent-plan.md)
+
 ## 14. Rule Gap Attribution API
 
 Rule Gap Attribution 用于在 evaluation case 上记录某个 finding 与规则缺口之间的人工归因。M8 只做诊断，不自动补 Retriever、不自动修改 Prompt、不生成项目策略、不降级或忽略 finding。

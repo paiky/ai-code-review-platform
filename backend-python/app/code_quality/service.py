@@ -100,6 +100,7 @@ from app.review_record.repository import (
     save_notification_records,
 )
 from app.review_feedback.service import ai_finding_fingerprint
+from app.release_metadata import image_release_sha
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -3585,6 +3586,9 @@ def _review_context_progress_detail(context: dict[str, Any]) -> str:
         "meta": context.get("meta") or {},
         "summary": _bounded_review_context_summary(context.get("summary") or {}),
     }
+    release_sha = image_release_sha()
+    if release_sha:
+        payload["backendReleaseSha"] = release_sha
     text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     if len(text) <= 3800:
         return text
@@ -3617,14 +3621,8 @@ def _review_context_progress_detail(context: dict[str, Any]) -> str:
     text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     if len(text) <= 3800:
         return text
-    return json.dumps(
-        {
-            "meta": _minimal_review_context_progress_meta(payload.get("meta") or {}),
-            "summary": {"progressSummaryTruncated": True},
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    payload["summary"] = {"progressSummaryTruncated": True}
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _bounded_review_context_summary(summary: dict[str, Any]) -> dict[str, Any]:

@@ -1,0 +1,40 @@
+CREATE TABLE IF NOT EXISTS review_quality_monitor_reports (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    project_id BIGINT NOT NULL,
+    source VARCHAR(16) NOT NULL,
+    idempotency_hash CHAR(64) NOT NULL,
+    start_at DATETIME(6) NOT NULL,
+    end_at DATETIME(6) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    rule_version VARCHAR(32) NOT NULL,
+    attempt_token VARCHAR(36) NOT NULL,
+    snapshot_json MEDIUMTEXT NULL,
+    error_code VARCHAR(64) NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    finished_at DATETIME(6) NULL,
+    UNIQUE KEY uk_quality_monitor_request (project_id, source, idempotency_hash),
+    KEY idx_quality_monitor_report_project (project_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS review_quality_monitor_issues (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    project_id BIGINT NOT NULL,
+    engine VARCHAR(16) NOT NULL,
+    issue_type VARCHAR(64) NOT NULL,
+    diagnostic_type VARCHAR(64) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    priority VARCHAR(16) NOT NULL,
+    status VARCHAR(24) NOT NULL,
+    version INT NOT NULL,
+    first_seen_at DATETIME(6) NOT NULL,
+    last_seen_at DATETIME(6) NOT NULL,
+    last_report_id BIGINT NOT NULL,
+    assignee VARCHAR(128) NULL,
+    resolution VARCHAR(2048) NULL,
+    acceptance_criteria VARCHAR(2048) NULL,
+    evaluation_case_id BIGINT NULL,
+    evaluation_run_id BIGINT NULL,
+    closed_at DATETIME(6) NULL,
+    UNIQUE KEY uk_quality_monitor_issue (project_id, engine, issue_type, diagnostic_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -334,6 +334,10 @@ def ensure_settings_schema(db: Session) -> None:
         "BOOLEAN NOT NULL DEFAULT TRUE",
     )
     _add_column_if_missing(
+        db, columns, "code_quality_review_settings", "review_quality_monitoring_enabled",
+        "BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+    _add_column_if_missing(
         db,
         columns,
         "code_quality_review_settings",
@@ -812,6 +816,7 @@ def settings_to_dict(record: CodeQualityReviewSettings) -> dict[str, Any]:
     return {
         "reviewEnabled": record.review_enabled,
         "standardReviewEnabled": record.standard_review_enabled,
+        "reviewQualityMonitoringEnabled": record.review_quality_monitoring_enabled,
         "mrAutoReviewEnabled": record.mr_auto_review_enabled,
         "dingtalkNotificationEnabled": record.dingtalk_notification_enabled,
         "autoFixPreviewEnabled": record.auto_fix_preview_enabled,
@@ -830,6 +835,8 @@ def update_settings_record(db: Session, request: dict[str, Any]) -> dict[str, An
         record.review_enabled = bool(request["reviewEnabled"])
     if "standardReviewEnabled" in request:
         record.standard_review_enabled = request["standardReviewEnabled"]
+    if "reviewQualityMonitoringEnabled" in request:
+        record.review_quality_monitoring_enabled = request["reviewQualityMonitoringEnabled"]
     if "mrAutoReviewEnabled" in request:
         record.mr_auto_review_enabled = bool(request["mrAutoReviewEnabled"])
     if "dingtalkNotificationEnabled" in request:

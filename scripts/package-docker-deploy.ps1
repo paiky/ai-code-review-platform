@@ -23,6 +23,19 @@ $AgentWorkerImage = "ai-code-review-agent-worker:$Version"
 $AgentEgressImage = "ai-code-review-agent-egress:$Version"
 $MysqlImage = "mysql:8.4"
 
+# Omit release attribution when the build context differs from the checked out revision.
+$ReviewReleaseArg = @()
+$ReviewGit = Get-Command git -ErrorAction SilentlyContinue
+if ($ReviewGit) {
+  $ReviewBuildStatus = & $ReviewGit.Source -C $RepoRoot status --porcelain --untracked-files=all -- backend-python/app backend-python/migrations backend-python/pyproject.toml deploy/backend.Dockerfile deploy/agent-review-worker.Dockerfile .dockerignore .gitattributes 2>$null
+  if ($LASTEXITCODE -eq 0 -and -not $ReviewBuildStatus) {
+    $ReviewBuildCommit = & $ReviewGit.Source -C $RepoRoot rev-parse HEAD 2>$null
+    if ($LASTEXITCODE -eq 0 -and $ReviewBuildCommit -cmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$') {
+      $ReviewReleaseArg = @("--build-arg", "REVIEW_RELEASE_SHA=$ReviewBuildCommit")
+    }
+  }
+}
+
 function Test-StartedFromExplorer {
   try {
     $CurrentProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $PID"
@@ -171,14 +184,16 @@ try {
       -TargetImage $AgentEgressImage
   } else {
     Write-Host "Building backend image: $BackendImage"
-    Invoke-Docker build -f (Join-Path $DeployDir "backend.Dockerfile") -t $BackendImage $RepoRoot
+    Invoke-Docker build @ReviewReleaseArg `
+      -f (Join-Path $DeployDir "backend.Dockerfile") -t $BackendImage $RepoRoot
 
     Write-Host "Building frontend image: $FrontendImage"
     Invoke-Docker build -f (Join-Path $DeployDir "frontend.Dockerfile") -t $FrontendImage $RepoRoot
   }
 
   Write-Host "Building Agent Worker image: $AgentWorkerImage"
-  Invoke-Docker build -f (Join-Path $DeployDir "agent-review-worker.Dockerfile") -t $AgentWorkerImage $RepoRoot
+  Invoke-Docker build @ReviewReleaseArg `
+    -f (Join-Path $DeployDir "agent-review-worker.Dockerfile") -t $AgentWorkerImage $RepoRoot
 
   if (-not $AgentWorkerOnly) {
     Write-Host "Building Agent egress proxy image: $AgentEgressImage"

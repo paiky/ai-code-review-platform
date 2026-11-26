@@ -22,6 +22,12 @@ subprocess.check_call([sys.executable, "-m", "pip", "install", *config["build-sy
 COPY backend-python/app /app/app
 COPY backend-python/migrations /app/migrations
 
+ARG REVIEW_RELEASE_SHA
+LABEL org.opencontainers.image.revision=${REVIEW_RELEASE_SHA}
+RUN install -d /usr/local/share/ai-review \
+    && printf '%s\n' "$REVIEW_RELEASE_SHA" > /usr/local/share/ai-review/release-sha \
+    && chmod 444 /usr/local/share/ai-review/release-sha
+
 # V58 onward was released with LF. Earlier migration checksums use the original bytes.
 RUN set -e; \
     for migration in migrations/bootstrap_sql/V*__*.sql; do \

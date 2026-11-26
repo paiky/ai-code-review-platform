@@ -38,6 +38,8 @@ from app.agent_review_spike.responses_runner import (
     ResponsesRunnerConfig,
 )
 from app.agent_review_spike.runner import RunnerConfig, run_agent_candidate
+from app.release_metadata import image_release_sha
+
 WORKER_VERSION = "agent-worker-v1"
 CLI_VERSION = "2.1.112"
 DEFAULT_RUNTIME = "CLAUDE_CODE_DEEPSEEK"
@@ -367,6 +369,8 @@ def _run_job(
             "idempotencyKey": job["idempotencyKey"],
             "runSummary": summary,
         }
+        if worker_release := image_release_sha():
+            base["workerReleaseSha"] = worker_release
         if cancelled.is_set():
             _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/cancelled", base)
         elif summary.get("status") == "SUCCESS" and isinstance(summary.get("reviewCard"), dict):
@@ -395,14 +399,17 @@ def _run_job(
             type(exception).__name__,
             _safe_exception_location(exception),
         )
-        _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/fail", {
+        payload = {
             "workerId": worker_id,
             "claimAttempt": claim_attempt,
             "idempotencyKey": job["idempotencyKey"],
             "failureCode": error_code,
             "failureMessage": _failure_message(error_code),
             "runSummary": {"audit": {}, **latest_audit.summary_snapshot()},
-        })
+        }
+        if worker_release := image_release_sha():
+            payload["workerReleaseSha"] = worker_release
+        _post(backend_url, token, f"/internal/agent-review/jobs/{job_id}/fail", payload)
     finally:
         stop.set()
         heartbeat.join(timeout=2)

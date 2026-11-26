@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 import json
 from pathlib import Path
 import re
@@ -195,6 +196,8 @@ def build_review_context_pack(
     head_ref: str | None = None,
     deterministic_security_summary: dict[str, Any] | None = None,
     target_type: str | None = None,
+    replay_worktree: Path | None = None,
+    replay_source_reader: Callable[[str], list[str]] | None = None,
 ) -> dict[str, Any]:
     files = _normalize_changed_files(changed_files or [], diff_text)
     feedback_summary = _context_missing_feedback_summary(db, project_id)
@@ -202,22 +205,27 @@ def build_review_context_pack(
         files,
         git_project_id=git_project_id,
         head_ref=head_ref,
+        source_reader=replay_source_reader,
     )
     context_plan = _context_plan(files, feedback_summary, same_file_context, target_type)
     planner_signals = context_plan.pop("_plannerSignals", [])
     requested_contexts = context_plan.pop("_requestedContexts", [])
     planner_unavailable_contexts = context_plan.pop("_unavailableContexts", [])
-    local_repository_context = prepare_local_repository_context(
-        project_id=project_id,
-        task_id=task_id,
-        repository_url=repository_url,
-        git_project_id=git_project_id,
-        head_ref=head_ref,
-    )
+    if replay_worktree is None:
+        local_repository_context = prepare_local_repository_context(
+            project_id=project_id,
+            task_id=task_id,
+            repository_url=repository_url,
+            git_project_id=git_project_id,
+            head_ref=head_ref,
+        )
+    else:
+        local_repository_context = {"summary": {"status": "PREPARED"}}
     local_reference_context = _local_reference_context(
         task_id=task_id,
         local_repository_context=local_repository_context,
         planner_signals=planner_signals,
+        replay_worktree=replay_worktree,
     )
     local_reference_pack_context = _local_reference_pack_context(local_reference_context)
     _prioritize_local_reference_context(local_reference_pack_context)
@@ -427,6 +435,7 @@ def _same_file_context(
     *,
     git_project_id: str | None,
     head_ref: str | None,
+    source_reader: Callable[[str], list[str]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     files_with_diff = [file for file in files if str(file.get("diffText") or "").strip()]
     files_with_context_lines = [
@@ -436,6 +445,7 @@ def _same_file_context(
         files_with_diff,
         git_project_id=git_project_id,
         head_ref=head_ref,
+        source_reader=source_reader,
     )
     source_file_count = len(source_contexts)
     source_snippet_count = sum(len(item.get("snippets") or []) for item in source_contexts)
@@ -473,10 +483,11 @@ def _source_snippets_for_changed_files(
     *,
     git_project_id: str | None,
     head_ref: str | None,
+    source_reader: Callable[[str], list[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not files:
         return [], []
-    capability_error = _source_context_capability_error(git_project_id, head_ref)
+    capability_error = None if source_reader else _source_context_capability_error(git_project_id, head_ref)
     if capability_error:
         return [], [capability_error]
 
@@ -515,7 +526,9 @@ def _source_snippets_for_changed_files(
             )
             continue
         try:
-            lines = gitlab_client.get_raw_file(str(git_project_id), path, str(head_ref))
+            lines = source_reader(path) if source_reader else gitlab_client.get_raw_file(
+                str(git_project_id), path, str(head_ref)
+            )
         except AppError as exception:
             unavailable.append(
                 {
@@ -1932,6 +1945,7 @@ def _local_reference_context(
     task_id: int | None,
     local_repository_context: dict[str, Any],
     planner_signals: list[dict[str, Any]],
+    replay_worktree: Path | None = None,
 ) -> dict[str, Any]:
     summary = local_repository_context.get("summary") or {}
     if str(summary.get("status") or "").upper() != "PREPARED":
@@ -1943,7 +1957,7 @@ def _local_reference_context(
             "durationMs": 0,
         }
     try:
-        worktree_path = task_head_worktree_path(task_id)
+        worktree_path = replay_worktree or task_head_worktree_path(task_id)
     except Exception:
         worktree_path = None
     retrieval = retrieve_local_reference_context(
