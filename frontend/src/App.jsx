@@ -9364,7 +9364,6 @@ function TemplateConfig() {
                 <section className="settings-subsection review-profile-prompt-card">
                   <SettingsCardHeader
                     title="审查重点"
-                    description="Agent 与 Standard 共用审查重点。取证方式和结果格式由各自引擎决定。"
                   />
                   <Input.TextArea
                     className="prompt-textarea review-profile-prompt-input"
