@@ -47,6 +47,10 @@ services:
       CODE_QUALITY_REVIEW_ENABLED: ${CODE_QUALITY_REVIEW_ENABLED:-true}
       CODE_QUALITY_REVIEW_PROVIDER: ${CODE_QUALITY_REVIEW_PROVIDER:-DEEPSEEK}
       CODE_QUALITY_REVIEW_PROXY: ${CODE_QUALITY_REVIEW_PROXY:-}
+      REVIEW_QUALITY_GOVERNANCE_ENABLED: ${REVIEW_QUALITY_GOVERNANCE_ENABLED:-false}
+      REVIEW_QUALITY_GOVERNANCE_PROVIDER: ${REVIEW_QUALITY_GOVERNANCE_PROVIDER:-}
+      REVIEW_QUALITY_GOVERNANCE_REPLAY_ROOT: /app/.local/review-workspaces/governance
+      REVIEW_QUALITY_GOVERNANCE_AUTO_CLOSE: ${REVIEW_QUALITY_GOVERNANCE_AUTO_CLOSE:-false}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_RESPONSES_URL: ${OPENAI_RESPONSES_URL:-https://api.openai.com/v1/responses}
       OPENAI_CODE_REVIEW_MODEL: ${OPENAI_CODE_REVIEW_MODEL:-gpt-5.4}
@@ -87,6 +91,42 @@ services:
       timeout: 5s
       retries: 10
       start_period: 40s
+
+  governance-worker:
+    image: ai-code-review-backend:${APP_VERSION:-local}
+    profiles: [review-quality-governance]
+    command: ["python", "-m", "app.review_quality.governance_worker"]
+    restart: unless-stopped
+    stop_grace_period: 90s
+    read_only: true
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+      REVIEW_QUALITY_GOVERNANCE_ENABLED: ${REVIEW_QUALITY_GOVERNANCE_ENABLED:-false}
+      REVIEW_QUALITY_GOVERNANCE_PROVIDER: ${REVIEW_QUALITY_GOVERNANCE_PROVIDER:-}
+      REVIEW_QUALITY_GOVERNANCE_REPLAY_ROOT: /workspaces/governance
+      LOCAL_REPO_WORKSPACE_ROOT: /workspaces/governance
+      CODE_QUALITY_REVIEW_PROXY: ${CODE_QUALITY_REVIEW_PROXY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_RESPONSES_URL: ${OPENAI_RESPONSES_URL:-https://api.openai.com/v1/responses}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MESSAGES_URL: ${ANTHROPIC_MESSAGES_URL:-https://api.anthropic.com/v1/messages}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      XIAOMIMO_API_KEY: ${XIAOMIMO_API_KEY:-}
+      GLM_API_KEY: ${GLM_API_KEY:-}
+    volumes:
+      - ${LOCAL_REPO_WORKSPACE_HOST_DIR:-./review-workspaces}/governance:/workspaces/governance:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.review_quality.governance_worker", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   agent-worker:
     image: ai-code-review-agent-worker:${APP_VERSION:-local}

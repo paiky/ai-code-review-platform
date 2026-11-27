@@ -10,6 +10,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.database import SessionLocal
 from app.core.errors import AppError
 from app.project_integration.models import Project
+from app.review_quality.governance_closure import close_verified_issues
+from app.review_quality.governance_queue import governance_enabled
+from app.review_quality.governance_service import enqueue_report
 from app.review_quality.monitoring import generate_monitoring_report, monitoring_enabled
 
 
@@ -23,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
         type=date.fromisoformat,
         help="Beijing schedule date (YYYY-MM-DD), for retrying a missed run",
     )
+    parser.add_argument("--governance", action="store_true", help="Enqueue governance after successful reports")
     args = parser.parse_args(argv)
     today = datetime.now(_BEIJING_TZ).date()
     schedule_date = args.date or today
@@ -56,6 +60,17 @@ def main(argv: list[str] | None = None) -> int:
                     source="SCHEDULED",
                 )
             outcome = {"reportId": report.id, "status": report.status, "errorCode": report.errorCode}
+            if args.governance and report.status == "SUCCEEDED" and governance_enabled():
+                try:
+                    with SessionLocal() as db:
+                        closed = close_verified_issues(db, report)
+                        runs = enqueue_report(db, project_id, report.id, scheduled=True)
+                    outcome["governance"] = {"runIds": [run.id for run in runs], "closedIssueIds": closed}
+                except (AppError, SQLAlchemyError) as exc:
+                    failed = True
+                    outcome["governance"] = {
+                        "errorCode": exc.code if isinstance(exc, AppError) else "GOVERNANCE_DATABASE_ERROR",
+                    }
         except (AppError, SQLAlchemyError) as exc:
             outcome = {"status": "FAILED", "errorCode": exc.code if isinstance(exc, AppError) else "MONITORING_DATABASE_ERROR"}
         print(json.dumps({"projectId": project_id, **outcome}))

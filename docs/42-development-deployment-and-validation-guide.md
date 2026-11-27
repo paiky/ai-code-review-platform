@@ -484,6 +484,14 @@ docker compose logs -f backend
 
 ## 七、服务器侧只读 Agent Review
 
+### 审查质量治理 Worker
+
+治理使用独立的 MySQL 队列。首次交付须完整打包 Backend，启动时应用 V68。`-AgentWorkerOnly` 复用旧 Backend，不能交付队列表或治理 API。确认治理 Provider 和样本授权后，在运行时 `.env` 设置 `REVIEW_QUALITY_GOVERNANCE_ENABLED=true` 和 `REVIEW_QUALITY_GOVERNANCE_PROVIDER=<Provider Code>`，并开启平台的「审查质量监测」。`deploy-stage3.sh upgrade` 会启动一个治理 Worker 并等待健康检查。手动启停使用 `docker compose --profile review-quality-governance up -d --wait governance-worker` 和 `docker compose --profile review-quality-governance stop governance-worker`。
+
+将已批准的固定夹具及干净 checkout 放在 `${LOCAL_REPO_WORKSPACE_HOST_DIR}/governance/<projectId>/<taskId>/<evidenceId>/<kind>/` 下，文件名分别为 `fixture.json` 和 `source/`。Agent Diff 使用 Run ID 和 `AGENT_DIFF`，Standard 使用进度事件 ID 和 `STANDARD_CONTEXT`。Worker 以只读卷读取，缺材料时治理结果保留待补证。Windows 开发环境可显式设置数据库连接、`REVIEW_QUALITY_GOVERNANCE_REPLAY_ROOT` 和相同的 `LOCAL_REPO_WORKSPACE_ROOT`，运行 `scripts/run-backend.ps1 app.review_quality.governance_worker`。
+
+由部署环境的调度器在北京时间每天 09:00 运行 `docker compose exec -T backend python -m app.review_quality.monitoring_schedule --governance`。补跑追加 `--date YYYY-MM-DD`。仅成功报告触发治理，单项目最多新建 10 个定时 Run，每个 Run 最多 4 次模型请求和 1 次回放。回放和调用额度由同一个治理 Worker 串行处理。`REVIEW_QUALITY_GOVERNANCE_AUTO_CLOSE` 默认关闭，具备经授权的上线观察条件时才启用。 [自动关闭条件](70-review-quality-monitoring-agent-plan.md#m9--定时执行与有条件自动关闭)
+
 安全边界及该专项的生产验收记录见 `docs/41-server-side-readonly-agent-review-plan.md`。部署至少需要：
 
 ```text

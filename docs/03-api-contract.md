@@ -1767,6 +1767,8 @@ GET /api/review-quality/dashboard
 
 接口前缀为 `/api/review-quality/monitoring`。通过 `GET/PUT /api/code-quality-reviews/settings` 的布尔字段 `reviewQualityMonitoringEnabled` 读取和修改全局监测开关，默认关闭。关闭时监测接口返回 `404`。开启后所有项目可用，访问沿用平台现有方式。`projectId` 查询参数限定报告和问题的归属，使用其他项目的记录 ID 返回 `404`。
 
+治理接口前缀为 `/api/review-quality/monitoring/governance`，沿用 `projectId` 和监测开关。对前缀执行 `GET` 返回项目治理状态、最新运行和每个问题的最新有效判断。`POST /runs` 接受 `reportId` 和可选 `issueId`，仅消费成功报告。重复证据复用已有运行。`GET /runs/{runId}` 返回完整运行、执行时间线及最新人工干预修订号。`PATCH /issues/{issueId}` 支持 `PAUSE`、`RESUME`、`CANCEL`、`PRIORITIZE` 或 `OVERRIDE`，需要该问题的 `revision`。并发修改后提交旧修订号返回 `409`。`PRIORITIZE` 提交 `priority`，`OVERRIDE` 提交 `conclusion`。历史决策、回放摘要、人工覆盖和关闭记录均可回查。独立治理开关默认关闭，关闭时概览返回停用状态，其他治理接口返回 `404`。
+
 | 方法与相对路径 | 请求与响应 |
 | --- | --- |
 | `GET /reports` | 接受 `pageNo`、`pageSize`，返回运行摘要列表与分页信息。 |

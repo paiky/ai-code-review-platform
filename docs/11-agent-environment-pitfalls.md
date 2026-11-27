@@ -335,6 +335,8 @@ BACKEND_PORT = 容器内后端监听端口，只在 Docker 网络内使用
 
 ## 数据库与迁移
 
+在存在 `.local/database.local.env` 的工作区，`scripts/run-backend.ps1 migrate` 会清除进程已有的数据库连接变量，再加载本地配置。验证迁移需要使用临时隔离库时，在独立进程设置该隔离库的 `DATABASE_URL`，先用应用的 SQLAlchemy Engine 执行 `SELECT DATABASE(), @@port, VERSION()` 确认连接目标，再用同一环境运行 `python -m app.migrate`。
+
 - Python 后端优先使用 `DATABASE_URL`：
 
 ```powershell

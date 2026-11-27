@@ -28,6 +28,7 @@ import {
 
 import { fetchApi } from '../api.js';
 import { REVIEW_QUALITY_MONITOR_ROUTE } from '../appShell.js';
+import { GovernanceDetail, GovernanceHome, StartGovernanceButton, governanceRequest } from './ReviewQualityGovernance.jsx';
 
 const { Text, Title } = Typography;
 const MONITORING_API = '/api/review-quality/monitoring';
@@ -186,7 +187,7 @@ function taskHref(sample) {
   return `/tasks/${sample.taskId}${query}`;
 }
 
-function ReportDetail({ report, onRetry, retrying }) {
+function ReportDetail({ report, onRetry, retrying, governanceEnabled }) {
   const isFailed = report.status === 'FAILED';
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -206,7 +207,10 @@ function ReportDetail({ report, onRetry, retrying }) {
             重试报告生成
           </Button>
         )}
-        {report.status === 'SUCCEEDED' && <Link to={monitoringHref(report.projectId, '/compare', { baselineId: report.id })}>以本报告为基线</Link>}
+        {report.status === 'SUCCEEDED' && <Space wrap>
+          <Link to={monitoringHref(report.projectId, '/compare', { baselineId: report.id })}>以本报告为基线</Link>
+          {governanceEnabled && <StartGovernanceButton projectId={report.projectId} reportId={report.id} href={monitoringHref(report.projectId)} />}
+        </Space>}
       </Card>
       {report.snapshot ? <MonitoringSummary report={report} /> : (
         <Alert showIcon type={report.status === 'FAILED' ? 'error' : 'info'} message={report.status === 'FAILED' ? '报告生成失败' : '报告正在生成'} description={report.errorCode || undefined} />
@@ -215,7 +219,7 @@ function ReportDetail({ report, onRetry, retrying }) {
   );
 }
 
-function IssueDetail({ issueId, projectId }) {
+function IssueDetail({ issueId, projectId, governanceEnabled }) {
   const [issue, setIssue] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -299,6 +303,8 @@ function IssueDetail({ issueId, projectId }) {
           {issue.evaluationCaseId && <Descriptions.Item label="评估样本"><Link to={`/evaluation-cases?caseId=${issue.evaluationCaseId}`}>#{issue.evaluationCaseId}</Link></Descriptions.Item>}
           {issue.evaluationRunId && <Descriptions.Item label="回放记录"><Link to={`/evaluation-runs/${issue.evaluationRunId}`}>#{issue.evaluationRunId}</Link></Descriptions.Item>}
         </Descriptions>
+        {governanceEnabled && issue.lastReportId && <StartGovernanceButton projectId={projectId}
+          reportId={issue.lastReportId} issueId={issue.id} href={monitoringHref(projectId)} />}
       </Card>
       <Card size="small" title="处置记录">
         <Form layout="vertical" disabled={loading || saving} onFinish={saveIssue}>
@@ -410,7 +416,7 @@ function ReportHistory({ projectId }) {
   );
 }
 
-function ReportRoute({ reportId, projectId }) {
+function ReportRoute({ reportId, projectId, governanceEnabled }) {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState(false);
@@ -443,7 +449,7 @@ function ReportRoute({ reportId, projectId }) {
   return (
     <Space vertical size={16} style={{ width: '100%' }}>
       {error && <Alert showIcon type="error" title={requestError(error)} />}
-      {report && <ReportDetail report={report} onRetry={retryReport} retrying={retrying} />}
+      {report && <ReportDetail report={report} onRetry={retryReport} retrying={retrying} governanceEnabled={governanceEnabled} />}
       {loading ? <Spin /> : (error || report?.status === 'RUNNING') && (
         <Button icon={<ReloadOutlined />} onClick={() => setRefresh(value => value + 1)}>刷新报告</Button>
       )}
@@ -632,15 +638,22 @@ export default function ReviewQualityMonitoringPage() {
   const [params] = useSearchParams();
   const detailMatch = useMatch(`${REVIEW_QUALITY_MONITOR_ROUTE}/:reportId`);
   const issueMatch = useMatch(`${REVIEW_QUALITY_MONITOR_ROUTE}/issues/:issueId`);
+  const governanceMatch = useMatch(`${REVIEW_QUALITY_MONITOR_ROUTE}/governance/:runId`);
   const compareMatch = useMatch(`${REVIEW_QUALITY_MONITOR_ROUTE}/compare`);
   const reportId = compareMatch ? null : detailMatch?.params.reportId;
   const issueId = issueMatch?.params.issueId;
   const [projects, setProjects] = useState(null);
   const [projectError, setProjectError] = useState(null);
   const [refresh, setRefresh] = useState(0);
+  const [governance, setGovernance] = useState(null);
+  const [governanceError, setGovernanceError] = useState(null);
   const requestedProjectId = Number(params.get('projectId'));
   const projectId = projects?.find(project => project.id === requestedProjectId)?.id
     ?? (params.has('projectId') ? null : projects?.[0]?.id);
+  const projectGovernance = governance && governance.projectId === projectId ? governance.data : null;
+  const governanceEnabled = projectGovernance?.enabled === true;
+  const reportList = params.get('view') === 'reports';
+  const reportsHref = monitoringHref(projectId, '', { view: 'reports' });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -651,16 +664,37 @@ export default function ReviewQualityMonitoringPage() {
     return () => controller.abort();
   }, [refresh]);
 
+  useEffect(() => {
+    if (!projectId) return undefined;
+    const controller = new AbortController();
+    setGovernanceError(null);
+    governanceRequest(projectId, '', { signal: controller.signal })
+      .then(data => { if (!controller.signal.aborted) setGovernance({ projectId, data }); })
+      .catch(error => {
+        if (!controller.signal.aborted) {
+          setGovernance({ projectId, data: { enabled: false } });
+          if (error.status !== 404) setGovernanceError(error);
+        }
+      });
+    return () => controller.abort();
+  }, [projectId, refresh]);
+
   return (
     <div style={{ padding: '20px clamp(16px, 3vw, 32px)', minHeight: 'calc(100dvh - 56px)', background: '#f5f7f8' }}>
-      <Space vertical size={16} style={{ width: '100%', maxWidth: 1440, margin: '0 auto' }}>
+      <Space vertical size={16} style={{ width: '100%', minWidth: 0 }}>
         <Card size="small">
           <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
             <Space align="start">
-              {(reportId || issueId || compareMatch) && <Link aria-label="返回报告历史" to={monitoringHref(projectId)}><ArrowLeftOutlined /></Link>}
-              <Title level={4} style={{ margin: 0 }}>审查质量监测</Title>
+              {(reportId || issueId || compareMatch || governanceMatch) && (
+                <Link aria-label={governanceMatch ? '返回质量治理' : '返回报告历史'}
+                  to={governanceMatch ? monitoringHref(projectId) : reportsHref}><ArrowLeftOutlined /></Link>
+              )}
+              <Title level={4} style={{ margin: 0 }}>{governanceEnabled && (governanceMatch || (!reportId && !issueId && !compareMatch && !reportList)) ? '质量治理' : '审查质量监测'}</Title>
             </Space>
             <Space wrap>
+              {governanceEnabled && (reportList || reportId || issueId || compareMatch
+                ? <Link to={monitoringHref(projectId)}>质量治理</Link>
+                : <Link to={reportsHref}>监测报告</Link>)}
               <Select
                 aria-label="项目"
                 placeholder="选择项目"
@@ -675,13 +709,19 @@ export default function ReviewQualityMonitoringPage() {
             </Space>
           </Space>
         </Card>
+        {governanceError && <Alert showIcon type="error" message="暂时无法读取治理状态" action={<Button onClick={() => setRefresh(value => value + 1)}>重试</Button>} />}
         {projectError ? <Alert showIcon type="error" title={requestError(projectError)} action={<Button onClick={() => setRefresh(value => value + 1)}>重试</Button>} />
           : !projects ? <Spin />
             : !projectId ? <Empty description={projects.length ? '请选择项目' : '暂无项目'} />
               : compareMatch ? <ReportComparison key={projectId} projectId={projectId} />
-                : issueId ? <IssueDetail key={`${projectId}/${issueId}`} issueId={issueId} projectId={projectId} />
-                  : reportId ? <ReportRoute key={`${projectId}/${reportId}`} reportId={reportId} projectId={projectId} />
-                    : <ReportHistory key={projectId} projectId={projectId} />}
+                : issueId ? <IssueDetail key={`${projectId}/${issueId}`} issueId={issueId} projectId={projectId} governanceEnabled={governanceEnabled} />
+                  : reportId ? <ReportRoute key={`${projectId}/${reportId}`} reportId={reportId} projectId={projectId} governanceEnabled={governanceEnabled} />
+                    : governanceMatch ? <GovernanceDetail key={`${projectId}/${governanceMatch.params.runId}`} projectId={projectId}
+                      runId={governanceMatch.params.runId} href={path => monitoringHref(projectId, path)} taskHref={taskHref} formatTimestamp={formatTimestamp} />
+                      : !reportList && !projectGovernance ? <Spin />
+                        : governanceEnabled && !reportList ? <GovernanceHome key={projectId} projectId={projectId} initial={projectGovernance}
+                          href={path => monitoringHref(projectId, path)} formatTimestamp={formatTimestamp} />
+                          : <ReportHistory key={projectId} projectId={projectId} />}
       </Space>
     </div>
   );

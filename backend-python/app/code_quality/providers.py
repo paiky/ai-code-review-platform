@@ -128,6 +128,29 @@ def test_provider_connection(
         )
 
 
+def request_governance_judgment(provider: CodeQualityModelProvider, instructions: str, payload: str) -> str:
+    prepared = _provider_connection_request(provider, {})
+    body = prepared["body"]
+    messages = [{"role": "system", "content": instructions}, {"role": "user", "content": payload}]
+    if provider.provider_type == "OPENAI_RESPONSES":
+        body.update(input=messages, max_output_tokens=1200)
+    elif provider.provider_type == "ANTHROPIC_MESSAGES":
+        body.update(system=instructions, messages=messages[1:], max_tokens=1200)
+    else:
+        body.update(messages=messages, max_tokens=1200)
+    timeout = min(prepared["timeout_seconds"], 45)
+    deadline = perf_counter() + 60
+    buffer = bytearray()
+    with _provider_http_client(timeout, verify_tls=prepared["tls_verify"]) as client:
+        with client.stream("POST", prepared["endpoint"], json=body, headers=prepared["headers"]) as response:
+            response.raise_for_status()
+            for chunk in response.iter_bytes():
+                buffer.extend(chunk)
+                if len(buffer) > 128_000 or perf_counter() > deadline:
+                    raise ValueError("Provider response exceeded the governance limit")
+    return prepared["output_extractor"](buffer.decode("utf-8"))
+
+
 def _run_openai_responses(
     db: Session,
     task_id: int,

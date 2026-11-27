@@ -382,6 +382,7 @@ show_dry_run_upgrade() {
   echo "DRY RUN: docker compose up -d agent-egress-proxy"
   echo "DRY RUN: docker compose up -d --no-deps --scale agent-worker=$WORKERS agent-worker"
   echo "DRY RUN: wait for onlineCapacity >= $WORKERS and drainingWorkers=0"
+  echo "DRY RUN: if quality governance is enabled, start one governance Worker and wait for health"
   echo "DRY RUN: docker compose up -d --no-deps frontend"
   echo "DRY RUN: restore the original enabled state only after healthy capacity"
   echo "DRY RUN: remove only created/exited/dead containers from the current Compose project"
@@ -414,6 +415,12 @@ case "$COMMAND" in
     compose up -d agent-egress-proxy
     compose up -d --no-deps --scale "agent-worker=$WORKERS" agent-worker
     wait_for_worker_capacity "$WORKERS"
+    if compose exec -T backend python -c 'import os; raise SystemExit(os.getenv("REVIEW_QUALITY_GOVERNANCE_ENABLED", "").lower() != "true")'; then
+      compose --profile review-quality-governance up -d --no-deps --scale governance-worker=1 \
+        --wait --wait-timeout "$TIMEOUT_SECONDS" governance-worker
+    else
+      compose --profile review-quality-governance stop governance-worker
+    fi
     compose up -d --no-deps frontend
 
     if [ "$ORIGINAL_AGENT_ENABLED" = true ]; then
