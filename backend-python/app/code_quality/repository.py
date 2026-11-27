@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -38,15 +39,14 @@ DEFAULT_AUTO_FIX_PREVIEW_SEVERITIES = ["CRITICAL"]
 AUTO_FIX_PREVIEW_SEVERITY_OPTIONS = {"CRITICAL", "MAJOR", "MINOR"}
 DEFAULT_REVIEW_KEY = "default"
 _PROGRESS_REVIEW_KEY: ContextVar[str | None] = ContextVar("code_quality_progress_review_key", default=None)
-DEFAULT_REVIEW_INSTRUCTIONS = """你是资深后端代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
-JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
+_REVIEW_SCOPE = "只报告本次变更引入的问题，可结合本次提供或按需取得的上下文核实。审查说明使用简体中文。"
+DEFAULT_REVIEW_INSTRUCTIONS = f"""你是资深后端代码质量审核助手。{_REVIEW_SCOPE}
 
 审查原则：
-1. 只审查本次 diff 新增或修改引入的问题，不报告历史存量问题。
-2. 只报告会影响线上正确性、数据一致性、安全、事务边界、SQL 性能、缓存一致性、MQ 一致性、异常处理或关键测试覆盖的问题。
-3. 不报告纯代码风格、命名偏好、格式、注释、主观重构或没有明确线上影响的建议。
-4. 不要猜测 diff 外部代码、调用方行为或未提供的配置；缺少证据时不要报告，除非潜在影响很高且必须人工确认。
-5. 每个 finding 都必须说明：为什么它由本次变更引入、具体触发条件、潜在影响、建议修复方式。
+1. 只报告会影响线上正确性、数据一致性、安全、事务边界、SQL 性能、缓存一致性、MQ 一致性、异常处理或关键测试覆盖的问题。
+2. 不报告纯代码风格、命名偏好、格式、注释、主观重构或没有明确线上影响的建议。
+3. 核对调用方行为或配置时以可用证据为准；缺少证据时不要报告，除非潜在影响很高且必须人工确认。
+4. 每条发现都要说明为何由本次变更引入、具体触发条件、潜在影响和建议修复方式。
 
 重点检查：
 - 正确性：条件分支、边界值、空值、状态流转、幂等、重复提交、并发竞争。
@@ -58,8 +58,7 @@ JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必
 - 异常与观测：异常吞掉、错误码误导、补偿缺失、关键日志和监控缺口。
 - 测试缺口：当本次变更涉及核心业务分支、数据一致性或高风险边界时，指出缺少的关键测试。"""
 
-WEB_PC_REVIEW_INSTRUCTIONS = """你是资深 PC Web / H5 代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
-JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
+WEB_PC_REVIEW_INSTRUCTIONS = f"""你是资深 PC Web / H5 代码质量审核助手。{_REVIEW_SCOPE}
 
 只报告会影响真实用户体验、线上正确性、安全、权限、接口契约、状态一致性、性能或关键测试覆盖的问题。不要报告纯样式偏好、命名、格式或主观重构建议。
 
@@ -71,8 +70,7 @@ JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必
 - 大列表、重复渲染、请求风暴、资源体积和缓存策略。
 - 核心页面和异常路径的测试缺口。"""
 
-APP_IOS_REVIEW_INSTRUCTIONS = """你是资深 iOS 代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
-JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
+APP_IOS_REVIEW_INSTRUCTIONS = f"""你是资深 iOS 代码质量审核助手。{_REVIEW_SCOPE}
 
 只报告可能导致崩溃、数据错误、安全问题、线上体验退化、兼容性问题或关键测试缺口的问题。不要报告纯风格或主观重构建议。
 
@@ -84,8 +82,7 @@ JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必
 - 网络错误、弱网、离线、重试、超时和取消。
 - iOS 版本兼容、深链、通知、存储迁移和崩溃风险。"""
 
-APP_ANDROID_REVIEW_INSTRUCTIONS = """你是资深 Android 代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
-JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
+APP_ANDROID_REVIEW_INSTRUCTIONS = f"""你是资深 Android 代码质量审核助手。{_REVIEW_SCOPE}
 
 只报告可能导致崩溃、ANR、数据错误、安全问题、兼容性问题、线上体验退化或关键测试缺口的问题。不要报告纯风格或主观重构建议。
 
@@ -97,8 +94,7 @@ JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必
 - 网络错误、弱网、离线、重试、超时和分页边界。
 - Android 版本兼容、Gradle 配置、混淆、通知、深链和 ANR 风险。"""
 
-APP_CROSS_PLATFORM_REVIEW_INSTRUCTIONS = """你是资深跨端应用代码质量审核助手。只审查用户提供的 diff，必须返回严格 JSON，不要 Markdown。
-JSON 字段名和枚举值保持英文；summary、title、body、suggestion 必须使用简体中文。
+APP_CROSS_PLATFORM_REVIEW_INSTRUCTIONS = f"""你是资深跨端应用代码质量审核助手。{_REVIEW_SCOPE}
 
 只报告可能导致跨端行为不一致、崩溃、数据错误、安全问题、性能退化、打包发布问题或关键测试缺口的问题。不要报告纯风格或主观重构建议。
 
@@ -116,6 +112,15 @@ LEGACY_DEFAULT_REVIEW_INSTRUCTIONS = {
     "只审查本次变更中会导致线上缺陷、数据不一致、安全风险、事务问题、SQL 性能问题、缓存一致性问题、MQ 一致性问题、异常处理缺口、测试缺口的代码质量问题。不要报告纯风格问题。请使用简体中文输出，每个问题以“高风险：”“中风险：”或“低风险：”开头，并尽量标明文件和行号。",
     "只报告可执行的正确性、数据一致性、安全、事务、SQL 性能、缓存一致性、MQ 一致性、异常处理和关键测试缺口问题。不要报告纯代码风格问题。",
     "只报告会影响线上正确性、数据一致性、安全、事务边界、SQL 性能、缓存一致性、MQ 一致性、异常处理或测试覆盖的问题。\n不报告纯代码风格、命名偏好、无明确影响的重构建议。\n每个问题都要说明触发条件、潜在影响和建议修复方式。",
+}
+
+# Exact UTF-8 fingerprints of the shipped defaults before engine-specific instructions were separated.
+_PREVIOUS_BUILT_IN_PROMPT_HASHES = {
+    DEFAULT_PROFILE_CODE: "0a5b8e6419dd4223b362acef5bb7e2878101a9dd967d3c6214459dd9be47e6a1",
+    "web-pc-default-ai-review": "fb67093d60ceb9b83c353ae54d6bf1698618c02d260fa9993e44b793a17dd69e",
+    "app-ios-default-ai-review": "6020626cf99f46ffe4aab70b4f01ff4cff6fc1c34f10b86eee9fe9f1d1bacfd2",
+    "app-android-default-ai-review": "47a8232bb32cd8e528164aefe969f1043e96fa78e3d08831e211d440ba97ccaa",
+    "app-cross-platform-default-ai-review": "3c327142cb3351deb3ac80ecca8d060a56103cb4bf257660064c7024b36e0081",
 }
 
 DEFAULT_PROFILE_DEFINITIONS = {
@@ -279,7 +284,11 @@ def _upsert_built_in_profile(db: Session, profile_code: str) -> CodeQualityRevie
         definition["ignored_paths"],
         definition["description"],
     )
-    if profile_code != DEFAULT_PROFILE_CODE and _is_backend_prompt(profile.review_instructions):
+    current = profile.review_instructions or ""
+    previous_hash = hashlib.sha256(current.encode("utf-8")).hexdigest()
+    if previous_hash == _PREVIOUS_BUILT_IN_PROMPT_HASHES[profile_code] or (
+        profile_code != DEFAULT_PROFILE_CODE and _is_backend_prompt(current)
+    ):
         profile.review_instructions = definition["instructions"]
         profile.openai_instructions = definition["instructions"]
         profile.codex_prompt = definition["instructions"]
@@ -295,7 +304,9 @@ def _default_profile_definition(profile_code: str) -> dict[str, Any]:
 
 
 def _is_backend_prompt(value: str | None) -> bool:
-    return (value or "").strip() == DEFAULT_REVIEW_INSTRUCTIONS.strip()
+    return hashlib.sha256((value or "").strip().encode("utf-8")).hexdigest() == (
+        _PREVIOUS_BUILT_IN_PROMPT_HASHES[DEFAULT_PROFILE_CODE]
+    )
 
 
 def ensure_code_quality_config_schema(db: Session) -> None:

@@ -727,6 +727,7 @@ GET /api/review-tasks/{taskId}/code-quality-progress
 - API Provider 会记录请求构建、Provider 调用、响应摘要、解析和保存结果等阶段，敏感字段会脱敏或省略。
 - `REVIEW_PLATFORM_PROMPT` 记录首轮使用的平台固定系统指令，沿用任务详情的读取范围。其 `detail` 是 JSON 字符串，包含 `schemaVersion`、`templateId`、`source`、`protocol` 和 `platformInstructions`。`source` 区分 `STANDARD_HTTP`、`AGENT_HTTP` 和 `CLAUDE_CLI_APPEND`。Claude CLI 对应平台传给进程的附加指令。Agent 事件还记录 `submitByTurn`、`runId` 和 `claimAttempt`。Standard 事件还记录 `effectiveEngine`（`STANDARD` 或 `STANDARD_FALLBACK`）。从 Agent Run 降级时附来源 `runId`，从入队前预检直接降级时该字段省略。历史任务可能没有此事件。
 - `platformInstructions` 由后端按已记录的模板版本和参数生成，包含平台固定指令。项目自定义指令、手动指令、diff、源码和其它任务上下文不在此字段中。
+- `AGENT_CONVERSATION_INPUT` 及 Standard 的 `REVIEW_PLATFORM_PROMPT` 可附 `profile` 摘要。`code` 是当次解析的 Profile 编号，`sha256` 和 `bytes` 仅在能确认当次审查重点片段时记录。`sourceSummaries` 可附各输入来源的计数和 UTF-8 字节数。`BASELINE_CONTEXT` 是总量，其中可能已包含单列的 `MEMORY` 和 `PREFLIGHT`。Standard 的 `REVIEW_PLATFORM_PROMPT` 可附传给 HTTP 客户端的序列化请求大小 `requestBytes`。Claude CLI 的输入事件使用 `ANTHROPIC_COMPATIBLE`，表示已向进程交付输入，省略 HTTP 请求大小。历史记录和旧 Worker 可以省略新增字段。
 - Agent 取证工具活动的 `detail` 仍是 JSON 字符串，按 `taskId`、`reviewKey`、`runId`、`claimAttempt` 和 `sequence` 识别同一次调用。`AGENT_TOOL_ACTIVITY`、`AGENT_CONVERGING` 或 `AGENT_SUBMITTING` 的取证事件可包含 `retrievalDetail`。此对象只记录已知的诊断事实，历史事件和旧 Worker 可省略。`status`、`errorCode`、`itemCount` 和 `sourceBytes` 保留原有含义。
 
 | `retrievalDetail` 字段 | 含义 |

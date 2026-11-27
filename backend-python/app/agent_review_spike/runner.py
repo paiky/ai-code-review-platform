@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from app.agent_review_spike.budgets import AGENT_BUDGET_LIMITS
-from app.agent_review_spike.conversation_capture import AgentReviewProgress
+from app.agent_review_spike.conversation_capture import AgentReviewProgress, ConversationCapture
 from app.agent_review_spike.diff import diff_by_file
 from app.agent_review_spike.metrics import (
     build_report_metrics,
@@ -27,14 +27,12 @@ from app.agent_review_spike.metrics import (
     expected_outcome,
 )
 from app.agent_review_spike.prompting import (
-    AGENT_SYSTEM_TEMPLATE,
     agent_system_prompt,
     baseline_system_prompt,
     review_input,
 )
 from app.agent_review_spike.retrieval_audit import sanitize_retrieval_detail
 from app.agent_review_spike.schema import normalize_relative_path, validate_review_card
-from app.review_prompt_metadata import PlatformPromptMarker
 
 
 DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions"
@@ -318,6 +316,11 @@ def _run_candidate(
             )
             deadline = perf_counter() + config.timeout_seconds
             prompt_input: str | None = review_input(case)
+            capture = ConversationCapture(
+                "ANTHROPIC_COMPATIBLE", case, {},
+                progress_callback.conversation if isinstance(progress_callback, AgentReviewProgress) else None,
+                config.submit_by_turn,
+            )
             while True:
                 if cancel_event is not None and cancel_event.is_set():
                     _terminate_process_group(process)
@@ -354,23 +357,15 @@ def _run_candidate(
                         audit=audit,
                     )
                 try:
-                    if prompt_input is not None and isinstance(progress_callback, AgentReviewProgress):
-                        try:
-                            marker = PlatformPromptMarker(
-                                templateId=AGENT_SYSTEM_TEMPLATE,
-                                source="CLAUDE_CLI_APPEND",
-                                protocol="ANTHROPIC_COMPATIBLE",
-                                submitByTurn=config.submit_by_turn,
-                            )
-                            progress_callback.conversation([marker.model_dump(exclude_none=True)])
-                        except Exception:
-                            # Reporting the optional prompt marker must not interrupt Claude.
-                            pass
+                    if prompt_input is not None:
+                        capture.prepare_request()
                     stdout, _stderr = process.communicate(
                         input=prompt_input, timeout=min(5.0, remaining)
                     )
+                    capture.record_request()
                     break
                 except subprocess.TimeoutExpired:
+                    capture.record_request()
                     prompt_input = None
                     audit = _load_safe_audit_snapshot(audit_path)
                     _notify_progress_callback(progress_callback, audit, progress_state)

@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from app.agent_review.schemas import (
     AGENT_CONVERSATION_INPUT,
@@ -20,7 +20,7 @@ from app.agent_review.schemas import (
 from app.agent_review_spike.budgets import AGENT_BUDGET_LIMITS
 from app.agent_review_spike.prompting import AGENT_SYSTEM_TEMPLATE
 from app.agent_review_spike.tool_executor import ToolExecutionResult
-from app.review_prompt_metadata import PlatformPromptMarker
+from app.review_prompt_metadata import PlatformPromptMarker, ReviewInputSource, ReviewProfileInput
 
 
 ConversationCallback = Callable[[list[dict[str, Any]]], None]
@@ -44,7 +44,7 @@ class ConversationCapture:
 
     def __init__(
         self,
-        protocol: AgentRuntimeProtocol,
+        protocol: AgentRuntimeProtocol | Literal["ANTHROPIC_COMPATIBLE"],
         case: dict[str, Any],
         diff_by_file: dict[str, str],
         callback: ConversationCallback | None,
@@ -68,27 +68,29 @@ class ConversationCapture:
         self.measurement_available = True
         self.new_evidence_count = 0
 
-    def prepare_request(self, payload: dict[str, Any]) -> None:
+    def prepare_request(self, payload: dict[str, Any] | None = None) -> None:
         if self.callback is None or self.events:
             return
         try:
             # Match the HTTP transport's JSON body encoding.
             request_bytes = len(json.dumps(
                 payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-            ).encode("utf-8"))
+            ).encode("utf-8")) if payload is not None else None
             diff_bytes = (
                 len(self.case["diff"].encode("utf-8")) if self.diff_mode == "INLINE" else 0
             )
             changed_file_count = len(self.case["changedFiles"])
             sources = [
-                {"source": "PLATFORM_INSTRUCTIONS"},
-                {"source": "CHANGED_FILES", "count": changed_file_count},
-                {"source": "DIFF", "bytes": diff_bytes},
+                ReviewInputSource(source="PLATFORM_INSTRUCTIONS"),
+                ReviewInputSource(source="CHANGED_FILES", count=changed_file_count),
+                ReviewInputSource(source="DIFF", bytes=diff_bytes),
             ]
             if context := self.case.get("baselineContext"):
-                sources.append({
-                    "source": "BASELINE_CONTEXT", "bytes": len(str(context).encode("utf-8"))
-                })
+                sources.append(ReviewInputSource(source="BASELINE_CONTEXT", bytes=len(context.encode("utf-8"))))
+            profile = None
+            if raw_profile := self.case.get("profileInput"):
+                profile = ReviewProfileInput.model_validate(raw_profile)
+            sources.extend(ReviewInputSource.model_validate(item) for item in self.case.get("inputSources", []))
             self.pending_input = AgentConversationInputEvent(
                 phase=AGENT_CONVERSATION_INPUT,
                 schemaVersion=1,
@@ -97,6 +99,7 @@ class ConversationCapture:
                 changedFileCount=changed_file_count,
                 requestBytes=request_bytes,
                 diffBytes=diff_bytes,
+                profile=profile,
                 sourceSummaries=sources,
             )
         except (TypeError, ValueError):
@@ -111,7 +114,7 @@ class ConversationCapture:
             try:
                 self.events.append(PlatformPromptMarker(
                     templateId=AGENT_SYSTEM_TEMPLATE,
-                    source="AGENT_HTTP",
+                    source="CLAUDE_CLI_APPEND" if self.protocol == "ANTHROPIC_COMPATIBLE" else "AGENT_HTTP",
                     protocol=self.protocol,
                     submitByTurn=self.submit_by_turn,
                 ))

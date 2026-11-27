@@ -110,6 +110,7 @@ class MemorySelectedSummary(MemorySchema):
     load_mode: LoadMode = Field(alias="loadMode")
     content_hash: str = Field(alias="contentHash", pattern=r"^[a-f0-9]{64}$")
     title: str = Field(max_length=160)
+    heading: str | None = Field(default=None, max_length=160)
     applicability: str = Field(max_length=160)
     selection_reason: list[
         Literal["CORE_REQUIRED", "ON_DEMAND", "ISSUE_MATCH", "PATH_MATCH", "KEYWORD_MATCH"]

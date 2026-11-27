@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Literal
 
@@ -11,6 +12,41 @@ from app.code_quality.prompt import STANDARD_PLATFORM_INSTRUCTIONS_V1
 
 
 REVIEW_PLATFORM_PROMPT = "REVIEW_PLATFORM_PROMPT"
+MAX_REVIEW_INPUT_BYTES = 10 * 1024 * 1024
+
+
+class ReviewInputSource(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    source: Literal[
+        "PLATFORM_INSTRUCTIONS", "PROFILE", "PROJECT_POLICY", "PREFLIGHT", "MEMORY",
+        "BASELINE_CONTEXT", "CHANGED_FILES", "DIFF", "CONTEXT_PACK",
+    ]
+    count: int | None = Field(default=None, ge=0, le=10_000)
+    bytes: int | None = Field(default=None, ge=0, le=MAX_REVIEW_INPUT_BYTES)
+    truncated: bool | None = None
+
+
+class ReviewProfileInput(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    code: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$")
+    sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    bytes: int | None = Field(default=None, ge=0, le=MAX_REVIEW_INPUT_BYTES)
+
+
+def review_profile_input(code: str | None, instructions: str | None) -> ReviewProfileInput | None:
+    if not code:
+        return None
+    encoded = instructions.strip().encode("utf-8") if instructions is not None else None
+    try:
+        return ReviewProfileInput(
+            code=code,
+            sha256=hashlib.sha256(encoded).hexdigest() if encoded is not None else None,
+            bytes=len(encoded) if encoded is not None else None,
+        )
+    except ValidationError:
+        return None
 
 
 class PlatformPromptMarker(BaseModel):
@@ -32,6 +68,9 @@ class PlatformPromptMarker(BaseModel):
     effectiveEngine: Literal["STANDARD", "STANDARD_FALLBACK"] | None = None
     runId: int | None = Field(default=None, gt=0)
     claimAttempt: int | None = Field(default=None, gt=0)
+    profile: ReviewProfileInput | None = None
+    sourceSummaries: list[ReviewInputSource] | None = Field(default=None, max_length=8)
+    requestBytes: int | None = Field(default=None, ge=0, le=MAX_REVIEW_INPUT_BYTES)
 
     @model_validator(mode="after")
     def validate_source(self) -> PlatformPromptMarker:

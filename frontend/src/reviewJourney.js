@@ -428,7 +428,8 @@ export function buildReviewJourney(review, events, options = {}) {
     finishedAt: reviewTimes.finishedAt,
     durationMs: reviewTimes.durationMs,
     agentSummary,
-    agentInput: agentInputSummary(attemptScopedEvents, nowMs),
+    agentInput: agentInputSummary(events, sourceReview, agentConversation?.scope),
+    agentScope: agentConversation?.scope ?? null,
     agentInstructions: agentConversation?.instructions || null,
     standardInstructions,
     agentConversation: agentConversation?.input || agentConversation?.turns.length > 0 ? {
@@ -597,7 +598,7 @@ const instructionSources = new Map([
 const maxPlatformInstructionBytes = 16 * 1024;
 const conversationSources = new Set([
   'PLATFORM_INSTRUCTIONS', 'PROFILE', 'PROJECT_POLICY', 'PREFLIGHT', 'MEMORY',
-  'BASELINE_CONTEXT', 'CHANGED_FILES', 'DIFF'
+  'BASELINE_CONTEXT', 'CHANGED_FILES', 'DIFF', 'CONTEXT_PACK'
 ]);
 const conversationToolTypes = new Set([
   'LIST_FILES', 'SEARCH_CODE', 'READ_FILE_RANGE', 'READ_DIFF_RANGE', 'SUBMIT_REVIEW'
@@ -709,7 +710,36 @@ function projectPlatformInstructions(detail, templateId, key) {
     || new TextEncoder().encode(text).length > maxPlatformInstructionBytes) {
     return null;
   }
-  return { key, sourceLabel: source.label, text };
+  return {
+    key, sourceLabel: source.label, text, templateId, protocol: detail.protocol,
+    profile: projectReviewProfile(detail.profile),
+    sourceSummaries: projectInputSources(detail.sourceSummaries),
+    requestBytes: conversationInteger(detail.requestBytes, maxConversationBytes)
+  };
+}
+
+function projectReviewProfile(profile) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/.test(profile?.code || '')) return null;
+  return {
+    code: profile.code,
+    sha256: /^[a-f0-9]{64}$/.test(profile.sha256 || '') ? profile.sha256 : null,
+    bytes: conversationInteger(profile.bytes, maxConversationBytes)
+  };
+}
+
+function projectInputSources(value) {
+  const sources = Array.isArray(value) ? value.slice(0, 8) : [];
+  const summaries = new Map();
+  for (const source of sources) {
+    if (!conversationSources.has(source?.source) || summaries.has(source.source)) continue;
+    summaries.set(source.source, {
+      source: source.source,
+      count: conversationInteger(source.count, 10_000),
+      bytes: conversationInteger(source.bytes, maxConversationBytes),
+      truncated: source.truncated === true
+    });
+  }
+  return [...summaries.values()];
 }
 
 function projectAgentConversationRecord(phase, detail) {
@@ -718,24 +748,14 @@ function projectAgentConversationRecord(phase, detail) {
     if (!conversationProtocols.has(detail.protocol) || !['INLINE', 'TOOL_PAGED'].includes(detail.diffMode)) {
       return null;
     }
-    const sources = Array.isArray(detail.sourceSummaries) ? detail.sourceSummaries.slice(0, 8) : [];
-    const sourceSummaries = new Map();
-    for (const source of sources) {
-      if (!conversationSources.has(source?.source) || sourceSummaries.has(source.source)) continue;
-      sourceSummaries.set(source.source, {
-        source: source.source,
-        count: conversationInteger(source.count, 10_000),
-        bytes: conversationInteger(source.bytes, maxConversationBytes),
-        truncated: source.truncated === true
-      });
-    }
     return {
       protocol: detail.protocol,
       diffMode: detail.diffMode,
       changedFileCount: conversationInteger(detail.changedFileCount, 10_000),
       requestBytes: conversationInteger(detail.requestBytes, maxConversationBytes),
       diffBytes: conversationInteger(detail.diffBytes, maxConversationBytes),
-      sourceSummaries: [...sourceSummaries.values()],
+      profile: projectReviewProfile(detail.profile),
+      sourceSummaries: projectInputSources(detail.sourceSummaries),
       truncated: detail.truncated === true
     };
   }
@@ -1284,17 +1304,30 @@ function latestJourneyEvent(events, phases, nowMs) {
     .at(-1)?.event || null;
 }
 
-function agentInputSummary(events, nowMs) {
-  const event = latestJourneyEvent(events, ['AGENT_INPUT_BUILD_COMPLETED'], nowMs);
-  if (!event) return null;
-  const detail = parseDetailObject(event.detail);
+function agentInputSummary(events, review, scope) {
+  const runId = scope?.runId;
+  if (runId == null) return null;
+  const taskEvents = (Array.isArray(events) ? events : []).filter(event => event?.taskId === review.taskId);
+  const reviewKey = normalizeReviewKey(review.reviewKey);
+  const detail = taskEvents.filter(event => event.phase === 'AGENT_QUEUED')
+    .filter(event => normalizeReviewKey(event.reviewKey) === reviewKey)
+    .map(event => parseDetailObject(event.detail)).find(item => item?.runId === runId);
+  if (!detail) return null;
+  const policy = detail.dispatchAttemptId && taskEvents
+    .filter(event => event.phase === 'PROJECT_POLICY_BUILD_COMPLETED')
+    .filter(event => event.reviewKey == null || normalizeReviewKey(event.reviewKey) === reviewKey)
+    .map(event => parseDetailObject(event.detail))
+    .find(item => item?.dispatchAttemptId === detail.dispatchAttemptId && item.status === 'COMPLETED'
+      && normalizeReviewKey(item.reviewKey) === reviewKey);
   const count = key => Number.isSafeInteger(detail?.[key]) && detail[key] >= 0 ? detail[key] : null;
   return {
     changedFileCount: count('changedFileCount'),
     includedFileCount: count('includedFileCount'),
     diffBytes: count('diffBytes'),
     diffMode: ['INLINE', 'TOOL_PAGED'].includes(detail?.diffMode) ? detail.diffMode : null,
-    memoryCount: count('memorySelectedCount')
+    memoryCount: count('memorySelectedCount'),
+    memoryBytes: count('memoryInjectedBytes'),
+    policyCount: conversationInteger(policy?.injectedCount, 10_000)
   };
 }
 

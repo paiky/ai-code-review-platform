@@ -320,6 +320,7 @@ def _summary(row, issues, words) -> MemorySelectedSummary:
         load_mode=entry.load_mode,
         content_hash=normalized_hash(entry.content),
         title=_short(source.title),
+        heading=_short(entry.heading),
         applicability=_short(applicability),
         selection_reason=reasons,
         path_sample=_short(paths[0]) if paths else None,
