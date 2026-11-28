@@ -48,6 +48,7 @@ from app.review_record.repository import (
 )
 from app.review_memory.service import select_review_memories
 from app.review_prompt_metadata import PlatformPromptMarker, review_profile_input
+from app.review_rules.input import build_file_rule_input
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -378,11 +379,17 @@ def enqueue_agent_review(
         )
         profile_instructions = str(getattr(profile, "review_instructions", None) or "").strip()
         profile_input = review_profile_input(profile.profile_code, profile_instructions)
+        file_rules = (
+            None if request.get("_skipFileRules") else build_file_rule_input(changed_files, diff_text)
+        )
+        if review_snapshot and file_rules:
+            review_snapshot["fileRuleCatalogVersion"] = file_rules["summary"]["catalogVersion"]
         review_instructions = "\n\n".join(
             value
             for value in (
                 profile_instructions,
                 policy_context.get("promptText"),
+                file_rules["text"] if file_rules else "",
             )
             if str(value or "").strip()
         )
@@ -474,6 +481,17 @@ def enqueue_agent_review(
         started_at=input_started,
         extra=input_progress,
     )
+    if file_rules:
+        summary = file_rules["summary"]
+        append_progress(
+            db,
+            int(task.id),
+            "FILE_RULES_RESOLVED",
+            "WARN" if summary["errorCount"] or summary["promptTruncated"] else "INFO",
+            "文件审查规则已匹配",
+            json.dumps(summary, ensure_ascii=True, separators=(",", ":")),
+            review_key=review_key,
+        )
     _append_dispatch_progress(
         db,
         task_id=int(task.id),
@@ -493,6 +511,8 @@ def enqueue_agent_review(
             "budgets": budgets,
             "memorySnapshot": memory.snapshot.model_dump(mode="json", by_alias=True),
         }
+        if file_rules:
+            input_payload["fileRules"] = file_rules
         if review_snapshot:
             input_payload["reviewSnapshot"] = review_snapshot
         run = repository.create_agent_job(

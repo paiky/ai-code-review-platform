@@ -19,6 +19,7 @@ from app.project_integration.models import (
     ProjectTargetConfig,
     TargetTypePathMapping,
 )
+from app.review_rules import FILE_REVIEW_PROFILE_CODE
 
 
 TARGET_TYPE_DEFAULTS = {
@@ -595,7 +596,8 @@ def create_project(db: Session, request: dict) -> dict:
     ).first()
     if existing is not None:
         raise AppError("VALIDATION_ERROR", f"Project already exists: {git_provider}/{git_project_id}", 400)
-    primary = normalize_target_type(request.get("targetType"))
+    requested_target = _blank_to_none(request.get("targetType"))
+    primary = normalize_target_type(requested_target or "GENERAL")
     defaults = TARGET_TYPE_DEFAULTS.get(primary, TARGET_TYPE_DEFAULTS["BACKEND"])
     now = datetime.now()
     project = Project(
@@ -607,7 +609,10 @@ def create_project(db: Session, request: dict) -> dict:
         detected_target_types=None,
         target_detection_json=None,
         default_template_code=request.get("defaultTemplateCode") or defaults["templateCode"],
-        default_code_quality_profile_code=request.get("defaultCodeQualityProfileCode") or defaults["profileCode"],
+        default_code_quality_profile_code=(
+            request.get("defaultCodeQualityProfileCode")
+            or (defaults["profileCode"] if requested_target else FILE_REVIEW_PROFILE_CODE)
+        ),
         default_code_quality_provider_code=_blank_to_none(request.get("defaultCodeQualityProviderCode")),
         dingtalk_webhook_id=None,
         status=request.get("status") or "ENABLED",
@@ -618,7 +623,10 @@ def create_project(db: Session, request: dict) -> dict:
     db.add(project)
     db.flush()
     _create_default_project_review_settings(db, project)
-    _create_manual_target_config(db, project, primary)
+    if requested_target:
+        _create_manual_target_config(db, project, primary)
+    else:
+        ensure_default_target_configs(db, project)
     db.commit()
     return project_to_dict(project)
 
@@ -656,19 +664,18 @@ def upsert_gitlab_project(
         db.flush()
         return project
 
-    detected_types = detection.get("targetTypes") or ["BACKEND"]
-    primary = detected_types[0]
-    defaults = TARGET_TYPE_DEFAULTS.get(primary, TARGET_TYPE_DEFAULTS["BACKEND"])
+    primary = detection["targetTypes"][0]
+    defaults = TARGET_TYPE_DEFAULTS[primary]
     project = Project(
         name=project_name,
         git_provider="GITLAB",
         git_project_id=git_project_id,
         repository_url=repository_url,
         target_type=primary,
-        detected_target_types=json.dumps(detected_types, ensure_ascii=False),
+        detected_target_types=json.dumps(detection["targetTypes"], ensure_ascii=False),
         target_detection_json=json.dumps(detection, ensure_ascii=False),
         default_template_code=defaults["templateCode"],
-        default_code_quality_profile_code=defaults["profileCode"],
+        default_code_quality_profile_code=FILE_REVIEW_PROFILE_CODE,
         default_code_quality_provider_code=None,
         dingtalk_webhook_id=None,
         status="ENABLED",
@@ -694,7 +701,7 @@ def update_project_target_detection(
         select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project.id)
     ).all()
     can_complete_initial_detection = (
-        effective_project_target_type(project) == "GENERAL"
+        project.target_type == "GENERAL"
         and not any(
             evidence.get("source") != "FALLBACK"
             for evidence in previous_detection.get("evidences") or []
@@ -717,7 +724,8 @@ def update_project_target_detection(
         db.flush()
         _set_project_target_type(db, project, primary)
         project.default_template_code = defaults["templateCode"]
-        project.default_code_quality_profile_code = defaults["profileCode"]
+        if project.default_code_quality_profile_code != FILE_REVIEW_PROFILE_CODE:
+            project.default_code_quality_profile_code = defaults["profileCode"]
         _create_detected_target_configs(db, project, [primary])
     project.updated_at = datetime.now()
     db.flush()
@@ -967,20 +975,6 @@ def list_project_target_configs(db: Session, project_id: int) -> list[dict]:
     return [target_config_to_dict(config) for config in configs]
 
 
-def ambiguous_auto_detected_target_types(db: Session, project: Project) -> list[str]:
-    if _blank_to_none(project.target_type):
-        return []
-    target_types = read_json_array(project.detected_target_types)
-    if len(target_types) <= 1:
-        return []
-    configs = db.scalars(
-        select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project.id)
-    ).all()
-    if configs and not all(config.description in SYSTEM_DETECTED_TARGET_CONFIG_DESCRIPTIONS for config in configs):
-        return []
-    return target_types
-
-
 def upsert_project_target_config(db: Session, project_id: int, target_type: str, request: dict) -> dict:
     project = find_project_by_id(db, project_id)
     if project is None:
@@ -1035,6 +1029,7 @@ def upsert_project_target_config(db: Session, project_id: int, target_type: str,
 
 def ensure_default_target_configs(db: Session, project: Project) -> None:
     target_type = effective_project_target_type(project)
+    unset_target = not _blank_to_none(project.target_type)
     existing_configs = db.scalars(
         select(ProjectTargetConfig).where(ProjectTargetConfig.project_id == project.id)
     ).all()
@@ -1059,6 +1054,8 @@ def ensure_default_target_configs(db: Session, project: Project) -> None:
         existing_configs.append(selected)
     for config in existing_configs:
         config.enabled = config is selected
+    if unset_target and not selected.code_quality_profile_code:
+        selected.code_quality_profile_code = FILE_REVIEW_PROFILE_CODE
     _set_project_target_type(db, project, target_type)
     db.flush()
 
@@ -1724,7 +1721,7 @@ def _reminder_card_enabled(target_type: str, config: ProjectTargetConfig | None,
 
 
 def effective_project_target_type(project: Project) -> str:
-    return normalize_target_type(project.target_type)
+    return normalize_target_type(_blank_to_none(project.target_type) or "GENERAL")
 
 
 def normalize_target_type(value: str | None) -> str:
@@ -1906,7 +1903,11 @@ def _create_detected_target_configs(db: Session, project: Project, detected_type
                 project_id=project.id,
                 target_type=normalized,
                 template_code=defaults["templateCode"],
-                code_quality_profile_code=defaults["profileCode"],
+                code_quality_profile_code=(
+                    FILE_REVIEW_PROFILE_CODE
+                    if project.default_code_quality_profile_code == FILE_REVIEW_PROFILE_CODE
+                    else defaults["profileCode"]
+                ),
                 provider_code=project.default_code_quality_provider_code,
                 path_patterns=json.dumps(["**/*"] if single_target else defaults["pathPatterns"], ensure_ascii=False),
                 reminder_card_enabled=bool(defaults["reminderCardEnabled"]),

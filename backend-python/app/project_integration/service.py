@@ -18,7 +18,6 @@ from app.notification.service import send_review_summary, send_risk_card
 from app.project_integration import gitlab_client
 from app.project_integration.models import GitLabMergeRequestEvent, GitLabPushEvent
 from app.project_integration.repository import (
-    ambiguous_auto_detected_target_types,
     get_project_push_policy,
     resolve_project_review_profile_code,
     resolve_project_target_config,
@@ -109,19 +108,6 @@ def handle_merge_request_webhook(
         event["repositoryUrl"],
         event["changedFilesSummary"].get("files", []),
     )
-    ambiguous_types = ambiguous_auto_detected_target_types(db, project)
-    if ambiguous_types:
-        task = _create_failed_mr_task_for_ambiguous_targets(db, project, event, payload, ambiguous_types)
-        db.commit()
-        return {
-            "taskId": task.id,
-            "status": "FAILED",
-            "gitProjectId": event["gitProjectId"],
-            "projectName": event["projectName"],
-            "mrId": event["mrId"],
-            "reasonCode": "TARGET_TYPE_AMBIGUOUS",
-            "message": task.error_message,
-        }
     target_config = resolve_project_target_config(
         db,
         project,
@@ -178,19 +164,6 @@ def handle_merge_request_webhook(
                 event["projectName"],
                 event["changedFilesSummary"].get("files", []),
             )
-            ambiguous_types = ambiguous_auto_detected_target_types(db, project)
-            if ambiguous_types:
-                _mark_existing_task_failed_for_ambiguous_targets(task, project, ambiguous_types)
-                db.commit()
-                return {
-                    "taskId": task.id,
-                    "status": "FAILED",
-                    "gitProjectId": event["gitProjectId"],
-                    "projectName": event["projectName"],
-                    "mrId": event["mrId"],
-                    "reasonCode": "TARGET_TYPE_AMBIGUOUS",
-                    "message": task.error_message,
-                }
         result = _process_task(
             db, task, event["changedFilesSummary"].get("files", []), None,
             trusted_auto_fix_ingress=trusted_auto_fix_ingress,
@@ -268,20 +241,6 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
                 "platform review task creation was skipped."
             ),
         }
-    ambiguous_types = ambiguous_auto_detected_target_types(db, project_record)
-    if ambiguous_types:
-        task = _create_failed_push_task_for_ambiguous_targets(db, project_record, event, payload, ambiguous_types)
-        db.commit()
-        return {
-            "taskId": task.id,
-            "status": "FAILED",
-            "gitProjectId": git_project_id,
-            "projectName": project_name,
-            "mrId": None,
-            "branchName": event["branchName"],
-            "reasonCode": "TARGET_TYPE_AMBIGUOUS",
-            "message": task.error_message,
-        }
     task = None
     try:
         if event["changedFilesSummary"].get("source") != "payload" and not _is_zero_sha(event["beforeSha"]):
@@ -296,20 +255,6 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
                 project_name,
                 event["changedFilesSummary"].get("files", []),
             )
-            ambiguous_types = ambiguous_auto_detected_target_types(db, project_record)
-            if ambiguous_types:
-                task = _create_failed_push_task_for_ambiguous_targets(db, project_record, event, payload, ambiguous_types)
-                db.commit()
-                return {
-                    "taskId": task.id,
-                    "status": "FAILED",
-                    "gitProjectId": git_project_id,
-                    "projectName": project_name,
-                    "mrId": None,
-                    "branchName": event["branchName"],
-                    "reasonCode": "TARGET_TYPE_AMBIGUOUS",
-                    "message": task.error_message,
-                }
         target_config = resolve_project_target_config(
             db,
             project_record,
@@ -366,163 +311,6 @@ def handle_push_webhook(db: Session, payload: dict[str, Any]) -> dict:
             mark_task_failed(task, str(exception))
         db.commit()
         raise
-
-
-def _ambiguous_target_message(project, target_types: list[str]) -> str:
-    conflict_summary = _target_detection_conflict_summary(project, target_types)
-    message = "端类型路径映射命中多个端类型：" + "、".join(target_types) + "。"
-    if conflict_summary:
-        message += f"冲突示例：{conflict_summary}。"
-    return message + "请调整全局端类型路径映射或项目端类型配置后重新触发审阅。"
-
-
-def _target_detection_conflict_summary(project, target_types: list[str]) -> str:
-    try:
-        detection = json.loads(project.target_detection_json or "{}")
-    except (TypeError, ValueError):
-        return ""
-    evidences = detection.get("evidences")
-    if not isinstance(evidences, list):
-        return ""
-    target_set = set(target_types)
-    by_path: dict[str, list[dict[str, str]]] = {}
-    for evidence in evidences:
-        if not isinstance(evidence, dict) or evidence.get("targetType") not in target_set:
-            continue
-        path = str(evidence.get("value") or "").strip()
-        if path:
-            by_path.setdefault(path, []).append(evidence)
-    overlapping = [
-        (path, items)
-        for path, items in by_path.items()
-        if len({item.get("targetType") for item in items}) > 1
-    ]
-    if overlapping:
-        return "；".join(_format_detection_path(path, items) for path, items in overlapping[:2])
-    first_by_type = []
-    seen: set[str] = set()
-    for evidence in evidences:
-        if not isinstance(evidence, dict):
-            continue
-        target_type = evidence.get("targetType")
-        if target_type in target_set and target_type not in seen and evidence.get("value"):
-            first_by_type.append(evidence)
-            seen.add(target_type)
-    return "；".join(
-        f"{item.get('targetType')} 命中 {item.get('value')}({item.get('pattern')})"
-        for item in first_by_type[:3]
-    )
-
-
-def _format_detection_path(path: str, evidences: list[dict[str, str]]) -> str:
-    matches = "、".join(
-        f"{item.get('targetType')}({item.get('pattern')})"
-        for item in evidences[:3]
-    )
-    return f"{path} 同时命中 {matches}"
-
-
-def _create_failed_mr_task_for_ambiguous_targets(
-    db: Session,
-    project,
-    event: dict[str, Any],
-    payload: dict[str, Any],
-    target_types: list[str],
-):
-    task = create_review_task(
-        db,
-        project_id=project.id,
-        trigger_type="GITLAB_MR_WEBHOOK",
-        external_source_id=event["mrId"],
-        external_url=event["externalUrl"],
-        source_branch=event["sourceBranch"],
-        target_branch=event["targetBranch"],
-        commit_sha=event["commitSha"],
-        before_sha=event["baseSha"],
-        after_sha=event["headSha"],
-        author_name=event["authorName"],
-        author_username=event["authorUsername"],
-        template_code="general-default",
-        target_type=None,
-        target_types=target_types,
-        code_quality_profile_code=None,
-    )
-    now = datetime.now()
-    db.add(
-        GitLabMergeRequestEvent(
-            task_id=task.id,
-            git_project_id=event["gitProjectId"],
-            project_name=event["projectName"],
-            mr_id=event["mrId"],
-            event_action=event["eventAction"],
-            event_time=event["eventTime"],
-            source_branch=event["sourceBranch"],
-            target_branch=event["targetBranch"],
-            author_name=event["authorName"],
-            author_username=event["authorUsername"],
-            changed_files_summary=json.dumps(event["changedFilesSummary"], ensure_ascii=False),
-            raw_payload=json.dumps(payload, ensure_ascii=False),
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    mark_task_failed(task, _ambiguous_target_message(project, target_types))
-    return task
-
-
-def _create_failed_push_task_for_ambiguous_targets(
-    db: Session,
-    project,
-    event: dict[str, Any],
-    payload: dict[str, Any],
-    target_types: list[str],
-):
-    task = create_review_task(
-        db,
-        project_id=project.id,
-        trigger_type="GITLAB_PUSH_WEBHOOK",
-        external_source_id=event["afterSha"],
-        external_url=event["externalUrl"],
-        source_branch=event["branchName"],
-        target_branch=None,
-        commit_sha=event["afterSha"],
-        before_sha=event["beforeSha"],
-        after_sha=event["afterSha"],
-        author_name=event["authorName"],
-        author_username=event["authorUsername"],
-        template_code="general-default",
-        target_type=None,
-        target_types=target_types,
-        code_quality_profile_code=None,
-    )
-    now = datetime.now()
-    db.add(
-        GitLabPushEvent(
-            task_id=task.id,
-            git_project_id=event["gitProjectId"],
-            project_name=event["projectName"],
-            ref=event["ref"],
-            branch_name=event["branchName"],
-            before_sha=event["beforeSha"],
-            after_sha=event["afterSha"],
-            event_time=event["eventTime"],
-            author_name=event["authorName"],
-            author_username=event["authorUsername"],
-            changed_files_summary=json.dumps(event["changedFilesSummary"], ensure_ascii=False),
-            raw_payload=json.dumps(payload, ensure_ascii=False),
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    mark_task_failed(task, _ambiguous_target_message(project, target_types))
-    return task
-
-
-def _mark_existing_task_failed_for_ambiguous_targets(task, project, target_types: list[str]) -> None:
-    task.target_type = None
-    task.target_types_json = json.dumps(target_types, ensure_ascii=False)
-    task.code_quality_profile_code = None
-    mark_task_failed(task, _ambiguous_target_message(project, target_types))
 
 
 def _process_task(

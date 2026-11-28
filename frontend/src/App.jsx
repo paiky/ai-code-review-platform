@@ -4347,6 +4347,7 @@ function ContextStageDrawerDetails({ details }) {
   const location = useLocation();
   if (!details?.hasReliableRecord) return null;
   const contextPack = details.contextPack || {};
+  const fileRules = details.fileRules;
   const repository = details.repository || {};
   const planner = details.planner || {};
   const retriever = details.retriever || {};
@@ -4363,6 +4364,26 @@ function ContextStageDrawerDetails({ details }) {
           title={details.detailState === 'PARTIAL' ? '部分详情不可用' : '详情不可用'}
           description="仅保留可由阶段事件可靠确认的固定状态；未补造上下文、时间或执行结果。"
         />
+      )}
+      {fileRules && (
+        <section>
+          <Title level={5}>文件审查规则</Title>
+          <Descriptions size="small" column={{ xs: 1, md: 2 }}>
+            <Descriptions.Item label="规则版本">
+              <Text title={fileRules.catalogVersion} code>{fileRules.catalogVersion.slice(0, 12)}</Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="命中">{countText(fileRules.matchedCount)}</Descriptions.Item>
+            <Descriptions.Item label="通用回退">{countText(fileRules.fallbackCount)}</Descriptions.Item>
+            <Descriptions.Item label="解析错误">{countText(fileRules.errorCount)}</Descriptions.Item>
+            <Descriptions.Item label=".m 内容不可用">{countText(fileRules.contentUnavailableCount)}</Descriptions.Item>
+            <Descriptions.Item label="注入字节">
+              <Space>
+                {countText(fileRules.promptBytes)}
+                {fileRules.promptTruncated && <Tag color="orange">发生裁剪</Tag>}
+              </Space>
+            </Descriptions.Item>
+          </Descriptions>
+        </section>
       )}
       <section>
         <Title level={5}>Context Pack 摘要</Title>

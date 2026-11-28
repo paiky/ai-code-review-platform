@@ -32,6 +32,7 @@ from app.project_integration.models import (
     ProjectTargetConfig,
 )
 from app.review_feedback.service import attach_ai_finding_feedbacks
+from app.review_rules import FILE_REVIEW_PROFILE_CODE
 
 
 DEFAULT_PROFILE_CODE = "backend-default-ai-review"
@@ -124,6 +125,13 @@ _PREVIOUS_BUILT_IN_PROMPT_HASHES = {
 }
 
 DEFAULT_PROFILE_DEFINITIONS = {
+    FILE_REVIEW_PROFILE_CODE: {
+        "profile_name": "文件规则默认 AI Review",
+        "instructions": f"你是资深代码质量审核助手。{_REVIEW_SCOPE}",
+        "enabled_categories": ["CORRECTNESS", "SECURITY", "PERFORMANCE", "TEST_GAP"],
+        "ignored_paths": [],
+        "description": "按变更文件匹配规则，使用通用项目审查指令。",
+    },
     DEFAULT_PROFILE_CODE: {
         "profile_name": "Backend default AI code review",
         "instructions": DEFAULT_REVIEW_INSTRUCTIONS,
@@ -286,8 +294,9 @@ def _upsert_built_in_profile(db: Session, profile_code: str) -> CodeQualityRevie
     )
     current = profile.review_instructions or ""
     previous_hash = hashlib.sha256(current.encode("utf-8")).hexdigest()
-    if previous_hash == _PREVIOUS_BUILT_IN_PROMPT_HASHES[profile_code] or (
-        profile_code != DEFAULT_PROFILE_CODE and _is_backend_prompt(current)
+    if previous_hash == _PREVIOUS_BUILT_IN_PROMPT_HASHES.get(profile_code) or (
+        profile_code not in {DEFAULT_PROFILE_CODE, FILE_REVIEW_PROFILE_CODE}
+        and _is_backend_prompt(current)
     ):
         profile.review_instructions = definition["instructions"]
         profile.openai_instructions = definition["instructions"]

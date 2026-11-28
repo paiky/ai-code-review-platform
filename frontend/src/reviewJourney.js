@@ -55,6 +55,7 @@ export const REVIEW_JOURNEY_STAGE_DEFINITIONS = Object.freeze([
     detailKind: 'CONTEXT',
     phases: Object.freeze([
       'CONTEXT_PACK_BUILT',
+      'FILE_RULES_RESOLVED',
       'LOCAL_REPO_PREPARE_STARTED',
       'LOCAL_REPO_PREPARED',
       'LOCAL_REPO_PREPARE_FAILED',
@@ -216,6 +217,7 @@ const safePhaseLabels = Object.freeze({
   DETERMINISTIC_PRECHECK_FAILED: '确定性预检不可用',
   DETERMINISTIC_PRECHECK_REUSED: '已复用本次调度的确定性预检',
   CONTEXT_PACK_BUILT: 'Context Pack 已构建',
+  FILE_RULES_RESOLVED: '文件审查规则已匹配',
   LOCAL_REPO_PREPARE_STARTED: '本地仓库正在准备',
   LOCAL_REPO_PREPARED: '本地上下文已准备',
   LOCAL_REPO_PREPARE_FAILED: '本地上下文准备不可用',
@@ -1063,6 +1065,7 @@ export function buildReviewJourneyContextDetails(events, review, now = Date.now(
   const source = Array.isArray(events) ? events : [];
   const nowMs = normalizeNow(now);
   const contextEvent = latestJourneyEvent(source, ['CONTEXT_PACK_BUILT'], nowMs);
+  const fileRulesEvent = latestJourneyEvent(source, ['FILE_RULES_RESOLVED'], nowMs);
   const repositoryEvent = latestJourneyEvent(
     source,
     ['LOCAL_REPO_PREPARE_STARTED', 'LOCAL_REPO_PREPARED', 'LOCAL_REPO_PREPARE_FAILED'],
@@ -1073,10 +1076,11 @@ export function buildReviewJourneyContextDetails(events, review, now = Date.now(
     ['LOCAL_CONTEXT_RETRIEVED', 'LOCAL_CONTEXT_RETRIEVE_FAILED'],
     nowMs
   );
-  const reliableEvents = [contextEvent, repositoryEvent, retrieverEvent].filter(Boolean);
+  const reliableEvents = [contextEvent, fileRulesEvent, repositoryEvent, retrieverEvent].filter(Boolean);
   if (reliableEvents.length === 0) return null;
 
   const contextPayload = parseDetailObject(contextEvent?.detail);
+  const fileRulesPayload = parseDetailObject(fileRulesEvent?.detail);
   const repositoryPayload = parseDetailObject(repositoryEvent?.detail);
   const retrieverPayload = parseDetailObject(retrieverEvent?.detail);
   const contextSummary = objectRecord(contextPayload?.summary);
@@ -1113,6 +1117,7 @@ export function buildReviewJourneyContextDetails(events, review, now = Date.now(
   const retrieverStatus = deriveRetrieverStatus(retrieverEvent, localReferenceSearch);
   const parsedDetailCount = [
     contextEvent ? contextPayload : undefined,
+    fileRulesEvent ? fileRulesPayload : undefined,
     repositoryEvent ? repositoryPayload : undefined,
     retrieverEvent ? retrieverPayload : undefined
   ].filter(value => value !== undefined && value !== null).length;
@@ -1121,6 +1126,15 @@ export function buildReviewJourneyContextDetails(events, review, now = Date.now(
   return {
     hasReliableRecord: true,
     detailState: detailState(parsedDetailCount, reliableEvents.length),
+    fileRules: /^[a-f0-9]{64}$/.test(fileRulesPayload?.catalogVersion || '') ? {
+      catalogVersion: fileRulesPayload.catalogVersion,
+      matchedCount: packCount(fileRulesPayload.matchedCount),
+      fallbackCount: packCount(fileRulesPayload.fallbackCount),
+      errorCount: packCount(fileRulesPayload.errorCount),
+      contentUnavailableCount: packCount(fileRulesPayload.contentUnavailableCount),
+      promptBytes: packCount(fileRulesPayload.promptBytes),
+      promptTruncated: booleanValue(fileRulesPayload.promptTruncated)
+    } : null,
     contextPack: {
       built: Boolean(contextEvent),
       changedFileCount: packCount(contextSummary.changedFileCount),

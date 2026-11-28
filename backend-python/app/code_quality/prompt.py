@@ -39,7 +39,12 @@ STANDARD_PLATFORM_INSTRUCTIONS_V1 = (
 def render_instructions(request: dict[str, Any]) -> str:
     instructions = str(request.get("instructions") or "").strip()
     policy_text = str(request.get("projectReviewPoliciesText") or "").strip()
-    parts = [item for item in (instructions, policy_text, STANDARD_PLATFORM_INSTRUCTIONS_V1) if item]
+    file_rules = request.get("_fileRuleInput") or {}
+    parts = [
+        item
+        for item in (instructions, policy_text, file_rules.get("text"), STANDARD_PLATFORM_INSTRUCTIONS_V1)
+        if item
+    ]
     return "\n\n".join(parts)
 
 

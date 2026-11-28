@@ -388,6 +388,8 @@ POST /api/projects
 
 此处仅列出常用响应字段。创建后的机器人关联通过项目综合配置的 `webhookIds` 维护。
 
+省略 `targetType` 时，手工创建的项目使用 `GENERAL`，并以 `file-default-ai-review` 作为默认 AI Review Profile。可用 `defaultCodeQualityProfileCode` 指定已有 Profile。Webhook 自动接入也使用文件规则默认 Profile，同时保留原有端类型检测、提醒模板和通知路由。
+
 ## 4.3 项目端类型配置
 
 ```http
@@ -725,6 +727,7 @@ GET /api/review-tasks/{taskId}/code-quality-progress
 
 - 该接口返回持久化的 AI Review 过程事件，前端在 `RUNNING` 时轮询展示；可追加 `?reviewKey=...` 只查看某个模型的事件。
 - API Provider 会记录请求构建、Provider 调用、响应摘要、解析和保存结果等阶段，敏感字段会脱敏或省略。
+- `FILE_RULES_RESOLVED` 的 `detail` 是 JSON 字符串。`catalogVersion` 是本次使用的规则目录 SHA-256，`matchedCount`、`fallbackCount`、`errorCount` 和 `contentUnavailableCount` 记录匹配状态。`promptBytes` 和 `promptTruncated` 记录规则段大小和预算裁剪。`files` 提供有限条目的相对路径、规则键、Pattern、来源、回退状态及可选原因码，`filesTruncated` 表示有条目省略。历史任务可省略此事件。
 - `REVIEW_PLATFORM_PROMPT` 记录首轮使用的平台固定系统指令，沿用任务详情的读取范围。其 `detail` 是 JSON 字符串，包含 `schemaVersion`、`templateId`、`source`、`protocol` 和 `platformInstructions`。`source` 区分 `STANDARD_HTTP`、`AGENT_HTTP` 和 `CLAUDE_CLI_APPEND`。Claude CLI 对应平台传给进程的附加指令。Agent 事件还记录 `submitByTurn`、`runId` 和 `claimAttempt`。Standard 事件还记录 `effectiveEngine`（`STANDARD` 或 `STANDARD_FALLBACK`）。从 Agent Run 降级时附来源 `runId`，从入队前预检直接降级时该字段省略。历史任务可能没有此事件。
 - `platformInstructions` 由后端按已记录的模板版本和参数生成，包含平台固定指令。项目自定义指令、手动指令、diff、源码和其它任务上下文不在此字段中。
 - `AGENT_CONVERSATION_INPUT` 及 Standard 的 `REVIEW_PLATFORM_PROMPT` 可附 `profile` 摘要。`code` 是当次解析的 Profile 编号，`sha256` 和 `bytes` 仅在能确认当次审查重点片段时记录。`sourceSummaries` 可附各输入来源的计数和 UTF-8 字节数。`BASELINE_CONTEXT` 是总量，其中可能已包含单列的 `MEMORY` 和 `PREFLIGHT`。Standard 的 `REVIEW_PLATFORM_PROMPT` 可附传给 HTTP 客户端的序列化请求大小 `requestBytes`。Claude CLI 的输入事件使用 `ANTHROPIC_COMPATIBLE`，表示已向进程交付输入，省略 HTTP 请求大小。历史记录和旧 Worker 可以省略新增字段。

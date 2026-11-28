@@ -39,3 +39,6 @@ target-version = "py312"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.review_rules" = ["assets/LICENSE", "assets/SOURCE", "assets/*.json", "assets/rule_docs/*.md"]

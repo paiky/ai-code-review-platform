@@ -100,6 +100,8 @@ from app.review_record.repository import (
     save_notification_records,
 )
 from app.review_feedback.service import ai_finding_fingerprint
+from app.review_rules.catalog import built_in_catalog
+from app.review_rules.input import build_file_rule_input
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1620,6 +1622,9 @@ def dispatch_auto_fix_review(
     original_snapshot = source.get("reviewSnapshot") or {}
     if not profile.enabled or review_profile_digest(profile) != original_snapshot.get("profileDigest"):
         raise AppError("AUTO_FIX_REVIEW_CONFIG_CHANGED", "Review profile changed since the original result", 409)
+    file_rule_version = original_snapshot.get("fileRuleCatalogVersion")
+    if file_rule_version and file_rule_version != built_in_catalog().version:
+        raise AppError("AUTO_FIX_REVIEW_CONFIG_CHANGED", "File review rules changed since the original result", 409)
     request = _build_review_request(
         profile,
         {
@@ -1638,6 +1643,9 @@ def dispatch_auto_fix_review(
     if not snapshot or not snapshot["complete"] or task.commit_sha != task.after_sha:
         raise AppError("AUTO_FIX_REVIEW_INPUT_INCOMPLETE", "Auto-fix review requires a complete SHA-bound diff", 409)
     request["reviewKey"] = review_key
+    request["_skipFileRules"] = not file_rule_version
+    if file_rule_version:
+        snapshot["fileRuleCatalogVersion"] = file_rule_version
     request["_reviewSnapshot"] = snapshot
     if source["effectiveEngine"] == "AGENT":
         from app.agent_review.service import enqueue_agent_review
@@ -1895,6 +1903,7 @@ def run_agent_standard_fallback_job(run_id: int) -> dict[str, Any]:
                 "effectiveEngine": "STANDARD_FALLBACK",
                 "agentRunId": run.id,
                 "agentRunSummary": run_to_summary(run, fallback_triggered=True),
+                "_fileRuleInput": input_payload.get("fileRules"),
             }
         )
         result = _run_review(
@@ -3128,6 +3137,26 @@ def _run_review(
         )
     policy_context = _attach_project_review_policies(db, project, request)
     review_context = _attach_review_context_pack(db, task_id, project, request)
+    if "_fileRuleInput" not in request and not request.get("_skipFileRules"):
+        request["_fileRuleInput"] = build_file_rule_input(
+            request.get("changedFiles") or [],
+            str(request.get("diffText") or ""),
+            file_details=request.get("changedFileDetails"),
+        )
+    file_rules = request.get("_fileRuleInput")
+    if file_rules:
+        summary = file_rules["summary"]
+        if input_snapshot and not is_fix_review:
+            input_snapshot = {**input_snapshot, "fileRuleCatalogVersion": summary["catalogVersion"]}
+        append_progress(
+            db,
+            task_id,
+            "FILE_RULES_RESOLVED",
+            "WARN" if summary["errorCount"] or summary["promptTruncated"] else "INFO",
+            "文件审查规则已匹配",
+            json.dumps(summary, ensure_ascii=True, separators=(",", ":")),
+            review_key=review_key,
+        )
     request["_profileCode"] = profile.profile_code
     profile_text = str(profile.review_instructions or "").strip()
     request["_profileText"] = profile_text if str(request.get("instructions") or "").strip() == profile_text else None
@@ -3163,8 +3192,11 @@ def _run_review(
     )
     db.commit()
     try:
-        if is_fix_review and not config_matches:
-            raise AppError("AUTO_FIX_REVIEW_CONFIG_CHANGED", "Review configuration changed while queued", 409)
+        if is_fix_review:
+            file_rule_version = (input_snapshot or {}).get("fileRuleCatalogVersion")
+            resolved_version = file_rules["summary"]["catalogVersion"] if file_rules else None
+            if not config_matches or resolved_version != file_rule_version:
+                raise AppError("AUTO_FIX_REVIEW_CONFIG_CHANGED", "Review configuration changed while queued", 409)
         with progress_review_key(review_key):
             result = run_provider(db, task_id, provider, request)
     except Exception as exception:

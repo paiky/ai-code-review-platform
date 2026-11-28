@@ -1,0 +1,1641 @@
+{
+  "catalog": {
+    "upstream": {
+      "repository": "https://github.com/alibaba/open-code-review",
+      "commit": "d4f568f71d3a9d5c5ec972791b1509e40cd31ad1",
+      "license": {
+        "id": "Apache-2.0",
+        "path": "LICENSE",
+        "sha256": "1945665fdb6968a66ea29438ddee0aee23035365c862e5c4a75b62b303340acf"
+      },
+      "mapping": {
+        "path": "internal/config/rules/system_rules.json",
+        "sha256": "5eb35e36d1a9d5364315ece90f00dae3b2f9cd57dfbcefaebddddfb445c830fb"
+      },
+      "documentsPath": "internal/config/rules/rule_docs",
+      "fileFilterAllowlist": {
+        "path": "internal/config/allowlist/supported_file_types.json",
+        "sha256": "635d7350307cc85f72a31c12c3e299cc8bf1671cc5b5c14978489d022d6ba6f0",
+        "entries": [
+          ".java",
+          ".kt",
+          ".kts",
+          ".scala",
+          ".groovy",
+          ".py",
+          ".pyi",
+          ".js",
+          ".jsx",
+          ".ts",
+          ".tsx",
+          ".mts",
+          ".cts",
+          ".mjs",
+          ".cjs",
+          ".c",
+          ".h",
+          ".cpp",
+          ".cc",
+          ".cxx",
+          ".hpp",
+          ".hxx",
+          ".cu",
+          ".cuh",
+          ".hip",
+          ".cs",
+          ".vb",
+          ".fs",
+          ".fsi",
+          ".fsx",
+          ".go",
+          ".rs",
+          ".rb",
+          ".rake",
+          ".gemspec",
+          ".php",
+          ".phtml",
+          ".swift",
+          ".m",
+          ".mm",
+          ".sh",
+          ".bash",
+          ".zsh",
+          ".fish",
+          ".ps1",
+          ".psm1",
+          ".psd1",
+          ".sql",
+          ".css",
+          ".scss",
+          ".sass",
+          ".less",
+          ".html",
+          ".htm",
+          ".ftl",
+          ".ftlh",
+          ".ftlx",
+          ".hbs",
+          ".mustache",
+          ".jinja2",
+          ".j2",
+          ".pug",
+          ".haml",
+          ".slim",
+          ".erb",
+          ".astro",
+          ".vue",
+          ".ipynb",
+          ".svelte",
+          ".xml",
+          ".yaml",
+          ".yml",
+          ".json",
+          ".toml",
+          ".ini",
+          ".env",
+          ".gradle",
+          ".cmake",
+          ".r",
+          ".lua",
+          ".pl",
+          ".pm",
+          ".ex",
+          ".exs",
+          ".erl",
+          ".hrl",
+          ".ets",
+          ".json5",
+          ".jsonc",
+          ".dart",
+          ".tf",
+          ".tofu",
+          ".graphql",
+          ".gql",
+          ".prisma",
+          ".jl",
+          ".hcl",
+          ".tfvars",
+          ".bicep",
+          ".proto",
+          ".nix",
+          ".hs",
+          ".lhs",
+          ".nim",
+          ".nims",
+          ".nimble",
+          ".nu",
+          ".elm",
+          ".properties",
+          ".po",
+          ".pot",
+          ".jsonnet",
+          ".libsonnet",
+          ".zig",
+          ".thrift",
+          ".capnp",
+          ".bzl",
+          ".bazel",
+          ".star",
+          ".ml",
+          ".mli",
+          ".re",
+          ".rei",
+          ".v",
+          ".sv",
+          ".vh",
+          ".vhd",
+          ".vhdl",
+          ".sol",
+          ".vy",
+          ".rego",
+          ".glsl",
+          ".hlsl",
+          ".wgsl",
+          ".metal",
+          ".ejs",
+          ".liquid",
+          ".njk",
+          ".clj",
+          ".cljs",
+          ".cljc",
+          ".edn",
+          ".move",
+          ".dhall"
+        ],
+        "useInPlatform": "reference_only"
+      }
+    },
+    "defaultRule": "default.md",
+    "pathRules": [
+      {
+        "pattern": "**/*.properties",
+        "rule": "properties.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*{mapper,dao}*.xml",
+        "rule": "mapper_dao_xml.md",
+        "matchType": "special_path"
+      },
+      {
+        "pattern": "**/pom.xml",
+        "rule": "pom_xml.md",
+        "matchType": "file_name"
+      },
+      {
+        "pattern": "**/build.gradle",
+        "rule": "build_gradle.md",
+        "matchType": "file_name"
+      },
+      {
+        "pattern": "**/package.json",
+        "rule": "package_json.md",
+        "matchType": "file_name"
+      },
+      {
+        "pattern": "**/Cargo.toml",
+        "rule": "cargo_toml.md",
+        "matchType": "file_name"
+      },
+      {
+        "pattern": "**/Move.toml",
+        "rule": "move_toml.md",
+        "matchType": "file_name"
+      },
+      {
+        "pattern": "**/*.move",
+        "rule": "move.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/composer.json",
+        "rule": "composer_json.md",
+        "matchType": "file_name"
+      },
+      {
+        "pattern": "**/*.{json,json5,jsonc}",
+        "rule": "json.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": ".github/workflows/**/*.{yaml,yml}",
+        "rule": "github_workflows.md",
+        "matchType": "special_path"
+      },
+      {
+        "pattern": ".github/**/*.{yaml,yml}",
+        "rule": "github_config.md",
+        "matchType": "special_path"
+      },
+      {
+        "pattern": "**/*.{yaml,yml}",
+        "rule": "yaml.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.java",
+        "rule": "java.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.go",
+        "rule": "go.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{ftl,ftlh,ftlx}",
+        "rule": "freemarker.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{hbs,mustache}",
+        "rule": "handlebars_mustache.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{jinja2,j2}",
+        "rule": "jinja.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.pug",
+        "rule": "pug.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{ejs,liquid,njk}",
+        "rule": "ejs_liquid_njk.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{haml,slim}",
+        "rule": "haml_slim.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.erb",
+        "rule": "erb.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.ets",
+        "rule": "arkts.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.astro",
+        "rule": "astro.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{ts,js,tsx,jsx,mjs,cjs,mts,cts}",
+        "rule": "ts_js_tsx_jsx.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{kt,kts}",
+        "rule": "kotlin.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.scala",
+        "rule": "scala.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{fs,fsi,fsx}",
+        "rule": "fsharp.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.cs",
+        "rule": "csharp.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.rs",
+        "rule": "rust.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{cpp,cc,cxx,hpp,hxx}",
+        "rule": "cpp.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.c",
+        "rule": "c.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{cu,cuh}",
+        "rule": "cuda_hip.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.hip",
+        "rule": "cuda_hip.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{py,pyi,ipynb}",
+        "rule": "python.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{rb,rake}",
+        "rule": "ruby.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.gemspec",
+        "rule": "ruby.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/{Gemfile,Rakefile}",
+        "rule": "ruby.md",
+        "matchType": "file_name"
+      },
+      {
+        "pattern": "**/*.{php,phtml}",
+        "rule": "php.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.proto",
+        "rule": "protobuf.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.po",
+        "rule": "po.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.pot",
+        "rule": "pot.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{graphql,gql}",
+        "rule": "graphql.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.prisma",
+        "rule": "prisma.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.jl",
+        "rule": "julia.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.R",
+        "rule": "r.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{tf,tofu,hcl,tfvars}",
+        "rule": "terraform.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.bicep",
+        "rule": "bicep.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.dhall",
+        "rule": "dhall.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.nix",
+        "rule": "nix.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{hs,lhs}",
+        "rule": "haskell.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{nim,nims,nimble}",
+        "rule": "nim.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.swift",
+        "rule": "swift.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.nu",
+        "rule": "nushell.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.elm",
+        "rule": "elm.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{jsonnet,libsonnet}",
+        "rule": "jsonnet.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.zig",
+        "rule": "zig.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.thrift",
+        "rule": "thrift.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{bzl,bazel,star}",
+        "rule": "starlark.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/{BUILD,WORKSPACE}",
+        "rule": "starlark.md",
+        "matchType": "file_name"
+      },
+      {
+        "pattern": "**/*.capnp",
+        "rule": "capnp.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{ml,mli}",
+        "rule": "ocaml.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{re,rei}",
+        "rule": "ocaml.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{v,sv,vh}",
+        "rule": "verilog.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{vhd,vhdl}",
+        "rule": "vhdl.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.m",
+        "rule": "matlab.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.mm",
+        "rule": "objc.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.sol",
+        "rule": "solidity.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.vy",
+        "rule": "vyper.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.rego",
+        "rule": "rego.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{glsl,hlsl,wgsl,metal}",
+        "rule": "shader.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{ps1,psm1,psd1}",
+        "rule": "powershell.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.{clj,cljs,cljc,edn}",
+        "rule": "clojure.md",
+        "matchType": "extension"
+      },
+      {
+        "pattern": "**/*.sql",
+        "rule": "sql.md",
+        "matchType": "extension"
+      }
+    ],
+    "ruleDocuments": [
+      {
+        "rule": "arkts.md",
+        "sha256": "8c146c5713b3ba32166930d8ba1c96e649fef593fd465dc73e6c7fb979bb8682",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "astro.md",
+        "sha256": "9ecfe0ab7035f413eb8172dd437de6502d781e229fac69857c9cc0ea5d17be4e",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "bicep.md",
+        "sha256": "ec9907d0e062f8bc71e84beafa3055d894cf8a8748082e47a52cc04108763681",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "build_gradle.md",
+        "sha256": "f511a3c5df99e0022d33edf28d00f43d4e7e0d7f7496ff1035b4f4a7ea4705a4",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "c.md",
+        "sha256": "bc24216e887e782d18b41448ba70ec149db60fca69ce270e69fe0285a4dd1996",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "capnp.md",
+        "sha256": "31bd6e7319d85e5f3b15212cb41825b631e0806d9e8c0790a5183c361393b386",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "cargo_toml.md",
+        "sha256": "0c0fd9e692e217d850ea66691e73775bcf045b1faf06d3814a43242d8dd8a593",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "clojure.md",
+        "sha256": "dcaed8ba627900684d934422924c428d398e2518cf9fcfc1c4d32cd04c224b0d",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "composer_json.md",
+        "sha256": "839a18f91961cbb5eff20300028afae5b7bed185eaccfc6cef8e758b67832476",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "cpp.md",
+        "sha256": "06df79df2454cb2003be6e52e4f6d58f9ce5ce51bc7e31e0be2e417af315e130",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "csharp.md",
+        "sha256": "b5de00bd9ce67b62f3abfcb508ed9d918caf516baa277f596f5b152f69bbc446",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "cuda_hip.md",
+        "sha256": "cd292f67d182ec8795aed3673ba4c57b3aa94dd2278b5239b352be1b9e3c3d98",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "default.md",
+        "sha256": "ababeb873e9c249a701c35afa115f8ee8e32b856d0fcebf6232a7d2bef03abd0",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "dhall.md",
+        "sha256": "5fc993bfb8dee43174218618552548d5ce605a937192bf6f9d2b487656a1925c",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "ejs_liquid_njk.md",
+        "sha256": "10cbfd1d4644991fd2843f036f12080b0518611b3eca15f646ae2882757e35a5",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "elm.md",
+        "sha256": "a1d394cb495cfc2cc8f9c682945e3cc744091e9ebc58e0a692a2287a22d1e580",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "erb.md",
+        "sha256": "3935ae6b57e8b58506b21171bc79fe3da7ef189b724352aba275d03111a81e6c",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "freemarker.md",
+        "sha256": "3b1eb68367f4d955d73e13dd139e71408a01884276cb4f7e151095c2a2c5d4c7",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "fsharp.md",
+        "sha256": "cbfcbaf2061476a1666916a8166fea5b97d6503d0ab07321a468e490f348cd5c",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "github_config.md",
+        "sha256": "64af359e7fcb8a0bdba88738e5429836d5efddc89851b042c9114985e7d22b95",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "github_workflows.md",
+        "sha256": "801de96a1a8de9d2a4f18f60b5c29c17d58ca49de201b9f66b5c16c1e9d83866",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "go.md",
+        "sha256": "b6958ae9894a8bbe6d09d9241956ca24673848472d0bdf0a968b2ee9ab308fa5",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "graphql.md",
+        "sha256": "d366bf4cf234c562c2522bed7ab979fafcccd5498f2f1f004a2638d58fc4ad24",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "haml_slim.md",
+        "sha256": "d81be1d43bc31562099800691391430348aa845bd218f17f843bd84d03c05e41",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "handlebars_mustache.md",
+        "sha256": "aa7d5a2d053402549ee2700fe26bae876b37937dc99d6c11e434b527c20feaaf",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "haskell.md",
+        "sha256": "94032848f52f79e2fe42c77ffa189395e62b6df2f1198c85f82e1bb806b4bf2a",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "java.md",
+        "sha256": "06668355abc6f5f4f703215870228c1e913e4360bf30ae682bb04d36b57b4837",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "jinja.md",
+        "sha256": "854162996c6d6d989a150ec6ba104767daaa2a051ad01a058b814bcf0ca86193",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "json.md",
+        "sha256": "5ec3f0fea279f3b63d417621ece604de89f40a3a5946fdd8e5e07aad8d64d410",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "jsonnet.md",
+        "sha256": "22d24192a4fb87b8a263a2f921bcf4e946145ef7b59d6fb88ec7cdc907fb25c9",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "julia.md",
+        "sha256": "3a55c6e22a2d092b5dcf200ff851e67e58a1d39538801489a2ad7153a6360ebb",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "kotlin.md",
+        "sha256": "816c6930855936bf987de87ae6847d954da015ed4af37a8bee2cb9e3128afae1",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "mapper_dao_xml.md",
+        "sha256": "8ff3a60e38e44986f82cba70cbbe7782ed4ea294486048336a14d173cf92678e",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "matlab.md",
+        "sha256": "76cde57b83dc943813c521f00d03238e435851b9b66d0a74fe9d93cc2384a4f5",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "move.md",
+        "sha256": "c5afab32d3a6fdc3ef52382c9947386272e47f904e53319512116cbffca5474b",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "move_toml.md",
+        "sha256": "26479ed4dee7faafc5e6b17a066068088dfe5740ecf4fd4f3255c0ea8c2c57f6",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "nim.md",
+        "sha256": "7b6682f398a22387d1c19e0e727b6fd23769e4aa639e0ef77ef8aba4982b7e73",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "nix.md",
+        "sha256": "49dc36a063cc4b423836b365d176511a3d82df426e3ab1b59ef32ce39f835feb",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "nushell.md",
+        "sha256": "62f772314230147c4a67cb7f9e1b207b5deff82bff816042dd06b5d61df39fe3",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "objc.md",
+        "sha256": "1ee6a1730ac0fffefc3ffc9f170c20f1aec54383dada662ffd23cb0e584b8e50",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "ocaml.md",
+        "sha256": "d9c11ff58131894333308953116851f826722ce0acdef6049a99edc701c2257c",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "package_json.md",
+        "sha256": "64307261dc703f6d8541ba9b5ddf7ee9be49f51018d7e5df4a5e57bd420a408f",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "php.md",
+        "sha256": "1ee3de4d9c2c122f8970e08c05eb9cee8139920cb28eaa75f83d470e771e527a",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "po.md",
+        "sha256": "c35c4c6698e68944edd583ae94adb3710b8ae0b3d11edd315ca6d9edfa6e522b",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "pom_xml.md",
+        "sha256": "1ef2b428df0e78a06cb2065f2aac53a6604b2c8ac578d917cc6cceaf4b08907e",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "pot.md",
+        "sha256": "4e365876a314944ca2fdaac6c9d0d91e77b32792f4bce5f9b08575c410b6a980",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "powershell.md",
+        "sha256": "5f3c6e3d48ad8f259510bcbe2e23664e86db3f8bbe40a00d4153a270022bc577",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "prisma.md",
+        "sha256": "46443470a166ad8e6c36401a82acb263482204acbe3cfe46733e436e43ec87c4",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "properties.md",
+        "sha256": "d4c304229aec069b009cf3a762c0fcb16d8944c4f059187533a745e36e35fb82",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "protobuf.md",
+        "sha256": "1dfcb6d6ec336f815f2c28ff5bfde8fb5563ae54386affdc26d315ce28b05cb7",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "pug.md",
+        "sha256": "1a4e02a7bb73958b828cc1a5eb8f73ec59c82a221b4be5ba206b055537f5d8f3",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "python.md",
+        "sha256": "a71dab574f994dd0d58de4e6229ef7171e6f2980f8f641c8b95636fcfca0b10d",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "r.md",
+        "sha256": "ae45b3705e663329a64a63ec198e792f3c12c6d73a34492d15ad8b42ba8c4e56",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "rego.md",
+        "sha256": "61c128158a98d813f1296f8d26102b520d694cc9edc379fe6b9ca2ab8366c0d2",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "ruby.md",
+        "sha256": "6d9f2769e1a9a0a9c8406d2ce9b6f43bb262012c55c41276ea70e037976d4e33",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "rust.md",
+        "sha256": "2a63d5a677748d1b3be38fca3031c271bda9f2098c44ae6a56563add9df47ae4",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "scala.md",
+        "sha256": "975460d04f30835433728428869de7ea6b8c3fe8593402bf580a54a7fba813cf",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "shader.md",
+        "sha256": "bcd567b7b51c376e5b0a4d97209f6d80ad94e36e2575ac6ded391f28581c350a",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "solidity.md",
+        "sha256": "85251d1136e6455cdd82b8bffbc7852776bc741e33aca6df8a7da46641891695",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "sql.md",
+        "sha256": "111f582b0247fec8ec70ca946258d9c194649908d5d6bf61098a9d41b74a4345",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "starlark.md",
+        "sha256": "41653e7e9a2562a0502f0379ab0dd5b0431419d348024cf5f3f73c36f65adedd",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "swift.md",
+        "sha256": "38d69073741b6b355803dfd6631c01d4f4f999ab438667abcf911e591045036b",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "terraform.md",
+        "sha256": "d2a5877ef8fdfb5cb1883aabf1ad7130894b01996292ae5e096ec1f35f78b92a",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "thrift.md",
+        "sha256": "0403f77502963820e119a957c2c356dea6553e8bdd6408acbe400ae2bc1e1a71",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "ts_js_tsx_jsx.md",
+        "sha256": "a365402a1884650cac3309f4c366020777452ef2f5f8d3ea474b9534004c5714",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "verilog.md",
+        "sha256": "377135189aa398642da704bf5d5e165fe63a2f2a8f8cf9ab98e2fd1eb8a9a5c7",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "vhdl.md",
+        "sha256": "56073c350c045fbaad5aba11c7ef8e89480197e389c4bb1c21930704ceb79e15",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "vyper.md",
+        "sha256": "6da84eeeca3cbaa95d3bb597021580e01e49fbb349610280c7b659e32a9f4274",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "yaml.md",
+        "sha256": "39cd95b21cf24f214cf1cfb080ae31e6441844496cbf49d573590200980872eb",
+        "adaptation": "pending_f1"
+      },
+      {
+        "rule": "zig.md",
+        "sha256": "6dcb998feec178c3d8bda0d6947dbc34553cb4f435c6eebc02d65aaeef1a9582",
+        "adaptation": "pending_f1"
+      }
+    ],
+    "contentOverrides": [
+      {
+        "extension": ".m",
+        "detectedLanguage": "Objective-C",
+        "rule": "objc.md",
+        "otherwise": "matlab.md"
+      }
+    ]
+  },
+  "baseline": {
+    "platformCommit": "0b4a2f2ce3ccfc202af339838a1dacd0d5fb801a",
+    "fixtureGit": {
+      "authorAndCommitter": "Review Fixture <fixture@example.invalid>",
+      "date": "2000-01-01T00:00:00Z",
+      "objectFormat": "sha1",
+      "baseMessage": "Fixture base",
+      "headMessagePrefix": "Fixture ",
+      "autocrlf": false
+    },
+    "samples": [
+      {
+        "id": "java-only",
+        "baseSha": "b1e7d89f0b8c44d6feed0fb6432fcd37b0d81682",
+        "headSha": "a30ec9c877a673e86ebc41bcf7ad001a6e95aa07",
+        "diff": {
+          "utf8Bytes": 214,
+          "sha256": "38f0456ea7068a15f60beda4d97d0629663958f1245568a54cf73ce261b1589a"
+        },
+        "files": [
+          {
+            "path": "src/main/java/example/Order.java",
+            "headContent": "final class Order {}\n",
+            "expectedF1Rule": "java.md"
+          }
+        ],
+        "routingBefore": {
+          "detectedTargetTypes": [
+            "BACKEND"
+          ],
+          "automaticPrimary": "BACKEND",
+          "automaticProfileCode": "backend-default-ai-review",
+          "explicitBackendProfileCode": "backend-default-ai-review",
+          "legacyUnsetAmbiguousTargetTypes": []
+        },
+        "requestBeforeAutomatic": {
+          "profileCode": "backend-default-ai-review",
+          "targetType": "BACKEND",
+          "agent": {
+            "diffMode": "INLINE",
+            "paths": [
+              "src/main/java/example/Order.java"
+            ],
+            "baselineContext": {
+              "utf8Bytes": 53,
+              "sha256": "0a7c5a46f741293abc1a550fe566016e78aa9eab3361509b1278ed9c2f8ff0f8"
+            },
+            "systemPrompt": {
+              "utf8Bytes": 3905,
+              "sha256": "81fd6966a881c63224052547f8a19aa8b754c1a6b64d4032c2ac42ecf5d65d93"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 463,
+              "sha256": "68aedd9f3444380bc1be183a926712bf5cea1a42da4c0aca7346cc88fc5daf90"
+            }
+          },
+          "standard": {
+            "protocol": "OPENAI_RESPONSES",
+            "paths": [
+              "src/main/java/example/Order.java"
+            ],
+            "systemPrompt": {
+              "utf8Bytes": 5582,
+              "sha256": "3138f17e0f1e49282f454b728ea85c1f83fe723a52b621d9bbe3c7873736f0b1"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 413,
+              "sha256": "790705d8f70119a454f7a9d5ff00572966621c91099c510ed91e12bde853b9dc"
+            }
+          }
+        },
+        "requestBeforeWithExplicitBackend": {
+          "profileCode": "backend-default-ai-review",
+          "targetType": "BACKEND",
+          "agent": {
+            "diffMode": "INLINE",
+            "paths": [
+              "src/main/java/example/Order.java"
+            ],
+            "baselineContext": {
+              "utf8Bytes": 53,
+              "sha256": "0a7c5a46f741293abc1a550fe566016e78aa9eab3361509b1278ed9c2f8ff0f8"
+            },
+            "systemPrompt": {
+              "utf8Bytes": 3905,
+              "sha256": "81fd6966a881c63224052547f8a19aa8b754c1a6b64d4032c2ac42ecf5d65d93"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 463,
+              "sha256": "68aedd9f3444380bc1be183a926712bf5cea1a42da4c0aca7346cc88fc5daf90"
+            }
+          },
+          "standard": {
+            "protocol": "OPENAI_RESPONSES",
+            "paths": [
+              "src/main/java/example/Order.java"
+            ],
+            "systemPrompt": {
+              "utf8Bytes": 5582,
+              "sha256": "3138f17e0f1e49282f454b728ea85c1f83fe723a52b621d9bbe3c7873736f0b1"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 413,
+              "sha256": "790705d8f70119a454f7a9d5ff00572966621c91099c510ed91e12bde853b9dc"
+            }
+          }
+        }
+      },
+      {
+        "id": "typescript-only",
+        "baseSha": "b1e7d89f0b8c44d6feed0fb6432fcd37b0d81682",
+        "headSha": "b7898a7ecae559f133df42587fd0b97feb31c4de",
+        "diff": {
+          "utf8Bytes": 178,
+          "sha256": "744a04f07c18ed405c55af023be5ee28ebc69413ea5078e302350c11ecfb13e7"
+        },
+        "files": [
+          {
+            "path": "frontend/types.ts",
+            "headContent": "export type OrderId = string;\n",
+            "expectedF1Rule": "ts_js_tsx_jsx.md"
+          }
+        ],
+        "routingBefore": {
+          "detectedTargetTypes": [
+            "WEB_PC"
+          ],
+          "automaticPrimary": "WEB_PC",
+          "automaticProfileCode": "web-pc-default-ai-review",
+          "explicitBackendProfileCode": "backend-default-ai-review",
+          "legacyUnsetAmbiguousTargetTypes": []
+        },
+        "requestBeforeAutomatic": {
+          "profileCode": "web-pc-default-ai-review",
+          "targetType": "WEB_PC",
+          "agent": {
+            "diffMode": "INLINE",
+            "paths": [
+              "frontend/types.ts"
+            ],
+            "baselineContext": {
+              "utf8Bytes": 53,
+              "sha256": "0a7c5a46f741293abc1a550fe566016e78aa9eab3361509b1278ed9c2f8ff0f8"
+            },
+            "systemPrompt": {
+              "utf8Bytes": 3099,
+              "sha256": "7215b1657a50096b247d2bd01e481f7e689897cd3b800bdda7dc32d496a45e20"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 418,
+              "sha256": "b9e5a53b7ca14c87e320314eb67eb45dd5ef7decf1800c6845480bf7a8a5d986"
+            }
+          },
+          "standard": {
+            "protocol": "OPENAI_RESPONSES",
+            "paths": [
+              "frontend/types.ts"
+            ],
+            "systemPrompt": {
+              "utf8Bytes": 4776,
+              "sha256": "fee076e31b58289a048252a142152f5ed31687c57cc2f145b93ddf253b433bcf"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 368,
+              "sha256": "722eb115c47fd6bcf1ca2aaaaf5adc473d7e67583cd2e7882f6c49bc219c923d"
+            }
+          }
+        },
+        "requestBeforeWithExplicitBackend": {
+          "profileCode": "backend-default-ai-review",
+          "targetType": "BACKEND",
+          "agent": {
+            "diffMode": "INLINE",
+            "paths": [
+              "frontend/types.ts"
+            ],
+            "baselineContext": {
+              "utf8Bytes": 53,
+              "sha256": "0a7c5a46f741293abc1a550fe566016e78aa9eab3361509b1278ed9c2f8ff0f8"
+            },
+            "systemPrompt": {
+              "utf8Bytes": 3905,
+              "sha256": "81fd6966a881c63224052547f8a19aa8b754c1a6b64d4032c2ac42ecf5d65d93"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 418,
+              "sha256": "b9e5a53b7ca14c87e320314eb67eb45dd5ef7decf1800c6845480bf7a8a5d986"
+            }
+          },
+          "standard": {
+            "protocol": "OPENAI_RESPONSES",
+            "paths": [
+              "frontend/types.ts"
+            ],
+            "systemPrompt": {
+              "utf8Bytes": 5582,
+              "sha256": "3138f17e0f1e49282f454b728ea85c1f83fe723a52b621d9bbe3c7873736f0b1"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 368,
+              "sha256": "722eb115c47fd6bcf1ca2aaaaf5adc473d7e67583cd2e7882f6c49bc219c923d"
+            }
+          }
+        }
+      },
+      {
+        "id": "languages",
+        "baseSha": "b1e7d89f0b8c44d6feed0fb6432fcd37b0d81682",
+        "headSha": "e6896712e47c85c5bbbe9e3c0991cb83999692ee",
+        "diff": {
+          "utf8Bytes": 1808,
+          "sha256": "a4e9470c08ffda88495d92d5c2e2499bc8b4d291e1dccfe5ff49bdf3e692f900"
+        },
+        "files": [
+          {
+            "path": "src/main/java/example/Order.java",
+            "headContent": "final class Order {}\n",
+            "expectedF1Rule": "java.md"
+          },
+          {
+            "path": "native/value.c",
+            "headContent": "int value(void) { return 1; }\n",
+            "expectedF1Rule": "c.md"
+          },
+          {
+            "path": "native/value.h",
+            "headContent": "int value(void);\n",
+            "expectedF1Rule": "default.md"
+          },
+          {
+            "path": "ios/Screen.m",
+            "headContent": "#import <Foundation/Foundation.h>\n",
+            "expectedF1Rule": "objc.md"
+          },
+          {
+            "path": "ios/Screen.mm",
+            "headContent": "#import <Foundation/Foundation.h>\n",
+            "expectedF1Rule": "objc.md"
+          },
+          {
+            "path": "math/value.m",
+            "headContent": "% MATLAB\nx = 1;\n",
+            "expectedF1Rule": "matlab.md"
+          },
+          {
+            "path": "frontend/types.ts",
+            "headContent": "export type OrderId = string;\n",
+            "expectedF1Rule": "ts_js_tsx_jsx.md"
+          },
+          {
+            "path": "tools/run.py",
+            "headContent": "value = 1\n",
+            "expectedF1Rule": "python.md"
+          },
+          {
+            "path": "ios/Value.swift",
+            "headContent": "let value = 1\n",
+            "expectedF1Rule": "swift.md"
+          },
+          {
+            "path": "flutter/main.dart",
+            "headContent": "void main() {}\n",
+            "expectedF1Rule": "default.md"
+          },
+          {
+            "path": "db/seed.sql",
+            "headContent": "SELECT 1;\n",
+            "expectedF1Rule": "sql.md"
+          }
+        ],
+        "routingBefore": {
+          "detectedTargetTypes": [
+            "APP_IOS",
+            "WEB_PC",
+            "BACKEND"
+          ],
+          "automaticPrimary": "APP_IOS",
+          "automaticProfileCode": "app-ios-default-ai-review",
+          "explicitBackendProfileCode": "backend-default-ai-review",
+          "legacyUnsetAmbiguousTargetTypes": [
+            "APP_IOS",
+            "WEB_PC",
+            "BACKEND"
+          ]
+        },
+        "requestBeforeAutomatic": {
+          "profileCode": "app-ios-default-ai-review",
+          "targetType": "APP_IOS",
+          "agent": {
+            "diffMode": "INLINE",
+            "paths": [
+              "db/seed.sql",
+              "flutter/main.dart",
+              "frontend/types.ts",
+              "ios/Screen.m",
+              "ios/Screen.mm",
+              "ios/Value.swift",
+              "math/value.m",
+              "native/value.c",
+              "native/value.h",
+              "src/main/java/example/Order.java",
+              "tools/run.py"
+            ],
+            "baselineContext": {
+              "utf8Bytes": 53,
+              "sha256": "0a7c5a46f741293abc1a550fe566016e78aa9eab3361509b1278ed9c2f8ff0f8"
+            },
+            "systemPrompt": {
+              "utf8Bytes": 3046,
+              "sha256": "afce9339bbfb49774859b37edfd2f60bbc6d5b2bc898c62a4e4e465fd66ae7bf"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 2234,
+              "sha256": "e916c902173b54bfc3fac78b279a6576e47d120731404cdfdede02a4ab4d930c"
+            }
+          },
+          "standard": {
+            "protocol": "OPENAI_RESPONSES",
+            "paths": [
+              "db/seed.sql",
+              "flutter/main.dart",
+              "frontend/types.ts",
+              "ios/Screen.m",
+              "ios/Screen.mm",
+              "ios/Value.swift",
+              "math/value.m",
+              "native/value.c",
+              "native/value.h",
+              "src/main/java/example/Order.java",
+              "tools/run.py"
+            ],
+            "systemPrompt": {
+              "utf8Bytes": 4723,
+              "sha256": "9f533f58a0b7885ad4bf4e969106b1a11fc266274902f503006647a4d79d0bd1"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 2184,
+              "sha256": "66565e4847da725bc5579583dcd95e9224421e917a62ef9f440884c377d1bc1c"
+            }
+          }
+        },
+        "requestBeforeWithExplicitBackend": {
+          "profileCode": "backend-default-ai-review",
+          "targetType": "BACKEND",
+          "agent": {
+            "diffMode": "INLINE",
+            "paths": [
+              "db/seed.sql",
+              "flutter/main.dart",
+              "frontend/types.ts",
+              "ios/Screen.m",
+              "ios/Screen.mm",
+              "ios/Value.swift",
+              "math/value.m",
+              "native/value.c",
+              "native/value.h",
+              "src/main/java/example/Order.java",
+              "tools/run.py"
+            ],
+            "baselineContext": {
+              "utf8Bytes": 53,
+              "sha256": "0a7c5a46f741293abc1a550fe566016e78aa9eab3361509b1278ed9c2f8ff0f8"
+            },
+            "systemPrompt": {
+              "utf8Bytes": 3905,
+              "sha256": "81fd6966a881c63224052547f8a19aa8b754c1a6b64d4032c2ac42ecf5d65d93"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 2234,
+              "sha256": "e916c902173b54bfc3fac78b279a6576e47d120731404cdfdede02a4ab4d930c"
+            }
+          },
+          "standard": {
+            "protocol": "OPENAI_RESPONSES",
+            "paths": [
+              "db/seed.sql",
+              "flutter/main.dart",
+              "frontend/types.ts",
+              "ios/Screen.m",
+              "ios/Screen.mm",
+              "ios/Value.swift",
+              "math/value.m",
+              "native/value.c",
+              "native/value.h",
+              "src/main/java/example/Order.java",
+              "tools/run.py"
+            ],
+            "systemPrompt": {
+              "utf8Bytes": 5582,
+              "sha256": "3138f17e0f1e49282f454b728ea85c1f83fe723a52b621d9bbe3c7873736f0b1"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 2184,
+              "sha256": "66565e4847da725bc5579583dcd95e9224421e917a62ef9f440884c377d1bc1c"
+            }
+          }
+        }
+      },
+      {
+        "id": "special-files",
+        "baseSha": "b1e7d89f0b8c44d6feed0fb6432fcd37b0d81682",
+        "headSha": "6f61fa72f7eb12fb4bb3bdda0a00fbb699515228",
+        "diff": {
+          "utf8Bytes": 1795,
+          "sha256": "d4abf25934ac53d2d3c4f8bceb5142e32747e94c8ed966f9244c7ba2a6c91187"
+        },
+        "files": [
+          {
+            "path": "src/main/resources/OrderMapper.xml",
+            "headContent": "<mapper namespace=\"OrderMapper\"/>\n",
+            "expectedF1Rule": "mapper_dao_xml.md"
+          },
+          {
+            "path": "src/main/resources/OrderDao.xml",
+            "headContent": "<mapper namespace=\"OrderDao\"/>\n",
+            "expectedF1Rule": "mapper_dao_xml.md"
+          },
+          {
+            "path": "src/main/resources/ordinary.xml",
+            "headContent": "<settings/>\n",
+            "expectedF1Rule": "default.md"
+          },
+          {
+            "path": "pom.xml",
+            "headContent": "<project/>\n",
+            "expectedF1Rule": "pom_xml.md"
+          },
+          {
+            "path": "build.gradle",
+            "headContent": "plugins { id 'java' }\n",
+            "expectedF1Rule": "build_gradle.md"
+          },
+          {
+            "path": "settings.gradle",
+            "headContent": "rootProject.name = 'fixture'\n",
+            "expectedF1Rule": "default.md"
+          },
+          {
+            "path": "package.json",
+            "headContent": "{\"name\":\"fixture\",\"private\":true}\n",
+            "expectedF1Rule": "package_json.md"
+          },
+          {
+            "path": "config/app.yml",
+            "headContent": "enabled: true\n",
+            "expectedF1Rule": "yaml.md"
+          },
+          {
+            "path": ".github/workflows/check.yml",
+            "headContent": "name: check\n",
+            "expectedF1Rule": "github_workflows.md"
+          },
+          {
+            "path": ".github/dependabot.yml",
+            "headContent": "version: 2\n",
+            "expectedF1Rule": "github_config.md"
+          }
+        ],
+        "routingBefore": {
+          "detectedTargetTypes": [
+            "APP_ANDROID",
+            "WEB_PC",
+            "BACKEND"
+          ],
+          "automaticPrimary": "APP_ANDROID",
+          "automaticProfileCode": "app-android-default-ai-review",
+          "explicitBackendProfileCode": "backend-default-ai-review",
+          "legacyUnsetAmbiguousTargetTypes": [
+            "APP_ANDROID",
+            "WEB_PC",
+            "BACKEND"
+          ]
+        },
+        "requestBeforeAutomatic": {
+          "profileCode": "app-android-default-ai-review",
+          "targetType": "APP_ANDROID",
+          "agent": {
+            "diffMode": "INLINE",
+            "paths": [
+              ".github/dependabot.yml",
+              ".github/workflows/check.yml",
+              "build.gradle",
+              "config/app.yml",
+              "package.json",
+              "pom.xml",
+              "settings.gradle",
+              "src/main/resources/OrderDao.xml",
+              "src/main/resources/OrderMapper.xml",
+              "src/main/resources/ordinary.xml"
+            ],
+            "baselineContext": {
+              "utf8Bytes": 53,
+              "sha256": "0a7c5a46f741293abc1a550fe566016e78aa9eab3361509b1278ed9c2f8ff0f8"
+            },
+            "systemPrompt": {
+              "utf8Bytes": 3101,
+              "sha256": "bfcbcef0c47ac346b19d3d86790b42f859d127bcc0d2364641a2a15fbcc9f4c8"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 2257,
+              "sha256": "7ebb9ce42a72bcf82460a4cc4dbfb7d5e7f390af4f0e19af2fd52f390bda43e1"
+            }
+          },
+          "standard": {
+            "protocol": "OPENAI_RESPONSES",
+            "paths": [
+              ".github/dependabot.yml",
+              ".github/workflows/check.yml",
+              "build.gradle",
+              "config/app.yml",
+              "package.json",
+              "pom.xml",
+              "settings.gradle",
+              "src/main/resources/OrderDao.xml",
+              "src/main/resources/OrderMapper.xml",
+              "src/main/resources/ordinary.xml"
+            ],
+            "systemPrompt": {
+              "utf8Bytes": 4778,
+              "sha256": "0e5014245864aef644aaae1fbfd2cf5de7ae7ab1bea1822c0e0b25bd63f59b9f"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 2207,
+              "sha256": "a3b332c590b31e9e469a321a2a50bbd8efe6213d7ecd076c42131a32b6dc809a"
+            }
+          }
+        },
+        "requestBeforeWithExplicitBackend": {
+          "profileCode": "backend-default-ai-review",
+          "targetType": "BACKEND",
+          "agent": {
+            "diffMode": "INLINE",
+            "paths": [
+              ".github/dependabot.yml",
+              ".github/workflows/check.yml",
+              "build.gradle",
+              "config/app.yml",
+              "package.json",
+              "pom.xml",
+              "settings.gradle",
+              "src/main/resources/OrderDao.xml",
+              "src/main/resources/OrderMapper.xml",
+              "src/main/resources/ordinary.xml"
+            ],
+            "baselineContext": {
+              "utf8Bytes": 53,
+              "sha256": "0a7c5a46f741293abc1a550fe566016e78aa9eab3361509b1278ed9c2f8ff0f8"
+            },
+            "systemPrompt": {
+              "utf8Bytes": 3905,
+              "sha256": "81fd6966a881c63224052547f8a19aa8b754c1a6b64d4032c2ac42ecf5d65d93"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 2257,
+              "sha256": "7ebb9ce42a72bcf82460a4cc4dbfb7d5e7f390af4f0e19af2fd52f390bda43e1"
+            }
+          },
+          "standard": {
+            "protocol": "OPENAI_RESPONSES",
+            "paths": [
+              ".github/dependabot.yml",
+              ".github/workflows/check.yml",
+              "build.gradle",
+              "config/app.yml",
+              "package.json",
+              "pom.xml",
+              "settings.gradle",
+              "src/main/resources/OrderDao.xml",
+              "src/main/resources/OrderMapper.xml",
+              "src/main/resources/ordinary.xml"
+            ],
+            "systemPrompt": {
+              "utf8Bytes": 5582,
+              "sha256": "3138f17e0f1e49282f454b728ea85c1f83fe723a52b621d9bbe3c7873736f0b1"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 2207,
+              "sha256": "a3b332c590b31e9e469a321a2a50bbd8efe6213d7ecd076c42131a32b6dc809a"
+            }
+          }
+        }
+      },
+      {
+        "id": "full-stack",
+        "baseSha": "b1e7d89f0b8c44d6feed0fb6432fcd37b0d81682",
+        "headSha": "3fe3a08df889ba3b09e5998dc9dbcc77fb22fa43",
+        "diff": {
+          "utf8Bytes": 1429,
+          "sha256": "66cca84dbacb680c2547ae8c092bf55b7e634b911a4e57b0596df0fca9f63dfb"
+        },
+        "files": [
+          {
+            "path": "backend/src/main/java/example/Order.java",
+            "headContent": "final class Order {}\n",
+            "expectedF1Rule": "java.md"
+          },
+          {
+            "path": "backend/src/main/resources/OrderMapper.xml",
+            "headContent": "<mapper namespace=\"OrderMapper\"/>\n",
+            "expectedF1Rule": "mapper_dao_xml.md"
+          },
+          {
+            "path": "backend/pom.xml",
+            "headContent": "<project/>\n",
+            "expectedF1Rule": "pom_xml.md"
+          },
+          {
+            "path": "frontend/src/order.tsx",
+            "headContent": "export const Order = () => null;\n",
+            "expectedF1Rule": "ts_js_tsx_jsx.md"
+          },
+          {
+            "path": "frontend/src/Order.vue",
+            "headContent": "<template><div>Order</div></template>\n",
+            "expectedF1Rule": "default.md"
+          },
+          {
+            "path": "frontend/src/Order.svelte",
+            "headContent": "<div>Order</div>\n",
+            "expectedF1Rule": "default.md"
+          },
+          {
+            "path": "frontend/package.json",
+            "headContent": "{\"name\":\"frontend\",\"private\":true}\n",
+            "expectedF1Rule": "package_json.md"
+          }
+        ],
+        "routingBefore": {
+          "detectedTargetTypes": [
+            "WEB_PC",
+            "BACKEND"
+          ],
+          "automaticPrimary": "WEB_PC",
+          "automaticProfileCode": "web-pc-default-ai-review",
+          "explicitBackendProfileCode": "backend-default-ai-review",
+          "legacyUnsetAmbiguousTargetTypes": [
+            "WEB_PC",
+            "BACKEND"
+          ]
+        },
+        "requestBeforeAutomatic": {
+          "profileCode": "web-pc-default-ai-review",
+          "targetType": "WEB_PC",
+          "agent": {
+            "diffMode": "INLINE",
+            "paths": [
+              "backend/pom.xml",
+              "backend/src/main/java/example/Order.java",
+              "backend/src/main/resources/OrderMapper.xml",
+              "frontend/package.json",
+              "frontend/src/Order.svelte",
+              "frontend/src/Order.vue",
+              "frontend/src/order.tsx"
+            ],
+            "baselineContext": {
+              "utf8Bytes": 53,
+              "sha256": "0a7c5a46f741293abc1a550fe566016e78aa9eab3361509b1278ed9c2f8ff0f8"
+            },
+            "systemPrompt": {
+              "utf8Bytes": 3099,
+              "sha256": "7215b1657a50096b247d2bd01e481f7e689897cd3b800bdda7dc32d496a45e20"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 1858,
+              "sha256": "95d6b57003d56b3da8f8ba97614415eeae2d5f2be351dbb1ba201522dc898abf"
+            }
+          },
+          "standard": {
+            "protocol": "OPENAI_RESPONSES",
+            "paths": [
+              "backend/pom.xml",
+              "backend/src/main/java/example/Order.java",
+              "backend/src/main/resources/OrderMapper.xml",
+              "frontend/package.json",
+              "frontend/src/Order.svelte",
+              "frontend/src/Order.vue",
+              "frontend/src/order.tsx"
+            ],
+            "systemPrompt": {
+              "utf8Bytes": 4776,
+              "sha256": "fee076e31b58289a048252a142152f5ed31687c57cc2f145b93ddf253b433bcf"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 1808,
+              "sha256": "2cb0e2b64c2a7cd41b5eff5163aa578aa67855b7917925b79fc1131d5450f5cc"
+            }
+          }
+        },
+        "requestBeforeWithExplicitBackend": {
+          "profileCode": "backend-default-ai-review",
+          "targetType": "BACKEND",
+          "agent": {
+            "diffMode": "INLINE",
+            "paths": [
+              "backend/pom.xml",
+              "backend/src/main/java/example/Order.java",
+              "backend/src/main/resources/OrderMapper.xml",
+              "frontend/package.json",
+              "frontend/src/Order.svelte",
+              "frontend/src/Order.vue",
+              "frontend/src/order.tsx"
+            ],
+            "baselineContext": {
+              "utf8Bytes": 53,
+              "sha256": "0a7c5a46f741293abc1a550fe566016e78aa9eab3361509b1278ed9c2f8ff0f8"
+            },
+            "systemPrompt": {
+              "utf8Bytes": 3905,
+              "sha256": "81fd6966a881c63224052547f8a19aa8b754c1a6b64d4032c2ac42ecf5d65d93"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 1858,
+              "sha256": "95d6b57003d56b3da8f8ba97614415eeae2d5f2be351dbb1ba201522dc898abf"
+            }
+          },
+          "standard": {
+            "protocol": "OPENAI_RESPONSES",
+            "paths": [
+              "backend/pom.xml",
+              "backend/src/main/java/example/Order.java",
+              "backend/src/main/resources/OrderMapper.xml",
+              "frontend/package.json",
+              "frontend/src/Order.svelte",
+              "frontend/src/Order.vue",
+              "frontend/src/order.tsx"
+            ],
+            "systemPrompt": {
+              "utf8Bytes": 5582,
+              "sha256": "3138f17e0f1e49282f454b728ea85c1f83fe723a52b621d9bbe3c7873736f0b1"
+            },
+            "inputPrompt": {
+              "utf8Bytes": 1808,
+              "sha256": "2cb0e2b64c2a7cd41b5eff5163aa578aa67855b7917925b79fc1131d5450f5cc"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

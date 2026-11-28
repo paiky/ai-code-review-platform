@@ -639,6 +639,11 @@ def _run_json_http_provider(
     verify_tls: bool = True,
 ) -> dict[str, Any]:
     request_json = json.dumps(body, ensure_ascii=False)
+    file_rule_text = (review_request.get("_fileRuleInput") or {}).get("text")
+    request_preview = request_json
+    if file_rule_text:
+        serialized_rules = json.dumps(file_rule_text, ensure_ascii=False)[1:-1]
+        request_preview = request_preview.replace(serialized_rules, "[file review rules omitted]")
     started_at = datetime.now()
     try:
         append_progress(db, task_id, f"{source}_REQUEST", "INFO", request_message, f"url={endpoint}, model={model}")
@@ -656,7 +661,7 @@ def _run_json_http_provider(
             f"{source}_REQUEST_PREVIEW",
             "DEBUG",
             f"{source} 请求预览",
-            _abbreviate(request_json, 3000),
+            _abbreviate(request_preview, 3000),
         )
         append_progress(
             db,
