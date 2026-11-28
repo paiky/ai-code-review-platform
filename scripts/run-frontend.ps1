@@ -2,21 +2,25 @@ param(
     [string] $Script = "dev",
     [string] $ApiProxyTarget = "",
     [string] $HostAddress = "",
+    [ValidateRange(1, 65535)]
     [Nullable[int]] $Port = $null,
     [switch] $StrictPort,
+    [string] $WorktreeBranch,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]] $NpmArgs
 )
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "resolve-startup-worktree.ps1")
+$worktree = Resolve-StartupWorktree -ScriptDirectory $PSScriptRoot -WorktreeBranch $WorktreeBranch
+$repoRoot = $worktree.Root
 $frontendDir = Join-Path $repoRoot "frontend"
 $packageJson = Join-Path $frontendDir "package.json"
 $nodeModules = Join-Path $frontendDir "node_modules"
 $localGitLabEnv = Join-Path $repoRoot ".local\gitlab.env"
 
-Write-Host "[Frontend] Worktree: $repoRoot | Source: $frontendDir"
+Write-Host "[Frontend] Worktree: $repoRoot | Branch: $($worktree.Branch) | Source: $frontendDir"
 
 function Import-DotEnvIfPresent {
     param([string] $Path)
@@ -95,8 +99,9 @@ try {
     }
     if ($null -ne $Port) {
         $effectiveNpmArgs += @("--port", [string] $Port)
+        Write-Host "[Frontend] Port: $Port"
     }
-    if ($StrictPort) {
+    if ($StrictPort -or $null -ne $Port) {
         $effectiveNpmArgs += "--strictPort"
     }
 

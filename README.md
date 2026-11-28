@@ -186,7 +186,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-frontend.p
 
 前端默认地址：`http://localhost:5173`，`/api` 默认代理到本地 8090 后端。
 
-首次安装 Python 依赖、修改端口和本地配置文件的步骤见操作手册。
+首次安装 Python 依赖和本地配置步骤见操作手册。启动时可用 `-Port` 指定端口，用 `-WorktreeBranch` 选择已检出的分支。 [指定端口和工作树的示例](docs/11-agent-environment-pitfalls.md#脚本入口)
 
 ## Docker 快速部署
 

@@ -57,6 +57,15 @@ Get-Content -Raw -Encoding UTF8 <path>
 .\scripts\run-frontend.ps1 build
 ```
 
+- 从文件管理器右键「使用 PowerShell 运行」时，脚本默认使用脚本文件所在的工作树。启动日志会显示 `Worktree`、`Branch` 和 `Source`。如果需要从同一个入口启动另一工作树，在 PowerShell 执行下列命令，或把相同参数写入 Windows 快捷方式，快捷方式中的 `-File` 使用脚本绝对路径。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-backend.ps1 dev -WorktreeBranch feat/unified-agent-review -Port 8091
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-frontend.ps1 -WorktreeBranch feat/unified-agent-review -Port 5174 -ApiProxyTarget http://localhost:8091
+```
+
+- `-WorktreeBranch` 接受 `git worktree list` 中已经检出的本地分支名。选定工作树后，从该目录加载源码和 `.local` 配置。未传端口时，开发前端默认 5173，预览前端通常为 4173，后端使用 `SERVER_PORT` 或默认 8090。前端显式指定 `-Port` 时，端口占用会直接报错。后端改端口后，通过 `-ApiProxyTarget` 让前端代理指向对应端口。Windows Worker 自动启动沿用后端 8090 的限制。
+
 - 仓库 Windows 自动化入口统一使用 `.ps1`；Agent 直接从 PowerShell 调用并读取退出码，不再新增 `.cmd` 转发层。
 
 ## Python 环境

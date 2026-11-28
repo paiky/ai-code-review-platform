@@ -1,17 +1,22 @@
 param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]] $Args
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
+    [string[]] $CommandArgs,
+    [ValidateRange(1, 65535)]
+    [int] $Port,
+    [string] $WorktreeBranch
 )
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "resolve-startup-worktree.ps1")
+$worktree = Resolve-StartupWorktree -ScriptDirectory $PSScriptRoot -WorktreeBranch $WorktreeBranch
+$repoRoot = $worktree.Root
 $backendDir = Join-Path $repoRoot "backend-python"
 $localGitLabEnv = Join-Path $repoRoot ".local\gitlab.env"
 $localDatabaseEnv = Join-Path $repoRoot ".local\database.local.env"
-$agentWorkerScript = Join-Path $PSScriptRoot "run-agent-worker.ps1"
+$agentWorkerScript = Join-Path $repoRoot "scripts\run-agent-worker.ps1"
 
-Write-Host "[Backend] Worktree: $repoRoot | Source: $backendDir"
+Write-Host "[Backend] Worktree: $repoRoot | Branch: $($worktree.Branch) | Source: $backendDir"
 
 function Import-DotEnvIfPresent {
     param([string] $Path)
@@ -187,9 +192,16 @@ function Resolve-DevPort {
 
     for ($index = 0; $index -lt $CommandArgs.Count; $index++) {
         $arg = $CommandArgs[$index]
-        if ($arg -eq "--port" -and $index + 1 -lt $CommandArgs.Count) {
+        if ($arg -eq "--port") {
+            if ($index + 1 -ge $CommandArgs.Count) {
+                throw "--port requires a value."
+            }
             $port = $CommandArgs[$index + 1]
             $index++
+            continue
+        }
+        if ($arg.StartsWith("--port=")) {
+            $port = $arg.Substring("--port=".Length)
             continue
         }
         $remaining.Add($arg)
@@ -206,8 +218,11 @@ if (-not (Test-Path $backendDir)) {
 }
 
 $command = "dev"
-if ($Args.Count -gt 0) {
-    $command = $Args[0]
+if ($CommandArgs.Count -gt 0) {
+    $command = $CommandArgs[0]
+}
+if ($Port -and $command -ne "dev") {
+    throw "-Port is only used by the backend dev command."
 }
 
 Import-DotEnvIfPresent $localGitLabEnv
@@ -219,8 +234,8 @@ Enable-BackendPythonStartupHooks
 $pythonCommand = Resolve-PythonCommand
 
 $remainingArgs = @()
-if ($Args.Count -gt 1) {
-    $remainingArgs = $Args[1..($Args.Count - 1)]
+if ($CommandArgs.Count -gt 1) {
+    $remainingArgs = $CommandArgs[1..($CommandArgs.Count - 1)]
 }
 
 $exitCode = 0
@@ -237,16 +252,19 @@ try {
             Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m", "app.migrate") + $remainingArgs)
         }
         "dev" {
-            $port = $env:SERVER_PORT
-            if ([string]::IsNullOrWhiteSpace($port)) {
-                $port = "8090"
+            $defaultPort = $env:SERVER_PORT
+            if ([string]::IsNullOrWhiteSpace($defaultPort)) {
+                $defaultPort = "8090"
             }
-            $resolvedDev = Resolve-DevPort -CommandArgs $remainingArgs -DefaultPort $port
+            $resolvedDev = Resolve-DevPort -CommandArgs $remainingArgs -DefaultPort $defaultPort
+            if ($Port) { $resolvedDev.Port = [string] $Port }
+            $env:SERVER_PORT = $resolvedDev.Port
+            Write-Host "[Backend] Port: $($resolvedDev.Port)"
             Start-AgentReviewWorkerIfConfigured -BackendPort $resolvedDev.Port
             Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", $resolvedDev.Port, "--reload") + $resolvedDev.RemainingArgs)
         }
         default {
-            Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m") + $Args)
+            Invoke-Python -PythonCommand $pythonCommand -PythonArgs (@("-m") + $CommandArgs)
         }
     }
 }
