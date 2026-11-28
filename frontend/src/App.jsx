@@ -3547,6 +3547,45 @@ const FACT_CHECK_REASON_LABELS = {
   INVALID_EVIDENCE: '反证无法与本次 diff 对应',
 };
 
+const FINDING_ANCHOR_LABELS = {
+  MATCHED: '已核验',
+  AMBIGUOUS: '位置有歧义',
+  UNMATCHED: '未匹配',
+  UNAVAILABLE: '无法核验',
+};
+
+const FINDING_ANCHOR_REASONS = {
+  MISSING_DIFF: '缺少可用的 diff',
+  INVALID_QUOTE: '引文格式无效',
+  INVALID_CANDIDATE: '候选引用无效',
+  QUEUE_FULL: '定位队列已满',
+  TIME_BUDGET: '定位等待超时',
+  CANCELLED: '定位已取消',
+  LOCATION_FAILED: '定位执行失败',
+};
+
+function FindingAnchor({ anchor, showHeading = false }) {
+  const label = FINDING_ANCHOR_LABELS[anchor?.status];
+  if (typeof label !== 'string') return null;
+  const location = anchor.location;
+  return (
+    <Space size={6} wrap>
+      {showHeading && <Text strong>原文定位</Text>}
+      <Tag color={anchor.status === 'MATCHED' ? 'green' : 'default'}>{label}</Tag>
+      {location && (
+        <Text type="secondary">
+          {location.side === 'OLD' ? '变更前' : '变更后'} · {codeLocationText(
+            location.filePath, location.startLine, location.endLine,
+          )}
+        </Text>
+      )}
+      {!location && FINDING_ANCHOR_REASONS[anchor.reasonCode] && (
+        <Text type="secondary">{FINDING_ANCHOR_REASONS[anchor.reasonCode]}</Text>
+      )}
+    </Space>
+  );
+}
+
 function FindingFactCheck({ check }) {
   if (!check) return null;
   const label = FACT_CHECK_STATUS_LABELS[check.verdict || check.status];
@@ -5041,6 +5080,7 @@ function AgentGroupPassProgress({ pass, groupStatus }) {
   const findings = safeArray(pass.findings);
   const latestTurn = turns.at(-1);
   const check = pass.factCheck;
+  const anchorProgress = pass.anchorProgress;
   const stageLabel = status => groupStageLabel(status, groupStatus);
   return (
     <div className="review-execution-summary">
@@ -5069,6 +5109,15 @@ function AgentGroupPassProgress({ pass, groupStatus }) {
           </div>
         </details>
       )}
+      {anchorProgress && (
+        <Space wrap>
+          <Text strong>原文定位</Text>
+          <Tag>{stageLabel(anchorProgress.status)}</Tag>
+          {Number.isSafeInteger(anchorProgress.durationMs) && (
+            <Tag>等待 {anchorProgress.durationMs} ms</Tag>
+          )}
+        </Space>
+      )}
       {check && (
         <Space wrap>
           <Text strong>{groupPassLabel(pass.passNo, true)}</Text>
@@ -5087,6 +5136,7 @@ function AgentGroupPassProgress({ pass, groupStatus }) {
           {finding.severity && <Tag color={severityColor(finding.severity)}>{severityLabel(finding.severity)}</Tag>}
           <Text>{finding.title || `Finding ${finding.findingNo}`}</Text>
           {finding.filePath && <Text type="secondary">{finding.filePath}{finding.startLine ? `:${finding.startLine}` : ''}</Text>}
+          <FindingAnchor anchor={finding.anchor} />
           <Tag>{FACT_CHECK_STATUS_LABELS[finding.verdict || finding.status]
             || (finding.status === 'PENDING' && groupStatus === 'CANCELLED' ? '复核已取消' : stageLabel(finding.status))}</Tag>
           {finding.reason && <Text type="secondary">{finding.reason === 'TOKEN_BUDGET'
@@ -5147,6 +5197,9 @@ function AgentGroupedProgress({ progress }) {
             title: '组内阶段', key: 'currentPhase', render: (_, row) => {
               const pass = passesByGroup[row.groupId]?.at(-1);
               if (!pass) return '—';
+              if (pass.anchorProgress?.status === 'RUNNING' && !pass.factCheck) {
+                return `${groupPassLabel(pass.passNo)} · 原文定位 · ${groupStageLabel('RUNNING', row.status)}`;
+              }
               return `${groupPassLabel(pass.passNo, Boolean(pass.factCheck))} · ${
                 groupStageLabel(pass.factCheck?.status || pass.reviewStatus, row.status)}`;
             }
@@ -6478,6 +6531,7 @@ function CodeQualityReviewView({
                           )}
                         </div>
                         <FindingContext finding={finding} />
+                        <FindingAnchor anchor={finding.anchor} showHeading />
                         <FindingFactCheck check={finding.factCheck} />
                         <FindingRefinementPanel overlay={finding.refinementOverlay} />
                         {!autoFixChild && FINDING_REFINEMENT_ACTION_VISIBLE && (

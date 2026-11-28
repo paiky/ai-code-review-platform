@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
+from app.agent_review_spike.review_candidates import ReviewCandidates
 from app.agent_review_spike.schema import (
     ReviewSchemaError,
     review_card_input_schema,
@@ -23,8 +24,8 @@ from app.agent_review_spike.workspace import (
 _MAX_REVIEW_SCHEMA_SUBMIT_ATTEMPTS = 3
 
 
-def tool_definitions(*, context_review: bool = False) -> list[dict[str, Any]]:
-    return [
+def tool_definitions(*, context_review: bool = False, finding_anchors: bool = False) -> list[dict[str, Any]]:
+    tools = [
         {
             "name": "list_files",
             "description": "List safe source files inside the current review worktree.",
@@ -95,6 +96,39 @@ def tool_definitions(*, context_review: bool = False) -> list[dict[str, Any]]:
             "inputSchema": review_card_input_schema(),
         },
     ]
+    if finding_anchors:
+        quote_schema = {
+            "type": "object",
+            "required": ["text"],
+            "additionalProperties": False,
+            "properties": {
+                "text": {
+                    "type": "string", "minLength": 1, "maxLength": 600,
+                    "description": "Quote consecutive whole source lines from this file's diff. Preserve indentation.",
+                },
+                "side": {"type": "string", "enum": ["OLD", "NEW"]},
+            },
+        }
+        tools[-1]["inputSchema"]["properties"]["findings"]["items"]["properties"].update(
+            anchorQuote=quote_schema,
+            candidateId={"type": "string", "minLength": 32, "maxLength": 32},
+        )
+        tools.insert(-1, {
+            "name": "submit_candidate",
+            "description": "Queue optional original-code location while investigating. Continue reviewing after receipt.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["filePath", "title", "body"],
+                "properties": {
+                    "filePath": {"type": "string"},
+                    "title": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "body": {"type": "string", "minLength": 1, "maxLength": 320},
+                    "anchorQuote": quote_schema,
+                },
+            },
+        })
+    return tools
 
 
 @dataclass(frozen=True)
@@ -116,6 +150,7 @@ class ReviewToolExecutor:
         diff_by_file: dict[str, str] | None = None,
         *,
         diff_paths: set[str] | None = None,
+        candidates: ReviewCandidates | None = None,
     ) -> None:
         self.workspace = workspace
         self.changed_files = changed_files
@@ -124,6 +159,7 @@ class ReviewToolExecutor:
         self.audit_path = audit_path
         self.budget = budget
         self.diff_by_file = diff_by_file or {}
+        self.candidates = candidates
         self.submitted = False
         self.submit_attempt_count = 0
         self.schema_failure_count = 0
@@ -331,13 +367,20 @@ class ReviewToolExecutor:
                 retrieval_detail=_returned_range_detail(range_detail, value, value["totalDiffLines"]),
             )
             return value
+        if tool == "submit_candidate" and self.candidates is not None and not self.submitted:
+            candidate = self.candidates.submit_candidate(args)
+            self.budget.finish(tool, started, item_count=1)
+            return candidate
         if tool == "submit_review":
             if self.submitted:
                 raise ReviewToolError(
                     "REVIEW_ALREADY_SUBMITTED", "submit_review may only be called once"
                 )
             self.submit_attempt_count += 1
-            card = validate_review_card(args, self.changed_files)
+            card = (
+                self.candidates.validate_submission(args, self.changed_files)
+                if self.candidates is not None else validate_review_card(args, self.changed_files)
+            )
             _atomic_write_json(self.result_path, card)
             self.submitted = True
             self.budget.finish(tool, started, item_count=len(card["findings"]))

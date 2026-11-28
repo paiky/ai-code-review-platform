@@ -147,7 +147,9 @@ def finding_identity(finding: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def validate_review_card(card: Any, changed_files: list[str]) -> dict[str, Any]:
+def validate_review_card(
+    card: Any, changed_files: list[str], *, accepted_indices: list[int] | None = None,
+) -> dict[str, Any]:
     collector = _ViolationCollector()
     if not isinstance(card, dict):
         collector.add("CARD_SHAPE", "$", "review card must be an object")
@@ -185,6 +187,8 @@ def validate_review_card(card: Any, changed_files: list[str]) -> dict[str, Any]:
             continue
         seen.add(key)
         findings.append(finding)
+        if accepted_indices is not None:
+            accepted_indices.append(index)
 
     collector.raise_if_any()
     if not findings:

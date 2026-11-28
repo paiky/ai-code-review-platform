@@ -34,6 +34,7 @@ from app.agent_review.schemas import (
 )
 from app.agent_review_spike.diff import DiffSection, diff_by_file, split_diff_sections, with_diff_section_header
 from app.agent_review_spike.fact_check import attach_fact_checks
+from app.agent_review_spike.finding_anchor import attach_finding_anchors
 from app.agent_review_spike.grouped import validate_group_coverage
 from app.agent_review_spike.schema import ReviewSchemaError, validate_review_card
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
@@ -895,6 +896,11 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
             if check and "reason" in check:
                 check["reason"] = scrub_sensitive(check["reason"])
         stored_result = {**result, "findings": findings}
+    if run.runner_version == repository.CONTEXT_REVIEW_RUNNER_VERSION and run_summary.get("anchorResults"):
+        stored_result = {**stored_result, "findings": attach_finding_anchors(
+            stored_result["findings"], run_summary["anchorResults"], run_summary["groupCoverage"],
+            str((input_payload.get("case") or {}).get("diff") or ""),
+        )}
     saved = save_result(
         db,
         task_id=run.task_id,

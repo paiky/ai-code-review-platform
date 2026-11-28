@@ -86,12 +86,21 @@ def baseline_system_prompt(case: dict[str, Any]) -> str:
 
 
 def agent_system_prompt(
-    case: dict[str, Any], submit_by_turn: int = 9, *, context_review: bool = False,
+    case: dict[str, Any], submit_by_turn: int = 9, *, context_review: bool = False, finding_anchors: bool = False,
 ) -> str:
     custom = str(case.get("reviewInstructions") or "").strip()
     if context_review:
+        scope = _AGENT_TOOL_SCOPE
+        anchor_instructions = ""
+        if finding_anchors:
+            scope = scope.replace("和 submit_review", "、submit_candidate 和 submit_review")
+            anchor_instructions = (
+                "如果已有可信候选且还要继续取证，可以用 submit_candidate 提交候选及原文，后台会定位。"
+                "最终在 submit_review 的对应 Finding 引用 candidateId，或者直接附上 anchorQuote。"
+                "引文须来自本文件 diff 的同一侧连续源码行，保留缩进，勿附 diff 前缀或行号。"
+            )
         return "\n\n".join(part for part in (
-            custom, _DEFAULT_REVIEW_INSTRUCTIONS_V1, _AGENT_TOOL_SCOPE,
+            custom, _DEFAULT_REVIEW_INSTRUCTIONS_V1, scope, anchor_instructions,
             "只在缺少关键证据时读取源码或搜索。优先复用已获得的证据，避免重复调用。"
             "完成判断后调用 submit_review。没有可信问题时提交空 Finding 列表。"
             "收到最后一轮提示时，使用已获得的证据提交结果。",

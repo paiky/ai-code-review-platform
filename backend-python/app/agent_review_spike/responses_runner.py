@@ -24,6 +24,7 @@ from app.agent_review_spike.review_context import (
     ReviewContext,
     normalized_openai_usage,
 )
+from app.agent_review_spike.review_candidates import ReviewCandidates
 from app.agent_review_spike.tool_executor import ReviewToolExecutor, tool_definitions
 from app.agent_review_spike.workspace import ReviewWorkspace, ToolBudget
 
@@ -213,6 +214,7 @@ class OpenAIResponsesAgentRunner:
         group_deadline: float | None = None,
         context_soft_limit: int | None = None,
         on_model_turn: Callable[[int, dict[str, Any]], None] | None = None,
+        candidates: ReviewCandidates | None = None,
     ) -> dict[str, Any]:
         if conversation_callback is None and isinstance(progress_callback, AgentReviewProgress):
             conversation_callback = progress_callback.conversation
@@ -247,6 +249,7 @@ class OpenAIResponsesAgentRunner:
                     ),
                     diff_by_file(effective_case) if diff_context is None else diff_context,
                     diff_paths=None if diff_context is None else set(diff_context),
+                    candidates=candidates,
                 )
                 conversation = ConversationCapture(
                     "OPENAI_RESPONSES",
@@ -268,7 +271,9 @@ class OpenAIResponsesAgentRunner:
                 final_submission = False
                 while not final_submission and (context is not None or turn_count < self.config.max_turns):
                     self._check_control(cancel_event, deadline)
-                    payload = self._request_payload(effective_case, history, context_review=context_review)
+                    payload = self._request_payload(
+                        effective_case, history, context_review=context_review, finding_anchors=candidates is not None,
+                    )
                     if context is not None:
                         metrics: dict[str, Any] = {}
                         action = context.prepare(
@@ -313,7 +318,7 @@ class OpenAIResponsesAgentRunner:
                         self._check_control(cancel_event, deadline)
                         call_id = _required_call_id(item, seen_call_ids)
                         name = str(item.get("name") or "")
-                        if name not in ALLOWED_TOOL_NAMES:
+                        if name not in ALLOWED_TOOL_NAMES and (name != "submit_candidate" or candidates is None):
                             raise ResponsesAgentError("AGENT_CUSTOM_TOOL_CALL_INVALID")
                         arguments = _parse_tool_arguments(item.get("arguments"))
                         result = executor.execute(name, arguments)
@@ -386,11 +391,14 @@ class OpenAIResponsesAgentRunner:
             )
 
     def _request_payload(
-        self, case: dict[str, Any], history: list[dict[str, Any]], *, context_review: bool = False,
+        self, case: dict[str, Any], history: list[dict[str, Any]], *,
+        context_review: bool = False, finding_anchors: bool = False,
     ) -> dict[str, Any]:
         return {
             "model": self.config.model,
-            "instructions": agent_system_prompt(case, self.config.submit_by_turn, context_review=context_review),
+            "instructions": agent_system_prompt(
+                case, self.config.submit_by_turn, context_review=context_review, finding_anchors=finding_anchors,
+            ),
             "input": history,
             "reasoning": {"effort": self.config.reasoning_effort},
             "tools": [
@@ -400,7 +408,7 @@ class OpenAIResponsesAgentRunner:
                     "description": item["description"],
                     "parameters": item["inputSchema"],
                 }
-                for item in tool_definitions(context_review=context_review)
+                for item in tool_definitions(context_review=context_review, finding_anchors=finding_anchors)
             ],
             "tool_choice": "required",
             "parallel_tool_calls": False,

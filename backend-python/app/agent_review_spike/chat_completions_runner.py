@@ -23,6 +23,7 @@ from app.agent_review_spike.review_context import (
     ReviewContext,
     normalized_openai_usage,
 )
+from app.agent_review_spike.review_candidates import ReviewCandidates
 from app.agent_review_spike.tool_executor import ReviewToolExecutor, tool_definitions
 from app.agent_review_spike.workspace import ReviewWorkspace, ToolBudget
 
@@ -194,6 +195,7 @@ class OpenAIChatCompletionsAgentRunner:
         group_deadline: float | None = None,
         context_soft_limit: int | None = None,
         on_model_turn: Callable[[int, dict[str, Any]], None] | None = None,
+        candidates: ReviewCandidates | None = None,
     ) -> dict[str, Any]:
         if conversation_callback is None and isinstance(progress_callback, AgentReviewProgress):
             conversation_callback = progress_callback.conversation
@@ -227,6 +229,7 @@ class OpenAIChatCompletionsAgentRunner:
                     ),
                     diff_by_file(effective_case) if diff_context is None else diff_context,
                     diff_paths=None if diff_context is None else set(diff_context),
+                    candidates=candidates,
                 )
                 conversation = ConversationCapture(
                     "OPENAI_CHAT_COMPLETIONS",
@@ -240,6 +243,7 @@ class OpenAIChatCompletionsAgentRunner:
                         "role": "system",
                         "content": agent_system_prompt(
                             effective_case, self.config.submit_by_turn, context_review=context_review,
+                            finding_anchors=candidates is not None,
                         ),
                     },
                     {"role": "user", "content": review_input(effective_case)},
@@ -249,7 +253,9 @@ class OpenAIChatCompletionsAgentRunner:
                 final_submission = False
                 while not final_submission and (context is not None or turn_count < self.config.max_turns):
                     self._check_control(cancel_event, deadline)
-                    payload = self._request_payload(messages, context_review=context_review)
+                    payload = self._request_payload(
+                        messages, context_review=context_review, finding_anchors=candidates is not None,
+                    )
                     if context is not None:
                         metrics: dict[str, Any] = {}
                         action = context.prepare(
@@ -302,7 +308,7 @@ class OpenAIChatCompletionsAgentRunner:
                         call_id = _required_call_id(call, seen_call_ids)
                         function = call["function"]
                         tool_name = function["name"]
-                        if tool_name not in ALLOWED_TOOL_NAMES:
+                        if tool_name not in ALLOWED_TOOL_NAMES and (tool_name != "submit_candidate" or candidates is None):
                             raise ChatCompletionsAgentError(
                                 "AGENT_CUSTOM_TOOL_CALL_INVALID"
                             )
@@ -367,7 +373,8 @@ class OpenAIChatCompletionsAgentRunner:
             )
 
     def _request_payload(
-        self, messages: list[dict[str, Any]], *, context_review: bool = False,
+        self, messages: list[dict[str, Any]], *,
+        context_review: bool = False, finding_anchors: bool = False,
     ) -> dict[str, Any]:
         return {
             "model": self.config.model,
@@ -381,7 +388,7 @@ class OpenAIChatCompletionsAgentRunner:
                         "parameters": item["inputSchema"],
                     },
                 }
-                for item in tool_definitions(context_review=context_review)
+                for item in tool_definitions(context_review=context_review, finding_anchors=finding_anchors)
             ],
             "tool_choice": "required",
             "parallel_tool_calls": False,

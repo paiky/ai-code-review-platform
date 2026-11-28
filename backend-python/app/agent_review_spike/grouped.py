@@ -13,14 +13,16 @@ from app.agent_review_spike.chat_completions_runner import (
     ChatCompletionsTransportError,
     OpenAIChatCompletionsAgentRunner,
 )
-from app.agent_review_spike.diff import DiffSection, split_diff_sections
+from app.agent_review_spike.diff import DiffSection, owned_diff_sections
 from app.agent_review_spike.fact_check import FactCheckOutcome, check_findings
+from app.agent_review_spike.finding_anchor import AnchorPool, FindingAnchorIndex
 from app.agent_review_spike.responses_runner import (
     OpenAIResponsesAgentRunner,
     ResponsesAgentError,
     ResponsesTransportError,
     _validate_response as validate_responses_output,
 )
+from app.agent_review_spike.review_candidates import ReviewCandidates
 from app.agent_review_spike.review_context import (
     COMPRESSION_THRESHOLD,
     REQUEST_TIMEOUT_SECONDS,
@@ -43,24 +45,6 @@ _GROUP_SYSTEM = (
     "a files array of zero-based indices. Each index must appear exactly once. "
     "Use at most 10 files per group."
 )
-
-
-def _review_diff_sections(case: dict[str, Any], *, unified: bool) -> dict[str, DiffSection]:
-    files = case["changedFiles"]
-    allowed = set(files)
-    sections: dict[str, DiffSection] = {}
-    ambiguous: set[str] = set()
-    unheaded_path = files[0] if unified and len(files) == 1 else None
-    for section in split_diff_sections(str(case.get("diff") or ""), unheaded_path=unheaded_path):
-        if path := section.changed_path(allowed):
-            if path in sections or not section.patch:
-                if not unified:
-                    return {}
-                ambiguous.add(path)
-                sections.pop(path, None)
-            elif path not in ambiguous:
-                sections[path] = section
-    return sections
 
 
 def _file_changes(files: list[str], sections: dict[str, DiffSection]) -> list[dict[str, Any]]:
@@ -286,7 +270,7 @@ def run_grouped_review(
     context_review = isinstance(options, ContextReviewSettings)
     max_passes = options.maxPasses
     paths = case["changedFiles"]
-    diff_sections = _review_diff_sections(case, unified=unified)
+    diff_sections = owned_diff_sections(str(case.get("diff") or ""), paths, unified=unified)
     complete_diff = bool(paths) and len(diff_sections) == len(paths)
     sections = {path: section.text for path, section in diff_sections.items()}
     patches = {path: section.patch for path, section in diff_sections.items()}
@@ -313,6 +297,9 @@ def run_grouped_review(
         for index, group in enumerate(grouped_paths, 1)
     ]
     fact_checks: list[dict[tuple[Any, ...], dict[str, Any]]] = [{} for _ in grouped_paths]
+    anchors: list[dict[tuple[Any, ...], dict[str, Any]]] = [{} for _ in grouped_paths]
+    anchor_index = FindingAnchorIndex(diff_sections) if context_review else None
+    anchor_pool = AnchorPool(cancel_event) if context_review else None
     lock = Lock()
     totals = {"turnCount": 0, "toolCallCount": 0, "sourceBytesReturned": 0, "diffBytesReturned": 0}
 
@@ -363,10 +350,16 @@ def run_grouped_review(
                 "groupId": index + 1, "passNo": pass_no, "reviewStatus": "RUNNING",
                 "reviewStartedAtMs": int(time() * 1000), "turns": [], "findings": [],
             }
+            candidates = None
 
             def publish_pass() -> None:
                 if on_pass_progress is not None:
+                    if candidates is not None and candidates.candidates:
+                        pass_progress["candidates"] = candidates.snapshot()
                     on_pass_progress(pass_progress)
+
+            if anchor_index is not None and anchor_pool is not None:
+                candidates = ReviewCandidates(set(group), anchor_index, anchor_pool, publish_pass)
 
             def update_turn(turn: int, fields: dict[str, Any]) -> None:
                 if turn > len(pass_progress["turns"]):
@@ -390,6 +383,7 @@ def run_grouped_review(
                 group_deadline=deadline,
                 **({"context_soft_limit": options.contextSoftLimit} if context_review else {}),
                 **({"on_model_turn": update_turn} if on_pass_progress is not None else {}),
+                **({"candidates": candidates} if candidates is not None else {}),
             )
             session = result.get("session", {})
             audit = result.get("toolAudit", {})
@@ -402,6 +396,8 @@ def run_grouped_review(
             tokens += _total_tokens(pass_usage)
             pass_progress["reviewDurationMs"] = int((monotonic() - pass_started) * 1000)
             if result["status"] != "SUCCESS":
+                if candidates is not None:
+                    candidates.discard()
                 reason = error = result.get("errorCode") or "AGENT_RUN_FAILED"
                 pass_progress.update(
                     reviewStatus="CANCELLED" if reason == "AGENT_CANCELLED" else "FAILED",
@@ -422,11 +418,15 @@ def run_grouped_review(
             update(index, findingCount=len(known), lastPassFindingCount=len(added), tokens=tokens)
             pass_progress["reviewStatus"] = "COMPLETED"
             if not added:
+                if candidates is not None:
+                    candidates.discard()
                 pass_progress["factCheck"] = {"status": "SKIPPED", "reason": "NO_NEW_FINDINGS"}
                 publish_pass()
                 reason = "NO_NEW_FINDINGS"
                 break
             if (mode == "WHOLE_TASK" and not unified) or cancel_event.is_set():
+                if candidates is not None:
+                    candidates.discard()
                 pass_progress["factCheck"] = {"status": "CANCELLED" if cancel_event.is_set() else "SKIPPED"}
                 publish_pass()
                 continue
@@ -436,6 +436,33 @@ def run_grouped_review(
                 ) if key in finding}, "status": "PENDING"}
                 for number, finding in enumerate(added.values(), 1)
             ]
+            if candidates is not None:
+                if candidates.references.keys() & added.keys():
+                    anchor_started = monotonic()
+                    pass_progress["anchorProgress"] = {"status": "RUNNING"}
+                    publish_pass()
+                    located = candidates.settle(
+                        added, remaining=deadline - runner.clock() if deadline is not None else float("inf"),
+                    )
+                    for identity, finding_progress in zip(added, pass_progress["findings"], strict=True):
+                        if anchor := located.get(identity):
+                            finding_progress["anchor"] = anchor.model_dump(exclude_none=True)
+                            anchors[index][identity] = {
+                                **finding_progress["anchor"], "groupId": index + 1, "passNo": pass_no,
+                            }
+                    pass_progress["anchorProgress"] = {
+                        "status": "CANCELLED" if cancel_event.is_set() else "COMPLETED",
+                        "durationMs": int((monotonic() - anchor_started) * 1000),
+                    }
+                else:
+                    candidates.discard()
+                if cancel_event.is_set():
+                    pass_progress["factCheck"] = {"status": "CANCELLED"}
+                    for finding_progress in pass_progress["findings"]:
+                        finding_progress["status"] = "CANCELLED"
+                    publish_pass()
+                    reason = error = "AGENT_CANCELLED"
+                    break
             check_started = monotonic()
             fact_progress: dict[str, Any] = {"status": "RUNNING", "startedAtMs": int(time() * 1000)}
             pass_progress["factCheck"] = fact_progress
@@ -499,9 +526,13 @@ def run_grouped_review(
         return merged, error
 
     update()
-    with ThreadPoolExecutor(max_workers=parallel_groups) as pool:
-        futures = [pool.submit(run_group, index, group) for index, group in enumerate(grouped_paths)]
-        results = [future.result() for future in futures]
+    try:
+        with ThreadPoolExecutor(max_workers=parallel_groups) as pool:
+            futures = [pool.submit(run_group, index, group) for index, group in enumerate(grouped_paths)]
+            results = [future.result() for future in futures]
+    finally:
+        if anchor_pool is not None:
+            anchor_pool.close()
     result = {
         **totals,
         "durationMs": int((monotonic() - started) * 1000),
@@ -523,11 +554,18 @@ def run_grouped_review(
         for index, finding in enumerate(card["findings"])
         if (identity := finding_identity(finding)) in checks
     ]
+    anchor_by_finding = {identity: data for group_anchors in anchors for identity, data in group_anchors.items()}
+    anchor_results = [
+        {"findingIndex": index, **anchor_by_finding[identity]}
+        for index, finding in enumerate(card["findings"])
+        if (identity := finding_identity(finding)) in anchor_by_finding
+    ]
     return {
         **result,
         "status": "SUCCESS",
         "card": card,
         **({"factCheckResults": fact_check_results} if fact_check_results else {}),
+        **({"anchorResults": anchor_results} if anchor_results else {}),
         "groupCoverage": [
             {"groupId": index, "paths": group, "status": "SUCCESS"}
             for index, group in enumerate(grouped_paths, 1)

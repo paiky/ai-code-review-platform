@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from sqlalchemy import case, delete, func, inspect, or_, select, text
@@ -58,6 +58,8 @@ from app.agent_review_spike.budgets import (
     validate_agent_budgets,
 )
 from app.agent_review_spike.retrieval_audit import sanitize_retrieval_detail
+from app.agent_review_spike.diff import owned_diff_sections
+from app.agent_review_spike.finding_anchor import MAX_CANDIDATES, AnchorLocation, AnchorResult
 from app.agent_review_spike.grouped import EFFORT_PASSES
 from app.agent_review_spike.schema import SEVERITIES
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
@@ -122,6 +124,7 @@ AGENT_TRACE_TOOLS = {
     "read_file_range",
     "read_diff_range",
     "submit_review",
+    "submit_candidate",
 }
 
 _SCHEMA_LOCK = Lock()
@@ -2506,10 +2509,24 @@ def _save_group_pass_progress(
         # The caller holds the job's claim lock. Keep diagnostic storage failures isolated.
         with db.begin_nested():
             payload = _read_json(run.input_json, {})
-            paths = frozenset((payload.get("case") or {}).get("changedFiles") or [])
+            case = payload.get("case") or {}
+            paths = frozenset(case.get("changedFiles") or [])
+            sections = None
+
+            def anchor_path_matches(path: str, location: AnchorLocation) -> bool:
+                if location.filePath == path:
+                    return True
+                if location.side != "OLD":
+                    return False
+                nonlocal sections
+                if sections is None:
+                    sections = owned_diff_sections(str(case.get("diff") or ""), list(paths), unified=True)
+                section = sections.get(path)
+                return section is not None and section.old_path == location.filePath
+
             snapshots: dict[str, dict[str, Any]] = {}
             for item in value[:750]:
-                row = _safe_group_pass(item, paths)
+                row = _safe_group_pass(item, paths, anchor_path_matches)
                 if row is None:
                     continue
                 key = f"{run.id}:{claim_attempt}:{row['groupId']}:{row['passNo']}"
@@ -2531,8 +2548,13 @@ def _save_group_pass_progress(
                 data = {"runId": run.id, "claimAttempt": claim_attempt, **row}
                 detail = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
                 if len(detail.encode("utf-8")) > 60_000:
+                    for candidate in data.get("candidates", []):
+                        candidate.pop("body", None)
                     for finding in data["findings"]:
                         finding.pop("filePath", None)
+                    detail = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+                if len(detail.encode("utf-8")) > 60_000 and "candidates" in data:
+                    data.pop("candidates")
                     detail = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
                 if record is None:
                     db.add(CodeQualityReviewProgressEvent(
@@ -2548,7 +2570,9 @@ def _save_group_pass_progress(
         return False
 
 
-def _safe_group_pass(value: Any, paths: frozenset[str]) -> dict[str, Any] | None:
+def _safe_group_pass(
+    value: Any, paths: frozenset[str], anchor_path_matches: Callable[[str, AnchorLocation], bool],
+) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     group, pass_no, revision = (value.get(key) for key in ("groupId", "passNo", "revision"))
@@ -2564,6 +2588,11 @@ def _safe_group_pass(value: Any, paths: frozenset[str]) -> dict[str, Any] | None
     row.update(_safe_group_pass_metrics(value, ("reviewDurationMs", "reviewStartedAtMs")))
     if reason := _safe_group_pass_reason(value.get("reviewReason")):
         row["reviewReason"] = reason
+    anchor_progress = value.get("anchorProgress")
+    if isinstance(anchor_progress, dict) and anchor_progress.get("status") in ("RUNNING", "COMPLETED", "CANCELLED"):
+        row["anchorProgress"] = {
+            "status": anchor_progress["status"], **_safe_group_pass_metrics(anchor_progress, ("durationMs",)),
+        }
     turns = value.get("turns")
     for row_no, turn in enumerate(turns[:101] if isinstance(turns, list) else [], 1):
         if not isinstance(turn, dict) or turn.get("turn") != row_no or turn.get("status") not in stages:
@@ -2612,8 +2641,59 @@ def _safe_group_pass(value: Any, paths: frozenset[str]) -> dict[str, Any] | None
             clean["verdict"] = item["verdict"]
         if reason := _safe_group_pass_reason(item.get("reason")):
             clean["reason"] = reason
+        if anchor := _safe_pass_anchor(item.get("anchor"), path, anchor_path_matches):
+            clean["anchor"] = anchor
         row["findings"].append(clean)
+    candidates = value.get("candidates")
+    if isinstance(candidates, list):
+        seen = set()
+        row["candidates"] = []
+        for candidate in candidates[:MAX_CANDIDATES]:
+            if not isinstance(candidate, dict):
+                continue
+            identifier, path, status = (candidate.get(key) for key in ("candidateId", "filePath", "status"))
+            if (not isinstance(identifier, str) or not re.fullmatch(r"[0-9a-f]{32}", identifier)
+                    or identifier in seen or not isinstance(path, str) or path not in paths
+                    or status not in ("PENDING_LOCATION", "LOCATED", "UNLOCATED", "FINISHED", "DISCARDED")):
+                continue
+            try:
+                path = validate_review_path(path)
+            except ReviewToolError:
+                continue
+            seen.add(identifier)
+            entry = {"candidateId": identifier, "status": status}
+            for name, text_value, maximum in (
+                ("title", candidate.get("title"), 160), ("body", candidate.get("body"), 320), ("filePath", path, 200),
+            ):
+                if isinstance(text_value, str):
+                    text_value = scrub_sensitive(" ".join(text_value.split())) or ""
+                    text_value = "".join(character for character in text_value if character.isprintable())
+                    if text_value:
+                        entry[name] = text_value.encode("utf-8", errors="replace")[:maximum].decode("utf-8", errors="ignore")
+            if anchor := _safe_pass_anchor(candidate.get("anchor"), path, anchor_path_matches):
+                entry["anchor"] = anchor
+            row["candidates"].append(entry)
     return row
+
+
+def _safe_pass_anchor(
+    value: Any, path: str, anchor_path_matches: Callable[[str, AnchorLocation], bool],
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        anchor = AnchorResult.model_validate(value)
+    except ValueError:
+        return None
+    result = anchor.model_dump(exclude_none=True)
+    if anchor.location:
+        file_path = anchor.location.filePath
+        safe = scrub_sensitive(file_path)
+        if safe != file_path or not anchor_path_matches(path, anchor.location):
+            return None
+        if len(file_path.encode("utf-8")) > 320 or not all(char.isprintable() for char in file_path):
+            return None
+    return result
 
 
 def _safe_group_pass_metrics(value: dict[str, Any], keys: tuple[str, ...]) -> dict[str, int]:

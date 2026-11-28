@@ -57,6 +57,23 @@ def diff_by_file(case: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def owned_diff_sections(diff: str, files: list[str], *, unified: bool) -> dict[str, DiffSection]:
+    allowed = set(files)
+    sections: dict[str, DiffSection] = {}
+    ambiguous: set[str] = set()
+    unheaded_path = files[0] if unified and len(files) == 1 else None
+    for section in split_diff_sections(diff, unheaded_path=unheaded_path):
+        if path := section.changed_path(allowed):
+            if path in sections or not section.patch:
+                if not unified:
+                    return {}
+                ambiguous.add(path)
+                sections.pop(path, None)
+            elif path not in ambiguous:
+                sections[path] = section
+    return sections
+
+
 def split_diff_sections(diff_text: str, *, unheaded_path: str | None = None) -> list[DiffSection]:
     lines = [line.removesuffix("\r") for line in diff_text.split("\n")]
     boundaries = [0]
