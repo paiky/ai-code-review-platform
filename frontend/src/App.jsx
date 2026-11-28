@@ -3525,6 +3525,52 @@ function RefinementStatDescriptions({ title, value, fields }) {
   );
 }
 
+const FACT_CHECK_STATUS_LABELS = {
+  KEEP: '未发现明确反证',
+  CONTRADICTED: '有明确反证',
+  NEEDS_CONTEXT: '需要更多上下文',
+  SKIPPED: '已跳过',
+  FAILED: '复核失败',
+};
+
+const FACT_CHECK_REASON_LABELS = {
+  MISSING_DIFF: '可用变更材料不足',
+  TOKEN_BUDGET: '已达到任务 Token 上限',
+  TIME_BUDGET: '组内复核时间不足',
+  PROVIDER_ERROR: '模型服务请求失败',
+  TIMEOUT: '模型复核超时',
+  INVALID_RESPONSE: '模型返回无法解析',
+  MISSING_VERDICT: '模型未返回该问题的复核结论',
+  DUPLICATE_VERDICT: '模型返回了重复结论',
+  UNKNOWN_FINDING: '模型返回的问题标识无法对应',
+  INVALID_EVIDENCE: '反证无法与本次 diff 对应',
+};
+
+function FindingFactCheck({ check }) {
+  if (!check) return null;
+  const label = FACT_CHECK_STATUS_LABELS[check.verdict || check.status];
+  if (!label) return null;
+  const evidence = check.evidence;
+  const reason = check.reason || FACT_CHECK_REASON_LABELS[check.reasonCode];
+  return (
+    <Space direction="vertical" size={4}>
+      <Space size={6} wrap>
+        <Text strong>事实复核</Text>
+        <Tag color={check.verdict === 'CONTRADICTED' ? 'orange' : 'default'}>{label}</Tag>
+      </Space>
+      {reason && <Text>{reason}</Text>}
+      {evidence && (
+        <Text type="secondary">
+          反证位置 {evidence.filePath} · {evidence.side === 'OLD' ? '旧侧' : '新侧'} · 第
+          {evidence.startLine === evidence.endLine
+            ? evidence.startLine
+            : evidence.startLine + '–' + evidence.endLine}行
+        </Text>
+      )}
+    </Space>
+  );
+}
+
 function FindingRefinementPanel({ overlay }) {
   if (!overlay) return null;
   const retrievalPlan = overlay.retrievalPlan || {};
@@ -6312,6 +6358,7 @@ function CodeQualityReviewView({
                           )}
                         </div>
                         <FindingContext finding={finding} />
+                        <FindingFactCheck check={finding.factCheck} />
                         <FindingRefinementPanel overlay={finding.refinementOverlay} />
                         {!autoFixChild && FINDING_REFINEMENT_ACTION_VISIBLE && (
                           <FindingRefinementControl

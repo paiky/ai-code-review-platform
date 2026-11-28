@@ -13,7 +13,8 @@ from app.agent_review_spike.chat_completions_runner import (
     ChatCompletionsTransportError,
     OpenAIChatCompletionsAgentRunner,
 )
-from app.agent_review_spike.diff import split_diff_sections
+from app.agent_review_spike.diff import DiffSection, split_diff_sections
+from app.agent_review_spike.fact_check import FactCheckOutcome, check_findings, normalized_openai_usage
 from app.agent_review_spike.responses_runner import (
     OpenAIResponsesAgentRunner,
     ResponsesAgentError,
@@ -38,17 +39,17 @@ _GROUP_SYSTEM = (
 )
 
 
-def _file_changes(case: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
+def _file_changes(case: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, DiffSection]]:
     files = case["changedFiles"]
     allowed = set(files)
     sections = {}
     for section in split_diff_sections(str(case.get("diff") or "")):
         if path := section.changed_path(allowed):
             if path in sections or not section.patch:
-                return [], {}, {}
+                return [], {}
             sections[path] = section
     if len(sections) != len(files):
-        return [], {}, {}
+        return [], {}
 
     changes = []
     for path in files:
@@ -71,9 +72,7 @@ def _file_changes(case: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str,
         changes.append({
             "path": path, "status": status, "additions": additions, "deletions": deletions,
         })
-    return changes, {path: item.text for path, item in sections.items()}, {
-        path: item.patch for path, item in sections.items()
-    }
+    return changes, sections
 
 
 def _parse_groups(content: str, file_count: int) -> list[list[int]]:
@@ -125,7 +124,7 @@ def _model_groups(
         ResponsesAgentError, ResponsesTransportError, OSError, ValueError,
     ):
         return [[index] for index in range(len(changes))], {}, "PER_FILE_FALLBACK"
-    usage = _normalized_usage(response.get("usage"))
+    usage = normalized_openai_usage(response.get("usage"))
     try:
         if responses:
             output, calls = validate_responses_output(response)
@@ -198,22 +197,6 @@ def _group_case(
     }
 
 
-def _normalized_usage(value: Any) -> dict[str, int]:
-    if not isinstance(value, dict):
-        return {}
-    result = {}
-    for source, target in (
-        ("prompt_tokens", "input_tokens"),
-        ("input_tokens", "input_tokens"),
-        ("completion_tokens", "output_tokens"),
-        ("output_tokens", "output_tokens"),
-        ("total_tokens", "total_tokens"),
-    ):
-        if type(number := value.get(source)) is int and number >= 0:
-            result[target] = number
-    return result
-
-
 def _merge_usage(target: dict[str, int], source: dict[str, int]) -> None:
     for key, value in source.items():
         if key != "total_tokens":
@@ -275,7 +258,9 @@ def run_grouped_review(
     started = monotonic()
     max_passes = options.maxPasses
     paths = case["changedFiles"]
-    changes, sections, patches = _file_changes(case)
+    changes, diff_sections = _file_changes(case)
+    sections = {path: section.text for path, section in diff_sections.items()}
+    patches = {path: section.patch for path, section in diff_sections.items()}
     if cancel_event.is_set():
         return {"status": "FAILED", "errorCode": "AGENT_CANCELLED"}
     if changes and case.get("groupRuleCatalogVersion") == built_in_catalog().version:
@@ -291,6 +276,7 @@ def run_grouped_review(
         }
         for index, group in enumerate(grouped_paths, 1)
     ]
+    fact_checks: list[dict[tuple[Any, ...], dict[str, Any]]] = [{} for _ in grouped_paths]
     lock = Lock()
     totals = {"turnCount": 0, "toolCallCount": 0, "sourceBytesReturned": 0, "diffBytesReturned": 0}
 
@@ -362,14 +348,33 @@ def run_grouped_review(
                 break
             card = result["card"]
             cards.append(card)
-            previous_count = len(known)
+            added = {}
             for finding in card["findings"]:
-                known.setdefault(finding_identity(finding), finding)
-            added = len(known) - previous_count
-            update(index, findingCount=len(known), lastPassFindingCount=added, tokens=tokens)
+                identity = finding_identity(finding)
+                if identity not in known:
+                    added[identity] = finding
+                    known[identity] = finding
+            update(index, findingCount=len(known), lastPassFindingCount=len(added), tokens=tokens)
             if not added:
                 reason = "NO_NEW_FINDINGS"
                 break
+            if mode == "WHOLE_TASK" or cancel_event.is_set():
+                continue
+            if budget_reached():
+                verdicts = [FactCheckOutcome(status="SKIPPED", reasonCode="TOKEN_BUDGET")] * len(added)
+            else:
+                verdicts, check_usage = check_findings(
+                    runner, list(added.values()), [diff_sections[path] for path in group], deadline=deadline,
+                )
+                if check_usage:
+                    with lock:
+                        _merge_usage(usage, check_usage)
+                    tokens += _total_tokens(check_usage)
+                    update(index, tokens=tokens)
+            for identity, verdict in zip(added, verdicts, strict=True):
+                fact_checks[index][identity] = {
+                    **verdict.model_dump(exclude_none=True), "groupId": index + 1, "passNo": pass_no,
+                }
 
         status = "SUCCESS" if cards else "FAILED"
         if cancel_event.is_set():
@@ -407,10 +412,17 @@ def run_grouped_review(
         card = _combine_cards([card for card, _ in results if card is not None], paths)
     except ReviewSchemaError:
         return {**result, "status": "FAILED", "errorCode": "AGENT_GROUP_CARD_INVALID"}
+    checks = {identity: data for group_checks in fact_checks for identity, data in group_checks.items()}
+    fact_check_results = [
+        {"findingIndex": index, **checks[identity]}
+        for index, finding in enumerate(card["findings"])
+        if (identity := finding_identity(finding)) in checks
+    ]
     return {
         **result,
         "status": "SUCCESS",
         "card": card,
+        **({"factCheckResults": fact_check_results} if fact_check_results else {}),
         "groupCoverage": [
             {"groupId": index, "paths": group, "status": "SUCCESS"}
             for index, group in enumerate(grouped_paths, 1)

@@ -33,6 +33,7 @@ from app.agent_review.schemas import (
     parse_agent_conversation_events,
 )
 from app.agent_review_spike.diff import DiffSection, diff_by_file, split_diff_sections, with_diff_section_header
+from app.agent_review_spike.fact_check import attach_fact_checks
 from app.agent_review_spike.grouped import validate_group_coverage
 from app.agent_review_spike.schema import ReviewSchemaError, validate_review_card
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
@@ -883,6 +884,17 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
     task = db.get(ReviewTask, run.task_id)
     if task is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Review task not found: {run.task_id}", 404)
+    stored_result = result
+    if run.runner_version in GROUPED_RUNNER_CAPABILITIES and run_summary.get("factCheckResults"):
+        findings = attach_fact_checks(
+            result["findings"], run_summary["factCheckResults"], run_summary["groupCoverage"],
+            str((input_payload.get("case") or {}).get("diff") or ""),
+        )
+        for finding in findings:
+            check = finding.get("factCheck")
+            if check and "reason" in check:
+                check["reason"] = scrub_sensitive(check["reason"])
+        stored_result = {**result, "findings": findings}
     saved = save_result(
         db,
         task_id=run.task_id,
@@ -893,7 +905,7 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         model=str(run.model or repository.AGENT_MODEL),
         display_name=f"Agent · {runtime_snapshot.get('displayName') or 'Claude Code + DeepSeek'}",
         sort_order=5,
-        result=result,
+        result=stored_result,
     )
     result.update(
         {

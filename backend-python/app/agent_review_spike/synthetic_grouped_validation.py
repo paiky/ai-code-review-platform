@@ -37,6 +37,7 @@ class GroupedSyntheticTransport:
         self.initial_paths: list[tuple[str, ...]] = []
         self.second_passes: list[tuple[str, ...]] = []
         self.third_passes = 0
+        self.fact_checks: dict[str, list[str]] = {}
         self.cross_group_read = False
         self.rejected_outside_finding = False
 
@@ -54,6 +55,28 @@ class GroupedSyntheticTransport:
             )
             return {"choices": [{"message": {"content": text}}], "usage": {"total_tokens": 2}}
 
+        if messages[0]["content"].startswith("Check whether the supplied diff"):
+            request = json.loads(messages[1]["content"])
+            findings = request["findings"]
+            path = findings[0]["filePath"]
+            assert len(findings) == 1 and path in request["diff"]
+            with self.lock:
+                self.fact_checks.setdefault(path, []).append(findings[0]["title"])
+            if path == _PATHS[3]:
+                raise TimeoutError("Synthetic review timeout")
+            verdict = {
+                "findingId": findings[0]["findingId"], "verdict": "CONTRADICTED",
+                "reason": "The patch contains the expected guard.",
+                "evidence": {
+                    "filePath": path, "side": "NEW", "startLine": 1,
+                    "endLine": 99 if path == _PATHS[4] else 1,
+                },
+            }
+            return {
+                "choices": [{"message": {"content": json.dumps([verdict])}}],
+                "usage": {"total_tokens": 1},
+            }
+
         prompt = messages[1]["content"]
         paths = tuple(ast.literal_eval(prompt.split("Changed files: ", 1)[1].splitlines()[0]))
         if len(paths) == 2:
@@ -69,6 +92,7 @@ class GroupedSyntheticTransport:
                 "Findings already reported for this group (do not repeat them; look for omissions):\n", 1,
             )[1].splitlines()[0])
             assert all(item["filePath"] in paths for item in carried)
+            assert self.fact_checks[paths[0]] == [item["title"] for item in carried]
             if len(carried) == 2:
                 self.third_passes += 1
                 return self._submit(paths[0], issues=False)
@@ -155,6 +179,11 @@ def validate() -> dict[str, Any]:
         assert progress[0]["groups"][8]["status"] == "QUEUED"
         assert transport.cross_group_read and transport.rejected_outside_finding
         assert len(transport.second_passes) == len(result["card"]["findings"]) == 7
+        assert sum(map(len, transport.fact_checks.values())) == 7
+        assert len(result["factCheckResults"]) == 7
+        assert {item.get("reasonCode") for item in result["factCheckResults"]} == {
+            None, "TIMEOUT", "INVALID_EVIDENCE",
+        }
 
         sequential = GroupedSyntheticTransport(concurrent=False)
         serial = run_grouped_review(
@@ -162,6 +191,8 @@ def validate() -> dict[str, Any]:
             GroupedReviewSettings(concurrency=1), cancel_event=Event(), progress=lambda value: None,
         )
         assert sequential.peak == 1 and serial["card"] == result["card"]
+        assert serial["factCheckResults"] == result["factCheckResults"]
+        assert serial["usage"]["total_tokens"] == result["usage"]["total_tokens"]
 
         broken = GroupedSyntheticTransport(concurrent=False, broken_grouping=True)
         fallback_progress = []
@@ -182,6 +213,7 @@ def validate() -> dict[str, Any]:
             cancel_event=Event(), progress=lambda value: None,
         )
         assert high_result["status"] == "SUCCESS" and high.third_passes == 7
+        assert {item["passNo"] for item in high_result["factCheckResults"]} == {1, 2}
 
         limited = GroupedSyntheticTransport(concurrent=False)
         limited_result = run_grouped_review(
@@ -196,6 +228,8 @@ def validate() -> dict[str, Any]:
         "maxPasses": progress[-1]["maxPasses"], "secondPasses": len(transport.second_passes),
         "highEffortThirdPasses": high.third_passes, "tokenBudgetStopsDispatch": not limited.initial_paths,
         "sameSerialResult": serial["card"] == result["card"],
+        "factChecks": len(result["factCheckResults"]),
+        "factCheckFailuresRetained": sum(item["status"] == "FAILED" for item in result["factCheckResults"]),
         "crossGroupDiffReadable": transport.cross_group_read,
         "crossGroupFindingRejected": transport.rejected_outside_finding,
         "malformedGroupingFallback": fallback_progress[-1]["mode"],
