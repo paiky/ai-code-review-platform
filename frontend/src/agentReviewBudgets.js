@@ -31,6 +31,31 @@ export const defaultAgentBudgetLimits = {
   submitByTurn: { min: 3, max: 15 }
 };
 
+const defaultGroupedReview = {
+  enabled: true, concurrency: 8, maxPasses: 2, maxTurns: 100,
+  maxTokens: 0, timeoutMinutesPerPass: 15
+};
+
+export function normalizeGroupedReview(settings) {
+  return { ...defaultGroupedReview, ...settings?.groupedReview };
+}
+
+export function validateGroupedReview(value) {
+  const bounds = [
+    ['concurrency', '并发组数', 1, Number.MAX_SAFE_INTEGER],
+    ['maxPasses', '每组最多遍数', 1, 3],
+    ['maxTurns', '每遍模型回合', 6, 100],
+    ['maxTokens', '整任务 Token 软上限', 0, Number.MAX_SAFE_INTEGER],
+    ['timeoutMinutesPerPass', '组时间上限基数', 0, 1440]
+  ];
+  for (const [key, label, min, max] of bounds) {
+    if (!Number.isSafeInteger(value[key]) || value[key] < min || value[key] > max) {
+      return `${label}必须输入 ${min}～${max} 范围内的整数`;
+    }
+  }
+  return null;
+}
+
 export const recommendedAgentBudgetValues = Object.freeze({
   maxTurns: [6, 9, 12, 14, 16, 18],
   maxToolCalls: [10, 20, 30, 40, 50, 60],

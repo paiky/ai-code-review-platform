@@ -30,6 +30,7 @@ class AgentReviewSettings(Base):
     custom_api_key_ciphertext: Mapped[str | None] = mapped_column(Text)
     custom_api_key_fingerprint: Mapped[str | None] = mapped_column(String(32))
     budget_config_json: Mapped[str | None] = mapped_column(Text)
+    grouped_review_config_json: Mapped[str | None] = mapped_column(Text)
     worker_id: Mapped[str | None] = mapped_column(String(128))
     worker_version: Mapped[str | None] = mapped_column(String(64))
     cli_version: Mapped[str | None] = mapped_column(String(64))

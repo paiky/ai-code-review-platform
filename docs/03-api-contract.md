@@ -1,4 +1,4 @@
-﻿# API 契约
+# API 契约
 
 > 状态说明：本文是平台 HTTP API 的权威契约，默认以 `backend-python/` FastAPI 实现为准。领域对象与表结构见 `02-domain-model.md`；提醒卡片 JSON 见 `04-risk-card-schema.md`。未列出的字段以 contract 测试和实际响应为准。
 
@@ -727,6 +727,8 @@ GET /api/review-tasks/{taskId}/code-quality-progress
 
 - 该接口返回持久化的 AI Review 过程事件，前端在 `RUNNING` 时轮询展示；可追加 `?reviewKey=...` 只查看某个模型的事件。
 - API Provider 会记录请求构建、Provider 调用、响应摘要、解析和保存结果等阶段，敏感字段会脱敏或省略。
+- 支持分组的 Chat Completions 和 Responses Agent 任务可在 `AGENT_HEARTBEAT`、终态事件及 AI 结果的 `agentRunSummary` 中返回 `groupProgress`。它包含分组方式、并发槽位、最多遍次、可选省略数量及各组的标识、文件数、状态、当前遍次、本遍新增与累计问题数、Token、耗时与结束原因。进度仅包含安全摘要，正式 Finding 仍由原结果字段返回。历史任务可省略此字段。
+- `GET/PUT /api/code-quality-reviews/agent-settings` 的 `groupedReview` 包含 `enabled`、`concurrency`、`maxPasses`、`maxTurns`、`maxTokens` 和 `timeoutMinutesPerPass`。后两项用 0 关闭对应上限。PUT 可提交要更新的字段，或用 `resetGroupedReview: true` 恢复部署默认值，两者互斥。分组 Runtime 由同页的当前 Agent 连接决定，新任务入队时记录生效配置。
 - `FILE_RULES_RESOLVED` 的 `detail` 是 JSON 字符串。`catalogVersion` 是本次使用的规则目录 SHA-256，`matchedCount`、`fallbackCount`、`errorCount` 和 `contentUnavailableCount` 记录匹配状态。`promptBytes` 和 `promptTruncated` 记录规则段大小和预算裁剪。`files` 提供有限条目的相对路径、规则键、Pattern、来源、回退状态及可选原因码，`filesTruncated` 表示有条目省略。历史任务可省略此事件。
 - `REVIEW_PLATFORM_PROMPT` 记录首轮使用的平台固定系统指令，沿用任务详情的读取范围。其 `detail` 是 JSON 字符串，包含 `schemaVersion`、`templateId`、`source`、`protocol` 和 `platformInstructions`。`source` 区分 `STANDARD_HTTP`、`AGENT_HTTP` 和 `CLAUDE_CLI_APPEND`。Claude CLI 对应平台传给进程的附加指令。Agent 事件还记录 `submitByTurn`、`runId` 和 `claimAttempt`。Standard 事件还记录 `effectiveEngine`（`STANDARD` 或 `STANDARD_FALLBACK`）。从 Agent Run 降级时附来源 `runId`，从入队前预检直接降级时该字段省略。历史任务可能没有此事件。
 - `platformInstructions` 由后端按已记录的模板版本和参数生成，包含平台固定指令。项目自定义指令、手动指令、diff、源码和其它任务上下文不在此字段中。

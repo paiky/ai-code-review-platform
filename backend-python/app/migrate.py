@@ -560,6 +560,13 @@ def _migration_statement_already_satisfied(
     connection, migration: MigrationFile, statement: str
 ) -> bool:
     """Reconcile migration effects that already exist outside the migration ledger."""
+    if migration.version == 69 and "ADD COLUMN grouped_review_config_json" in statement:
+        for column in inspect(connection).get_columns("code_quality_agent_settings"):
+            if column["name"] == "grouped_review_config_json":
+                if not column["nullable"] or str(column["type"]).lower() != "text":
+                    raise MigrationError("Existing code_quality_agent_settings.grouped_review_config_json is incompatible with V69")
+                return True
+        return False
     if migration.version == 65 and "ADD COLUMN auto_fix_enabled" in statement:
         existing = next((
             column for column in inspect(connection).get_columns("project_review_settings")

@@ -110,9 +110,12 @@ class ReviewToolExecutor:
         audit_path: Path,
         budget: ToolBudget,
         diff_by_file: dict[str, str] | None = None,
+        *,
+        diff_paths: set[str] | None = None,
     ) -> None:
         self.workspace = workspace
         self.changed_files = changed_files
+        self.diff_paths = set(changed_files) if diff_paths is None else diff_paths
         self.result_path = result_path
         self.audit_path = audit_path
         self.budget = budget
@@ -286,7 +289,7 @@ class ReviewToolExecutor:
             return value
         if tool == "read_diff_range":
             path = str(args.get("path") or "").replace("\\", "/")
-            if path not in self.changed_files:
+            if path not in self.diff_paths:
                 raise ReviewToolError("DIFF_PATH_NOT_ALLOWED", "diff path is not a changed file")
             try:
                 start_line = int(args.get("startLine") or 0)

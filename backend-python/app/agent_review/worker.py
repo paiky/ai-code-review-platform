@@ -17,6 +17,13 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from app.agent_review.schemas import (
+    GROUPED_CHAT_CAPABILITY,
+    GROUPED_CHAT_RUNNER_VERSION,
+    GROUPED_REVIEW_CAPABILITY,
+    GROUPED_REVIEW_RUNNER_VERSION,
+    GroupedReviewSettings,
+)
 from app.agent_review_spike.budgets import (
     AgentBudgetValidationError,
     validate_agent_budgets,
@@ -32,6 +39,7 @@ from app.agent_review_spike.chat_completions_runner import (
     OpenAIChatCompletionsAgentRunner,
 )
 from app.agent_review_spike.conversation_capture import AgentReviewProgress
+from app.agent_review_spike.grouped import EFFORT_PASSES, GroupedRunner, run_grouped_review
 from app.agent_review_spike.responses_runner import (
     HttpxResponsesTransport,
     OpenAIResponsesAgentRunner,
@@ -55,6 +63,8 @@ WORKER_CAPABILITIES = [
     CUSTOM_RUNTIME,
     OPENAI_RESPONSES_RUNNER,
     OPENAI_CHAT_RUNNER,
+    GROUPED_CHAT_CAPABILITY,
+    GROUPED_REVIEW_CAPABILITY,
     ANTHROPIC_MESSAGES_RUNNER,
 ]
 AGENT_WORKER_SHUTDOWN_GRACE_SECONDS = 930
@@ -66,6 +76,11 @@ class _LatestAuditSnapshot:
         self._lock = Lock()
         self._value: dict[str, Any] = {}
         self._conversation: list[dict[str, Any]] = []
+        self._group_progress: dict[str, Any] = {}
+
+    def update_groups(self, value: dict[str, Any]) -> None:
+        with self._lock:
+            self._group_progress = deepcopy(value)
 
     def update(self, value: dict[str, Any]) -> None:
         if not isinstance(value, dict):
@@ -82,6 +97,8 @@ class _LatestAuditSnapshot:
             result = {"audit": self._value} if self._value else {}
             if self._conversation:
                 result["conversationEvents"] = self._conversation
+            if self._group_progress:
+                result["groupProgress"] = self._group_progress
             return deepcopy(result)
 
 
@@ -309,7 +326,7 @@ def _run_job(
             summary = _normalize_anthropic_summary(anthropic_result)
         elif runner_type == OPENAI_CHAT_RUNNER:
             endpoint = f"{str(runtime.get('baseUrl') or '').rstrip('/')}/chat/completions"
-            chat_result = OpenAIChatCompletionsAgentRunner(
+            chat_runner = OpenAIChatCompletionsAgentRunner(
                 HttpxChatCompletionsTransport(
                     endpoint,
                     str(runtime.get("apiKey") or ""),
@@ -319,16 +336,11 @@ def _run_job(
                     job.get("budgets"),
                     model=str(runtime.get("model") or "synthetic-chat-model"),
                 ),
-            ).run(
-                job.get("input") or {},
-                worktree,
-                cancel_event=cancelled,
-                progress_callback=review_progress,
             )
-            summary = _normalize_chat_summary(chat_result)
+            summary = _run_openai_review(chat_runner, job.get("input") or {}, worktree, cancelled, latest_audit, review_progress)
         elif runner_type == OPENAI_RESPONSES_RUNNER or runtime_type == CUSTOM_RUNTIME:
             endpoint = f"{str(runtime.get('baseUrl') or '').rstrip('/')}/responses"
-            responses_result = OpenAIResponsesAgentRunner(
+            responses_runner = OpenAIResponsesAgentRunner(
                 HttpxResponsesTransport(
                     endpoint,
                     str(runtime.get("apiKey") or ""),
@@ -339,13 +351,8 @@ def _run_job(
                     model=str(runtime.get("model") or "gpt-5.6-sol"),
                     reasoning_effort=str(runtime.get("reasoningEffort") or "high"),
                 ),
-            ).run(
-                job.get("input") or {},
-                worktree,
-                cancel_event=cancelled,
-                progress_callback=review_progress,
             )
-            summary = _normalize_responses_summary(responses_result)
+            summary = _run_openai_review(responses_runner, job.get("input") or {}, worktree, cancelled, latest_audit, review_progress)
         elif runner_type == CLAUDE_CODE_RUNNER or runtime_type == DEFAULT_RUNTIME:
             summary = run_agent_candidate(
                 job.get("input") or {},
@@ -681,6 +688,10 @@ def _failure_message(error_code: str) -> str:
         return "Claude CLI exited with a non-zero status before submitting a Review Card"
     if error_code == "AGENT_WORKER_ERROR":
         return "Agent Worker failed before a valid Review Card could be submitted"
+    if error_code == "AGENT_GROUP_TOKEN_BUDGET":
+        return "The configured Agent token budget stopped review before all groups completed"
+    if error_code in {"AGENT_GROUP_CARD_INVALID", "AGENT_GROUP_INCOMPLETE"}:
+        return "Grouped Agent Review did not produce a valid card covering all required files"
     return "Agent Review did not produce a valid submitted Review Card"
 
 
@@ -745,6 +756,36 @@ def _anthropic_runner_config_from_budgets(
         validate_agent_budgets(value),
         model=model,
     )
+
+
+def _run_openai_review(
+    runner: GroupedRunner,
+    case: dict[str, Any],
+    worktree: Path,
+    cancelled: Event,
+    latest_audit: _LatestAuditSnapshot,
+    review_progress: AgentReviewProgress,
+) -> dict[str, Any]:
+    normalize = (
+        _normalize_responses_summary
+        if isinstance(runner, OpenAIResponsesAgentRunner)
+        else _normalize_chat_summary
+    )
+    options = case.get("groupedReview")
+    if not isinstance(options, dict):
+        return normalize(runner.run(
+            case, worktree, cancel_event=cancelled, progress_callback=review_progress,
+        ))
+    version = GROUPED_REVIEW_RUNNER_VERSION
+    if "effort" in options:
+        version = GROUPED_CHAT_RUNNER_VERSION
+        options = {**options, "maxPasses": EFFORT_PASSES[options["effort"]]}
+        del options["effort"]
+    result = run_grouped_review(
+        runner, case, worktree, GroupedReviewSettings.model_validate(options),
+        cancel_event=cancelled, progress=latest_audit.update_groups,
+    )
+    return {**normalize(result), "runnerVersion": version}
 
 
 def _normalize_responses_summary(value: dict[str, Any]) -> dict[str, Any]:

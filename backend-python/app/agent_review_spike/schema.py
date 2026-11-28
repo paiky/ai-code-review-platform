@@ -140,6 +140,13 @@ def normalize_relative_path(value: Any, field: str = "path") -> str:
     return "/".join(parts)
 
 
+def finding_identity(finding: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        finding["filePath"], finding["startLine"], finding["endLine"],
+        finding["category"], finding["title"].casefold(),
+    )
+
+
 def validate_review_card(card: Any, changed_files: list[str]) -> dict[str, Any]:
     collector = _ViolationCollector()
     if not isinstance(card, dict):
@@ -173,13 +180,7 @@ def validate_review_card(card: Any, changed_files: list[str]) -> dict[str, Any]:
         finding = _collect_finding(raw, changed, index, collector)
         if finding is None:
             continue
-        key = (
-            finding["filePath"],
-            finding["startLine"],
-            finding["endLine"],
-            finding["category"],
-            finding["title"].casefold(),
-        )
+        key = finding_identity(finding)
         if key in seen:
             continue
         seen.add(key)

@@ -26,8 +26,14 @@ from app.agent_review.runtime import (
     runtime_provider,
     runtime_review_key,
 )
-from app.agent_review.schemas import AgentConversationTurnEvent, parse_agent_conversation_events
+from app.agent_review.schemas import (
+    GROUPED_REVIEW_CAPABILITY,
+    GROUPED_RUNNER_CAPABILITIES,
+    AgentConversationTurnEvent,
+    parse_agent_conversation_events,
+)
 from app.agent_review_spike.diff import DiffSection, diff_by_file, split_diff_sections, with_diff_section_header
+from app.agent_review_spike.grouped import validate_group_coverage
 from app.agent_review_spike.schema import ReviewSchemaError, validate_review_card
 from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
 from app.code_quality.models import CodeQualitySchedulerJob
@@ -384,14 +390,12 @@ def enqueue_agent_review(
         )
         if review_snapshot and file_rules:
             review_snapshot["fileRuleCatalogVersion"] = file_rules["summary"]["catalogVersion"]
-        review_instructions = "\n\n".join(
-            value
-            for value in (
-                profile_instructions,
-                policy_context.get("promptText"),
-                file_rules["text"] if file_rules else "",
-            )
+        base_instructions = "\n\n".join(
+            value for value in (profile_instructions, policy_context.get("promptText"))
             if str(value or "").strip()
+        )
+        review_instructions = "\n\n".join(
+            value for value in (base_instructions, file_rules["text"] if file_rules else "") if value
         )
         diff_mode = "INLINE" if diff_bytes <= budgets["inlineDiffBytes"] else "TOOL_PAGED"
         if review_snapshot and diff_mode != "INLINE":
@@ -416,6 +420,18 @@ def enqueue_agent_review(
                 "excludedPaths": excluded_files,
             },
         }
+        if (
+            runtime.get("runnerType") in {OPENAI_CHAT_RUNNER, OPENAI_RESPONSES_RUNNER}
+            and len(changed_files) > 1
+            and file_rules
+            and repository.worker_capability_online(db, GROUPED_REVIEW_CAPABILITY)
+        ):
+            grouped = repository.effective_grouped_review_settings(settings_record)
+            if grouped.enabled:
+                budgets = {**budgets, "maxTurns": grouped.maxTurns, "submitByTurn": grouped.maxTurns - 3}
+                input_case["groupedReview"] = grouped.model_dump()
+                input_case["groupRuleCatalogVersion"] = file_rules["summary"]["catalogVersion"]
+                input_case["groupBaseInstructions"] = base_instructions
         input_case["inputSources"] = [
             {
                 "source": "PROJECT_POLICY",
@@ -802,7 +818,14 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
         else {}
     )
     changed_files = ((input_payload.get("case") or {}).get("changedFiles") or [])
+    if run.runner_version in GROUPED_RUNNER_CAPABILITIES:
+        if run.status != "RUNNING" or job.status != "RUNNING":
+            raise AppError("AGENT_JOB_LEASE_LOST", "Grouped Agent Review is no longer running", 409)
+        if job.cancel_requested_at is not None:
+            return fail_job(db, job_id, {**request, "failureCode": "AGENT_CANCELLED"})
     try:
+        if run.runner_version in GROUPED_RUNNER_CAPABILITIES:
+            validate_group_coverage(run_summary.get("groupCoverage"), changed_files)
         card = validate_review_card(request.get("reviewCard"), changed_files)
     except (ReviewSchemaError, ValueError, TypeError) as exception:
         raise AppError("AGENT_REVIEW_SCHEMA_INVALID", str(exception), 400) from exception
@@ -895,6 +918,7 @@ def complete_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str,
             ensure_ascii=False,
         ),
         review_key=run.review_key,
+        detail_limit=54000 if "groupProgress" in result["agentRunSummary"] else 4000,
     )
     _finish_existing_review_flow(db, run, result)
     if task.trigger_type == "GITLAB_MR_WEBHOOK" and not run.comparison_mode:
@@ -931,6 +955,8 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
     cancelled = failure_code == "AGENT_CANCELLED"
     terminal_status = "CANCELLED" if cancelled else ("TIMED_OUT" if failure_code == "AGENT_TIMEOUT" else "FAILED")
     run_summary = request.get("runSummary") if isinstance(request.get("runSummary"), dict) else {}
+    if run.runner_version in GROUPED_RUNNER_CAPABILITIES and run.status == "SUCCEEDED":
+        return {"accepted": True, "idempotent": True, "run": repository.run_to_summary(run)}
     if run.status in {"FAILED", "CANCELLED", "TIMED_OUT"}:
         if run.status == terminal_status:
             _persist_agent_conversation_safely(
@@ -1012,6 +1038,7 @@ def fail_job(db: Session, job_id: int, request: dict[str, Any]) -> dict[str, Any
             ensure_ascii=False,
         ),
         review_key=run.review_key,
+        detail_limit=54000 if run.runner_version in GROUPED_RUNNER_CAPABILITIES else 4000,
     )
     if is_fix_review and not cancelled:
         from app.code_quality.service import fail_auto_fix_review
@@ -1331,14 +1358,19 @@ def _persist_agent_heartbeat_safely(
         }
         if effective_budgets:
             detail["effectiveBudgets"] = effective_budgets
+        if locked_run.runner_version in GROUPED_RUNNER_CAPABILITIES:
+            grouped = repository.sanitize_group_progress(run_summary.get("groupProgress"))
+            if grouped:
+                detail["groupProgress"] = grouped
         append_progress(
             db,
             int(locked_run.task_id),
             "AGENT_HEARTBEAT",
             "INFO",
             "Agent Worker 运行心跳",
-            json.dumps(detail, ensure_ascii=False),
+            json.dumps(detail, ensure_ascii=False, separators=(",", ":")),
             review_key=locked_run.review_key,
+            detail_limit=54000 if "groupProgress" in detail else 4000,
         )
         db.commit()
     except Exception as exception:

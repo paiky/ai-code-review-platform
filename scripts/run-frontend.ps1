@@ -16,6 +16,8 @@ $packageJson = Join-Path $frontendDir "package.json"
 $nodeModules = Join-Path $frontendDir "node_modules"
 $localGitLabEnv = Join-Path $repoRoot ".local\gitlab.env"
 
+Write-Host "[Frontend] Worktree: $repoRoot | Source: $frontendDir"
+
 function Import-DotEnvIfPresent {
     param([string] $Path)
 

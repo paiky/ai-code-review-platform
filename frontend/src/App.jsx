@@ -171,11 +171,13 @@ import {
 import ReviewImmersiveCanvas from './ReviewImmersiveCanvas.jsx';
 import {
   agentBudgetLimits,
-  buildAgentBudgetOptions,
   bytesToKilobytes,
+  kilobytesToBytes,
   formatAgentBudgetSummary,
   normalizeAgentBudgets,
-  validateAgentBudgets
+  normalizeGroupedReview,
+  validateAgentBudgets,
+  validateGroupedReview
 } from './agentReviewBudgets.js';
 import { normalizeAgentWorkerPool } from './agentWorkerPool.js';
 import {
@@ -4955,6 +4957,48 @@ function AgentModelTurn({ turn }) {
   );
 }
 
+function AgentGroupedProgress({ progress }) {
+  const statusLabels = {
+    QUEUED: '排队', RUNNING: '审查中', SUCCESS: '已完成',
+    FAILED: '失败', SKIPPED: '跳过', CANCELLED: '已取消'
+  };
+  const reasonLabels = {
+    EFFORT_LIMIT: '达到遍次上限', NO_NEW_FINDINGS: '本遍无新增问题',
+    TOKEN_BUDGET: '达到任务 Token 上限', AGENT_TIMEOUT: '审查超时', AGENT_CANCELLED: '任务已取消'
+  };
+  return (
+    <div className="review-execution-summary">
+      <Space wrap>
+        <Text strong>审查组</Text>
+        <Tag>{progress.groups.length + (progress.omittedCount || 0)} 组</Tag>
+        <Tag>并发槽位 {progress.concurrency}</Tag>
+        <Tag>每组最多 {progress.maxPasses} 遍</Tag>
+      </Space>
+      <Table
+        size="small"
+        rowKey="groupId"
+        dataSource={progress.groups}
+        pagination={progress.groups.length > 8 ? { pageSize: 8, showSizeChanger: false } : false}
+        scroll={{ x: true }}
+        columns={[
+          { title: '组', dataIndex: 'groupId' },
+          { title: '文件数', dataIndex: 'fileCount' },
+          { title: '状态', dataIndex: 'status', render: status => statusLabels[status] || '—' },
+          { title: '遍次', dataIndex: 'passNo', render: pass => pass || '—' },
+          { title: '累计问题', dataIndex: 'findingCount' },
+          { title: '本遍新增', dataIndex: 'lastPassFindingCount', render: value => value ?? '—' },
+          { title: 'Token', dataIndex: 'tokens' },
+          { title: '耗时', dataIndex: 'durationMs', render: ms => ms ? formatDuration(ms / 1000) : '—' },
+          { title: '结束原因', dataIndex: 'reason', render: reason => reasonLabels[reason] || reason || '—' }
+        ]}
+      />
+      {progress.omittedCount > 0 && (
+        <Text type="secondary">还有 {progress.omittedCount} 组超出进度展示上限</Text>
+      )}
+    </div>
+  );
+}
+
 function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
   const process = buildReviewExecutionPresentation(journey, review);
   const { agentConversation, agentInput, agentInstructions, standardInput, standardInstructions, final } = process;
@@ -5048,6 +5092,7 @@ function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
       </section>
       <section className="review-execution-bubble">
         <Title level={5}>执行过程</Title>
+        {journey?.groupProgress && <AgentGroupedProgress progress={journey.groupProgress} />}
         {retrieval && (
           <Space size={[6, 6]} wrap aria-label="取证摘要">
             <Tag>有效 {retrieval.returned}</Tag>
@@ -5072,7 +5117,7 @@ function ReviewExecutionProcess({ journey, review, onViewFormalResult }) {
             )}
             {process.agentTracePartial && <Text type="secondary">仅展示可核验的 Agent 活动</Text>}
           </div>
-        ) : showsAgent && (
+        ) : showsAgent && (!journey?.groupProgress || process.agentEvents.length > 0) && (
           <div className="review-execution-summary">
             <Text strong>Agent 工具活动</Text>
             {process.agentEvents.length > 0 ? (
@@ -7155,14 +7200,12 @@ function AgentBudgetFieldCard({
   value,
   defaultValue,
   limits,
-  options,
   onChange
 }) {
   const toDisplayValue = rawValue => (
-    field.bytes ? bytesToKilobytes(rawValue) : rawValue
+    rawValue == null ? null : field.bytes ? bytesToKilobytes(rawValue) : rawValue
   );
-  const optionDefault = options.find(option => option.isDefault)?.value;
-  const displayDefault = toDisplayValue(optionDefault ?? defaultValue) ?? '-';
+  const displayDefault = toDisplayValue(defaultValue) ?? '-';
   const displayMinimum = toDisplayValue(limits.min);
   const displayMaximum = toDisplayValue(limits.max);
 
@@ -7171,26 +7214,19 @@ function AgentBudgetFieldCard({
       <div className="agent-budget-field-title">
         <Text strong>{field.label}</Text>
       </div>
-      <Select
+      <InputNumber
         aria-label={field.label}
         className="agent-budget-field-select"
         size="large"
-        value={value}
-        onChange={nextValue => onChange(field.key, nextValue)}
-        options={options.map(option => ({
-          value: option.value,
-          disabled: option.disabled,
-          title: option.disabledReason || undefined,
-          label: `${toDisplayValue(option.value)} ${field.unit}${
-            option.isDefault
-              ? '（默认/推荐）'
-              : option.isCurrentCustom
-                ? '（当前自定义）'
-                : option.disabled
-                  ? '（不可用）'
-                  : ''
-          }`
-        }))}
+        value={toDisplayValue(value)}
+        min={displayMinimum}
+        max={displayMaximum}
+        step={field.bytes ? 0.001 : 1}
+        precision={field.bytes ? 3 : 0}
+        addonAfter={field.unit}
+        onChange={nextValue => onChange(
+          field.key, nextValue != null && field.bytes ? kilobytesToBytes(nextValue) : nextValue
+        )}
       />
       <Text type="secondary" className="agent-budget-field-help">
         默认/推荐 {displayDefault} {field.unit} · 范围 {displayMinimum}～{displayMaximum} {field.unit}
@@ -7224,7 +7260,8 @@ function TemplateConfig() {
   const [agentRuntimeDraft, setAgentRuntimeDraft] = useState(createAgentRuntimeDraft);
   const [agentSettingsDraft, setAgentSettingsDraft] = useState({
     ...normalizeAgentRuntimeDraft(null),
-    budgets: normalizeAgentBudgets(null)
+    budgets: normalizeAgentBudgets(null),
+    groupedReview: normalizeGroupedReview(null)
   });
   const [agentSettingsSaving, setAgentSettingsSaving] = useState(false);
   const [agentSettingsTesting, setAgentSettingsTesting] = useState(false);
@@ -7310,7 +7347,8 @@ function TemplateConfig() {
       setAgentRuntimes(runtimeItems);
       setAgentSettingsDraft({
         ...normalizeAgentRuntimeDraft(agentSettingsData),
-        budgets: normalizeAgentBudgets(agentSettingsData)
+        budgets: normalizeAgentBudgets(agentSettingsData),
+        groupedReview: normalizeGroupedReview(agentSettingsData)
       });
       setAgentSettingsTestResult(agentSettingsData?.configurationTest || null);
       setAgentSettingsTesting(['QUEUED', 'RUNNING'].includes(agentSettingsData?.configurationTest?.status));
@@ -7689,7 +7727,8 @@ function TemplateConfig() {
 
   const saveAgentBudgets = async () => {
     if (agentSettingsSaving) return;
-    const budgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings);
+    const budgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings)
+      || validateGroupedReview(agentSettingsDraft.groupedReview);
     if (budgetError) {
       messageApi.error(budgetError);
       return;
@@ -7698,12 +7737,16 @@ function TemplateConfig() {
     try {
       const settings = await fetchApi('/api/code-quality-reviews/agent-settings', {
         method: 'PUT',
-        body: JSON.stringify({ budgets: agentSettingsDraft.budgets })
+        body: JSON.stringify({
+          budgets: agentSettingsDraft.budgets,
+          groupedReview: agentSettingsDraft.groupedReview
+        })
       });
       setAgentSettings(settings);
       setAgentSettingsDraft(current => ({
         ...current,
-        budgets: normalizeAgentBudgets(settings)
+        budgets: normalizeAgentBudgets(settings),
+        groupedReview: normalizeGroupedReview(settings)
       }));
       clearSettingsDraftDirty('review-model-settings:budgets');
       messageApi.success('Agent 执行预算已保存');
@@ -7720,12 +7763,13 @@ function TemplateConfig() {
     try {
       const settings = await fetchApi('/api/code-quality-reviews/agent-settings', {
         method: 'PUT',
-        body: JSON.stringify({ resetBudgets: true })
+        body: JSON.stringify({ resetBudgets: true, resetGroupedReview: true })
       });
       setAgentSettings(settings);
       setAgentSettingsDraft(current => ({
         ...current,
-        budgets: normalizeAgentBudgets(settings)
+        budgets: normalizeAgentBudgets(settings),
+        groupedReview: normalizeGroupedReview(settings)
       }));
       clearSettingsDraftDirty('review-model-settings:budgets');
       messageApi.success('Agent Review 运行参数已恢复默认');
@@ -7737,13 +7781,20 @@ function TemplateConfig() {
   };
 
   const updateAgentBudget = (field, value) => {
-    if (!Number.isInteger(Number(value))) return;
     setAgentSettingsDraft(current => ({
       ...current,
       budgets: {
         ...current.budgets,
-        [field]: Number(value)
+        [field]: value
       }
+    }));
+    markSettingsDraftDirty('review-model-settings:budgets');
+  };
+
+  const updateGroupedReview = (field, value) => {
+    setAgentSettingsDraft(current => ({
+      ...current,
+      groupedReview: { ...current.groupedReview, [field]: value }
     }));
     markSettingsDraftDirty('review-model-settings:budgets');
   };
@@ -8604,20 +8655,22 @@ function TemplateConfig() {
     || String(agentRuntimeDraft.apiKey || '').trim()
   );
   const currentAgentBudgetLimits = agentBudgetLimits(agentSettings);
-  const agentBudgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings);
+  const groupedReview = agentSettingsDraft.groupedReview;
+  const agentBudgetError = validateAgentBudgets(agentSettingsDraft.budgets, agentSettings)
+    || validateGroupedReview(groupedReview);
   const agentWorkerPool = useMemo(
     () => normalizeAgentWorkerPool(agentSettings),
     [agentSettings]
   );
   const agentBudgetFields = [
-    { key: 'maxTurns', label: '模型决策回合', unit: '回合' },
+    { key: 'maxTurns', label: '整任务模型决策回合', unit: '回合' },
     { key: 'maxToolCalls', label: 'MCP 工具调用', unit: '次' },
     { key: 'maxSourceBytes', label: '源码返回', unit: 'KB', bytes: true },
     { key: 'timeoutSeconds', label: '整体超时', unit: '秒' },
     { key: 'inlineDiffBytes', label: '内联 Diff', unit: 'KB', bytes: true },
     { key: 'maxEvidenceCalls', label: '证据调用', unit: '次', advanced: true },
     { key: 'convergeAtCalls', label: '收敛起点', unit: '次', advanced: true },
-    { key: 'submitByTurn', label: '最迟提交回合', unit: '回合', advanced: true }
+    { key: 'submitByTurn', label: '整任务最迟提交回合', unit: '回合', advanced: true }
   ];
 
   const reviewConnectionColumns = [
@@ -9273,7 +9326,7 @@ function TemplateConfig() {
               <SettingsCardHeader
                 icon={<ControlOutlined />}
                 title="Agent 执行预算"
-                description="预算独立于连接行，保存后只影响新建 Agent 任务。"
+                description="保存后生效于新建任务。分组审查使用当前选中的 Chat Completions 或 Responses 连接。"
                 tags={<Tag color="blue">{agentSettings?.budgetConfigSource === 'CUSTOM' ? '自定义预算' : '默认预算'}</Tag>}
                 extra={(
                   <Space wrap>
@@ -9284,6 +9337,44 @@ function TemplateConfig() {
                   </Space>
                 )}
               />
+              <Space wrap>
+                <Text strong>分组审查</Text>
+                <Switch aria-label="分组审查" checked={groupedReview.enabled} onChange={value => updateGroupedReview('enabled', value)} />
+              </Space>
+              <div className="agent-budget-grid agent-budget-grid-basic">
+                {[
+                  ['concurrency', '并发组数', 1, Number.MAX_SAFE_INTEGER],
+                  ['maxPasses', '每组最多遍数', 1, 3],
+                  ['maxTurns', '每遍模型回合', 6, 100],
+                  ['maxTokens', '整任务 Token 软上限', 1, Number.MAX_SAFE_INTEGER, null],
+                  ['timeoutMinutesPerPass', '组时间上限基数（分钟）', 1, 1440, 15]
+                ].map(([key, label, min, max, onValue]) => (
+                  <div key={key} className="agent-budget-field-card">
+                    <Space wrap>
+                      <Text strong>{label}</Text>
+                      {onValue !== undefined && (
+                        <Switch
+                          aria-label={`启用${label}`}
+                          checked={groupedReview[key] !== 0}
+                          onChange={enabled => updateGroupedReview(key, enabled ? onValue : 0)}
+                        />
+                      )}
+                    </Space>
+                    <InputNumber
+                      aria-label={label}
+                      className="agent-budget-field-select"
+                      size="large"
+                      value={groupedReview[key] === 0 ? null : groupedReview[key]}
+                      min={min}
+                      max={max}
+                      precision={0}
+                      disabled={groupedReview[key] === 0}
+                      onChange={value => updateGroupedReview(key, value)}
+                    />
+                  </div>
+                ))}
+              </div>
+              <Text type="secondary">组时间上限为基数乘以允许遍数。关闭后，各遍仍受下方整体超时约束。</Text>
               <div className="agent-budget-grid agent-budget-grid-basic">
                 {agentBudgetFields.map(item => (
                   <AgentBudgetFieldCard
@@ -9292,7 +9383,6 @@ function TemplateConfig() {
                     value={agentSettingsDraft.budgets?.[item.key]}
                     defaultValue={agentSettings?.budgetDefaults?.[item.key]}
                     limits={currentAgentBudgetLimits[item.key]}
-                    options={buildAgentBudgetOptions(item.key, agentSettingsDraft.budgets, agentSettings)}
                     onChange={updateAgentBudget}
                   />
                 ))}

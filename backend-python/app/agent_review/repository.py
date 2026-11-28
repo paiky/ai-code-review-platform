@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import json
 import logging
+import os
 import re
 from threading import Lock
 from typing import Any
@@ -39,7 +40,13 @@ from app.agent_review.runtime import (
     runtime_snapshot,
     worker_supports,
 )
-from app.agent_review.schemas import AGENT_CONVERSATION_INPUT, AGENT_CONVERSATION_PHASES
+from app.agent_review.schemas import (
+    AGENT_CONVERSATION_INPUT,
+    AGENT_CONVERSATION_PHASES,
+    GROUPED_REVIEW_RUNNER_VERSION,
+    GROUPED_RUNNER_CAPABILITIES,
+    GroupedReviewSettings,
+)
 from app.agent_review_spike.budgets import (
     AGENT_BUDGET_KEYS,
     AGENT_BUDGET_LIMITS,
@@ -50,6 +57,7 @@ from app.agent_review_spike.budgets import (
     validate_agent_budgets,
 )
 from app.agent_review_spike.retrieval_audit import sanitize_retrieval_detail
+from app.agent_review_spike.grouped import EFFORT_PASSES
 from app.code_quality.models import (
     CodeQualityReviewProgressEvent,
     CodeQualitySchedulerJob,
@@ -1042,12 +1050,31 @@ def agent_settings_response(db: Session) -> dict[str, Any]:
         "budgetDefaults": default_agent_budgets(),
         "budgetLimits": agent_budget_limits(),
         "budgetConfigSource": budget_source,
+        "groupedReview": effective_grouped_review_settings(record).model_dump(),
         "updatedAt": format_datetime(record.updated_at),
     }
 
 
 def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any]:
     record = get_agent_settings_record(db)
+    next_grouped_review_json = record.grouped_review_config_json
+    if "resetGroupedReview" in request:
+        if type(request["resetGroupedReview"]) is not bool or "groupedReview" in request:
+            raise AppError("VALIDATION_ERROR", "resetGroupedReview must be a boolean and cannot be combined with groupedReview", 400)
+        if request["resetGroupedReview"]:
+            next_grouped_review_json = None
+    if "groupedReview" in request:
+        grouped_patch = request["groupedReview"]
+        if not isinstance(grouped_patch, dict):
+            raise AppError("VALIDATION_ERROR", "groupedReview must be an object", 400)
+        try:
+            grouped = GroupedReviewSettings.model_validate({
+                **effective_grouped_review_settings(record).model_dump(),
+                **grouped_patch,
+            })
+        except ValueError as exception:
+            raise AppError("VALIDATION_ERROR", "Invalid groupedReview settings", 400) from exception
+        next_grouped_review_json = grouped.model_dump_json()
     if "resetBudgets" in request and not isinstance(request.get("resetBudgets"), bool):
         raise AppError("VALIDATION_ERROR", "resetBudgets must be a boolean", 400)
     reset_budgets = request.get("resetBudgets") is True
@@ -1066,6 +1093,7 @@ def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any
             next_budgets = validate_agent_budgets(
                 request.get("budgets"),
                 base=current_budgets,
+                limits=agent_budget_limits(),
             )
         except AgentBudgetValidationError as exception:
             raise AppError("VALIDATION_ERROR", str(exception), 400) from exception
@@ -1153,10 +1181,25 @@ def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any
     record.runtime_type = next_runtime
     record.selected_runtime_code = next_selected_runtime_code
     record.budget_config_json = next_budget_json
+    record.grouped_review_config_json = next_grouped_review_json
     record.updated_at = utc_now()
     sync_legacy_agent_runtime_records(db, record)
     db.commit()
     return agent_settings_response(db)
+
+
+def effective_grouped_review_settings(record: AgentReviewSettings) -> GroupedReviewSettings:
+    try:
+        if record.grouped_review_config_json is not None:
+            return GroupedReviewSettings.model_validate_json(record.grouped_review_config_json)
+        effort = os.getenv("AGENT_REVIEW_GROUP_EFFORT", "medium").strip().lower()
+        return GroupedReviewSettings(
+            concurrency=int(os.getenv("AGENT_REVIEW_GROUP_CONCURRENCY", "8")),
+            maxPasses=EFFORT_PASSES[effort],
+            maxTokens=int(os.getenv("AGENT_REVIEW_GROUP_MAX_TOKENS", "0")),
+        )
+    except (KeyError, ValueError) as exception:
+        raise AppError("AGENT_GROUP_CONFIG_INVALID", "Invalid grouped Agent Review configuration", 500) from exception
 
 
 def effective_agent_budgets(record: AgentReviewSettings) -> tuple[dict[str, int], str]:
@@ -1166,7 +1209,7 @@ def effective_agent_budgets(record: AgentReviewSettings) -> tuple[dict[str, int]
     if not isinstance(stored, dict) or set(stored) != AGENT_BUDGET_KEYS:
         return default_agent_budgets(), "DEFAULT"
     try:
-        budgets = validate_agent_budgets(stored)
+        budgets = validate_agent_budgets(stored, limits=agent_budget_limits())
     except AgentBudgetValidationError:
         return default_agent_budgets(), "DEFAULT"
     return budgets, "CUSTOM"
@@ -1680,7 +1723,9 @@ def create_agent_job(
         requested_engine="AGENT",
         effective_engine=None,
         runner_version=(
-            RESPONSES_RUNNER_VERSION
+            GROUPED_REVIEW_RUNNER_VERSION
+            if (input_payload.get("case") or {}).get("groupedReview")
+            else RESPONSES_RUNNER_VERSION
             if runner_type == "OPENAI_RESPONSES_AGENT"
             else CHAT_COMPLETIONS_RUNNER_VERSION
             if runner_type == "OPENAI_CHAT_AGENT"
@@ -1870,6 +1915,9 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
         .order_by(CodeQualitySchedulerJob.priority.desc(), CodeQualitySchedulerJob.queued_at.asc())
         .limit(1)
     )
+    for version, capability in GROUPED_RUNNER_CAPABILITIES.items():
+        if capability not in capabilities:
+            stmt = stmt.where(AgentReviewRun.runner_version != version)
     if _supports_skip_locked(db):
         stmt = stmt.with_for_update(skip_locked=True)
     else:
@@ -1897,6 +1945,8 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
     run.started_at = run.started_at or now
     run.heartbeat_at = now
     run.updated_at = now
+    if run.runner_version in GROUPED_RUNNER_CAPABILITIES:
+        run.tool_summary_json = None
     input_payload = _read_json(run.input_json, {})
     snapshot = input_payload.get("runtimeSnapshot")
     if not isinstance(snapshot, dict):
@@ -1945,14 +1995,17 @@ def heartbeat_agent_job(
     job = db.get(CodeQualitySchedulerJob, job_id)
     if job is None or job.job_type != "AGENT_REVIEW":
         raise AppError("RESOURCE_NOT_FOUND", f"Agent Review job not found: {job_id}", 404)
-    if job.status != "RUNNING" or job.lease_owner != worker_id:
+    run = db.scalars(select(AgentReviewRun).where(AgentReviewRun.scheduler_job_id == job.id)).first()
+    if run is not None and run.runner_version in GROUPED_RUNNER_CAPABILITIES:
+        job = db.get(CodeQualitySchedulerJob, job_id, populate_existing=True, with_for_update=True)
+        run = db.get(AgentReviewRun, run.id, populate_existing=True, with_for_update=True)
+    if job is None or job.status != "RUNNING" or job.lease_owner != worker_id:
         raise AppError("AGENT_JOB_LEASE_LOST", "Agent Review job lease is no longer owned", 409)
     _assert_claim_attempt(job, claim_attempt)
     now = utc_now()
     job.heartbeat_at = now
     job.lease_expires_at = now + timedelta(seconds=max(get_settings().agent_review_lease_seconds, 30))
     job.updated_at = now
-    run = db.scalars(select(AgentReviewRun).where(AgentReviewRun.scheduler_job_id == job.id)).first()
     if run is not None:
         run.heartbeat_at = now
         run.updated_at = now
@@ -1969,28 +2022,42 @@ def expire_exhausted_agent_jobs(db: Session) -> list[int]:
     now = utc_now()
     settings_record = get_agent_settings_record(db)
     worker_online = _worker_online(settings_record)
-    jobs = db.scalars(
-        select(CodeQualitySchedulerJob)
+    jobs = db.execute(
+        select(CodeQualitySchedulerJob, AgentReviewRun)
+        .outerjoin(AgentReviewRun, AgentReviewRun.scheduler_job_id == CodeQualitySchedulerJob.id)
         .where(CodeQualitySchedulerJob.job_type == "AGENT_REVIEW")
         .where(CodeQualitySchedulerJob.status.in_(["QUEUED", "RUNNING"]))
     ).all()
+    grouped_online: dict[str, bool] = {}
     run_ids: list[int] = []
-    for job in jobs:
+    for job, run in jobs:
+        eligible_worker_online = worker_online
+        if run is not None and (capability := GROUPED_RUNNER_CAPABILITIES.get(run.runner_version)):
+            if capability not in grouped_online:
+                grouped_online[capability] = worker_capability_online(db, capability)
+            eligible_worker_online = grouped_online[capability]
+            if job.status == "RUNNING" and job.lease_expires_at and job.lease_expires_at >= now:
+                continue
+            if job.status == "QUEUED" and (eligible_worker_online or not job.queued_at or job.queued_at >= now - timedelta(seconds=60)):
+                continue
+            job = db.get(CodeQualitySchedulerJob, job.id, populate_existing=True, with_for_update=True)
+            run = db.get(AgentReviewRun, run.id, populate_existing=True, with_for_update=True)
+            if job is None or job.status not in {"QUEUED", "RUNNING"}:
+                continue
         running_expired = bool(
             job.status == "RUNNING"
             and job.lease_expires_at
             and job.lease_expires_at < now
-            and (int(job.attempt or 0) >= int(job.max_attempts or 0) or not worker_online)
+            and (int(job.attempt or 0) >= int(job.max_attempts or 0) or not eligible_worker_online)
         )
         queued_offline = bool(
             job.status == "QUEUED"
-            and not worker_online
+            and not eligible_worker_online
             and job.queued_at
             and job.queued_at < now - timedelta(seconds=60)
         )
         if not running_expired and not queued_offline:
             continue
-        run = db.scalars(select(AgentReviewRun).where(AgentReviewRun.scheduler_job_id == job.id)).first()
         job.status = "FAILED"
         job.error_message = "AGENT_LEASE_EXHAUSTED"
         job.finished_at = now
@@ -2019,6 +2086,9 @@ def get_run_for_completion(
     ensure_agent_review_schema(db)
     job = db.get(CodeQualitySchedulerJob, job_id)
     run = db.scalars(select(AgentReviewRun).where(AgentReviewRun.scheduler_job_id == job_id)).first()
+    if run is not None and run.runner_version in GROUPED_RUNNER_CAPABILITIES:
+        job = db.get(CodeQualitySchedulerJob, job_id, populate_existing=True, with_for_update=True)
+        run = db.get(AgentReviewRun, run.id, populate_existing=True, with_for_update=True)
     if job is None or run is None:
         raise AppError("RESOURCE_NOT_FOUND", f"Agent Review job not found: {job_id}", 404)
     if run.idempotency_key != idempotency_key:
@@ -2099,6 +2169,9 @@ def run_to_summary(run: AgentReviewRun, *, fallback_triggered: bool | None = Non
     }
     if effective_budgets:
         result["effectiveBudgets"] = effective_budgets
+    if run.runner_version in GROUPED_RUNNER_CAPABILITIES and isinstance(tool_summary, dict):
+        if grouped := sanitize_group_progress(tool_summary.get("groupProgress")):
+            result["groupProgress"] = grouped
     return result
 
 
@@ -2355,6 +2428,47 @@ def agent_heartbeat_sequences(
     return sequences
 
 
+def sanitize_group_progress(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or not isinstance(rows := value.get("groups"), list):
+        return {}
+    mode = value.get("mode")
+    if mode not in ("WHOLE_TASK", "SMALL_CHANGE", "SEMANTIC", "PER_FILE", "PER_FILE_FALLBACK"):
+        return {}
+    groups = []
+    seen = set()
+    for row in rows[:250]:
+        if not isinstance(row, dict):
+            continue
+        group_id = _non_negative(row.get("groupId"))
+        status = row.get("status")
+        if not group_id or group_id in seen or status not in (
+            "QUEUED", "RUNNING", "SUCCESS", "FAILED", "SKIPPED", "CANCELLED",
+        ):
+            continue
+        seen.add(group_id)
+        reason = str(row.get("reason") or "")
+        groups.append({
+            "groupId": group_id,
+            "status": status,
+            "fileCount": _non_negative(row.get("fileCount")),
+            "passNo": _limited_non_negative(row.get("passNo"), 3),
+            "findingCount": _non_negative(row.get("findingCount")),
+            "lastPassFindingCount": (
+                _non_negative(row["lastPassFindingCount"]) if row.get("lastPassFindingCount") is not None else None
+            ),
+            "tokens": _non_negative(row.get("tokens")),
+            "durationMs": _non_negative(row.get("durationMs")),
+            "reason": reason if re.fullmatch(r"[A-Z_]{1,64}", reason) else None,
+        })
+    return {
+        "mode": mode,
+        "concurrency": _non_negative(value.get("concurrency")),
+        "maxPasses": _limited_non_negative(value.get("maxPasses"), 3),
+        "omittedCount": _non_negative(value.get("omittedCount")) + max(0, len(rows) - 250),
+        "groups": groups,
+    }
+
+
 def _apply_safe_run_summary(run: AgentReviewRun, value: dict[str, Any]) -> None:
     run.cli_version = _bounded(value.get("cliVersion") or run.cli_version, 64)
     run.session_id = _bounded(value.get("sessionId") or run.session_id, 128)
@@ -2383,6 +2497,14 @@ def _apply_safe_run_summary(run: AgentReviewRun, value: dict[str, Any]) -> None:
     effective_budgets = _safe_effective_budgets(value.get("effectiveBudgets"))
     if effective_budgets:
         audit["effectiveBudgets"] = effective_budgets
+    if run.runner_version in GROUPED_RUNNER_CAPABILITIES:
+        run.turn_count = _limited_non_negative(value.get("turnCount"), 2_147_483_647)
+        run.tool_call_count = _limited_non_negative(value.get("toolCallCount"), 2_147_483_647)
+        run.source_bytes_returned = _limited_non_negative(value.get("sourceBytesReturned"), 2_147_483_647)
+        run.diff_bytes_returned = _limited_non_negative(value.get("diffBytesReturned"), 2_147_483_647)
+        run.duration_ms = _limited_non_negative(value.get("durationMs"), 2_147_483_647) or run.duration_ms
+        if grouped := sanitize_group_progress(value.get("groupProgress")):
+            audit["groupProgress"] = grouped
     run.usage_json = json.dumps(_safe_usage(value.get("usage")), ensure_ascii=False)
     run.tool_summary_json = json.dumps(audit, ensure_ascii=False)
 
@@ -2473,6 +2595,10 @@ def _assert_claim_attempt(job: CodeQualitySchedulerJob, claim_attempt: int) -> N
             "Agent Review claim attempt is stale",
             409,
         )
+
+
+def worker_capability_online(db: Session, capability: str) -> bool:
+    return _worker_pool_supports(agent_worker_pool(db), capability)
 
 
 def _worker_pool_supports(worker_pool: dict[str, Any], runtime_type: str) -> bool:
@@ -2629,6 +2755,7 @@ def _ensure_settings_columns(db: Session, inspector) -> None:
         "custom_api_key_ciphertext": "TEXT NULL",
         "custom_api_key_fingerprint": "VARCHAR(32) NULL",
         "budget_config_json": "TEXT NULL",
+        "grouped_review_config_json": "TEXT NULL",
         "test_request_id": "VARCHAR(128) NULL",
         "test_status": "VARCHAR(32) NULL",
         "test_message": "VARCHAR(512) NULL",

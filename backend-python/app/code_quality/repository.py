@@ -2332,6 +2332,8 @@ def append_progress(
     message: str,
     detail: str | None = None,
     review_key: str | None = None,
+    *,
+    detail_limit: int = 4000,
 ) -> None:
     normalized_review_key = review_key if review_key is not None else _PROGRESS_REVIEW_KEY.get()
     db.add(
@@ -2341,7 +2343,7 @@ def append_progress(
             phase=_truncate(phase, 64) or phase,
             level=_truncate(level, 32) or level,
             message=_truncate(message, 512) or message,
-            detail=_truncate(scrub_sensitive(detail), 4000),
+            detail=_truncate(scrub_sensitive(detail), detail_limit),
             created_at=datetime.now(),
         )
     )

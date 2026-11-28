@@ -35,6 +35,7 @@ COPY backend-python/app/agent_review/__init__.py /opt/agent-review/app/agent_rev
 COPY backend-python/app/agent_review/worker.py /opt/agent-review/app/agent_review/worker.py
 COPY backend-python/app/agent_review/schemas.py /opt/agent-review/app/agent_review/schemas.py
 COPY backend-python/app/review_prompt_metadata.py /opt/agent-review/app/review_prompt_metadata.py
+COPY backend-python/app/review_rules /opt/agent-review/app/review_rules
 COPY backend-python/app/code_quality/__init__.py backend-python/app/code_quality/prompt.py /opt/agent-review/app/code_quality/
 
 USER 10001:10001

@@ -15,14 +15,14 @@ DEFAULT_AGENT_BUDGETS: dict[str, int] = {
 }
 
 AGENT_BUDGET_LIMITS: dict[str, dict[str, int]] = {
-    "maxTurns": {"min": 6, "max": 18},
+    "maxTurns": {"min": 6, "max": 100},
     "maxToolCalls": {"min": 10, "max": 60},
     "maxSourceBytes": {"min": 10_000, "max": 300_000},
     "timeoutSeconds": {"min": 60, "max": 900},
     "inlineDiffBytes": {"min": 10_000, "max": 300_000},
     "maxEvidenceCalls": {"min": 4, "max": 15},
     "convergeAtCalls": {"min": 2, "max": 13},
-    "submitByTurn": {"min": 3, "max": 15},
+    "submitByTurn": {"min": 3, "max": 97},
 }
 
 AGENT_BUDGET_KEYS = frozenset(DEFAULT_AGENT_BUDGETS)
@@ -36,6 +36,7 @@ def validate_agent_budgets(
     value: Any,
     *,
     base: Mapping[str, int] | None = None,
+    limits: Mapping[str, Mapping[str, int]] = AGENT_BUDGET_LIMITS,
 ) -> dict[str, int]:
     if not isinstance(value, dict):
         raise AgentBudgetValidationError("budgets must be an object")
@@ -47,10 +48,10 @@ def validate_agent_budgets(
     for key, raw in value.items():
         if isinstance(raw, bool) or not isinstance(raw, int):
             raise AgentBudgetValidationError(f"{key} must be an integer")
-        limits = AGENT_BUDGET_LIMITS[key]
-        if raw < limits["min"] or raw > limits["max"]:
+        bounds = limits[key]
+        if raw < bounds["min"] or raw > bounds["max"]:
             raise AgentBudgetValidationError(
-                f"{key} must be between {limits['min']} and {limits['max']}"
+                f"{key} must be between {bounds['min']} and {bounds['max']}"
             )
         result[key] = raw
 
@@ -75,4 +76,7 @@ def default_agent_budgets() -> dict[str, int]:
 
 
 def agent_budget_limits() -> dict[str, dict[str, int]]:
-    return {key: dict(value) for key, value in AGENT_BUDGET_LIMITS.items()}
+    limits = {key: dict(value) for key, value in AGENT_BUDGET_LIMITS.items()}
+    limits["maxTurns"]["max"] = 18
+    limits["submitByTurn"]["max"] = 15
+    return limits

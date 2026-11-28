@@ -19,6 +19,29 @@ AgentRuntimeProtocol = Literal[
 ]
 ReasoningEffort = Literal["low", "medium", "high"]
 
+GROUPED_CHAT_CAPABILITY = "OPENAI_CHAT_GROUPED"
+GROUPED_CHAT_RUNNER_VERSION = "openai-chat-grouped-v1"
+GROUPED_REVIEW_CAPABILITY = "OPENAI_GROUPED_REVIEW"
+GROUPED_REVIEW_RUNNER_VERSION = "openai-grouped-v1"
+GROUPED_RUNNER_CAPABILITIES = {
+    GROUPED_CHAT_RUNNER_VERSION: GROUPED_CHAT_CAPABILITY,
+    GROUPED_REVIEW_RUNNER_VERSION: GROUPED_REVIEW_CAPABILITY,
+}
+
+
+class GroupedReviewSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    enabled: bool = True
+    concurrency: int = Field(default=8, ge=1, le=9_007_199_254_740_991)
+    maxPasses: int = Field(default=2, ge=1, le=3)
+    maxTurns: int = Field(
+        default=100, ge=AGENT_BUDGET_LIMITS["maxTurns"]["min"], le=AGENT_BUDGET_LIMITS["maxTurns"]["max"]
+    )
+    maxTokens: int = Field(default=0, ge=0, le=9_007_199_254_740_991)
+    timeoutMinutesPerPass: int = Field(default=15, ge=0, le=1440)
+
+
 AGENT_CONVERSATION_INPUT = "AGENT_CONVERSATION_INPUT"
 AGENT_CONVERSATION_TURN = "AGENT_CONVERSATION_TURN"
 AGENT_CONVERSATION_PHASES = (

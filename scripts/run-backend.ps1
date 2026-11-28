@@ -11,6 +11,8 @@ $localGitLabEnv = Join-Path $repoRoot ".local\gitlab.env"
 $localDatabaseEnv = Join-Path $repoRoot ".local\database.local.env"
 $agentWorkerScript = Join-Path $PSScriptRoot "run-agent-worker.ps1"
 
+Write-Host "[Backend] Worktree: $repoRoot | Source: $backendDir"
+
 function Import-DotEnvIfPresent {
     param([string] $Path)
 

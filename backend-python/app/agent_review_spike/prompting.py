@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -51,12 +52,24 @@ def review_input(case: dict[str, Any]) -> str:
         )
     else:
         diff_section = f"Diff:\n{case['diff']}"
+    group_context = ""
+    if isinstance(other_files := case.get("otherChangedFiles"), dict):
+        group_context += (
+            "Other changed files (evidence only; never submit findings against them):\n"
+            + json.dumps(other_files, ensure_ascii=True) + "\n\n"
+        )
+    if existing := case.get("existingGroupFindings"):
+        group_context += (
+            "Findings already reported for this group (do not repeat them; look for omissions):\n"
+            + json.dumps(existing, ensure_ascii=True) + "\n\n"
+        )
     return (
         f"Case id: {case['id']}\n"
         f"Title: {case.get('title') or '-'}\n"
         f"Base ref: {case.get('baseRef') or '-'}\n"
         f"Commit sha: {case.get('commitSha') or '-'}\n"
         f"Changed files: {case['changedFiles']}\n\n"
+        f"{group_context}"
         f"Existing bounded context:\n"
         f"{case.get('baselineContext') or '-'}\n\n"
         f"{diff_section}"

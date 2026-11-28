@@ -184,6 +184,8 @@ class OpenAIChatCompletionsAgentRunner:
         cancel_event: Any = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
         conversation_callback: ConversationCallback | None = None,
+        diff_context: dict[str, str] | None = None,
+        group_deadline: float | None = None,
     ) -> dict[str, Any]:
         if conversation_callback is None and isinstance(progress_callback, AgentReviewProgress):
             conversation_callback = progress_callback.conversation
@@ -197,6 +199,8 @@ class OpenAIChatCompletionsAgentRunner:
             if len(str(case.get("diff") or "").encode("utf-8")) > self.config.inline_diff_bytes:
                 effective_case["diffMode"] = "TOOL_PAGED"
             deadline = self.clock() + self.config.timeout_seconds
+            if group_deadline is not None:
+                deadline = min(deadline, group_deadline)
             with tempfile.TemporaryDirectory(prefix="chat-completions-agent-review-") as name:
                 temporary = Path(name)
                 result_path = temporary / "review-card.json"
@@ -211,7 +215,8 @@ class OpenAIChatCompletionsAgentRunner:
                         max_evidence_calls=self.config.max_evidence_calls,
                         converge_at_evidence_calls=self.config.converge_at_calls,
                     ),
-                    diff_by_file(effective_case),
+                    diff_by_file(effective_case) if diff_context is None else diff_context,
+                    diff_paths=None if diff_context is None else set(diff_context),
                 )
                 conversation = ConversationCapture(
                     "OPENAI_CHAT_COMPLETIONS",

@@ -430,6 +430,9 @@ export function buildReviewJourney(review, events, options = {}) {
     finishedAt: reviewTimes.finishedAt,
     durationMs: reviewTimes.durationMs,
     agentSummary,
+    groupProgress: ['AGENT', 'FALLBACK'].includes(identity.engineKind)
+      ? agentGroupProgress(attemptScopedEvents, sourceReview, nowMs)
+      : null,
     agentInput: agentInputSummary(events, sourceReview, agentConversation?.scope),
     agentScope: agentConversation?.scope ?? null,
     agentInstructions: agentConversation?.instructions || null,
@@ -616,7 +619,7 @@ const conversationSummaryLabels = new Map([
   ['PREPARE_SUBMISSION', '准备提交审查结果']
 ]);
 const maxConversationBytes = 10 * 1024 * 1024;
-const maxConversationTurns = 18;
+const maxConversationTurns = 100;
 const maxConversationToolSequences = 60;
 
 function conversationInteger(value, max = Number.MAX_SAFE_INTEGER, min = 0) {
@@ -705,7 +708,7 @@ function projectPlatformInstructions(detail, templateId, key) {
   if (source?.templateId !== templateId || !conversationProtocols.has(detail.protocol)) return null;
   if ((detail.source === 'CLAUDE_CLI_APPEND') !== (detail.protocol === 'ANTHROPIC_COMPATIBLE')) return null;
   if (templateId === 'AGENT_SYSTEM_V1' && (
-    detail.effectiveEngine != null || conversationInteger(detail.submitByTurn, 15, 3) === null
+    detail.effectiveEngine != null || conversationInteger(detail.submitByTurn, 97, 3) === null
   )) return null;
   const text = detail.platformInstructions;
   if (typeof text !== 'string' || !text.trim() || text.length > maxPlatformInstructionBytes
@@ -1316,6 +1319,14 @@ function latestJourneyEvent(events, phases, nowMs) {
     }))
     .sort(compareMappedEventRecency)
     .at(-1)?.event || null;
+}
+
+function agentGroupProgress(events, review, nowMs) {
+  const final = review?.agentRunSummary?.groupProgress;
+  const latest = latestJourneyEvent(events, ['AGENT_HEARTBEAT', 'AGENT_FINISHED', 'AGENT_FALLBACK', 'AGENT_CANCELLED', 'FAILED'], nowMs);
+  const detail = parseDetailObject(latest?.detail);
+  const current = detail?.groupProgress ?? (isTerminalReviewStatus(review?.status) ? final : null);
+  return Array.isArray(current?.groups) ? current : null;
 }
 
 function agentInputSummary(events, review, scope) {
