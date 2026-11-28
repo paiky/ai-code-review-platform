@@ -23,7 +23,7 @@ from app.agent_review_spike.workspace import (
 _MAX_REVIEW_SCHEMA_SUBMIT_ATTEMPTS = 3
 
 
-def tool_definitions() -> list[dict[str, Any]]:
+def tool_definitions(*, context_review: bool = False) -> list[dict[str, Any]]:
     return [
         {
             "name": "list_files",
@@ -55,7 +55,11 @@ def tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "read_file_range",
-            "description": "Read at most 400 lines from one safe source file.",
+            "description": (
+                "Read up to 500 lines from one safe source file. Long lines and large results are truncated. "
+                "Use the returned endLine to continue reading."
+                if context_review else "Read at most 400 lines from one safe source file."
+            ),
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": False,

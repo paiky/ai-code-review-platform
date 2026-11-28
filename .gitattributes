@@ -1,4 +1,5 @@
 *.sh text eol=lf
+backend-python/app/agent_review_spike/cl100k_base.tiktoken text eol=lf
 backend-python/migrations/bootstrap_sql/V5[89]__*.sql text eol=lf
 backend-python/migrations/bootstrap_sql/V[6-9][0-9]__*.sql text eol=lf
 backend-python/migrations/bootstrap_sql/V[1-9][0-9][0-9]*__*.sql text eol=lf

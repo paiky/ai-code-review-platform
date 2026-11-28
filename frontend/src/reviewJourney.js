@@ -431,7 +431,7 @@ export function buildReviewJourney(review, events, options = {}) {
     durationMs: reviewTimes.durationMs,
     agentSummary,
     groupProgress: ['AGENT', 'FALLBACK'].includes(identity.engineKind)
-      ? agentGroupProgress(attemptScopedEvents, sourceReview, nowMs)
+      ? agentGroupProgress(attemptScopedEvents, sourceReview, nowMs, scopedEvents)
       : null,
     agentInput: agentInputSummary(events, sourceReview, agentConversation?.scope),
     agentScope: agentConversation?.scope ?? null,
@@ -1321,12 +1321,32 @@ function latestJourneyEvent(events, phases, nowMs) {
     .at(-1)?.event || null;
 }
 
-function agentGroupProgress(events, review, nowMs) {
+function agentGroupProgress(events, review, nowMs, scopedEvents) {
   const final = review?.agentRunSummary?.groupProgress;
   const latest = latestJourneyEvent(events, ['AGENT_HEARTBEAT', 'AGENT_FINISHED', 'AGENT_FALLBACK', 'AGENT_CANCELLED', 'FAILED'], nowMs);
   const detail = parseDetailObject(latest?.detail);
   const current = detail?.groupProgress ?? (isTerminalReviewStatus(review?.status) ? final : null);
-  return Array.isArray(current?.groups) ? current : null;
+  if (!Array.isArray(current?.groups)) return null;
+  const latestScope = getLatestAgentTraceScope(scopedEvents);
+  const runId = Number(review?.agentRunSummary?.runId ?? review?.agentRunId ?? latestScope?.runId);
+  const passes = scopedEvents.filter(event => event.phase === 'AGENT_GROUP_PASS_PROGRESS' && event.taskId === review.taskId)
+    .map(event => parseDetailObject(event.detail))
+    .filter(pass => pass?.runId === runId && Number.isSafeInteger(pass.claimAttempt)
+      && Number.isSafeInteger(pass.groupId) && Number.isSafeInteger(pass.passNo));
+  let attempt = latestScope?.runId === runId ? latestScope.claimAttempt : 0;
+  for (const pass of passes) attempt = Math.max(attempt, pass.claimAttempt);
+  const byGroup = new Map();
+  for (const pass of passes) {
+    if (pass.claimAttempt !== attempt) continue;
+    if (!byGroup.has(pass.groupId)) byGroup.set(pass.groupId, new Map());
+    const groupPasses = byGroup.get(pass.groupId);
+    if (!groupPasses.has(pass.passNo) || pass.revision > groupPasses.get(pass.passNo).revision) {
+      groupPasses.set(pass.passNo, pass);
+    }
+  }
+  return { ...current, passesByGroup: Object.fromEntries([...byGroup].map(([id, groupPasses]) => [
+    id, [...groupPasses.values()].sort((left, right) => left.passNo - right.passNo)
+  ])) };
 }
 
 function agentInputSummary(events, review, scope) {

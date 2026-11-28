@@ -6,7 +6,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from app.agent_review.schemas import GROUPED_CHAT_CAPABILITY, GROUPED_REVIEW_CAPABILITY
+from app.agent_review.schemas import GROUPED_RUNNER_CAPABILITIES
 from app.core.errors import AppError
 
 
@@ -22,8 +22,7 @@ RUNNER_CAPABILITIES = frozenset(
         CLAUDE_CODE_RUNNER,
         OPENAI_RESPONSES_RUNNER,
         OPENAI_CHAT_RUNNER,
-        GROUPED_CHAT_CAPABILITY,
-        GROUPED_REVIEW_CAPABILITY,
+        *GROUPED_RUNNER_CAPABILITIES.values(),
         ANTHROPIC_MESSAGES_RUNNER,
     }
 )

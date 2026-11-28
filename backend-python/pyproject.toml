@@ -19,6 +19,7 @@ dependencies = [
     "python-docx==1.2.0",
     "pypdf==7.0.1",
     "sqlalchemy>=2.0.0",
+    "tiktoken==0.12.0",
     "uvicorn[standard]>=0.30.0",
 ]
 
@@ -42,3 +43,4 @@ include = ["app*"]
 
 [tool.setuptools.package-data]
 "app.review_rules" = ["assets/LICENSE", "assets/SOURCE", "assets/*.json", "assets/rule_docs/*.md"]
+"app.agent_review_spike" = ["cl100k_base.tiktoken"]

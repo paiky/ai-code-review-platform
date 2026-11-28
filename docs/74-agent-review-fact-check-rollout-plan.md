@@ -6,7 +6,7 @@
 
 事实复核判断原 Finding 的核心主张是否被同一次审查的代码证据明确反驳。首版将裁决和反证附在原 Finding 上，供人工判读。正式 Finding、严重度、行号、反馈和修复引用继续沿用原结果。范围限 73 的分组 Agent Review，定向补证仍沿用现有入口和语义。
 
-每个组在自己的槽位内执行 **首遍审查并校验 Finding → 复核本遍新增 Finding → 判断是否加审 → 如有次审，复核次审新增 Finding → 出组**。等待本遍复核结束或跳过期间，其他组可以继续审查或复核。早先遍次的 Finding 继续按 73 的规则传给下一遍，后续遍次的复核只处理该遍去重后的新增项。各组完成后整任务汇总一份正式 Review Card，组进度沿用「执行过程」。审查中提前展示候选由 71 的 C2B 承接。 [73 组内顺序和汇总](73-agent-review-grouped-execution-rollout-plan.md#24-组内审查顺序) · [71 后续阶段](71-review-engine-improvement-plan.md#4-后续--审查执行与结果处理)
+每个组在自己的槽位内执行 **首遍审查并校验 Finding → 复核本遍新增 Finding → 判断是否加审 → 如有次审，复核次审新增 Finding → 出组**。等待本遍复核结束或跳过期间，其他组可以继续审查或复核。早先遍次的 Finding 继续按 73 的规则传给下一遍，后续遍次的复核只处理该遍去重后的新增项。各组完成后整任务汇总一份正式 Review Card。「执行过程」在每遍主审提交校验通过后展示待复核 Finding，复核请求返回后批量更新裁决状态。取证中逐条提交候选仍由 71 的 C2 承接。 [73 实时进度](73-agent-review-grouped-execution-rollout-plan.md#8-组内审查实时进度) · [71 后续阶段](71-review-engine-improvement-plan.md#4-后续--审查执行与结果处理)
 
 ## 2. 复核输入与裁决契约
 
@@ -80,8 +80,8 @@ $env:PYTHONPATH = (Join-Path $PWD 'backend-python')
 
 ### A3B 正常入口
 
-1. 启动本工作树的 Backend、Agent Worker 和前端，确认模型连接为 Chat Completions 或 Responses，分组已开启且新版 Worker 在线。回传字段可选，数据库沿用现有 Finding JSON。分开更新时先升级 Backend，再升级 Worker 和前端。
-2. 用普通 MR 或手动审查触发一个至少包含两个纳入的变更文件且能生成 Finding 的任务。「执行过程」应有分组进度。等任务终态，在唯一一份正式 Review Card 展开 Finding 的「上下文与判断依据」，核对「事实复核」的裁决、理由，以及命中反证时的文件、diff 侧和行区间。
+1. 启动本工作树的 Backend、Agent Worker 和前端，确认模型连接为 Chat Completions 或 Responses，兼容 Worker 在线。回传字段可选，数据库沿用现有 Finding JSON。分开更新时先升级 Backend，再升级 Worker 和前端。
+2. 用普通 MR 或手动审查触发能生成 Finding 的任务。新版 73 自动分组，单文件也按单组复核。首审、复核和加审共用组期限。任务运行中，在「执行过程 → 审查组」展开组，核对本遍提交后候选进入待复核，以及该批裁决更新。等任务终态，在唯一一份正式 Review Card 展开 Finding 的「上下文与判断依据」，核对「事实复核」的裁决、理由，以及命中反证时的文件、diff 侧和行区间。 [73 组内实时进度](73-agent-review-grouped-execution-rollout-plan.md#8-组内审查实时进度)
 3. 查一份旧任务以及一份复核失败或跳过的任务。确认旧任务按原样读取，复核失败时原 Finding 仍在。可用以下替身命令复现超时和无效坐标，并验证同组第二遍开始前已处理第一遍复核。
 
 ```powershell

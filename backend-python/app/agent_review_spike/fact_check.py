@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 import json
 import re
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -16,6 +16,12 @@ from app.agent_review_spike.chat_completions_runner import (
     OpenAIChatCompletionsAgentRunner,
 )
 from app.agent_review_spike.diff import DiffSection, split_diff_sections
+from app.agent_review_spike.review_context import (
+    COMPRESSION_THRESHOLD,
+    REQUEST_TIMEOUT_SECONDS,
+    estimate_context_tokens,
+    normalized_openai_usage,
+)
 from app.agent_review_spike.responses_runner import (
     OpenAIResponsesAgentRunner,
     ResponsesAgentError,
@@ -103,6 +109,8 @@ def attach_fact_checks(
     if not isinstance(value, list) or not value or len(value) > 50:
         return findings
     group_paths = {group["groupId"]: set(group["paths"]) for group in coverage}
+    all_paths = {path for paths in group_paths.values() for path in paths}
+    unheaded_path = next(iter(all_paths)) if len(all_paths) == 1 else None
     indices = Counter(
         item["findingIndex"] for item in value
         if isinstance(item, dict) and type(item.get("findingIndex")) is int
@@ -124,7 +132,7 @@ def attach_fact_checks(
         overlay = check.model_dump(exclude_none=True, exclude={"findingIndex"})
         if check.evidence is not None:
             if sections is None:
-                sections = split_diff_sections(diff)
+                sections = split_diff_sections(diff, unheaded_path=unheaded_path)
             if not any(
                 section.changed_path(paths) for section in sections
                 if check.evidence.filePath in (section.old_path, section.new_path)
@@ -200,28 +208,14 @@ def _read_verdicts(content: str, ids: set[int], sections: list[DiffSection]) -> 
     return {finding_id: outcomes.get(finding_id, missing) for finding_id in ids}
 
 
-def normalized_openai_usage(value: Any) -> dict[str, int]:
-    if not isinstance(value, dict):
-        return {}
-    result = {}
-    for source, target in (
-        ("prompt_tokens", "input_tokens"),
-        ("input_tokens", "input_tokens"),
-        ("completion_tokens", "output_tokens"),
-        ("output_tokens", "output_tokens"),
-        ("total_tokens", "total_tokens"),
-    ):
-        if type(number := value.get(source)) is int and number >= 0:
-            result[target] = number
-    return result
-
-
 def check_findings(
     runner: FactCheckRunner,
     findings: list[dict[str, Any]],
     sections: list[DiffSection],
     *,
     deadline: float | None = None,
+    context_review: bool = False,
+    on_request: Callable[[int], None] | None = None,
 ) -> tuple[list[FactCheckOutcome], dict[str, int]]:
     ids = range(1, len(findings) + 1)
     context = []
@@ -229,7 +223,7 @@ def check_findings(
     candidate_paths = {finding.get("filePath") for finding in findings}
     for section in sorted(sections, key=lambda item: not candidate_paths.intersection((item.old_path, item.new_path))):
         size = len(section.text.encode("utf-8")) + 1
-        if section.patch and size <= remaining:
+        if section.patch and (context_review or size <= remaining):
             context.append(section)
             remaining -= size
     available_paths = {path for section in context for path in (section.old_path, section.new_path)}
@@ -252,13 +246,19 @@ def check_findings(
             {"role": "system", "content": FACT_CHECK_PROMPT}, {"role": "user", "content": review_input},
         ]}
     )
-    timeout = float(runner.config.timeout_seconds)
+    context_tokens = estimate_context_tokens(payload) if context_review else 0
+    if context_review and context_tokens >= COMPRESSION_THRESHOLD:
+        fallback = FactCheckOutcome(status="SKIPPED", reasonCode="TOKEN_BUDGET")
+        return [fallback if index in included_ids else missing for index in ids], {}
+    timeout = float(REQUEST_TIMEOUT_SECONDS if context_review else runner.config.timeout_seconds)
     if deadline is not None:
         timeout = min(timeout, deadline - runner.clock())
     usage: dict[str, int] = {}
     if timeout <= 0:
         fallback = FactCheckOutcome(status="SKIPPED", reasonCode="TIME_BUDGET")
         return [fallback if index in included_ids else missing for index in ids], usage
+    if on_request is not None:
+        on_request(context_tokens)
     try:
         response = runner.transport.create({"model": runner.config.model, **payload}, timeout)
         usage = normalized_openai_usage(response.get("usage"))

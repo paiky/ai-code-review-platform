@@ -23,9 +23,15 @@ GROUPED_CHAT_CAPABILITY = "OPENAI_CHAT_GROUPED"
 GROUPED_CHAT_RUNNER_VERSION = "openai-chat-grouped-v1"
 GROUPED_REVIEW_CAPABILITY = "OPENAI_GROUPED_REVIEW"
 GROUPED_REVIEW_RUNNER_VERSION = "openai-grouped-v1"
+UNIFIED_REVIEW_CAPABILITY = "OPENAI_UNIFIED_REVIEW"
+UNIFIED_REVIEW_RUNNER_VERSION = "openai-unified-v1"
+CONTEXT_REVIEW_CAPABILITY = "OPENAI_CONTEXT_REVIEW"
+CONTEXT_REVIEW_RUNNER_VERSION = "openai-unified-v2"
 GROUPED_RUNNER_CAPABILITIES = {
     GROUPED_CHAT_RUNNER_VERSION: GROUPED_CHAT_CAPABILITY,
     GROUPED_REVIEW_RUNNER_VERSION: GROUPED_REVIEW_CAPABILITY,
+    UNIFIED_REVIEW_RUNNER_VERSION: UNIFIED_REVIEW_CAPABILITY,
+    CONTEXT_REVIEW_RUNNER_VERSION: CONTEXT_REVIEW_CAPABILITY,
 }
 
 
@@ -40,6 +46,16 @@ class GroupedReviewSettings(BaseModel):
     )
     maxTokens: int = Field(default=0, ge=0, le=9_007_199_254_740_991)
     timeoutMinutesPerPass: int = Field(default=15, ge=0, le=1440)
+
+
+class ContextReviewSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    concurrency: int = GroupedReviewSettings.model_fields["concurrency"]
+    maxPasses: int = GroupedReviewSettings.model_fields["maxPasses"]
+    maxTurns: int = GroupedReviewSettings.model_fields["maxTurns"]
+    contextSoftLimit: Literal[-1] | Annotated[int, Field(ge=1, lt=200_000)] = -1
+    timeoutMinutesPerPass: Literal[-1] | Annotated[int, Field(ge=1, le=1440)] = 15
 
 
 AGENT_CONVERSATION_INPUT = "AGENT_CONVERSATION_INPUT"

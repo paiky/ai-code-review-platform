@@ -19,6 +19,11 @@ from app.agent_review_spike.conversation_capture import (
 )
 from app.agent_review_spike.diff import diff_by_file
 from app.agent_review_spike.prompting import agent_system_prompt, review_input
+from app.agent_review_spike.review_context import (
+    REQUEST_TIMEOUT_SECONDS,
+    ReviewContext,
+    normalized_openai_usage,
+)
 from app.agent_review_spike.tool_executor import ReviewToolExecutor, tool_definitions
 from app.agent_review_spike.workspace import ReviewWorkspace, ToolBudget
 
@@ -49,6 +54,7 @@ SAFE_ERROR_MESSAGES = {
     "AGENT_CANCELLED": "Agent Review 已取消",
     "AGENT_TIMEOUT": "Agent Review 执行超时",
     "AGENT_MAX_TURNS_EXCEEDED": "Agent Review 已达到最大决策回合数",
+    "AGENT_CONTEXT_LIMIT_EXCEEDED": "Agent Review 压缩后仍超过上下文阈值",
     "AGENT_SUBMIT_DEADLINE_EXCEEDED": "Agent Review 未在规定回合进入提交阶段",
     "AGENT_REVIEW_NOT_SUBMITTED": "Agent Review 未调用 submit_review",
     "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED": "Review Card 结构修正已达到安全上限",
@@ -205,6 +211,8 @@ class OpenAIResponsesAgentRunner:
         conversation_callback: ConversationCallback | None = None,
         diff_context: dict[str, str] | None = None,
         group_deadline: float | None = None,
+        context_soft_limit: int | None = None,
+        on_model_turn: Callable[[int, dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         if conversation_callback is None and isinstance(progress_callback, AgentReviewProgress):
             conversation_callback = progress_callback.conversation
@@ -215,17 +223,18 @@ class OpenAIResponsesAgentRunner:
         try:
             self._validate_case(case)
             effective_case = dict(case)
-            if len(str(case.get("diff") or "").encode("utf-8")) > self.config.inline_diff_bytes:
+            context_review = context_soft_limit is not None
+            if not context_review and len(str(case.get("diff") or "").encode("utf-8")) > self.config.inline_diff_bytes:
                 effective_case["diffMode"] = "TOOL_PAGED"
-            deadline = self.clock() + self.config.timeout_seconds
-            if group_deadline is not None:
-                deadline = min(deadline, group_deadline)
+            deadline = group_deadline if group_deadline is not None else float("inf")
+            if not context_review:
+                deadline = min(deadline, self.clock() + self.config.timeout_seconds)
             with tempfile.TemporaryDirectory(prefix="responses-agent-review-") as temporary_name:
                 temporary = Path(temporary_name)
                 result_path = temporary / "review-card.json"
                 audit_path = temporary / "tool-audit.json"
                 executor = ReviewToolExecutor(
-                    ReviewWorkspace(worktree),
+                    ReviewWorkspace(worktree, context_review=context_review),
                     [str(item).replace("\\", "/") for item in effective_case["changedFiles"]],
                     result_path,
                     audit_path,
@@ -234,6 +243,7 @@ class OpenAIResponsesAgentRunner:
                         max_source_bytes=self.config.max_source_bytes,
                         max_evidence_calls=self.config.max_evidence_calls,
                         converge_at_evidence_calls=self.config.converge_at_calls,
+                        unlimited=context_review,
                     ),
                     diff_by_file(effective_case) if diff_context is None else diff_context,
                     diff_paths=None if diff_context is None else set(diff_context),
@@ -254,21 +264,46 @@ class OpenAIResponsesAgentRunner:
                     }
                 ]
                 seen_call_ids: set[str] = set()
-                while turn_count < self.config.max_turns:
+                context = ReviewContext(len(history), context_soft_limit) if context_soft_limit is not None else None
+                final_submission = False
+                while not final_submission and (context is not None or turn_count < self.config.max_turns):
                     self._check_control(cancel_event, deadline)
-                    payload = self._request_payload(effective_case, history)
+                    payload = self._request_payload(effective_case, history, context_review=context_review)
+                    if context is not None:
+                        metrics: dict[str, Any] = {}
+                        action = context.prepare(
+                            payload, "input", last_turn=turn_count >= self.config.max_turns,
+                            metrics=metrics if on_model_turn is not None else None,
+                        )
+                        if on_model_turn is not None:
+                            on_model_turn(turn_count + 1, {
+                                **metrics, "status": "SKIPPED" if action == "CONTEXT_LIMIT" else "RUNNING",
+                            })
+                        if action == "CONTEXT_LIMIT":
+                            raise ResponsesAgentError("AGENT_CONTEXT_LIMIT_EXCEEDED")
+                        final_submission = action == "SUBMIT"
+                        context.turn_starts.append(len(history))
                     requested_at = perf_counter()
                     response = self._request_with_retry(
-                        payload, cancel_event, deadline, conversation
+                        payload, cancel_event, deadline, conversation,
+                        request_timeout=REQUEST_TIMEOUT_SECONDS if context_review else float("inf"),
+                        allow_retry=not final_submission,
                     )
                     request_ms = max(int((perf_counter() - requested_at) * 1000), 0)
                     turn_count += 1
                     _merge_usage(usage, response.get("usage"))
+                    if on_model_turn is not None:
+                        usage_now = normalized_openai_usage(response.get("usage"))
+                        on_model_turn(turn_count, {
+                            "status": "COMPLETED", "requestMs": request_ms,
+                            "inputTokens": usage_now.get("input_tokens"),
+                            "outputTokens": usage_now.get("output_tokens"),
+                        })
                     output, function_calls = _validate_response(response)
                     history.extend(output)
                     if not function_calls:
                         raise ResponsesAgentError("AGENT_REVIEW_NOT_SUBMITTED")
-                    if turn_count >= self.config.submit_by_turn and any(
+                    if (final_submission or (context is None and turn_count >= self.config.submit_by_turn)) and any(
                         item.get("name") != "submit_review" for item in function_calls
                     ):
                         raise ResponsesAgentError("AGENT_SUBMIT_DEADLINE_EXCEEDED")
@@ -325,7 +360,9 @@ class OpenAIResponsesAgentRunner:
                                 budgets=self.config.effective_budgets(),
                                 card=card,
                             )
-                raise ResponsesAgentError("AGENT_MAX_TURNS_EXCEEDED")
+                raise ResponsesAgentError(
+                    "AGENT_REVIEW_NOT_SUBMITTED" if final_submission else "AGENT_MAX_TURNS_EXCEEDED"
+                )
         except ResponsesAgentError as exception:
             return _safe_summary(
                 status="FAILED",
@@ -349,11 +386,11 @@ class OpenAIResponsesAgentRunner:
             )
 
     def _request_payload(
-        self, case: dict[str, Any], history: list[dict[str, Any]]
+        self, case: dict[str, Any], history: list[dict[str, Any]], *, context_review: bool = False,
     ) -> dict[str, Any]:
         return {
             "model": self.config.model,
-            "instructions": agent_system_prompt(case, self.config.submit_by_turn),
+            "instructions": agent_system_prompt(case, self.config.submit_by_turn, context_review=context_review),
             "input": history,
             "reasoning": {"effort": self.config.reasoning_effort},
             "tools": [
@@ -363,7 +400,7 @@ class OpenAIResponsesAgentRunner:
                     "description": item["description"],
                     "parameters": item["inputSchema"],
                 }
-                for item in tool_definitions()
+                for item in tool_definitions(context_review=context_review)
             ],
             "tool_choice": "required",
             "parallel_tool_calls": False,
@@ -377,6 +414,9 @@ class OpenAIResponsesAgentRunner:
         cancel_event: Any,
         deadline: float,
         conversation: ConversationCapture | None = None,
+        *,
+        request_timeout: float = float("inf"),
+        allow_retry: bool = True,
     ) -> dict[str, Any]:
         if conversation is not None:
             conversation.prepare_request(payload)
@@ -387,12 +427,12 @@ class OpenAIResponsesAgentRunner:
             try:
                 if conversation is not None:
                     conversation.record_request()
-                return self.transport.create(payload, max(remaining, 0.001))
+                return self.transport.create(payload, min(request_timeout, max(remaining, 0.001)))
             except ResponsesAgentError:
                 raise
             except ResponsesTransportError as exception:
                 status = exception.status_code
-                if status in RETRYABLE_STATUS_CODES and attempts < self.config.max_retries:
+                if allow_retry and status in RETRYABLE_STATUS_CODES and attempts < self.config.max_retries:
                     attempts += 1
                     delay = 0.1 * (2 ** (attempts - 1))
                     if deadline - self.clock() <= delay:

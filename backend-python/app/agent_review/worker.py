@@ -22,6 +22,11 @@ from app.agent_review.schemas import (
     GROUPED_CHAT_RUNNER_VERSION,
     GROUPED_REVIEW_CAPABILITY,
     GROUPED_REVIEW_RUNNER_VERSION,
+    UNIFIED_REVIEW_CAPABILITY,
+    UNIFIED_REVIEW_RUNNER_VERSION,
+    CONTEXT_REVIEW_CAPABILITY,
+    CONTEXT_REVIEW_RUNNER_VERSION,
+    ContextReviewSettings,
     GroupedReviewSettings,
 )
 from app.agent_review_spike.budgets import (
@@ -65,6 +70,8 @@ WORKER_CAPABILITIES = [
     OPENAI_CHAT_RUNNER,
     GROUPED_CHAT_CAPABILITY,
     GROUPED_REVIEW_CAPABILITY,
+    UNIFIED_REVIEW_CAPABILITY,
+    CONTEXT_REVIEW_CAPABILITY,
     ANTHROPIC_MESSAGES_RUNNER,
 ]
 AGENT_WORKER_SHUTDOWN_GRACE_SECONDS = 930
@@ -77,10 +84,32 @@ class _LatestAuditSnapshot:
         self._value: dict[str, Any] = {}
         self._conversation: list[dict[str, Any]] = []
         self._group_progress: dict[str, Any] = {}
+        self._pending_passes: dict[tuple[int, int], dict[str, Any]] = {}
+        self._pass_revision = 0
+        self.pass_wakeup = Event()
 
     def update_groups(self, value: dict[str, Any]) -> None:
         with self._lock:
             self._group_progress = deepcopy(value)
+
+    def update_group_pass(self, value: dict[str, Any]) -> None:
+        if value["groupId"] > 250:
+            return
+        with self._lock:
+            self._pass_revision += 1
+            key = value["groupId"], value["passNo"]
+            self._pending_passes[key] = {**deepcopy(value), "revision": self._pass_revision}
+        self.pass_wakeup.set()
+
+    def acknowledge_group_passes(self, passes: list[dict[str, Any]]) -> None:
+        with self._lock:
+            for value in passes:
+                key = value["groupId"], value["passNo"]
+                pending = self._pending_passes.get(key)
+                if pending and pending["revision"] == value["revision"]:
+                    del self._pending_passes[key]
+            if self._pending_passes:
+                self.pass_wakeup.set()
 
     def update(self, value: dict[str, Any]) -> None:
         if not isinstance(value, dict):
@@ -92,13 +121,15 @@ class _LatestAuditSnapshot:
         with self._lock:
             self._conversation = deepcopy(events)
 
-    def summary_snapshot(self) -> dict[str, Any]:
+    def summary_snapshot(self, *, pass_limit: int | None = None) -> dict[str, Any]:
         with self._lock:
             result = {"audit": self._value} if self._value else {}
             if self._conversation:
                 result["conversationEvents"] = self._conversation
             if self._group_progress:
                 result["groupProgress"] = self._group_progress
+            if self._pending_passes:
+                result["groupPassProgress"] = list(self._pending_passes.values())[:pass_limit]
             return deepcopy(result)
 
 
@@ -337,7 +368,10 @@ def _run_job(
                     model=str(runtime.get("model") or "synthetic-chat-model"),
                 ),
             )
-            summary = _run_openai_review(chat_runner, job.get("input") or {}, worktree, cancelled, latest_audit, review_progress)
+            summary = _run_openai_review(
+                chat_runner, job.get("input") or {}, worktree, cancelled, latest_audit, review_progress,
+                runner_version=job.get("runnerVersion"),
+            )
         elif runner_type == OPENAI_RESPONSES_RUNNER or runtime_type == CUSTOM_RUNTIME:
             endpoint = f"{str(runtime.get('baseUrl') or '').rstrip('/')}/responses"
             responses_runner = OpenAIResponsesAgentRunner(
@@ -352,7 +386,10 @@ def _run_job(
                     reasoning_effort=str(runtime.get("reasoningEffort") or "high"),
                 ),
             )
-            summary = _run_openai_review(responses_runner, job.get("input") or {}, worktree, cancelled, latest_audit, review_progress)
+            summary = _run_openai_review(
+                responses_runner, job.get("input") or {}, worktree, cancelled, latest_audit, review_progress,
+                runner_version=job.get("runnerVersion"),
+            )
         elif runner_type == CLAUDE_CODE_RUNNER or runtime_type == DEFAULT_RUNTIME:
             summary = run_agent_candidate(
                 job.get("input") or {},
@@ -412,6 +449,7 @@ def _run_job(
         })
     finally:
         stop.set()
+        latest_audit.pass_wakeup.set()
         heartbeat.join(timeout=2)
 
 
@@ -573,13 +611,14 @@ def _heartbeat_loop(
 ) -> None:
     heartbeat_sequence = 0
     while True:
+        latest_audit.pass_wakeup.clear()
         try:
             payload: dict[str, Any] = {
                 "workerId": worker_id,
                 "claimAttempt": claim_attempt,
                 "heartbeatSequence": heartbeat_sequence,
             }
-            summary = latest_audit.summary_snapshot()
+            summary = latest_audit.summary_snapshot(pass_limit=16)
             if summary:
                 payload["runSummary"] = summary
             response = _post(
@@ -588,12 +627,18 @@ def _heartbeat_loop(
                 f"/internal/agent-review/jobs/{job_id}/heartbeat",
                 payload,
             )
-            if bool((response.get("data") or {}).get("cancelRequested")):
+            data = response.get("data") or {}
+            if data.get("groupPassProgressAccepted"):
+                latest_audit.acknowledge_group_passes(summary.get("groupPassProgress", []))
+            if bool(data.get("cancelRequested")):
                 cancelled.set()
         except Exception:
             pass
         heartbeat_sequence += 1
-        if stop.wait(15):
+        if stop.wait(2):
+            return
+        latest_audit.pass_wakeup.wait(13)
+        if stop.is_set():
             return
 
 
@@ -682,6 +727,8 @@ def _failure_message(error_code: str) -> str:
         return "Agent Review rejected an invalid runtime budget contract"
     if error_code == "AGENT_MAX_TURNS_EXCEEDED":
         return "Agent Review reached the turn budget before submitting a Review Card"
+    if error_code == "AGENT_CONTEXT_LIMIT_EXCEEDED":
+        return "Agent Review could not fit the input context after compression"
     if error_code == "AGENT_REVIEW_SCHEMA_RETRY_EXHAUSTED":
         return "Review Card schema repair attempts reached the safety limit"
     if error_code == "AGENT_CLI_FAILED":
@@ -765,6 +812,8 @@ def _run_openai_review(
     cancelled: Event,
     latest_audit: _LatestAuditSnapshot,
     review_progress: AgentReviewProgress,
+    *,
+    runner_version: str | None = None,
 ) -> dict[str, Any]:
     normalize = (
         _normalize_responses_summary
@@ -772,18 +821,22 @@ def _run_openai_review(
         else _normalize_chat_summary
     )
     options = case.get("groupedReview")
-    if not isinstance(options, dict):
+    context_review = runner_version == CONTEXT_REVIEW_RUNNER_VERSION
+    unified = context_review or runner_version == UNIFIED_REVIEW_RUNNER_VERSION
+    if not unified and not isinstance(options, dict):
         return normalize(runner.run(
             case, worktree, cancel_event=cancelled, progress_callback=review_progress,
         ))
-    version = GROUPED_REVIEW_RUNNER_VERSION
-    if "effort" in options:
+    version = runner_version if unified else GROUPED_REVIEW_RUNNER_VERSION
+    if not unified and "effort" in options:
         version = GROUPED_CHAT_RUNNER_VERSION
         options = {**options, "maxPasses": EFFORT_PASSES[options["effort"]]}
         del options["effort"]
+    settings = ContextReviewSettings if context_review else GroupedReviewSettings
     result = run_grouped_review(
-        runner, case, worktree, GroupedReviewSettings.model_validate(options),
-        cancel_event=cancelled, progress=latest_audit.update_groups,
+        runner, case, worktree, settings.model_validate(options),
+        cancel_event=cancelled, progress=latest_audit.update_groups, unified=unified,
+        on_pass_progress=latest_audit.update_group_pass if context_review else None,
     )
     return {**normalize(result), "runnerVersion": version}
 

@@ -27,8 +27,8 @@ from app.agent_review.runtime import (
     runtime_review_key,
 )
 from app.agent_review.schemas import (
-    GROUPED_REVIEW_CAPABILITY,
     GROUPED_RUNNER_CAPABILITIES,
+    CONTEXT_REVIEW_CAPABILITY,
     AgentConversationTurnEvent,
     parse_agent_conversation_events,
 )
@@ -236,6 +236,10 @@ def enqueue_agent_review(
 ) -> dict[str, Any]:
     settings_record = repository.assert_agent_available(db, require_worker=False)
     runtime = repository.selected_agent_runtime_snapshot(db)
+    runner_type = runtime.get("runnerType")
+    unified_review = runner_type in {OPENAI_CHAT_RUNNER, OPENAI_RESPONSES_RUNNER}
+    if unified_review and not repository.worker_capability_online(db, CONTEXT_REVIEW_CAPABILITY, runner_type):
+        raise AppError("AGENT_REVIEW_UNAVAILABLE", "No online Worker supports unified Agent Review for this Runtime", 409)
     runtime_code = str(runtime.get("runtimeCode") or DEFAULT_RUNTIME)
     review_key = runtime_review_key(runtime_code)
     provider = runtime_provider(runtime)
@@ -398,7 +402,7 @@ def enqueue_agent_review(
         review_instructions = "\n\n".join(
             value for value in (base_instructions, file_rules["text"] if file_rules else "") if value
         )
-        diff_mode = "INLINE" if diff_bytes <= budgets["inlineDiffBytes"] else "TOOL_PAGED"
+        diff_mode = "INLINE" if unified_review or diff_bytes <= budgets["inlineDiffBytes"] else "TOOL_PAGED"
         if review_snapshot and diff_mode != "INLINE":
             review_snapshot["complete"] = False
         preflight_summary = request.get("_deterministicPreflightSummary")
@@ -421,16 +425,11 @@ def enqueue_agent_review(
                 "excludedPaths": excluded_files,
             },
         }
-        if (
-            runtime.get("runnerType") in {OPENAI_CHAT_RUNNER, OPENAI_RESPONSES_RUNNER}
-            and len(changed_files) > 1
-            and file_rules
-            and repository.worker_capability_online(db, GROUPED_REVIEW_CAPABILITY)
-        ):
+        if unified_review:
             grouped = repository.effective_grouped_review_settings(settings_record)
-            if grouped.enabled:
-                budgets = {**budgets, "maxTurns": grouped.maxTurns, "submitByTurn": grouped.maxTurns - 3}
-                input_case["groupedReview"] = grouped.model_dump()
+            budgets = {**budgets, "maxTurns": grouped.maxTurns, "submitByTurn": grouped.maxTurns - 3}
+            input_case["groupedReview"] = grouped.model_dump()
+            if file_rules:
                 input_case["groupRuleCatalogVersion"] = file_rules["summary"]["catalogVersion"]
                 input_case["groupBaseInstructions"] = base_instructions
         input_case["inputSources"] = [
@@ -540,6 +539,7 @@ def enqueue_agent_review(
             completion_context=completion_context,
             comparison_mode=comparison_mode,
             runtime=runtime,
+            unified_review=unified_review,
         )
         result_payload = {
             "status": "RUNNING",

@@ -45,7 +45,8 @@ from app.agent_review.schemas import (
     AGENT_CONVERSATION_PHASES,
     GROUPED_REVIEW_RUNNER_VERSION,
     GROUPED_RUNNER_CAPABILITIES,
-    GroupedReviewSettings,
+    CONTEXT_REVIEW_RUNNER_VERSION,
+    ContextReviewSettings,
 )
 from app.agent_review_spike.budgets import (
     AGENT_BUDGET_KEYS,
@@ -58,11 +59,18 @@ from app.agent_review_spike.budgets import (
 )
 from app.agent_review_spike.retrieval_audit import sanitize_retrieval_detail
 from app.agent_review_spike.grouped import EFFORT_PASSES
+from app.agent_review_spike.schema import SEVERITIES
+from app.agent_review_spike.workspace import ReviewToolError, validate_review_path
 from app.code_quality.models import (
     CodeQualityReviewProgressEvent,
     CodeQualitySchedulerJob,
 )
-from app.code_quality.repository import ensure_result_schema, ensure_scheduler_job_schema, format_datetime
+from app.code_quality.repository import (
+    ensure_result_schema,
+    ensure_scheduler_job_schema,
+    format_datetime,
+    scrub_sensitive,
+)
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.json_utils import utc_now
@@ -90,6 +98,7 @@ ABSOLUTE_MAX_SOURCE_BYTES = AGENT_BUDGET_LIMITS["maxSourceBytes"]["max"]
 ABSOLUTE_MAX_INLINE_DIFF_BYTES = AGENT_BUDGET_LIMITS["inlineDiffBytes"]["max"]
 ABSOLUTE_MAX_TIMEOUT_SECONDS = AGENT_BUDGET_LIMITS["timeoutSeconds"]["max"]
 ABSOLUTE_MAX_EVIDENCE_CALLS = AGENT_BUDGET_LIMITS["maxEvidenceCalls"]["max"]
+AGENT_GROUP_PASS_PROGRESS = "AGENT_GROUP_PASS_PROGRESS"
 AGENT_COMPLETION_CONTEXT_SCHEMA_VERSION = "agent-completion-context-v2"
 AGENT_COMPLETION_CONTEXT_MAX_BYTES = 16 * 1024
 _COMPLETION_CONTEXT_NOTIFICATION_KEYS = (
@@ -1068,7 +1077,7 @@ def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any
         if not isinstance(grouped_patch, dict):
             raise AppError("VALIDATION_ERROR", "groupedReview must be an object", 400)
         try:
-            grouped = GroupedReviewSettings.model_validate({
+            grouped = ContextReviewSettings.model_validate({
                 **effective_grouped_review_settings(record).model_dump(),
                 **grouped_patch,
             })
@@ -1188,15 +1197,21 @@ def update_agent_settings(db: Session, request: dict[str, Any]) -> dict[str, Any
     return agent_settings_response(db)
 
 
-def effective_grouped_review_settings(record: AgentReviewSettings) -> GroupedReviewSettings:
+def effective_grouped_review_settings(record: AgentReviewSettings) -> ContextReviewSettings:
     try:
         if record.grouped_review_config_json is not None:
-            return GroupedReviewSettings.model_validate_json(record.grouped_review_config_json)
+            stored = json.loads(record.grouped_review_config_json)
+            if not isinstance(stored, dict):
+                raise ValueError("Grouped review configuration must be an object")
+            stored.pop("enabled", None)
+            stored.pop("maxTokens", None)
+            if stored.get("timeoutMinutesPerPass") == 0:
+                stored["timeoutMinutesPerPass"] = -1
+            return ContextReviewSettings.model_validate(stored)
         effort = os.getenv("AGENT_REVIEW_GROUP_EFFORT", "medium").strip().lower()
-        return GroupedReviewSettings(
+        return ContextReviewSettings(
             concurrency=int(os.getenv("AGENT_REVIEW_GROUP_CONCURRENCY", "8")),
             maxPasses=EFFORT_PASSES[effort],
-            maxTokens=int(os.getenv("AGENT_REVIEW_GROUP_MAX_TOKENS", "0")),
         )
     except (KeyError, ValueError) as exception:
         raise AppError("AGENT_GROUP_CONFIG_INVALID", "Invalid grouped Agent Review configuration", 500) from exception
@@ -1670,6 +1685,7 @@ def create_agent_job(
     completion_context: dict[str, Any] | None,
     comparison_mode: bool,
     runtime: dict[str, Any] | None = None,
+    unified_review: bool = False,
 ) -> AgentReviewRun:
     ensure_agent_review_schema(db)
     now = utc_now()
@@ -1723,7 +1739,9 @@ def create_agent_job(
         requested_engine="AGENT",
         effective_engine=None,
         runner_version=(
-            GROUPED_REVIEW_RUNNER_VERSION
+            CONTEXT_REVIEW_RUNNER_VERSION
+            if unified_review
+            else GROUPED_REVIEW_RUNNER_VERSION
             if (input_payload.get("case") or {}).get("groupedReview")
             else RESPONSES_RUNNER_VERSION
             if runner_type == "OPENAI_RESPONSES_AGENT"
@@ -1974,6 +1992,7 @@ def claim_agent_job(db: Session, *, worker_id: str) -> dict[str, Any] | None:
         "taskId": run.task_id,
         "reviewKey": run.review_key,
         "worktree": input_payload.get("worktree"),
+        "runnerVersion": run.runner_version,
         "input": input_payload.get("case") or {},
         "apiKey": api_key,
         "runtime": {**snapshot, "apiKey": api_key},
@@ -2011,9 +2030,14 @@ def heartbeat_agent_job(
         run.updated_at = now
         if run_summary:
             _apply_safe_run_summary(run, run_summary)
+    pass_progress = run_summary.get("groupPassProgress") if run is not None and run_summary else None
+    pass_progress_accepted = _save_group_pass_progress(db, run, claim_attempt, pass_progress)
     cancelled = job.cancel_requested_at is not None
     db.commit()
-    return {"accepted": True, "cancelRequested": cancelled}
+    return {
+        "accepted": True, "cancelRequested": cancelled,
+        **({"groupPassProgressAccepted": pass_progress_accepted} if pass_progress is not None else {}),
+    }
 
 
 def expire_exhausted_agent_jobs(db: Session) -> list[int]:
@@ -2113,6 +2137,8 @@ def finish_agent_records(
     failure_message: str | None = None,
     clear_input: bool = True,
 ) -> None:
+    if "groupPassProgress" in summary:
+        _save_group_pass_progress(db, run, int(job.attempt or 0), summary["groupPassProgress"])
     now = utc_now()
     run.status = status
     run.effective_engine = effective_engine
@@ -2143,7 +2169,7 @@ def run_to_summary(run: AgentReviewRun, *, fallback_triggered: bool | None = Non
     effective_budgets = _safe_effective_budgets(
         tool_summary.get("effectiveBudgets") if isinstance(tool_summary, dict) else None
     )
-    if not effective_budgets:
+    if not effective_budgets and run.runner_version != CONTEXT_REVIEW_RUNNER_VERSION:
         input_payload = _read_json(run.input_json, {})
         if isinstance(input_payload, dict):
             effective_budgets = _safe_effective_budgets(input_payload.get("budgets"))
@@ -2432,7 +2458,7 @@ def sanitize_group_progress(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or not isinstance(rows := value.get("groups"), list):
         return {}
     mode = value.get("mode")
-    if mode not in ("WHOLE_TASK", "SMALL_CHANGE", "SEMANTIC", "PER_FILE", "PER_FILE_FALLBACK"):
+    if mode not in ("SINGLE_GROUP", "WHOLE_TASK", "SMALL_CHANGE", "SEMANTIC", "PER_FILE", "PER_FILE_FALLBACK"):
         return {}
     groups = []
     seen = set()
@@ -2460,13 +2486,144 @@ def sanitize_group_progress(value: Any) -> dict[str, Any]:
             "durationMs": _non_negative(row.get("durationMs")),
             "reason": reason if re.fullmatch(r"[A-Z_]{1,64}", reason) else None,
         })
+    max_turns = value.get("maxTurns")
     return {
         "mode": mode,
         "concurrency": _non_negative(value.get("concurrency")),
         "maxPasses": _limited_non_negative(value.get("maxPasses"), 3),
+        **({"maxTurns": max_turns} if type(max_turns) is int and 6 <= max_turns <= ABSOLUTE_MAX_TURNS else {}),
         "omittedCount": _non_negative(value.get("omittedCount")) + max(0, len(rows) - 250),
         "groups": groups,
     }
+
+
+def _save_group_pass_progress(
+    db: Session, run: AgentReviewRun | None, claim_attempt: int, value: Any,
+) -> bool:
+    if run is None or run.runner_version != CONTEXT_REVIEW_RUNNER_VERSION or not isinstance(value, list):
+        return False
+    try:
+        # The caller holds the job's claim lock. Keep diagnostic storage failures isolated.
+        with db.begin_nested():
+            payload = _read_json(run.input_json, {})
+            paths = frozenset((payload.get("case") or {}).get("changedFiles") or [])
+            snapshots: dict[str, dict[str, Any]] = {}
+            for item in value[:750]:
+                row = _safe_group_pass(item, paths)
+                if row is None:
+                    continue
+                key = f"{run.id}:{claim_attempt}:{row['groupId']}:{row['passNo']}"
+                if key not in snapshots or row["revision"] > snapshots[key]["revision"]:
+                    snapshots[key] = row
+            if not snapshots:
+                return True
+            records = db.scalars(select(CodeQualityReviewProgressEvent).where(
+                CodeQualityReviewProgressEvent.task_id == run.task_id,
+                CodeQualityReviewProgressEvent.review_key == run.review_key,
+                CodeQualityReviewProgressEvent.phase == AGENT_GROUP_PASS_PROGRESS,
+                CodeQualityReviewProgressEvent.message.in_(snapshots),
+            )).all()
+            existing = {record.message: record for record in records}
+            for key, row in snapshots.items():
+                record = existing.get(key)
+                if record and _non_negative(_read_json(record.detail, {}).get("revision")) >= row["revision"]:
+                    continue
+                data = {"runId": run.id, "claimAttempt": claim_attempt, **row}
+                detail = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+                if len(detail.encode("utf-8")) > 60_000:
+                    for finding in data["findings"]:
+                        finding.pop("filePath", None)
+                    detail = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+                if record is None:
+                    db.add(CodeQualityReviewProgressEvent(
+                        task_id=run.task_id, review_key=run.review_key, phase=AGENT_GROUP_PASS_PROGRESS,
+                        level="INFO", message=key, detail=detail, created_at=datetime.now(),
+                    ))
+                else:
+                    record.detail = detail
+        return True
+    except Exception as exception:
+        _LOGGER.warning("Agent group progress persistence failed runId=%s errorType=%s",
+                        run.id, type(exception).__name__)
+        return False
+
+
+def _safe_group_pass(value: Any, paths: frozenset[str]) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    group, pass_no, revision = (value.get(key) for key in ("groupId", "passNo", "revision"))
+    if (type(group) is not int or not 1 <= group <= 250 or type(pass_no) is not int
+            or not 1 <= pass_no <= 3 or type(revision) is not int or revision < 1):
+        return None
+    stages = ("RUNNING", "COMPLETED", "FAILED", "SKIPPED", "CANCELLED", "PARTIAL")
+    review_status = value.get("reviewStatus")
+    if review_status not in stages:
+        return None
+    row = {"groupId": group, "passNo": pass_no, "revision": revision, "reviewStatus": review_status,
+           "turns": [], "findings": []}
+    row.update(_safe_group_pass_metrics(value, ("reviewDurationMs", "reviewStartedAtMs")))
+    if reason := _safe_group_pass_reason(value.get("reviewReason")):
+        row["reviewReason"] = reason
+    turns = value.get("turns")
+    for row_no, turn in enumerate(turns[:101] if isinstance(turns, list) else [], 1):
+        if not isinstance(turn, dict) or turn.get("turn") != row_no or turn.get("status") not in stages:
+            break
+        row["turns"].append({
+            "turn": row_no, "status": turn["status"],
+            **_safe_group_pass_metrics(turn, (
+                "requestMs", "contextTokens", "inputTokens", "outputTokens",
+                "compressionBeforeTokens", "compressionAfterTokens",
+            )),
+            **({"finalSubmission": True} if turn.get("finalSubmission") is True else {}),
+        })
+    check = value.get("factCheck")
+    if isinstance(check, dict) and check.get("status") in stages:
+        row["factCheck"] = {"status": check["status"], **_safe_group_pass_metrics(
+            check, ("durationMs", "startedAtMs", "contextTokens", "inputTokens", "outputTokens"),
+        )}
+        if type(check.get("turn")) is int and check["turn"] == 1:
+            row["factCheck"]["turn"] = 1
+        if reason := _safe_group_pass_reason(check.get("reason")):
+            row["factCheck"]["reason"] = reason
+    findings = value.get("findings")
+    for number, item in enumerate(findings[:50] if isinstance(findings, list) else [], 1):
+        if not isinstance(item, dict) or item.get("findingNo") != number:
+            continue
+        path = item.get("filePath")
+        if not isinstance(path, str) or path not in paths:
+            continue
+        try:
+            path = validate_review_path(path)
+        except ReviewToolError:
+            continue
+        status = item.get("status")
+        if status not in ("PENDING", "COMPLETED", "SKIPPED", "FAILED", "CANCELLED"):
+            continue
+        clean = {"findingNo": number, "status": status, **_safe_group_pass_metrics(item, ("startLine", "endLine"))}
+        for name, text_value, maximum in (("title", item.get("title"), 160), ("filePath", path, 200)):
+            if isinstance(text_value, str):
+                text_value = scrub_sensitive(" ".join(text_value.split())) or ""
+                text_value = "".join(character for character in text_value if character.isprintable())
+                if text_value:
+                    clean[name] = text_value.encode("utf-8", errors="replace")[:maximum].decode("utf-8", errors="ignore")
+        if isinstance(severity := item.get("severity"), str) and severity in SEVERITIES:
+            clean["severity"] = severity
+        if item.get("verdict") in ("KEEP", "CONTRADICTED", "NEEDS_CONTEXT"):
+            clean["verdict"] = item["verdict"]
+        if reason := _safe_group_pass_reason(item.get("reason")):
+            clean["reason"] = reason
+        row["findings"].append(clean)
+    return row
+
+
+def _safe_group_pass_metrics(value: dict[str, Any], keys: tuple[str, ...]) -> dict[str, int]:
+    return {key: number for key in keys if type(number := value.get(key)) is int and 0 <= number < (
+        253_402_300_800_000 if key.lower().endswith("startedatms") else 2_147_483_648
+    )}
+
+
+def _safe_group_pass_reason(value: Any) -> str | None:
+    return value if isinstance(value, str) and re.fullmatch(r"[A-Z_]{1,64}", value) else None
 
 
 def _apply_safe_run_summary(run: AgentReviewRun, value: dict[str, Any]) -> None:
@@ -2597,11 +2754,11 @@ def _assert_claim_attempt(job: CodeQualitySchedulerJob, claim_attempt: int) -> N
         )
 
 
-def worker_capability_online(db: Session, capability: str) -> bool:
-    return _worker_pool_supports(agent_worker_pool(db), capability)
+def worker_capability_online(db: Session, capability: str, *required: str) -> bool:
+    return _worker_pool_supports(agent_worker_pool(db), capability, *required)
 
 
-def _worker_pool_supports(worker_pool: dict[str, Any], runtime_type: str) -> bool:
+def _worker_pool_supports(worker_pool: dict[str, Any], runtime_type: str, *required: str) -> bool:
     nodes = worker_pool.get("nodes") if isinstance(worker_pool, dict) else None
     if not isinstance(nodes, list):
         return False
@@ -2609,7 +2766,7 @@ def _worker_pool_supports(worker_pool: dict[str, Any], runtime_type: str) -> boo
         isinstance(node, dict)
         and node.get("online") is True
         and str(node.get("state") or "IDLE").upper() != "DRAINING"
-        and worker_supports(node.get("capabilities"), runtime_type)
+        and all(worker_supports(node.get("capabilities"), item) for item in (runtime_type, *required))
         for node in nodes
     )
 

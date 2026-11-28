@@ -32,12 +32,14 @@ export const defaultAgentBudgetLimits = {
 };
 
 const defaultGroupedReview = {
-  enabled: true, concurrency: 8, maxPasses: 2, maxTurns: 100,
-  maxTokens: 0, timeoutMinutesPerPass: 15
+  concurrency: 8, maxPasses: 2, maxTurns: 100,
+  contextSoftLimit: -1, timeoutMinutesPerPass: 15
 };
 
 export function normalizeGroupedReview(settings) {
-  return { ...defaultGroupedReview, ...settings?.groupedReview };
+  return Object.fromEntries(Object.entries(defaultGroupedReview).map(([key, value]) => [
+    key, settings?.groupedReview?.[key] ?? value
+  ]));
 }
 
 export function validateGroupedReview(value) {
@@ -45,12 +47,13 @@ export function validateGroupedReview(value) {
     ['concurrency', '并发组数', 1, Number.MAX_SAFE_INTEGER],
     ['maxPasses', '每组最多遍数', 1, 3],
     ['maxTurns', '每遍模型回合', 6, 100],
-    ['maxTokens', '整任务 Token 软上限', 0, Number.MAX_SAFE_INTEGER],
-    ['timeoutMinutesPerPass', '组时间上限基数', 0, 1440]
+    ['contextSoftLimit', '上下文 Token 软上限', -1, 199999],
+    ['timeoutMinutesPerPass', '审查组每遍时间上限', -1, 1440]
   ];
   for (const [key, label, min, max] of bounds) {
-    if (!Number.isSafeInteger(value[key]) || value[key] < min || value[key] > max) {
-      return `${label}必须输入 ${min}～${max} 范围内的整数`;
+    if (!Number.isSafeInteger(value[key]) || value[key] < min || value[key] > max || value[key] === 0) {
+      const range = min === -1 ? `-1 或 1～${max}` : `${min}～${max}`;
+      return `${label}必须输入 ${range} 范围内的整数`;
     }
   }
   return null;

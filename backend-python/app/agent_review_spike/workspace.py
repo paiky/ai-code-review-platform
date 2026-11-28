@@ -94,15 +94,16 @@ class ToolBudget:
     blocked_access_count: int = 0
     events: list[dict[str, Any]] = field(default_factory=list)
     top_path_summaries: list[dict[str, Any]] = field(default_factory=list)
+    unlimited: bool = False
 
     def begin(self, tool: str, *, retrieval_detail: dict[str, Any] | None = None) -> float:
-        if self.calls >= self.max_calls:
+        if not self.unlimited and self.calls >= self.max_calls:
             raise ReviewToolError("TOOL_CALL_BUDGET_EXCEEDED", "tool call budget exhausted")
         self.calls += 1
         started = perf_counter()
         if tool not in EVIDENCE_TOOLS:
             return started
-        if self.evidence_calls >= self.max_evidence_calls:
+        if not self.unlimited and self.evidence_calls >= self.max_evidence_calls:
             # 拒绝发生在 worktree 访问前；拒绝本身仍属于总 MCP 调用审计。
             self.finish(
                 tool,
@@ -130,7 +131,7 @@ class ToolBudget:
         error_code: str | None = None,
         retrieval_detail: dict[str, Any] | None = None,
     ) -> None:
-        if source_bytes > 0 and self.source_bytes + source_bytes > self.max_source_bytes:
+        if not self.unlimited and source_bytes > 0 and self.source_bytes + source_bytes > self.max_source_bytes:
             raise ReviewToolError("SOURCE_BUDGET_EXCEEDED", "source byte budget exhausted")
         self.source_bytes += max(source_bytes, 0)
         if tool == "read_diff_range":
@@ -168,6 +169,8 @@ class ToolBudget:
         self.blocked_access_count += 1
 
     def review_budget(self) -> dict[str, Any]:
+        if self.unlimited:
+            return {"phase": "DISCOVERY", "evidenceCallsUsed": self.evidence_calls, "mustSubmit": False}
         used = min(max(int(self.evidence_calls), 0), max(int(self.max_evidence_calls), 0))
         if used >= self.max_evidence_calls:
             phase = "SUBMIT"
@@ -202,12 +205,13 @@ class ToolBudget:
 
 
 class ReviewWorkspace:
-    def __init__(self, root: Path, *, max_file_bytes: int = 1_048_576) -> None:
+    def __init__(self, root: Path, *, max_file_bytes: int = 1_048_576, context_review: bool = False) -> None:
         resolved = root.resolve(strict=True)
         if not resolved.is_dir():
             raise ReviewToolError("WORKTREE_NOT_FOUND", "worktree root is not a directory")
         self.root = resolved
         self.max_file_bytes = max(int(max_file_bytes), 1)
+        self.context_review = context_review
 
     def list_files(self, pattern: str = "**/*", limit: int = 200) -> dict[str, Any]:
         normalized_pattern = _validate_glob(pattern)
@@ -226,17 +230,33 @@ class ReviewWorkspace:
     def read_file_range(self, path: str, start_line: int, end_line: int) -> dict[str, Any]:
         safe_path, relative = self._resolve_file(path)
         start = _bounded_int(start_line, 1, 10_000_000, "startLine")
-        end = _bounded_int(end_line, start, start + 399, "endLine")
+        end = _bounded_int(end_line, start, 10_000_000 if self.context_review else start + 399, "endLine")
         lines = _read_text_lines(safe_path, self.max_file_bytes)
-        selected = lines[start - 1 : end]
-        content = "\n".join(f"{start + index}: {line}" for index, line in enumerate(selected))
+        selected = lines[start - 1 : min(end, start + 499) if self.context_review else end]
+        rendered = []
+        size = 0
+        truncated = self.context_review and end > start + 499 and len(lines) > start + 499
+        for index, line in enumerate(selected, start):
+            encoded = line.encode("utf-8") if self.context_review else b""
+            if len(encoded) > 2048:
+                line = encoded[:2048].decode("utf-8", errors="ignore") + " …[line truncated]"
+                truncated = True
+            entry = f"{index}: {line}"
+            if self.context_review:
+                size += len(entry.encode("utf-8")) + bool(rendered)
+                if size > 256 * 1024:
+                    truncated = True
+                    break
+            rendered.append(entry)
+        content = "\n".join(rendered)
         return {
             "path": relative,
             "startLine": start,
-            "endLine": start + len(selected) - 1 if selected else start,
-            "lineCount": len(selected),
+            "endLine": start + len(rendered) - 1 if rendered else start,
+            "lineCount": len(rendered),
             "totalLines": len(lines),
             "content": content,
+            **({"truncated": truncated} if self.context_review else {}),
         }
 
     def search_code(

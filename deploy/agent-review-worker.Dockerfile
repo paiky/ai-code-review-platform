@@ -26,7 +26,7 @@ RUN apt-get update \
 COPY --from=claude-code /usr/local/bin/node /usr/local/bin/node
 COPY --from=claude-code /usr/local/lib/node_modules/@anthropic-ai/claude-code /usr/local/lib/node_modules/@anthropic-ai/claude-code
 RUN ln -s /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js /usr/local/bin/claude
-RUN pip install --no-cache-dir "pydantic>=2,<3"
+RUN pip install --no-cache-dir "pydantic>=2,<3" "tiktoken==0.12.0"
 
 WORKDIR /opt/agent-review
 COPY backend-python/app/__init__.py /opt/agent-review/app/__init__.py

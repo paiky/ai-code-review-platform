@@ -88,11 +88,15 @@
 
 **进度。** 73 已合入 `main`（`d77b02c`），构建和本地替身闭环通过。生产验收按 72 的顺序安排。 [73 本地推进结果](73-agent-review-grouped-execution-rollout-plan.md#本地推进结果)
 
+73 的统一预算调整以第 7 节为准。新任务固定启用自动拆分，使用组内共享期限和当前对话的上下文软上限。 [73 统一审查预算与上下文收敛](73-agent-review-grouped-execution-rollout-plan.md#7-统一审查预算与上下文收敛)
+
 ### A3B · 主审查接入组内事实复核
 
 **改动量等级为大。** 在不同组各自的槽位内逐遍复核新增 Finding，正式结果随整任务汇总返回。裁决和反证附在原 Finding 详情。 [74 的接入、展示与验收](74-agent-review-fact-check-rollout-plan.md#4-a3b-组内自动复核)
 
 ### C2A · 审查中提交候选与异步定位
+
+73 已在每遍主审提交后展示待复核 Finding。C2 从取证阶段开始接收模型逐条提交的候选，并联动异步定位。 [73 组内实时进度](73-agent-review-grouped-execution-rollout-plan.md#8-组内审查实时进度)
 
 - **改动量等级：大。** 涉及模型工具 schema、异步处理和 Worker 到 Backend 的候选事件契约。
 - **目标与范围**　A1 完成后，参考 OCR 的 `code_comment` 与异步评论池，先用单组验证审查中的异步候选链路。`ReviewToolExecutor` 增加内置工具 `submit_candidate`，接收候选的路径、标题、说明和可选引文。工具校验组内文件归属后返回 `candidateId`，把定位工作派给有界评论池，模型可以继续查下一处。候选工具计入总工具调用，只在调查阶段开放。到 `submitByTurn` 后继续沿用 `submit_review` 的独立提交机会。
